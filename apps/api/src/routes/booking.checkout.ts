@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { apiEnv } from "@chairback/config";
-import { Prisma, forShop, runWithShop } from "@chairback/db";
+import { Prisma, forShop, prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { requireActiveAccess } from "../middleware/billing.js";
@@ -12,7 +12,7 @@ import {
   restoreCardAfterCanceledCharge,
 } from "../billing/cardOnFile.js";
 import { connectEnabled } from "../billing/stripe.js";
-import { terminalEnabled } from "../billing/terminal.js";
+import { createServiceCheckoutTerminalIntent, terminalEnabled } from "../billing/terminal.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import {
   checkoutAmountAllowed,
@@ -20,13 +20,17 @@ import {
   type ServiceCheckoutState,
 } from "../engines/serviceCheckout.js";
 import {
+  attemptById,
   attemptForRequest,
   liveAttemptFor,
   openCheckoutAttempt,
   updateCheckoutAttempt,
   type AttemptRow,
 } from "../services/serviceCheckoutAttempt.js";
-import { settleServiceCheckout } from "../services/serviceCheckoutSettlement.js";
+import {
+  settleServiceCheckout,
+  settleServiceCheckoutFromReconciler,
+} from "../services/serviceCheckoutSettlement.js";
 
 /**
  * POST-SERVICE CHECKOUT — the barber finishes the cut and collects the balance.
@@ -308,6 +312,16 @@ checkoutRouter.get("/appointments/:id", async (req, res) => {
   }
   const { appt, state, live, serviceName, clientName } = loaded;
 
+  // Shop reads are default-deny inside runWithShop, so this one goes direct.
+  // Only its presence is used; the id itself never leaves the server.
+  const shop = terminalEnabled()
+    ? await prisma.shop.findUnique({
+        where: { id: shopId },
+        select: { stripeConnectAccountId: true },
+      })
+    : null;
+  const connectAccountId = shop?.stripeConnectAccountId ?? null;
+
   res.json({
     appointment: {
       id: appt.id,
@@ -331,10 +345,22 @@ checkoutRouter.get("/appointments/:id", async (req, res) => {
         dueCents: state.chargeableCents,
         card: state.card,
       },
-      // Phase 2. Advertised as actionable only where the native capability and
-      // the account are actually ready, which no server can know alone - the
-      // shell tells us, and until it does this stays false.
-      tapToPay: { available: false, blocker: terminalEnabled() ? "native_not_ready" : "disabled" },
+      // 🔴 HALF AN ANSWER, AND IT SAYS SO. Whether a contactless collection can
+      // happen has two halves and the server owns only one: the flag, Connect,
+      // and an account for the money to land in. The other half - an iPhone
+      // with the entitlement, a reader connected - is knowable only on the
+      // device, so the SCREEN ands this with what the native shell announces
+      // and shows "Not set up on this device yet" when the shell is silent.
+      // Reporting `true` here is therefore not a promise that the button works.
+      tapToPay: {
+        available: terminalEnabled() && connectAccountId !== null && appt.paidAt === null,
+        blocker: !terminalEnabled()
+          ? "disabled"
+          : connectAccountId === null
+            ? "connect_required"
+            : null,
+        dueCents: state.chargeableCents,
+      },
       cashOther: { available: appt.paidAt === null },
     },
     // A live attempt is the reason every method is refused, so it is returned
@@ -717,6 +743,275 @@ checkoutRouter.post("/appointments/:id/cash", async (req, res) => {
     // saying so is more honest than minting an id that leads nowhere.
     receiptReference: null,
   });
+});
+
+const tapToPayIntentSchema = z
+  .object({
+    /** The figure the barber confirmed, in cents. Checked, never trusted. */
+    amountCents: z.number().int().positive().max(1_000_000),
+    /** One press of Tap to Pay. The same value twice is the same attempt. */
+    requestId: z.string().min(8).max(64),
+  })
+  .strict();
+
+/**
+ * POST /api/checkout/appointments/:id/tap-to-pay-intent — start a contactless
+ * collection and hand the phone a client secret to drive the reader with.
+ *
+ * 🔴 THIS ROUTE DOES NOT COLLECT ANY MONEY. It reserves the attempt and mints a
+ * card-present PaymentIntent; the NFC hardware and the customer's card do the
+ * rest, on the device, through the native SDK. That split is why the attempt
+ * opens BEFORE the intent exists: from the moment this returns, a card the
+ * customer has not yet tapped may still take the money, so every other method
+ * must already be blocked.
+ *
+ * It takes the same `requestId` contract as `charge-card`, for the same reason:
+ * a barber who presses twice, or whose app relaunches mid-tap, gets the SAME
+ * attempt and the SAME intent back rather than a second one.
+ */
+checkoutRouter.post("/appointments/:id/tap-to-pay-intent", async (req, res) => {
+  const parsed = tapToPayIntentSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const loaded = await loadCheckout(shopId, req.params.id!);
+  if (!loaded) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const { appt, state, serviceName } = loaded;
+
+  // Replay first, before every refusal - identical to charge-card, and for the
+  // identical reason: the second press of one button must return the first
+  // press's answer, including when the first press is already collecting.
+  const prior = await attemptForRequest(shopId, appt.id, parsed.data.requestId);
+  if (prior) {
+    res.status(200).json({
+      replay: true,
+      attempt: publicAttempt(prior),
+      // A resumed press needs the secret again - the app may have been killed
+      // between the tap and the card. Minted under the attempt's own
+      // idempotency key, so this is the same intent, never a second one.
+      ...(prior.stripePaymentIntentId
+        ? await resumeTapToPaySecret(prior.stripePaymentIntentId)
+        : {}),
+    });
+    return;
+  }
+
+  if (!terminalEnabled()) {
+    res.status(409).json({ error: "tap_to_pay_disabled" });
+    return;
+  }
+  if (appt.paidAt) {
+    res.status(409).json({ error: "paid_already" });
+    return;
+  }
+  if (!checkoutAmountAllowed(state, parsed.data.amountCents)) {
+    res.status(409).json({ error: "amount_not_authorized", dueCents: state.chargeableCents });
+    return;
+  }
+
+  // Shop reads are default-deny inside runWithShop, so this one goes direct.
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { stripeConnectAccountId: true, platformFeeBps: true, name: true },
+  });
+  if (!shop?.stripeConnectAccountId) {
+    res.status(409).json({ error: "connect_required" });
+    return;
+  }
+
+  const opened = await openCheckoutAttempt({
+    shopId,
+    appointmentId: appt.id,
+    clientId: appt.clientId,
+    actorUserId: req.userId ?? null,
+    requestId: parsed.data.requestId,
+    method: "tap_to_pay",
+    amountCents: parsed.data.amountCents,
+    // A contactless card is presented at the reader; there is nothing saved and
+    // no stored-card consent involved, which is exactly why this method works
+    // for a customer who declined to keep a card on file.
+    paymentMethodId: null,
+    cardBrand: null,
+    cardLast4: null,
+    consentVersion: null,
+    consentAt: null,
+  });
+
+  if (opened.kind === "busy") {
+    res.status(409).json({ error: "collection_in_progress", liveAttempt: publicAttempt(opened.attempt) });
+    return;
+  }
+  if (opened.kind === "replay") {
+    res.status(200).json({ replay: true, attempt: publicAttempt(opened.attempt) });
+    return;
+  }
+
+  const attempt = opened.attempt;
+  const created = await createServiceCheckoutTerminalIntent({
+    shopId,
+    appointmentId: appt.id,
+    connectAccountId: shop.stripeConnectAccountId,
+    amountCents: parsed.data.amountCents,
+    platformFeeBps: shop.platformFeeBps,
+    checkoutAttemptId: attempt.id,
+    description: `${serviceName ?? "Appointment"} at ${shop.name} - balance`,
+  });
+
+  logger.info(
+    {
+      shopId,
+      appointmentId: appt.id,
+      attemptId: attempt.id,
+      actorUserId: req.userId ?? null,
+      amountCents: parsed.data.amountCents,
+      ok: created.ok,
+      reason: created.ok ? null : created.reason,
+    },
+    "service checkout: tap to pay intent",
+  );
+
+  if (!created.ok) {
+    // 🔴 CLOSING THIS IS SAFE HERE, AND IS NOT SAFE FOR A SAVED CARD. Read this
+    // before copying either way.
+    //
+    // A saved-card charge is sent with `confirm: true`, so a create that times
+    // out may already be taking the customer's money - its attempt must stay
+    // live or cash gets taken on top. A card-present intent is created
+    // UNCONFIRMED and can only be completed by a reader holding its client
+    // secret. On this path no secret was returned to anyone, so there is no
+    // device that can present a card against it and no way for money to move -
+    // whether Stripe refused outright or never answered at all.
+    //
+    // So the attempt closes, the appointment is freed, and the barber can take
+    // cash instead of being stranded over a charge that cannot happen.
+    await updateCheckoutAttempt({
+      shopId,
+      attemptId: attempt.id,
+      state: "failed",
+      failureReason: created.reason,
+    });
+    res.status(created.reason === "paid_already" ? 409 : 502).json({ error: created.reason });
+    return;
+  }
+
+  await updateCheckoutAttempt({
+    shopId,
+    attemptId: attempt.id,
+    state: "processing",
+    stripePaymentIntentId: created.paymentIntentId,
+  });
+
+  res.json({
+    attemptId: attempt.id,
+    clientSecret: created.clientSecret,
+    paymentIntentId: created.paymentIntentId,
+    amountCents: parsed.data.amountCents,
+    // The SDK needs the destination account to configure Tap to Pay: we use
+    // destination charges, so the reader connects on the PLATFORM account while
+    // the money is destined for the barber's.
+    connectAccountId: shop.stripeConnectAccountId,
+  });
+});
+
+/** The same intent again, for a press that is being resumed rather than made. */
+async function resumeTapToPaySecret(
+  paymentIntentId: string,
+): Promise<{ clientSecret?: string; paymentIntentId?: string }> {
+  try {
+    const { stripeClient } = await import("../billing/stripe.js");
+    const pi = await stripeClient().paymentIntents.retrieve(paymentIntentId);
+    return pi.client_secret
+      ? { clientSecret: pi.client_secret, paymentIntentId: pi.id }
+      : { paymentIntentId: pi.id };
+  } catch {
+    // The replay answer still stands without it; the screen will re-read.
+    return {};
+  }
+}
+
+const tapToPaySettleSchema = z.object({ attemptId: z.string().min(1).max(64) }).strict();
+
+/**
+ * POST /api/checkout/appointments/:id/tap-to-pay-settle — ask Stripe how the
+ * tap went, and record it.
+ *
+ * 🔴 THE WEBHOOK IS STILL THE SOURCE OF TRUTH. This exists because the barber
+ * is standing in front of the customer and cannot wait on a webhook that
+ * usually arrives in a second and occasionally does not. It reads Stripe's own
+ * answer and routes it through the SAME settlement function the webhook and the
+ * reconciler use, so whichever arrives second changes nothing.
+ *
+ * It deliberately does NOT take an outcome from the client. The phone knows
+ * what the SDK told it, but a client-reported "paid" is a client-reported
+ * amount by another name.
+ */
+checkoutRouter.post("/appointments/:id/tap-to-pay-settle", async (req, res) => {
+  const parsed = tapToPaySettleSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const attempt = await runWithShop(shopId, (tx) =>
+    tx.checkoutAttempt.findFirst({
+      where: { id: parsed.data.attemptId, appointmentId: req.params.id!, shopId },
+      select: { id: true, state: true, stripePaymentIntentId: true, method: true },
+    }),
+  );
+  if (!attempt) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (attempt.method !== "tap_to_pay") {
+    res.status(409).json({ error: "not_a_tap_to_pay_attempt" });
+    return;
+  }
+  if (!attempt.stripePaymentIntentId) {
+    // The intent never got as far as existing, so there is nothing to read.
+    // The reconciler owns it; the attempt stays live and nothing else may run.
+    res.status(409).json({ error: "no_intent_yet" });
+    return;
+  }
+
+  let status: string;
+  try {
+    const { stripeClient } = await import("../billing/stripe.js");
+    const pi = await stripeClient().paymentIntents.retrieve(attempt.stripePaymentIntentId);
+    status = pi.status;
+    // 🔴 THROUGH THE SAME WRITER AS THE WEBHOOK, not beside it. A saved card
+    // records its own Payment row at charge time; a tap has no such moment on
+    // this server, so without this the row would sit at
+    // `requires_payment_method` until the webhook arrived - the appointment
+    // reading paid while revenue did not count the money. `applyIntentSnapshot`
+    // is keyed on a marker, so the webhook applying the same answer later is a
+    // no-op rather than a second write.
+    const { applyIntentSnapshot } = await import("../billing/payments.js");
+    await applyIntentSnapshot(pi, `tap-settle:${pi.id}:${pi.status}`, { reconciled: true });
+  } catch (err) {
+    logger.error(
+      { shopId, attemptId: attempt.id, errName: (err as Error)?.name },
+      "service checkout: could not read the tap to pay intent",
+    );
+    // 🔴 Left live ON PURPOSE. Not knowing whether a tapped card was charged is
+    // the one state in which offering another method charges the customer twice.
+    res.status(502).json({ error: "settle_failed" });
+    return;
+  }
+
+  await settleServiceCheckoutFromReconciler({
+    shopId,
+    appointmentId: req.params.id!,
+    stripePaymentIntentId: attempt.stripePaymentIntentId,
+    stripeStatus: status,
+  });
+
+  const after = await attemptById(shopId, attempt.id);
+  res.json({ attempt: after ? publicAttempt(after) : null });
 });
 
 const cancelSchema = z.object({ attemptId: z.string().min(1).max(64) }).strict();

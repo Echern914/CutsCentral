@@ -238,6 +238,22 @@ export async function updateCheckoutAttempt(params: {
  * indistinguishable from a genuine double-collection attempt, and it hides the
  * receipt the barber is waiting to see.
  */
+/**
+ * One attempt by id, live or terminal.
+ *
+ * `liveAttemptFor` deliberately sees only unresolved attempts, so it cannot
+ * answer "what did that collection end up as" - which is exactly what a screen
+ * needs the moment a contactless tap settles.
+ */
+export async function attemptById(shopId: string, attemptId: string): Promise<AttemptRow | null> {
+  return runWithShop(shopId, (tx) =>
+    tx.checkoutAttempt.findFirst({
+      where: { id: attemptId, shopId },
+      select: ATTEMPT_SELECT,
+    }),
+  );
+}
+
 export async function attemptForRequest(
   shopId: string,
   appointmentId: string,

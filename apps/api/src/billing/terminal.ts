@@ -265,6 +265,158 @@ export async function createTerminalPaymentIntent(
   }
 }
 
+export interface ServiceCheckoutIntentInput {
+  shopId: string;
+  appointmentId: string;
+  connectAccountId: string;
+  amountCents: number;
+  platformFeeBps: number;
+  /** The CheckoutAttempt this intent belongs to. Its id keys everything here. */
+  checkoutAttemptId: string;
+  currency?: string;
+  description?: string;
+}
+
+/**
+ * A card-present PaymentIntent for ONE post-service checkout attempt.
+ *
+ * WHY THIS IS A SIBLING OF `createTerminalPaymentIntent` RATHER THAN A FLAG ON
+ * IT. The legacy helper serves the original chair checkout, where the Payment
+ * row IS the collection and there is no attempt ledger. Two differences make
+ * sharing it wrong rather than merely awkward:
+ *
+ *   1. 🔴 IT REFUSES WHEN ANY OTHER service_checkout PAYMENT EXISTS. After a
+ *      declined saved card - which leaves a `failed` row by design, because the
+ *      row is written before Stripe is called - that refusal reads
+ *      `payment_exists` and the barber cannot fall back to the phone. Falling
+ *      back to another method is the entire reason a decline is recoverable, so
+ *      here a row that did not take money does not block a new attempt.
+ *   2. Its idempotency key is `terminal-pi:<paymentId>`. This flow keys on the
+ *      ATTEMPT, so one press is one intent however many times the request is
+ *      retried, the same rule `chargeSavedCardForService` follows.
+ *
+ * 🔴 THE METADATA IS LOAD-BEARING, NOT DECORATION. `checkoutAttemptId` is the
+ * only thing that lets the webhook settle the attempt
+ * (`settleCheckoutAttemptForIntent` keys on it), and `purpose` is what keeps
+ * `promoteHoldForPaidIntent` away from it - without that, an appointment
+ * cancelled between the tap and the webhook would have the barber's money
+ * refunded for a cut they had already given.
+ */
+export async function createServiceCheckoutTerminalIntent(
+  input: ServiceCheckoutIntentInput,
+): Promise<
+  | { ok: true; clientSecret: string; paymentIntentId: string; paymentId: string }
+  | { ok: false; reason: "disabled" | "paid_already" | "stripe_error" }
+> {
+  if (!terminalEnabled()) return { ok: false, reason: "disabled" };
+  const currency = input.currency ?? "usd";
+  const feeAmount = Math.floor((input.amountCents * input.platformFeeBps) / 10000);
+
+  const invalid = validateCharge(input.amountCents, currency);
+  if (invalid) {
+    logger.error(
+      { appointmentId: input.appointmentId, reason: invalid },
+      "createServiceCheckoutTerminalIntent refused: invalid amount or currency",
+    );
+    return { ok: false, reason: "stripe_error" };
+  }
+
+  // Money that actually landed for this cut blocks a second collection. A
+  // `failed`/`canceled` row does not - it is the record of an attempt that took
+  // nothing, and refusing on it would strand the barber after a decline.
+  const settled = await prisma.payment.findFirst({
+    where: {
+      appointmentId: input.appointmentId,
+      purpose: "service_checkout",
+      status: { in: ["succeeded", "processing", "requires_action"] },
+    },
+    select: { id: true },
+  });
+  if (settled) return { ok: false, reason: "paid_already" };
+
+  try {
+    // ROW BEFORE NETWORK, keyed on the attempt: a retry of the same press finds
+    // its own reservation and re-issues under the same idempotency key rather
+    // than minting a second intent.
+    const existing = await prisma.payment.findFirst({
+      where: { appointmentId: input.appointmentId, purpose: "service_checkout", mode: "terminal" },
+      select: { id: true, stripePaymentIntentId: true },
+    });
+    const resumable = existing && isPendingIntentId(existing.stripePaymentIntentId) ? existing : null;
+    const paymentId = resumable?.id ?? `pay_${randomHex(24)}`;
+    if (!resumable) {
+      await prisma.payment.create({
+        data: {
+          id: paymentId,
+          shopId: input.shopId,
+          appointmentId: input.appointmentId,
+          stripePaymentIntentId: pendingIntentId(paymentId),
+          stripeConnectAccountId: input.connectAccountId,
+          mode: "terminal",
+          purpose: "service_checkout",
+          amount: input.amountCents,
+          currency,
+          applicationFeeAmount: feeAmount,
+          status: "requires_payment_method",
+        },
+      });
+    }
+
+    try {
+      const intent = await stripeClient().paymentIntents.create(
+        {
+          amount: input.amountCents,
+          currency,
+          payment_method_types: ["card_present"],
+          capture_method: "automatic",
+          on_behalf_of: input.connectAccountId,
+          transfer_data: { destination: input.connectAccountId },
+          ...(feeAmount > 0 ? { application_fee_amount: feeAmount } : {}),
+          description: input.description,
+          metadata: {
+            shopId: input.shopId,
+            appointmentId: input.appointmentId,
+            paymentId,
+            checkoutAttemptId: input.checkoutAttemptId,
+            purpose: "service_checkout",
+          },
+        },
+        { idempotencyKey: `svc-checkout-pi:${input.checkoutAttemptId}` },
+      );
+      await prisma.payment.updateMany({
+        where: { id: paymentId, stripePaymentIntentId: pendingIntentId(paymentId) },
+        data: { stripePaymentIntentId: intent.id, status: intent.status, ambiguousAt: null },
+      });
+      return intent.client_secret
+        ? { ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id, paymentId }
+        : { ok: false, reason: "stripe_error" };
+    } catch (err) {
+      const facts = stripeErrorFacts(err);
+      if (!facts.definitive) {
+        // Unknown outcome: the reconciler owns it from here, and the attempt
+        // stays live so no second collection can start behind it.
+        await prisma.payment.updateMany({
+          where: { id: paymentId },
+          data: { ambiguousAt: new Date() },
+        });
+      }
+      logger.error(
+        { appointmentId: input.appointmentId, paymentId, ...facts },
+        facts.definitive
+          ? "createServiceCheckoutTerminalIntent refused by Stripe"
+          : "createServiceCheckoutTerminalIntent outcome unknown - the reconciler owns it",
+      );
+      return { ok: false, reason: "stripe_error" };
+    }
+  } catch (err) {
+    logger.error(
+      { appointmentId: input.appointmentId, errName: errorClassification(err) },
+      "createServiceCheckoutTerminalIntent failed",
+    );
+    return { ok: false, reason: "stripe_error" };
+  }
+}
+
 function randomHex(n: number): string {
   const bytes = new Uint8Array(Math.ceil(n / 2));
   globalThis.crypto.getRandomValues(bytes);
