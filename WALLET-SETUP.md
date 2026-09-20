@@ -212,3 +212,63 @@ never reuses the punch card's cert or key.)
 4. Cancel it → the pass greys out as no longer valid.
 
 Same expiry note as above: the cert renews yearly, refresh the two BASE64 vars.
+
+---
+
+# Appointment pass — the production audit
+
+Everything the appointment pass needs in production, in one place. The gate is
+`appointmentWalletEnabled()` in `apps/api/src/wallet/appointmentPass.ts`, and it
+is **all five or nothing** — any one missing and every route 404s, every badge
+hides, and no poke is dispatched.
+
+| Variable | Shared? | Set? | What breaks without it |
+| --- | --- | --- | --- |
+| `WALLET_APPT_PASS_TYPE_ID` | appointment only | ❌ **UNSET** | Everything. Also the APNs topic. |
+| `WALLET_APPT_PASS_CERT_BASE64` | appointment only | ❌ **UNSET** | Signing. Apple binds one cert to one type id. |
+| `WALLET_APPT_PASS_KEY_BASE64` | appointment only | ❌ **UNSET** | Signing. Must be an **unencrypted** PEM (`-nodes`). |
+| `WALLET_TEAM_ID` | with the punch card | ✅ set (punch card is live) | Signing, for both pass types. |
+| `WALLET_WWDR_CERT_BASE64` | with the punch card | ✅ set (punch card is live) | The chain, for both pass types. |
+
+`WALLET_APPT_PASS_KEY_PASSPHRASE` is **deliberately unset** and must stay that
+way while the key is unencrypted — see §3 above.
+
+So the remaining work is exactly the three `WALLET_APPT_*` variables. The two
+shared ones are already in production, proven by the punch-card pass being live.
+
+🔴 **Never print a value.** Use the `keys[]`-only commands in §5; both `grep` on
+`railway variables` and `--kv` print raw values, which for these variables means
+the certificate and the private key. The same rule covers manage tokens: the
+API's own log redaction already replaces them (`/wallet-pass` requests log as
+`/api/book/manage/[redacted]/wallet-pass`), and nothing in the wallet code logs
+a token or a certificate.
+
+## Optional: location relevance
+
+`Shop.latitude` / `Shop.longitude` (nullable, added in
+`20261004000000_shop_coordinates`) make the pass surface on the lock screen when
+the customer arrives AT THE SHOP, not only near the appointment time. Apple's
+`locations` array takes coordinates and nothing else, so an address cannot stand
+in for them.
+
+Both null is a perfectly valid shop: the pass simply omits `locations` and keeps
+time relevance. 🔴 Do not guess coordinates from the address — a pass that buzzes
+at the wrong building is worse than one that never buzzes. No geocoder runs
+anywhere in this codebase; these are set deliberately or not at all.
+
+## Where the badge appears once the three variables land
+
+| Surface | How it adds |
+| --- | --- |
+| Booking confirmation screen | iOS Safari navigation |
+| Customer home, under the next appointment | iOS Safari navigation |
+| Manage-a-booking page | iOS Safari navigation |
+| Confirmation email | link to the same relay |
+| **Inside the ChairBack app** | **native** — `PKAddPassesViewController` via `apps/mobile/modules/wallet-pass` |
+
+The in-app path needs an app build containing the `wallet-pass` native module;
+older installs show no badge rather than a dead button.
+
+🔴 **A PENDING request never gets a pass**, on any surface. A request is not a
+booking, and a pass claiming an appointment the barber has not accepted is worse
+than no pass. Both the badge gate and the `.pkpass` route enforce it.

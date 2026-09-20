@@ -281,6 +281,8 @@ export function RewardsClient({
                   href={`/book/manage/${nextVisit.manageToken}/wallet-pass`}
                   available={data.wallet?.appointment ?? false}
                   label="Add this appointment to Apple Wallet"
+                  // Enables the in-app native path; ignored in Safari.
+                  manageToken={nextVisit.manageToken}
                 />
               )}
             </motion.div>

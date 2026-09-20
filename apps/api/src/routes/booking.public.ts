@@ -2856,6 +2856,19 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
       sentAt: n.createdAt.toISOString(),
     })),
     nudgeReplied: replied,
+    // Whether this page may offer "Add to Apple Wallet". BOTH conditions, and
+    // they are different kinds of thing: the env gate says the server can SIGN
+    // a pass at all, the status says THIS appointment deserves one.
+    //
+    // 🔴 PENDING IS EXCLUDED ON PURPOSE. A request is not a booking. A pass
+    // sitting in someone's phone claiming an appointment the barber has not
+    // accepted is worse than no pass, and it is the same rule the confirmation
+    // screen and the confirmation email already apply. The .pkpass route above
+    // refuses it too, so the button and the download agree - a badge that
+    // downloads a 404 is its own bug.
+    walletPass: {
+      appointment: appointmentWalletEnabled() && appt.status === "BOOKED",
+    },
   });
 });
 

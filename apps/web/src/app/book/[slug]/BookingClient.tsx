@@ -2083,6 +2083,8 @@ export function BookingClient({
                 href={`/book/manage/${confirmedToken}/wallet-pass`}
                 available={data.walletPass?.appointment ?? false}
                 label="Add this appointment to Apple Wallet"
+                // Enables the in-app native path; ignored in Safari.
+                manageToken={confirmedToken}
               />
             </div>
           )}

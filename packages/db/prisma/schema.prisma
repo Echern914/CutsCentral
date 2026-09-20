@@ -363,6 +363,19 @@ model Shop {
   addressCity   String?
   addressRegion String? // state/province abbreviation ("NY")
   addressPostal String?
+  // Coordinates for Apple Wallet LOCATION RELEVANCE - the only thing that makes
+  // an appointment pass surface on the lock screen when the customer arrives at
+  // the shop, rather than only near the appointment time. Apple's `locations`
+  // array takes lat/lng and nothing else, so an address string cannot stand in.
+  //
+  // 🔴 NULLABLE, AND NULL IS NOT A BUG. No geocoder runs anywhere in this
+  // codebase, so these are only ever set deliberately. A pass for a shop
+  // without them is still completely valid - it simply omits `locations` and
+  // keeps time-based relevance (see wallet/appointmentPass.ts). Never guess
+  // coordinates from the address: a pass that buzzes at the wrong building is
+  // worse than one that does not buzz at all.
+  latitude      Float?
+  longitude     Float?
   galleryUrls       String[] @default([]) // legacy: bare photo URLs (superseded by galleryItems)
   // Gallery photos with optional per-photo captions: [{ url, caption? }, ...].
   // Migrated from galleryUrls; galleryUrls is kept for one release as a safety net.
