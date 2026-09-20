@@ -74,11 +74,21 @@ public class TapToPayEducationModule: Module {
           do {
             let discovery = ProximityReaderDiscovery()
             let content = try await discovery.content(for: .payment(.howToTap))
-            discovery.presentContent(content, from: top)
-            // Apple's `presentContent(_:from:)` returns no dismissal callback,
-            // so "presented" is the strongest thing that can honestly be
-            // reported here. The caller treats it as "the barber has been
-            // shown it", which is what the requirement asks for.
+            // 🔴 `try await`, AND STRIPE'S PUBLISHED SNIPPET HAS NEITHER. Their
+            // documentation shows `discovery.presentContent(content, from: vc)`
+            // bare; the real API is `async throws`, and a build written from
+            // that snippet does not compile:
+            //
+            //   error: call can throw but is not marked with 'try'
+            //   error: expression is 'async' but is not marked with 'await'
+            //
+            // Found by an actual EAS build. No amount of TypeScript checking
+            // would have caught it, because none of this is TypeScript.
+            //
+            // It being async is also good news: awaiting it means the overlay
+            // was shown AND finished, so the caller gets a real completion
+            // rather than "we asked for it to appear".
+            try await discovery.presentContent(content, from: top)
             promise.resolve(true)
           } catch {
             promise.reject("ERR_PRESENT_FAILED", error.localizedDescription)

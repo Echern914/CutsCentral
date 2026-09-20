@@ -96,13 +96,24 @@ describe("dismissal and completion", () => {
     expect(write).toHaveBeenCalled();
   });
 
-  it("records Apple's overlay once it has been presented", async () => {
-    // Apple's `presentContent(_:from:)` has no dismissal callback, so
-    // "presented" is the honest completion signal - and the docs' requirement
-    // is that it is presented.
-    const d = deps();
-    await ensureHowToTapShown(d);
-    expect(d.write).toHaveBeenCalledTimes(1);
+  it("waits for Apple's overlay to finish before recording it", async () => {
+    // `presentContent(_:from:)` is `async throws` - which an EAS build proved,
+    // since Stripe's published snippet omits both and does not compile - so
+    // awaiting it means shown AND finished, not merely requested.
+    let finish!: () => void;
+    const shown = new Promise<void>((r) => {
+      finish = r;
+    });
+    const write = vi.fn(async () => {});
+    const d = deps({ presentNative: vi.fn(() => shown), write });
+
+    const pending = ensureHowToTapShown(d);
+    await Promise.resolve();
+    expect(write).not.toHaveBeenCalled();
+
+    finish();
+    expect((await pending).outcome).toBe("native");
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });
 
