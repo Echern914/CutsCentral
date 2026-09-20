@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import type { BookShopData } from "../page";
 import {
   groupCreateAction,
@@ -73,7 +74,11 @@ function newIdempotencyKey(): string {
 export function GroupBookingClient({ data }: { data: BookShopData }) {
   const slug = data.shop.slug;
   const tz = data.shop.timezone;
-  const providerNoun = data.shop.vocabulary?.providerNoun ?? "barber";
+  // 🔴 NEVER the literal "barber". This page renders for nail studios and
+  // tattoo shops too, and the neutral fallback is what the rest of the product
+  // already uses when a shop has not chosen a vertical.
+  const providerNoun =
+    data.shop.vocabulary?.providerNoun ?? NEUTRAL_VOCABULARY.providerNoun;
 
   const [step, setStep] = useState<Step>("who");
   const [staffId, setStaffId] = useState<string | null>(null);
@@ -127,10 +132,17 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
     attendees.length >= 2 &&
     attendees.every((a) => a.firstName.trim().length > 0 && a.serviceId);
 
+  /**
+   * 🔴 DOES NOT CLEAR THE NOTICE. It used to, and that silently ate the one
+   * message that matters most: a slot conflict sets "that time was just taken,
+   * nothing was booked" and then reloads the times - so the explanation was
+   * wiped a moment after being written, and the customer was thrown back to a
+   * picker with no idea why. Callers clear the notice when they START something
+   * new; reloading times is not that.
+   */
   const loadSlots = useCallback(async () => {
     if (!staffId || !ready) return;
     setSlotsBusy(true);
-    setNotice(null);
     const from = new Date();
     const to = new Date(from.getTime() + 30 * 24 * 60 * 60 * 1000);
     const res = await groupSlotsAction(slug, {
@@ -237,7 +249,7 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
       <Shell title={outcome.kind === "booked" ? "You're booked" : "Almost there"}>
         {outcome.kind === "confirming" ? (
           <p className="text-muted">
-            Your chairs are held and we&apos;re confirming with the shop&apos;s calendar.
+            Your appointments are held and we&apos;re confirming with the shop&apos;s calendar.
             You don&apos;t need to do anything - this page is safe to close.
           </p>
         ) : (
@@ -370,6 +382,7 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
           <Primary
             disabled={!ready}
             onClick={async () => {
+              setNotice(null);
               setStep("when");
               await loadSlots();
             }}

@@ -820,7 +820,7 @@ async function groupByToken(token: string | undefined) {
       staffId: true,
       status: true,
       firstName: true,
-      shop: { select: { timezone: true, name: true, bookingBufferMin: true } },
+      shop: { select: { slug: true, timezone: true, name: true, bookingBufferMin: true } },
       staff: { select: { name: true } },
       appointments: {
         orderBy: { groupPosition: "asc" },
@@ -859,7 +859,11 @@ bookingGroupRouter.get("/group/:token", rewardsLimiter, async (req, res) => {
   res.json({
     status: group.status,
     bookedBy: group.firstName,
-    shop: { name: group.shop.name, timezone: group.shop.timezone },
+    // slug is the PUBLIC shop handle - the same segment already in this page's
+    // own URL. It is here so reschedule-all can reuse /:slug/group/slots and
+    // ask for times that fit the party as it stands, rather than inventing a
+    // second availability path.
+    shop: { slug: group.shop.slug, name: group.shop.name, timezone: group.shop.timezone },
     // 🔴 staffId is here so RESCHEDULE-ALL can reuse /group/slots - it needs to
     // ask for times on this barber with these services. A display-safe
     // identifier and nothing more: no mirror state, no Acuity id, no customer
