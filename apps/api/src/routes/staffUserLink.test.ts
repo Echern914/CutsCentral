@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { createApp } from "../app.js";
@@ -7,6 +7,12 @@ import { __setSendEmailForTests } from "../messaging/email.js";
 import { __setMessageProviderForTests } from "../messaging/twilio.js";
 import type { SendMessageInput } from "../messaging/provider.js";
 import { __setPushSenderForTests, type PushPayload } from "../messaging/push.js";
+import {
+  armBackgroundWorkTracking,
+  backgroundWorkInFlight,
+  disarmBackgroundWorkTracking,
+  settleBackgroundWork,
+} from "../backgroundWork.js";
 
 /**
  * Staff.userId — the chair→login link that every barber alert routes on.
@@ -37,6 +43,8 @@ let lastInviteToken: string | null = null;
 
 let sent: SendMessageInput[] = [];
 let pushes: Array<{ endpoint: string; payload: PushPayload }> = [];
+/** Milliseconds the fake SMS provider stalls before recording. 0 = immediate. */
+let smsDelayMs = 0;
 
 let ownerCookie: string;
 let ownerEmail: string;
@@ -48,6 +56,8 @@ let serviceId: string;
 let chairId: string;
 /** A second chair, so re-linking has somewhere to move to. */
 let spareChairId: string;
+/** The service given to that chair, reused by the contamination pair below. */
+let spareServiceId: string;
 
 const ORIGINAL_DRY_RUN = process.env.DRY_RUN;
 
@@ -105,7 +115,35 @@ async function newChair(name: string): Promise<string> {
   return res.body.id as string;
 }
 
-/** Poll until the fire-and-forget notify legs land (they run post-response). */
+/**
+ * Wait for THIS test's notifications to finish - both legs, not one.
+ *
+ * 🔴 WHY POLLING FOR AN EFFECT IS NOT ENOUGH, and what went wrong before.
+ * A booking route dispatches its notification with `void notify(...)`, so it
+ * responds before the barber's push and SMS have been sent. This file used to
+ * poll for whichever effect a test cared about:
+ *
+ *     await waitFor(() => pushes.length > 0);
+ *     expect(sent.map((s) => s.to)).not.toContain(BARBER_PHONE);
+ *
+ * Push and SMS are two independent legs of one dispatch. Waiting for the push
+ * says nothing about the SMS, so the test could finish with an SMS still in
+ * flight; `beforeEach` then cleared `sent`, the straggler landed in the NEXT
+ * test's array, and that test failed on a message it never caused. It passed
+ * everywhere except a loaded CI runner, which is the worst possible place for
+ * it to be the only thing that fails.
+ *
+ * `settleBackgroundWork` counts the dispatches themselves, so "nothing of mine
+ * is still running" is a fact rather than a guess about timing. Every test
+ * below that triggers a notification ends with this, and `afterEach` repeats it
+ * as a floor - so a test added later that forgets still cannot leak into its
+ * neighbour.
+ */
+async function settleNotifications(): Promise<void> {
+  await settleBackgroundWork();
+}
+
+/** Poll until a condition holds. Only for effects, never for quiescence. */
 async function waitFor(pred: () => boolean): Promise<void> {
   for (let i = 0; i < 80; i++) {
     if (pred()) return;
@@ -124,6 +162,8 @@ function futureAtHour(daysAhead: number, hourUtc: number): Date {
 beforeAll(async () => {
   process.env.DRY_RUN = "false";
   __resetEnvCacheForTests();
+  // Armed before anything can dispatch, so no notification escapes counting.
+  armBackgroundWorkTracking();
   // The raw invite token exists ONLY in the email (we store its sha256).
   __setSendEmailForTests(async (input) => {
     const m = /token=([^\s&]+)/.exec(input.text ?? "");
@@ -133,6 +173,10 @@ beforeAll(async () => {
   __setMessageProviderForTests({
     channel: "SMS",
     send: async (input) => {
+      // `smsDelayMs` lets a test make the SMS leg arrive LATE on purpose - the
+      // shape a loaded CI runner produces by accident. See the regression test
+      // at the end of this file.
+      if (smsDelayMs > 0) await new Promise((r) => setTimeout(r, smsDelayMs));
       sent.push(input);
       return { sid: `SM-fake-${sent.length}`, status: "queued" };
     },
@@ -214,6 +258,10 @@ afterAll(async () => {
   if (ORIGINAL_DRY_RUN === undefined) delete process.env.DRY_RUN;
   else process.env.DRY_RUN = ORIGINAL_DRY_RUN;
   __resetEnvCacheForTests();
+  // Drain before unhooking the fakes: an in-flight notification that reached a
+  // torn-down sender would throw into nobody's test.
+  await settleBackgroundWork();
+  disarmBackgroundWorkTracking();
   __setSendEmailForTests(undefined);
   __setMessageProviderForTests(undefined);
   __setPushSenderForTests(undefined);
@@ -229,8 +277,24 @@ afterAll(async () => {
 
 beforeEach(() => {
   lastInviteToken = null;
+  smsDelayMs = 0;
   sent = [];
   pushes = [];
+});
+
+/**
+ * 🔴 THE FLOOR, and the reason this is in `afterEach` rather than trusted to
+ * each test. Vitest runs afterEach(N) fully before beforeEach(N+1), so draining
+ * here means the capture arrays are cleared with NOTHING in flight - which is
+ * what makes "a previous test cannot contaminate the next one" structural
+ * rather than a property of how carefully each test was written.
+ *
+ * Individual tests still settle before their own assertions, because they need
+ * their notifications to have HAPPENED. This guarantees the different thing:
+ * that none of them outlive the test that caused them.
+ */
+afterEach(async () => {
+  await settleBackgroundWork();
 });
 
 describe("the chair link follows the seat", () => {
@@ -383,7 +447,10 @@ describe("alerts reach the barber whose chair it is", () => {
 
   it("a new booking pushes the barber's device and texts the barber's number", async () => {
     await book(futureAtHour(2, 10), "Malik");
-    await waitFor(() => pushes.length > 0 && sent.some((s) => s.to === BARBER_PHONE));
+    // Both legs, by construction. Polling for "a push AND a barber SMS" would
+    // also pass here, but only because this test happens to assert on both -
+    // and it would still leave the CUSTOMER confirmation in flight.
+    await settleNotifications();
 
     const push = pushes.find((p) => p.payload.title === "New booking");
     expect(push).toBeTruthy();
@@ -399,13 +466,17 @@ describe("alerts reach the barber whose chair it is", () => {
 
   it("a customer cancellation reaches the same barber", async () => {
     const { manageToken } = await book(futureAtHour(3, 11), "Priya");
-    await waitFor(() => sent.some((s) => s.to === BARBER_PHONE));
+    // 🔴 THE SAME TRAP, INSIDE ONE TEST. This waited for the booking's SMS and
+    // then cleared both arrays - so the booking's PUSH, still in flight, landed
+    // in the arrays meant for the cancellation and the assertions below read a
+    // "New booking" push as if it were the cancellation's.
+    await settleNotifications();
     sent = [];
     pushes = [];
 
     const res = await request(app).post(`/api/book/manage/${manageToken}/cancel`).send({});
     expect(res.status).toBe(200);
-    await waitFor(() => pushes.length > 0);
+    await settleNotifications();
 
     const push = pushes.find((p) => p.payload.body.includes("canceled"));
     expect(push).toBeTruthy();
@@ -420,6 +491,7 @@ describe("alerts reach the barber whose chair it is", () => {
       .set("Cookie", ownerCookie)
       .send({ name: "Lineup", durationMin: 20, price: 20, staffIds: [spareChairId] });
     expect(svc.status).toBe(201);
+    spareServiceId = svc.body.id as string;
     await request(app)
       .put(`/api/booking/staff/${spareChairId}/availability`)
       .set("Cookie", ownerCookie)
@@ -442,11 +514,68 @@ describe("alerts reach the barber whose chair it is", () => {
       smsConsent: true,
     });
     expect(res.status).toBe(201);
-    await waitFor(() => pushes.length > 0);
+    // 🔴 THE ASSERTION THAT WENT RED IN CI. It waited for the PUSH and then
+    // asserted about SMS, so the barber SMS it is asserting the ABSENCE of
+    // could still be the previous test's, arriving after `beforeEach` cleared
+    // the array. Settling makes "no barber SMS" a statement about this test.
+    await settleNotifications();
 
     // Unclaimed chair -> the owner, which is the behavior a solo shop relies on.
     const push = pushes.find((p) => p.payload.title === "New booking");
     expect(push!.endpoint).toBe("https://push.test/owner-device");
+    expect(sent.map((s) => s.to)).toContain(OWNER_PHONE);
+    expect(sent.map((s) => s.to)).not.toContain(BARBER_PHONE);
+  });
+
+  /**
+   * 🔴 THE REGRESSION TEST FOR THE RACE ITSELF, not for what it broke.
+   *
+   * The pair below reproduces the CI failure deliberately: the first test makes
+   * the barber's SMS arrive LATE - far later than its own push, which is what a
+   * loaded runner does by accident - and the second is the victim, asserting
+   * that no barber SMS reached it.
+   *
+   * Without the drain the delayed SMS lands in the second test's freshly
+   * cleared array and `not.toContain(BARBER_PHONE)` fails, which is exactly the
+   * observed `[ '+13025550199', '+13025550100' ]`. With it, the first test
+   * cannot finish while its own SMS is outstanding, so there is nothing left to
+   * leak. Deleting the `settleNotifications()` calls or the `afterEach` drain
+   * turns the second test red.
+   */
+  it("a delayed SMS is still THIS test's, however late the provider is", async () => {
+    smsDelayMs = 250;
+    await book(futureAtHour(6, 10), "Late");
+    await settleNotifications();
+
+    // It landed here, where it belongs - not in whatever runs next.
+    expect(sent.some((s) => s.to === BARBER_PHONE)).toBe(true);
+    // And the drain is a fact about the dispatches, not a sleep that was long
+    // enough: nothing is outstanding at the moment this test ends.
+    expect(backgroundWorkInFlight()).toBe(0);
+  });
+
+  it("🔴 and the NEXT test is clean, which is the whole point", async () => {
+    // Runs immediately after the delayed-SMS test above. Under the old code
+    // this is where that stray '+13025550199' turned up.
+    expect(sent).toHaveLength(0);
+    expect(pushes).toHaveLength(0);
+
+    // Book on the unclaimed chair again: the owner is texted, the barber is not
+    // - and "not" now means something, because nothing from the previous test
+    // can still be arriving.
+    const res = await request(app).post(`/api/book/${slug}`).send({
+      staffId: spareChairId,
+      serviceId: spareServiceId,
+      startsAt: futureAtHour(7, 12).toISOString(),
+      firstName: "Clean",
+      lastName: "Slate",
+      phone: "(302) 555-0423",
+      email: "cust0423@example.com",
+      smsConsent: true,
+    });
+    expect(res.status).toBe(201);
+    await settleNotifications();
+
     expect(sent.map((s) => s.to)).toContain(OWNER_PHONE);
     expect(sent.map((s) => s.to)).not.toContain(BARBER_PHONE);
   });
