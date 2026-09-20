@@ -258,6 +258,9 @@ async function loadAppointment(shopId: string, appointmentId: string) {
         // A standing appointment this booking belongs to, so the confirmation
         // can say how many of the requested visits actually landed.
         seriesId: true,
+        // A back-to-back party this booking belongs to, so ONE email can carry
+        // the whole visit instead of three near-identical ones arriving together.
+        groupId: true,
         firstName: true,
         email: true, // what the booker typed (preferred email target)
         service: { select: { name: true } },
@@ -416,8 +419,40 @@ async function notifyAppointmentConfirmationImpl(params: {
               };
             })
           : null;
+        // 🔴 THE PARTY, COUNTED FROM THE ROWS THAT ACTUALLY LANDED - never
+        // from what was asked for. A group whose third member was refused must
+        // read as two appointments, because two is what the customer has.
+        //
+        // Only members still BOOKED are listed: a cancelled attendee is not
+        // part of the visit any more, and printing them would have the barber
+        // expecting somebody who is not coming.
+        const group = appt.groupId
+          ? await runWithShop(shop.id, async (tx) => {
+              const members = await tx.appointment.findMany({
+                where: { groupId: appt.groupId as string, shopId: shop.id, status: "BOOKED" },
+                select: {
+                  firstName: true,
+                  startsAt: true,
+                  service: { select: { name: true } },
+                },
+                orderBy: { startsAt: "asc" },
+              });
+              if (members.length < 2) return null;
+              return {
+                count: members.length,
+                lines: members.map(
+                  (m) =>
+                    `${m.firstName} - ${m.service?.name ?? "Appointment"} - ${formatApptTime(
+                      m.startsAt,
+                      shop.timezone,
+                    )}`,
+                ),
+              };
+            })
+          : null;
         const email = buildAppointmentConfirmationEmail({
           address: shop,
+          group,
           series,
           firstName: appt.firstName,
           shopName: shop.name,

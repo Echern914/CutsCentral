@@ -16,6 +16,14 @@ import {
 } from "../engines/appointmentGroup.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { cancelGroup } from "../engines/appointmentPromotion.js";
+import {
+  MirrorNotConfiguredError,
+  dispatchCreateAll,
+  recordMirrorIntent,
+  releaseForAppointment,
+} from "../engines/acuityMirror.js";
+import { noteAvailabilityChanged } from "../services/availabilityCache.js";
+import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
 import { isSlotBookable } from "../engines/slots.js";
 import { bookingWriteLimiter, rewardsLimiter } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
@@ -360,6 +368,9 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
   });
   const consented = d.smsConsent === true;
 
+  // Collected inside the transaction, acted on after it commits.
+  const appointmentIds: string[] = [];
+  const mirrorOutboxIds: string[] = [];
   try {
     const created = await prisma.$transaction(async (tx) => {
       // 🔴 ONE call, the COMBINED interval. See the header above.
@@ -423,7 +434,7 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
       });
 
       for (const m of plan.members) {
-        await tx.appointment.create({
+        const appt = await tx.appointment.create({
           data: {
             shopId: shop.id,
             staffId: d.staffId,
@@ -449,10 +460,98 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
             groupId: group.id,
             groupPosition: m.position,
           },
+          select: { id: true },
         });
+
+        // 🔴 EVERY MEMBER GETS ITS OWN ACUITY BLOCK, and the intent is written
+        // in THIS transaction so an appointment can never exist without one.
+        //
+        // This was missing when the group endpoints first shipped, and on an
+        // ENFORCE shop that is not a cosmetic gap: the barber's Acuity calendar
+        // stays sellable over three chairs ChairBack has already promised. That
+        // is the exact way a ChairBack booking which had held 6:10pm for eleven
+        // days got sold over from the Acuity side.
+        //
+        // A group is N blocks, not one: Acuity has no notion of a party, and a
+        // single block spanning the run would be wrong the moment one attendee
+        // cancels. The HTTP calls happen after commit for the same reason the
+        // single path defers them - holding the staff advisory lock across
+        // 200-800ms of Acuity latency would serialise every booking for this
+        // barber behind it, and a group would hold it three times over.
+        const outboxIds = await recordMirrorIntent(tx, {
+          shopId: shop.id,
+          now,
+          appointmentId: appt.id,
+          staffId: d.staffId,
+          startsAt: m.startsAt,
+          endsAt: m.endsAt,
+          occupancy: {
+            // Pay-at-shop only in v1, so a group member is always a real
+            // booking - never a payment hold and never an approval request.
+            status: "BOOKED",
+            startsAt: m.startsAt,
+            endsAt: m.endsAt,
+            holdExpiresAt: null,
+            holdReason: null,
+            visitId: null,
+          },
+        });
+        appointmentIds.push(appt.id);
+        mirrorOutboxIds.push(...outboxIds);
       }
       return group;
     });
+
+    // MIRROR BEFORE WE PROMISE ANYTHING. Acuity has to be holding every one of
+    // these times before the customer is told the party is booked - otherwise
+    // "you are booked" is a claim we cannot back.
+    if (mirrorOutboxIds.length > 0) {
+      const outcome = await dispatchCreateAll(mirrorOutboxIds);
+      if (outcome === "failed") {
+        // DEFINITIVE rejection: Acuity looked and declined, so no block exists.
+        // 🔴 UNDO THE WHOLE PARTY. Keeping the members that happened to land
+        // would leave a family booked for two of three chairs and nobody told
+        // which one is missing - the partial success this feature exists to
+        // make impossible. Nothing has been sent and no money was taken, so
+        // this costs the customer only the need to pick again.
+        await compensateUnmirroredGroup(shop.id, created.id, appointmentIds);
+        await noteAvailabilityChanged(shop.id);
+        res.status(409).json({ error: "slot_unavailable_external", code: "SLOT_UNAVAILABLE" });
+        return;
+      }
+      if (outcome === "unknown") {
+        // AMBIGUOUS - the blocks may well exist; we simply never heard back.
+        // Cancelling would kill a real party over a lost response AND strand
+        // live blocks. Keep the booking, say nothing confirmatory, and let the
+        // reconciler settle it by reference.
+        logger.warn(
+          { shopId: shop.id, groupId: created.id, outboxIds: mirrorOutboxIds },
+          "acuity mirror: ambiguous group create - holding booking, suppressing confirmation",
+        );
+        await noteAvailabilityChanged(shop.id);
+        res.status(202).json({
+          status: "processing",
+          groupId: created.id,
+          manageToken: created.manageToken,
+        });
+        return;
+      }
+    }
+    await noteAvailabilityChanged(shop.id);
+
+    // 🔴 ONE CONFIRMATION FOR THE WHOLE PARTY, not one per chair. Only the
+    // FIRST member is notified, and the email carries everybody (see the
+    // `group` block in messaging/templates.ts). Three near-identical
+    // confirmations landing together reads as a bug, not as thoroughness.
+    //
+    // Fire-and-forget, like the single booking path: a send problem must not
+    // fail a booking that is already durably saved. The per-appointment
+    // confirmationEmailSentAt stamp is what keeps it at-most-once, and the
+    // other members are never passed here, so they have nothing to stamp.
+    const firstId = appointmentIds[0];
+    if (firstId) {
+      void notifyAppointmentConfirmation({ shopId: shop.id, appointmentId: firstId });
+    }
 
     res.status(201).json({ groupId: created.id, manageToken: created.manageToken });
   } catch (err) {
@@ -481,6 +580,18 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
         return;
       }
     }
+    // An ENFORCE shop whose chair has no Acuity calendar mapped. The single
+    // booking path refuses for the same reason: without somewhere to write the
+    // block there is no way to protect the time, and booking anyway would be
+    // the unprotected write this whole mechanism exists to prevent.
+    if (err instanceof MirrorNotConfiguredError) {
+      logger.error(
+        { shopId: shop.id, staffId: err.staffId },
+        "acuity mirror: ENFORCE with an unmapped chair - group booking refused",
+      );
+      res.status(409).json({ error: "slot_unavailable_external", code: "SLOT_UNAVAILABLE" });
+      return;
+    }
     if (err instanceof SlotTakenError) {
       // Someone else took part of the run while the customer was confirming.
       // NOTHING was written - the transaction rolled back - so the honest
@@ -492,6 +603,47 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
     res.status(500).json({ error: "server_error" });
   }
 });
+
+/**
+ * Undo a group whose Acuity blocks were definitively refused.
+ *
+ * Cancels every member and releases whatever blocks DID land, then marks the
+ * group itself cancelled so nothing downstream treats it as a live visit.
+ *
+ * Deliberately NOT cancelGroup(): this is a compensation for a booking the
+ * customer was never told about, so it must not apply a cancellation policy
+ * fee, send a cancellation email, or count as an occurrence anyone has to
+ * explain. It is the group-shaped twin of compensateUnmirroredBooking.
+ *
+ * Never throws. A failure here leaves the party booked but unmirrored, which
+ * the reconciler owns - and a thrown error would turn a recoverable state into
+ * a 500 on top of it.
+ */
+async function compensateUnmirroredGroup(
+  shopId: string,
+  groupId: string,
+  appointmentIds: string[],
+): Promise<void> {
+  try {
+    const now = new Date();
+    await prisma.$transaction(async (tx) => {
+      await tx.appointment.updateMany({
+        where: { id: { in: appointmentIds }, shopId },
+        data: { status: "CANCELED", canceledAt: now },
+      });
+      await tx.appointmentGroup.updateMany({
+        where: { id: groupId, shopId },
+        data: { status: "CANCELED", canceledAt: now },
+      });
+    });
+    for (const id of appointmentIds) await releaseForAppointment(shopId, id);
+  } catch (err) {
+    logger.error(
+      { err, shopId, groupId },
+      "acuity mirror: group compensation FAILED - party survives unmirrored, reconciler owns it",
+    );
+  }
+}
 
 /** The group behind a whole-group manage token, or null. */
 async function groupByToken(token: string | undefined) {
