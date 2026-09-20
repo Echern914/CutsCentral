@@ -1,7 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { GetTheApp } from "./GetTheApp";
 import { appleItunesApp } from "@/lib/appBanner";
+import { track } from "@/lib/analytics";
+
+vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
+const tracked = vi.mocked(track);
 
 /**
  * The banner's whole job is knowing when to say NOTHING. Every assertion here
@@ -23,6 +27,7 @@ function setUA(ua: string) {
 
 beforeEach(() => {
   localStorage.clear();
+  tracked.mockClear();
   delete (window as { ReactNativeWebView?: unknown }).ReactNativeWebView;
 });
 
@@ -39,10 +44,16 @@ describe("GetTheApp", () => {
     expect(screen.getByText(/book faster next time/i)).toBeTruthy();
   });
 
-  it("says nothing in iOS SAFARI - Apple's own banner is already there", () => {
+  it("🔴 OFFERS THE APP IN iOS SAFARI - this is the QR-scan path", async () => {
+    // This assertion used to be its exact opposite ("says nothing in iOS
+    // Safari - Apple own banner is already there"), and that rule is what
+    // hid this card from almost everyone it was written for. A QR code
+    // scanned with the iPhone Camera opens in SAFARI. Apple banner is
+    // dismissible once per domain forever, so a customer who ever swiped it
+    // away had no install affordance left on any shop page.
     setUA(IPHONE_SAFARI);
-    const { container } = render(<GetTheApp surface="booking" />);
-    expect(container.textContent).toBe("");
+    render(<GetTheApp surface="booking" />);
+    expect(await screen.findByText(/book faster next time/i)).toBeTruthy();
   });
 
   it("🔴 says nothing on ANDROID - there is no Play Store listing to send them to", () => {
@@ -83,6 +94,17 @@ describe("GetTheApp", () => {
     expect(link.getAttribute("href")).toMatch(/apps\.apple\.com/);
   });
 
+  it("🔴 the confirmation screen is its OWN surface, not `manage`", async () => {
+    // Same booking, very different moment. Folding them together would make
+    // "how many people installed right after booking" - the number this whole
+    // feature is judged by - unanswerable, because it would be mixed in with
+    // everyone who opened a manage link days later.
+    setUA(IPHONE_SAFARI);
+    render(<GetTheApp surface="confirmation" openPath="/book/manage/mt_abc" />);
+    expect(await screen.findByText(/keep this appointment in your pocket/i)).toBeTruthy();
+    expect(tracked).toHaveBeenCalledWith("app_banner_shown", { surface: "confirmation" });
+  });
+
   it("each surface gets its own pitch", async () => {
     setUA(IPHONE_CHROME);
     const { unmount } = render(<GetTheApp surface="line" />);
@@ -90,6 +112,71 @@ describe("GetTheApp", () => {
     unmount();
     render(<GetTheApp surface="manage" />);
     expect(await screen.findByText(/manage bookings in the app/i)).toBeTruthy();
+  });
+});
+
+describe("Open in ChairBack", () => {
+  it("🔴 preserves the shop AND the prefill in the hand-off", async () => {
+    // The whole point of openPath: landing in the app on a generic booking
+    // screen instead of this shop, with this service, would make the app a
+    // downgrade from the web page the customer was already looking at.
+    setUA(IPHONE_SAFARI);
+    render(
+      <GetTheApp surface="booking" openPath="/book/cherncuts?service=svc_1&staff=stf_2" />,
+    );
+    const open = (await screen.findByText(/open in chairback/i)) as HTMLAnchorElement;
+    expect(open.getAttribute("href")).toBe(
+      "chairback://book/cherncuts?service=svc_1&staff=stf_2",
+    );
+  });
+
+  it("🔴 is NOT an https universal link - iOS ignores those from the same domain", async () => {
+    // An https://getchairback.com/book/... href here reloads the page the
+    // customer is already on and nothing else, because iOS suppresses
+    // universal links for same-domain navigations. That failure is silent,
+    // which is exactly why it is pinned by a test.
+    setUA(IPHONE_SAFARI);
+    render(<GetTheApp surface="manage" openPath="/book/manage/mt_abc" />);
+    const open = (await screen.findByText(/open in chairback/i)) as HTMLAnchorElement;
+    expect(open.getAttribute("href")).not.toMatch(/^https?:/);
+  });
+
+  it("without an openPath the card is install-only", async () => {
+    setUA(IPHONE_SAFARI);
+    render(<GetTheApp surface="line" />);
+    await screen.findByText(/get the app/i);
+    expect(screen.queryByText(/open in chairback/i)).toBeNull();
+  });
+});
+
+describe("analytics", () => {
+  it("records the card being shown, and carries NO customer data", async () => {
+    setUA(IPHONE_SAFARI);
+    render(<GetTheApp surface="booking" openPath="/book/cherncuts" />);
+    await screen.findByText(/book faster next time/i);
+    expect(tracked).toHaveBeenCalledWith("app_banner_shown", { surface: "booking" });
+    // 🔴 The surface and nothing else. These fire on a page anyone can reach
+    // by scanning a sticker on a wall: there is no identified customer to
+    // attach, and attaching the shop would turn a counter into a record of
+    // who visited which shop.
+    for (const call of tracked.mock.calls) {
+      expect(Object.keys(call[1] ?? {})).toEqual(["surface"]);
+    }
+  });
+
+  it("records the App Store tap and the app-open tap separately", async () => {
+    setUA(IPHONE_SAFARI);
+    render(<GetTheApp surface="booking" openPath="/book/cherncuts" />);
+    fireEvent.click(await screen.findByText(/open in chairback/i));
+    fireEvent.click(screen.getByText(/get the app/i));
+    expect(tracked).toHaveBeenCalledWith("app_opened", { surface: "booking" });
+    expect(tracked).toHaveBeenCalledWith("app_store_clicked", { surface: "booking" });
+  });
+
+  it("stays silent where the card does not render", () => {
+    setUA(ANDROID_CHROME);
+    render(<GetTheApp surface="booking" />);
+    expect(tracked).not.toHaveBeenCalled();
   });
 });
 

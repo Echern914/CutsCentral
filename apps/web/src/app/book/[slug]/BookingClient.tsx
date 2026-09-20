@@ -26,6 +26,7 @@ import {
 import { BackToDashboard } from "@/components/BackToDashboard";
 import { AddToWallet } from "@/components/AddToWallet";
 import { CustomerBack } from "@/components/CustomerBack";
+import { GetTheApp } from "@/components/GetTheApp";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { DemoTour } from "@/components/tour/DemoTour";
@@ -2086,6 +2087,19 @@ export function BookingClient({
               />
             </div>
           )}
+          {/* The one moment a customer is certain to be pleased with us, and
+              the one page they are most likely to come back to - so it is where
+              "Open in ChairBack" belongs. openPath is the MANAGE page rather
+              than the booking page: what they will want next is this booking,
+              not another one. Renders nothing off iOS, and nothing at all
+              inside the app (they already have it). */}
+          <div className="mt-6">
+            <GetTheApp
+              surface="confirmation"
+              serviceNoun={vocab.serviceNoun}
+              openPath={`/book/manage/${confirmedToken}`}
+            />
+          </div>
           {/* Escape hatch: in the app WebView the confirmation was a dead end
               (no browser chrome) — pop back to wherever the customer started
               (rewards home or shop page). */}

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { STORAGE, rewardsUrl } from "@/src/config";
+import { STORAGE, WEB_ORIGIN, rewardsUrl } from "@/src/config";
 import { invalidate, useCustomer } from "@/src/customer/CustomerProvider";
 import { color, radius, space } from "@/src/customer/theme";
 import { Button, Txt } from "@/src/customer/ui";
@@ -25,7 +25,12 @@ import { WebPage } from "@/src/customer/WebPage";
  * pre-answered, and the page opens the same either way.
  */
 export default function LinkScreen() {
-  const { token, url, name } = useLocalSearchParams<{ token?: string; url?: string; name?: string }>();
+  const { token, url, path, name } = useLocalSearchParams<{
+    token?: string;
+    url?: string;
+    path?: string;
+    name?: string;
+  }>();
   const { status, api, isDemo } = useCustomer();
   const [offer, setOffer] = useState<"idle" | "busy" | "connected" | "refused" | "dismissed">("idle");
 
@@ -93,6 +98,15 @@ export default function LinkScreen() {
       load={async () => {
         if (token) return rewardsUrl(token);
         if (url) return url; // WebPage refuses anything off ChairBack's origin.
+        // A path from app/+native-intent.tsx (a scanned /book/... QR code).
+        // 🔴 It is resolved HERE rather than being sent as a whole URL, so the
+        // only origin this screen can ever be pointed at is the one the build
+        // was configured with. A caller supplying `path` cannot choose a host.
+        // The leading-slash check keeps "//evil.com" - which resolves to a
+        // different ORIGIN, not a path - out of the concatenation.
+        if (path && path.startsWith("/") && !path.startsWith("//")) {
+          return `${WEB_ORIGIN}${path}`;
+        }
         throw new Error("no_link");
       }}
       onMessage={(data) => {

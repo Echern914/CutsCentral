@@ -70,7 +70,11 @@ export default async function ManagePage({
     <>
       <ManageClient token={params.token} data={data} />
       <div className="mx-auto w-full max-w-2xl px-4 pb-8">
-        <GetTheApp surface="manage" />
+        {/* openPath makes this an OPEN action as well as an install one: the
+            manage token is the page's own authentication, so the in-app copy
+            of this page is the same page, and app/+native-intent.tsx sends it
+            to the signed-out link screen rather than asking for a login. */}
+        <GetTheApp surface="manage" openPath={`/book/manage/${params.token}`} />
       </div>
     </>
   );
