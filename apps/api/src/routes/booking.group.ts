@@ -26,8 +26,8 @@ import {
   sendGroupConfirmationOnce,
 } from "../engines/appointmentGroupSettle.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
-import { isSlotBookable } from "../engines/slots.js";
-import { bookingWriteLimiter, rewardsLimiter } from "../middleware/rateLimit.js";
+import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
+import { bookingReadLimiter, bookingWriteLimiter, rewardsLimiter } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
 
 /**
@@ -255,6 +255,190 @@ async function preflight(
 
   return { ok: true, plan };
 }
+
+/**
+ * 🔴 THE GRID MUST BE SIZED FOR THE WHOLE PARTY, NOT FOR ONE HAIRCUT.
+ *
+ * `/plan` takes a start time as an INPUT - it validates one candidate. Nothing
+ * enumerated candidates, and neither existing availability endpoint can express
+ * a combined run: `/slug/slots` takes a single serviceId and no extra duration,
+ * `/slug/day` takes only a date. A picker built on those offers times sized for
+ * ONE service, the customer taps 2:30, and the write refuses it - the grid
+ * disagreeing with the writer, which is the outage class #344 was about.
+ *
+ * So: the same pairing the writer already uses, exposed for reading. Nothing
+ * here is new logic - `preflight` calls exactly this on line ~230.
+ *
+ * 🔴 NOTHING ABOUT DURATION COMES FROM THE BROWSER. The query names services
+ * BY ID; every duration and price is resolved server-side from this shop's own
+ * rows. A client that could post `extraDurationMin` could book a three-person
+ * run into a one-person hole.
+ *
+ * 🔴 AND THE IDS ARE NOT DEDUPLICATED. Two siblings can want the same cut, and
+ * that service's duration has to count TWICE. `loadGroupServices` dedupes its
+ * database LOOKUP (an optimisation), but the plan is built by walking the
+ * attendee list in order, so a repeated id is planned once per attendee.
+ *
+ * Read-only: no row is written and Acuity is never contacted.
+ */
+const groupSlotsQuerySchema = z.object({
+  staffId: z.string().min(1).max(64),
+  /**
+   * In ATTENDEE ORDER, repeats allowed. Order matters because each duration is
+   * resolved at its own start, so "30 then 20" and "20 then 30" can end at
+   * different times once a weekday override is in play.
+   */
+  serviceIds: z
+    .string()
+    .min(1)
+    .transform((v) => v.split(",").map((x) => x.trim()).filter(Boolean)),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+});
+
+/** Placeholder attendee names. The planner requires one; slots never show it. */
+const SLOT_PLACEHOLDER_NAMES = ["A", "B", "C"];
+
+bookingGroupRouter.get("/:slug/group/slots", bookingReadLimiter, async (req, res) => {
+  const parsed = groupSlotsQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const serviceIds = parsed.data.serviceIds;
+  // A party, not a single booking. One id would be an ordinary /slots query and
+  // must not be answered here, or the two grids could drift apart.
+  if (serviceIds.length < 2 || serviceIds.length > MAX_GROUP_ATTENDEES) {
+    res.status(400).json({ error: "invalid_input", code: "GROUP_SIZE" });
+    return;
+  }
+
+  const shop = await resolveNativeShop(req.params.slug);
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (!hasActiveAccess(shop)) {
+    res.status(403).json({ error: "no_active_access", code: "BOOKING_UNAVAILABLE" });
+    return;
+  }
+  // The same refusal /plan and /create give. Offering times for a shop that
+  // cannot take a group booking would be a picker leading to a dead end.
+  if (collectsMoneyAtBooking(shop)) {
+    res.status(409).json({ error: "group_payments_unsupported" });
+    return;
+  }
+
+  const staff = await prisma.staff.findFirst({
+    where: { id: parsed.data.staffId, shopId: shop.id, active: true },
+    select: { id: true },
+  });
+  if (!staff) {
+    res.status(400).json({ error: "invalid_slot" });
+    return;
+  }
+  // Resolved against THIS shop, and only services this barber actually offers.
+  const services = await loadGroupServices(shop.id, parsed.data.staffId, serviceIds);
+  if (!services) {
+    res.status(400).json({ error: "invalid_slot" });
+    return;
+  }
+
+  const now = new Date();
+  const from = parsed.data.from ?? now;
+  const horizonMs = shop.bookingMaxDays * 24 * 60 * 60 * 1000;
+  const to = parsed.data.to ?? new Date(now.getTime() + horizonMs);
+  if (to.getTime() <= from.getTime()) {
+    res.status(400).json({ error: "invalid_input", code: "RANGE" });
+    return;
+  }
+  // Bounded like every other slot read: this endpoint fans out to
+  // computeOpenSlots, which holds a pooled connection for its whole
+  // interactive transaction. An unbounded window is a way to hold one open.
+  if (to.getTime() - from.getTime() > horizonMs) {
+    res.status(400).json({ error: "invalid_input", code: "RANGE_TOO_WIDE" });
+    return;
+  }
+
+  // The SAME ordered plan /plan and /create build - walked per attendee, so a
+  // repeated service id is counted once per person.
+  const attendees = serviceIds.map((serviceId, i) => ({
+    firstName: SLOT_PLACEHOLDER_NAMES[i] ?? "X",
+    serviceId,
+  }));
+  let plan: GroupPlan;
+  try {
+    plan = planGroupSequence({
+      attendees,
+      startsAt: from,
+      timezone: shop.timezone,
+      services,
+    });
+  } catch (err) {
+    if (err instanceof GroupPlanError) {
+      res.status(400).json({ error: "invalid_slot" });
+      return;
+    }
+    throw err;
+  }
+
+  const candidates = await computeOpenSlots({
+    shopId: shop.id,
+    staffId: parsed.data.staffId,
+    serviceId: plan.members[0]!.serviceId,
+    fromDate: from,
+    toDate: to,
+    // 🔴 Server-computed, from server-resolved durations. Never from the query.
+    extraDurationMin: groupExtraDurationMin(plan),
+    now,
+  });
+
+  // 🔴 RE-PLAN AT EACH CANDIDATE, because a duration is resolved at ITS OWN
+  // start. The grid above was sized from ONE plan (at `from`), but a service
+  // can be 30 minutes Mon-Thu and 20 on Friday - so a candidate on another
+  // weekday can need more room than the grid was sized for. Re-planning is
+  // pure and needs no database, so the check is cheap; without it this endpoint
+  // would hand back times that /plan then refuses, which is the precise
+  // disagreement it exists to prevent.
+  const slots = candidates.filter((slot) => {
+    try {
+      const at = planGroupSequence({
+        attendees,
+        startsAt: slot.startsAt,
+        timezone: shop.timezone,
+        services,
+      });
+      const roomMin = (slot.endsAt.getTime() - slot.startsAt.getTime()) / 60_000;
+      if (at.totalDurationMin > roomMin) return false;
+      // Every LATER member's own service must be offered across its own span -
+      // the one question the combined grid cannot answer. Same rule as preflight.
+      return at.members.slice(1).every((m) => {
+        const svc = services.get(m.serviceId)!;
+        return serviceOfferedDuring({
+          hoursWindows: svc.hoursWindows,
+          timeOverrides: svc.timeOverrides,
+          startsAt: m.startsAt,
+          endsAt: m.endsAt,
+          timezone: shop.timezone,
+        });
+      });
+    } catch {
+      return false;
+    }
+  });
+
+  // Display-safe only: when the party may start, and when the chair frees up.
+  res.json({
+    timezone: shop.timezone,
+    totalDurationMin: plan.totalDurationMin,
+    slots: slots.map((s) => ({
+      startsAt: s.startsAt.toISOString(),
+      endsAt: new Date(
+        s.startsAt.getTime() + plan.totalDurationMin * 60_000,
+      ).toISOString(),
+    })),
+  });
+});
 
 /**
  * The sequence and the total, WITHOUT booking anything.
@@ -676,7 +860,11 @@ bookingGroupRouter.get("/group/:token", rewardsLimiter, async (req, res) => {
     status: group.status,
     bookedBy: group.firstName,
     shop: { name: group.shop.name, timezone: group.shop.timezone },
-    staff: { name: group.staff.name },
+    // 🔴 staffId is here so RESCHEDULE-ALL can reuse /group/slots - it needs to
+    // ask for times on this barber with these services. A display-safe
+    // identifier and nothing more: no mirror state, no Acuity id, no customer
+    // data beyond what this token already authorises.
+    staff: { id: group.staffId, name: group.staff.name },
     // The party span, from what is still BOOKED. A cancelled member shrinks
     // the visit rather than leaving a hole in the middle of it.
     startsAt: live[0]?.startsAt.toISOString() ?? null,
@@ -687,6 +875,9 @@ bookingGroupRouter.get("/group/:token", rewardsLimiter, async (req, res) => {
       position: a.groupPosition,
       firstName: a.firstName,
       status: a.status,
+      // Same reason as staff.id above: reschedule-all rebuilds the party's
+      // service list to re-ask for times. The NAME alone cannot do that.
+      serviceId: a.serviceId,
       serviceName: a.service?.name ?? null,
       startsAt: a.startsAt.toISOString(),
       endsAt: a.endsAt.toISOString(),
