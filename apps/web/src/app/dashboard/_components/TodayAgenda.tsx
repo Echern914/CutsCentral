@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
-import { serviceColorHex } from "@chairback/config/constants";
+import { resolveServiceColor } from "@chairback/config/serviceColor";
 import { NAME_WRAP_CLS, initialsOf } from "./appointmentCardStyles";
 
 /** One row of today's agenda (the subset of /api/booking/agenda we render). */
@@ -93,7 +93,12 @@ export function TodayAgenda({
       ) : (
         <ul className="divide-y divide-subtle">
           {rows.map((r) => {
-            const stripe = serviceColorHex(r.serviceColor);
+            // Same resolver as the calendar, so one service is one colour on
+            // both surfaces - explicit choice first, then derived from the name.
+            const stripe = resolveServiceColor({
+              explicitKey: r.serviceColor,
+              serviceName: r.serviceName,
+            }).hex;
             const closed = CLOSED.has(r.status);
             return (
               <li

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { businessType, randomToken, SERVICE_COLOR_KEYS } from "@chairback/config";
+import { businessType, normalizeServiceName, randomToken, SERVICE_COLOR_KEYS } from "@chairback/config";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -2348,6 +2348,11 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
           dailyTarget: true,
           serviceGroupId: true,
           active: true,
+          // Read here rather than in a second query: the Acuity colour mapping
+          // below needs name+colour for every service, and this row set is
+          // already exactly that, already shop-scoped, and already unfiltered
+          // by `active` - which is what a retired service's old bookings need.
+          color: true,
         },
       }),
     ] as const);
@@ -2667,6 +2672,43 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       },
     })) as unknown as VisitAgendaRow[];
     if (externalVisits.length >= BOOKING_CAP) truncated = true;
+
+    // 🔴 GIVE A SYNCED BOOKING ITS SERVICE'S COLOUR. A Visit carries a
+    // free-text service name and no service row, so `serviceColor` was
+    // hardcoded null here and EVERY Acuity appointment rendered colourless -
+    // on drickcuttinup that is 70 of the 81 cards in the next 30 days, which
+    // made the whole palette look broken rather than unset.
+    //
+    // Matched on the NORMALISED name, and only when it resolves to exactly ONE
+    // service: two services normalising the same way ("Beard Trim" as both a
+    // service and an add-on) is a real shape, and guessing between them would
+    // paint a booking with another service's colour. An ambiguous or unmatched
+    // name falls through to null and the client derives a colour from the name
+    // itself, so the card is still coloured - just not claiming to be a
+    // barber's explicit choice.
+    // 🔴 NO EXTRA QUERY, AND NO QUERY PER VISIT. Built once from `serviceRows`,
+    // which this handler already loaded for the category gauge - shop-scoped by
+    // its own `where` AND by the RLS session this whole block runs inside. A
+    // lookup per Visit row would be an N+1 on a calendar that routinely renders
+    // seventy of them.
+    const colorByService = new Map<string, string | null>();
+    {
+      const seen = new Set<string>();
+      for (const s of serviceRows) {
+        const key = normalizeServiceName(s.name);
+        if (!key) continue;
+        if (seen.has(key)) {
+          colorByService.set(key, null); // ambiguous: refuse to guess
+          continue;
+        }
+        seen.add(key);
+        colorByService.set(key, s.color ?? null);
+      }
+    }
+    const mappedColor = (serviceName: string | null): string | null => {
+      if (!serviceName) return null;
+      return colorByService.get(normalizeServiceName(serviceName)) ?? null;
+    };
     for (const v of externalVisits) {
       agenda.push({
         id: v.id,
@@ -2681,7 +2723,9 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
           fullName(v.client?.firstName ?? null, v.client?.lastName ?? null) ||
           "Booked elsewhere",
         serviceName: v.serviceName ?? null,
-        serviceColor: null,
+        // The mapped service's own colour when the name resolves to exactly
+        // one; otherwise null, and the screen derives one from the name.
+        serviceColor: mappedColor(v.serviceName ?? null),
         price: v.price == null ? null : Number(v.price),
         status: VISIT_STATUS[v.status] ?? "upcoming",
         seriesId: null,

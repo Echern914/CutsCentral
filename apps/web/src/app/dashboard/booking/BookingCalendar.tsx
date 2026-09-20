@@ -26,7 +26,7 @@ import {
   appointmentStatusPill,
   initialsOf,
 } from "../_components/appointmentCardStyles";
-import { serviceColorHex } from "@chairback/config/constants";
+import { resolveServiceColor } from "@chairback/config/serviceColor";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import type {
   AgendaCategory,
@@ -1889,7 +1889,10 @@ function PencilIcon() {
 // Shared card language (name wrapping + initials) - see appointmentCardStyles.
 // The card is PRESENTATION-only work: statuses, permissions and every action
 // handler below are exactly as they were.
-function AppointmentBlock({
+// Exported for tests: the collapsed-card contract (time, who, service,
+// colour, status) is the thing Drick asked for and the thing a future density
+// pass would quietly undo.
+export function AppointmentBlock({
   row,
   timeLabel,
   toast,
@@ -2112,9 +2115,13 @@ function AppointmentBlock({
     });
   }
 
-  // Service color-coding: a slim left accent line (and a dot by the service
-  // name). Falls back to the default subtle border when the service has no color.
-  const colorHex = serviceColorHex(row.serviceColor);
+  // Service colour: the barber's explicit choice, else a deterministic one
+  // derived from the service name. Never null for a row that HAS a service,
+  // because an unset palette is what made the whole feature look broken.
+  const colorHex = resolveServiceColor({
+    explicitKey: row.serviceColor,
+    serviceName: row.serviceName,
+  }).hex;
   const durMin =
     row.end && row.end > row.start
       ? Math.round((Date.parse(row.end) - Date.parse(row.start)) / 60_000)
@@ -2176,15 +2183,17 @@ function AppointmentBlock({
         </span>
       </button>
 
-      {/* Collapsed, the row stops here. What a barber scanning the day needs is
-          when, who and what state — the service, the price and six buttons are
-          what made eight cuts an unscrollable wall. */}
-      {expanded && (
-      <>
-
-      {/* The service line: what, how long, how much - plus the origin chips,
-          which used to crowd the name row. */}
-      <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 pl-[38px] text-xs text-muted">
+      {/* 🔴 THE SERVICE NAME IS NOT BEHIND THE TAP. It used to be: this whole
+          line sat inside `expanded`, so a collapsed card showed when, who and
+          a status pill, and "what am I actually doing at 2pm" cost a tap per
+          appointment. Drick asked for it back after comparing with Acuity.
+          What stays hidden is what actually made the day an unscrollable wall
+          - the price, the duration and six buttons - so the card grew one line
+          of text, not its old height. */}
+      <p
+        data-testid="service-line"
+        className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 pl-[38px] text-xs text-muted"
+      >
         {colorHex && (
           <span
             aria-hidden
@@ -2194,8 +2203,10 @@ function AppointmentBlock({
         )}
         <span className="[overflow-wrap:anywhere]">
           {row.serviceName ?? "Appointment"}
-          {durMin !== null && ` · ${fmtDuration(durMin)}`}
-          {row.price != null && ` · $${row.price.toFixed(0)}`}
+          {/* Duration and price stay behind the tap - they are reference, not
+              the at-a-glance fact, and they are what crowded the line. */}
+          {expanded && durMin !== null && ` · ${fmtDuration(durMin)}`}
+          {expanded && row.price != null && ` · $${row.price.toFixed(0)}`}
         </span>
         {isRecurring && (
           <span
@@ -2217,6 +2228,11 @@ function AppointmentBlock({
           </span>
         )}
       </p>
+
+      {/* Everything from here down is the expanded card: reference and
+          actions, which is what made the collapsed list unscrollable. */}
+      {expanded && (
+      <>
 
       {/* SOURCE, not status. A synced booking is just as booked as a native
           one; what differs is who OWNS it. ChairBack has no outbound
