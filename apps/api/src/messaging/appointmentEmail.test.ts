@@ -298,3 +298,57 @@ describe("calendar, wallet and the app CTA", () => {
     }
   });
 });
+
+describe("a back-to-back party gets ONE email that carries everybody", () => {
+  const group = {
+    count: 3,
+    lines: [
+      "Eric - Haircut - Wed, Sep 2 at 11:00 AM",
+      "Brother - Kids cut - Wed, Sep 2 at 11:30 AM",
+      "Dad - Beard trim - Wed, Sep 2 at 11:50 AM",
+    ],
+  };
+
+  it("names the party in the subject rather than one service", () => {
+    // Three people are booked; a subject saying "Skin Fade" understates what
+    // the customer is opening.
+    const e = buildAppointmentConfirmationEmail({ ...base, group });
+    expect(e.subject).toContain("3 appointments");
+    expect(e.subject).not.toContain("Skin Fade");
+  });
+
+  it("lists every attendee, service and time - in both text and html", () => {
+    const e = buildAppointmentConfirmationEmail({ ...base, group });
+    for (const who of ["Eric", "Brother", "Dad"]) {
+      expect(e.text).toContain(who);
+      expect(e.html).toContain(who);
+    }
+    expect(e.text).toContain("3 back-to-back appointments");
+    expect(e.html).toContain("3 back-to-back appointments");
+  });
+
+  it("🔴 says nothing about a group when there is only one person", () => {
+    // A group of one is an ordinary booking, and the email must read like one.
+    const e = buildAppointmentConfirmationEmail({
+      ...base,
+      group: { count: 1, lines: ["Eric - Haircut - Wed, Sep 2 at 11:00 AM"] },
+    });
+    expect(e.subject).toContain("Skin Fade");
+    expect(e.text).not.toContain("back-to-back");
+  });
+
+  it("an ordinary booking is completely unchanged", () => {
+    const withGroup = buildAppointmentConfirmationEmail({ ...base, group: null });
+    const without = buildAppointmentConfirmationEmail({ ...base });
+    expect(withGroup.subject).toBe(without.subject);
+    expect(withGroup.text).toBe(without.text);
+    expect(withGroup.html).toBe(without.html);
+  });
+
+  it("still offers the one route to change a booking", () => {
+    // The rule the rest of this file exists for holds for a party too.
+    const e = buildAppointmentConfirmationEmail({ ...base, group });
+    expect(e.text).toContain("/book/manage/tok_abc123");
+    expect(e.text).not.toMatch(/reply to this email/i);
+  });
+});

@@ -16,6 +16,16 @@ import {
 } from "../engines/appointmentGroup.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { cancelGroup } from "../engines/appointmentPromotion.js";
+import {
+  MirrorNotConfiguredError,
+  dispatchCreateEach,
+  recordMirrorIntent,
+} from "../engines/acuityMirror.js";
+import {
+  compensateGroup,
+  sendGroupConfirmationOnce,
+} from "../engines/appointmentGroupSettle.js";
+import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { isSlotBookable } from "../engines/slots.js";
 import { bookingWriteLimiter, rewardsLimiter } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
@@ -360,6 +370,9 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
   });
   const consented = d.smsConsent === true;
 
+  // Collected inside the transaction, acted on after it commits.
+  const appointmentIds: string[] = [];
+  const mirrorOutboxIds: string[] = [];
   try {
     const created = await prisma.$transaction(async (tx) => {
       // 🔴 ONE call, the COMBINED interval. See the header above.
@@ -423,7 +436,7 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
       });
 
       for (const m of plan.members) {
-        await tx.appointment.create({
+        const appt = await tx.appointment.create({
           data: {
             shopId: shop.id,
             staffId: d.staffId,
@@ -449,10 +462,117 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
             groupId: group.id,
             groupPosition: m.position,
           },
+          select: { id: true },
         });
+
+        // 🔴 EVERY MEMBER GETS ITS OWN ACUITY BLOCK, and the intent is written
+        // in THIS transaction so an appointment can never exist without one.
+        //
+        // This was missing when the group endpoints first shipped, and on an
+        // ENFORCE shop that is not a cosmetic gap: the barber's Acuity calendar
+        // stays sellable over three chairs ChairBack has already promised. That
+        // is the exact way a ChairBack booking which had held 6:10pm for eleven
+        // days got sold over from the Acuity side.
+        //
+        // A group is N blocks, not one: Acuity has no notion of a party, and a
+        // single block spanning the run would be wrong the moment one attendee
+        // cancels. The HTTP calls happen after commit for the same reason the
+        // single path defers them - holding the staff advisory lock across
+        // 200-800ms of Acuity latency would serialise every booking for this
+        // barber behind it, and a group would hold it three times over.
+        const outboxIds = await recordMirrorIntent(tx, {
+          shopId: shop.id,
+          now,
+          appointmentId: appt.id,
+          staffId: d.staffId,
+          startsAt: m.startsAt,
+          endsAt: m.endsAt,
+          occupancy: {
+            // Pay-at-shop only in v1, so a group member is always a real
+            // booking - never a payment hold and never an approval request.
+            status: "BOOKED",
+            startsAt: m.startsAt,
+            endsAt: m.endsAt,
+            holdExpiresAt: null,
+            holdReason: null,
+            visitId: null,
+          },
+        });
+        appointmentIds.push(appt.id);
+        mirrorOutboxIds.push(...outboxIds);
       }
       return group;
     });
+
+    // MIRROR BEFORE WE PROMISE ANYTHING. Acuity has to be holding every one of
+    // these times before the customer is told the party is booked - otherwise
+    // "you are booked" is a claim we cannot back.
+    //
+    // 🔴 PER-MEMBER OUTCOMES, NOT THE COLLAPSED ONE. dispatchCreateAll folds
+    // several answers into one and lets `failed` win over `unknown`. For a
+    // single appointment that is correct. For a party it is dangerous: three
+    // members coming back ACTIVE + FAILED + UNKNOWN is NOT a definitive
+    // failure, because the UNKNOWN member's block may exist in Acuity. Acting
+    // on the FAILED one alone would release what we can see and ORPHAN what we
+    // cannot - a block nobody can find, on a chair nothing will ever free.
+    if (mirrorOutboxIds.length > 0) {
+      const outcomes = await dispatchCreateEach(mirrorOutboxIds);
+      const anyUnknown = outcomes.includes("unknown");
+      const anyFailed = outcomes.includes("failed");
+
+      // 🔴 UNKNOWN OUTRANKS FAILED. Uncertainty anywhere in the party means
+      // nothing here may be called definitive yet, whatever else came back.
+      if (anyUnknown) {
+        logger.warn(
+          { shopId: shop.id, groupId: created.id, outboxIds: mirrorOutboxIds, outcomes },
+          "acuity mirror: ambiguous group create - holding party for reconciliation",
+        );
+        // DURABLE. The party keeps its chairs and the settlement sweep finishes
+        // it once the reconciler has resolved every UNKNOWN - see
+        // engines/appointmentGroupSettle.ts. An in-memory callback would lose
+        // this on the next deploy, and deploys happen constantly.
+        await prisma.appointmentGroup.updateMany({
+          where: { id: created.id, shopId: shop.id },
+          data: { mirrorPendingSince: now },
+        });
+        await noteAvailabilityChanged(shop.id);
+        res.status(202).json({
+          status: "processing",
+          groupId: created.id,
+          manageToken: created.manageToken,
+        });
+        return;
+      }
+
+      if (anyFailed) {
+        // DEFINITIVE, and now provably so: nothing in this party is uncertain.
+        // 🔴 UNDO THE WHOLE PARTY. Keeping the members that happened to land
+        // would leave a family booked for two of three chairs and nobody told
+        // which one is missing - the partial success this feature exists to
+        // make impossible. compensateGroup releases EVERY member's blocks, not
+        // only the failed one. Nothing has been sent and no money was taken.
+        await compensateGroup(shop.id, created.id, now);
+        await noteAvailabilityChanged(shop.id);
+        res.status(409).json({ error: "slot_unavailable_external", code: "SLOT_UNAVAILABLE" });
+        return;
+      }
+    }
+    await noteAvailabilityChanged(shop.id);
+
+    // 🔴 ONE CONFIRMATION FOR THE WHOLE PARTY, not one per chair, and claimed
+    // through the SAME durable marker the settlement sweep uses. Whichever
+    // route reaches a party first wins; the other reads count === 0 and sends
+    // nothing. That is what stops a retry - or a sweep racing this response -
+    // putting a second "you are booked" in front of the same family.
+    //
+    // 🔴 AWAITED, unlike the single booking path's fire-and-forget notify. Two
+    // fast writes, and they are what make the promise durable: if this were
+    // voided and the process died here, the claim would never land, the party
+    // would carry no mirrorPendingSince for the sweep to find, and the customer
+    // would simply never be told. The EMAIL itself is still fire-and-forget
+    // inside sendGroupConfirmationOnce - a send problem must not fail a booking
+    // that is already saved.
+    await sendGroupConfirmationOnce(shop.id, created.id, now);
 
     res.status(201).json({ groupId: created.id, manageToken: created.manageToken });
   } catch (err) {
@@ -480,6 +600,18 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
           .json({ groupId: winner.id, manageToken: winner.manageToken, retried: true });
         return;
       }
+    }
+    // An ENFORCE shop whose chair has no Acuity calendar mapped. The single
+    // booking path refuses for the same reason: without somewhere to write the
+    // block there is no way to protect the time, and booking anyway would be
+    // the unprotected write this whole mechanism exists to prevent.
+    if (err instanceof MirrorNotConfiguredError) {
+      logger.error(
+        { shopId: shop.id, staffId: err.staffId },
+        "acuity mirror: ENFORCE with an unmapped chair - group booking refused",
+      );
+      res.status(409).json({ error: "slot_unavailable_external", code: "SLOT_UNAVAILABLE" });
+      return;
     }
     if (err instanceof SlotTakenError) {
       // Someone else took part of the run while the customer was confirming.

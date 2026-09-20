@@ -323,10 +323,28 @@ export async function dispatchCreate(outboxId: string): Promise<DispatchOutcome>
  * independent calendars, and stopping early would leave rows PENDING that the
  * reconciler then has to clean up anyway.
  */
-export async function dispatchCreateAll(outboxIds: string[]): Promise<DispatchOutcome> {
-  if (outboxIds.length === 0) return "skipped";
+/**
+ * Every outcome, unfolded - for a caller that cannot act on the collapsed one.
+ *
+ * 🔴 `dispatchCreateAll` COLLAPSES failed OVER unknown, and for a single
+ * appointment that is right: one block, one answer, and a definitive refusal is
+ * definitive. For a GROUP it is actively wrong. A party of three that comes
+ * back ACTIVE + FAILED + UNKNOWN is not a definitive failure: the UNKNOWN
+ * member's block may exist in Acuity, and compensating the group on the
+ * strength of the FAILED one would release what we can see and ORPHAN what we
+ * cannot. The caller needs to see all three.
+ */
+export async function dispatchCreateEach(
+  outboxIds: string[],
+): Promise<DispatchOutcome[]> {
   const outcomes: DispatchOutcome[] = [];
   for (const id of outboxIds) outcomes.push(await dispatchCreate(id));
+  return outcomes;
+}
+
+export async function dispatchCreateAll(outboxIds: string[]): Promise<DispatchOutcome> {
+  if (outboxIds.length === 0) return "skipped";
+  const outcomes = await dispatchCreateEach(outboxIds);
   if (outcomes.includes("failed")) return "failed";
   if (outcomes.includes("unknown")) return "unknown";
   if (outcomes.includes("active")) return "active";

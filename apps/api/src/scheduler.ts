@@ -20,6 +20,7 @@ import { runSquareResync } from "./engines/squareResync.js";
 import { rollForwardTargetedRules } from "./engines/targetedSlotRules.js";
 import { runAcuityResync } from "./engines/acuityResync.js";
 import { runAcuityOutboundReconcile } from "./engines/acuityMirror.js";
+import { runGroupMirrorSettle } from "./engines/appointmentGroupSettle.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
 import { runAiTrialReminders } from "./engines/aiTrialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
@@ -251,6 +252,18 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       const r = await runAcuityOutboundReconcile();
       if (r.adopted > 0 || r.retried > 0 || r.released > 0) {
         logger.info(r, "acuity outbound reconcile");
+      }
+      // 🔴 AFTER the reconcile, never before: settling a party means reading
+      // whether every member's block is ACTIVE, and it is the reconcile pass
+      // above that turns an UNKNOWN row into ACTIVE or proves it absent. Run
+      // first and every ambiguous group would simply read as "still pending".
+      //
+      // Deliberately folded into THIS job rather than given its own cron: a new
+      // scheduled job needs a job_lease row seeded by a migration or it never
+      // runs in production at all, silently.
+      const g = await runGroupMirrorSettle();
+      if (g.confirmed > 0 || g.compensated > 0) {
+        logger.info(g, "group mirror settle");
       }
     },
     failMsg: "acuity outbound reconcile failed",
