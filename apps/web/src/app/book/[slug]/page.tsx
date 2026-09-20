@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { APP_NAME } from "@chairback/config/constants";
 import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import { apiPublicGet } from "@/lib/api";
@@ -235,6 +236,23 @@ export default async function BookPage({
       </div>
       <BookingClient data={data} prefill={prefill} />
       <div className="mx-auto w-full max-w-2xl px-4 pb-8">
+        {/* 🔴 THE ONLY CHANGE THIS FEATURE MAKES TO THE SINGLE BOOKING PAGE:
+            one link. The flow above is untouched - not wrapped, not refactored,
+            not given a second mode - so the path every ordinary customer takes
+            is exactly what it was.
+
+            Hidden when the shop collects at booking, because the API refuses a
+            group outright for those shops; offering the link would walk someone
+            into a refusal. `payment.collects` is the same public signal the
+            single page already uses to describe what Confirm will do. */}
+        {!data.shop.payment?.collects && (
+          <Link
+            href={`/book/${params.slug}/group`}
+            className="mb-4 block text-center text-sm text-muted underline transition-colors hover:text-offwhite"
+          >
+            Booking for 2 or 3 people?
+          </Link>
+        )}
         <RewardsDoor />
       </div>
     </>
