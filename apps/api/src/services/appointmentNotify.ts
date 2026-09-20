@@ -18,6 +18,7 @@ import { appointmentDeepLink, resolveNotifyPrefs, sendToBarber } from "./barberN
 import { sendPushToUser } from "../messaging/push.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
+import { trackBackgroundWork } from "../backgroundWork.js";
 import { hasPremiumAccess } from "../billing/entitlements.js";
 
 /**
@@ -316,7 +317,23 @@ export function publicBookingEmailRequired(): boolean {
   return !CONFIRMATION_SMS_ENABLED;
 }
 
-export async function notifyAppointmentConfirmation(params: {
+/**
+ * Every caller dispatches this with `void` - the customer must not wait on an
+ * SMS to get their booking confirmed. That makes it invisible to a test, which
+ * can assert on the response while the notification is still running and then
+ * leave it to land in the next test. `trackBackgroundWork` is how a test can
+ * wait for its OWN dispatches; it returns this promise untouched and allocates
+ * nothing unless a test has armed tracking.
+ */
+export function notifyAppointmentConfirmation(params: {
+  shopId: string;
+  appointmentId: string;
+  now?: Date;
+}): Promise<void> {
+  return trackBackgroundWork(notifyAppointmentConfirmationImpl(params));
+}
+
+async function notifyAppointmentConfirmationImpl(params: {
   shopId: string;
   appointmentId: string;
   now?: Date;
@@ -736,7 +753,16 @@ const BARBER_EVENT_TITLE: Record<BarberBookingEventKind, string> = {
  * there is no Nudge ledger row - that ledger is client-keyed). Fires AFTER the
  * booking transaction committed; fire-and-forget; never throws.
  */
-export async function notifyBarberBookingEvent(params: {
+/** Also dispatched with `void`; tracked for the same reason as above. */
+export function notifyBarberBookingEvent(params: {
+  shopId: string;
+  appointmentId: string;
+  kind: BarberBookingEventKind;
+}): Promise<void> {
+  return trackBackgroundWork(notifyBarberBookingEventImpl(params));
+}
+
+async function notifyBarberBookingEventImpl(params: {
   shopId: string;
   appointmentId: string;
   kind: BarberBookingEventKind;
