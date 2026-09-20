@@ -138,6 +138,16 @@ export async function lockStaffAndAssertSlotFree(
     /** Ignore this row (reschedule/approve/book re-check its own slot). */
     excludeAppointmentId?: string;
     /**
+     * Ignore SEVERAL rows - rescheduling a back-to-back GROUP, where every
+     * member has to be excluded or the run collides with itself.
+     *
+     * Kept separate from `excludeAppointmentId` rather than replacing it: that
+     * field is passed by five call sites whose meaning is genuinely "this one
+     * row", and widening them all to arrays would be churn for no gain. The two
+     * are UNIONED below, so a caller may pass either or both.
+     */
+    excludeAppointmentIds?: readonly string[];
+    /**
      * Which rows block. Default counts BOOKED + PENDING (a pending request or
      * active hold owns its slot). The approve path passes ["BOOKED"]: the row
      * being approved is itself PENDING, and any conflicting PENDING would have
@@ -333,9 +343,19 @@ export async function lockStaffAndAssertSlotFree(
   // includes an in-progress walk-in (recorded COMPLETED, still occupying its
   // span); see engines/chairOccupancy.ts for why that row exists at all.
   const statusFragment = occupyingSql(now, statuses, opts.completedInProgress ?? "occupy");
-  const excludeFragment = opts.excludeAppointmentId
-    ? Prisma.sql`AND "id" <> ${opts.excludeAppointmentId}`
-    : Prisma.empty;
+  // The union of both exclude inputs, de-duplicated. Empty means exclude
+  // nothing, which is the ordinary create path.
+  const excludedIds = [
+    ...new Set(
+      [opts.excludeAppointmentId, ...(opts.excludeAppointmentIds ?? [])].filter(
+        (id): id is string => typeof id === "string" && id.length > 0,
+      ),
+    ),
+  ];
+  const excludeFragment =
+    excludedIds.length > 0
+      ? Prisma.sql`AND "id" <> ALL(${excludedIds}::text[])`
+      : Prisma.empty;
 
   const overlap = await tx.$queryRaw<{ id: string }[]>(
     Prisma.sql`SELECT id FROM "Appointment"
@@ -534,7 +554,7 @@ export async function lockStaffAndAssertSlotFree(
       startsAt: opts.startsAt,
       status: "PENDING",
       holdExpiresAt: { lte: now },
-      ...(opts.excludeAppointmentId ? { id: { not: opts.excludeAppointmentId } } : {}),
+      ...(excludedIds.length > 0 ? { id: { notIn: excludedIds } } : {}),
     },
     data: { status: "CANCELED", canceledAt: now },
   });

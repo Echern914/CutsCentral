@@ -393,6 +393,71 @@ export async function cancelAppointment(
 
 export type CancelSeriesScope = "this" | "future" | "all";
 
+export interface CancelGroupResult {
+  /** How many members were still BOOKED and are now cancelled. */
+  canceled: number;
+}
+
+/**
+ * Cancel EVERY remaining member of a back-to-back group.
+ *
+ * 🔴 EXPLICIT ONLY. Nothing calls this because one attendee dropped out -
+ * cancelling a member is an ordinary single-appointment cancel through that
+ * member's own manage token, and it leaves the rest of the party booked,
+ * because they are still coming. The group is only ended when someone asks for
+ * the whole visit to be called off.
+ *
+ * Shaped exactly like cancelSeries, and for the same reasons: it loops
+ * cancelAppointment per member rather than doing its own UPDATE, so every
+ * existing consequence of a cancellation - the refund rule, the cancellation
+ * email outbox, the Acuity block release, the Wallet pass poke - happens once
+ * per appointment and stays in one place. `suppressSlotOpened` is on because a
+ * group cancel frees a burst of adjacent capacity, and firing three separate
+ * "a slot opened" alerts for one party is noise the barber did not ask for.
+ */
+export async function cancelGroup(
+  shopId: string,
+  groupId: string,
+  now = new Date(),
+  opts: { applyPolicyFee?: boolean } = {},
+): Promise<CancelGroupResult | null> {
+  const group = await runWithShop(shopId, (tx) =>
+    tx.appointmentGroup.findFirst({
+      where: { id: groupId, shopId },
+      select: { id: true },
+    }),
+  );
+  // 🔴 Tenant isolation: a group id from another shop reads as absent here, so
+  // this returns null rather than cancelling someone else's customers.
+  if (!group) return null;
+
+  const rows = await runWithShop(shopId, (tx) =>
+    tx.appointment.findMany({
+      where: { shopId, groupId, status: "BOOKED" },
+      select: { id: true },
+      orderBy: { startsAt: "asc" },
+    }),
+  );
+
+  let canceled = 0;
+  for (const r of rows) {
+    const ok = await cancelAppointment(shopId, r.id, "CANCELED", now, {
+      suppressSlotOpened: true,
+      applyPolicyFee: opts.applyPolicyFee === true,
+    });
+    if (ok) canceled++;
+  }
+
+  await runWithShop(shopId, (tx) =>
+    tx.appointmentGroup.updateMany({
+      where: { id: groupId, shopId, status: "ACTIVE" },
+      data: { status: "CANCELED", canceledAt: now },
+    }),
+  ).catch(() => {});
+
+  return { canceled };
+}
+
 export interface CancelSeriesResult {
   canceled: number;
   seriesStatus: "CANCELED" | "ENDED";

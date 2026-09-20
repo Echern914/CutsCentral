@@ -33,6 +33,10 @@ const SENSITIVE_QUERY_PARAMS = ["token", "code", "state"];
  *                                    session, including opt-out and delete
  *  - `/api/book/offer/:token`        claim someone's held waitlist slot
  *  - `/api/book/manage/:token`       cancel or reschedule someone's booking
+ *  - `/api/book/group/:token`        move or cancel a whole back-to-back party,
+ *                                    and read every member's OWN manage token
+ *                                    out of the response - so it is strictly
+ *                                    more authority than a single manage token
  *  - `/api/page/waitlist/cancel/:token`  cancel someone's place in the queue
  *  - `/api/unsubscribe/:token`       the dedicated marketing opt-out token,
  *                                    carried in the footer of every broadcast
@@ -60,6 +64,12 @@ const SECRET_PATH_PATTERNS: readonly RegExp[] = [
   /(\/api\/rewards\/)[^/?#]+/,
   /(\/api\/book\/offer\/)[^/?#]+/,
   /(\/api\/book\/manage\/)[^/?#]+/,
+  // 🔴 Only the LITERAL /api/book/group/<token>. The group CREATE route is
+  // /api/book/<slug>/group, where the slug is a public shop handle and the
+  // word "group" is the last segment - it contains no "/api/book/group/"
+  // substring, so this cannot over-redact the one path here that has no secret
+  // in it at all.
+  /(\/api\/book\/group\/)[^/?#]+/,
   /(\/api\/page\/waitlist\/cancel\/)[^/?#]+/,
   /(\/api\/unsubscribe\/)[^/?#]+/,
 ];

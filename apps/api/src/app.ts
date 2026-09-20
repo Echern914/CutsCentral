@@ -51,6 +51,7 @@ import { readinessRouter } from "./routes/readiness.js";
 import { teamRouter } from "./routes/team.js";
 import { teamJoinRouter } from "./routes/teamJoin.js";
 import { bookingPublicRouter } from "./routes/booking.public.js";
+import { bookingGroupRouter } from "./routes/booking.group.js";
 import { bookingDashboardRouter } from "./routes/booking.dashboard.js";
 import { bookingConflictsRouter } from "./routes/booking.conflicts.js";
 import { loyaltyRouter } from "./routes/loyalty.js";
@@ -203,6 +204,9 @@ export function createApp(): Express {
   // route. See routes/unsubscribe.public.ts.
   app.use("/api/unsubscribe", rewardsLimiter, unsubscribeRouter);
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
+  // 🔴 BEFORE the public booking router, which owns "/:slug" and would swallow
+  // "/group/..." as a shop slug. Express matches in registration order.
+  app.use("/api/book", bookingGroupRouter); // back-to-back group booking
   app.use("/api/book", bookingPublicRouter); // public native booking (per-route limits inside)
   // Walk-In Mode public surface: the kiosk tablet + "My Place in Line".
   // Per-route limits inside; every credential rides in a POST body, never a
