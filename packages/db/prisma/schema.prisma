@@ -643,6 +643,7 @@ model Shop {
   availabilityExceptions AvailabilityException[]
   appointments           Appointment[]
   recurringSeries        RecurringSeries[]
+  appointmentGroups      AppointmentGroup[]
   appointmentPriceChanges AppointmentPriceChange[]
   appointmentOverrides AppointmentOverride[]
   serviceAddOns          ServiceAddOn[]
@@ -1192,6 +1193,7 @@ model Client {
   promoUses           PromotionRedemption[]
   appointments        Appointment[]
   recurringSeries     RecurringSeries[]
+  appointmentGroups   AppointmentGroup[]
   pushSubscriptions   PushSubscription[]
   cardGrants          CardGrant[]
   walletRegistrations WalletPassRegistration[]
@@ -2135,6 +2137,7 @@ model Staff {
   exceptions        AvailabilityException[]
   appointments      Appointment[]
   recurringSeries   RecurringSeries[]
+  appointmentGroups AppointmentGroup[]
   targetedSlots     TargetedSlot[]
   targetedSlotRules TargetedSlotRule[]
   // The team seat that works this chair, if any (see ShopMember.staffId).
@@ -2974,6 +2977,21 @@ model Appointment {
   seriesId              String?
   series                RecurringSeries?  @relation(fields: [seriesId], references: [id], onDelete: SetNull)
   seriesOccurrenceIndex Int?
+  // Back-to-back group booking ("me and my brother, one after the other").
+  // null = an ordinary single appointment, which is every row before this.
+  //
+  // 🔴 A REAL LINK, NEVER AN INFERENCE. Two appointments sharing a phone
+  // number and touching in time are NOT a group - a shop that books a father
+  // at 2:00 and his son at 2:30 on separate visits would be silently merged
+  // by any such rule, and cancelling one would then offer to cancel the other.
+  // Membership is only ever this column, written once at creation.
+  //
+  // SetNull, matching seriesId and for the same reason: releasing a group must
+  // never delete an occurrence whose Visit/PunchLedger already granted
+  // punches. groupPosition is the 0-based place in the run (0 books first).
+  groupId               String?
+  group                 AppointmentGroup?     @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  groupPosition         Int?
   // AI-receptionist soft-lock. non-null = this PENDING row is a HOLD placed by
   // the receptionist while a client decides ("want Thu 2:30?"), not a real
   // request-before-booking request. An ACTIVE hold (holdExpiresAt > now) blocks
@@ -3047,6 +3065,7 @@ model Appointment {
   @@index([status, startsAt]) // reminder + promotion scans
   @@index([shopId, status, startsAt]) // dashboard upcoming list
   @@index([seriesId]) // "future rows of this series" lookups for cancel-scope
+  @@index([groupId]) // "the rest of this group" for view/reschedule/cancel-all
   @@index([status, holdExpiresAt]) // expired-hold sweep + busy-set exclusion
   walletApptPasses   WalletAppointmentPassRegistration[]
 }
@@ -3064,6 +3083,84 @@ enum RecurringSeriesStatus {
 // stored SHOP-LOCAL (weekday + minutes from local midnight) so occurrence
 // instants are recomputed per date via zonedWallTimeToUtc and stay correct
 // across DST (never add 7*24h in UTC). Exactly one of count / untilDate is set.
+/// A group is ACTIVE until every appointment in it is gone.
+///
+/// 🔴 CANCELED here means THE WHOLE GROUP was cancelled as a unit. It is not
+/// set when one attendee drops out: the other appointments are still real
+/// bookings the barber is expected to keep, and flipping the group would make
+/// "is this visit still happening?" answer no while two people turn up.
+enum AppointmentGroupStatus {
+  ACTIVE
+  CANCELED
+}
+
+/// One visit, several chairs in a row: "me and my brother, back to back with
+/// the same barber".
+///
+/// 🔴 NOT CALLED "BookingGroup", and that is deliberate. `Shop.bookingGroupsFirst`
+/// already exists and means something completely different - showing SERVICE
+/// group cards on the public booking menu. Two "booking group" concepts in one
+/// schema would be a permanent reading hazard, so this one is named after what
+/// it actually groups: appointments. It also reads as a sibling of
+/// RecurringSeries, which is the other thing that owns several Appointment rows.
+///
+/// WHY A TABLE AND NOT A HEURISTIC. The alternative - treating adjacent
+/// appointments that share a phone number as a group - is wrong in both
+/// directions. It invents groups (a father at 2:00 and his son at 2:30, booked
+/// separately, are two visits) and it loses real ones (three attendees, one of
+/// whom cancels, leaves a gap and the "adjacency" evaporates). Group identity
+/// has to be a fact recorded at creation, and this is where it lives.
+///
+/// SCOPE, v1: one shop, ONE barber, up to three attendees, consecutive with no
+/// gap, different services and durations allowed. The barber is on the GROUP
+/// rather than per appointment precisely so "different barbers in one group"
+/// cannot be expressed - a limit the schema enforces rather than a rule some
+/// validator has to remember.
+model AppointmentGroup {
+  id      String @id @default(cuid())
+  shopId  String
+  shop    Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId String
+  staff   Staff  @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  /// The person who booked. Each ATTENDEE's own name lives on their Appointment.
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  /// Booker snapshot, mirroring Appointment - survives client archive/merge.
+  /// This is the ONE contact messaged for the group: three attendees get one
+  /// confirmation, not three.
+  firstName String
+  lastName  String?
+  phone     String?
+  email     String?
+
+  /// Login-less management of the WHOLE group, exactly like a series has.
+  /// Each appointment keeps its own manageToken as well, which is what makes
+  /// "cancel just me" possible without exposing the rest of the group.
+  manageToken String @unique
+
+  /// 🔴 IDEMPOTENT RETRIES. A group create is several appointments in one
+  /// transaction; a client that retries a request whose response it never saw
+  /// must get the SAME group back, not a second set of chairs. Unique, so the
+  /// retry loses the insert race and reads the winner instead.
+  /// Nullable because a group created by hand (a barber, an import) has no
+  /// request to be idempotent about - and 🔴 in Postgres NULLs are DISTINCT in
+  /// a unique index, so any number of rows may carry null here.
+  idempotencyKey String? @unique
+
+  status AppointmentGroupStatus @default(ACTIVE)
+
+  /// Audit. canceledAt is set only by a whole-group cancellation.
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  canceledAt DateTime?
+
+  appointments Appointment[]
+
+  @@index([shopId, status])
+  @@index([shopId, staffId])
+}
+
 model RecurringSeries {
   id        String @id @default(cuid())
   shopId    String
