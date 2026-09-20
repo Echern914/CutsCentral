@@ -609,6 +609,23 @@ export function buildAppointmentConfirmationEmail(params: {
     /** Already formatted in the shop's zone, soonest first. */
     dates: string[];
   } | null;
+  /**
+   * A BACK-TO-BACK PARTY this booking belongs to.
+   *
+   * 🔴 ONE EMAIL FOR THE WHOLE VISIT, NOT ONE PER CHAIR. Three appointments
+   * are three rows on the barber's calendar, but they are ONE thing that
+   * happened to the customer - and three near-identical confirmations landing
+   * together reads as a bug, not as thoroughness. So only the FIRST member is
+   * notified, and it carries everybody.
+   *
+   * Every line is already formatted in the shop's zone by the caller, in
+   * sitting order: "Eric - Haircut - 2:00 PM".
+   */
+  group?: {
+    /** How many people are in the party, counted from the rows that landed. */
+    count: number;
+    lines: string[];
+  } | null;
 }): EmailCopy {
   const when = formatApptTime(params.startsAt, params.timezone);
   const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
@@ -636,6 +653,24 @@ export function buildAppointmentConfirmationEmail(params: {
     ? `\n${seriesLine}\n` +
       (seriesDates.length > 0 ? seriesDates.map((d) => `  - ${d}`).join("\n") + "\n" : "")
     : "";
+  // The party summary. Same shape as the standing-appointment block above,
+  // because it answers the same question: "what exactly did I just book?"
+  const grp = params.group && params.group.count > 1 ? params.group : null;
+  const groupLine = grp
+    ? `${grp.count} back-to-back appointments, one after the other.`
+    : null;
+  const groupText = groupLine
+    ? `\n${groupLine}\n` + grp!.lines.map((l) => `  - ${l}`).join("\n") + "\n"
+    : "";
+  const groupHtml = groupLine
+    ? `<div style="margin:0 28px 16px;padding:14px 16px;background:#0f0f0f;border:1px solid #2a2a2a;border-radius:12px">
+      <div style="color:#a1a1aa;font-size:14px;line-height:1.5">${escapeHtml(groupLine)}</div>
+      <div style="color:#fafafa;font-size:14px;margin-top:10px">${grp!.lines
+        .map((l) => `<div style="padding:2px 0">${escapeHtml(l)}</div>`)
+        .join("")}</div>
+    </div>`
+    : "";
+
   const seriesHtml = seriesLine
     ? `<div style="margin:0 28px 16px;padding:14px 16px;background:#0f0f0f;border:1px solid ${
         shortfall > 0 ? "#a16207" : "#2a2a2a"
@@ -654,9 +689,16 @@ export function buildAppointmentConfirmationEmail(params: {
     : "";
 
   return {
-    subject: `Booking confirmed: ${params.serviceName} at ${params.shopName}`,
+    // A party gets its own subject: naming one service when three people are
+    // booked would understate what the customer is opening.
+    subject: grp
+      ? `Booking confirmed: ${grp.count} appointments at ${params.shopName}`
+      : `Booking confirmed: ${params.serviceName} at ${params.shopName}`,
     text:
-      `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}.\n` +
+      (grp
+        ? `Hi ${who}, your group is booked at ${params.shopName}${withWhom}, starting ${when}.\n`
+        : `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}.\n`) +
+      groupText +
       seriesText +
       `\n` +
       (address ? `Where: ${address}\n\n` : "") +
@@ -666,8 +708,13 @@ export function buildAppointmentConfirmationEmail(params: {
       `Book faster next time - get the ChairBack app: ${MOBILE_APP.appStoreUrl}`,
     html: appointmentEmailHtml({
       heading: "You're booked",
-      intro: `Hi ${who}, your appointment is confirmed. Here are the details:`,
-      extraBlock: seriesHtml || null,
+      intro: grp
+        ? `Hi ${who}, your group is confirmed. Here is the whole visit:`
+        : `Hi ${who}, your appointment is confirmed. Here are the details:`,
+      // A booking is never BOTH a party and a standing appointment (a group is
+      // one visit; a series repeats), so concatenating is safe and keeps the
+      // template from growing a second slot it does not need.
+      extraBlock: groupHtml + seriesHtml || null,
       shopName: params.shopName,
       serviceName: params.serviceName,
       when,
