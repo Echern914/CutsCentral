@@ -421,7 +421,16 @@ describe("release", () => {
     await dispatchCreate(a.outboxId);
     await dispatchCreate(b.outboxId);
 
-    expect(await releaseAllForShop(shopId)).toBe(2);
+    // 🔴 `released` is what was PROVEN gone, not what the sweep touched. It
+    // used to return the request size, so a rollback that had confirmed
+    // nothing still reported every row as released. Both blocks here really
+    // were deleted, so the two numbers agree - which is the point of
+    // asserting `unresolved` alongside rather than instead.
+    expect(await releaseAllForShop(shopId)).toEqual({
+      requested: 2,
+      released: 2,
+      unresolved: 0,
+    });
     expect(acuityMock.deleteBlock).toHaveBeenCalledTimes(2);
     const live = await prisma.acuityOutboundBlock.count({
       where: { shopId, state: { in: ["PENDING", "ACTIVE", "UNKNOWN"] } },

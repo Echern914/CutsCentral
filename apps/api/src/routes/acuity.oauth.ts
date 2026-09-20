@@ -13,6 +13,11 @@ import { backfillShop } from "../acuity/backfill.js";
 import { ACUITY } from "@chairback/config";
 import { acuityMeSchema } from "../acuity/types.js";
 import { logger } from "../logger.js";
+import {
+  countUnresolvedReleases,
+  markReleasesStranded,
+  reconcileShop,
+} from "../engines/acuityMirror.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 
 const env = apiEnv();
@@ -230,6 +235,50 @@ acuityOAuthRouter.post("/repair", requireUser, requireShop, async (req, res) => 
 acuityOAuthRouter.post("/disconnect", requireUser, requireShop, async (req, res) => {
   const shop = req.shop!;
   const conn = await prisma.acuityConnection.findUnique({ where: { shopId: shop.id } });
+
+  // 🔴 ORDER MATTERS, AND IT USED TO BE WRONG. Deleting the connection removes
+  // the only credentials that can look up or delete a block, and
+  // reconcileShop() returns immediately for a shop that is not connected. Any
+  // release still in flight was therefore stranded the instant the token went
+  // - its block living on the barber's real Acuity calendar with nothing left
+  // in ChairBack pointing at it, and no way to find it again short of the
+  // barber deleting it by hand.
+  //
+  // So: finish what we can while we still have the credentials, then refuse if
+  // anything is left. Failing the disconnect is recoverable; silently
+  // orphaning a block on somebody's live calendar is not.
+  if (conn) {
+    // Best effort - a reconcile failure must not be the thing that decides
+    // this; the count below is what decides it.
+    await reconcileShop(shop.id).catch(() => undefined);
+    const unresolved = await countUnresolvedReleases(shop.id);
+    if (unresolved > 0) {
+      // Fail CLOSED and say exactly what is blocking. `force` exists so an
+      // Acuity outage cannot trap a shop in ChairBack forever - but it does
+      // NOT mark anything released; it records the rows as knowingly stranded,
+      // which is a different and honest claim.
+      if (req.body?.force !== true) {
+        logger.warn(
+          { shopId: shop.id, unresolved },
+          "acuity disconnect refused - releases still unresolved",
+        );
+        res.status(409).json({
+          error: "unresolved_acuity_releases",
+          unresolved,
+          message:
+            `${unresolved} Acuity block${unresolved === 1 ? "" : "s"} could not be confirmed deleted yet. ` +
+            "Disconnecting now would leave them on your Acuity calendar with no way for ChairBack to remove them. " +
+            "Try again in a few minutes, or disconnect with force:true to accept that they stay.",
+        });
+        return;
+      }
+      const stranded = await markReleasesStranded(shop.id);
+      logger.error(
+        { shopId: shop.id, stranded },
+        "acuity disconnect FORCED with releases unresolved - blocks may remain on the calendar",
+      );
+    }
+  }
 
   // Best-effort: remove our webhook subscriptions at Acuity so it stops sending
   // events for a shop we no longer track. Failure here must not block disconnect.

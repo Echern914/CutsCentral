@@ -1932,8 +1932,20 @@ bookingDashboardRouter.get("/acuity/outbound-report", async (req, res) => {
 bookingDashboardRouter.post("/acuity/release-all", async (req, res) => {
   const shopId = req.shop!.id;
   try {
-    const released = await releaseAllForShop(shopId);
-    res.json({ ok: true, released });
+    const result = await releaseAllForShop(shopId);
+    // 🔴 `released` is now what was PROVEN gone - deleted, confirmed already
+    // absent, or never dispatched - not the number of rows the sweep touched.
+    // The old version returned the request size, so an operator could read
+    // "released: 12" about twelve blocks several of which were still sitting
+    // on the calendar. `unresolved` is the number still to converge; it is not
+    // an error, but it is the number that decides whether the rollback is
+    // actually finished.
+    res.json({
+      ok: true,
+      released: result.released,
+      requested: result.requested,
+      unresolved: result.unresolved,
+    });
   } catch (err) {
     logger.error({ err, shopId }, "acuity release-all failed");
     res.status(502).json({ error: "acuity_unavailable" });
