@@ -44,6 +44,14 @@ export interface ManageData {
   // whether the one-tap decline was already sent.
   nudges: { body: string | null; sentAt: string }[];
   nudgeReplied: boolean;
+  /**
+   * May this page offer Add to Apple Wallet? The API answers it, because both
+   * halves live there: whether a pass can be SIGNED at all (the WALLET_APPT_*
+   * env) and whether THIS appointment deserves one (BOOKED, never a PENDING
+   * request). Optional because an older API deploy does not send it - the page
+   * then simply shows no badge, which is the safe direction to fail.
+   */
+  walletPass?: { appointment: boolean } | null;
 }
 
 export const metadata: Metadata = {

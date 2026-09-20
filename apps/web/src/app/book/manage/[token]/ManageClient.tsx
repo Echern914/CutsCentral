@@ -11,6 +11,7 @@ import {
 } from "@chairback/config/customerStatus";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { CustomerBack } from "@/components/CustomerBack";
+import { AddToWallet } from "@/components/AddToWallet";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { useDemoTour } from "@/components/tour/state";
 import type { ManageData } from "./page";
@@ -217,6 +218,20 @@ export function ManageClient({
               onStatus={setCheckinStatus}
               demoMode={demoTour}
             />
+            {/* The pass for THIS booking. The page it belongs on most and the
+                one it was missing from: the relay route has sat beside this
+                file since the pass shipped, with nothing linking to it.
+                `available` carries the whole decision (signable + BOOKED), and
+                AddToWallet renders nothing off iOS Safari, so this line is a
+                no-op everywhere it would be wrong. */}
+            {!demoTour && (
+              <AddToWallet
+                href={`/book/manage/${token}/wallet-pass`}
+                available={data.walletPass?.appointment ?? false}
+                label="Add this appointment to Apple Wallet"
+                manageToken={token}
+              />
+            )}
             {data.canReschedule && !demoTour && (
               <ReschedulePicker
                 token={token}

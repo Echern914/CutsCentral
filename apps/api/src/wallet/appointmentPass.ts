@@ -1,7 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { PKPass } from "passkit-generator";
 import { apiEnv } from "@chairback/config";
+import { describeCancellationPolicy } from "@chairback/config/shopPolicy";
+import { formatShopAddress } from "@chairback/config/shopAddress";
 import { runAsOwner } from "@chairback/db";
+import { connectEnabled } from "../billing/stripe.js";
 import { logger } from "../logger.js";
 import {
   decodeWalletCerts,
@@ -109,12 +112,220 @@ function faceLabels(at: Date, timezone: string): { date: string; time: string } 
 }
 
 /**
- * Build + sign the CURRENT pass for one appointment. Returns null when the
- * appointment is gone. A canceled/completed appointment returns a VOIDED pass
- * - Wallet greys it out - because the devices that already added it re-fetch
- * through here after a poke, and "this is no longer valid" must be sayable.
- * Whether a FRESH download is allowed at all is the route's decision, not
- * this builder's.
+ * "2:00 - 2:30 PM" in the SHOP's timezone.
+ *
+ * 🔴 BOTH ENDS, IN ONE FIELD. The pass used to print the start only, which is
+ * the single question a customer in a chair cannot answer from it: "how long
+ * am I here for?". One field rather than two because Wallet gives an
+ * eventTicket very little room, and a range is read at a glance where a
+ * separate ENDS row is not.
+ *
+ * The timezone is the SHOP's, never the phone's. A customer who books in one
+ * city and opens the pass in another must still see the time they are expected.
+ */
+function faceTimeRange(startsAt: Date, endsAt: Date, timezone: string): string {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    const start = fmt.format(startsAt);
+    const end = fmt.format(endsAt);
+    // "2:00 PM - 2:30 PM" reads better as "2:00 - 2:30 PM" when the meridiem
+    // matches; when it straddles noon or midnight both have to stay.
+    const startMeridiem = start.slice(-2);
+    const endMeridiem = end.slice(-2);
+    return startMeridiem === endMeridiem
+      ? `${start.slice(0, -3)} - ${end}`
+      : `${start} - ${end}`;
+  } catch {
+    return `${startsAt.toUTCString().slice(17, 22)} - ${endsAt.toUTCString().slice(17, 22)}`;
+  }
+}
+
+/**
+ * The short confirmation reference a customer reads out on the phone.
+ *
+ * 🔴 A HANDLE, NOT A SECRET. It is derived from the appointment id, which is
+ * already the pass serial number and is already visible to anyone holding the
+ * pass. Nothing authenticates on it - the manageToken does that - so shortening
+ * it costs nothing. It exists because "my confirmation is CJ4K2P" is sayable
+ * and a 25-character cuid is not.
+ */
+export function confirmationReference(appointmentId: string): string {
+  return appointmentId.slice(-6).toUpperCase();
+}
+
+/**
+ * Everything the pass face needs, which is exactly what the query below
+ * selects. Written out rather than inferred from Prisma so the CONTENT of a
+ * pass can be tested without a database and, more importantly, without an
+ * Apple certificate - the fields a customer reads are the part with all the
+ * requirements in it, and signing is a separate concern.
+ */
+export interface AppointmentPassSource {
+  /**
+   * CAN this shop actually take a card right now (Connect live + charges
+   * enabled + an account)? An INPUT rather than something computed here,
+   * because it depends on process env and this function must stay pure - a
+   * pass face that changes with an environment variable is not testable, and
+   * the cancellation sentence is exactly the field where being wrong costs a
+   * customer money.
+   */
+  paymentsLive: boolean;
+  id: string;
+  status: string;
+  startsAt: Date;
+  endsAt: Date;
+  firstName: string | null;
+  manageToken: string;
+  service: { name: string } | null;
+  staff: { name: string } | null;
+  shop: {
+    name: string;
+    timezone: string;
+    accentColor: string | null;
+    addressStreet: string | null;
+    addressCity: string | null;
+    addressRegion: string | null;
+    addressPostal: string | null;
+    latitude: number | null;
+    longitude: number | null;
+    twilioNumber: string | null;
+    paymentsMode: "off" | "ahead" | "deposit" | "card_on_file" | "hold" | "terminal";
+    cancelWindowHours: number;
+    cancelFeeBps: number;
+    depositAmountCents: number | null;
+    requireBookingApproval: boolean;
+    connectChargesEnabled: boolean;
+    stripeConnectAccountId: string | null;
+    chargeCardOnFileFees: boolean;
+  };
+}
+
+/**
+ * The pass.json for one appointment. PURE - no database, no certificate, no
+ * clock beyond the appointment's own instants - so every field a customer
+ * reads is testable on its own.
+ *
+ * A canceled/completed appointment yields a VOIDED pass (Wallet greys it out)
+ * because the devices that already added it re-fetch through here after a
+ * poke, and "this is no longer valid" must be sayable. Whether a FRESH
+ * download is allowed at all is the route's decision, not this builder's.
+ */
+export function buildAppointmentPassJson(
+  appt: AppointmentPassSource,
+): Record<string, unknown> {
+
+  const manageUrl = `${env.APP_BASE_URL}/book/manage/${appt.manageToken}`;
+  const { date } = faceLabels(appt.startsAt, appt.shop.timezone);
+  const when = faceTimeRange(appt.startsAt, appt.endsAt, appt.shop.timezone);
+  // 🔴 THE ONE ADDRESS FORMATTER. This file used to join the three columns by
+  // hand, which is how a second, quietly different version of the shop's
+  // address starts existing - the email, the reminder and the pass have to
+  // agree about where the shop is.
+  const address = formatShopAddress(appt.shop);
+  const reference = confirmationReference(appt.id);
+  const live = LIVE_STATUSES.has(appt.status);
+
+  // What happens if they cancel, in the SAME words the receptionist and the
+  // confirmation email use. No channel override: this booking came through a
+  // surface that does collect at booking when the shop is set up to, so
+  // claiming otherwise would understate a fee the customer may really owe.
+  const cancellationPolicy = describeCancellationPolicy({
+    paymentsMode: appt.shop.paymentsMode,
+    cancelWindowHours: appt.shop.cancelWindowHours,
+    cancelFeeBps: appt.shop.cancelFeeBps,
+    depositAmountCents: appt.shop.depositAmountCents,
+    requiresApproval: appt.shop.requireBookingApproval,
+    chargeCardOnFileFees: appt.shop.chargeCardOnFileFees,
+    paymentsLive: appt.paymentsLive,
+  });
+
+  return {
+    formatVersion: 1,
+    passTypeIdentifier: env.WALLET_APPT_PASS_TYPE_ID!,
+    teamIdentifier: env.WALLET_TEAM_ID!,
+    organizationName: appt.shop.name,
+    description: `${appt.shop.name} appointment`,
+    serialNumber: appt.id,
+    webServiceURL: `${env.API_BASE_URL}/api/wallet`,
+    authenticationToken: apptPassAuthToken(appt.id),
+    sharingProhibited: true,
+    // iOS surfaces the pass on the lock screen around this instant.
+    relevantDate: appt.startsAt.toISOString(),
+    // Wallet's own expiry/cleanup hint; the pass is meaningless a day after.
+    expirationDate: new Date(appt.endsAt.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+    // Lock-screen relevance AT THE SHOP, not just near the time. Emitted only
+    // when the shop has real coordinates: Apple takes lat/lng and nothing else,
+    // and a guessed point would buzz a customer at the wrong building, which is
+    // worse than never buzzing at all.
+    ...(appt.shop.latitude !== null && appt.shop.longitude !== null
+      ? {
+          locations: [
+            {
+              latitude: appt.shop.latitude,
+              longitude: appt.shop.longitude,
+              relevantText: `${appt.shop.name} - ${when}`,
+            },
+          ],
+        }
+      : {}),
+    ...(live ? {} : { voided: true }),
+    logoText: appt.shop.name,
+    backgroundColor: "rgb(10,10,11)",
+    foregroundColor: "rgb(245,245,244)",
+    labelColor: hexToRgb(appt.shop.accentColor, "rgb(212,175,55)"),
+    eventTicket: {
+      headerFields: [{ key: "ref", label: "CONFIRMATION", value: reference }],
+      primaryFields: [
+        {
+          key: "when",
+          label: live ? date.toUpperCase() : "CANCELED",
+          value: when,
+          // The lock-screen line Wallet shows when an update lands (reschedule).
+          changeMessage: "Your appointment changed: now %@",
+        },
+      ],
+      secondaryFields: [
+        { key: "service", label: "SERVICE", value: appt.service?.name ?? "Appointment" },
+        ...(appt.staff?.name
+          ? [{ key: "with", label: "WITH", value: appt.staff.name }]
+          : []),
+      ],
+      auxiliaryFields: [
+        ...(appt.firstName ? [{ key: "name", label: "NAME", value: appt.firstName }] : []),
+        ...(address ? [{ key: "where", label: "WHERE", value: address }] : []),
+      ],
+      backFields: [
+        ...(address ? [{ key: "address", label: "Address", value: address }] : []),
+        ...(appt.shop.twilioNumber
+          ? [{ key: "phone", label: "Phone", value: appt.shop.twilioNumber }]
+          : []),
+        { key: "manage", label: "Reschedule or cancel", value: manageUrl },
+        // 🔴 The policy in the SAME words the confirmation email and the SMS
+        // receptionist use (@chairback/config/shopPolicy). A pass that a
+        // customer keeps for weeks is exactly the wrong place for a second,
+        // drifting copy of what a late cancellation costs.
+        { key: "policy", label: "Cancellation policy", value: cancellationPolicy },
+        {
+          key: "auto",
+          label: "This pass updates itself",
+          value:
+            "If the time changes or the appointment is canceled, the pass refreshes on its own.",
+        },
+      ],
+    },
+  };
+
+}
+
+/**
+ * Build + SIGN the current pass for one appointment. Returns null when the
+ * appointment is gone. The content decision lives in
+ * buildAppointmentPassJson; this function is the database read and the
+ * certificate, and nothing else.
  */
 export async function buildPassForAppointment(
   appointmentId: string,
@@ -139,6 +350,24 @@ export async function buildPassForAppointment(
             addressStreet: true,
             addressCity: true,
             addressRegion: true,
+            addressPostal: true,
+            // Apple Wallet location relevance. Null on most shops; see schema.
+            latitude: true,
+            longitude: true,
+            // The shop's PUBLIC line. 🔴 Deliberately twilioNumber and never
+            // notifyPhone: notifyPhone is the barber's own mobile, kept for
+            // lead-alert texts, and printing it on a pass every customer keeps
+            // would publish a private number to everyone who ever books.
+            twilioNumber: true,
+            // Everything describeCancellationPolicy() needs to tell the truth.
+            paymentsMode: true,
+            cancelWindowHours: true,
+            cancelFeeBps: true,
+            depositAmountCents: true,
+            requireBookingApproval: true,
+            connectChargesEnabled: true,
+            stripeConnectAccountId: true,
+            chargeCardOnFileFees: true,
           },
         },
       },
@@ -146,68 +375,18 @@ export async function buildPassForAppointment(
   );
   if (!appt) return null;
 
-  const manageUrl = `${env.APP_BASE_URL}/book/manage/${appt.manageToken}`;
-  const { date, time } = faceLabels(appt.startsAt, appt.shop.timezone);
-  const address = [appt.shop.addressStreet, appt.shop.addressCity, appt.shop.addressRegion]
-    .map((l) => l?.trim())
-    .filter(Boolean)
-    .join(", ");
-  const live = LIVE_STATUSES.has(appt.status);
-
-  const passJson = {
-    formatVersion: 1,
-    passTypeIdentifier: env.WALLET_APPT_PASS_TYPE_ID!,
-    teamIdentifier: env.WALLET_TEAM_ID!,
-    organizationName: appt.shop.name,
-    description: `${appt.shop.name} appointment`,
-    serialNumber: appt.id,
-    webServiceURL: `${env.API_BASE_URL}/api/wallet`,
-    authenticationToken: apptPassAuthToken(appt.id),
-    sharingProhibited: true,
-    // iOS surfaces the pass on the lock screen around this instant.
-    relevantDate: appt.startsAt.toISOString(),
-    // Wallet's own expiry/cleanup hint; the pass is meaningless a day after.
-    expirationDate: new Date(appt.endsAt.getTime() + 24 * 60 * 60 * 1000).toISOString(),
-    ...(live ? {} : { voided: true }),
-    logoText: appt.shop.name,
-    backgroundColor: "rgb(10,10,11)",
-    foregroundColor: "rgb(245,245,244)",
-    labelColor: hexToRgb(appt.shop.accentColor, "rgb(212,175,55)"),
-    eventTicket: {
-      primaryFields: [
-        {
-          key: "when",
-          label: live ? date.toUpperCase() : "CANCELED",
-          value: time,
-          // The lock-screen line Wallet shows when an update lands (reschedule).
-          changeMessage: "Your appointment changed: now %@",
-        },
-      ],
-      secondaryFields: [
-        { key: "service", label: "SERVICE", value: appt.service?.name ?? "Appointment" },
-        ...(appt.staff?.name
-          ? [{ key: "with", label: "WITH", value: appt.staff.name }]
-          : []),
-      ],
-      auxiliaryFields: [
-        ...(appt.firstName ? [{ key: "name", label: "NAME", value: appt.firstName }] : []),
-        ...(address ? [{ key: "where", label: "WHERE", value: address }] : []),
-      ],
-      backFields: [
-        { key: "manage", label: "Reschedule or cancel", value: manageUrl },
-        {
-          key: "auto",
-          label: "This pass updates itself",
-          value:
-            "If the time changes or the appointment is canceled, the pass refreshes on its own.",
-        },
-      ],
-    },
-  };
+  // Resolved HERE, where reading the environment is fine, and handed to the
+  // content builder as a plain fact.
+  const paymentsLive =
+    connectEnabled() &&
+    appt.shop.connectChargesEnabled &&
+    Boolean(appt.shop.stripeConnectAccountId);
 
   const pass = new PKPass(
     {
-      "pass.json": Buffer.from(JSON.stringify(passJson)),
+      "pass.json": Buffer.from(
+        JSON.stringify(buildAppointmentPassJson({ ...appt, paymentsLive })),
+      ),
       ...loadArt(),
     },
     loadApptCerts(),
