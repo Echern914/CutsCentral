@@ -281,10 +281,43 @@ charges" outcome and keeps the history.
 
 ## Tap to Pay on iPhone — what is owed before it can ship
 
-The server half already exists (`apps/api/src/billing/terminal.ts`: connection
-tokens, a per-shop Terminal Location cached on `Shop.stripeTerminalLocationId`,
-card-present intents). What is missing is the native SDK half and the account
-configuration below. **None of it can be done in code.**
+**The code is now written, on both sides.** The server mints card-present
+intents through the same attempt ledger as every other method
+(`/tap-to-pay-intent`, `/tap-to-pay-settle` in `routes/booking.checkout.ts`,
+`createServiceCheckoutTerminalIntent` in `billing/terminal.ts`), and the app
+drives the reader (`apps/mobile/src/tapToPay/`).
+
+**🔴 None of it has ever taken a payment.** There is no Apple entitlement on
+the account, so no build carrying it has ever been signed, and a simulator
+cannot read a card. Everything below the API layer is unproven, and the tests
+that exist prove decisions against fakes — not hardware.
+
+The remaining work is an account, an approval and a device, and is written up
+separately in **`docs/tap-to-pay-setup.md`**.
+
+It does not block anything in the meantime: the native half sits behind
+`TAP_TO_PAY_NATIVE_ENABLED`, which **defaults to false**, so ordinary iOS
+builds sign and ship exactly as before — no entitlement, no permission string,
+and the shell announces nothing. Turn it on only once Apple has granted the
+entitlement, or the build will **fail to sign**.
+
+### How a tap actually flows
+
+```
+screen ──POST /tap-to-pay-intent──> server     attempt opens, intent minted
+                                               (cash + saved card now BLOCKED)
+screen ──cb:tap-to-pay (bridge)───> shell      client secret only, never an amount
+shell  ──SDK────────────────────── reader      customer taps
+shell  ──resolve() (bridge)───────> screen     a HINT, never the record
+screen ──POST /tap-to-pay-settle──> server     reads Stripe; THIS decides
+```
+
+🔴 The device never reports money. A `collected` outcome from the phone means
+"ask the server now" — the screen's next call is always the settle route, which
+reads Stripe itself. The whole checkout refuses to record money on a client's
+word, and a payment terminal is still a client.
+
+### The old checklist still applies
 
 | | who | what |
 |---|---|---|

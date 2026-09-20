@@ -7,15 +7,30 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": { "TAP_TO_PAY_NATIVE_ENABLED": "false" },
       "ios": { "simulator": true, "image": "macos-tahoe-26.4-xcode-26.4" }
     },
     "preview": {
       "distribution": "internal",
+      "env": { "TAP_TO_PAY_NATIVE_ENABLED": "false" },
+      "ios": { "simulator": false, "image": "macos-tahoe-26.4-xcode-26.4" }
+    },
+    "simulator": {
+      "distribution": "internal",
+      "env": { "TAP_TO_PAY_NATIVE_ENABLED": "false" },
+      "ios": { "simulator": true, "image": "macos-tahoe-26.4-xcode-26.4" }
+    },
+    "taptopay-device": {
+      "extends": "preview",
+      "env": { "TAP_TO_PAY_NATIVE_ENABLED": "true" },
       "ios": { "simulator": false, "image": "macos-tahoe-26.4-xcode-26.4" }
     },
     "production": {
       "autoIncrement": true,
-      "env": { "EAS_BUILD_NO_EXPO_GO_WARNING": "true" },
+      "env": {
+        "EAS_BUILD_NO_EXPO_GO_WARNING": "true",
+        "TAP_TO_PAY_NATIVE_ENABLED": "false"
+      },
       "ios": {
         "image": "macos-tahoe-26.4-xcode-26.4"
       }

@@ -8,9 +8,17 @@ import {
   chargeSavedCardAction,
   getCheckoutAction,
   recordCashCheckoutAction,
+  settleTapToPayAction,
+  startTapToPayAction,
+  terminalConnectionTokenAction,
   type CheckoutState,
   type ChargeCardResult,
 } from "./actions";
+import {
+  collectWithPhone,
+  nativeTapToPayAvailable,
+  requestTapToPayEducation,
+} from "./tapToPayBridge";
 
 /**
  * POST-SERVICE CHECKOUT — the screen a barber uses with the customer in front
@@ -89,6 +97,13 @@ export function CheckoutFlow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const vocab = useVocab();
+  // Whether THIS device can collect contactlessly. Read after mount, never
+  // during render: the server render has no `window`, and a value baked into
+  // the HTML would be wrong for every viewer of it.
+  const [nativeReady, setNativeReady] = useState(false);
+  useEffect(() => {
+    setNativeReady(nativeTapToPayAvailable());
+  }, []);
 
 
   /** Minted when confirm opens; every retry of THAT press reuses it. */
@@ -117,6 +132,87 @@ export function CheckoutFlow({
    */
   const dueCents = state?.remainingCents ?? null;
   const chargeCents = dueCents ?? 0;
+
+  /**
+   * One contactless collection: open the attempt, hand the phone the secret,
+   * then ASK THE SERVER what happened.
+   *
+   * 🔴 THE PHONE'S ANSWER NEVER BECOMES THE RECORD. Whatever the device
+   * reports - collected, cancelled, declined, nothing at all - the outcome
+   * shown here comes from the settle call, which reads Stripe. A device saying
+   * "collected" is a client claiming a payment, and this flow has refused to
+   * take a client's word for money since the first line of it.
+   *
+   * 🔴 A CANCEL IS NOT A CONCLUSION EITHER. The attempt stays open on the
+   * server until the server closes it, so a barber who backs out mid-tap still
+   * cannot immediately take cash. That is the intended behaviour: the card may
+   * have been read a moment before they gave up.
+   */
+  const runTapToPay = useCallback(
+    async (rid: string): Promise<ChargeCardResult> => {
+      const opened = await startTapToPayAction(appointmentId, {
+        amountCents: chargeCents,
+        requestId: rid,
+      });
+      if (!opened.ok || !opened.attemptId) {
+        return { ok: false, error: opened.error ?? "tap_to_pay_unavailable", dueCents: opened.dueCents };
+      }
+      // A replay of a press that already finished. Do not put a phone back in
+      // front of the customer for money that has been taken.
+      if (opened.attempt && opened.attempt.state === "succeeded") {
+        return { ok: true, result: "paid", amountCents: chargeCents, attempt: opened.attempt };
+      }
+      if (!opened.clientSecret) {
+        // Open, but with no intent to collect against - the mint failed, or is
+        // mid-flight. The server owns it from here.
+        await load();
+        return { ok: false, error: "tap_to_pay_failed" };
+      }
+
+      // The Location AND the destination account both come from the route that
+      // mints connection tokens - a reader cannot connect without either, and
+      // this way a resumed press does not need them echoed back to it.
+      const conn = await terminalConnectionTokenAction();
+      if (!conn.ok || !conn.locationId || !conn.connectAccountId) {
+        // The attempt is open and stays open: the server must conclude it.
+        await load();
+        return { ok: false, error: "tap_to_pay_unavailable" };
+      }
+
+      const reported = await collectWithPhone(
+        {
+          requestId: rid,
+          clientSecret: opened.clientSecret,
+          connectAccountId: conn.connectAccountId,
+          locationId: conn.locationId,
+          amountCents: chargeCents,
+        },
+        async () => (await terminalConnectionTokenAction()).secret ?? null,
+      );
+
+      // The device could not even try. Nothing was presented, so there is
+      // nothing for the server to find - but it is still the server that says
+      // so, by reading the untouched intent.
+      const settled = await settleTapToPayAction(appointmentId, { attemptId: opened.attemptId });
+      if (settled.attempt?.state === "succeeded") {
+        return { ...settled, ok: true, result: "paid", amountCents: chargeCents };
+      }
+      await load();
+      return {
+        ok: false,
+        error:
+          reported.outcome === "unavailable"
+            ? "tap_to_pay_unavailable"
+            : reported.outcome === "canceled"
+              ? "tap_to_pay_canceled"
+              : "tap_to_pay_failed",
+      };
+    },
+    // `load` is defined below and stable; chargeCents changes with the balance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [appointmentId, chargeCents],
+  );
+
 
   if (loadError) {
     return (
@@ -326,12 +422,14 @@ export function CheckoutFlow({
                     amountCents: chargeCents,
                     requestId: requestId.current,
                   })
-                : await recordCashCheckoutAction(appointmentId, {
-                    amountCents: chargeCents,
-                    method: choice.kind === "cash_other" ? choice.method : "other",
-                    requestId: requestId.current,
-                    confirmed: true,
-                  });
+                : choice.kind === "tap_to_pay"
+                  ? await runTapToPay(requestId.current)
+                  : await recordCashCheckoutAction(appointmentId, {
+                      amountCents: chargeCents,
+                      method: choice.method,
+                      requestId: requestId.current,
+                      confirmed: true,
+                    });
             setBusy(false);
 
             if (res.result === "requires_action" || res.result === "ambiguous") {
@@ -391,6 +489,15 @@ export function CheckoutFlow({
         </p>
       </div>
 
+      {/* A refusal that happens on THIS step - so far, only Apple's required
+          Tap to Pay walkthrough failing to appear. Without this the barber
+          taps the method, nothing visibly happens, and they tap it again. */}
+      {error && (
+        <p role="alert" className="text-center text-sm text-danger-soft">
+          {error}
+        </p>
+      )}
+
       <div className="flex flex-col gap-1.5">
         {state.totalCents !== null && (
           <Row label="Ticket" value={money(state.totalCents)} />
@@ -438,19 +545,46 @@ export function CheckoutFlow({
             )
           )}
 
-          {state.methods.tapToPay.available ? (
+          {/* 🔴 TWO HALVES, AND BOTH MUST BE TRUE. The server knows the flag,
+              Connect and where the money goes; only the device knows whether it
+              has the reader, the entitlement and a supported iPhone. Offering
+              this on the strength of either half alone is how a barber presses
+              a button that cannot work, in front of a customer. */}
+          {state.methods.tapToPay.available && nativeReady ? (
             <MethodButton
               qa="method-tap-to-pay"
               label="Tap to Pay"
               hint="Hold their card to this phone"
-              onClick={() => {
+              onClick={async () => {
+                // 🔴 APPLE'S REQUIRED EDUCATION, AT THE ENABLING POINT. Stripe's
+                // docs: Apple requires a "How to Tap" overlay when enabling Tap
+                // to Pay, integrated before the app is submitted for review. It
+                // runs HERE rather than at confirm, because the native overlay
+                // has no dismissal callback and must not land on top of a live
+                // collection. After the first time it returns `already` and
+                // this is a no-op.
+                if (busy) return;
+                setBusy(true);
+                setError(null);
+                const taught = await requestTapToPayEducation(newRequestId());
+                setBusy(false);
+                if (taught.outcome === "failed") {
+                  // Not educated, so not offered. Proceeding would ship around
+                  // the requirement and hand a barber a reader they were never
+                  // shown how to use.
+                  setError(errorCopy("tap_to_pay_education_failed", undefined, vocab.serviceNoun));
+                  return;
+                }
                 setChoice({ kind: "tap_to_pay" });
                 setStep("confirm");
               }}
             />
           ) : (
             <p className="rounded-lg border border-subtle/60 px-3.5 py-2.5 text-xs text-muted">
-              Tap to Pay — {BLOCKER_COPY[state.methods.tapToPay.blocker ?? ""] ?? "not available"}
+              Tap to Pay —{" "}
+              {state.methods.tapToPay.available
+                ? BLOCKER_COPY.native_not_ready
+                : (BLOCKER_COPY[state.methods.tapToPay.blocker ?? ""] ?? "not available")}
             </p>
           )}
 
@@ -558,6 +692,25 @@ function errorCopy(
       return `This ${serviceNoun} has already been checked out.`;
     case "no_service_consent":
       return "This card was only approved for no-show fees.";
+    case "tap_to_pay_unavailable":
+      return "This phone can't take contactless payments. Try another way.";
+    case "tap_to_pay_education_failed":
+      // Apple requires the How to Tap walkthrough before the first payment. If
+      // it could not be shown, Tap to Pay is not offered - so this says what to
+      // do rather than what failed.
+      return "Couldn't show the Tap to Pay walkthrough. Take payment another way for now.";
+    // Shop-level, not device-level, and worth telling apart: one is fixed by
+    // using a different phone, the other by an owner changing a setting.
+    case "tap_to_pay_disabled":
+      return "Tap to Pay isn't turned on for this shop.";
+    case "connect_required":
+      return "Connect a payout account before taking card payments.";
+    case "tap_to_pay_canceled":
+      // Deliberately not "nothing was charged": the card may have been read a
+      // moment before the barber backed out, and only the server knows.
+      return "Tap to Pay was stopped. Check the balance before collecting again.";
+    case "tap_to_pay_failed":
+      return "That tap didn't go through. Check the balance before trying again.";
     default:
       return "That didn't go through. Nothing was charged.";
   }

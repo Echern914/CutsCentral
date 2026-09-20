@@ -77,6 +77,22 @@ export const GOOGLE_IOS_CLIENT_ID: string =
   (Constants.expoConfig?.extra?.googleIosClientId as string | undefined) ?? "";
 
 /**
+ * Whether THIS binary may offer Tap to Pay.
+ *
+ * Set at build time by `TAP_TO_PAY_NATIVE_ENABLED`, which in the same breath
+ * decides whether the Apple entitlement is in the generated iOS project. The
+ * two are one value on purpose: a shell that advertised the capability without
+ * the entitlement would hand the barber a button that dies at the reader with a
+ * customer standing in front of them.
+ *
+ * 🔴 DEFAULTS FALSE, INCLUDING WHEN THE KEY IS MISSING ENTIRELY - an older
+ * build, or a config that never set it. Strict `=== true`, so any other value
+ * reads as "cannot", which is the only safe direction for a payment surface.
+ */
+export const TAP_TO_PAY_NATIVE_ENABLED: boolean =
+  Constants.expoConfig?.extra?.tapToPayNativeEnabled === true;
+
+/**
  * The 3-way role picker (app/index.tsx) is LIVE: "barber" and "manager" route to
  * the NATIVE Apple/Google sign-in (app/login.tsx) and then the dashboard
  * WebView via the /app-auth cookie handoff. The customer path is My ChairBack

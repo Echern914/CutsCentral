@@ -754,6 +754,83 @@ export async function chargeSavedCardAction(
   } as ChargeCardResult;
 }
 
+export type TapToPayIntentResult = Result & {
+  attemptId?: string;
+  clientSecret?: string;
+  paymentIntentId?: string;
+  connectAccountId?: string;
+  amountCents?: number;
+  replay?: boolean;
+  attempt?: CheckoutAttemptView;
+  dueCents?: number;
+  liveAttempt?: CheckoutAttemptView;
+};
+
+/**
+ * Open a contactless collection and get the secret the phone collects against.
+ *
+ * 🔴 NO MONEY MOVES HERE, and the attempt is open the moment this returns. The
+ * card has not been presented yet, but from now until the collection is
+ * concluded every other method is blocked - because a card that is about to be
+ * tapped can still take the money after a barber gives up and takes cash.
+ */
+export async function startTapToPayAction(
+  appointmentId: string,
+  input: { amountCents: number; requestId: string },
+): Promise<TapToPayIntentResult> {
+  const res = await apiSend(
+    "POST",
+    `/api/checkout/appointments/${appointmentId}/tap-to-pay-intent`,
+    input,
+  );
+  const body = (res.data ?? {}) as Record<string, unknown>;
+  return {
+    ok: res.ok,
+    error: res.ok ? undefined : ((body.error as string) ?? res.error ?? "failed"),
+    ...(body as object),
+  } as TapToPayIntentResult;
+}
+
+/** The shop's Terminal Location + a connection token, which only a session can get. */
+export async function terminalConnectionTokenAction(): Promise<{
+  ok: boolean;
+  secret?: string;
+  locationId?: string;
+  connectAccountId?: string;
+  error?: string;
+}> {
+  const res = await apiSend("POST", `/api/payments/terminal/connection-token`, {});
+  const body = (res.data ?? {}) as Record<string, unknown>;
+  return {
+    ok: res.ok,
+    error: res.ok ? undefined : ((body.error as string) ?? res.error ?? "failed"),
+    ...(body as object),
+  };
+}
+
+/**
+ * Ask the server what actually happened to a tap.
+ *
+ * 🔴 The phone's answer is a HINT. This is the only thing that decides whether
+ * money arrived, because it reads Stripe rather than believing a device.
+ */
+export async function settleTapToPayAction(
+  appointmentId: string,
+  input: { attemptId: string },
+): Promise<ChargeCardResult> {
+  const res = await apiSend(
+    "POST",
+    `/api/checkout/appointments/${appointmentId}/tap-to-pay-settle`,
+    input,
+  );
+  const body = (res.data ?? {}) as Record<string, unknown>;
+  return {
+    ok: res.ok,
+    error: res.ok ? undefined : ((body.error as string) ?? res.error ?? "failed"),
+    ...(body as object),
+  } as ChargeCardResult;
+}
+
 /** Record money taken in person. Creates no Stripe charge of any kind. */
 export async function recordCashCheckoutAction(
   appointmentId: string,

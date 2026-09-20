@@ -21,6 +21,36 @@ const WEB_HOST = WEB_ORIGIN.replace(/^https?:\/\//, "");
 // The API origin the native app calls directly (no browser CSP in a native app).
 const API_ORIGIN = process.env.EXPO_PUBLIC_API_ORIGIN ?? "https://api.getchairback.com";
 
+/**
+ * TAP TO PAY ON IPHONE — one build-time flag, three consequences that must
+ * never disagree.
+ *
+ * 🔴 DEFAULT FALSE, AND THE DEFAULT IS THE POINT. The Apple entitlement
+ * (`com.apple.developer.proximity-reader.payment.acceptance`) is granted per
+ * bundle id, on request, and **a build declaring an entitlement the account has
+ * not been granted FAILS TO SIGN**. Declaring it unconditionally would have
+ * blocked every iOS build until Apple answered - including builds that have
+ * nothing to do with payments. So off is the shipping default, and stays that
+ * way until the grant lands.
+ *
+ * Turning it on does three things AT ONCE, from this single value:
+ *   1. the entitlement goes into the generated iOS project;
+ *   2. the Stripe Terminal config plugin writes the Info.plist permission
+ *      strings its SDK requires;
+ *   3. `extra.tapToPayNativeEnabled` tells the JS bundle it may announce the
+ *      capability to the dashboard page.
+ *
+ * 🔴 THE THIRD IS WHY THIS IS ONE FLAG AND NOT THREE. If the shell advertised
+ * Tap to Pay in a binary without the entitlement, the barber would get a button
+ * that fails at the reader with a customer standing there. The announcement and
+ * the entitlement are the same decision, so they are the same value.
+ *
+ *   TAP_TO_PAY_NATIVE_ENABLED=true eas build ...
+ */
+const TAP_TO_PAY_NATIVE_ENABLED = ["true", "1"].includes(
+  (process.env.TAP_TO_PAY_NATIVE_ENABLED ?? "").trim().toLowerCase(),
+);
+
 // The Google iOS OAuth client id (Google Cloud Console > Credentials > iOS client,
 // bundle com.getchairback.rewards). ONE source of truth for three things that must
 // agree: the backend's GOOGLE_OAUTH_IOS_CLIENT_ID env, GoogleSignin.configure({
@@ -139,6 +169,27 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       NSPhotoLibraryUsageDescription:
         "Lets you choose photos for your shop page and gallery.",
     },
+    // 🔴 TAP TO PAY ON IPHONE, and ONLY when the flag is on. The entitlement is
+    // NOT added by the Stripe Terminal config plugin - that one only writes
+    // Info.plist permission strings - so it is declared here, and it is the
+    // single line that decides whether a build can use the NFC reader at all.
+    //
+    // Absent by default because a build declaring an entitlement Apple has not
+    // granted FAILS TO SIGN, and that must not be the cost of an unrelated
+    // release. With it absent the app signs and ships exactly as before, the
+    // shell announces nothing, and the checkout screen reads "Not set up on
+    // this device yet" - the correct answer for a binary that genuinely cannot.
+    //
+    // Apple takes no cut of these payments: the entitlement is permission to
+    // use the hardware, and a haircut is a real-world service expressly
+    // excluded from in-app purchase.
+    ...(TAP_TO_PAY_NATIVE_ENABLED
+      ? {
+          entitlements: {
+            "com.apple.developer.proximity-reader.payment.acceptance": true,
+          },
+        }
+      : {}),
   },
   android: {
     package: "com.getchairback.rewards",
@@ -194,6 +245,31 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       "@react-native-google-signin/google-signin",
       { iosUrlScheme: GOOGLE_IOS_URL_SCHEME },
     ],
+    // Stripe Terminal, for Tap to Pay on iPhone - behind the SAME flag as the
+    // entitlement. The plugin writes the Info.plist permission strings the SDK
+    // requires: location is MANDATORY for Terminal (Stripe uses it for fraud
+    // and dispute evidence on card-present charges), not optional chrome we
+    // could drop for being intrusive.
+    //
+    // 🔴 GATED TOO, NOT JUST THE ENTITLEMENT. A build that cannot take a
+    // contactless payment has no business asking iOS for location, and App
+    // Review is entitled to ask why a barbershop app wants it. Off by default,
+    // there is no permission string and nothing to justify.
+    //
+    // 🔴 A CONFIG PLUGIN DOES NOTHING IN AN OTA UPDATE. This needs a new native
+    // build, like expo-web-browser and expo-secure-store above.
+    ...(TAP_TO_PAY_NATIVE_ENABLED
+      ? [
+          [
+            "@stripe/stripe-terminal-react-native",
+            {
+              bluetoothBackgroundMode: false,
+              locationWhenInUsePermission:
+                "Location is required by our card processor to accept card payments at your chair.",
+            },
+          ] as [string, Record<string, unknown>],
+        ]
+      : []),
     // GoogleSignIn 9.x pulls in AppCheckCore (Swift) + GoogleUtilities /
     // RecaptchaInterop (no module maps); under Expo's static-library build that
     // breaks `pod install` unless those transitive pods get modular headers.
@@ -214,6 +290,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // Surfaced to JS (expo-constants) so GoogleSignin.configure({ iosClientId })
     // reads the SAME id the iosUrlScheme plugin used - they can never drift.
     googleIosClientId: GOOGLE_IOS_CLIENT_ID,
+    // 🔴 The SAME value that decided the entitlement above, handed to the JS
+    // bundle so the shell can only advertise Tap to Pay in a binary that can
+    // actually do it. Read through src/config.ts; never re-derived.
+    tapToPayNativeEnabled: TAP_TO_PAY_NATIVE_ENABLED,
     // EAS project (created on expo.dev). Links this app to the cloud build/project.
     eas: { projectId: "6919de0f-3dba-4966-bf62-05e328f248e3" },
   },
