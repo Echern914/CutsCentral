@@ -43,6 +43,9 @@ describe("redactUrl: the path secrets", () => {
     ["rescheduling through it", `/api/book/manage/${SECRET}/reschedule`],
     ["cancelling through it", `/api/book/manage/${SECRET}/cancel`],
     ["a waitlist cancel link", `/api/page/waitlist/cancel/${SECRET}`],
+    ["a whole-party group link", `/api/book/group/${SECRET}`],
+    ["moving the whole party", `/api/book/group/${SECRET}/reschedule`],
+    ["cancelling the whole party", `/api/book/group/${SECRET}/cancel`],
   ])("masks %s", (_label, url) => {
     const out = redactUrl(url);
     expect(out).not.toContain(SECRET);
@@ -53,6 +56,15 @@ describe("redactUrl: the path secrets", () => {
     expect(redactUrl(`/api/book/manage/${SECRET}/reschedule`)).toBe(
       "/api/book/manage/[redacted]/reschedule",
     );
+  });
+
+  it("🔴 does NOT redact the shop slug on the group CREATE route", () => {
+    // /api/book/<slug>/group carries no secret at all - the slug is the public
+    // shop handle, printed on every QR code. Redacting it would hide WHICH
+    // shop a refusal came from, which is the one field that makes a booking
+    // log worth reading.
+    expect(redactUrl("/api/book/cherncuts/group")).toBe("/api/book/cherncuts/group");
+    expect(redactUrl("/api/book/cherncuts/group/plan")).toBe("/api/book/cherncuts/group/plan");
   });
 
   it("🔴 does NOT redact an ordinary row id that merely looks similar", () => {
@@ -157,6 +169,10 @@ describe("🔴 every route whose path IS a credential is covered", () => {
       }
     }
     expect([...found].sort()).toEqual([
+      // The whole-party token. MORE authority than a single manage token, not
+      // less: the group view hands back every member's own manage token, so
+      // one leaked group URL is the entire visit.
+      "booking.group.ts/group/",
       "booking.public.ts/manage/",
       "booking.public.ts/offer/",
       "rewards.ts/",
