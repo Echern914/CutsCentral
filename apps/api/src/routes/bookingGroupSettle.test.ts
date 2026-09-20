@@ -321,7 +321,7 @@ describe("🔴 UNKNOWN that settles ACTIVE sends exactly ONE confirmation", () =
     await settleHappy();
     await prisma.emailIntent.deleteMany({ where: { shopId } });
     const group = await theGroup();
-    expect(group!.confirmationSentAt).not.toBeNull();
+    expect(group!.confirmationEnqueuedAt).not.toBeNull();
 
     await prisma.appointmentGroup.update({
       where: { id: group!.id },
@@ -357,7 +357,7 @@ describe("🔴 UNKNOWN that settles ACTIVE sends exactly ONE confirmation", () =
     const group = await theGroup();
     await prisma.appointmentGroup.update({
       where: { id: group!.id },
-      data: { confirmationSentAt: null },
+      data: { confirmationEnqueuedAt: null },
     });
     await prisma.emailIntent.deleteMany({ where: { shopId } });
 
@@ -501,7 +501,7 @@ describe("the ordinary paths still behave", () => {
     expect(res.status).toBe(201);
     expect(await groupIntents()).toBe(1);
     expect((await theGroup())!.mirrorPendingSince).toBeNull();
-    expect((await theGroup())!.confirmationSentAt).not.toBeNull();
+    expect((await theGroup())!.confirmationEnqueuedAt).not.toBeNull();
   });
 
   it("mirroring OFF books the party and makes zero outbound calls", async () => {

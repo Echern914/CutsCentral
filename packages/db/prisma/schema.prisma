@@ -3275,14 +3275,22 @@ model AppointmentGroup {
   /// settlement must not lose a party that is holding real chairs.
   mirrorPendingSince DateTime?
 
-  /// The grouped confirmation has been dispatched. ONE per group, ever.
+  /// The grouped confirmation has been ENQUEUED. ONE per group, ever.
   ///
-  /// 🔴 THIS IS THE IDEMPOTENCY MARKER, claimed by an atomic
-  /// updateMany(where: confirmationSentAt = null) before anything is sent. The
-  /// settlement sweep runs every five minutes and a replay must not put a
-  /// second "you are booked" in front of the same family - and `count === 0`
-  /// from that claim IS the "somebody else already sent it" signal.
-  confirmationSentAt DateTime?
+  /// 🔴 ENQUEUED, NOT SENT, and the distinction is the whole point. This is
+  /// stamped in the same transaction that writes the durable EmailIntent; it
+  /// says a promise exists, not that a provider accepted anything. The
+  /// provider-confirmed fact lives on `Appointment.confirmationEmailSentAt`,
+  /// written only after a send comes back good. Naming this one `...SentAt`
+  /// invited exactly the reading that produced the bug it now guards: stamp
+  /// it, call it sent, and lose the email on the next crash.
+  ///
+  /// THE IDEMPOTENCY MARKER, claimed by an atomic
+  /// updateMany(where: confirmationEnqueuedAt = null). The settlement sweep
+  /// runs every five minutes and a replay must not put a second "you are
+  /// booked" in front of the same family - `count === 0` from that claim IS
+  /// the "somebody else already enqueued it" signal.
+  confirmationEnqueuedAt DateTime?
 
   /// Audit. canceledAt is set only by a whole-group cancellation.
   createdAt  DateTime  @default(now())

@@ -48,12 +48,17 @@ export interface GroupSettleResult {
 const IN_FLIGHT = new Set(["PENDING", "UNKNOWN", "RELEASING"]);
 
 /**
- * Claim the right to send a group's ONE confirmation.
+ * Claim the right to ENQUEUE a group's ONE confirmation.
  *
  * 🔴 AN ATOMIC COMPARE-AND-SET, NOT A READ-THEN-WRITE. The sweep runs every
- * five minutes, can overlap a retry, and may run on two replicas; `count === 0`
- * is the "somebody else already sent it" signal, and it is the only thing
- * standing between one confirmation and a family getting several.
+ * five minutes, can overlap a retry, and may run on two replicas;
+ * `count === 0` is the "somebody else already enqueued it" signal, and it is
+ * the only thing standing between one confirmation and a family getting
+ * several.
+ *
+ * 🔴 ENQUEUED, NEVER SENT. `confirmationEnqueuedAt` records that a durable
+ * promise exists. The provider-confirmed fact is
+ * `Appointment.confirmationEmailSentAt`, and nothing here may claim it.
  *
  * Exported because the SUCCESS path at booking time claims through here too -
  * one marker, one owner, whichever route gets there first.
@@ -80,8 +85,8 @@ export async function claimGroupConfirmation(
   // If this process dies one line from here, the row is already on disk.
   const claimed = await prisma.$transaction(async (tx) => {
     const res = await tx.appointmentGroup.updateMany({
-      where: { id: groupId, shopId, confirmationSentAt: null },
-      data: { confirmationSentAt: now },
+      where: { id: groupId, shopId, confirmationEnqueuedAt: null },
+      data: { confirmationEnqueuedAt: now },
     });
     if (res.count === 0) return false;
     await tx.emailIntent.createMany({
@@ -122,11 +127,14 @@ export function isGroupConfirmationKind(kind: string): boolean {
 }
 
 /**
- * Send the one grouped confirmation for a party, at most once ever.
+ * Promise the one grouped confirmation for a party, at most once ever.
  *
- * The FIRST member is notified and the email carries everybody (see the
- * `group` block in messaging/templates.ts). The other members are never passed
- * to the notifier, so there is nothing for them to send.
+ * The FIRST member is the one notified and the email carries everybody (see
+ * the `group` block in messaging/templates.ts). The other members are never
+ * passed to the notifier, so there is nothing for them to send.
+ *
+ * Named `...Once` for the guarantee, not for the timing: the ONCE is enforced
+ * by the claim below, and the delivery happens later, from the outbox.
  */
 export async function sendGroupConfirmationOnce(
   shopId: string,

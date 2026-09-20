@@ -6,7 +6,7 @@ import { randomToken } from "@chairback/config";
  * THE GROUPED CONFIRMATION IS A DURABLE PROMISE, NOT A FIRE-AND-FORGET SEND.
  *
  * 🔴 THE BUG THIS FILE EXISTS FOR. Settlement used to stamp
- * `AppointmentGroup.confirmationSentAt` and then `void` a direct sendEmail().
+ * `AppointmentGroup.confirmationEnqueuedAt` and then `void` a direct sendEmail().
  * A crash in between - a deploy, an OOM, a frozen instance - lost the
  * confirmation PERMANENTLY: the marker was already set, so nothing retried,
  * and a family holding three real chairs was never told they were booked.
@@ -155,7 +155,7 @@ describe("the promise is as durable as the marker", () => {
     expect(rows[0]!.status).toBe("PENDING");
 
     const g = await prisma.appointmentGroup.findUniqueOrThrow({ where: { id: groupId } });
-    expect(g.confirmationSentAt).not.toBeNull();
+    expect(g.confirmationEnqueuedAt).not.toBeNull();
   });
 
   it("🔴 SENDS NOTHING ITSELF - a crash here can no longer lose it", async () => {

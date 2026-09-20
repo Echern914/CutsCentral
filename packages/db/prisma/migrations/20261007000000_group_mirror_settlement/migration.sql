@@ -21,10 +21,18 @@
 ALTER TABLE "AppointmentGroup" ADD COLUMN "mirrorPendingSince" TIMESTAMP(3);
 
 -- 🔴 THE IDEMPOTENCY MARKER for the ONE grouped confirmation, claimed with an
--- atomic UPDATE ... WHERE "confirmationSentAt" IS NULL before anything is
--- sent. The settlement sweep runs every five minutes; a replay must not put a
--- second "you are booked" in front of the same family.
-ALTER TABLE "AppointmentGroup" ADD COLUMN "confirmationSentAt" TIMESTAMP(3);
+-- atomic UPDATE ... WHERE "confirmationEnqueuedAt" IS NULL.
+--
+-- ENQUEUED, NOT SENT. It is stamped in the same transaction that writes the
+-- durable EmailIntent, so it records that a PROMISE exists - never that a
+-- provider accepted anything. The provider-confirmed fact lives on
+-- "Appointment"."confirmationEmailSentAt", written only after a good send.
+-- Calling this column "...SentAt" invited exactly the reading that caused the
+-- bug it now guards: stamp it, treat it as sent, lose the email on a crash.
+--
+-- The settlement sweep runs every five minutes; a replay must not put a second
+-- "you are booked" in front of the same family.
+ALTER TABLE "AppointmentGroup" ADD COLUMN "confirmationEnqueuedAt" TIMESTAMP(3);
 
 -- The settlement sweep's work queue: parties still waiting on their mirror.
 CREATE INDEX "AppointmentGroup_shopId_mirrorPendingSince_idx"
@@ -32,8 +40,13 @@ CREATE INDEX "AppointmentGroup_shopId_mirrorPendingSince_idx"
 
 -- The grouped confirmation rides the EXISTING durable outbox -----------------
 --
--- 🔴 WHY IT HAD TO. The settlement stamped `confirmationSentAt` and then
--- fire-and-forgot a direct sendEmail(). A crash between those two - a deploy,
+-- 🔴 WHY IT HAD TO. The settlement stamped a marker it called
+-- `confirmationSentAt` and then fire-and-forgot a direct sendEmail(). The name
+-- was half the bug: the column recorded an INTENT and was read as a delivery.
+-- It is `confirmationEnqueuedAt` now, and the only thing that may be called a
+-- send is "Appointment"."confirmationEmailSentAt".
+--
+-- A crash between the stamp and the provider - a deploy,
 -- an OOM, a frozen instance - lost the confirmation PERMANENTLY: the marker
 -- was already set, so nothing retried, and a family holding three real chairs
 -- was never told they were booked. Dropping the marker instead would have
