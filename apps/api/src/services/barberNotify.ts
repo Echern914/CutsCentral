@@ -58,10 +58,33 @@ export const NOTIFY_DEFAULTS = {
 export type NotifyPrefs = typeof NOTIFY_DEFAULTS;
 
 /** Which alert a send belongs to, so one switch can silence one kind. */
-export type BarberAlertKind = "nextUp" | "dayAhead" | "newBooking" | "cancel" | "conflict";
+export type BarberAlertKind =
+  | "nextUp"
+  | "dayAhead"
+  | "newBooking"
+  | "cancel"
+  | "conflict"
+  | "review";
 
 /**
- * 🔴 `conflict` IS DELIBERATELY ABSENT, and that is the whole policy.
+ * The kinds that have no per-kind switch. See the policy note below.
+ *
+ * 🔴 A SET, NOT A STRING COMPARISON. When `conflict` was the only one, the
+ * guard in sendToBarber read `kind !== "conflict"`; adding a second mandatory
+ * kind that way means remembering to widen an inline condition in a file
+ * nobody is editing at the time. Naming the set makes KIND_SWITCH's type check
+ * it: a kind that is neither switched nor listed here is a compile error.
+ */
+export const MANDATORY_KINDS = ["conflict", "review"] as const;
+export type MandatoryAlertKind = (typeof MANDATORY_KINDS)[number];
+
+function isMandatoryKind(kind: BarberAlertKind): kind is MandatoryAlertKind {
+  return (MANDATORY_KINDS as readonly string[]).includes(kind);
+}
+
+/**
+ * 🔴 `conflict` AND `review` ARE DELIBERATELY ABSENT, and that is the whole
+ * policy.
  *
  * Every other kind tells a barber about business that is going fine - a
  * booking arrived, one cancelled, the next client is due. Those are theirs to
@@ -71,6 +94,17 @@ export type BarberAlertKind = "nextUp" | "dayAhead" | "newBooking" | "cancel" | 
  * that writes one, and no toggle in settings - rather than a column that
  * exists, defaults on, and can never be changed, which only looks like a
  * preference.
+ *
+ * `review` is here for the SECOND half of that reasoning rather than the
+ * first. A review is not an integrity event, but a `reviewEnabled` column
+ * would have been exactly the sham this comment warns about: nothing in the
+ * settings screen or the notification API writes one, so it would have
+ * defaulted true and stayed true forever while presenting itself as a choice.
+ * The honest options were to build the toggle end to end or not to pretend,
+ * and a review alert is low enough volume - a handful a month for a busy shop
+ * - that the channel switches are the right granularity. If it ever needs
+ * silencing on its own, that is a column AND a settings control AND an API
+ * field, added together.
  *
  * WHAT IT STILL RESPECTS: the CHANNEL switches below (`pushEnabled`,
  * `smsEnabled`, `emailEnabled`). Mandatory decides *whether there is something
@@ -92,7 +126,7 @@ export type BarberAlertKind = "nextUp" | "dayAhead" | "newBooking" | "cancel" | 
  * just did it, while they can still ring the customer - and the durable
  * BookingConflict row, which waits however long it takes.
  */
-const KIND_SWITCH: Record<Exclude<BarberAlertKind, "conflict">, keyof NotifyPrefs> = {
+const KIND_SWITCH: Record<Exclude<BarberAlertKind, MandatoryAlertKind>, keyof NotifyPrefs> = {
   nextUp: "nextUpEnabled",
   dayAhead: "dayAheadEnabled",
   newBooking: "newBookingEnabled",
@@ -196,9 +230,9 @@ export async function sendToBarber(params: {
   const out: BarberSendResult = { pushed: false, texted: false, emailed: false };
   try {
     const prefs = params.prefs ?? (await resolveNotifyPrefs(params.shopId, params.userId));
-    // `conflict` has no switch to consult (see KIND_SWITCH above): it is a
-    // mandatory integrity alert and passes straight to the channel gates.
-    if (params.kind !== "conflict" && !params.force && !prefs[KIND_SWITCH[params.kind]]) {
+    // A mandatory kind has no switch to consult (see KIND_SWITCH above): it
+    // passes straight to the channel gates.
+    if (!isMandatoryKind(params.kind) && !params.force && !prefs[KIND_SWITCH[params.kind]]) {
       return out;
     }
 

@@ -52,6 +52,9 @@ import { previewNudgeBody } from "../messaging/templates.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 import { sendPushToUser } from "../messaging/push.js";
+import { enqueueReviewNotifications } from "../services/reviewNotify.js";
+import { kickReviewNotifications } from "../engines/reviewNotifyOutbox.js";
+import { trackBackgroundWork } from "../backgroundWork.js";
 import { leadLimiter, waitlistLimiter } from "../middleware/rateLimit.js";
 import {
   hasReceptionistEntitlement,
@@ -1484,30 +1487,39 @@ publicPageRouter.post("/:slug/review", leadLimiter, async (req, res) => {
     return;
   }
   const d = parsed.data;
-  await prisma.review.create({
-    data: {
-      shopId: shop.id,
-      rating: d.rating,
-      body: d.body || null,
-      authorName: d.authorName || null,
-      // status defaults to PENDING - barber must approve before it shows.
-    },
+
+  // 🔴 THE REVIEW AND THE PROMISE TO ANNOUNCE IT COMMIT TOGETHER, OR NEITHER
+  // DOES. This used to be a create followed by an inline Twilio call to
+  // `shop.notifyPhone`, which failed three ways at once for a shop with no
+  // notify phone: the only branch that could send was never entered, no push
+  // was ever attempted, and nothing recorded that a notification had been
+  // owed. Nine reviews went unannounced with no evidence to find afterwards.
+  //
+  // 🔴 NOT ONE BYTE OF NETWORK I/O INSIDE THIS TRANSACTION. Everything in
+  // `enqueueReviewNotifications` is a read or a write on `tx`; a provider call
+  // in here would hold a pooled database connection open for the length of a
+  // round-trip to somebody else's service, and a provider that hangs would
+  // become a connection-pool outage in this one. The sending happens after the
+  // commit, from a worker that can retry it.
+  const review = await prisma.$transaction(async (tx) => {
+    const created = await tx.review.create({
+      data: {
+        shopId: shop.id,
+        rating: d.rating,
+        body: d.body || null,
+        authorName: d.authorName || null,
+        // status defaults to PENDING - barber must approve before it shows.
+      },
+    });
+    await enqueueReviewNotifications(tx, { shopId: shop.id, reviewId: created.id });
+    return created;
   });
 
-  // Best-effort barber alert (same DRY_RUN-honoring path as the lead notify).
-  if (shop.notifyPhone) {
-    const who = d.authorName?.trim() || "A customer";
-    const body = `New ${d.rating}-star review at ${shop.name} from ${who}. Approve it in your dashboard to publish.`;
-    if (apiEnv().DRY_RUN) {
-      logger.info({ shopId: shop.id, to: shop.notifyPhone }, "review notify SMS (dry-run, not sent)");
-    } else {
-      try {
-        await getMessageProvider().send({ to: shop.notifyPhone, body });
-      } catch (err) {
-        logger.error({ err, shopId: shop.id }, "review notify SMS failed");
-      }
-    }
-  }
+  // Wake the worker for this review's rows specifically, so a barber hears in
+  // seconds rather than on the next minute's tick. Deliberately NOT awaited:
+  // the customer who just left a review must not wait on a barber's SMS, and
+  // the scheduled pass is the backstop if this process dies mid-send.
+  void trackBackgroundWork(kickReviewNotifications(review.id));
 
   res.status(201).json({ ok: true });
 });

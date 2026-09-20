@@ -2146,12 +2146,20 @@ dashboardRouter.get("/requests", async (req, res) => {
 // page only ever shows APPROVED - this is the barber's full moderation view.
 dashboardRouter.get("/reviews", async (req, res) => {
   const db = forShop(req.shop!.id);
-  const reviews = await db.review.findMany({
-    orderBy: { createdAt: "desc" },
-    take: 200,
-  });
-  // Count pending so the dashboard can badge "N awaiting approval".
-  const pendingCount = reviews.filter((r) => r.status === "PENDING").length;
+  // `limit=1` for a caller that only wants the badge count: the rows are
+  // thrown away and only `pendingCount` is read. Same trick the calendar's
+  // waitlist badge uses, and it keeps the header's per-render fan-out cheap.
+  const limit = Math.max(1, Math.min(Number(req.query.limit) || 200, 200));
+  const [reviews, pendingCount] = await Promise.all([
+    db.review.findMany({ orderBy: { createdAt: "desc" }, take: limit }),
+    // 🔴 COUNTED IN THE DATABASE, NOT FILTERED OUT OF THE PAGE. This was
+    // `reviews.filter(...).length` over the first 200 rows, which is the right
+    // answer only while a shop has fewer than 200 reviews in total - past
+    // that, older pending ones fall off the end of the page and the badge
+    // silently under-reports the queue it exists to surface. It also has to be
+    // independent of `limit`, or asking for one row would badge at most one.
+    db.review.count({ where: { status: "PENDING" } }),
+  ]);
   res.json({
     reviews: reviews.map((r) => ({
       id: r.id,

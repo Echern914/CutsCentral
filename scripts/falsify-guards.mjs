@@ -47,6 +47,9 @@ const WAVES = {
       "StripeWebhookEvent_eventId_key",
       "AffiliateQualifyingInvoice_stripeInvoiceId_key",
       "Shop_twilioNumber_key",
+      // The key that makes one review produce at most one alert per recipient
+      // per channel, however many times the enqueue runs.
+      "ReviewNotification_reviewId_userId_channel_key",
     ],
   },
 };
