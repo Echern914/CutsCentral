@@ -320,10 +320,28 @@ export async function dispatchCreate(outboxId: string): Promise<DispatchOutcome>
  * independent calendars, and stopping early would leave rows PENDING that the
  * reconciler then has to clean up anyway.
  */
-export async function dispatchCreateAll(outboxIds: string[]): Promise<DispatchOutcome> {
-  if (outboxIds.length === 0) return "skipped";
+/**
+ * Every outcome, unfolded - for a caller that cannot act on the collapsed one.
+ *
+ * 🔴 `dispatchCreateAll` COLLAPSES failed OVER unknown, and for a single
+ * appointment that is right: one block, one answer, and a definitive refusal is
+ * definitive. For a GROUP it is actively wrong. A party of three that comes
+ * back ACTIVE + FAILED + UNKNOWN is not a definitive failure: the UNKNOWN
+ * member's block may exist in Acuity, and compensating the group on the
+ * strength of the FAILED one would release what we can see and ORPHAN what we
+ * cannot. The caller needs to see all three.
+ */
+export async function dispatchCreateEach(
+  outboxIds: string[],
+): Promise<DispatchOutcome[]> {
   const outcomes: DispatchOutcome[] = [];
   for (const id of outboxIds) outcomes.push(await dispatchCreate(id));
+  return outcomes;
+}
+
+export async function dispatchCreateAll(outboxIds: string[]): Promise<DispatchOutcome> {
+  if (outboxIds.length === 0) return "skipped";
+  const outcomes = await dispatchCreateEach(outboxIds);
   if (outcomes.includes("failed")) return "failed";
   if (outcomes.includes("unknown")) return "unknown";
   if (outcomes.includes("active")) return "active";
@@ -374,19 +392,70 @@ export async function dispatchAfterCommit(
  * Runs regardless of the shop's mode - see isMirrorEligible: a block we
  * created is ours to clean up even after the feature is switched off.
  */
+/**
+ * Release a set of outbound rows - the ONE place that decides what a release
+ * request means for each state.
+ *
+ * 🔴 AN UNKNOWN ROW IS NOT RELEASED HERE, AND THAT IS THE WHOLE POINT.
+ *
+ * This used to bulk-set EVERY row to RELEASING and only then call releaseRow(),
+ * which re-reads the row from the database. By the time releaseRow saw it, its
+ * own guard -
+ *
+ *     // An UNKNOWN with no id may still exist in Acuity - leave it for the
+ *     // reconciler, which can find it by reference, or it would be orphaned.
+ *     if (row.state === "UNKNOWN") return;
+ *
+ * - could never fire, because the state had already been overwritten. The row
+ * then fell through to "no acuityBlockId, nothing to delete" and was marked
+ * RELEASED. If Acuity HAD created that block, it is now orphaned on the
+ * barber's calendar forever, with nothing in ChairBack pointing at it: the
+ * chair reads as busy and no cancel will ever free it.
+ *
+ * The intent in that comment was right. What was missing was leaving the state
+ * intact long enough for it to be acted on. So an UNKNOWN row records the
+ * release INTENT and keeps its state; the reconciler resolves identity first
+ * (findBlockByReference either finds the block or proves its absence) and
+ * releases it then - see the UNKNOWN branch of reconcileShop.
+ */
+async function requestReleaseOf(
+  rows: Array<{ id: string; state: string }>,
+  now: Date,
+): Promise<void> {
+  if (rows.length === 0) return;
+  const unknown = rows.filter((r) => r.state === "UNKNOWN").map((r) => r.id);
+  const releasable = rows.filter((r) => r.state !== "UNKNOWN").map((r) => r.id);
+
+  if (unknown.length > 0) {
+    // Intent only. State stays UNKNOWN so the reconciler still knows this row
+    // may have a remote block, and `releaseRequestedAt` tells it what to do
+    // once it finds out.
+    await prisma.acuityOutboundBlock.updateMany({
+      where: { id: { in: unknown }, releaseRequestedAt: null },
+      data: { releaseRequestedAt: now },
+    });
+    logTransition("release deferred - UNKNOWN, identity not yet resolved", {
+      outboxIds: unknown,
+    });
+  }
+  if (releasable.length > 0) {
+    await prisma.acuityOutboundBlock.updateMany({
+      where: { id: { in: releasable } },
+      data: { state: "RELEASING" },
+    });
+    for (const id of releasable) await releaseRow(id);
+  }
+}
+
 export async function releaseForAppointment(
   shopId: string,
   appointmentId: string,
 ): Promise<void> {
   const rows = await prisma.acuityOutboundBlock.findMany({
     where: { shopId, appointmentId, state: { in: ["PENDING", "ACTIVE", "UNKNOWN"] } },
+    select: { id: true, state: true },
   });
-  if (rows.length === 0) return;
-  await prisma.acuityOutboundBlock.updateMany({
-    where: { id: { in: rows.map((r) => r.id) } },
-    data: { state: "RELEASING" },
-  });
-  for (const row of rows) await releaseRow(row.id);
+  await requestReleaseOf(rows, new Date());
 }
 
 /** Delete one RELEASING row's block in Acuity, then mark it RELEASED. */
@@ -762,6 +831,25 @@ export async function reconcileShop(shopId: string, now = new Date()): Promise<{
       // which would then block the chair a SECOND time and, worse, outlive a
       // cancel by up to a full resync. Drop the echo now that we own the id.
       await deleteEchoedExternalBlock(shopId, found);
+      // 🔴 SOMEBODY ASKED FOR THIS TO BE RELEASED while it was UNKNOWN - a
+      // cancel, or a compensated group. Now that it has an id, it can actually
+      // be deleted instead of orphaned. THIS is the release that could not
+      // safely happen at request time.
+      if (row.releaseRequestedAt) {
+        await prisma.acuityOutboundBlock.update({
+          where: { id: row.id },
+          data: { state: "RELEASING" },
+        });
+        await releaseRow(row.id);
+        released++;
+        logTransition("UNKNOWN -> RELEASED (found by reference, then deleted)", {
+          shopId,
+          appointmentId: row.appointmentId,
+          outboxId: row.id,
+          acuityBlockId: found,
+        });
+        continue;
+      }
       adopted++;
       logTransition("UNKNOWN -> ACTIVE (recovered by reference)", {
         shopId,
@@ -771,7 +859,24 @@ export async function reconcileShop(shopId: string, now = new Date()): Promise<{
       });
       continue;
     }
-    // Not there: the create genuinely did not happen. Safe to retry cleanly.
+    // Not there: the create genuinely did not happen.
+    if (row.releaseRequestedAt) {
+      // Asked to release something that was never created. Nothing exists to
+      // delete, and absence is now PROVEN rather than assumed - which is the
+      // only condition under which marking this RELEASED is honest.
+      await prisma.acuityOutboundBlock.update({
+        where: { id: row.id },
+        data: { state: "RELEASED" },
+      });
+      released++;
+      logTransition("UNKNOWN -> RELEASED (proven absent; nothing to delete)", {
+        shopId,
+        appointmentId: row.appointmentId,
+        outboxId: row.id,
+      });
+      continue;
+    }
+    // Safe to retry cleanly.
     await prisma.acuityOutboundBlock.update({
       where: { id: row.id },
       data: { state: "PENDING" },
@@ -979,13 +1084,13 @@ export async function deleteEchoedExternalBlock(
 export async function releaseAllForShop(shopId: string): Promise<number> {
   const rows = await prisma.acuityOutboundBlock.findMany({
     where: { shopId, state: { in: ["PENDING", "ACTIVE", "UNKNOWN"] } },
-    select: { id: true },
+    select: { id: true, state: true },
   });
-  await prisma.acuityOutboundBlock.updateMany({
-    where: { id: { in: rows.map((r) => r.id) } },
-    data: { state: "RELEASING" },
-  });
-  for (const r of rows) await releaseRow(r.id);
+  // Same rule as releaseForAppointment, and for the same reason: an UNKNOWN
+  // row released blind is an orphaned block on the barber's calendar. This
+  // path had the identical bug - it is the escape hatch for undoing a bad
+  // rollout, which is precisely when UNKNOWN rows are most likely to exist.
+  await requestReleaseOf(rows, new Date());
   logTransition("release-all complete", { shopId, count: rows.length }, "warn");
   return rows.length;
 }

@@ -2717,6 +2717,20 @@ model AcuityOutboundBlock {
   startsAt      DateTime
   endsAt        DateTime
   state         OutboundBlockState @default(PENDING)
+  // 🔴 "RELEASE THIS ONCE YOU KNOW WHAT IT IS."
+  //
+  // An UNKNOWN row is one whose create we never got an answer to - the block
+  // may or may not exist in Acuity. Releasing it blind is what orphans a block
+  // on the barber's calendar forever: with no acuityBlockId there is nothing to
+  // delete BY, and marking it RELEASED throws away the only record that
+  // something might be out there.
+  //
+  // So a release request on an UNKNOWN row records the INTENT here and leaves
+  // the state alone. The reconciler resolves identity first (findBlockByReference
+  // either finds the block or proves its absence) and only then releases.
+  // Null on every other row and on every row written before this column existed,
+  // which is exactly right: nobody has asked for those to be released.
+  releaseRequestedAt DateTime?
   attempts      Int      @default(0)
   lastError     String? // sanitized (status + code only, never a payload echo)
   createdAt     DateTime @default(now())
@@ -3238,10 +3252,35 @@ model AppointmentGroup {
   updatedAt  DateTime  @updatedAt
   canceledAt DateTime?
 
+  /// 🔴 THE PARTY IS BOOKED BUT ITS ACUITY BLOCKS ARE NOT SETTLED YET.
+  ///
+  /// Set when the mirror came back AMBIGUOUS - at least one create never got an
+  /// answer, so its block may or may not exist. The customer holds the chairs
+  /// and has been told "processing", not "booked": no confirmation goes out
+  /// while this is set, because we cannot yet promise the time is protected.
+  ///
+  /// Cleared by engines/appointmentGroupSettle.ts once the reconciler has
+  /// resolved every member - either by sending the one grouped confirmation
+  /// (all ACTIVE) or by compensating the whole party (a definitive failure).
+  /// It is DURABLE on purpose: a process restart between the 202 and the
+  /// settlement must not lose a party that is holding real chairs.
+  mirrorPendingSince DateTime?
+
+  /// The grouped confirmation has been dispatched. ONE per group, ever.
+  ///
+  /// 🔴 THIS IS THE IDEMPOTENCY MARKER, claimed by an atomic
+  /// updateMany(where: confirmationSentAt = null) before anything is sent. The
+  /// settlement sweep runs every five minutes and a replay must not put a
+  /// second "you are booked" in front of the same family - and `count === 0`
+  /// from that claim IS the "somebody else already sent it" signal.
+  confirmationSentAt DateTime?
+
   appointments Appointment[]
 
   @@index([shopId, status])
   @@index([shopId, staffId])
+  /// The settlement sweep's work queue: parties still waiting on their mirror.
+  @@index([shopId, mirrorPendingSince])
 }
 
 model RecurringSeries {

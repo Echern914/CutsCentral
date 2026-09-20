@@ -18,12 +18,14 @@ import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWr
 import { cancelGroup } from "../engines/appointmentPromotion.js";
 import {
   MirrorNotConfiguredError,
-  dispatchCreateAll,
+  dispatchCreateEach,
   recordMirrorIntent,
-  releaseForAppointment,
 } from "../engines/acuityMirror.js";
+import {
+  compensateGroup,
+  sendGroupConfirmationOnce,
+} from "../engines/appointmentGroupSettle.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
-import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
 import { isSlotBookable } from "../engines/slots.js";
 import { bookingWriteLimiter, rewardsLimiter } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
@@ -505,29 +507,34 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
     // MIRROR BEFORE WE PROMISE ANYTHING. Acuity has to be holding every one of
     // these times before the customer is told the party is booked - otherwise
     // "you are booked" is a claim we cannot back.
+    //
+    // 🔴 PER-MEMBER OUTCOMES, NOT THE COLLAPSED ONE. dispatchCreateAll folds
+    // several answers into one and lets `failed` win over `unknown`. For a
+    // single appointment that is correct. For a party it is dangerous: three
+    // members coming back ACTIVE + FAILED + UNKNOWN is NOT a definitive
+    // failure, because the UNKNOWN member's block may exist in Acuity. Acting
+    // on the FAILED one alone would release what we can see and ORPHAN what we
+    // cannot - a block nobody can find, on a chair nothing will ever free.
     if (mirrorOutboxIds.length > 0) {
-      const outcome = await dispatchCreateAll(mirrorOutboxIds);
-      if (outcome === "failed") {
-        // DEFINITIVE rejection: Acuity looked and declined, so no block exists.
-        // 🔴 UNDO THE WHOLE PARTY. Keeping the members that happened to land
-        // would leave a family booked for two of three chairs and nobody told
-        // which one is missing - the partial success this feature exists to
-        // make impossible. Nothing has been sent and no money was taken, so
-        // this costs the customer only the need to pick again.
-        await compensateUnmirroredGroup(shop.id, created.id, appointmentIds);
-        await noteAvailabilityChanged(shop.id);
-        res.status(409).json({ error: "slot_unavailable_external", code: "SLOT_UNAVAILABLE" });
-        return;
-      }
-      if (outcome === "unknown") {
-        // AMBIGUOUS - the blocks may well exist; we simply never heard back.
-        // Cancelling would kill a real party over a lost response AND strand
-        // live blocks. Keep the booking, say nothing confirmatory, and let the
-        // reconciler settle it by reference.
+      const outcomes = await dispatchCreateEach(mirrorOutboxIds);
+      const anyUnknown = outcomes.includes("unknown");
+      const anyFailed = outcomes.includes("failed");
+
+      // 🔴 UNKNOWN OUTRANKS FAILED. Uncertainty anywhere in the party means
+      // nothing here may be called definitive yet, whatever else came back.
+      if (anyUnknown) {
         logger.warn(
-          { shopId: shop.id, groupId: created.id, outboxIds: mirrorOutboxIds },
-          "acuity mirror: ambiguous group create - holding booking, suppressing confirmation",
+          { shopId: shop.id, groupId: created.id, outboxIds: mirrorOutboxIds, outcomes },
+          "acuity mirror: ambiguous group create - holding party for reconciliation",
         );
+        // DURABLE. The party keeps its chairs and the settlement sweep finishes
+        // it once the reconciler has resolved every UNKNOWN - see
+        // engines/appointmentGroupSettle.ts. An in-memory callback would lose
+        // this on the next deploy, and deploys happen constantly.
+        await prisma.appointmentGroup.updateMany({
+          where: { id: created.id, shopId: shop.id },
+          data: { mirrorPendingSince: now },
+        });
         await noteAvailabilityChanged(shop.id);
         res.status(202).json({
           status: "processing",
@@ -536,22 +543,36 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
         });
         return;
       }
+
+      if (anyFailed) {
+        // DEFINITIVE, and now provably so: nothing in this party is uncertain.
+        // 🔴 UNDO THE WHOLE PARTY. Keeping the members that happened to land
+        // would leave a family booked for two of three chairs and nobody told
+        // which one is missing - the partial success this feature exists to
+        // make impossible. compensateGroup releases EVERY member's blocks, not
+        // only the failed one. Nothing has been sent and no money was taken.
+        await compensateGroup(shop.id, created.id, now);
+        await noteAvailabilityChanged(shop.id);
+        res.status(409).json({ error: "slot_unavailable_external", code: "SLOT_UNAVAILABLE" });
+        return;
+      }
     }
     await noteAvailabilityChanged(shop.id);
 
-    // 🔴 ONE CONFIRMATION FOR THE WHOLE PARTY, not one per chair. Only the
-    // FIRST member is notified, and the email carries everybody (see the
-    // `group` block in messaging/templates.ts). Three near-identical
-    // confirmations landing together reads as a bug, not as thoroughness.
+    // 🔴 ONE CONFIRMATION FOR THE WHOLE PARTY, not one per chair, and claimed
+    // through the SAME durable marker the settlement sweep uses. Whichever
+    // route reaches a party first wins; the other reads count === 0 and sends
+    // nothing. That is what stops a retry - or a sweep racing this response -
+    // putting a second "you are booked" in front of the same family.
     //
-    // Fire-and-forget, like the single booking path: a send problem must not
-    // fail a booking that is already durably saved. The per-appointment
-    // confirmationEmailSentAt stamp is what keeps it at-most-once, and the
-    // other members are never passed here, so they have nothing to stamp.
-    const firstId = appointmentIds[0];
-    if (firstId) {
-      void notifyAppointmentConfirmation({ shopId: shop.id, appointmentId: firstId });
-    }
+    // 🔴 AWAITED, unlike the single booking path's fire-and-forget notify. Two
+    // fast writes, and they are what make the promise durable: if this were
+    // voided and the process died here, the claim would never land, the party
+    // would carry no mirrorPendingSince for the sweep to find, and the customer
+    // would simply never be told. The EMAIL itself is still fire-and-forget
+    // inside sendGroupConfirmationOnce - a send problem must not fail a booking
+    // that is already saved.
+    await sendGroupConfirmationOnce(shop.id, created.id, now);
 
     res.status(201).json({ groupId: created.id, manageToken: created.manageToken });
   } catch (err) {
@@ -603,47 +624,6 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
     res.status(500).json({ error: "server_error" });
   }
 });
-
-/**
- * Undo a group whose Acuity blocks were definitively refused.
- *
- * Cancels every member and releases whatever blocks DID land, then marks the
- * group itself cancelled so nothing downstream treats it as a live visit.
- *
- * Deliberately NOT cancelGroup(): this is a compensation for a booking the
- * customer was never told about, so it must not apply a cancellation policy
- * fee, send a cancellation email, or count as an occurrence anyone has to
- * explain. It is the group-shaped twin of compensateUnmirroredBooking.
- *
- * Never throws. A failure here leaves the party booked but unmirrored, which
- * the reconciler owns - and a thrown error would turn a recoverable state into
- * a 500 on top of it.
- */
-async function compensateUnmirroredGroup(
-  shopId: string,
-  groupId: string,
-  appointmentIds: string[],
-): Promise<void> {
-  try {
-    const now = new Date();
-    await prisma.$transaction(async (tx) => {
-      await tx.appointment.updateMany({
-        where: { id: { in: appointmentIds }, shopId },
-        data: { status: "CANCELED", canceledAt: now },
-      });
-      await tx.appointmentGroup.updateMany({
-        where: { id: groupId, shopId },
-        data: { status: "CANCELED", canceledAt: now },
-      });
-    });
-    for (const id of appointmentIds) await releaseForAppointment(shopId, id);
-  } catch (err) {
-    logger.error(
-      { err, shopId, groupId },
-      "acuity mirror: group compensation FAILED - party survives unmirrored, reconciler owns it",
-    );
-  }
-}
 
 /** The group behind a whole-group manage token, or null. */
 async function groupByToken(token: string | undefined) {
