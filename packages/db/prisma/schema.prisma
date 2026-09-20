@@ -2717,6 +2717,34 @@ model AcuityOutboundBlock {
   startsAt      DateTime
   endsAt        DateTime
   state         OutboundBlockState @default(PENDING)
+  /// 🔴 "SOMEBODY HAS ASKED FOR THIS BLOCK TO GO AWAY" - durable, and separate
+  /// from `state` on purpose.
+  ///
+  /// A cancel or a rollback can arrive while the CREATE is still UNKNOWN: we
+  /// asked Acuity to make a block and never heard back, so we do not know
+  /// whether there is anything to delete. The old code answered that by
+  /// overwriting UNKNOWN with RELEASING, which destroyed the one fact that
+  /// said "resolve this by reference before believing anything" - and the row
+  /// was then marked RELEASED with no id and no delete, orphaning a block that
+  /// may well have existed.
+  ///
+  /// The intent now outlives the uncertainty. The row stays UNKNOWN until the
+  /// remote truth is established; this flag is what tells the reconciler that
+  /// once it IS established the answer is "delete it", not "adopt it".
+  releaseRequested Boolean @default(false)
+  /// When a create request was last actually put in front of Acuity.
+  ///
+  /// 🔴 NOT `updatedAt`, and the difference is load-bearing. "This block is not
+  /// in Acuity's listing" only becomes evidence of absence once the listing has
+  /// had time to show it, so that judgement needs a clock measuring "how long
+  /// since we asked Acuity to create it". `updatedAt` measures something else
+  /// entirely - it moves on EVERY write, so merely recording the release intent
+  /// reset it, pushing authoritative absence ten more minutes into the future
+  /// each time anyone touched the row. A row could never settle.
+  ///
+  /// Null on rows that predate this column, and on rows that were never
+  /// dispatched at all (where `attempts` is 0 and absence needs no clock).
+  lastCreateAttemptAt DateTime?
   attempts      Int      @default(0)
   lastError     String? // sanitized (status + code only, never a payload echo)
   createdAt     DateTime @default(now())

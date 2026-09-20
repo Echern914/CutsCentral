@@ -253,7 +253,10 @@ export async function dispatchCreate(outboxId: string): Promise<DispatchOutcome>
 
   await prisma.acuityOutboundBlock.update({
     where: { id: row.id },
-    data: { attempts: { increment: 1 } },
+    // 🔴 STAMPED WITH THE ATTEMPT, not derived from updatedAt later. This is
+    // the clock that decides when "absent from Acuity's listing" is allowed to
+    // count as proof, so it must measure the create request and nothing else.
+    data: { attempts: { increment: 1 }, lastCreateAttemptAt: new Date() },
   });
 
   try {
@@ -367,9 +370,33 @@ export async function dispatchAfterCommit(
 }
 
 /**
- * Release every live block for an appointment (cancel / decline / no-show /
- * hold expiry). Marks RELEASING first so a crash mid-flight leaves the
- * reconciler an obvious job rather than a silent orphan.
+ * 🔴 THE ONE RULE THIS FILE MUST NEVER BREAK.
+ *
+ * A row may be marked RELEASED only when one of these is true:
+ *
+ *   1. the delete was CONFIRMED by Acuity (2xx, or 404 = already absent), or
+ *   2. absence is AUTHORITATIVELY PROVEN - either the create was never
+ *      dispatched at all (attempts === 0, so no request ever left this
+ *      process), or a settled reference lookup found no such block.
+ *
+ * Anything else - an ambiguous create, a lookup that timed out, a delete that
+ * errored - must stay NON-TERMINAL and recoverable. RELEASED is a claim that
+ * the barber's calendar is clear; making it without proof is how a block ends
+ * up living on a real calendar forever with nothing pointing at it.
+ */
+
+/**
+ * Ask for every live block of an appointment to go away (cancel / decline /
+ * no-show / hold expiry).
+ *
+ * 🔴 UNKNOWN IS NOT OVERWRITTEN. It used to be: every non-terminal row was
+ * flipped to RELEASING and handed to releaseRow, which then found no block id,
+ * tested `state === "UNKNOWN"` - a state it had just destroyed - and marked
+ * the row RELEASED having deleted nothing. See the migration for the full
+ * post-mortem.
+ *
+ * An UNKNOWN row keeps its state and records the INTENT instead. The
+ * reconciler resolves what exists remotely and only then deletes.
  *
  * Runs regardless of the shop's mode - see isMirrorEligible: a block we
  * created is ours to clean up even after the feature is switched off.
@@ -382,11 +409,136 @@ export async function releaseForAppointment(
     where: { shopId, appointmentId, state: { in: ["PENDING", "ACTIVE", "UNKNOWN"] } },
   });
   if (rows.length === 0) return;
-  await prisma.acuityOutboundBlock.updateMany({
-    where: { id: { in: rows.map((r) => r.id) } },
-    data: { state: "RELEASING" },
+  await requestRelease(rows);
+}
+
+/**
+ * Record the release intent on a set of rows and move the ones that CAN move.
+ *
+ * PENDING/ACTIVE go to RELEASING as before - for those we either hold a block
+ * id or know for certain no request ever left. UNKNOWN stays UNKNOWN, because
+ * for those the remote truth is genuinely not known yet and the state is the
+ * only thing that remembers to go and find out.
+ */
+async function requestRelease(
+  rows: { id: string; state: string }[],
+): Promise<void> {
+  const unknown = rows.filter((r) => r.state === "UNKNOWN");
+  const movable = rows.filter((r) => r.state !== "UNKNOWN");
+
+  if (movable.length > 0) {
+    await prisma.acuityOutboundBlock.updateMany({
+      where: { id: { in: movable.map((r) => r.id) } },
+      data: { state: "RELEASING", releaseRequested: true },
+    });
+  }
+  if (unknown.length > 0) {
+    await prisma.acuityOutboundBlock.updateMany({
+      where: { id: { in: unknown.map((r) => r.id) } },
+      data: { releaseRequested: true },
+    });
+  }
+
+  for (const row of movable) await releaseRow(row.id);
+  // Best effort right now; the reconciler owns whatever does not settle here.
+  for (const row of unknown) await settleUnknownRelease(row.id);
+}
+
+/**
+ * Resolve ONE ambiguous create that somebody has asked to be released.
+ *
+ * This is the whole point of keeping the row UNKNOWN: we do not know whether a
+ * block exists, so we ask Acuity by our own opaque reference before claiming
+ * anything.
+ *
+ *   found                  -> adopt the id, then delete it properly
+ *   absent AND settled     -> absence is proven; RELEASED is honest
+ *   absent but NOT settled -> too soon to trust; stay UNKNOWN and retry
+ *   lookup failed          -> we learned nothing; stay UNKNOWN and retry
+ *
+ * Never throws: it is called from cancel paths that must not fail because
+ * Acuity is briefly unreachable.
+ */
+export async function settleUnknownRelease(
+  outboxId: string,
+  now: Date = new Date(),
+): Promise<"deleted" | "absent" | "retry"> {
+  const row = await prisma.acuityOutboundBlock.findUnique({ where: { id: outboxId } });
+  if (!row || row.state !== "UNKNOWN") return "retry";
+
+  const shop = await loadShopSlice(row.shopId);
+  // 🔴 NO CONNECTION, NO PROOF. Without Acuity credentials we can neither look
+  // the block up nor delete it, so there is nothing honest to do but leave the
+  // row exactly as it is. Marking it RELEASED here would be inventing a fact
+  // precisely when we have lost the ability to check it.
+  if (!shop || !shop.acuityConnected) return "retry";
+
+  let found: string | null = null;
+  try {
+    found = await findBlockByReference(row.shopId, {
+      outboxId: row.id,
+      calendarId: row.acuityCalendarId,
+      startsAt: row.startsAt,
+      endsAt: row.endsAt,
+    });
+  } catch (err) {
+    // A timeout or a 5xx on the LOOKUP tells us nothing about the block. This
+    // is the case that most wants to be mistaken for "not there".
+    const { detail } = safeError(err);
+    await prisma.acuityOutboundBlock.update({
+      where: { id: row.id },
+      data: { attempts: { increment: 1 }, lastError: detail },
+    });
+    logTransition(
+      "release lookup ambiguous - staying UNKNOWN for the reconciler",
+      { shopId: row.shopId, appointmentId: row.appointmentId, outboxId: row.id, detail },
+      "warn",
+    );
+    return "retry";
+  }
+
+  if (found) {
+    // We own it after all. Adopt the id and take the normal delete path, which
+    // is the only one that can mark RELEASED off a confirmed deletion.
+    await prisma.acuityOutboundBlock.update({
+      where: { id: row.id },
+      data: { state: "RELEASING", acuityBlockId: found, lastError: null },
+    });
+    logTransition("UNKNOWN -> RELEASING (block found by reference)", {
+      shopId: row.shopId,
+      appointmentId: row.appointmentId,
+      outboxId: row.id,
+      acuityBlockId: found,
+    });
+    await releaseRow(row.id);
+    return "deleted";
+  }
+
+  // 🔴 "NOT IN THE LISTING" IS ONLY EVIDENCE ONCE THE LISTING HAS HAD A CHANCE
+  // TO SHOW IT. A lookup landing seconds after the create would read a block
+  // that does exist as absent, and we would mark it RELEASED and orphan the
+  // very thing we were trying to delete. Same settle window the restore sweep
+  // uses, and for the same reason.
+  //
+  // Measured from the CREATE ATTEMPT, never from updatedAt: updatedAt moves on
+  // every write, so recording the release intent would reset it and the row
+  // could never settle. `createdAt` is the fallback for rows written before
+  // that column existed - those are old by definition.
+  const attemptedAt = row.lastCreateAttemptAt ?? row.createdAt;
+  if (attemptedAt.getTime() > now.getTime() - VERIFY_SETTLE_MS) {
+    return "retry";
+  }
+
+  await prisma.acuityOutboundBlock.update({
+    where: { id: row.id },
+    data: { state: "RELEASED", lastError: "absent_confirmed" },
   });
-  for (const row of rows) await releaseRow(row.id);
+  logTransition("UNKNOWN -> RELEASED (absence confirmed by reference)", {
+    shopId: row.shopId,
+    appointmentId: row.appointmentId,
+    outboxId: row.id,
+  });
+  return "absent";
 }
 
 /** Delete one RELEASING row's block in Acuity, then mark it RELEASED. */
@@ -394,15 +546,28 @@ export async function releaseRow(outboxId: string): Promise<void> {
   const row = await prisma.acuityOutboundBlock.findUnique({ where: { id: outboxId } });
   if (!row || row.state === "RELEASED") return;
 
-  // Never created in Acuity (PENDING that never dispatched): nothing to
-  // delete, and no id to delete it by. Terminal immediately.
   if (!row.acuityBlockId) {
-    // An UNKNOWN with no id may still exist in Acuity - leave it for the
-    // reconciler, which can find it by reference, or it would be orphaned.
-    if (row.state === "UNKNOWN") return;
+    // 🔴 NO ID. Two very different situations, and conflating them is the bug
+    // this whole change exists for.
+    //
+    // attempts === 0: no create request ever left this process, so there is
+    // provably nothing in Acuity. Absence by construction - RELEASED is honest.
+    //
+    // attempts > 0: we DID ask Acuity to create it and did not get a usable
+    // answer. A block may exist. We have no id to delete it by and no proof it
+    // is absent, so the one thing we must not do is claim release. Leave it
+    // recoverable for settleUnknownRelease / the reconciler.
+    if (row.attempts > 0) {
+      logTransition(
+        "release skipped - create was attempted but never confirmed; resolving by reference",
+        { shopId: row.shopId, appointmentId: row.appointmentId, outboxId: row.id },
+        "warn",
+      );
+      return;
+    }
     await prisma.acuityOutboundBlock.update({
       where: { id: row.id },
-      data: { state: "RELEASED" },
+      data: { state: "RELEASED", lastError: "never_dispatched" },
     });
     return;
   }
@@ -746,6 +911,18 @@ export async function reconcileShop(shopId: string, now = new Date()): Promise<{
       continue;
     }
 
+    // 🔴 AN AMBIGUOUS CREATE SOMEBODY HAS SINCE ASKED TO RELEASE. The intent
+    // outlived the uncertainty (see releaseRequested), so the answer is not
+    // "adopt it and carry on" - it is "find out what exists, then delete it".
+    // settleUnknownRelease owns every ending: deleted, proven absent, or
+    // retry. None of them marks RELEASED without proof.
+    if (row.releaseRequested) {
+      const outcome = await settleUnknownRelease(row.id, now);
+      if (outcome === "deleted" || outcome === "absent") released++;
+      else retried++;
+      continue;
+    }
+
     // UNKNOWN: did Acuity create it after all?
     const found = await findBlockByReference(shopId, {
       outboxId: row.id,
@@ -976,18 +1153,152 @@ export async function deleteEchoedExternalBlock(
  * blocks; this removes the ones already out there, so a bad rollout can be
  * fully undone without anyone editing Acuity by hand.
  */
-export async function releaseAllForShop(shopId: string): Promise<number> {
+/**
+ * Rows whose RELEASE has been asked for and not yet proven done.
+ *
+ * 🔴 THIS IS THE DISCONNECT GATE. Deleting the AcuityConnection removes the
+ * only credentials that can look a block up or delete it, and `reconcileShop`
+ * returns immediately for a shop that is not connected - so every one of these
+ * rows would be stranded the instant the token goes, and its block would live
+ * on the barber's real calendar with nothing left pointing at it.
+ *
+ * Deliberately NOT every non-terminal row. An ACTIVE block nobody has asked to
+ * release is a live mirror of a live appointment; disconnecting leaves it in
+ * place, which is a product question, not a correctness one. These are only
+ * the rows that have been PROMISED a deletion and have not got one.
+ */
+/**
+ * Every state from which a ChairBack-owned block might still exist in Acuity.
+ *
+ * FAILED is absent: a definitive refusal means Acuity looked at the create and
+ * declined it, so no block was made and there is nothing to delete. RELEASED is
+ * absent because - after this change - it means the deletion was confirmed or
+ * absence was proven.
+ */
+const UNSETTLED_STATES = ["PENDING", "ACTIVE", "UNKNOWN", "RELEASING"] as const;
+
+export async function countUnresolvedReleases(shopId: string): Promise<number> {
+  return prisma.acuityOutboundBlock.count({
+    where: { shopId, state: { in: [...UNSETTLED_STATES] } },
+  });
+}
+
+/**
+ * Push every unsettled block for a shop one step towards gone.
+ *
+ * 🔴 THIS IS WHAT A DISCONNECT REQUEST QUEUES. Disconnecting deletes the only
+ * credentials that can find or delete a block, so every block ChairBack has
+ * put on that calendar has to be dealt with FIRST - including the ACTIVE ones.
+ * An ACTIVE block is not harmless here: after the token is gone nothing owns
+ * it, nothing can remove it, and it holds the barber's chair shut forever over
+ * an appointment ChairBack is no longer mirroring.
+ *
+ * 🔴 IT DOES NOT TOUCH THE APPOINTMENT. The customer keeps their booking; only
+ * the Acuity mirror of it goes away. Disconnecting an integration must never
+ * cancel somebody's haircut.
+ *
+ * Idempotent by construction: a row already RELEASED is skipped by every path
+ * below, so calling this twice - a retry, a second tab, a concurrent request -
+ * converges rather than double-deleting. (Two callers racing on the SAME
+ * RELEASING row can still each issue a delete; Acuity answers the loser 404,
+ * which this engine already treats as success. That is at-least-once deletion
+ * of an idempotent operation, not exactly-once, and it is worth saying so.)
+ */
+export async function queueReleaseForDisconnect(shopId: string): Promise<{
+  queued: number;
+  unresolved: number;
+}> {
+  const rows = await prisma.acuityOutboundBlock.findMany({
+    where: { shopId, state: { in: [...UNSETTLED_STATES] } },
+    select: { id: true, state: true },
+  });
+  if (rows.length === 0) return { queued: 0, unresolved: 0 };
+
+  // PENDING/ACTIVE/UNKNOWN take the normal intent-recording path.
+  const fresh = rows.filter((r) => r.state !== "RELEASING");
+  if (fresh.length > 0) await requestRelease(fresh);
+
+  // RELEASING rows are deletes that have already been asked for and did not
+  // confirm. requestRelease deliberately leaves them alone (they are already
+  // in flight), so retry them here - otherwise a disconnect could sit blocked
+  // forever behind a single failed delete that nothing was re-attempting.
+  for (const r of rows.filter((x) => x.state === "RELEASING")) {
+    await prisma.acuityOutboundBlock.update({
+      where: { id: r.id },
+      data: { releaseRequested: true },
+    });
+    await releaseRow(r.id);
+  }
+
+  return { queued: rows.length, unresolved: await countUnresolvedReleases(shopId) };
+}
+
+/**
+ * Mark unresolved releases as knowingly stranded, for an operator who has
+ * chosen to disconnect anyway.
+ *
+ * 🔴 IT DOES NOT MARK THEM RELEASED, and that is the entire point. The rows
+ * stay non-terminal and carry a fixed reason, so the state on disk says "we
+ * gave up while it was still unknown" rather than "the calendar is clear". If
+ * the shop reconnects, the reconciler picks them up exactly where they were.
+ */
+export async function markReleasesStranded(shopId: string): Promise<number> {
+  const res = await prisma.acuityOutboundBlock.updateMany({
+    where: { shopId, state: { in: [...UNSETTLED_STATES] } },
+    data: { lastError: "disconnected_before_release" },
+  });
+  if (res.count > 0) {
+    logTransition(
+      "acuity disconnected with releases unresolved - blocks may remain on the calendar",
+      { shopId, stranded: res.count },
+      "error",
+    );
+  }
+  return res.count;
+}
+
+export interface ReleaseAllResult {
+  /** Rows that were non-terminal when the sweep started. */
+  requested: number;
+  /** Rows now genuinely terminal: deleted, already absent, or never dispatched. */
+  released: number;
+  /**
+   * Rows still unresolved. NOT a failure of the caller's request - it is the
+   * honest count of blocks whose remote existence we could not establish on
+   * this pass. They stay in the reconciler's queue.
+   */
+  unresolved: number;
+}
+
+export async function releaseAllForShop(shopId: string): Promise<ReleaseAllResult> {
   const rows = await prisma.acuityOutboundBlock.findMany({
     where: { shopId, state: { in: ["PENDING", "ACTIVE", "UNKNOWN"] } },
-    select: { id: true },
+    select: { id: true, state: true },
   });
-  await prisma.acuityOutboundBlock.updateMany({
-    where: { id: { in: rows.map((r) => r.id) } },
-    data: { state: "RELEASING" },
+  if (rows.length === 0) {
+    return { requested: 0, released: 0, unresolved: 0 };
+  }
+
+  // Same split as the per-appointment path: an UNKNOWN row keeps its state and
+  // gains the intent, so the reference lookup still happens before anything is
+  // called released.
+  await requestRelease(rows);
+
+  // 🔴 COUNT WHAT IS ACTUALLY TERMINAL, don't report the request size as the
+  // result. The old version returned `rows.length` - "released: 12" for twelve
+  // rows it had merely touched, several of which it had falsely marked
+  // RELEASED without deleting anything. An operator reading that number was
+  // being told the calendar was clear.
+  const still = await prisma.acuityOutboundBlock.count({
+    where: { shopId, id: { in: rows.map((r) => r.id) }, state: { not: "RELEASED" } },
   });
-  for (const r of rows) await releaseRow(r.id);
-  logTransition("release-all complete", { shopId, count: rows.length }, "warn");
-  return rows.length;
+  const result: ReleaseAllResult = {
+    requested: rows.length,
+    released: rows.length - still,
+    unresolved: still,
+  };
+  logTransition("release-all complete", { shopId, ...result }, "warn");
+  return result;
 }
 
 /**

@@ -13,6 +13,12 @@ import { backfillShop } from "../acuity/backfill.js";
 import { ACUITY } from "@chairback/config";
 import { acuityMeSchema } from "../acuity/types.js";
 import { logger } from "../logger.js";
+import {
+  countUnresolvedReleases,
+  markReleasesStranded,
+  queueReleaseForDisconnect,
+  reconcileShop,
+} from "../engines/acuityMirror.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 
 const env = apiEnv();
@@ -231,6 +237,59 @@ acuityOAuthRouter.post("/disconnect", requireUser, requireShop, async (req, res)
   const shop = req.shop!;
   const conn = await prisma.acuityConnection.findUnique({ where: { shopId: shop.id } });
 
+  // 🔴 ORDER MATTERS, AND IT USED TO BE WRONG. Deleting the connection removes
+  // the only credentials that can look up or delete a block, and
+  // reconcileShop() returns immediately for a shop that is not connected. Any
+  // release still in flight was therefore stranded the instant the token went
+  // - its block living on the barber's real Acuity calendar with nothing left
+  // in ChairBack pointing at it, and no way to find it again short of the
+  // barber deleting it by hand.
+  //
+  // So: finish what we can while we still have the credentials, then refuse if
+  // anything is left. Failing the disconnect is recoverable; silently
+  // orphaning a block on somebody's live calendar is not.
+  if (conn) {
+    // 🔴 THE DISCONNECT REQUEST IS ITSELF THE RELEASE REQUEST. Every block
+    // ChairBack owns on this calendar - ACTIVE ones included - is queued for
+    // deletion while the credentials still exist, because after they are gone
+    // nothing can find or remove them and an ACTIVE block would hold the
+    // barber's chair shut forever with nobody managing it.
+    //
+    // The appointments are untouched: the customer keeps the booking, only the
+    // Acuity mirror of it goes.
+    await queueReleaseForDisconnect(shop.id).catch(() => undefined);
+    // Then the normal reconciler, for anything the queue could not settle in
+    // one pass (an ambiguous create that needs its reference lookup).
+    await reconcileShop(shop.id).catch(() => undefined);
+    const unresolved = await countUnresolvedReleases(shop.id);
+    if (unresolved > 0) {
+      // Fail CLOSED and say exactly what is blocking. `force` exists so an
+      // Acuity outage cannot trap a shop in ChairBack forever - but it does
+      // NOT mark anything released; it records the rows as knowingly stranded,
+      // which is a different and honest claim.
+      if (req.body?.force !== true) {
+        logger.warn(
+          { shopId: shop.id, unresolved },
+          "acuity disconnect refused - releases still unresolved",
+        );
+        res.status(409).json({
+          error: "unresolved_acuity_releases",
+          unresolved,
+          message:
+            `${unresolved} Acuity block${unresolved === 1 ? "" : "s"} could not be confirmed deleted yet. ` +
+            "Disconnecting now would leave them on your Acuity calendar with no way for ChairBack to remove them. " +
+            "Try again in a few minutes, or disconnect with force:true to accept that they stay.",
+        });
+        return;
+      }
+      const stranded = await markReleasesStranded(shop.id);
+      logger.error(
+        { shopId: shop.id, stranded },
+        "acuity disconnect FORCED with releases unresolved - blocks may remain on the calendar",
+      );
+    }
+  }
+
   // Best-effort: remove our webhook subscriptions at Acuity so it stops sending
   // events for a shop we no longer track. Failure here must not block disconnect.
   if (conn && shop.acuityWebhookIds.length) {
@@ -255,9 +314,13 @@ acuityOAuthRouter.post("/disconnect", requireUser, requireShop, async (req, res)
   }
 
   await prisma.shop.update({ where: { id: shop.id }, data: { acuityWebhookIds: [] } });
-  if (conn) {
-    await prisma.acuityConnection.delete({ where: { shopId: shop.id } });
-  }
+  // 🔴 deleteMany, NOT delete. Two disconnect requests racing - a double
+  // click, a retry, two tabs - both read `conn` as present, both pass the
+  // release gate, and `delete` throws P2025 on the loser because the row is
+  // already gone. That turned an idempotent operation into a 500 on a shop
+  // that had in fact disconnected perfectly well. deleteMany matches zero rows
+  // and returns quietly.
+  await prisma.acuityConnection.deleteMany({ where: { shopId: shop.id } });
   logger.info({ shopId: shop.id }, "acuity disconnected");
   res.json({ ok: true });
 });
