@@ -2149,7 +2149,11 @@ dashboardRouter.get("/reviews", async (req, res) => {
   // `limit=1` for a caller that only wants the badge count: the rows are
   // thrown away and only `pendingCount` is read. Same trick the calendar's
   // waitlist badge uses, and it keeps the header's per-render fan-out cheap.
-  const limit = Math.max(1, Math.min(Number(req.query.limit) || 200, 200));
+  // 🔴 TRUNCATED, not just clamped. `Number(req.query.limit)` happily yields
+  // 1.9 from `?limit=1.9`, and Prisma's `take` wants an integer - a fractional
+  // one is a query-engine error, which is a 500 on a header render rather than
+  // a badge. Clamping alone never removes the fraction.
+  const limit = Math.max(1, Math.min(Math.trunc(Number(req.query.limit)) || 200, 200));
   const [reviews, pendingCount] = await Promise.all([
     db.review.findMany({ orderBy: { createdAt: "desc" }, take: limit }),
     // 🔴 COUNTED IN THE DATABASE, NOT FILTERED OUT OF THE PAGE. This was

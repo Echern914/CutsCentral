@@ -22,22 +22,34 @@ import {
  *
  *   - the UNIQUE KEY on (reviewId, userId, channel) makes duplicate ENQUEUE
  *     impossible (pinned in services/reviewNotify.test.ts);
- *   - the LEASE makes two replicas working the same row at the same time
- *     impossible (pinned below).
+ *   - the LEASE makes two workers holding a VALID CLAIM on one row at the same
+ *     time impossible (pinned below).
  *
- * Neither makes DELIVERY exactly-once, and no test here pretends otherwise. If
- * a provider accepts a message and this process dies before recording it, the
- * row is still pending, its lease ages out, another worker sends again and the
- * barber gets two. `lastAttemptAmbiguous` exists so that window is visible
- * afterwards rather than silently recorded as a clean failure.
+ * 🔴 THE SECOND ONE IS NARROWER THAN IT SOUNDS, and the tests below are
+ * careful not to claim more. The lease serialises CLAIMS; it does not
+ * serialise the provider requests those claims lead to. A worker that reserves
+ * its attempt, puts a request on the wire and then stalls past LEASE_MS leaves
+ * that request unresolved while a second worker legitimately claims the row
+ * and sends. Two requests, one row, at the same moment - and nothing in this
+ * process can cancel the first. The CAS on `lockedBy` stops the stalled worker
+ * RECORDING a result it no longer owns; it cannot reach into the socket.
+ *
+ * So DELIVERY is at least once, and no test here pretends otherwise. The same
+ * window swallows the crash case: a provider accepts, this process dies before
+ * recording it, the lease ages out, another worker sends again and the barber
+ * gets two. `lastAttemptAmbiguous` exists so that window is visible afterwards
+ * rather than silently recorded as a clean failure.
  */
 const app = createApp();
 
 const sentSms: { to: string; body: string }[] = [];
-let smsBehaviour: "ok" | "throw5xx" | "throw4xx" = "ok";
+let smsBehaviour: "ok" | "throw5xx" | "throw4xx" | "slow" = "ok";
 const fakeProvider: MessageProvider = {
   channel: "SMS",
   async send(input) {
+    // A provider that takes a few milliseconds, so two sends in one batch
+    // cannot land in the same millisecond and the per-row clock is visible.
+    if (smsBehaviour === "slow") await new Promise((r) => setTimeout(r, 12));
     if (smsBehaviour === "throw5xx") {
       // The answer is UNKNOWN: the provider may or may not have accepted it.
       throw Object.assign(new Error("gateway"), { status: 502 });
@@ -543,6 +555,108 @@ describe("authorization is rechecked at delivery, not trusted from enqueue", () 
     expect(res.skipped).toBe(1);
     expect(sentSms).toHaveLength(0);
     expect((await reload(row.id)).lastError).toBe("channel_off");
+  });
+});
+
+describe("every row in a batch is delivered on its own clock", () => {
+  it("does not stamp the whole batch with the moment the batch started", async () => {
+    // 🔴 WHY THIS MATTERS, AND IT IS NOT COSMETIC. A pass claims up to 50 rows
+    // and works them one at a time, each waiting on a provider; row 50 can be
+    // reached minutes after row 1. If every row is handed the batch-start
+    // timestamp, row 50 renews its lease to `batchStart + LEASE_MS` - a
+    // deadline that may ALREADY HAVE PASSED by the time that renewal commits.
+    // Another replica could then claim the row while this worker is still
+    // mid-send, which is the double-send the lease exists to prevent, reached
+    // the long way round. It also backdates sentAt and every backoff.
+    //
+    // Observable cheaply: with the bug, every row in one batch settles with a
+    // byte-identical `sentAt`. The provider below takes a few ms, so with the
+    // fix they are strictly ordered.
+    await prisma.shop.update({ where: { id: shopId }, data: { notifyPhone: BARBER_PHONE } });
+    smsBehaviour = "slow";
+
+    const a = await prisma.review.create({ data: { shopId, rating: 5 } });
+    const b = await prisma.review.create({ data: { shopId, rating: 4 } });
+    await prisma.reviewNotification.createMany({
+      data: [
+        { shopId, reviewId: a.id, userId: ownerId, channel: "sms" },
+        { shopId, reviewId: b.id, userId: ownerId, channel: "sms" },
+      ],
+    });
+
+    const res = await runReviewNotifyOutbox({ batch: 10 });
+
+    expect(res.sent).toBe(2);
+    const rows = await prisma.reviewNotification.findMany({
+      where: { shopId, channel: "sms" },
+      orderBy: { sentAt: "asc" },
+      select: { sentAt: true },
+    });
+    expect(rows).toHaveLength(2);
+    const first = rows[0]!.sentAt!.getTime();
+    const second = rows[1]!.sentAt!.getTime();
+    // Strictly later, not merely "not earlier": identical stamps are exactly
+    // what the batch-start clock produces.
+    expect(second).toBeGreaterThan(first);
+  });
+});
+
+describe("a notification row pointing at another shop's review", () => {
+  it("sends nothing, and settles terminally instead of retrying", async () => {
+    // 🔴 THE WORKER HAS NO RLS UNDERNEATH IT. It runs through `runAsOwner`,
+    // which turns row security OFF so one pass can drain every shop's queue.
+    // A lookup by reviewId alone would therefore happily read ANOTHER
+    // tenant's review and put its rating into this shop's text. Nothing can
+    // write such a row today - the enqueue stamps shopId and reviewId from
+    // the same shop, and the FK holds - but "no current caller does this" is
+    // an argument about today's callers, and this is the single place that
+    // would turn such a row into a message to a real phone.
+    await prisma.shop.update({ where: { id: shopId }, data: { notifyPhone: BARBER_PHONE } });
+
+    // A second shop, and a review that belongs to it.
+    const otherEmail = `revout-other-${suffix}@test.local`.toLowerCase();
+    emails.push(otherEmail);
+    const signup = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: otherEmail, password: "supersecret123", name: "Other", smsAttested: true });
+    const otherCookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
+    const otherShop = await request(app)
+      .post("/api/shops")
+      .set("Cookie", otherCookie)
+      .send({ name: "Other Cuts", bookingUrl: "https://oc.test", smsAttested: true });
+    const foreignReview = await prisma.review.create({
+      data: { shopId: otherShop.body.id, rating: 1, body: "not ours" },
+    });
+
+    // The mismatch, written by hand: OUR shop, OUR recipient, THEIR review.
+    const row = await prisma.reviewNotification.create({
+      data: {
+        shopId,
+        reviewId: foreignReview.id,
+        userId: ownerId,
+        channel: "sms",
+      },
+    });
+
+    const res = await runReviewNotifyOutbox({ batch: 10 });
+
+    // Not one provider call, and nothing of the other shop's review anywhere.
+    expect(sentSms).toHaveLength(0);
+    expect(res.sent).toBe(0);
+    expect(res.skipped).toBe(1);
+    const after = await reload(row.id);
+    // Terminal: `gone` is not retried, so a mismatched row cannot sit in the
+    // queue being re-attempted every minute forever either.
+    expect(after.status).toBe("skipped");
+    expect(after.lastError).toBe("gone");
+    expect(after.attempts).toBe(0);
+    expect(after.nextAttemptAt).toBeNull();
+    expect(after.leaseUntil).toBeNull();
+
+    // And it stays settled on the next pass.
+    expect((await runReviewNotifyOutbox({ batch: 10 })).claimed).toBe(0);
+
+    await prisma.shop.deleteMany({ where: { id: otherShop.body.id } });
   });
 });
 

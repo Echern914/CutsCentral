@@ -20,7 +20,9 @@ import {
  * this repo should not have three answers to one problem:
  *
  *   - the claim is one atomic conditional UPDATE with `FOR UPDATE SKIP LOCKED`
- *     and a per-pass identity, so two replicas cannot take the same row;
+ *     and a per-pass identity, so two replicas cannot hold a valid claim on
+ *     one row at the same time (which is NOT the same as "cannot both have a
+ *     request in flight for it" - see the at-least-once note below);
  *   - every write after a claim compare-and-sets that identity, so a worker
  *     whose lease expired and whose rows were taken over writes nothing;
  *   - a lease that has passed is reclaimable, which is what makes "the process
@@ -31,24 +33,36 @@ import {
  * 🔴 DELIVERY IS AT LEAST ONCE. IT IS NOT EXACTLY ONCE, AND CALLING IT THAT
  * WOULD BE A LIE ABOUT A DISTRIBUTED SYSTEM.
  *
- * Two different guarantees are easy to conflate, so they are named separately:
+ * Two different guarantees are easy to conflate, so they are named separately -
+ * and the second one is WEAKER THAN IT FIRST LOOKS:
  *
  *   - THE UNIQUE KEY on (reviewId, userId, channel) prevents duplicate
  *     ENQUEUE. However many times the review route retries, however many
  *     replicas run it concurrently, one review produces at most one row per
  *     recipient per channel. This one IS exact.
- *   - THE LEASE prevents CONCURRENT SENDS. At any instant at most one worker
- *     holds a given row, so two replicas do not both call the provider for it
- *     at the same time. This one is exact too.
+ *   - THE LEASE prevents two workers holding a VALID CLAIM on one row at the
+ *     same time. That is all it prevents, and it is worth saying precisely:
+ *     it serialises CLAIMS, not the provider requests those claims lead to.
  *
- * Neither of them makes delivery exactly-once, because of the window nothing
- * in this process can close: if the provider ACCEPTS a message and this
- * process dies before the acceptance is recorded, the row is still `pending`,
- * its lease ages out, another worker claims it and sends again. The message
- * arrives twice. `lastAttemptAmbiguous` is written BEFORE the request so that
- * window is at least VISIBLE afterwards, and a row that exhausts its budget
- * while ambiguous settles as `abandoned` rather than `failed` - "we stopped
- * without knowing" instead of "it was refused".
+ * 🔴 THE LEASE DOES NOT MAKE CONCURRENT EXTERNAL SENDS IMPOSSIBLE, and an
+ * earlier version of this comment said it did. A lease is a deadline held in
+ * this database, and the provider request is a socket held somewhere else.
+ * Worker A can reserve its attempt, put a request on the wire, and then stall
+ * - a GC pause, a frozen instance, a network partition, a provider taking
+ * longer than LEASE_MS to answer. The lease expires while that request is
+ * still unresolved. Worker B claims the row perfectly legitimately and sends.
+ * Now two requests for one row are in flight AT THE SAME TIME, and nothing
+ * here can cancel A's. The CAS on `lockedBy` stops A from *recording* a result
+ * it no longer owns; it cannot reach into the socket and stop the text.
+ *
+ * So the overlap window is real, it is what LEASE_MS is really trading
+ * against, and it is the same window as the crash case: if the provider
+ * ACCEPTS and this process dies before the acceptance is recorded, the row is
+ * still `pending`, its lease ages out, another worker sends again.
+ * `lastAttemptAmbiguous` is written BEFORE the request so that window is at
+ * least VISIBLE afterwards, and a row that exhausts its budget while ambiguous
+ * settles as `abandoned` rather than `failed` - "we stopped without knowing"
+ * instead of "it was refused".
  *
  * WHAT EACH CHANNEL CAN ACTUALLY PROMISE:
  *   - EMAIL: effectively once. Every attempt carries the same stable
@@ -148,6 +162,20 @@ export async function runReviewNotifyOutbox(
   const batch = Math.max(1, Math.min(Math.trunc(opts.batch ?? BATCH), 200));
   const lockedBy = randomToken(16);
   const leaseUntil = new Date(now.getTime() + LEASE_MS);
+  // 🔴 EACH ROW IS DELIVERED AT ITS OWN CLOCK, not at the batch's.
+  //
+  // A pass claims up to 50 rows and works them one at a time, each waiting on
+  // a provider. Row 50 can be reached minutes after row 1. Handing every row
+  // the batch-start timestamp means row 50 renews its lease to
+  // `batchStart + LEASE_MS` - a deadline that may ALREADY HAVE PASSED by the
+  // time the renewal commits. The row would then be claimable by another
+  // replica while this one is still mid-send, which is the double-send the
+  // lease exists to prevent, reached the long way round. It would also
+  // backdate `sentAt` and every backoff in the batch.
+  //
+  // A test that pins an explicit `now` keeps it for every row: that is the
+  // whole point of being able to age a lease without sleeping.
+  const rowClock = (): Date => opts.now ?? new Date();
 
   const claimed = await runAsOwner((tx) =>
     // 🔴 ISO string + ::timestamp, never a JS Date in raw SQL - a Date is
@@ -178,7 +206,7 @@ export async function runReviewNotifyOutbox(
     const outcome = await deliverReviewNotification({
       notificationId: row.id,
       lockedBy,
-      now,
+      now: rowClock(),
     }).catch(() => "retry" as const);
     tally(result, outcome);
   }
@@ -199,10 +227,15 @@ export async function runReviewNotifyOutbox(
  */
 export async function kickReviewNotifications(
   reviewId: string,
-  now = new Date(),
+  explicitNow?: Date,
 ): Promise<ReviewOutboxResult> {
+  const now = explicitNow ?? new Date();
   const lockedBy = randomToken(16);
   const leaseUntil = new Date(now.getTime() + LEASE_MS);
+  // Per row, for the same reason as the scheduled pass above: a review with
+  // several recipients is several provider round-trips, and the last of them
+  // must not renew its lease against a deadline set before the first one.
+  const rowClock = (): Date => explicitNow ?? new Date();
   const result: ReviewOutboxResult = { ...EMPTY };
   try {
     const claimed = await runAsOwner((tx) =>
@@ -233,7 +266,7 @@ export async function kickReviewNotifications(
       const outcome = await deliverReviewNotification({
         notificationId: row.id,
         lockedBy,
-        now,
+        now: rowClock(),
       }).catch(() => "retry" as const);
       tally(result, outcome);
     }
@@ -335,7 +368,20 @@ export async function deliverReviewNotification(params: {
         where: { id: row.shopId },
         select: { name: true, notifyPhone: true },
       }),
-      tx.review.findUnique({ where: { id: row.reviewId }, select: { rating: true } }),
+      // 🔴 SCOPED TO THE ROW'S OWN SHOP, NOT JUST TO THE REVIEW ID. This
+      // worker runs under `runAsOwner`, which turns row security OFF so one
+      // pass can drain every shop - so there is no RLS policy underneath to
+      // catch a notification row whose reviewId points at ANOTHER tenant's
+      // review. Nothing can write such a row today (the enqueue stamps both
+      // from the same shop, and the FK holds), but "nothing can write it"
+      // is an argument about today's callers, and this is the one place that
+      // would read a stranger's review and put its rating in a text. A
+      // findFirst with both keys makes the mismatch return null, which lands
+      // on the existing terminal `gone` skip: no provider call, no retry.
+      tx.review.findFirst({
+        where: { id: row.reviewId, shopId: row.shopId },
+        select: { rating: true },
+      }),
       tx.user.findUnique({ where: { id: row.userId }, select: { email: true } }),
       // Push's equivalent of "is there a phone number", asked BEFORE an
       // attempt is reserved so the one invariant the whole ledger rests on -
