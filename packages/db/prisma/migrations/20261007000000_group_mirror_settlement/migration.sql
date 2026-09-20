@@ -29,3 +29,37 @@ ALTER TABLE "AppointmentGroup" ADD COLUMN "confirmationSentAt" TIMESTAMP(3);
 -- The settlement sweep's work queue: parties still waiting on their mirror.
 CREATE INDEX "AppointmentGroup_shopId_mirrorPendingSince_idx"
   ON "AppointmentGroup"("shopId", "mirrorPendingSince");
+
+-- The grouped confirmation rides the EXISTING durable outbox -----------------
+--
+-- 🔴 WHY IT HAD TO. The settlement stamped `confirmationSentAt` and then
+-- fire-and-forgot a direct sendEmail(). A crash between those two - a deploy,
+-- an OOM, a frozen instance - lost the confirmation PERMANENTLY: the marker
+-- was already set, so nothing retried, and a family holding three real chairs
+-- was never told they were booked. Dropping the marker instead would have
+-- traded that for the opposite failure, a second "you are booked" on every
+-- replay of a sweep that runs each five minutes.
+--
+-- Neither is acceptable and neither needed a new mechanism. EmailIntent is the
+-- durable outbox this codebase already has: the row is written in the SAME
+-- transaction that claims the confirmation, the worker owns delivery with
+-- bounded retries, and the idempotency key is handed to Resend so a retry
+-- after an ambiguous accept is collapsed by the PROVIDER rather than hoped
+-- about here.
+--
+-- EmailIntent.kind is CHECK-pinned, so the vocabulary is re-pinned in FULL -
+-- never a partial list - and nothing about the existing kinds changes. The
+-- status CHECK is untouched.
+ALTER TABLE "EmailIntent"
+  DROP CONSTRAINT IF EXISTS "EmailIntent_kind_check";
+ALTER TABLE "EmailIntent"
+  ADD CONSTRAINT "EmailIntent_kind_check"
+  CHECK ("kind" IN (
+    'appointment_canceled',
+    'affiliate_approved',
+    'affiliate_rejected',
+    'affiliate_reward_qualified',
+    'affiliate_reward_available',
+    'affiliate_reward_reversed',
+    'group_confirmation'
+  ));

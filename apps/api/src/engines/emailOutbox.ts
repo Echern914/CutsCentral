@@ -3,6 +3,10 @@ import { Prisma, runAsOwner } from "@chairback/db";
 import { logger } from "../logger.js";
 import { deliverCancellationIntent } from "../services/appointmentCanceledNotify.js";
 import { deliverAffiliateIntent, isAffiliateEmailKind } from "../services/affiliateNotify.js";
+import {
+  deliverGroupConfirmationIntent,
+  isGroupConfirmationKind,
+} from "./appointmentGroupSettle.js";
 
 /**
  * The email outbox worker: drains PENDING EmailIntent rows.
@@ -96,9 +100,15 @@ export async function runEmailOutbox(
     // intent must not stop the batch.
     // One outbox, two families of email. The kind on the row picks the
     // deliverer; both share the claim/attempt/idempotency state machine.
-    const deliver = isAffiliateEmailKind(row.kind)
-      ? deliverAffiliateIntent
-      : deliverCancellationIntent;
+    // One outbox, now three families of email. The kind on the row picks the
+    // deliverer; all of them share the claim/attempt/idempotency state machine,
+    // which is the whole reason a group confirmation rides here rather than
+    // getting a delivery path of its own.
+    const deliver = isGroupConfirmationKind(row.kind)
+      ? deliverGroupConfirmationIntent
+      : isAffiliateEmailKind(row.kind)
+        ? deliverAffiliateIntent
+        : deliverCancellationIntent;
     const outcome = await deliver({
       intentId: row.id,
       claimToken,

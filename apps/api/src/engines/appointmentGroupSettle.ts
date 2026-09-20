@@ -1,7 +1,15 @@
-import { prisma } from "@chairback/db";
+import { prisma, runAsOwner } from "@chairback/db";
 import { logger } from "../logger.js";
+import { emailDispatchMode } from "../messaging/email.js";
 import { releaseForAppointment } from "./acuityMirror.js";
 import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
+import {
+  ambiguous,
+  classifyRefusedReservation,
+  reserveAttempt,
+  settle,
+  type IntentOutcome,
+} from "../services/appointmentCanceledNotify.js";
 
 /**
  * FINISHING A PARTY WHOSE ACUITY MIRROR CAME BACK AMBIGUOUS.
@@ -55,11 +63,62 @@ export async function claimGroupConfirmation(
   groupId: string,
   now = new Date(),
 ): Promise<boolean> {
-  const claimed = await prisma.appointmentGroup.updateMany({
-    where: { id: groupId, shopId, confirmationSentAt: null },
-    data: { confirmationSentAt: now },
+  // 🔴 THE CLAIM AND THE PROMISE TO DELIVER COMMIT TOGETHER.
+  //
+  // This used to stamp the marker and then fire-and-forget a direct
+  // sendEmail(). A crash in between - a deploy, an OOM, a frozen instance -
+  // lost the confirmation PERMANENTLY: the marker was already set, so nothing
+  // retried, and a family holding three real chairs was never told they were
+  // booked. Dropping the marker instead would have bought the opposite
+  // failure, a second "you are booked" on every replay of a sweep that runs
+  // each five minutes.
+  //
+  // Neither needed a new mechanism. EmailIntent is the durable outbox this
+  // codebase already has: the intent is written in the SAME transaction as the
+  // claim, so the promise is as durable as the marker, and the email worker
+  // owns delivery with bounded retries and a provider-side Idempotency-Key.
+  // If this process dies one line from here, the row is already on disk.
+  const claimed = await prisma.$transaction(async (tx) => {
+    const res = await tx.appointmentGroup.updateMany({
+      where: { id: groupId, shopId, confirmationSentAt: null },
+      data: { confirmationSentAt: now },
+    });
+    if (res.count === 0) return false;
+    await tx.emailIntent.createMany({
+      data: [
+        {
+          kind: GROUP_CONFIRMATION_KIND,
+          idempotencyKey: groupConfirmationKey(groupId),
+          shopId,
+          status: "PENDING",
+          // Due immediately; the worker's next pass picks it up.
+          nextAttemptAt: new Date(0),
+        },
+      ],
+      // The unique key is what makes a replay collapse rather than double.
+      skipDuplicates: true,
+    });
+    return true;
   });
-  return claimed.count > 0;
+  return claimed;
+}
+
+/** The EmailIntent kind for a party's single confirmation. CHECK-pinned. */
+export const GROUP_CONFIRMATION_KIND = "group_confirmation";
+
+/**
+ * Stable per GROUP, and handed to Resend as the Idempotency-Key.
+ *
+ * That is what closes the last window: if the provider ACCEPTS and this
+ * process dies before recording it, the retry presents the same key and Resend
+ * collapses it rather than sending a second confirmation.
+ */
+export function groupConfirmationKey(groupId: string): string {
+  return `group_confirmation:${groupId}`;
+}
+
+export function isGroupConfirmationKind(kind: string): boolean {
+  return kind === GROUP_CONFIRMATION_KIND;
 }
 
 /**
@@ -74,15 +133,129 @@ export async function sendGroupConfirmationOnce(
   groupId: string,
   now = new Date(),
 ): Promise<boolean> {
-  if (!(await claimGroupConfirmation(shopId, groupId, now))) return false;
-  const first = await prisma.appointment.findFirst({
-    where: { groupId, shopId, status: "BOOKED" },
-    orderBy: { startsAt: "asc" },
-    select: { id: true },
+  // 🔴 THIS NO LONGER SENDS ANYTHING. It records a durable promise and
+  // returns; `deliverGroupConfirmationIntent` below is what reaches a
+  // provider, driven by the existing email outbox worker. Sending from here
+  // is what made a crash lose the confirmation.
+  return claimGroupConfirmation(shopId, groupId, now);
+}
+
+/**
+ * Deliver one party's confirmation, from the durable outbox.
+ *
+ * Reuses the SAME rendering and channel logic every other appointment
+ * confirmation uses (`notifyAppointmentConfirmation`) - this is a durability
+ * wrapper around the existing notifier, not a second notification system. The
+ * email body, the vocabulary, the wallet pass, the address block and the
+ * group lines all stay in one place.
+ *
+ * 🔴 SUCCESS IS READ FROM THE DURABLE STAMP, not from a return value.
+ * `notifyAppointmentConfirmation` swallows its own failures by design (a
+ * booking must not fail because email is down), so its resolution says
+ * nothing. `Appointment.confirmationEmailSentAt` is written ONLY after a
+ * confirmed send, which makes it the honest evidence - and it doubles as the
+ * second idempotency layer: a retry that finds it already set settles without
+ * sending again.
+ */
+export async function deliverGroupConfirmationIntent(params: {
+  intentId: string;
+  claimToken: string;
+  now?: Date;
+}): Promise<IntentOutcome> {
+  const now = params.now ?? new Date();
+  const intent = await runAsOwner((tx) =>
+    tx.emailIntent.findFirst({
+      where: { id: params.intentId, status: "PENDING", claimToken: params.claimToken },
+      select: { id: true, shopId: true, idempotencyKey: true },
+    }),
+  );
+  if (!intent) return "stale_claim";
+
+  const groupId = intent.idempotencyKey.slice(`${GROUP_CONFIRMATION_KIND}:`.length);
+  const group = await prisma.appointmentGroup.findFirst({
+    where: { id: groupId, shopId: intent.shopId },
+    select: { id: true, status: true },
   });
-  if (!first) return false;
-  void notifyAppointmentConfirmation({ shopId, appointmentId: first.id });
-  return true;
+  // The party was cancelled or compensated after the promise was made. There
+  // is no longer a booking to confirm, and saying so is not a failure.
+  if (!group || group.status !== "ACTIVE") {
+    await settle(intent.id, "SUPERSEDED", "group_not_active");
+    return "superseded";
+  }
+
+  const first = await prisma.appointment.findFirst({
+    where: { groupId, shopId: intent.shopId, status: "BOOKED" },
+    orderBy: { startsAt: "asc" },
+    select: { id: true, email: true, confirmationEmailSentAt: true, client: { select: { email: true } } },
+  });
+  if (!first) {
+    await settle(intent.id, "SUPERSEDED", "no_booked_member");
+    return "superseded";
+  }
+  // Already delivered - by the booking-time path, or by a previous attempt of
+  // this very intent that died after the provider accepted.
+  if (first.confirmationEmailSentAt) {
+    await markIntentSent(intent.id, now);
+    return "sent";
+  }
+
+  // Decided BEFORE an attempt is counted: neither of these can be fixed by
+  // retrying, and both are terminal in the outbox's own vocabulary.
+  const mode = emailDispatchMode();
+  if (mode !== "live") {
+    await settle(intent.id, "SUPPRESSED", mode);
+    return "suppressed";
+  }
+  if (!(first.email ?? first.client?.email)) {
+    await settle(intent.id, "SUPPRESSED", "no_email_address");
+    return "suppressed";
+  }
+
+  const attemptNo = await reserveAttempt(intent.id, params.claimToken, now);
+  if (attemptNo === null) {
+    // Either the budget is spent or our claim was taken over. The shared
+    // classifier decides which, and settles it only when it is ours to settle.
+    return classifyRefusedReservation(
+      { intentId: intent.id, claimToken: params.claimToken },
+      now,
+    );
+  }
+
+  await notifyAppointmentConfirmation({
+    shopId: intent.shopId,
+    appointmentId: first.id,
+  });
+
+  // Re-read the stamp: it is written only on a confirmed send.
+  const after = await prisma.appointment.findUnique({
+    where: { id: first.id },
+    select: { confirmationEmailSentAt: true },
+  });
+  if (after?.confirmationEmailSentAt) {
+    await markIntentSent(intent.id, now);
+    return "sent";
+  }
+  // It did not land, and the notifier does not tell us why. Ambiguous is the
+  // honest reading - a provider can accept and then fail on the way back - so
+  // this backs off and retries rather than claiming a definitive failure.
+  return ambiguous(intent.id, attemptNo, now, "not_confirmed");
+}
+
+async function markIntentSent(intentId: string, now: Date): Promise<void> {
+  await runAsOwner((tx) =>
+    tx.emailIntent.update({
+      where: { id: intentId },
+      data: {
+        status: "SENT",
+        sentAt: now,
+        lastAttemptAmbiguous: false,
+        lastError: null,
+        claimedAt: null,
+        claimToken: null,
+        nextAttemptAt: null,
+      },
+    }),
+  );
 }
 
 /**

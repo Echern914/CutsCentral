@@ -137,6 +137,7 @@ beforeEach(async () => {
   await prisma.acuityOutboundBlock.deleteMany({ where: { shopId } });
   await prisma.appointment.deleteMany({ where: { shopId } });
   await prisma.appointmentGroup.deleteMany({ where: { shopId } });
+  await prisma.emailIntent.deleteMany({ where: { shopId } });
   acuityMock.createBlock.mockReset();
   acuityMock.deleteBlock.mockReset();
   acuityMock.listBlocks.mockReset();
@@ -182,6 +183,18 @@ const booked = () =>
 const theGroup = () => prisma.appointmentGroup.findFirst({ where: { shopId } });
 
 /**
+ * How many durable confirmation promises exist for this shop.
+ *
+ * 🔴 THE CONFIRMATION IS AN OUTBOX ROW NOW, not a direct call. These tests
+ * used to count calls to `notifyAppointmentConfirmation`, which proved the
+ * settlement had TRIED - and a try is exactly what a crash loses. An
+ * EmailIntent row committed in the same transaction as the claim is what
+ * survives, so that is what is counted.
+ */
+const groupIntents = () =>
+  prisma.emailIntent.count({ where: { shopId, kind: "group_confirmation" } });
+
+/**
  * createBlock answers, in call order. The LAST answer repeats, so a party of
  * three can be described with two entries when the tail is uniform.
  */
@@ -218,7 +231,7 @@ describe("🔴 uncertainty anywhere means nothing is definitive", () => {
     expect(group!.mirrorPendingSince).not.toBeNull();
 
     // And no confirmation: we cannot promise a time we cannot prove is held.
-    expect(notifyMock.notifyAppointmentConfirmation).not.toHaveBeenCalled();
+    expect(await groupIntents()).toBe(0);
   });
 
   it("the ambiguity is recorded DURABLY, not in memory", async () => {
@@ -284,7 +297,7 @@ describe("🔴 UNKNOWN that settles ACTIVE sends exactly ONE confirmation", () =
   it("confirms the party once every block is ACTIVE", async () => {
     const r = await settleHappy();
     expect(r.confirmed).toBe(1);
-    expect(notifyMock.notifyAppointmentConfirmation).toHaveBeenCalledTimes(1);
+    expect(await groupIntents()).toBe(1);
     // Still booked, and no longer pending.
     expect(await booked()).toBe(2);
     expect((await theGroup())!.mirrorPendingSince).toBeNull();
@@ -292,7 +305,7 @@ describe("🔴 UNKNOWN that settles ACTIVE sends exactly ONE confirmation", () =
 
   it("🔴 ONE confirmation, not one per member", async () => {
     await settleHappy();
-    expect(notifyMock.notifyAppointmentConfirmation).toHaveBeenCalledTimes(1);
+    expect(await groupIntents()).toBe(1);
   });
 
   it("🔴 REPLAYING the sweep does not send a second one", async () => {
@@ -306,7 +319,7 @@ describe("🔴 UNKNOWN that settles ACTIVE sends exactly ONE confirmation", () =
     // clearing the marker: the next sweep finds the party still pending and
     // would confirm it a second time. So put it back into exactly that state.
     await settleHappy();
-    notifyMock.notifyAppointmentConfirmation.mockClear();
+    await prisma.emailIntent.deleteMany({ where: { shopId } });
     const group = await theGroup();
     expect(group!.confirmationSentAt).not.toBeNull();
 
@@ -316,7 +329,7 @@ describe("🔴 UNKNOWN that settles ACTIVE sends exactly ONE confirmation", () =
     });
     await settleAmbiguousGroups(shopId);
     await settleAmbiguousGroups(shopId);
-    expect(notifyMock.notifyAppointmentConfirmation).not.toHaveBeenCalled();
+    expect(await groupIntents()).toBe(0);
   });
 
   it("🔴 claiming twice in a row yields ONE send, even back to back", async () => {
@@ -324,7 +337,7 @@ describe("🔴 UNKNOWN that settles ACTIVE sends exactly ONE confirmation", () =
     // callers, one confirmation. This is what a retry racing the response, or
     // two replicas sweeping together, actually looks like.
     await settleHappy();
-    notifyMock.notifyAppointmentConfirmation.mockClear();
+    await prisma.emailIntent.deleteMany({ where: { shopId } });
     const group = await theGroup();
     const { sendGroupConfirmationOnce } = await import(
       "../engines/appointmentGroupSettle.js"
@@ -332,7 +345,7 @@ describe("🔴 UNKNOWN that settles ACTIVE sends exactly ONE confirmation", () =
     const a = await sendGroupConfirmationOnce(shopId, group!.id);
     const b = await sendGroupConfirmationOnce(shopId, group!.id);
     expect([a, b]).toEqual([false, false]); // already claimed by settleHappy
-    expect(notifyMock.notifyAppointmentConfirmation).not.toHaveBeenCalled();
+    expect(await groupIntents()).toBe(0);
   });
 
   it("🔴 a party that has NEVER been confirmed is claimed exactly once", async () => {
@@ -346,7 +359,7 @@ describe("🔴 UNKNOWN that settles ACTIVE sends exactly ONE confirmation", () =
       where: { id: group!.id },
       data: { confirmationSentAt: null },
     });
-    notifyMock.notifyAppointmentConfirmation.mockClear();
+    await prisma.emailIntent.deleteMany({ where: { shopId } });
 
     const { sendGroupConfirmationOnce } = await import(
       "../engines/appointmentGroupSettle.js"
@@ -357,7 +370,7 @@ describe("🔴 UNKNOWN that settles ACTIVE sends exactly ONE confirmation", () =
       sendGroupConfirmationOnce(shopId, group!.id),
     ]);
     expect(results.filter(Boolean)).toHaveLength(1);
-    expect(notifyMock.notifyAppointmentConfirmation).toHaveBeenCalledTimes(1);
+    expect(await groupIntents()).toBe(1);
   });
 
   it("a party still in flight is left alone, not confirmed", async () => {
@@ -367,7 +380,7 @@ describe("🔴 UNKNOWN that settles ACTIVE sends exactly ONE confirmation", () =
     const r = await settleAmbiguousGroups(shopId);
     expect(r.pending).toBe(1);
     expect(r.confirmed).toBe(0);
-    expect(notifyMock.notifyAppointmentConfirmation).not.toHaveBeenCalled();
+    expect(await groupIntents()).toBe(0);
   });
 });
 
@@ -395,7 +408,7 @@ describe("🔴 UNKNOWN that proves absent compensates the WHOLE party", () => {
     const group = await theGroup();
     expect(group!.status).toBe("CANCELED");
     expect(group!.mirrorPendingSince).toBeNull();
-    expect(notifyMock.notifyAppointmentConfirmation).not.toHaveBeenCalled();
+    expect(await groupIntents()).toBe(0);
   });
 
   it("🔴 compensation DELETES every block that really landed", async () => {
@@ -486,7 +499,7 @@ describe("the ordinary paths still behave", () => {
     answerWith("ok");
     const res = await createGroup(2);
     expect(res.status).toBe(201);
-    expect(notifyMock.notifyAppointmentConfirmation).toHaveBeenCalledTimes(1);
+    expect(await groupIntents()).toBe(1);
     expect((await theGroup())!.mirrorPendingSince).toBeNull();
     expect((await theGroup())!.confirmationSentAt).not.toBeNull();
   });
@@ -498,7 +511,7 @@ describe("the ordinary paths still behave", () => {
       expect(res.status).toBe(201);
       expect(await booked()).toBe(2);
       expect(acuityMock.createBlock).not.toHaveBeenCalled();
-      expect(notifyMock.notifyAppointmentConfirmation).toHaveBeenCalledTimes(1);
+      expect(await groupIntents()).toBe(1);
     } finally {
       await prisma.shop.update({
         where: { id: shopId },
@@ -522,7 +535,7 @@ describe("🔴 tenant isolation", () => {
     expect(after!.mirrorPendingSince).toEqual(before!.mirrorPendingSince);
     expect(after!.status).toBe("ACTIVE");
     expect(await booked()).toBe(2);
-    expect(notifyMock.notifyAppointmentConfirmation).not.toHaveBeenCalled();
+    expect(await groupIntents()).toBe(0);
   });
 
   it("compensating under the wrong shop id changes nothing", async () => {
