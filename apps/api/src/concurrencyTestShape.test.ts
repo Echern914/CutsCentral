@@ -70,6 +70,12 @@ const EXEMPT: Record<string, string> = {
     "message fan-in shaping; 'race' is not in play",
   "concurrent workers lose no increment and cannot exceed MAX_ATTEMPTS":
     "covered by the write-ahead attempt reservation asserted in the same file",
+  "two disconnects racing settle on one outcome":
+    "asserts CONVERGENCE, not contention - that whatever order Postgres " +
+    "serialises two disconnects in, the end state is one deleted block and a " +
+    "disconnected shop and neither caller sees a 500. The guard it covers is " +
+    "`deleteMany` over `delete` (P2025 on the loser), which a barrier cannot " +
+    "make more or less true; it is falsified by reverting that one call",
   "lets exactly one of two workers holding the same row call the provider":
     "REAL (falsified 2026-09-19: deleting the lockedBy CAS sends the barber TWO texts). " +
     "A barrier would assert a guarantee this system does not make. Under FOR UPDATE " +

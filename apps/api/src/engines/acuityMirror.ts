@@ -1167,19 +1167,70 @@ export async function deleteEchoedExternalBlock(
  * place, which is a product question, not a correctness one. These are only
  * the rows that have been PROMISED a deletion and have not got one.
  */
+/**
+ * Every state from which a ChairBack-owned block might still exist in Acuity.
+ *
+ * FAILED is absent: a definitive refusal means Acuity looked at the create and
+ * declined it, so no block was made and there is nothing to delete. RELEASED is
+ * absent because - after this change - it means the deletion was confirmed or
+ * absence was proven.
+ */
+const UNSETTLED_STATES = ["PENDING", "ACTIVE", "UNKNOWN", "RELEASING"] as const;
+
 export async function countUnresolvedReleases(shopId: string): Promise<number> {
   return prisma.acuityOutboundBlock.count({
-    where: {
-      shopId,
-      OR: [
-        // A delete that did not confirm.
-        { state: "RELEASING" },
-        // An ambiguous create somebody has asked to release: we still do not
-        // know whether there is a block, and without credentials we never will.
-        { state: "UNKNOWN", releaseRequested: true },
-      ],
-    },
+    where: { shopId, state: { in: [...UNSETTLED_STATES] } },
   });
+}
+
+/**
+ * Push every unsettled block for a shop one step towards gone.
+ *
+ * 🔴 THIS IS WHAT A DISCONNECT REQUEST QUEUES. Disconnecting deletes the only
+ * credentials that can find or delete a block, so every block ChairBack has
+ * put on that calendar has to be dealt with FIRST - including the ACTIVE ones.
+ * An ACTIVE block is not harmless here: after the token is gone nothing owns
+ * it, nothing can remove it, and it holds the barber's chair shut forever over
+ * an appointment ChairBack is no longer mirroring.
+ *
+ * 🔴 IT DOES NOT TOUCH THE APPOINTMENT. The customer keeps their booking; only
+ * the Acuity mirror of it goes away. Disconnecting an integration must never
+ * cancel somebody's haircut.
+ *
+ * Idempotent by construction: a row already RELEASED is skipped by every path
+ * below, so calling this twice - a retry, a second tab, a concurrent request -
+ * converges rather than double-deleting. (Two callers racing on the SAME
+ * RELEASING row can still each issue a delete; Acuity answers the loser 404,
+ * which this engine already treats as success. That is at-least-once deletion
+ * of an idempotent operation, not exactly-once, and it is worth saying so.)
+ */
+export async function queueReleaseForDisconnect(shopId: string): Promise<{
+  queued: number;
+  unresolved: number;
+}> {
+  const rows = await prisma.acuityOutboundBlock.findMany({
+    where: { shopId, state: { in: [...UNSETTLED_STATES] } },
+    select: { id: true, state: true },
+  });
+  if (rows.length === 0) return { queued: 0, unresolved: 0 };
+
+  // PENDING/ACTIVE/UNKNOWN take the normal intent-recording path.
+  const fresh = rows.filter((r) => r.state !== "RELEASING");
+  if (fresh.length > 0) await requestRelease(fresh);
+
+  // RELEASING rows are deletes that have already been asked for and did not
+  // confirm. requestRelease deliberately leaves them alone (they are already
+  // in flight), so retry them here - otherwise a disconnect could sit blocked
+  // forever behind a single failed delete that nothing was re-attempting.
+  for (const r of rows.filter((x) => x.state === "RELEASING")) {
+    await prisma.acuityOutboundBlock.update({
+      where: { id: r.id },
+      data: { releaseRequested: true },
+    });
+    await releaseRow(r.id);
+  }
+
+  return { queued: rows.length, unresolved: await countUnresolvedReleases(shopId) };
 }
 
 /**
@@ -1193,10 +1244,7 @@ export async function countUnresolvedReleases(shopId: string): Promise<number> {
  */
 export async function markReleasesStranded(shopId: string): Promise<number> {
   const res = await prisma.acuityOutboundBlock.updateMany({
-    where: {
-      shopId,
-      OR: [{ state: "RELEASING" }, { state: "UNKNOWN", releaseRequested: true }],
-    },
+    where: { shopId, state: { in: [...UNSETTLED_STATES] } },
     data: { lastError: "disconnected_before_release" },
   });
   if (res.count > 0) {

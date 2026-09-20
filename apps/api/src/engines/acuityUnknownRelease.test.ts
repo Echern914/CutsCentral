@@ -471,12 +471,30 @@ describe("the disconnect gate", () => {
     expect(await countUnresolvedReleases(shopId)).toBe(1);
   });
 
-  it("does not count an ACTIVE block nobody asked to release", async () => {
+  it("🔴 counts an ACTIVE block too - disconnecting would abandon it", async () => {
     await seed({ state: "ACTIVE", acuityBlockId: "blk_live" });
 
-    // A live mirror of a live appointment is not an unresolved release.
-    // Disconnecting leaves it in place, which is a product question rather
-    // than a correctness one.
+    // An earlier revision of this file treated a live mirror of a live
+    // appointment as "not an unresolved release", on the grounds that whether
+    // disconnect should remove it was a product question. That was wrong on
+    // correctness grounds: once the credentials are gone nothing can find or
+    // delete this block, so it holds the barber's chair shut forever over an
+    // appointment ChairBack is no longer mirroring. Being ACTIVE makes it MORE
+    // certain to exist remotely, not less - it is the one state where we KNOW
+    // there is a real block out there.
+    expect(await countUnresolvedReleases(shopId)).toBe(1);
+  });
+
+  it("counts a FAILED create as settled - there is nothing to delete", async () => {
+    // A definitive refusal means Acuity looked at the create and declined it,
+    // so no block was ever made. Blocking a disconnect on that would be
+    // refusing over a block that provably does not exist.
+    const s = await seed({ state: "UNKNOWN" });
+    await prisma.acuityOutboundBlock.update({
+      where: { id: s.outboxId },
+      data: { state: "FAILED" },
+    });
+
     expect(await countUnresolvedReleases(shopId)).toBe(0);
   });
 
