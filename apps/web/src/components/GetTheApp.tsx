@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { MOBILE_APP } from "@chairback/config/constants";
+import { track } from "@/lib/analytics";
 
 /**
- * "Get the app" nudge for the PUBLIC customer surfaces - the booking page, the
- * shop mini-site, manage-a-booking and the walk-in line.
+ * "Get the app" / "Open in ChairBack" for the PUBLIC customer surfaces - the
+ * booking page, the shop mini-site, manage-a-booking and the walk-in line.
  *
  * Most customers reach these by scanning a QR code or tapping a texted link, on
  * a phone, in a browser. That is exactly the moment the app is worth offering:
@@ -19,12 +20,23 @@ import { MOBILE_APP } from "@chairback/config/constants";
  * by an absence nobody could see. The listing id is stable and already lives in
  * config; reading it from there cannot fail closed.
  *
+ * 🔴 IT NOW RENDERS IN iOS SAFARI, WHICH IT USED TO REFUSE TO DO. The old rule
+ * was "Safari has Apple's Smart App Banner, so stand down" - and that reasoning
+ * had a hole big enough to swallow the whole feature: a QR code scanned with the
+ * iPhone CAMERA opens in Safari. Safari was not the edge case, it was the main
+ * path, and on it this component rendered nothing at all. What customers were
+ * left with was Apple's banner alone, which is dismissible ONCE, per domain,
+ * forever - so a customer who ever swiped it away never saw an install
+ * affordance again on any shop's page.
+ *
+ * The two can briefly sit together on a first visit. That is a small cosmetic
+ * cost, bounded by our own dismissal, and it buys back the case that actually
+ * matters: every visit after the first one.
+ *
  * Renders NOTHING when:
  *   - we are inside the native app already (the react-native-webview bridge) -
  *     they have it, so do not nag;
  *   - we are not on iOS (see the Android note below);
- *   - we are in iOS SAFARI, where the native Smart App Banner does this job
- *     better than any bar we could draw (see appleItunesApp());
  *   - the customer dismissed it before, remembered per device.
  *
  * 🔴 ANDROID GETS NOTHING, DELIBERATELY. There is no Play Store listing: every
@@ -39,8 +51,19 @@ import { MOBILE_APP } from "@chairback/config/constants";
 
 const DISMISS_KEY = "cb_get_app_dismissed";
 
-/** Which page is asking, so the pitch matches what they came here to do. */
-export type AppBannerSurface = "booking" | "shop" | "manage" | "line";
+/**
+ * Which page is asking, so the pitch matches what they came here to do - and
+ * so the three analytics events can tell these surfaces apart. `confirmation`
+ * is deliberately NOT folded into `manage`: they are the same booking but very
+ * different moments, and "how many people installed right after booking" is
+ * the number this whole feature gets judged by.
+ */
+export type AppBannerSurface =
+  | "booking"
+  | "confirmation"
+  | "shop"
+  | "manage"
+  | "line";
 
 const copyFor = (
   /** The shop's word for a visit. Neutral default: this renders on public
@@ -50,6 +73,10 @@ const copyFor = (
   booking: {
     headline: "Book faster next time",
     body: `Save your details, rebook in two taps, and get a reminder before your ${serviceNoun}.`,
+  },
+  confirmation: {
+    headline: "Keep this appointment in your pocket",
+    body: `Reschedule in a tap, get a reminder before your ${serviceNoun}, and rebook next time in two.`,
   },
   shop: {
     headline: "Keep this shop in your pocket",
@@ -77,24 +104,10 @@ function isIos(): boolean {
   return /iphone|ipad|ipod/i.test(navigator.userAgent);
 }
 
-/**
- * iOS Safari specifically - where Apple draws its own banner from the meta tag
- * and ours would be a second, uglier one directly underneath it.
- *
- * Every iOS browser ships "Safari" in its user agent because they are all
- * WebKit; the alternatives identify themselves with their own token first
- * (CriOS = Chrome, FxiOS = Firefox, EdgiOS = Edge, OPT = Opera). So the test is
- * "claims Safari and claims nothing else".
- */
-function isIosSafari(): boolean {
-  if (!isIos()) return false;
-  const ua = navigator.userAgent;
-  return /safari/i.test(ua) && !/crios|fxios|edgios|opt\//i.test(ua);
-}
-
 export function GetTheApp({
   surface,
   serviceNoun = "visit",
+  openPath,
 }: {
   surface: AppBannerSurface;
   /**
@@ -103,6 +116,17 @@ export function GetTheApp({
    * for every vertical where a guess would be wrong for most.
    */
   serviceNoun?: string;
+  /**
+   * The in-app destination for THIS page, as a site-relative path - normally
+   * the page's own (`/book/<slug>`). Given one, the card offers "Open in
+   * ChairBack" beside the install button, and the hand-off preserves the
+   * booking context: app/+native-intent.tsx forwards the tail verbatim, so a
+   * ?service=/?staff= prefill survives.
+   *
+   * Omitted (the mini-site, the line) the card is install-only rather than
+   * guessing at a route the app may not have.
+   */
+  openPath?: string;
 }) {
   // Gated entirely on the client: userAgent, the RN bridge and localStorage are
   // browser-only, and rendering this on the server would hand the client a
@@ -112,17 +136,33 @@ export function GetTheApp({
   useEffect(() => {
     if (isInNativeApp()) return;
     if (!isIos()) return; // no Android listing to send anyone to
-    if (isIosSafari()) return; // Apple's own banner is already there
     try {
       if (localStorage.getItem(DISMISS_KEY) === "1") return;
     } catch {
       /* private mode / storage blocked: showing it once is the friendlier miss */
     }
     setShow(true);
-  }, []);
+    // The denominator for the two tap events. Surface only - see lib/analytics.
+    track("app_banner_shown", { surface });
+  }, [surface]);
 
   if (!show) return null;
   const copy = copyFor(serviceNoun)[surface];
+
+  /**
+   * 🔴 A CUSTOM SCHEME, NOT THE https UNIVERSAL LINK, and only for this button.
+   * iOS does not honour a universal link when the tap comes from a page on the
+   * SAME domain - it treats that as "this person chose to stay in the browser"
+   * - so an https://getchairback.com/book/... href here would reload the page
+   * the customer is already looking at and nothing else. The scanned QR code
+   * still arrives over the verified https link; this is the in-page fallback
+   * for someone who is already in Safari.
+   *
+   * The scheme is unverified - any app on the device could claim it - so this
+   * hands over NOTHING worth stealing: a shop slug that is already public in
+   * the address bar above it, and never a token or a session.
+   */
+  const openUrl = openPath ? `${MOBILE_APP.scheme}:/${openPath}` : null;
 
   function dismiss() {
     setShow(false);
@@ -139,14 +179,30 @@ export function GetTheApp({
         <div className="min-w-0 flex-1">
           <p className="font-semibold text-offwhite">{copy.headline}</p>
           <p className="mt-1 text-sm text-muted">{copy.body}</p>
-          <a
-            className="mt-3 inline-flex min-h-11 items-center rounded-full bg-gold px-5 font-semibold text-charcoal-900"
-            href={MOBILE_APP.appStoreUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Get the app
-          </a>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {openUrl && (
+              <a
+                className="inline-flex min-h-11 items-center rounded-full bg-gold px-5 font-semibold text-charcoal-900"
+                href={openUrl}
+                onClick={() => track("app_opened", { surface })}
+              >
+                Open in ChairBack
+              </a>
+            )}
+            <a
+              className={
+                openUrl
+                  ? "inline-flex min-h-11 items-center rounded-full border border-subtle px-5 font-semibold text-offwhite"
+                  : "inline-flex min-h-11 items-center rounded-full bg-gold px-5 font-semibold text-charcoal-900"
+              }
+              href={MOBILE_APP.appStoreUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => track("app_store_clicked", { surface })}
+            >
+              Get the app
+            </a>
+          </div>
         </div>
         <button
           type="button"

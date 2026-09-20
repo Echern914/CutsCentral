@@ -11,10 +11,19 @@ import { MOBILE_APP } from "@chairback/config/constants";
  * application/json content-type, a 200, and NO redirect - Apple rejects the
  * AASA on any redirect or wrong content-type. appID is <TeamID>.<bundleId>.
  *
- * THREE PATHS, one per thing the app can meaningfully take over:
+ * FOUR PATHS, one per thing the app can meaningfully take over:
  *
  *  - /r/*                     the customer magic link. The original, and the
  *                             reason this file exists. Do not narrow it.
+ *  - /book/*                  the shop's QR code. Every printed sticker, mirror
+ *                             decal and business card encodes
+ *                             https://getchairback.com/book/<slug>, so this is
+ *                             the path the most customers actually arrive on -
+ *                             and until it was claimed here, a scan opened
+ *                             Safari even on a phone with the app installed.
+ *                             app/+native-intent.tsx turns it into the shop's
+ *                             page inside My ChairBack, query string intact, so
+ *                             a ?service=/?staff= prefill survives the hop.
  *  - /team/join*              an invitation. Tapping it in Mail should land in
  *                             the app when the app is installed, rather than
  *                             stranding the barber in a browser.
@@ -44,6 +53,7 @@ export async function GET(): Promise<NextResponse> {
           appID: `${TEAM_ID}.${MOBILE_APP.iosBundleId}`,
           paths: [
             "/r/*",
+            "/book/*",
             `${MOBILE_APP.teamJoinPath}*`,
             `${MOBILE_APP.authCallbackPath}*`,
           ],

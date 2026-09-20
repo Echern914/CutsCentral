@@ -211,12 +211,30 @@ export default async function BookPage({
     searchParams?.service || searchParams?.staff
       ? { serviceId: searchParams.service ?? null, staffId: searchParams.staff ?? null }
       : null;
+  // The in-app destination for this exact page, prefill included, so "Open in
+  // ChairBack" lands on the same shop with the same service/staff preselected
+  // rather than on a generic booking screen.
+  const openQuery = new URLSearchParams();
+  if (searchParams?.service) openQuery.set("service", searchParams.service);
+  if (searchParams?.staff) openQuery.set("staff", searchParams.staff);
+  const openSuffix = openQuery.toString();
+  const openPath = `/book/${params.slug}${openSuffix ? `?${openSuffix}` : ""}`;
+
   return (
     <>
+      {/* 🔴 ABOVE THE FLOW, which reverses what this file used to say ("below
+          the flow, never above it: the booking is what they came for"). That
+          rule quietly assumed the customer would still be here at the bottom.
+          The people this card is for arrived by scanning a sticker on a mirror,
+          and the ones who book immediately never scroll past the confirmation -
+          so at the bottom it was shown mostly to people who had already left.
+          It stays small, and it stays dismissible: booking is still the job of
+          this page, and nothing here blocks it. */}
+      <div className="mx-auto w-full max-w-2xl px-4 pt-4">
+        <GetTheApp surface="booking" openPath={openPath} />
+      </div>
       <BookingClient data={data} prefill={prefill} />
-      {/* Below the flow, never above it: the booking is what they came for. */}
       <div className="mx-auto w-full max-w-2xl px-4 pb-8">
-        <GetTheApp surface="booking" />
         <RewardsDoor />
       </div>
     </>
