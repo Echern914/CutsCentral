@@ -70,6 +70,15 @@ const EXEMPT: Record<string, string> = {
     "message fan-in shaping; 'race' is not in play",
   "concurrent workers lose no increment and cannot exceed MAX_ATTEMPTS":
     "covered by the write-ahead attempt reservation asserted in the same file",
+  "lets exactly one of two workers holding the same row call the provider":
+    "REAL (falsified 2026-09-19: deleting the lockedBy CAS sends the barber TWO texts). " +
+    "A barrier would assert a guarantee this system does not make. Under FOR UPDATE " +
+    "SKIP LOCKED a row-lock barrier makes the second worker SKIP rather than block, so " +
+    "settledEarly could never reach 0; and parking both at their UPDATE would leave an " +
+    "ordering in which a lease takeover mid-send genuinely DOES deliver twice - which is " +
+    "the documented at-least-once behaviour, not a bug. The test therefore constructs " +
+    "the dangerous state (two workers each believing they hold the row) deliberately " +
+    "instead of hoping to race into it",
 };
 
 /**

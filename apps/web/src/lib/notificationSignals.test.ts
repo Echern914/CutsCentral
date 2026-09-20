@@ -203,3 +203,72 @@ describe("the walk-in line signal (PR 4)", () => {
     expect(await collectNotificationSignals(MANAGER)).toEqual([]);
   });
 });
+
+describe("the pending-review signal", () => {
+  it("counts reviews waiting for approval and points at the queue", async () => {
+    // 🔴 THE THIRD OF THE THREE REASONS NINE REVIEWS WENT UNNOTICED. The API
+    // had computed `pendingCount` for months with a comment saying the
+    // dashboard could badge it; nothing in the web app ever read it.
+    routes({
+      readiness: ok({ scope: "shop", milestonesBlocking: 0 }),
+      waitlist: ok({ counts: { WAITING: 0 } }),
+      conversations: ok({ escalatedCount: 0 }),
+      "dashboard/reviews": ok({ pendingCount: 9 }),
+    });
+    const out = await collectNotificationSignals(MANAGER);
+    expect(out).toEqual([
+      {
+        key: "reviews",
+        label: "9 reviews to approve",
+        count: 9,
+        href: "/dashboard/reviews",
+      },
+    ]);
+  });
+
+  it("pluralises one review correctly", async () => {
+    routes({
+      readiness: ok({ scope: "shop", milestonesBlocking: 0 }),
+      waitlist: ok({ counts: { WAITING: 0 } }),
+      conversations: ok({ escalatedCount: 0 }),
+      "dashboard/reviews": ok({ pendingCount: 1 }),
+    });
+    const out = await collectNotificationSignals(MANAGER);
+    expect(out[0]!.label).toBe("1 review to approve");
+  });
+
+  it("asks for one row only - the badge wants the count, not the page", async () => {
+    routes({ "dashboard/reviews": ok({ pendingCount: 3 }) });
+    await collectNotificationSignals(MANAGER);
+    const asked = apiGet.mock.calls.map(([p]) => p as string);
+    expect(asked).toContain("/api/dashboard/reviews?limit=1");
+  });
+
+  it("says nothing when the queue is empty", async () => {
+    routes({
+      readiness: ok({ scope: "shop", milestonesBlocking: 0 }),
+      waitlist: ok({ counts: { WAITING: 0 } }),
+      conversations: ok({ escalatedCount: 0 }),
+      "dashboard/reviews": ok({ pendingCount: 0 }),
+    });
+    expect(await collectNotificationSignals(MANAGER)).toEqual([]);
+  });
+
+  it("stays quiet for an employee seat rather than asking and being refused", async () => {
+    // /api/dashboard/reviews is requireManager: a barber seat gets a 403, and
+    // badging a queue they cannot open is a number they cannot act on.
+    routes({ readiness: ok({ scope: "barber", incompletePersonal: 0 }) });
+    await collectNotificationSignals({ barberOnly: true, premiumAiLocked: false });
+    const asked = apiGet.mock.calls.map(([p]) => p as string);
+    expect(asked.some((p) => p.includes("dashboard/reviews"))).toBe(false);
+  });
+
+  it("survives a shop on a lapsed plan, whose reviews endpoint 402s", async () => {
+    routes({
+      readiness: ok({ scope: "shop", milestonesBlocking: 1 }),
+      "dashboard/reviews": denied(402),
+    });
+    const out = await collectNotificationSignals(MANAGER);
+    expect(out.map((s) => s.key)).toEqual(["readiness"]);
+  });
+});

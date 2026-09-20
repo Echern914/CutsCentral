@@ -132,6 +132,8 @@ model User {
   // which is shops they OWN).
   shopMemberships     ShopMember[]
   notifyPrefs         BarberNotifyPref[]
+  // "A customer reviewed you" - one durable row per channel, per review.
+  reviewNotifications ReviewNotification[]
   // Barber/manager devices registered for native push (dashboard app).
   pushSubscriptions   PushSubscription[]
   // Assistants (ChatGPT/Claude) this person connected to one of their shops.
@@ -624,6 +626,7 @@ model Shop {
   waitlistEvents      WaitlistEvent[]
   tierOpenings        TierOpening[]
   reviews             Review[]
+  reviewNotifications ReviewNotification[]
   receptionistConversations ReceptionistConversation[]
   receptionistMessages      ReceptionistMessage[]
   pushSubscriptions   PushSubscription[]
@@ -1603,7 +1606,87 @@ model Review {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  notifications ReviewNotification[]
+
   @@index([shopId, status])
+  @@index([shopId, createdAt])
+}
+
+/// The promise to TELL SOMEBODY a review arrived - one row per recipient per
+/// channel, committed in the SAME transaction as the Review itself.
+///
+/// 🔴 WHY A TABLE AND NOT A SEND. The old code called Twilio inline, once, to
+/// `Shop.notifyPhone`. Drick has no notifyPhone, so nine reviews arrived and
+/// nothing happened - no text, no push, no retry, no record that anything was
+/// meant to. There was no evidence to find afterwards either, because a send
+/// that is never attempted leaves nothing behind. A row does.
+///
+/// ONE ROW PER (reviewId, userId, channel), unique. Two concurrent submits of
+/// the same review, a retried enqueue, or a worker replaying its own batch all
+/// collapse onto the same three rows. Independent rows are also what makes the
+/// channels independent: an SMS that keeps failing does not hold up the push,
+/// and neither is retried on the other's schedule.
+model ReviewNotification {
+  id       String @id @default(cuid())
+  shopId   String
+  shop     Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  reviewId String
+  review   Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  /// The barber/manager this is for. Re-authorised at delivery time, never
+  /// trusted from enqueue: a manager removed between the two gets 'skipped'.
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// "push" | "sms" | "email" (CHECK-pinned).
+  channel String
+
+  /// pending -> sent | skipped | failed | abandoned (CHECK-pinned).
+  ///   skipped  - there was nothing to send TO, or nobody to send it to: no
+  ///     registered device, no phone anywhere in the chain, no address, the
+  ///     channel switched off, or the recipient is no longer an active
+  ///     OWNER/MANAGER. Terminal ON PURPOSE - none of those is a transient
+  ///     fault, and retrying them forever would be a queue that never drains.
+  ///   failed   - the provider looked at it and refused. Nothing was accepted.
+  ///   abandoned - we STOPPED WITHOUT KNOWING. The attempt budget is spent and
+  ///     the last attempt was ambiguous, so it may or may not have arrived.
+  ///     Never collapsed into `failed`: "refused" and "may have landed" are
+  ///     different facts and the ledger must not claim the stronger one.
+  status String @default("pending")
+
+  /// Real provider dispatches only - a claim is not an attempt.
+  attempts               Int       @default(0)
+  firstProviderAttemptAt DateTime?
+  /// Write-ahead: committed BEFORE the request leaves, so a process that dies
+  /// after the provider accepted still leaves a row that says an attempt may
+  /// be in flight. Only a definitive answer clears it.
+  lastAttemptAmbiguous   Boolean   @default(false)
+  nextAttemptAt          DateTime?
+
+  /// --- The lease, which is what makes this safe on more than one replica ---
+  /// When this claim stops being respected. Stored as a DEADLINE rather than
+  /// as "claimedAt + a constant in the worker": deploying a different TTL then
+  /// cannot retroactively reinterpret claims already in flight, and a row that
+  /// wants a longer lease (a slow provider) can say so without every other row
+  /// inheriting it.
+  leaseUntil DateTime?
+  /// The identity of the CURRENT claim. Every write after a claim is a
+  /// compare-and-set on this value, so a worker whose lease expired and whose
+  /// row was taken over by another replica writes nothing at all.
+  lockedBy   String?
+
+  /// Fixed classification only - never provider prose, never a phone or an
+  /// address, and NEVER any of the customer's review text.
+  lastError         String?
+  providerMessageId String?
+  sentAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// The dedupe key the whole design rests on.
+  @@unique([reviewId, userId, channel])
+  /// The claim scan: due, unleased or expired, oldest first.
+  @@index([status, nextAttemptAt])
   @@index([shopId, createdAt])
 }
 

@@ -32,6 +32,7 @@ import { expireDeadWaitlistEntries } from "./engines/waitlistExpiry.js";
 import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
 import { runDemoReset } from "./engines/demoReset.js";
 import { runEmailOutbox } from "./engines/emailOutbox.js";
+import { runReviewNotifyOutbox } from "./engines/reviewNotifyOutbox.js";
 import { runBroadcastWorker } from "./engines/broadcastWorker.js";
 import { runCustomerSignInOutbox } from "./engines/customerSignInOutbox.js";
 import { runTierRecompute } from "./engines/tierRecomputeJob.js";
@@ -465,6 +466,29 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       }
     },
     failMsg: "email outbox worker failed",
+  },
+  // Review notifications: tell the shop a customer reviewed it.
+  //
+  // 🔴 THE FAST PATH IS THE REVIEW ROUTE'S OWN KICK, NOT THIS. The submit
+  // drains that review's rows immediately after its transaction commits, so a
+  // barber normally hears within seconds. This pass exists for the window in
+  // which that process dies mid-send, and for the retry schedule of anything
+  // the provider refused. With no pending rows - the steady state - it is one
+  // indexed read and returns.
+  //
+  // TTL comfortably exceeds the per-row lease so the job's lease cannot expire
+  // while a row it claimed is still being worked.
+  {
+    cronExpr: "* * * * *",
+    name: "review-notify-outbox",
+    ttlMs: 5 * MINUTE,
+    run: async () => {
+      const r = await runReviewNotifyOutbox();
+      if (r.sent > 0 || r.failed > 0 || r.abandoned > 0) {
+        logger.info(r, "review notify outbox progressed");
+      }
+    },
+    failMsg: "review notify outbox worker failed",
   },
   // Client broadcasts: drain the frozen recipient rows of any blast a shop has
   // queued. Every minute, because a barber who has just pressed send is

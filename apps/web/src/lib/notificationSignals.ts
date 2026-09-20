@@ -56,7 +56,7 @@ export async function collectNotificationSignals(opts: {
   /** Premium AI locked: the receptionist inbox is permanently 0 for this shop. */
   premiumAiLocked: boolean;
 }): Promise<BellSignal[]> {
-  const [readiness, waitlist, inbox, walkIns] = await Promise.all([
+  const [readiness, waitlist, inbox, walkIns, reviews] = await Promise.all([
     apiGet<ReadinessSummary>("/api/readiness/summary"),
     opts.barberOnly
       ? null
@@ -76,6 +76,12 @@ export async function collectNotificationSignals(opts: {
     apiGet<{ entries?: { status: string }[] }>(
       opts.barberOnly ? "/api/barber/walk-ins" : "/api/walk-ins/queue",
     ),
+    // Reviews awaiting approval. `pendingCount` is counted in the database
+    // over the whole shop, so limit=1 costs one row and still badges the full
+    // backlog. Manager-only, like the waitlist — an employee seat would 403.
+    opts.barberOnly
+      ? null
+      : apiGet<{ pendingCount?: number }>("/api/dashboard/reviews?limit=1"),
   ]);
 
   const out: BellSignal[] = [];
@@ -109,6 +115,26 @@ export async function collectNotificationSignals(opts: {
       label: `${inLine} walk-in${inLine === 1 ? "" : "s"} in the line`,
       count: inLine,
       href: walkInHref,
+    });
+  }
+
+  // A review a customer has left and nobody has approved is invisible to
+  // everyone: it is not on the public page yet, and the moderation queue is a
+  // page you have to think to open. One shop sat on nine of them.
+  //
+  // 🔴 DERIVED FROM THE REVIEW ROWS, NOT FROM THE NOTIFICATION LEDGER. The
+  // push and the text are the bonus channel and either can legitimately reach
+  // nobody — no registered device, no phone number anywhere. The badge is the
+  // delivery that cannot be switched off, so it must not be able to inherit a
+  // notification's failure.
+  const pendingReviews = reviews?.ok ? (reviews.data?.pendingCount ?? 0) : 0;
+  const reviewsHref = hrefFor("reviews");
+  if (pendingReviews > 0 && reviewsHref) {
+    out.push({
+      key: "reviews",
+      label: `${pendingReviews} review${pendingReviews === 1 ? "" : "s"} to approve`,
+      count: pendingReviews,
+      href: reviewsHref,
     });
   }
 
