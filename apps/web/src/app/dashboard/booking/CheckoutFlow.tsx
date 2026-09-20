@@ -14,7 +14,11 @@ import {
   type CheckoutState,
   type ChargeCardResult,
 } from "./actions";
-import { collectWithPhone, nativeTapToPayAvailable } from "./tapToPayBridge";
+import {
+  collectWithPhone,
+  nativeTapToPayAvailable,
+  requestTapToPayEducation,
+} from "./tapToPayBridge";
 
 /**
  * POST-SERVICE CHECKOUT — the screen a barber uses with the customer in front
@@ -485,6 +489,15 @@ export function CheckoutFlow({
         </p>
       </div>
 
+      {/* A refusal that happens on THIS step - so far, only Apple's required
+          Tap to Pay walkthrough failing to appear. Without this the barber
+          taps the method, nothing visibly happens, and they tap it again. */}
+      {error && (
+        <p role="alert" className="text-center text-sm text-danger-soft">
+          {error}
+        </p>
+      )}
+
       <div className="flex flex-col gap-1.5">
         {state.totalCents !== null && (
           <Row label="Ticket" value={money(state.totalCents)} />
@@ -542,7 +555,26 @@ export function CheckoutFlow({
               qa="method-tap-to-pay"
               label="Tap to Pay"
               hint="Hold their card to this phone"
-              onClick={() => {
+              onClick={async () => {
+                // 🔴 APPLE'S REQUIRED EDUCATION, AT THE ENABLING POINT. Stripe's
+                // docs: Apple requires a "How to Tap" overlay when enabling Tap
+                // to Pay, integrated before the app is submitted for review. It
+                // runs HERE rather than at confirm, because the native overlay
+                // has no dismissal callback and must not land on top of a live
+                // collection. After the first time it returns `already` and
+                // this is a no-op.
+                if (busy) return;
+                setBusy(true);
+                setError(null);
+                const taught = await requestTapToPayEducation(newRequestId());
+                setBusy(false);
+                if (taught.outcome === "failed") {
+                  // Not educated, so not offered. Proceeding would ship around
+                  // the requirement and hand a barber a reader they were never
+                  // shown how to use.
+                  setError(errorCopy("tap_to_pay_education_failed", undefined, vocab.serviceNoun));
+                  return;
+                }
                 setChoice({ kind: "tap_to_pay" });
                 setStep("confirm");
               }}
@@ -662,6 +694,11 @@ function errorCopy(
       return "This card was only approved for no-show fees.";
     case "tap_to_pay_unavailable":
       return "This phone can't take contactless payments. Try another way.";
+    case "tap_to_pay_education_failed":
+      // Apple requires the How to Tap walkthrough before the first payment. If
+      // it could not be shown, Tap to Pay is not offered - so this says what to
+      // do rather than what failed.
+      return "Couldn't show the Tap to Pay walkthrough. Take payment another way for now.";
     // Shop-level, not device-level, and worth telling apart: one is fixed by
     // using a different phone, the other by an owner changing a setting.
     case "tap_to_pay_disabled":

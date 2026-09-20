@@ -2,7 +2,14 @@
 .expo/
 dist/
 web-build/
-ios/
-android/
+# 🔴 ANCHORED, deliberately. These two were bare `ios/` and `android/`, which
+# match a directory of that name at ANY depth - including
+# `modules/*/ios/`, where a local Expo module's Swift source lives. That is not
+# a build artifact, it is source, and the bare pattern silently excluded it:
+# the file existed on disk, `git add -A` skipped it, and an EAS build (which
+# archives from git) would have shipped a binary with the native module
+# missing while every local check stayed green.
+/ios/
+/android/
 expo-env.d.ts
 *.orig.*

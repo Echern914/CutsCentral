@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   StripeTerminalProvider,
   useStripeTerminal,
@@ -9,10 +10,14 @@ import { TokenRelay } from "./tokenRelay";
 import { collectTapToPay, type TerminalLike } from "./collect";
 import {
   capabilityScript,
+  educationResultScript,
   parseTapToPayMessage,
   resultScript,
   tokenRequestScript,
 } from "./protocol";
+import { ensureHowToTapShown, EDUCATION_STORAGE_KEY } from "./education";
+import { HowToTapFallback } from "./HowToTapFallback";
+import { tapToPayEducationNative } from "../../modules/tap-to-pay-education";
 
 /**
  * Wires the dashboard WebView to the Tap to Pay hardware.
@@ -46,6 +51,11 @@ function TapToPayInner({
   const waitingForReader = useRef<((r: Reader.Type | null) => void) | null>(null);
   const busy = useRef(false);
   const initialized = useRef(false);
+  // Our own instructions, for an iPhone too old for Apple's overlay. The
+  // promise resolves when the barber dismisses it, so "educated" means read,
+  // not merely displayed.
+  const [fallbackVisible, setFallbackVisible] = useState(false);
+  const dismissFallback = useRef<(() => void) | null>(null);
 
   const {
     initialize,
@@ -149,6 +159,41 @@ function TapToPayInner({
         return true;
       }
 
+      if (msg.kind === "education") {
+        // 🔴 APPLE REQUIRES THIS BEFORE THE FIRST PAYMENT. Stripe's docs: "Apple
+        // requires you to present a 'How to Tap' instructional overlay when
+        // enabling Tap to Pay on iPhone. You must integrate this before
+        // submitting your app for review."
+        const nativeEd = tapToPayEducationNative();
+        void ensureHowToTapShown({
+          read: () => AsyncStorage.getItem(EDUCATION_STORAGE_KEY),
+          write: (v) => AsyncStorage.setItem(EDUCATION_STORAGE_KEY, v),
+          // Absent on Android, in Expo Go, and in any build made before this
+          // module existed - all of which mean "cannot show Apple's overlay".
+          nativeAvailable: () => nativeEd?.isNativeEducationAvailable() ?? false,
+          presentNative: async () => {
+            if (!nativeEd) throw new Error("native education module unavailable");
+            return nativeEd.presentHowToTap();
+          },
+          presentFallback: () =>
+            new Promise<void>((resolve) => {
+              dismissFallback.current = resolve;
+              setFallbackVisible(true);
+            }),
+        })
+          .then((res) => inject(educationResultScript(msg.requestId, res.outcome, res.reason)))
+          .catch((err: unknown) =>
+            inject(
+              educationResultScript(
+                msg.requestId,
+                "failed",
+                err instanceof Error ? err.message : "unknown",
+              ),
+            ),
+          );
+        return true;
+      }
+
       const { requestId } = msg.request;
       // 🔴 ONE COLLECTION AT A TIME. The server already refuses a second live
       // attempt, but a second reader session on one device is its own mess -
@@ -186,7 +231,20 @@ function TapToPayInner({
     [inject, relay, terminal],
   );
 
-  return children({ handleMessage });
+  return (
+    <>
+      {children({ handleMessage })}
+      <HowToTapFallback
+        visible={fallbackVisible}
+        onDismiss={() => {
+          setFallbackVisible(false);
+          const resolve = dismissFallback.current;
+          dismissFallback.current = null;
+          resolve?.();
+        }}
+      />
+    </>
+  );
 }
 
 /**

@@ -40,10 +40,12 @@ vi.mock("./actions", () => ({
 
 const nativeTapToPayAvailable = vi.fn(() => false);
 const collectWithPhone = vi.fn();
+const requestTapToPayEducation = vi.fn();
 
 vi.mock("./tapToPayBridge", () => ({
   nativeTapToPayAvailable: (...a: unknown[]) => nativeTapToPayAvailable(...a),
   collectWithPhone: (...a: unknown[]) => collectWithPhone(...a),
+  requestTapToPayEducation: (...a: unknown[]) => requestTapToPayEducation(...a),
 }));
 
 const { CheckoutFlow } = await import("./CheckoutFlow");
@@ -86,6 +88,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   getCheckoutAction.mockResolvedValue({ ok: true, data: stateFor() });
   nativeTapToPayAvailable.mockReturnValue(false);
+  // Apple's education has already been shown on this device, which is the
+  // state every test but the education ones below care about.
+  requestTapToPayEducation.mockResolvedValue({
+    requestId: "edu",
+    outcome: "already",
+    reason: null,
+  });
 });
 
 /** A state where BOTH halves say Tap to Pay is possible. */
@@ -162,6 +171,10 @@ describe("Tap to Pay", () => {
       ).toBeTruthy(),
     );
     fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+    // Apple's education is awaited before the confirm step opens.
+    await waitFor(() =>
+      expect(document.querySelector('[data-qa="confirm-charge"]')).toBeTruthy(),
+    );
     fireEvent.click(document.querySelector('[data-qa="confirm-charge"]')!);
 
     await waitFor(() => expect(settleTapToPayAction).toHaveBeenCalled());
@@ -211,6 +224,10 @@ describe("Tap to Pay", () => {
       ).toBeTruthy(),
     );
     fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+    // Apple's education is awaited before the confirm step opens.
+    await waitFor(() =>
+      expect(document.querySelector('[data-qa="confirm-charge"]')).toBeTruthy(),
+    );
     fireEvent.click(document.querySelector('[data-qa="confirm-charge"]')!);
 
     await waitFor(() => expect(settleTapToPayAction).toHaveBeenCalled());
@@ -252,6 +269,10 @@ describe("Tap to Pay", () => {
       ).toBeTruthy(),
     );
     fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+    // Apple's education is awaited before the confirm step opens.
+    await waitFor(() =>
+      expect(document.querySelector('[data-qa="confirm-charge"]')).toBeTruthy(),
+    );
     fireEvent.click(document.querySelector('[data-qa="confirm-charge"]')!);
 
     await waitFor(() =>
@@ -279,11 +300,84 @@ describe("Tap to Pay", () => {
       ).toBeTruthy(),
     );
     fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+    // Apple's education is awaited before the confirm step opens.
+    await waitFor(() =>
+      expect(document.querySelector('[data-qa="confirm-charge"]')).toBeTruthy(),
+    );
     fireEvent.click(document.querySelector('[data-qa="confirm-charge"]')!);
 
     await waitFor(() => expect(startTapToPayAction).toHaveBeenCalled());
     expect(collectWithPhone).not.toHaveBeenCalled();
     expect(terminalConnectionTokenAction).not.toHaveBeenCalled();
+  });
+
+  it("🔴 shows Apple's required education when Tap to Pay is CHOSEN, before any collection", async () => {
+    // Stripe's docs: Apple requires a "How to Tap" overlay when enabling Tap to
+    // Pay, integrated before the app is submitted for review. It runs at
+    // selection rather than at confirm because Apple's overlay has no dismissal
+    // callback and must not land on top of a live collection.
+    getCheckoutAction.mockResolvedValue({ ok: true, data: tapReady() });
+    nativeTapToPayAvailable.mockReturnValue(true);
+    requestTapToPayEducation.mockResolvedValue({
+      requestId: "edu",
+      outcome: "native",
+      reason: null,
+    });
+
+    renderFlow();
+    await waitFor(() =>
+      expect(document.querySelector('[data-qa="method-tap-to-pay"]')).toBeTruthy(),
+    );
+    fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+
+    await waitFor(() => expect(requestTapToPayEducation).toHaveBeenCalledTimes(1));
+    // Taught first, and nothing charged by being taught.
+    expect(startTapToPayAction).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(document.querySelector('[data-qa="confirm-charge"]')).toBeTruthy(),
+    );
+  });
+
+  it("🔴 refuses to proceed when the required education could NOT be shown", async () => {
+    // Proceeding would ship around Apple's requirement and hand a barber a
+    // reader they were never shown how to use.
+    getCheckoutAction.mockResolvedValue({ ok: true, data: tapReady() });
+    nativeTapToPayAvailable.mockReturnValue(true);
+    requestTapToPayEducation.mockResolvedValue({
+      requestId: "edu",
+      outcome: "failed",
+      reason: "ERR_NO_VIEW_CONTROLLER",
+    });
+
+    renderFlow();
+    await waitFor(() =>
+      expect(document.querySelector('[data-qa="method-tap-to-pay"]')).toBeTruthy(),
+    );
+    fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+
+    await waitFor(() => expect(screen.getByText(/walkthrough/i)).toBeTruthy());
+    // Never reached the confirm step, and never opened an attempt.
+    expect(document.querySelector('[data-qa="confirm-charge"]')).toBeNull();
+    expect(startTapToPayAction).not.toHaveBeenCalled();
+  });
+
+  it("an older iPhone is taught with our own screen and still proceeds", async () => {
+    getCheckoutAction.mockResolvedValue({ ok: true, data: tapReady() });
+    nativeTapToPayAvailable.mockReturnValue(true);
+    requestTapToPayEducation.mockResolvedValue({
+      requestId: "edu",
+      outcome: "fallback",
+      reason: null,
+    });
+
+    renderFlow();
+    await waitFor(() =>
+      expect(document.querySelector('[data-qa="method-tap-to-pay"]')).toBeTruthy(),
+    );
+    fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+    await waitFor(() =>
+      expect(document.querySelector('[data-qa="confirm-charge"]')).toBeTruthy(),
+    );
   });
 
   it("tells a shop-level refusal apart from a device one", async () => {
@@ -303,6 +397,10 @@ describe("Tap to Pay", () => {
       ).toBeTruthy(),
     );
     fireEvent.click(document.querySelector('[data-qa="method-tap-to-pay"]')!);
+    // Apple's education is awaited before the confirm step opens.
+    await waitFor(() =>
+      expect(document.querySelector('[data-qa="confirm-charge"]')).toBeTruthy(),
+    );
     fireEvent.click(document.querySelector('[data-qa="confirm-charge"]')!);
 
     await waitFor(() =>

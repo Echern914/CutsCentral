@@ -23,13 +23,81 @@ export interface TapToPayResult {
   message: string | null;
 }
 
+export type EducationOutcome = "native" | "fallback" | "already" | "failed";
+
+export interface EducationResult {
+  requestId: string;
+  outcome: EducationOutcome;
+  reason: string | null;
+}
+
 interface NativeWindow {
   __cbNative?: { tapToPay?: boolean };
   __cbTapToPay?: {
-    resolve: (r: TapToPayResult) => void;
-    provideToken: (nonce: string) => void;
+    resolve?: (r: TapToPayResult) => void;
+    provideToken?: (nonce: string) => void;
+    education?: (r: EducationResult) => void;
   };
   ReactNativeWebView?: { postMessage: (s: string) => void };
+}
+
+/** Merge a handler in rather than replacing the object another call installed. */
+function installHandlers(handlers: Partial<NonNullable<NativeWindow["__cbTapToPay"]>>): void {
+  const nw = w();
+  nw.__cbTapToPay = { ...(nw.__cbTapToPay ?? {}), ...handlers };
+}
+
+function removeHandlers(keys: Array<keyof NonNullable<NativeWindow["__cbTapToPay"]>>): void {
+  const nw = w();
+  if (!nw.__cbTapToPay) return;
+  for (const k of keys) delete nw.__cbTapToPay[k];
+}
+
+function postToShell(msg: unknown): void {
+  try {
+    w().ReactNativeWebView?.postMessage(JSON.stringify(msg));
+  } catch {
+    /* the shell went away; every caller has its own timeout */
+  }
+}
+
+/**
+ * Ask the shell to show Apple's required "How to Tap" education.
+ *
+ * 🔴 CALLED WHEN THE BARBER FIRST CHOOSES TAP TO PAY, not when they collect.
+ * Apple requires the overlay "when enabling Tap to Pay on iPhone", and its
+ * native presentation has no dismissal callback - showing it mid-collection
+ * would put an instructional sheet over a live payment with a customer waiting.
+ *
+ * Resolves `failed` if the shell never answers, because a barber who has not
+ * been shown the education must not be handed the reader.
+ */
+export function requestTapToPayEducation(
+  requestId: string,
+  timeoutMs = 60_000,
+): Promise<EducationResult> {
+  return new Promise<EducationResult>((resolve) => {
+    let done = false;
+    const finish = (r: EducationResult) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      removeHandlers(["education"]);
+      resolve(r);
+    };
+    const timer = setTimeout(
+      () => finish({ requestId, outcome: "failed", reason: "the phone did not answer" }),
+      timeoutMs,
+    );
+
+    installHandlers({
+      education: (r: EducationResult) => {
+        if (!r || r.requestId !== requestId) return;
+        finish(r);
+      },
+    });
+    postToShell({ type: "cb:tap-to-pay-education", requestId });
+  });
 }
 
 function w(): NativeWindow {
@@ -86,8 +154,9 @@ export function collectWithPhone(
       if (done) return;
       done = true;
       clearTimeout(timer);
-      // Leave nothing behind that a later, unrelated collection could hit.
-      delete nativeWindow.__cbTapToPay;
+      // Leave nothing behind that a later, unrelated collection could hit -
+      // but only OUR handlers, so an education request in flight survives.
+      removeHandlers(["resolve", "provideToken"]);
       resolve(r);
     };
 
@@ -101,7 +170,7 @@ export function collectWithPhone(
       REPLY_TIMEOUT_MS,
     );
 
-    nativeWindow.__cbTapToPay = {
+    installHandlers({
       resolve: (r: TapToPayResult) => {
         // A reply for a press we are no longer waiting on is dropped: it can
         // only be a stale answer, and resolving on it would show the barber
@@ -111,20 +180,14 @@ export function collectWithPhone(
       },
       provideToken: (nonce: string) => {
         void fetchToken()
-          .then((secret) => post({ type: "cb:tap-to-pay-token", nonce, secret: secret ?? null }))
+          .then((secret) =>
+            postToShell({ type: "cb:tap-to-pay-token", nonce, secret: secret ?? null }),
+          )
           // The shell must hear something, or its SDK hangs with no error.
-          .catch(() => post({ type: "cb:tap-to-pay-token", nonce, secret: null }));
+          .catch(() => postToShell({ type: "cb:tap-to-pay-token", nonce, secret: null }));
       },
-    };
+    });
 
-    function post(msg: unknown): void {
-      try {
-        nativeWindow.ReactNativeWebView?.postMessage(JSON.stringify(msg));
-      } catch {
-        /* the shell went away; the timeout above is the backstop */
-      }
-    }
-
-    post({ type: "cb:tap-to-pay", ...request });
+    postToShell({ type: "cb:tap-to-pay", ...request });
   });
 }

@@ -53,7 +53,32 @@ both generated configurations and that these three can never disagree.
 
 ---
 
-## 1. Apple: the entitlement
+## The order these must happen in
+
+**🔴 THERE ARE TWO ENTITLEMENTS, NOT ONE**, and Stripe's documentation is
+explicit about the sequence: "you must first request and configure the Tap to
+Pay on iPhone **development** entitlement from your Apple Developer account.
+After you complete internal testing, you must request a **distribution**
+entitlement."
+
+Doing them out of order wastes an Apple review cycle. The whole path:
+
+| # | step | who | gate it opens |
+|---|---|---|---|
+| 1 | **Development** entitlement requested and granted | Eric | internal testing on a physical device |
+| 2 | **Development** provisioning profile regenerated *after* the grant | Eric | a build that signs with the entitlement |
+| 3 | EAS **development/internal** build on a **registered** physical iPhone, `TAP_TO_PAY_NATIVE_ENABLED=true` | Eric + us | a real reader on a real device |
+| 4 | **A real $1.00 payment and refund**, with the Stripe intent, the signed webhook, the ChairBack attempt/payment ledger and the connected account all agreeing | Eric | the only thing that makes "it works" true |
+| 5 | **Distribution** entitlement requested and granted | Eric | a shippable build |
+| 6 | **Distribution** provisioning refreshed | Eric | signing a release build |
+| 7 | Production / TestFlight build, then App Review submission | Eric + us | customers |
+
+Nothing between 1 and 4 is shippable, and **step 4 is not a formality** — see
+the bottom of this file.
+
+---
+
+## 1. Apple: the DEVELOPMENT entitlement
 
 **What:** `com.apple.developer.proximity-reader.payment.acceptance`, granted per
 bundle id — ours is `com.getchairback.rewards`.
@@ -72,11 +97,33 @@ A haircut is a real-world service and is expressly excluded from in-app
 purchase, so these payments go card → Stripe → the barber, with no App Store
 commission.
 
+## 1b. Apple: the DISTRIBUTION entitlement — later, not now
+
+Requested **after** internal testing is done (step 4 above). Asking for it
+before there is anything to distribute is how a review cycle gets spent on a
+build that was never going to ship.
+
 ## 2. Apple: provisioning
 
 Once granted, the provisioning profile must be **regenerated** — an existing
 profile does not gain the entitlement retroactively — and EAS credentials
 refreshed so the build picks up the new profile.
+
+Development provisioning comes first, for step 3. Distribution provisioning is
+refreshed separately after the distribution entitlement lands (step 6): they are
+different profiles and the second does not follow from the first.
+
+## 2b. 🔴 NO DEVICE IS REGISTERED, and that blocks the device build
+
+`eas device:list --apple-team-id ZLP9T7HSYJ` returns **"Could not find devices
+on Apple team"**. An internal / ad-hoc build for a physical iPhone cannot be
+produced until at least one device UDID is registered, whatever else is in
+place. See "What Eric has to do" at the bottom.
+
+A **simulator** build needs none of this — no entitlement, no provisioning, no
+device — and is what the `simulator` profile in `eas.json` exists for. It
+proves the Swift module and the Stripe Terminal SDK compile and link; it cannot
+prove anything about taking a payment, because a simulator has no NFC hardware.
 
 ## 3. Stripe: Tap to Pay on the platform, terms on the connected account
 
@@ -131,6 +178,79 @@ shop's own connected account with a **$1.00** ticket, and refund it afterwards.
 Until that is ticked, the surface stays dark: `SERVICE_CHECKOUT_ENABLED` is
 false, and even with it on, a device that announces no capability shows
 "Not set up on this device yet".
+
+---
+
+---
+
+## Merchant education — required, and already built
+
+> **Apple requires you to present a "How to Tap" instructional overlay when
+> enabling Tap to Pay on iPhone. You must integrate this before submitting your
+> app for review.** — Stripe, *Tap to Pay on iPhone*
+
+This is not advice. An app without it fails App Review, and the Stripe Terminal
+React Native SDK does **not** expose the API, which is why
+`apps/mobile/modules/tap-to-pay-education/` exists.
+
+- **iOS 18+**: Apple's own `ProximityReaderDiscovery`, `content(for:
+  .payment(.howToTap))` then `presentContent(_:from:)`, presented from the
+  **topmost** presented view controller (Stripe notes the call fails otherwise,
+  and this app's WebView routinely sits under a sheet).
+- **iOS 17 and earlier**: a native fallback screen of our own. It is a
+  **fallback**, never a substitute — Apple's content is localized for the
+  merchant's region and kept current by Apple.
+- **When**: the first time a barber *chooses* Tap to Pay, per device. Not during
+  a collection: Apple's overlay has no dismissal callback, so showing it then
+  would drop an instructional sheet on top of a live payment.
+- **🔴 If it cannot be shown on iOS 18+, Tap to Pay is refused** rather than
+  falling back. Shipping around the requirement quietly is how an app arrives at
+  review without the thing Apple asked for and nothing anywhere saying so.
+
+---
+
+## What Eric has to do
+
+Everything below needs an Apple account, a Stripe dashboard or a physical
+phone. None of it can be done from the repository.
+
+**1. Register a device** — blocks the physical-device build today.
+
+```
+cd apps/mobile
+npx eas device:create
+```
+
+Choose *Website* or *Developer Portal*, open the link on the iPhone that will
+take payments, install the profile, then confirm it appears in
+`npx eas device:list --apple-team-id ZLP9T7HSYJ`.
+
+**2. Request the Tap to Pay DEVELOPMENT entitlement**
+
+https://developer.apple.com/contact/request/tap-to-pay-on-iphone/
+
+Bundle ID `com.getchairback.rewards`, Team ID `ZLP9T7HSYJ`. Apple replies by
+email; it is a review, not a toggle.
+
+**3. Enable Tap to Pay on the Stripe platform account**
+
+Stripe Dashboard → **Terminal** → **Tap to Pay**, on the ChairBack **platform**
+account (not a connected account). The connected account accepts Stripe's Tap
+to Pay terms on the device the first time — the code passes
+`tosAcceptancePermitted: true` so that is possible — but the platform must
+permit it first.
+
+**4. After the grant**: regenerate development provisioning, then
+
+```
+cd apps/mobile
+npx eas build --platform ios --profile taptopay-device
+```
+
+That profile sets `TAP_TO_PAY_NATIVE_ENABLED=true`. Every other profile leaves
+it false.
+
+**5. The $1 test** — the real-device script in `docs/service-checkout.md`.
 
 ---
 
