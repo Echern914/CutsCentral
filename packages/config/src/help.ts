@@ -910,7 +910,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "custom-domain",
     q: "How do I connect my own domain?",
-    a: "It lives at the bottom of your page settings: open your dashboard, tap More, then Public shop page, and scroll down to \"Use your own domain.\"\n\nFrom there:\n1. Type your domain (like drickcuttinup.com) and tap Connect.\n2. Two records appear. Add them wherever you bought the domain (GoDaddy, Namecheap, Squarespace…) — in that site's DNS settings, add an A record with name @ and value 76.76.21.21, and a CNAME record with name www and value cname.vercel-dns.com.\n3. Come back and tap \"I've added them — check again.\" It usually flips to Connected within minutes; DNS can occasionally take up to 48 hours.\n\nOnce it's Connected, anyone who types your domain lands straight on your ChairBack page. Google search results show your page's getchairback.com address — your domain is the door, your ChairBack page is the shop.",
+    a: "It lives at the bottom of your page settings: open your dashboard, tap More, then Public shop page, and scroll down to \"Use your own domain.\"\n\nOne thing first: if that domain already has a website on it, connecting it here REPLACES that site. Visitors will see your ChairBack page instead. Your email on that domain isn't affected.\n\nFrom there:\n1. Type your domain (like drickcuttinup.com) and tap Connect.\n2. Three records appear. Add them wherever you bought the domain (GoDaddy, Namecheap, Squarespace, Google Domains…) in that site's DNS settings:\n   • an A record, name @ (some registrars want it blank), value 76.76.21.21\n   • a CNAME record, name www, value cname.vercel-dns.com\n   • a TXT record, name _chairback, with the exact value shown in your dashboard — that one proves the domain is yours, so it's different for every shop.\n   If there's already an A record or a \"parking\" record for @, delete it — two A records on @ and the wrong one wins.\n3. Come back and tap \"I've added them — check again.\" The card tells you which record it can see and what it currently points at, so you know exactly what's left. It usually says Connected within minutes; DNS can occasionally take up to 48 hours.\n\nOnce it's Connected, anyone who types your domain — with or without www — lands straight on your ChairBack page over https, automatically. Google search results show your page's getchairback.com address: your domain is the door, your ChairBack page is the shop.\n\nIf you ever disconnect it, remove those three records at your registrar too, so the domain stops pointing here.",
     keywords: [
       // "my website URL", not "address": the word "address" belongs to the
       // street-address answer (show-up-on-google) since #204 added real ones.
@@ -918,6 +918,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
       "godaddy", "namecheap", "squarespace domain", "connect domain",
       "point domain", "bought a domain", "add domain", "where domain",
       "a record", "cname", "hook up domain", "link domain",
+      "txt record", "verify domain", "domain not working", "replace my website",
     ],
     primaryFor: ["domain", "dns"],
     category: "brand",

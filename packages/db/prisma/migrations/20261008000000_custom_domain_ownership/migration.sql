@@ -1,0 +1,33 @@
+-- Proof of domain ownership, before a custom domain is allowed to send anyone
+-- anywhere.
+--
+-- 🔴 THE HOLE THIS CLOSES. Connecting a domain stored the row and the redirect
+-- was live from that moment: the public by-domain resolver required only that
+-- the row EXIST, and `customDomainVerifiedAt` was a status-display detail. But
+-- nothing ever proved the shop making the claim controlled the domain. Vercel's
+-- own "verified" means "not already on another Vercel account", and its
+-- "configured" means "some A record points at 76.76.21.21" - the REAL owner's
+-- record, set by following our own instructions. So:
+--
+--   1. any active shop could claim any domain not yet in this table, and
+--   2. the moment the real owner's DNS pointed here, their visitors landed on
+--      the claimant's page.
+--
+-- The window is every gap between "DNS points at us" and "the right shop holds
+-- the row": the wrong setup order, any Disconnect, or a domain previously
+-- hosted on Vercel by somebody else. A squatter could also pre-claim a shop's
+-- known domain and lock the real owner out with `domain_taken`.
+--
+-- The fix is the one every registrar-facing product uses: a TXT record carrying
+-- a secret we minted for THIS shop. Only somebody who can write the zone can
+-- add it, and the redirect is gated on `customDomainVerifiedAt`, which is now
+-- stamped only once that record resolves.
+ALTER TABLE "Shop" ADD COLUMN "customDomainVerifyToken" TEXT;
+
+-- 🔴 NO BACKFILL, AND NOTHING BREAKS. At the time of writing three shops have a
+-- domain connected and none is verified, and a read-only lookup showed none of
+-- the three point at Vercel at all - so no live redirect exists to preserve.
+-- Each of those shops is handed its TXT record the next time the page loads
+-- (the status route mints a token lazily for a connected-but-tokenless row),
+-- and their redirect comes alive when they finish DNS, exactly as it would for
+-- a new connection.
