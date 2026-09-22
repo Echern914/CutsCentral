@@ -4,6 +4,46 @@ import { prisma } from "@chairback/db";
 import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 import { normalizeDomain } from "./domains.js";
+import {
+  OWNERSHIP_TXT_PREFIX,
+  VERCEL_APEX_A,
+  VERCEL_WWW_CNAME,
+  __setDnsResolverForTests,
+  type DnsResolver,
+} from "../services/dnsLookup.js";
+
+/**
+ * A stand-in for the network, answering per host. Each test sets exactly the
+ * zone it wants to describe; a host with no entry is "not found", the way an
+ * unpublished record really answers.
+ */
+function fakeDns(zone: {
+  a?: string[];
+  cname?: string[];
+  txt?: string[];
+  /** Simulate a resolver that cannot answer at all (timeout / SERVFAIL). */
+  down?: boolean;
+}): DnsResolver {
+  const notFound = () => Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" });
+  const down = () => Object.assign(new Error("ETIMEOUT"), { code: "ETIMEOUT" });
+  return {
+    async resolve4() {
+      if (zone.down) throw down();
+      if (!zone.a) throw notFound();
+      return zone.a;
+    },
+    async resolveCname() {
+      if (zone.down) throw down();
+      if (!zone.cname) throw notFound();
+      return zone.cname;
+    },
+    async resolveTxt() {
+      if (zone.down) throw down();
+      if (!zone.txt) throw notFound();
+      return zone.txt.map((v) => [v]);
+    },
+  };
+}
 
 /**
  * Custom domains: the owner lifecycle routes (which degrade to 503/"email
@@ -101,9 +141,27 @@ describe("owner routes with the Vercel seam UNSET", () => {
 });
 
 describe("public by-domain resolver", () => {
-  it("resolves a connected domain to the shop slug, www included", async () => {
-    // Simulate the connected state directly - attaching is the Vercel half.
-    await prisma.shop.update({ where: { id: shopId }, data: { customDomain: domain } });
+  it("🔴 refuses a connected domain until ownership is verified", async () => {
+    // The hijack this pins. A row with `customDomain` set and `verifiedAt`
+    // null is a CLAIM: any active shop could have typed the name in. Until
+    // the TXT ownership record has resolved with this shop's token, resolving
+    // the domain would send the real owner's visitors - whose DNS points here
+    // because they followed our instructions - to whichever shop claimed it.
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { customDomain: domain, customDomainVerifiedAt: null },
+    });
+    const res = await request(app).get(`/api/page/-/by-domain/${domain}`);
+    expect(res.status).toBe(404);
+  });
+
+  it("resolves a VERIFIED domain to the shop slug, www included", async () => {
+    // Simulate the verified state directly - attaching is the Vercel half and
+    // the ownership lookup is pinned in the seam-SET block below.
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { customDomain: domain, customDomainVerifiedAt: new Date() },
+    });
     const bare = await request(app).get(`/api/page/-/by-domain/${domain}`);
     expect(bare.status).toBe(200);
     expect(bare.body.slug).toBe(slug);
@@ -239,13 +297,139 @@ describe("owner routes with the Vercel seam SET (mocked fetch)", () => {
     expect(rowB?.customDomain).toBe(domainB);
   });
 
-  it("verify stamps verifiedAt when Vercel reports green", async () => {
+  it("connect hands back THREE records, the third carrying a per-shop token", async () => {
+    const res = await request(app).get("/api/domains").set("Cookie", cookieB);
+    expect(res.status).toBe(200);
+    const types = res.body.records.map((r: { type: string }) => r.type);
+    expect(types).toEqual(["A", "CNAME", "TXT"]);
+    const txt = res.body.records[2];
+    expect(txt.name).toBe(`_chairback.${domainB}`);
+    expect(txt.value.startsWith(OWNERSHIP_TXT_PREFIX)).toBe(true);
+    // The token on the row is the one in the record - and it is a secret this
+    // shop alone was shown.
+    const row = await prisma.shop.findUnique({ where: { id: shopBId } });
+    expect(txt.value).toBe(`${OWNERSHIP_TXT_PREFIX}${row?.customDomainVerifyToken}`);
+    expect(row?.customDomainVerifyToken?.length).toBeGreaterThan(16);
+  });
+
+  it("🔴 Vercel reporting green is NOT enough - no TXT record, no verifiedAt", async () => {
+    // Everything Vercel can say is green: attached, verified, configured.
+    // The apex even points here. What is missing is the one thing that proves
+    // WHO pointed it: the ownership record.
+    __setDnsResolverForTests(fakeDns({ a: [VERCEL_APEX_A], cname: [VERCEL_WWW_CNAME] }));
+    const res = await request(app).post("/api/domains/verify").set("Cookie", cookieB);
+    expect(res.status).toBe(200);
+    expect(res.body.verifiedAt).toBeNull();
+    expect(res.body.dns.txt.status).toBe("missing");
+    expect(res.body.dns.apex.status).toBe("points_here");
+    // And the public resolver still refuses it.
+    expect((await request(app).get(`/api/page/-/by-domain/${domainB}`)).status).toBe(404);
+  });
+
+  it("a TXT record with SOMEBODY ELSE's token is not proof either", async () => {
+    __setDnsResolverForTests(
+      fakeDns({
+        a: [VERCEL_APEX_A],
+        cname: [VERCEL_WWW_CNAME],
+        txt: [`${OWNERSHIP_TXT_PREFIX}not-this-shops-token`],
+      }),
+    );
+    const res = await request(app).post("/api/domains/verify").set("Cookie", cookieB);
+    expect(res.body.verifiedAt).toBeNull();
+    expect(res.body.dns.txt.status).toBe("wrong");
+  });
+
+  it("ownership proven but the apex still pointing elsewhere is not Connected", async () => {
+    const row = await prisma.shop.findUnique({ where: { id: shopBId } });
+    __setDnsResolverForTests(
+      fakeDns({
+        a: ["203.0.113.9"], // their old host
+        txt: [`${OWNERSHIP_TXT_PREFIX}${row?.customDomainVerifyToken}`],
+      }),
+    );
+    const res = await request(app).post("/api/domains/verify").set("Cookie", cookieB);
+    expect(res.body.verifiedAt).toBeNull();
+    expect(res.body.dns.txt.status).toBe("found");
+    // The diagnosis says WHAT it points at - the thing the old card never did.
+    expect(res.body.dns.apex).toEqual({ status: "points_elsewhere", found: "203.0.113.9" });
+  });
+
+  it("🔴 a resolver that cannot answer is never read as absence", async () => {
+    // The distinction that matters: "your record is not there" is a fact;
+    // "we could not look just now" is not, and must not clear or stamp anything.
+    __setDnsResolverForTests(fakeDns({ down: true }));
+    const res = await request(app).post("/api/domains/verify").set("Cookie", cookieB);
+    expect(res.body.verifiedAt).toBeNull();
+    expect(res.body.dns.txt.status).toBe("error");
+    expect(res.body.dns.apex.status).toBe("error");
+  });
+
+  it("stamps verifiedAt only with the TXT proof AND the apex here - then resolves", async () => {
+    const row = await prisma.shop.findUnique({ where: { id: shopBId } });
+    __setDnsResolverForTests(
+      fakeDns({
+        a: [VERCEL_APEX_A],
+        cname: [`${VERCEL_WWW_CNAME}.`], // a trailing-dot answer, as resolvers give
+        txt: [`${OWNERSHIP_TXT_PREFIX}${row?.customDomainVerifyToken}`],
+      }),
+    );
     const res = await request(app).post("/api/domains/verify").set("Cookie", cookieB);
     expect(res.status).toBe(200);
     expect(res.body.verifiedAt).not.toBeNull();
+    expect(res.body.dns.www.status).toBe("points_here");
+    // The redirect is live now, and only now.
+    const pub = await request(app).get(`/api/page/-/by-domain/${domainB}`);
+    expect(pub.status).toBe(200);
   });
 
-  it("disconnect detaches only the shop's own domain", async () => {
+  it("verifying again is idempotent and keeps the first stamp", async () => {
+    const before = await prisma.shop.findUnique({ where: { id: shopBId } });
+    const res = await request(app).post("/api/domains/verify").set("Cookie", cookieB);
+    expect(res.body.verifiedAt).toBe(before?.customDomainVerifiedAt?.toISOString());
+  });
+
+  it("reconnecting mints a FRESH token and drops the stamp", async () => {
+    const before = await prisma.shop.findUnique({ where: { id: shopBId } });
+    const res = await request(app)
+      .post("/api/domains")
+      .set("Cookie", cookieB)
+      .send({ domain: domainB });
+    expect(res.status).toBe(201);
+    expect(res.body.verifiedAt).toBeNull();
+    const after = await prisma.shop.findUnique({ where: { id: shopBId } });
+    // Proof has to be fresh to be proof: the old token may sit in a zone this
+    // shop no longer controls.
+    expect(after?.customDomainVerifyToken).not.toBe(before?.customDomainVerifyToken);
+    expect(after?.customDomainVerifiedAt).toBeNull();
+  });
+
+  it("refuses our hosting providers' hostnames", async () => {
+    for (const d of ["something.railway.app", "x.vercel.app", "api.getchairback.com"]) {
+      const res = await request(app).post("/api/domains").set("Cookie", cookieB).send({ domain: d });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("reserved_domain");
+    }
+  });
+
+  it("mints a token lazily for a row connected before ownership existed", async () => {
+    // The three shops connected in production before this shipped have a
+    // domain and no token. They must see their TXT record on next load,
+    // without reconnecting.
+    await prisma.shop.update({
+      where: { id: shopBId },
+      data: { customDomainVerifyToken: null, customDomainVerifiedAt: null },
+    });
+    __setDnsResolverForTests(fakeDns({}));
+    const res = await request(app).get("/api/domains").set("Cookie", cookieB);
+    expect(res.status).toBe(200);
+    expect(res.body.records[2].type).toBe("TXT");
+    const row = await prisma.shop.findUnique({ where: { id: shopBId } });
+    expect(row?.customDomainVerifyToken).toBeTruthy();
+    // And a GET on an unfinished setup carries the diagnosis straight away.
+    expect(res.body.dns.txt.status).toBe("missing");
+  });
+
+  it("disconnect detaches only the shop's own domain, clears the token, and lists what to remove", async () => {
     const before = vercelCalls.length;
     const res = await request(app).delete("/api/domains").set("Cookie", cookieB);
     expect(res.status).toBe(200);
@@ -253,6 +437,14 @@ describe("owner routes with the Vercel seam SET (mocked fetch)", () => {
     expect(deletes.some((c) => c.includes(domainB))).toBe(true);
     // Shop A's domain was never in any DELETE this whole suite.
     expect(vercelCalls.filter((c) => c.startsWith("DELETE") && c.includes(domain))).toEqual([]);
+    // The token dies with the connection.
+    const row = await prisma.shop.findUnique({ where: { id: shopBId } });
+    expect(row?.customDomainVerifyToken).toBeNull();
+    expect(row?.customDomainVerifiedAt).toBeNull();
+    // The owner is told exactly what they published, so they can take it down.
+    expect(res.body.removed.domain).toBe(domainB);
+    expect(res.body.removed.records.map((r: { type: string }) => r.type)).toEqual(["A", "CNAME", "TXT"]);
+    __setDnsResolverForTests(undefined);
   });
 });
 

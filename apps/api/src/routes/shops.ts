@@ -911,9 +911,14 @@ publicPageRouter.get("/-/by-domain/:host", async (req, res) => {
   }
   const shop = await prisma.shop.findUnique({
     where: { customDomain: raw },
-    select: { slug: true, publicPageEnabled: true },
+    select: { slug: true, publicPageEnabled: true, customDomainVerifiedAt: true },
   });
-  if (!shop || !shop.publicPageEnabled || !shop.slug) {
+  // 🔴 UNVERIFIED MEANS NOBODY GOES ANYWHERE. Until this shop has proven it
+  // controls the domain (the TXT ownership record) AND the apex points here,
+  // the claim is just a row. Resolving it before that is how a domain whose
+  // real owner pointed DNS at us - by following our own instructions - sent
+  // their visitors to whichever shop had typed the name in first.
+  if (!shop || !shop.publicPageEnabled || !shop.slug || !shop.customDomainVerifiedAt) {
     res.status(404).json({ error: "not_found" });
     return;
   }

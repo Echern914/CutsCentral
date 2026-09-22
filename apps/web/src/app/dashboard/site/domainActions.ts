@@ -11,12 +11,33 @@ import { apiGet, apiSend } from "@/lib/api";
  * (or dirty) the page editor's diff-save.
  */
 
+export type DnsRecordStatus = "points_here" | "points_elsewhere" | "missing" | "error";
+export type DnsTxtStatus = "found" | "wrong" | "missing" | "error";
+
+/**
+ * What our own lookup saw, so the card can say WHICH record is wrong and what
+ * it currently points at, rather than a bare "waiting on DNS". Null when the
+ * shop has no domain, or the lookup was not run for this response.
+ */
+export interface DomainDnsReport {
+  apex: { status: DnsRecordStatus; found: string | null };
+  www: { status: DnsRecordStatus; found: string | null };
+  txt: { status: DnsTxtStatus };
+  checkedAt: string;
+}
+
 export interface DomainStatus {
   /** False = the Vercel env seam is unset; the card says "email support". */
   available: boolean;
   domain: string | null;
+  /**
+   * Non-null only once ownership is PROVEN (the TXT record) and the apex
+   * points here. The public redirect refuses a domain until then.
+   */
   verifiedAt: string | null;
+  /** The three records to set: A, CNAME, and the shop's own TXT ownership record. */
   records: readonly { type: string; name: string; value: string }[];
+  dns: DomainDnsReport | null;
   vercel: {
     verified: boolean;
     misconfigured: boolean;

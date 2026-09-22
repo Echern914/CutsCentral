@@ -77,7 +77,7 @@ export default async function PageSettingsPage() {
           initial={
             domainRes.ok && domainRes.data
               ? domainRes.data
-              : { available: false, domain: null, verifiedAt: null, records: [], vercel: null }
+              : { available: false, domain: null, verifiedAt: null, records: [], dns: null, vercel: null }
           }
         />
       </div>
