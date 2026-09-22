@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 
@@ -52,7 +52,7 @@ const onRecorded = vi.fn();
 const staff = [{ id: "st1", name: "Sam", active: true }] as never;
 
 function open() {
-  render(<WalkInBar staff={staff} toast={toast} onRecorded={onRecorded} />);
+  render(<WalkInBar staff={staff} toast={toast} onRecorded={onRecorded} timezone="UTC" />);
   fireEvent.click(screen.getByRole("button", { name: /walk-in/i }));
   return screen.getByRole("spinbutton", { name: /amount the walk-in paid/i });
 }
@@ -186,6 +186,158 @@ describe("the operation id is stable per submission, fresh per walk-in", () => {
   });
 });
 
+describe("a walk-in logged after the fact", () => {
+  /**
+   * The time field opens at now and, left alone, sends NOTHING - so the
+   * ordinary one-tap walk-in is exactly what it was. Only a changed time is a
+   * backdated walk-in, and it is read in the SHOP's zone: `new Date(value)`
+   * would read it in the device's, and a barber away from the shop would book
+   * the cut at the wrong hour.
+   */
+  // A fixed PAST instant, Date only: the dates written below stay inside the
+  // 30-day window for good, and the timers React Testing Library polls with
+  // keep running.
+  // Installing fake timers a second time keeps the first instant, so a test
+  // that needs another moment MOVES the faked clock instead.
+  const pin = (iso: string) => vi.setSystemTime(new Date(iso));
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    pin("2026-09-22T16:00:00Z");
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function openIn(timezone: string) {
+    render(<WalkInBar staff={staff} toast={toast} onRecorded={onRecorded} timezone={timezone} />);
+    fireEvent.click(screen.getByRole("button", { name: /walk-in/i }));
+    return {
+      amount: screen.getByRole("spinbutton", { name: /amount the walk-in paid/i }),
+      when: screen.getByLabelText(/when the walk-in happened/i) as HTMLInputElement,
+    };
+  }
+  const save = () => fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+  it("left at its opening time, sends no time at all - an ordinary walk-in", async () => {
+    recordWalkInAction.mockResolvedValue({ ok: true });
+    const { amount, when } = openIn("America/New_York");
+    expect(when.value).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    fireEvent.change(amount, { target: { value: "35" } });
+    save();
+    await waitFor(() => expect(recordWalkInAction).toHaveBeenCalledTimes(1));
+    expect(recordWalkInAction.mock.calls[0]![0]).not.toHaveProperty("occurredAt");
+  });
+
+  it("🔴 a changed time is sent as the SHOP's instant, whatever zone the device is in", async () => {
+    recordWalkInAction.mockResolvedValue({ ok: true });
+    // A zone this suite is vanishingly unlikely to run in, so reading the
+    // value in the DEVICE's zone would land on a different instant and fail.
+    const { amount, when } = openIn("Asia/Kolkata");
+    fireEvent.change(amount, { target: { value: "35" } });
+    fireEvent.change(when, { target: { value: "2026-09-21T14:30" } });
+    save();
+    await waitFor(() => expect(recordWalkInAction).toHaveBeenCalledTimes(1));
+    // 2:30pm in Kolkata (UTC+5:30, no DST) on 21 Sept is 09:00 UTC.
+    expect(recordWalkInAction.mock.calls[0]![0].occurredAt).toBe("2026-09-21T09:00:00.000Z");
+  });
+
+  it("a time in the future is refused before anything is sent", async () => {
+    const { amount, when } = openIn("UTC");
+    fireEvent.change(amount, { target: { value: "35" } });
+    fireEvent.change(when, { target: { value: "2099-01-01T10:00" } });
+    save();
+    expect(toast).toHaveBeenCalledWith("Pick a time that has already happened", "error");
+    expect(recordWalkInAction).not.toHaveBeenCalled();
+  });
+
+  it("the server refusing the time says so, rather than a generic failure", async () => {
+    recordWalkInAction.mockResolvedValue({ ok: false, error: "occurred_at_not_in_past" });
+    const { amount, when } = openIn("UTC");
+    fireEvent.change(amount, { target: { value: "35" } });
+    fireEvent.change(when, { target: { value: "2026-09-21T10:00" } });
+    save();
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith("Pick a time that has already happened", "error"),
+    );
+    expect(toast).not.toHaveBeenCalledWith("Couldn't record that walk-in", "error");
+  });
+
+  it("the field offers exactly the server's window: local midnight 30 days back, up to now", () => {
+    // 22 Sept, noon EDT.
+    const { when } = openIn("America/New_York");
+    expect(when.min).toBe("2026-08-23T00:00");
+    expect(when.max).toBe("2026-09-22T12:00");
+  });
+
+  it("EXACTLY 30 days back is sent; the minute before is refused before anything is sent", async () => {
+    recordWalkInAction.mockResolvedValue({ ok: true });
+    const { amount, when } = openIn("America/New_York");
+    fireEvent.change(amount, { target: { value: "35" } });
+
+    fireEvent.change(when, { target: { value: "2026-08-22T23:59" } });
+    save();
+    expect(toast).toHaveBeenCalledWith("Walk-ins can be logged up to 30 days back", "error");
+    expect(recordWalkInAction).not.toHaveBeenCalled();
+
+    fireEvent.change(when, { target: { value: "2026-08-23T00:00" } });
+    save();
+    await waitFor(() => expect(recordWalkInAction).toHaveBeenCalledTimes(1));
+    // 23 Aug 00:00 EDT.
+    expect(recordWalkInAction.mock.calls[0]![0].occurredAt).toBe("2026-08-23T04:00:00.000Z");
+  });
+
+  it("🔴 DST: across spring forward, 720 hours back is refused - local midnight is the line", async () => {
+    pin("2026-03-20T04:30:00Z"); // 20 Mar 00:30 EDT
+    recordWalkInAction.mockResolvedValue({ ok: true });
+    const { amount, when } = openIn("America/New_York");
+    expect(when.min).toBe("2026-02-18T00:00");
+    fireEvent.change(amount, { target: { value: "35" } });
+
+    // Exactly 720 hours earlier reads 17 Feb 23:30 on the shop's clock.
+    fireEvent.change(when, { target: { value: "2026-02-17T23:30" } });
+    save();
+    expect(toast).toHaveBeenCalledWith("Walk-ins can be logged up to 30 days back", "error");
+    expect(recordWalkInAction).not.toHaveBeenCalled();
+
+    fireEvent.change(when, { target: { value: "2026-02-18T00:00" } });
+    save();
+    await waitFor(() => expect(recordWalkInAction).toHaveBeenCalledTimes(1));
+    expect(recordWalkInAction.mock.calls[0]![0].occurredAt).toBe("2026-02-18T05:00:00.000Z");
+  });
+
+  it("a zone with no midnight that day opens the field at its first real minute", () => {
+    // Santiago skips 6 Sept 00:00-00:59 (spring forward at midnight).
+    pin("2026-10-06T15:00:00Z");
+    const { when } = openIn("America/Santiago");
+    expect(when.min).toBe("2026-09-06T01:00");
+  });
+
+  it("the server refusing a too-old time reads as the 30-day limit", async () => {
+    recordWalkInAction.mockResolvedValue({ ok: false, error: "occurred_at_too_old" });
+    const { amount, when } = openIn("UTC");
+    fireEvent.change(amount, { target: { value: "35" } });
+    fireEvent.change(when, { target: { value: "2026-09-21T10:00" } });
+    save();
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith("Walk-ins can be logged up to 30 days back", "error"),
+    );
+    expect(toast).not.toHaveBeenCalledWith("Couldn't record that walk-in", "error");
+  });
+
+  it("a backdated overlap asks for the record to be put right - nobody is left to call", async () => {
+    recordWalkInAction.mockResolvedValue({ ok: true, conflict: { withAppointmentIds: ["a1"] } });
+    const { amount, when } = openIn("UTC");
+    fireEvent.change(amount, { target: { value: "35" } });
+    fireEvent.change(when, { target: { value: "2026-09-21T10:00" } });
+    save();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/double-booked/i);
+    expect(alert).toHaveTextContent(/nothing was discarded/i);
+    expect(alert).toHaveTextContent(/two records now claim the same time/i);
+    expect(alert).not.toHaveTextContent(/call whoever is booked/i);
+  });
+});
+
 describe("vertical vocabulary in the warning", () => {
   /**
    * 🔴 "this chair is double-booked" was hard-coded and shipped that way; the
@@ -202,7 +354,9 @@ describe("vertical vocabulary in the warning", () => {
     // This file mocks the vocabulary module wholesale, so the provider cannot
     // be used here; the hook is switched instead.
     vocabHolder.current = barbershop;
-    const view = render(<WalkInBar staff={staff} toast={toast} onRecorded={onRecorded} />);
+    const view = render(
+      <WalkInBar staff={staff} toast={toast} onRecorded={onRecorded} timezone="UTC" />,
+    );
     fireEvent.click(screen.getByRole("button", { name: /^walk-in$/i }));
     fireEvent.change(screen.getByLabelText(/amount the walk-in paid/i), { target: { value: "35" } });
     fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
@@ -212,7 +366,7 @@ describe("vertical vocabulary in the warning", () => {
     view.unmount();
 
     vocabHolder.current = null;
-    render(<WalkInBar staff={staff} toast={toast} onRecorded={onRecorded} />);
+    render(<WalkInBar staff={staff} toast={toast} onRecorded={onRecorded} timezone="UTC" />);
     fireEvent.click(screen.getByRole("button", { name: /^walk-in$/i }));
     fireEvent.change(screen.getByLabelText(/amount the walk-in paid/i), { target: { value: "35" } });
     fireEvent.click(screen.getByRole("button", { name: /^save$/i }));

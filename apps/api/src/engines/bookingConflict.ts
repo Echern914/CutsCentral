@@ -1,6 +1,6 @@
 import type { Prisma } from "@chairback/db";
 import { occupyingWhere } from "./chairOccupancy.js";
-import { visitSpan } from "./interval.js";
+import { DEFAULT_SPAN_MIN, visitSpan } from "./interval.js";
 
 /**
  * WHAT A RECORDED RECEIPT COLLIDED WITH, and how that stops being invisible.
@@ -34,20 +34,17 @@ import { visitSpan } from "./interval.js";
  * rather than premature - but they are not reachable equally, and pretending
  * otherwise would be the same sort of lie:
  *
- * | kind          | how a walk-in reaches it                                    |
+ * | kind          | when a receipt reports it                                   |
  * |---------------|-------------------------------------------------------------|
- * | `appointment` | on its own - the guard throws SlotTakenError on an overlapping
- * |               | Appointment (bookingWrite.ts, appointment probe) and this runs |
- * | `visit`       | on its own - same, via the synced-Visit probe                 |
- * | `block`       | ONLY IN COMPANY. The walk-in passes `externalBlocks:"ignore"`,
- * |               | so an ExternalBlock alone never throws and this never runs. A
- * |               | block is recorded when an appointment or visit ALSO overlaps:
- * |               | that throws, and the sweep below then names everything holding
- * |               | the chair, blocks included.                                  |
+ * | `appointment` | on its own - an occupying Appointment on THIS chair           |
+ * | `visit`       | on its own - a synced visit (they hold every chair)           |
+ * | `block`       | ONLY IN COMPANY - listed when an appointment or visit ALSO    |
+ * |               | overlaps, never on its own (see `findConflicts`)              |
  *
- * That asymmetry is deliberate, not an oversight: a person is physically in the
- * chair, so an Acuity entry must not eject them - but once the chair is known
- * to be contested, the manager should see everything that claims it.
+ * That asymmetry is deliberate, not an oversight: a block is the barber's own
+ * calendar entry, not somebody else's booking, so a walk-in over one alone is
+ * him working time he blocked - but once the chair is known to be contested,
+ * the manager should see everything that claims it.
  */
 export interface DetectedConflict {
   id: string;
@@ -57,13 +54,21 @@ export interface DetectedConflict {
 }
 
 /**
- * Everything overlapping `[start, end)` that counts as holding the chair.
+ * What ELSE held the chair during `[start, end)`, as of `now`.
  *
- * Deliberately asks the SAME questions the write guard asks, through the same
- * canonical predicate (`occupyingWhere`) and the same span rule (`visitSpan`),
- * so what gets reported can never drift from what got refused. It runs only
- * after the guard has already thrown, so the extra reads cost nothing on the
- * ordinary path.
+ * 🔴 THIS IS THE RECEIPT'S WHOLE ANSWER, and it no longer waits for the write
+ * guard to throw. The guard answers a different question - may a RESERVATION
+ * be made here? - and refuses for reasons that are not occupancy at all: an
+ * UNBOOKED targeted slot (an offer of that time, with nobody in it) and the
+ * shop's turnover buffer. Treating its refusal as "double-booked" is what put
+ * the amber panel on drickcuttinup walk-ins whose time held nothing but his own
+ * published, unbooked specials. This asks only what occupancy asks, through the
+ * same canonical predicate (`occupyingWhere`) and span rule (`visitSpan`).
+ *
+ * `now` is the instant occupancy is judged at. For a walk-in recorded live it
+ * is the wall clock; for one recorded after the fact it is when the cut
+ * happened, so a booking that has since been promoted to COMPLETED still
+ * counts as holding the chair then.
  *
  * A synced Visit and an ExternalBlock carry no `staffId` — they hold every
  * chair in the shop — so they are matched shop-wide, exactly as the grid and
@@ -74,6 +79,10 @@ export async function findConflicts(
   opts: { shopId: string; staffId: string; start: Date; end: Date; now: Date },
 ): Promise<DetectedConflict[]> {
   const { shopId, staffId, start, end, now } = opts;
+  // visitSpan gives a visit with no stored end DEFAULT_SPAN_MIN, so one that
+  // started this long before `start` cannot reach it.
+  const nullEndFloor = new Date(start.getTime() - DEFAULT_SPAN_MIN * 60_000);
+  const completedEndFloor = new Date(Math.max(start.getTime(), now.getTime()));
 
   const [appointments, visits, blocks] = await Promise.all([
     tx.appointment.findMany({
@@ -90,12 +99,32 @@ export async function findConflicts(
     tx.visit.findMany({
       where: {
         shopId,
-        status: { in: ["SCHEDULED", "RESCHEDULED"] },
         appointment: null,
         scheduledAt: { lt: end },
-        // NULL-tolerant: a visit with no stored end still holds the chair, and
-        // `visitSpan` below supplies the conservative span it holds.
-        OR: [{ endAt: { gt: start } }, { endAt: null }],
+        OR: [
+          { status: { in: ["SCHEDULED", "RESCHEDULED"] }, endAt: { gt: start } },
+          // NULL-tolerant: a visit with no stored end still holds the chair, and
+          // `visitSpan` below supplies the conservative span it holds.
+          //
+          // 🔴 BOUNDED, because `take` truncates BEFORE that re-check runs.
+          // Unbounded, this branch matched a shop's whole imported history:
+          // production drickcuttinup carries ~19,900 SCHEDULED visits with no
+          // endAt from its Acuity import, `take: 10` returned ten from 2022,
+          // the re-check dropped all ten, and a live Acuity booking under the
+          // walk-in was never named - no row, no alert, a panel pointing at
+          // "something".
+          {
+            status: { in: ["SCHEDULED", "RESCHEDULED"] },
+            endAt: null,
+            scheduledAt: { gt: nullEndFloor },
+          },
+          // A visit that HAPPENED held its span until the span ended - the
+          // rule chairOccupancy applies to a COMPLETED appointment. The
+          // promotion job flips every fulfilled visit to COMPLETED, so for a
+          // walk-in recorded after the fact this is how a past Acuity booking
+          // is found at all.
+          { status: "COMPLETED", endAt: { gt: completedEndFloor } },
+        ],
       },
       select: { id: true, scheduledAt: true, endAt: true },
       take: 10,
@@ -107,20 +136,12 @@ export async function findConflicts(
     }),
   ]);
 
-  const out: DetectedConflict[] = [
-    ...appointments.map((a) => ({
-      id: a.id,
-      kind: "appointment" as const,
-      start: a.startsAt,
-      end: a.endsAt,
-    })),
-    ...blocks.map((b) => ({
-      id: b.id,
-      kind: "block" as const,
-      start: b.startsAt,
-      end: b.endsAt,
-    })),
-  ];
+  const out: DetectedConflict[] = appointments.map((a) => ({
+    id: a.id,
+    kind: "appointment" as const,
+    start: a.startsAt,
+    end: a.endsAt,
+  }));
   for (const v of visits) {
     const span = visitSpan(v);
     // The NULL-end read above is deliberately wide; re-check the real span so a
@@ -128,6 +149,13 @@ export async function findConflicts(
     if (span.start.getTime() < end.getTime() && span.end.getTime() > start.getTime()) {
       out.push({ id: v.id, kind: "visit", start: span.start, end: span.end });
     }
+  }
+  // Blocks ONLY IN COMPANY (see the table above). Nobody else is in a block, so
+  // one on its own is not a double booking; alongside a real occupant it is
+  // part of what the manager needs to see.
+  if (out.length === 0) return [];
+  for (const b of blocks) {
+    out.push({ id: b.id, kind: "block", start: b.startsAt, end: b.endsAt });
   }
   return out;
 }

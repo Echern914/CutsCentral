@@ -61,6 +61,18 @@ describe("recordWalkInAction preserves what the server said", () => {
     );
   });
 
+  it("passes a backdated time straight through, and sends none when there is none", async () => {
+    apiSend.mockResolvedValue({ ok: true, data: { ok: true, id: "a" } });
+    await recordWalkInAction({ amount: 30, occurredAt: "2026-09-21T18:30:00.000Z" });
+    expect(apiSend).toHaveBeenLastCalledWith(
+      "POST",
+      "/api/booking/appointments/walk-in",
+      expect.objectContaining({ occurredAt: "2026-09-21T18:30:00.000Z" }),
+    );
+    await recordWalkInAction({ amount: 30 });
+    expect(apiSend.mock.lastCall![2]).not.toHaveProperty("occurredAt");
+  });
+
   it("surfaces a failure rather than inventing success", async () => {
     apiSend.mockResolvedValue({ ok: false, error: "staff_required" });
     const res = await recordWalkInAction({ amount: 30 });

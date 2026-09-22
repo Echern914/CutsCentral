@@ -17,10 +17,15 @@ import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js"
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
-import { ExternalBlockError, lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import {
+  ExternalBlockError,
+  lockStaffAndAssertSlotFree,
+  lockStaffCalendar,
+  SlotTakenError,
+} from "../engines/bookingWrite.js";
 import { findConflicts, recordConflicts } from "../engines/bookingConflict.js";
 import { sendToBarber } from "../services/barberNotify.js";
-import { apiEnv } from "@chairback/config";
+import { apiEnv, walkInBackdateRefusal } from "@chairback/config";
 import {
   blockedTimeIsTheOnlyObstacle,
   blockSentence,
@@ -5587,6 +5592,22 @@ const walkInSchema = z
      * today's behaviour exactly; nothing is deduplicated by inference.
      */
     operationId: z.string().trim().min(8).max(100).optional(),
+    /**
+     * WHEN THE CUT HAPPENED, for a walk-in written down after the fact - the
+     * one somebody forgot to tap. Omitted, it is now, exactly as before.
+     *
+     * A backdated walk-in is a RECORD OF THE PAST, and everything that differs
+     * follows from that: it is not mirrored to Acuity (the time is gone), it
+     * takes no reservation-guard side effects (no hold is released), it alerts
+     * nobody (there is no one left to call), and its span ends no later than
+     * the moment it is recorded, so it can never take bookable time away. The
+     * money is recorded exactly as a live walk-in's is, dated when it was taken.
+     *
+     * The future is refused: this path writes down what already happened. So
+     * is anything before local midnight 30 calendar days back, in the SHOP's
+     * zone - config/walkInBackdate.ts, the rule the dashboard's field mirrors.
+     */
+    occurredAt: z.string().datetime({ offset: true }).optional(),
   })
   .strict();
 
@@ -5648,15 +5669,28 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
   }
   const shopId = req.shop!.id;
   const now = new Date();
+  const occurredAt = parsed.data.occurredAt ? new Date(parsed.data.occurredAt) : null;
   // Read OUTSIDE runWithShop: Shop carries RLS with no policy for the app
   // role, so this select returns null inside the tenant transaction.
   const shop = await prisma.shop.findUnique({
     where: { id: shopId },
-    select: { bookingBufferMin: true },
+    select: { bookingBufferMin: true, timezone: true },
   });
   if (!shop) {
     res.status(404).json({ error: "not_found" });
     return;
+  }
+  // A backdated walk-in records the RECENT past, checked before a chair is
+  // locked. Not strictly before the server's clock is refused - "now" is the
+  // omitted field, and a future receipt would be a reservation that never met
+  // the reservation guard - and so is anything before the window, counted in
+  // the SHOP's calendar days. The error codes are the shared rule's own.
+  if (occurredAt) {
+    const refusal = walkInBackdateRefusal(occurredAt, now, shop.timezone);
+    if (refusal) {
+      res.status(400).json({ error: refusal });
+      return;
+    }
   }
 
   const result = await runWithShop(shopId, async (tx) => {
@@ -5721,7 +5755,17 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     }
 
     const service = await ensureWalkInService(tx, shopId);
-    const walkInEnd = new Date(now.getTime() + service.durationMin * 60_000);
+    // The time this receipt covers. Live: from now, for the length of the cut.
+    // Backdated: from when it happened, CLIPPED to now - the client has gone,
+    // and a span reaching past the moment it was written down would hold
+    // bookable time (here and, through the mirror, in Acuity) for a cut that
+    // is already over.
+    const walkInStart = occurredAt ?? now;
+    const walkInEnd = new Date(
+      occurredAt
+        ? Math.min(occurredAt.getTime() + service.durationMin * 60_000, now.getTime())
+        : now.getTime() + service.durationMin * 60_000,
+    );
 
     // 🔴 THE GUARD THIS ROUTE NEVER HAD. It created a real Appointment
     // occupying [now, now + duration) with no advisory lock and no overlap
@@ -5748,48 +5792,68 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     //   a RECEIPT for work already done is recorded, and the collision is
     //     detected and surfaced instead.
     //
-    // The guard still runs, and that is the point of running it: it takes the
-    // per-chair advisory lock, so two concurrent walk-in writes serialise here
-    // rather than interleaving, and the conflict test below sees a settled
-    // state. The throw is caught because the ANSWER differs, not the check.
-    // null = no collision. An EMPTY array still means a collision, with
-    // something that is not a native appointment - a synced visit, a block, a
-    // hold. Losing that distinction would under-report the very case the
-    // external calendar makes most likely.
-    let conflict: { withAppointmentIds: string[] } | null = null;
-    let detected: Awaited<ReturnType<typeof findConflicts>> = [];
-    try {
-      await lockStaffAndAssertSlotFree(tx, {
-        staffId,
-        shopId,
-        startsAt: now,
-        endsAt: walkInEnd,
-        bufferMin: shop.bookingBufferMin,
-        serviceDayLimit: null,
-        // Barber-driven, the same answers the dashboard create gives.
-        walkInCapacity: "ignore",
-        // The person is in the chair; an Acuity entry does not eject them.
-        externalBlocks: "ignore",
-        overrideWaitlistHolds: true,
-        now,
-      });
-    } catch (err) {
-      if (!(err instanceof SlotTakenError)) throw err;
-      // Name what it collided with, through the SAME canonical predicate and
-      // span rule the guard uses, so the record cannot drift from the refusal.
-      detected = await findConflicts(tx, {
-        shopId,
-        staffId,
-        start: now,
-        end: walkInEnd,
-        now,
-      });
-      conflict = {
-        withAppointmentIds: detected
-          .filter((c) => c.kind === "appointment")
-          .map((c) => c.id),
-      };
+    // The guard still runs on a live walk-in, for two things: the per-chair
+    // advisory lock, so two concurrent walk-in writes serialise here rather
+    // than interleaving and the detection below sees a settled state; and its
+    // barber-driven hold handling, which releases a waitlist or tier hold on
+    // the time this client is now sitting in.
+    //
+    // 🔴 ITS "NO" IS NOT THIS RECEIPT'S ANSWER, so it is caught and dropped.
+    // It answers "may a RESERVATION be made here?", and refuses for reasons
+    // that are not occupancy: an UNBOOKED targeted slot (an offer of the time,
+    // nobody in it) and the turnover buffer. Reading that refusal as "double-
+    // booked" is what put the amber panel on drickcuttinup walk-ins whose time
+    // held nothing but his own unbooked specials. What actually shares the
+    // chair is asked separately, below.
+    //
+    // A backdated walk-in asks no reservation question at all: it takes the
+    // lock alone, and none of the guard's side effects - no customer's hold is
+    // released over time that has already gone.
+    if (occurredAt) {
+      await lockStaffCalendar(tx, staffId);
+    } else {
+      try {
+        await lockStaffAndAssertSlotFree(tx, {
+          staffId,
+          shopId,
+          startsAt: now,
+          endsAt: walkInEnd,
+          bufferMin: shop.bookingBufferMin,
+          serviceDayLimit: null,
+          // Barber-driven, the same answers the dashboard create gives.
+          walkInCapacity: "ignore",
+          // The person is in the chair; an Acuity entry does not eject them.
+          externalBlocks: "ignore",
+          overrideWaitlistHolds: true,
+          now,
+        });
+      } catch (err) {
+        if (!(err instanceof SlotTakenError)) throw err;
+      }
     }
+    // What ELSE held this chair during the recorded span, judged as of when the
+    // cut happened. Asked BEFORE the receipt exists, so a walk-in can never be
+    // reported as conflicting with itself.
+    //
+    // null = no collision. An EMPTY id list still means a collision, with
+    // something that is not a native appointment - a synced visit. Losing that
+    // distinction would under-report the very case the external calendar
+    // makes most likely.
+    const detected = await findConflicts(tx, {
+      shopId,
+      staffId,
+      start: walkInStart,
+      end: walkInEnd,
+      now: walkInStart,
+    });
+    const conflict: { withAppointmentIds: string[] } | null =
+      detected.length > 0
+        ? {
+            withAppointmentIds: detected
+              .filter((c) => c.kind === "appointment")
+              .map((c) => c.id),
+          }
+        : null;
 
     const appt = await tx.appointment.create({
       data: {
@@ -5801,14 +5865,16 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
         clientId: null,
         firstName: WALK_IN_SERVICE_NAME,
         status: "COMPLETED",
-        startsAt: now,
-        endsAt: new Date(now.getTime() + service.durationMin * 60_000),
+        startsAt: walkInStart,
+        endsAt: walkInEnd,
         // The ticket IS what they paid - there was no booked price to compare
         // against, so the two are the same number here.
         priceAtBooking: new Prisma.Decimal(parsed.data.amount.toFixed(2)),
         paidAmount: new Prisma.Decimal(parsed.data.amount.toFixed(2)),
         paidMethod: parsed.data.method,
-        paidAt: now,
+        // Paid when the cut happened - for a backdated walk-in that is when
+        // it happened, not when somebody remembered it.
+        paidAt: walkInStart,
         manageToken: randomToken(),
         // The partial unique index on (shopId, operationId) is what actually
         // enforces this; the read above is the fast path, this is the wall.
@@ -5827,7 +5893,7 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
         staffId,
         receiptId: appt.id,
         source: "walk_in_quick_log",
-        receiptStart: now,
+        receiptStart: walkInStart,
         receiptEnd: walkInEnd,
         conflicts: detected,
       });
@@ -5860,9 +5926,13 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     // So the walk-in is recorded and the mirror is skipped, loudly. The chair
     // is genuinely double-bookable in the external calendar until someone maps
     // the barber, and that is a worse-of-two-evils we take on purpose.
+    //
+    // A BACKDATED walk-in is never mirrored: its span ends by now, so an Acuity
+    // block over it would protect nothing and only add create calls for a cut
+    // that is already over.
     let outboxIds: string[] = [];
     try {
-      outboxIds = await recordMirrorIntent(tx, {
+      outboxIds = occurredAt ? [] : await recordMirrorIntent(tx, {
         shopId,
         now,
         appointmentId: appt.id,
@@ -5941,7 +6011,12 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     via: "walk_in",
   });
   logger.info(
-    { shopId, appointmentId: result.id, amount: parsed.data.amount },
+    {
+      shopId,
+      appointmentId: result.id,
+      amount: parsed.data.amount,
+      ...(occurredAt ? { occurredAt: occurredAt.toISOString() } : {}),
+    },
     "walk-in recorded",
   );
 
@@ -5949,7 +6024,11 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
   // rows detected - a retry re-detects the same collision, creates nothing, and
   // must not alert again. Best-effort and after commit, like every other barber
   // alert: a notification problem must never roll back money already taken.
-  if (result.newConflicts > 0) {
+  //
+  // Not for a BACKDATED receipt: its overlap is in the past, nobody is about to
+  // turn up to a taken chair, and the person who wrote it down is reading the
+  // answer. The conflict row still waits in the inbox either way.
+  if (result.newConflicts > 0 && !occurredAt) {
     void (async () => {
       try {
         const shopRow = await prisma.shop.findUnique({
