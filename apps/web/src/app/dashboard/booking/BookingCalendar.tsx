@@ -28,6 +28,11 @@ import {
 } from "../_components/appointmentCardStyles";
 import { resolveServiceColor } from "@chairback/config/serviceColor";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
+import {
+  earliestWalkInBackdate,
+  WALK_IN_BACKDATE_MAX_DAYS,
+  walkInBackdateRefusal,
+} from "@chairback/config/walkInBackdate";
 import type {
   AgendaCategory,
   AgendaResponse,
@@ -1160,6 +1165,16 @@ function shopInputToUtc(value: string, timeZone: string): Date | null {
   return Number.isNaN(at.getTime()) ? null : at;
 }
 
+/** A refused walk-in time in words - the API's codes, which the check here
+ *  shares with it. Null for any other error. */
+function backdateRefusalCopy(code: string | null | undefined): string | null {
+  if (code === "occurred_at_not_in_past") return "Pick a time that has already happened";
+  if (code === "occurred_at_too_old") {
+    return `Walk-ins can be logged up to ${WALK_IN_BACKDATE_MAX_DAYS} days back`;
+  }
+  return null;
+}
+
 /**
  * "Walk-in" — one tap, type what they paid, done.
  *
@@ -1204,14 +1219,18 @@ export function WalkInBar({
   const [when, setWhen] = useState("");
   /** What `when` opened at. Unchanged means now, and nothing is sent. */
   const [whenOpenedAt, setWhenOpenedAt] = useState("");
+  /** The earliest time the field offers - the server's 30-day window, mirrored. */
+  const [whenEarliest, setWhenEarliest] = useState("");
   /** The warning on screen is for a backdated walk-in - nobody left to call. */
   const [conflictWasBackdated, setConflictWasBackdated] = useState(false);
   const active = staff.filter((s) => s.active);
 
   function openBar() {
-    const nowInput = shopLocalInput(new Date(), timezone);
+    const now = new Date();
+    const nowInput = shopLocalInput(now, timezone);
     setWhen(nowInput);
     setWhenOpenedAt(nowInput);
+    setWhenEarliest(shopLocalInput(earliestWalkInBackdate(now, timezone), timezone));
     setOpen(true);
   }
 
@@ -1223,6 +1242,7 @@ export function WalkInBar({
     setConflicted(null);
     setWhen("");
     setWhenOpenedAt("");
+    setWhenEarliest("");
     setConflictWasBackdated(false);
     // Cancel abandons this submission, so the next one is genuinely new.
     operationIdRef.current = null;
@@ -1242,12 +1262,16 @@ export function WalkInBar({
     }
     // Left at its opening value the time means NOW and is not sent, so the
     // server's own clock makes the ordinary walk-in. Changed, it is when the
-    // cut happened - and a walk-in cannot happen in the future.
+    // cut happened - checked by the SAME rule the server enforces: in the
+    // past, and inside the shop's 30-day window.
     let occurredAt: string | undefined;
     if (when && when !== whenOpenedAt) {
       const at = shopInputToUtc(when, timezone);
-      if (!at || at.getTime() >= Date.now()) {
-        toast("Pick a time that has already happened", "error");
+      const refusal = at
+        ? walkInBackdateRefusal(at, new Date(), timezone)
+        : "occurred_at_not_in_past";
+      if (!at || refusal) {
+        toast(backdateRefusalCopy(refusal) ?? "Pick a time that has already happened", "error");
         return;
       }
       occurredAt = at.toISOString();
@@ -1288,9 +1312,10 @@ export function WalkInBar({
         toast(`Whose ${vocab.stationNoun} was it?`, "error");
         return;
       }
-      if (res.error === "occurred_at_not_in_past") {
-        // The device clock ran ahead of the server's; keep what they typed.
-        toast("Pick a time that has already happened", "error");
+      const refusedTime = backdateRefusalCopy(res.error);
+      if (refusedTime) {
+        // The device clock disagreed with the server's; keep what they typed.
+        toast(refusedTime, "error");
         return;
       }
       toast("Couldn't record that walk-in", "error");
@@ -1385,6 +1410,7 @@ export function WalkInBar({
         <input
           type="datetime-local"
           value={when}
+          min={whenEarliest || undefined}
           max={whenOpenedAt || undefined}
           onChange={(e) => setWhen(e.target.value)}
           onKeyDown={(e) => {

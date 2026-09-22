@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 
@@ -194,6 +194,20 @@ describe("a walk-in logged after the fact", () => {
    * would read it in the device's, and a barber away from the shop would book
    * the cut at the wrong hour.
    */
+  // A fixed PAST instant, Date only: the dates written below stay inside the
+  // 30-day window for good, and the timers React Testing Library polls with
+  // keep running.
+  // Installing fake timers a second time keeps the first instant, so a test
+  // that needs another moment MOVES the faked clock instead.
+  const pin = (iso: string) => vi.setSystemTime(new Date(iso));
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    pin("2026-09-22T16:00:00Z");
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   function openIn(timezone: string) {
     render(<WalkInBar staff={staff} toast={toast} onRecorded={onRecorded} timezone={timezone} />);
     fireEvent.click(screen.getByRole("button", { name: /walk-in/i }));
@@ -244,6 +258,68 @@ describe("a walk-in logged after the fact", () => {
     save();
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith("Pick a time that has already happened", "error"),
+    );
+    expect(toast).not.toHaveBeenCalledWith("Couldn't record that walk-in", "error");
+  });
+
+  it("the field offers exactly the server's window: local midnight 30 days back, up to now", () => {
+    // 22 Sept, noon EDT.
+    const { when } = openIn("America/New_York");
+    expect(when.min).toBe("2026-08-23T00:00");
+    expect(when.max).toBe("2026-09-22T12:00");
+  });
+
+  it("EXACTLY 30 days back is sent; the minute before is refused before anything is sent", async () => {
+    recordWalkInAction.mockResolvedValue({ ok: true });
+    const { amount, when } = openIn("America/New_York");
+    fireEvent.change(amount, { target: { value: "35" } });
+
+    fireEvent.change(when, { target: { value: "2026-08-22T23:59" } });
+    save();
+    expect(toast).toHaveBeenCalledWith("Walk-ins can be logged up to 30 days back", "error");
+    expect(recordWalkInAction).not.toHaveBeenCalled();
+
+    fireEvent.change(when, { target: { value: "2026-08-23T00:00" } });
+    save();
+    await waitFor(() => expect(recordWalkInAction).toHaveBeenCalledTimes(1));
+    // 23 Aug 00:00 EDT.
+    expect(recordWalkInAction.mock.calls[0]![0].occurredAt).toBe("2026-08-23T04:00:00.000Z");
+  });
+
+  it("🔴 DST: across spring forward, 720 hours back is refused - local midnight is the line", async () => {
+    pin("2026-03-20T04:30:00Z"); // 20 Mar 00:30 EDT
+    recordWalkInAction.mockResolvedValue({ ok: true });
+    const { amount, when } = openIn("America/New_York");
+    expect(when.min).toBe("2026-02-18T00:00");
+    fireEvent.change(amount, { target: { value: "35" } });
+
+    // Exactly 720 hours earlier reads 17 Feb 23:30 on the shop's clock.
+    fireEvent.change(when, { target: { value: "2026-02-17T23:30" } });
+    save();
+    expect(toast).toHaveBeenCalledWith("Walk-ins can be logged up to 30 days back", "error");
+    expect(recordWalkInAction).not.toHaveBeenCalled();
+
+    fireEvent.change(when, { target: { value: "2026-02-18T00:00" } });
+    save();
+    await waitFor(() => expect(recordWalkInAction).toHaveBeenCalledTimes(1));
+    expect(recordWalkInAction.mock.calls[0]![0].occurredAt).toBe("2026-02-18T05:00:00.000Z");
+  });
+
+  it("a zone with no midnight that day opens the field at its first real minute", () => {
+    // Santiago skips 6 Sept 00:00-00:59 (spring forward at midnight).
+    pin("2026-10-06T15:00:00Z");
+    const { when } = openIn("America/Santiago");
+    expect(when.min).toBe("2026-09-06T01:00");
+  });
+
+  it("the server refusing a too-old time reads as the 30-day limit", async () => {
+    recordWalkInAction.mockResolvedValue({ ok: false, error: "occurred_at_too_old" });
+    const { amount, when } = openIn("UTC");
+    fireEvent.change(amount, { target: { value: "35" } });
+    fireEvent.change(when, { target: { value: "2026-09-21T10:00" } });
+    save();
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith("Walk-ins can be logged up to 30 days back", "error"),
     );
     expect(toast).not.toHaveBeenCalledWith("Couldn't record that walk-in", "error");
   });

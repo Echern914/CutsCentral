@@ -32,7 +32,8 @@
     "./affiliateProgram": "./src/affiliateProgram.ts",
     "./supportCapabilities": "./src/supportCapabilities.ts",
     "./supportEngine": "./src/supportEngine.ts",
-    "./checkoutConsent": "./src/checkoutConsent.ts"
+    "./checkoutConsent": "./src/checkoutConsent.ts",
+    "./walkInBackdate": "./src/walkInBackdate.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

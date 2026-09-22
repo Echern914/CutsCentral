@@ -25,7 +25,7 @@ import {
 } from "../engines/bookingWrite.js";
 import { findConflicts, recordConflicts } from "../engines/bookingConflict.js";
 import { sendToBarber } from "../services/barberNotify.js";
-import { apiEnv } from "@chairback/config";
+import { apiEnv, walkInBackdateRefusal } from "@chairback/config";
 import {
   blockedTimeIsTheOnlyObstacle,
   blockSentence,
@@ -5603,7 +5603,9 @@ const walkInSchema = z
      * the moment it is recorded, so it can never take bookable time away. The
      * money is recorded exactly as a live walk-in's is, dated when it was taken.
      *
-     * The future is refused: this path writes down what already happened.
+     * The future is refused: this path writes down what already happened. So
+     * is anything before local midnight 30 calendar days back, in the SHOP's
+     * zone - config/walkInBackdate.ts, the rule the dashboard's field mirrors.
      */
     occurredAt: z.string().datetime({ offset: true }).optional(),
   })
@@ -5667,24 +5669,28 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
   }
   const shopId = req.shop!.id;
   const now = new Date();
-  // A backdated walk-in records the past. Anything not strictly before the
-  // server's clock is refused before a row is read or a chair locked - "now" is
-  // the omitted field, and a future receipt would be a reservation that never
-  // met the reservation guard.
   const occurredAt = parsed.data.occurredAt ? new Date(parsed.data.occurredAt) : null;
-  if (occurredAt && occurredAt.getTime() >= now.getTime()) {
-    res.status(400).json({ error: "occurred_at_not_in_past" });
-    return;
-  }
   // Read OUTSIDE runWithShop: Shop carries RLS with no policy for the app
   // role, so this select returns null inside the tenant transaction.
   const shop = await prisma.shop.findUnique({
     where: { id: shopId },
-    select: { bookingBufferMin: true },
+    select: { bookingBufferMin: true, timezone: true },
   });
   if (!shop) {
     res.status(404).json({ error: "not_found" });
     return;
+  }
+  // A backdated walk-in records the RECENT past, checked before a chair is
+  // locked. Not strictly before the server's clock is refused - "now" is the
+  // omitted field, and a future receipt would be a reservation that never met
+  // the reservation guard - and so is anything before the window, counted in
+  // the SHOP's calendar days. The error codes are the shared rule's own.
+  if (occurredAt) {
+    const refusal = walkInBackdateRefusal(occurredAt, now, shop.timezone);
+    if (refusal) {
+      res.status(400).json({ error: refusal });
+      return;
+    }
   }
 
   const result = await runWithShop(shopId, async (tx) => {

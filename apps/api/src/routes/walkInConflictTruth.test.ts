@@ -1,7 +1,7 @@
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { earliestWalkInBackdate, randomToken } from "@chairback/config";
 
 /**
  * THE AMBER PANEL MUST MEAN SOMEBODY ELSE WAS IN THE CHAIR.
@@ -516,6 +516,107 @@ describe("🔴 a backdated walk-in has no side effects beyond its own row", () =
     expect(res.status).toBe(201);
     expect(await openingStatus(opening.id)).toBe("HELD");
     expect(await outboxFor(res.body.id)).toBe(0);
+  });
+});
+
+describe("🔴 the 30-day window, counted in the SHOP's calendar days", () => {
+  let N: Shop; // America/New_York
+  let K: Shop; // Pacific/Kiritimati, UTC+14
+
+  beforeAll(async () => {
+    N = await makeShop("Truth Window NY");
+    await prisma.shop.update({ where: { id: N.shopId }, data: { timezone: "America/New_York" } });
+    K = await makeShop("Truth Window Kiritimati");
+    await prisma.shop.update({ where: { id: K.shopId }, data: { timezone: "Pacific/Kiritimati" } });
+  });
+
+  beforeEach(async () => {
+    await wipe(N.shopId);
+    await wipe(K.shopId);
+  });
+
+  const receipts = (s: Shop) => prisma.appointment.count({ where: { shopId: s.shopId } });
+
+  it("EXACTLY 30 days back - the first minute of that shop-local day - is recorded; the minute before is not", async () => {
+    const earliest = earliestWalkInBackdate(new Date(), "America/New_York");
+    const before = await receipts(N);
+
+    const tooOld = await walkIn(N, { occurredAt: new Date(earliest.getTime() - MIN).toISOString() });
+    expect(tooOld.status).toBe(400);
+    expect(tooOld.body.error).toBe("occurred_at_too_old");
+    expect(await receipts(N)).toBe(before);
+
+    const edge = await walkIn(N, { occurredAt: earliest.toISOString() });
+    expect(edge.status).toBe(201);
+    const row = await prisma.appointment.findUniqueOrThrow({
+      where: { id: edge.body.id },
+      select: { startsAt: true },
+    });
+    expect(row.startsAt.toISOString()).toBe(earliest.toISOString());
+  });
+
+  it("OVER 30 days back is refused - 31, 45 and 365 days - and nothing is written", async () => {
+    const before = await receipts(N);
+    for (const days of [31, 45, 365]) {
+      const res = await walkIn(N, { occurredAt: new Date(Date.now() - days * 24 * 60 * MIN).toISOString() });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("occurred_at_too_old");
+    }
+    expect(await receipts(N)).toBe(before);
+  });
+
+  it("a FUTURE time is refused, even one second ahead", async () => {
+    const res = await walkIn(N, { occurredAt: new Date(Date.now() + 1000).toISOString() });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("occurred_at_not_in_past");
+  });
+
+  it("🔴 the SHOP's zone draws the line, not UTC's - one instant, two answers", async () => {
+    // A (UTC) and K (+14) open their windows at different instants whatever
+    // the time of day; probe the minute before the later of the two.
+    const now = new Date();
+    const utc = earliestWalkInBackdate(now, "UTC");
+    const kir = earliestWalkInBackdate(now, "Pacific/Kiritimati");
+    expect(utc.getTime()).not.toBe(kir.getTime());
+    const [later, earlier] = utc.getTime() > kir.getTime() ? [A, K] : [K, A];
+    const probe = new Date(Math.max(utc.getTime(), kir.getTime()) - MIN).toISOString();
+
+    const refused = await walkIn(later, { occurredAt: probe });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toBe("occurred_at_too_old");
+    expect((await walkIn(earlier, { occurredAt: probe })).status).toBe(201);
+  });
+
+  describe("DST, with the server's clock pinned", () => {
+    // Date ONLY: faking timers too would stall the HTTP stack. And always a
+    // PAST instant - the session cookie was issued today, so a pinned clock
+    // beyond its expiry answers 401 before the route is ever reached.
+    const at = (iso: string) => vi.useFakeTimers({ toFake: ["Date"], now: new Date(iso) });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("🔴 SPRING FORWARD: exactly 720 hours back is refused - local midnight 30 days back is the line", async () => {
+      at("2026-03-20T04:30:00Z"); // 20 Mar 00:30 EDT
+      // 720 hours ago is 17 Feb 23:30 EST - the 31st calendar day back,
+      // because the clocks lost an hour in between.
+      const hours = await walkIn(N, { occurredAt: "2026-02-18T04:30:00.000Z" });
+      expect(hours.status).toBe(400);
+      expect(hours.body.error).toBe("occurred_at_too_old");
+      // 18 Feb 00:00 EST - the first minute of the 30th day back.
+      expect((await walkIn(N, { occurredAt: "2026-02-18T05:00:00.000Z" })).status).toBe(201);
+    });
+
+    it("🔴 FALL BACK: the line is still local midnight, an hour and a half past 720 hours", async () => {
+      at("2025-11-16T05:30:00Z"); // 16 Nov 2025 00:30 EST; clocks fell back 2 Nov
+      // 720 hours ago (17 Oct 01:30 EDT) is inside: the calendar window runs longer.
+      expect((await walkIn(N, { occurredAt: "2025-10-17T05:30:00.000Z" })).status).toBe(201);
+      // 17 Oct 00:00 EDT is the first minute; 23:59 the night before is not.
+      expect((await walkIn(N, { occurredAt: "2025-10-17T04:00:00.000Z" })).status).toBe(201);
+      const tooOld = await walkIn(N, { occurredAt: "2025-10-17T03:59:00.000Z" });
+      expect(tooOld.status).toBe(400);
+      expect(tooOld.body.error).toBe("occurred_at_too_old");
+    });
   });
 });
 
