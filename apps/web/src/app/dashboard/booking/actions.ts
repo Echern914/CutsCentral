@@ -1054,6 +1054,11 @@ export async function recordWalkInAction(input: {
    * seconds apart stay two.
    */
   operationId?: string;
+  /**
+   * When the cut happened (UTC ISO), for one written down after the fact.
+   * Omitted means now - the ordinary walk-in. The server refuses the future.
+   */
+  occurredAt?: string;
 }): Promise<WalkInResult> {
   const res = await apiSend<{
     ok: boolean;

@@ -112,6 +112,22 @@ export function externalBlockConfirmation(blocks: ExternalBlockSpan[]): string {
   return createHash("sha256").update(`external_block:v1:${canonical}`).digest("hex").slice(0, 32);
 }
 
+/**
+ * The per-chair advisory lock, and nothing else.
+ *
+ * Every Appointment write takes it through `lockStaffAndAssertSlotFree`. A
+ * writer that must SERIALISE with those writes but is not asking the
+ * reservation question - a walk-in recorded after the fact - takes exactly
+ * this, and none of the guard's side effects (releasing holds, clearing
+ * expired ones). One key in one place: the race tests queue on it too.
+ */
+export async function lockStaffCalendar(
+  tx: Prisma.TransactionClient,
+  staffId: string,
+): Promise<void> {
+  await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${staffId}`}))`);
+}
+
 /** What the guard reports back besides "you may write". */
 export interface SlotGuardResult {
   /**
@@ -334,9 +350,7 @@ export async function lockStaffAndAssertSlotFree(
     }
   }
 
-  await tx.$executeRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${opts.staffId}`}))`,
-  );
+  await lockStaffCalendar(tx, opts.staffId);
 
   // Who is in the chair - the SAME rule the slot grid and the specials filter
   // read with, so what is offered and what is accepted cannot disagree. It

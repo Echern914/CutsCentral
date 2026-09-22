@@ -630,6 +630,7 @@ export function BookingCalendar({
             onChanged={refreshAgenda}
             waitingCount={waitingCount}
             onOpenWaitlist={onOpenWaitlist}
+            timezone={tz}
           />
         </div>
       ) : (
@@ -735,6 +736,7 @@ export function BookingCalendar({
               onChanged={refreshAgenda}
             waitingCount={waitingCount}
             onOpenWaitlist={onOpenWaitlist}
+            timezone={tz}
             />
           </motion.div>
         )}
@@ -1131,6 +1133,33 @@ function CategoryChip({
 const BLOCK_STRIPES =
   "bg-[repeating-linear-gradient(-45deg,transparent,transparent_6px,rgba(255,255,255,0.04)_6px,rgba(255,255,255,0.04)_12px)]";
 
+/** "2026-09-21T14:30": an instant as a datetime-local value in the SHOP's zone -
+ *  device-local formatting would show a different hour than the calendar. */
+function shopLocalInput(at: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(at);
+  const get = (t: string) => parts.find((x) => x.type === t)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour") === "24" ? "00" : get("hour")}:${get("minute")}`;
+}
+
+/** The instant a datetime-local value names, read in the SHOP's zone - never
+ *  `new Date(value)`, which reads it in the device's. Null when malformed. */
+function shopInputToUtc(value: string, timeZone: string): Date | null {
+  const [day, time] = value.split("T");
+  const [y, m, d] = (day ?? "").split("-").map(Number);
+  const [hh, mm] = (time ?? "").split(":").map(Number);
+  if (![y, m, d, hh, mm].every((n) => Number.isInteger(n))) return null;
+  const at = zonedWallTimeToUtc(y!, m! - 1, d!, hh! * 60 + mm!, timeZone);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
 /**
  * "Walk-in" — one tap, type what they paid, done.
  *
@@ -1143,15 +1172,22 @@ const BLOCK_STRIPES =
  * The barber picker only appears when the shop has more than one active barber
  * AND the API says it can't tell whose chair it was - a solo shop and a
  * signed-in barber both resolve server-side and never see it.
+ *
+ * The time field opens at now and, left alone, is not sent at all - the
+ * ordinary walk-in is untouched. Changed, it records one somebody forgot to
+ * log when it happened.
  */
 export function WalkInBar({
   staff,
   toast,
   onRecorded,
+  timezone,
 }: {
   staff: StaffRow[];
   toast: Toast;
   onRecorded: () => void;
+  /** The SHOP's zone - the one the calendar draws in - for the time field. */
+  timezone: string;
 }) {
   const vocab = useVocab();
   const [open, setOpen] = useState(false);
@@ -1164,7 +1200,20 @@ export function WalkInBar({
   const [conflicted, setConflicted] = useState<number | null>(null);
   /** Stable across retries of ONE submission; cleared on success or Cancel. */
   const operationIdRef = useRef<string | null>(null);
+  /** When the cut happened, as a datetime-local value in the shop's zone. */
+  const [when, setWhen] = useState("");
+  /** What `when` opened at. Unchanged means now, and nothing is sent. */
+  const [whenOpenedAt, setWhenOpenedAt] = useState("");
+  /** The warning on screen is for a backdated walk-in - nobody left to call. */
+  const [conflictWasBackdated, setConflictWasBackdated] = useState(false);
   const active = staff.filter((s) => s.active);
+
+  function openBar() {
+    const nowInput = shopLocalInput(new Date(), timezone);
+    setWhen(nowInput);
+    setWhenOpenedAt(nowInput);
+    setOpen(true);
+  }
 
   function reset() {
     setOpen(false);
@@ -1172,6 +1221,9 @@ export function WalkInBar({
     setNeedStaff(false);
     setStaffId("");
     setConflicted(null);
+    setWhen("");
+    setWhenOpenedAt("");
+    setConflictWasBackdated(false);
     // Cancel abandons this submission, so the next one is genuinely new.
     operationIdRef.current = null;
   }
@@ -1188,6 +1240,18 @@ export function WalkInBar({
       toast(`Pick whose ${vocab.stationNoun}`, "error");
       return;
     }
+    // Left at its opening value the time means NOW and is not sent, so the
+    // server's own clock makes the ordinary walk-in. Changed, it is when the
+    // cut happened - and a walk-in cannot happen in the future.
+    let occurredAt: string | undefined;
+    if (when && when !== whenOpenedAt) {
+      const at = shopInputToUtc(when, timezone);
+      if (!at || at.getTime() >= Date.now()) {
+        toast("Pick a time that has already happened", "error");
+        return;
+      }
+      occurredAt = at.toISOString();
+    }
     // 🔴 ONE ID PER SUBMISSION, REUSED BY ITS RETRIES. Minted here and only
     // cleared on success or Cancel, so tapping Save again after a timeout sends
     // the SAME id and the server returns the original receipt instead of
@@ -1201,6 +1265,7 @@ export function WalkInBar({
         amount: value,
         ...(staffId ? { staffId } : {}),
         operationId: operationIdRef.current!,
+        ...(occurredAt ? { occurredAt } : {}),
       });
       if (res.ok) {
         operationIdRef.current = null;
@@ -1209,6 +1274,7 @@ export function WalkInBar({
           // 🔴 NOT A SUCCESS TOAST. The receipt is safe, but this chair is
           // double-booked and a toast would slide away before anyone read it.
           setConflicted(res.conflict.withAppointmentIds.length);
+          setConflictWasBackdated(occurredAt !== undefined);
           setAmount("");
           return;
         }
@@ -1220,6 +1286,11 @@ export function WalkInBar({
         // Ask once, keep the amount they already typed.
         setNeedStaff(true);
         toast(`Whose ${vocab.stationNoun} was it?`, "error");
+        return;
+      }
+      if (res.error === "occurred_at_not_in_past") {
+        // The device clock ran ahead of the server's; keep what they typed.
+        toast("Pick a time that has already happened", "error");
         return;
       }
       toast("Couldn't record that walk-in", "error");
@@ -1254,8 +1325,12 @@ export function WalkInBar({
             : conflicted > 1
               ? ` ${conflicted} appointments that were already booked`
               : " something already on the calendar"}
-          . Check the calendar and call whoever is booked so nobody turns up to
-          a {vocab.stationNoun} that is taken.
+          .{" "}
+          {conflictWasBackdated
+            ? // Over and done: there is nobody left to call, only a record
+              // to put right.
+              "Check the calendar - two records now claim the same time."
+            : `Check the calendar and call whoever is booked so nobody turns up to a ${vocab.stationNoun} that is taken.`}
         </p>
         <button
           type="button"
@@ -1272,7 +1347,7 @@ export function WalkInBar({
     return (
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={openBar}
         className={cn(ROW_BTN, "border border-subtle text-muted hover:border-gold/50 hover:text-gold")}
       >
         Walk-in
@@ -1303,6 +1378,19 @@ export function WalkInBar({
             }
           }}
           className="w-20 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+        />
+      </label>
+      <label className="flex min-w-0 items-center text-xs text-muted">
+        <span className="sr-only">When the walk-in happened</span>
+        <input
+          type="datetime-local"
+          value={when}
+          max={whenOpenedAt || undefined}
+          onChange={(e) => setWhen(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") reset();
+          }}
+          className="min-w-0 rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
         />
       </label>
       {needStaff && (
@@ -1357,6 +1445,7 @@ function DayPlanner({
   waitingCount,
   onOpenWaitlist,
   standalone = false,
+  timezone,
 }: {
   rows: AgendaRow[];
   /** Gauge buckets (groups + ungrouped services) with their display-only targets. */
@@ -1383,6 +1472,8 @@ function DayPlanner({
   /** DAY view: the planner owns the card, so it drops the repeated date
    *  heading and the divider that separated it from the month grid. */
   standalone?: boolean;
+  /** The shop's zone, for the walk-in bar's time field. */
+  timezone: string;
 }) {
   const vocab = useVocab();
   // ---- Day gauge: how full is this day, and in what? ----
@@ -1566,7 +1657,7 @@ function DayPlanner({
           >
             + New appointment
           </button>
-          <WalkInBar staff={staff} toast={toast} onRecorded={onChanged} />
+          <WalkInBar staff={staff} toast={toast} onRecorded={onChanged} timezone={timezone} />
           <button
             type="button"
             onClick={onBlock}
