@@ -126,7 +126,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        and be one App Store Connect has not seen, and 42 was never uploaded.
   //
   // 1.1.0 = build 42. Minor, not patch: #423/#424/#426/#427 are features.
-  version: "1.1.0",
+  version: "1.1.1",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
