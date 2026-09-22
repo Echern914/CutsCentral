@@ -57,23 +57,30 @@ describe("the DEFAULT build - the one that has to keep shipping", () => {
     expect(config.extra?.tapToPayNativeEnabled).toBe(false);
   });
 
-  it("leaves out the Terminal plugin, so iOS is never asked for location", async () => {
-    // A build that cannot take a contactless payment has nothing to justify
-    // a location permission string with, and App Review may ask.
+  it("🔴 STILL carries the Terminal plugin, because the SDK is linked regardless", async () => {
+    // Build 43 is the reason. The SDK is an ordinary dependency, so it links
+    // into every binary whether or not the flag is on. With the plugin gated,
+    // build 43 shipped Terminal's location/Bluetooth/local-network API usage
+    // with NO purpose strings, and App Store Connect raised ITMS-90683. The
+    // strings describe what the binary contains; only the entitlement and the
+    // announcement describe what it may do.
     const config = await generate(undefined);
-    expect(pluginNames(config)).not.toContain(STRIPE_TERMINAL_PLUGIN);
+    const entry = (config.plugins ?? []).find(
+      (p) => Array.isArray(p) && p[0] === STRIPE_TERMINAL_PLUGIN,
+    ) as [string, Record<string, unknown>] | undefined;
+    expect(entry).toBeDefined();
+    expect(entry?.[1]?.locationWhenInUsePermission).toMatch(/card payments/i);
   });
 
-  it("changes NOTHING else - the rest of the app is untouched by the flag", async () => {
+  it("changes NOTHING else - the flag moves the entitlement and the announcement only", async () => {
     const off = await generate(undefined);
     const on = await generate("true");
     expect(off.ios?.bundleIdentifier).toBe("com.getchairback.rewards");
     expect(off.ios?.bundleIdentifier).toBe(on.ios?.bundleIdentifier);
     expect(off.ios?.buildNumber).toBe(on.ios?.buildNumber);
     expect(off.ios?.associatedDomains).toEqual(on.ios?.associatedDomains);
-    // Every plugin the app already had is still there, in the same order.
-    const others = pluginNames(on).filter((n) => n !== STRIPE_TERMINAL_PLUGIN);
-    expect(pluginNames(off)).toEqual(others);
+    // Identical plugin list, in the same order: the flag no longer touches it.
+    expect(pluginNames(off)).toEqual(pluginNames(on));
     expect(pluginNames(off)).toContain("expo-router");
     expect(pluginNames(off)).toContain("expo-secure-store");
   });
@@ -107,6 +114,10 @@ describe("🔴 the entitlement and the announcement can never disagree", () => {
   it("every accepted value moves both, or neither", async () => {
     // The invariant this whole flag exists to hold. If these two ever come
     // apart, one of the halves is lying to a barber mid-checkout.
+    //
+    // The Terminal plugin is deliberately NOT part of it any more: it is
+    // present for every value, because the SDK it describes is linked for
+    // every value (see the DEFAULT-build test, and ITMS-90683 on build 43).
     for (const flag of [undefined, "", "false", "0", "no", "yes", "true", "1"]) {
       const config = await generate(flag);
       const entitled = config.ios?.entitlements?.[ENTITLEMENT] === true;
@@ -116,7 +127,7 @@ describe("🔴 the entitlement and the announcement can never disagree", () => {
         flag,
         entitled: announced,
         announced,
-        plugged: announced,
+        plugged: true,
       });
     }
   });
