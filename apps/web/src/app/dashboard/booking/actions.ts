@@ -703,6 +703,67 @@ export interface CheckoutState {
     cashOther: CheckoutMethodState;
   };
   liveAttempt: CheckoutAttemptView | null;
+  /**
+   * The CARD payments this checkout took, and whether each can be refunded
+   * from ChairBack. Optional: a web deploy ahead of the API shows no button.
+   */
+  refunds?: CheckoutRefundable[];
+}
+
+/** One checkout card payment, as the refund button needs it. */
+export interface CheckoutRefundable {
+  paymentId: string;
+  method: "tap_to_pay" | "saved_card";
+  collectedCents: number;
+  refundedCents: number;
+  /** What the button would give back. 0 when it cannot. */
+  refundableCents: number;
+  /** null only when the button would actually work. */
+  refundBlocker: "refunded" | "unconfirmed_charge" | "partially_refunded" | null;
+  card: { brand: string; last4: string } | null;
+  paidAt: string;
+}
+
+export interface RefundResult {
+  ok: boolean;
+  /** What happened to the money. `unconfirmed` = pressing again is safe. */
+  result?: "refunded" | "already_refunded" | "unconfirmed";
+  amountCents?: number;
+  status?: "succeeded" | "pending";
+  error?: string;
+  reason?: string;
+  code?: string;
+}
+
+/**
+ * Give a checkout card payment back, from ChairBack.
+ *
+ * 🔴 Not "refund it in Stripe". On a destination charge the barber's own
+ * dashboard shows a copy of the payment, and refunding the copy takes the money
+ * back from the barber while the customer gets nothing. This refunds the real
+ * charge. See the API's billing/serviceRefund.ts.
+ *
+ * Mapped field by field rather than spread: the API seam drops unknown fields
+ * from error bodies, and a 202 "unconfirmed" is HTTP-ok while the refund is not.
+ */
+export async function refundCheckoutPaymentAction(
+  appointmentId: string,
+  input: { paymentId: string; amountCents: number; note?: string },
+): Promise<RefundResult> {
+  const res = await apiSend<{
+    result?: RefundResult["result"];
+    amountCents?: number;
+    status?: RefundResult["status"];
+  }>("POST", `/api/checkout/appointments/${appointmentId}/refund`, input);
+  if (!res.ok) {
+    return { ok: false, error: res.error ?? "failed", reason: res.reason, code: res.code };
+  }
+  const body = res.data ?? {};
+  if (body.result === "unconfirmed") {
+    return { ok: false, result: "unconfirmed", error: "unconfirmed" };
+  }
+  revalidatePath("/dashboard/booking");
+  return { ok: true, result: body.result, amountCents: body.amountCents, status: body.status };
 }
 
 /**

@@ -660,6 +660,7 @@ model Shop {
   recurringSeries        RecurringSeries[]
   appointmentGroups      AppointmentGroup[]
   appointmentPriceChanges AppointmentPriceChange[]
+  paymentRefunds          PaymentRefund[]
   appointmentOverrides AppointmentOverride[]
   serviceAddOns          ServiceAddOn[]
   bookingQuestions       BookingQuestion[]
@@ -5077,6 +5078,34 @@ model AppointmentOverride {
 
   @@index([shopId, appointmentId, createdAt])
   @@index([shopId, createdAt])
+}
+
+/// A refund a shop issued from ChairBack against a post-service checkout
+/// payment, and who issued it. Append-only (a trigger refuses UPDATE), exactly
+/// like AppointmentPriceChange: a refund is the most sensitive manual money
+/// action in the product, and "who gave this customer their money back, and
+/// why" must survive every later edit. paymentId/appointmentId are not FKs on
+/// purpose - the history outlives the rows it describes.
+model PaymentRefund {
+  id              String   @id @default(cuid())
+  shopId          String
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  paymentId       String
+  appointmentId   String
+  actorUserId     String?
+  amountCents     Int
+  /// Whether the refund also pulled the barber's share back (reverse_transfer).
+  /// false only when that share had ALREADY been reversed outside ChairBack.
+  reverseTransfer Boolean
+  stripeRefundId  String?
+  /// succeeded | pending | failed | ambiguous (CHECK-pinned in SQL)
+  outcome         String
+  /// The barber's own words, if any. Never shown to the customer.
+  note            String?
+  createdAt       DateTime @default(now())
+
+  @@index([shopId, appointmentId, createdAt])
+  @@index([paymentId])
 }
 
 model AppointmentPriceChange {

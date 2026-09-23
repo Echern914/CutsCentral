@@ -322,6 +322,65 @@ checkoutRouter.get("/appointments/:id", async (req, res) => {
     : null;
   const connectAccountId = shop?.stripeConnectAccountId ?? null;
 
+  // THE CARD PAYMENTS THIS CHECKOUT TOOK, and whether each can be refunded from
+  // here. Deposits are not listed: they follow the cancellation rules. Cash is
+  // not listed: there is no card to put it back on, and it is handed back in
+  // person. `refundBlocker` is null only when the button would actually work.
+  const checkoutPayments = await runWithShop(shopId, (tx) =>
+    tx.payment.findMany({
+      where: { appointmentId: appt.id, shopId, purpose: "service_checkout" },
+      select: {
+        id: true,
+        mode: true,
+        status: true,
+        amount: true,
+        capturedAmount: true,
+        refundedAmount: true,
+        ambiguousAt: true,
+        stripePaymentIntentId: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "asc" },
+    }),
+  );
+  const attemptCards = checkoutPayments.length
+    ? await runWithShop(shopId, (tx) =>
+        tx.checkoutAttempt.findMany({
+          where: {
+            appointmentId: appt.id,
+            shopId,
+            stripePaymentIntentId: { in: checkoutPayments.map((p) => p.stripePaymentIntentId) },
+          },
+          select: { stripePaymentIntentId: true, cardBrand: true, cardLast4: true },
+        }),
+      )
+    : [];
+  const COLLECTED = new Set(["succeeded", "partially_refunded", "refunded"]);
+  const refunds = checkoutPayments
+    .filter((p) => COLLECTED.has(p.status))
+    .map((p) => {
+      const collected = p.capturedAmount ?? p.amount;
+      const refundable = Math.max(0, collected - p.refundedAmount);
+      const card = attemptCards.find((a) => a.stripePaymentIntentId === p.stripePaymentIntentId);
+      return {
+        paymentId: p.id,
+        method: p.mode === "terminal" ? "tap_to_pay" : "saved_card",
+        collectedCents: collected,
+        refundedCents: p.refundedAmount,
+        refundableCents: p.refundedAmount > 0 ? 0 : refundable,
+        refundBlocker:
+          refundable <= 0
+            ? "refunded"
+            : p.ambiguousAt
+              ? "unconfirmed_charge"
+              : p.refundedAmount > 0
+                ? "partially_refunded"
+                : null,
+        card: card?.cardBrand && card?.cardLast4 ? { brand: card.cardBrand, last4: card.cardLast4 } : null,
+        paidAt: p.createdAt,
+      };
+    });
+
   res.json({
     appointment: {
       id: appt.id,
@@ -366,6 +425,7 @@ checkoutRouter.get("/appointments/:id", async (req, res) => {
     // A live attempt is the reason every method is refused, so it is returned
     // first-class rather than as an error the screen has to infer.
     liveAttempt: live ? publicAttempt(live) : null,
+    refunds,
   });
 });
 
@@ -1086,5 +1146,98 @@ checkoutRouter.post("/appointments/:id/cancel-attempt", async (req, res) => {
     "service checkout: attempt canceled by barber",
   );
   res.json({ ok: true });
+});
+
+const refundSchema = z
+  .object({
+    /** Which checkout payment. An appointment can carry more than one row. */
+    paymentId: z.string().min(1).max(64),
+    /** The figure the manager confirmed. Must equal what is refundable. */
+    amountCents: z.number().int().positive().max(1_000_000),
+    /** The shop's own reason, for its records. Never sent to the customer. */
+    note: z.string().trim().max(200).optional(),
+  })
+  .strict();
+
+/**
+ * POST /api/checkout/appointments/:id/refund — give a checkout payment back.
+ *
+ * Owners and managers only, like everything under /api/checkout. The refund is
+ * made on the PLATFORM charge with the barber's share reversed - see
+ * billing/serviceRefund.ts for why refunding "in Stripe" from the barber's own
+ * dashboard is the mistake this route exists to prevent.
+ *
+ * Every answer says what actually happened to the money, because each one
+ * leads the barber to a different next step: done; it was already done; the
+ * figure moved; finish this one in Stripe; Stripe said no; or we could not tell
+ * and pressing again is safe.
+ */
+checkoutRouter.post("/appointments/:id/refund", async (req, res) => {
+  const parsed = refundSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const appointmentId = req.params.id!;
+  // Not found rather than forbidden for another shop's id, like every read here.
+  const appt = await forShop(shopId).appointment.findFirst({
+    where: { id: appointmentId, shopId },
+    select: { id: true },
+  });
+  if (!appt) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const { refundServiceCheckoutPayment } = await import("../billing/serviceRefund.js");
+  const result = await refundServiceCheckoutPayment({
+    shopId,
+    appointmentId,
+    paymentId: parsed.data.paymentId,
+    confirmedCents: parsed.data.amountCents,
+    actorUserId: req.userId ?? null,
+    note: parsed.data.note && parsed.data.note.length > 0 ? parsed.data.note : null,
+  });
+
+  switch (result.outcome) {
+    case "refunded":
+      res.json({
+        ok: true,
+        result: "refunded",
+        amountCents: result.amountCents,
+        status: result.status,
+      });
+      return;
+    case "already_refunded":
+      res.json({ ok: true, result: "already_refunded", amountCents: result.refundedCents });
+      return;
+    case "not_found":
+      res.status(404).json({ error: "not_found" });
+      return;
+    case "nothing_to_refund":
+      res.status(409).json({ error: "nothing_to_refund" });
+      return;
+    case "amount_changed":
+      res.status(409).json({ error: "amount_changed", refundableCents: result.refundableCents });
+      return;
+    case "not_refundable":
+      res.status(409).json({ error: "not_refundable", reason: result.reason });
+      return;
+    case "refund_in_stripe":
+      res.status(409).json({ error: "refund_in_stripe", reason: result.reason });
+      return;
+    case "refused":
+      res.status(402).json({ error: "refund_refused", code: result.code });
+      return;
+    case "unconfirmed":
+      // Accepted, not failed: the refund may exist. Pressing again names the
+      // same idempotency key, so it cannot become a second refund.
+      res.status(202).json({ ok: false, result: "unconfirmed" });
+      return;
+    case "stripe_unavailable":
+      res.status(503).json({ error: "stripe_unavailable" });
+      return;
+  }
 });
 
