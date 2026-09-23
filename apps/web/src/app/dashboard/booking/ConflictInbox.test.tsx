@@ -17,7 +17,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 const listConflictsAction = vi.hoisted(() => vi.fn());
 const resolveConflictAction = vi.hoisted(() => vi.fn());
-vi.mock("./conflictActions", () => ({ listConflictsAction, resolveConflictAction }));
+const resolveAllConflictsAction = vi.hoisted(() => vi.fn());
+vi.mock("./conflictActions", () => ({
+  listConflictsAction,
+  resolveConflictAction,
+  resolveAllConflictsAction,
+}));
+
+/** When the fake server "read" the list - what resolve-all must send back. */
+const AS_OF = "2026-10-05T15:00:00.000Z";
 
 const { ConflictInbox, ConflictTabBadge, useUnresolvedConflictCount } = await import(
   "./ConflictInbox"
@@ -54,14 +62,16 @@ const row = (over: Record<string, unknown> = {}) => ({
 
 const page = (items: unknown[], over: Record<string, unknown> = {}) => ({
   ok: true,
-  data: { items, nextCursor: null, unresolvedCount: items.length, ...over },
+  data: { items, nextCursor: null, unresolvedCount: items.length, asOf: AS_OF, ...over },
 });
 
 beforeEach(() => {
   listConflictsAction.mockReset();
   resolveConflictAction.mockReset();
+  resolveAllConflictsAction.mockReset();
   listConflictsAction.mockResolvedValue(page([row()]));
   resolveConflictAction.mockResolvedValue({ ok: true, changed: true });
+  resolveAllConflictsAction.mockResolvedValue({ ok: true, resolved: 1 });
 });
 
 describe("what it says about itself", () => {
@@ -490,5 +500,133 @@ describe("vertical vocabulary", () => {
       }),
     ).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/undefined/);
+  });
+});
+
+/**
+ * RESOLVE ALL - asked for after a shop worked sixteen of these one tap and one
+ * confirmation at a time. Same promises as the single button, and it has to
+ * send back exactly what the manager was SHOWN: the server refuses to reach
+ * past that, in time or in number.
+ */
+describe("resolve all", () => {
+  /** Sixteen open, one page on screen - the real shape of the ask. */
+  const sixteen = () =>
+    listConflictsAction.mockResolvedValue(page([row()], { unresolvedCount: 16 }));
+  const openConfirm = async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "Resolve all (16)" }));
+    return screen.findByRole("dialog", { name: "Resolve all 16?" });
+  };
+
+  it("offers the WHOLE open count, not just the rows on this page", async () => {
+    sixteen();
+    render(<ConflictInbox />);
+    expect(await screen.findByRole("button", { name: "Resolve all (16)" })).toBeInTheDocument();
+    // An action, not a filter: it must not sit inside the tab strip.
+    expect(
+      within(screen.getByRole("tablist")).queryByRole("button", { name: /resolve all/i }),
+    ).toBeNull();
+  });
+
+  it("is not offered when nothing is open, or on the resolved list", async () => {
+    listConflictsAction.mockResolvedValue(page([], { unresolvedCount: 0 }));
+    const empty = render(<ConflictInbox />);
+    await screen.findByText(/nothing to deal with/i);
+    expect(screen.queryByRole("button", { name: /resolve all/i })).toBeNull();
+    empty.unmount();
+
+    sixteen();
+    render(<ConflictInbox />);
+    await screen.findByRole("button", { name: "Resolve all (16)" });
+    fireEvent.click(screen.getByRole("tab", { name: /resolved/i }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /resolve all/i })).toBeNull(),
+    );
+  });
+
+  it("🔴 is deliberate, and its confirmation says what it does NOT do", async () => {
+    sixteen();
+    render(<ConflictInbox />);
+    const dialog = await openConfirm();
+    expect(dialog).toHaveTextContent(/not.*cancel, move or refund any booking/i);
+    expect(dialog).toHaveTextContent(/doesn.t tell any customer/i);
+    // It covers rows not loaded yet - say so, since the manager can't see them.
+    expect(dialog).toHaveTextContent(/including any not shown on this page/i);
+    expect(resolveAllConflictsAction).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /cancel/i }));
+    expect(resolveAllConflictsAction).not.toHaveBeenCalled();
+  });
+
+  it("🔴 sends back the list's asOf and the count it showed, with the note", async () => {
+    sixteen();
+    resolveAllConflictsAction.mockResolvedValue({ ok: true, resolved: 16 });
+    render(<ConflictInbox />);
+    const dialog = await openConfirm();
+    fireEvent.change(within(dialog).getByPlaceholderText(/called everyone/i), {
+      target: { value: "Rang all of them" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Resolve all 16" }));
+    await waitFor(() =>
+      expect(resolveAllConflictsAction).toHaveBeenCalledWith({
+        asOf: AS_OF,
+        expected: 16,
+        note: "Rang all of them",
+      }),
+    );
+    expect(await screen.findByText("Marked 16 resolved. No booking was changed.")).toBeInTheDocument();
+    // And the list is re-read, so the screen shows the server's truth.
+    await waitFor(() => expect(listConflictsAction).toHaveBeenCalledTimes(2));
+  });
+
+  it("drops the badge to zero at once, then takes the server's count", async () => {
+    const onCount = vi.fn();
+    listConflictsAction
+      .mockResolvedValueOnce(page([row()], { unresolvedCount: 16 }))
+      // One arrived after the list was read, so it is still open.
+      .mockResolvedValueOnce(page([row({ id: "late" })], { unresolvedCount: 1 }));
+    let release!: (v: unknown) => void;
+    resolveAllConflictsAction.mockReturnValue(new Promise((r) => (release = r)));
+    render(<ConflictInbox onUnresolvedCount={onCount} />);
+    const dialog = await openConfirm();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Resolve all 16" }));
+    await waitFor(() => expect(onCount).toHaveBeenLastCalledWith(0));
+    release({ ok: true, resolved: 16 });
+    await waitFor(() => expect(onCount).toHaveBeenLastCalledWith(1));
+  });
+
+  it("🔴 when MORE came in than were shown, says so, puts the count back and re-reads", async () => {
+    const onCount = vi.fn();
+    sixteen();
+    resolveAllConflictsAction.mockResolvedValue({ ok: false, error: "conflicts_changed" });
+    render(<ConflictInbox onUnresolvedCount={onCount} />);
+    const dialog = await openConfirm();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Resolve all 16" }));
+    expect(await screen.findByText(/new conflicts came in/i)).toHaveTextContent(
+      /nothing was changed/i,
+    );
+    await waitFor(() => expect(onCount).toHaveBeenLastCalledWith(16));
+    await waitFor(() => expect(listConflictsAction).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a failure says nothing was changed and keeps the count", async () => {
+    const onCount = vi.fn();
+    sixteen();
+    resolveAllConflictsAction.mockResolvedValue({ ok: false, error: "failed" });
+    render(<ConflictInbox onUnresolvedCount={onCount} />);
+    const dialog = await openConfirm();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Resolve all 16" }));
+    expect(await screen.findByText("Couldn't mark them resolved. Nothing was changed.")).toBeInTheDocument();
+    await waitFor(() => expect(onCount).toHaveBeenLastCalledWith(16));
+  });
+
+  it("tells the truth when a teammate had already done them all", async () => {
+    sixteen();
+    resolveAllConflictsAction.mockResolvedValue({ ok: true, resolved: 0 });
+    render(<ConflictInbox />);
+    const dialog = await openConfirm();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Resolve all 16" }));
+    expect(await screen.findByText(/already been resolved by a teammate/i)).toBeInTheDocument();
   });
 });

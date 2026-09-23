@@ -117,6 +117,8 @@ const list = (s: Shop, q = "") =>
   request(app).get(`/api/booking-conflicts${q}`).set("Cookie", s.cookie);
 const resolve = (s: Shop, id: string, body: Record<string, unknown> = {}) =>
   request(app).post(`/api/booking-conflicts/${id}/resolve`).set("Cookie", s.cookie).send(body);
+const resolveAll = (s: Shop, body: Record<string, unknown>) =>
+  request(app).post("/api/booking-conflicts/resolve-all").set("Cookie", s.cookie).send(body);
 
 beforeAll(async () => {
   A = await makeShop("Inbox A");
@@ -498,5 +500,218 @@ describe("8. no destructive side effects", () => {
     );
     expect(item).toBeTruthy();
     expect(item.resolvedAt).toBeTruthy();
+  });
+});
+
+/**
+ * RESOLVE ALL - asked for after a shop worked sixteen conflicts one tap and
+ * one confirmation at a time. It is the single resolve's rules applied to the
+ * batch, plus the two that only a batch needs: it never reaches past what the
+ * manager was SHOWN, in time or in number.
+ */
+describe("9. resolve all", () => {
+  /** The list as the manager saw it: its count and its asOf. */
+  async function shown(s: Shop) {
+    const r = await list(s);
+    expect(r.status).toBe(200);
+    return { asOf: r.body.asOf as string, expected: r.body.unresolvedCount as number };
+  }
+
+  it("the list says when it was read", async () => {
+    const before = Date.now();
+    const r = await list(A);
+    const asOf = new Date(r.body.asOf).getTime();
+    expect(asOf).toBeGreaterThanOrEqual(before - 1000);
+    expect(asOf).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("resolves every open one, recording who, when and the note", async () => {
+    const rows = [await conflict(A), await conflict(A), await conflict(A)];
+    const res = await resolveAll(A, { ...(await shown(A)), note: "Rang everyone" });
+    expect(res.status).toBe(200);
+    expect(res.body.resolved).toBe(3);
+
+    for (const r of rows) {
+      const after = await prisma.bookingConflict.findUniqueOrThrow({ where: { id: r.id } });
+      expect(after.resolvedAt).not.toBeNull();
+      expect(after.resolvedByUserId).toBe(A.ownerId);
+      expect(after.resolutionNote).toBe("Rang everyone");
+    }
+    expect((await list(A)).body.unresolvedCount).toBe(0);
+  });
+
+  it("🔴 a conflict a teammate ALREADY resolved keeps their name and note", async () => {
+    const theirs = await conflict(A);
+    await resolve(A, theirs.id, { note: "teammate's call" });
+    const theirsBefore = await prisma.bookingConflict.findUniqueOrThrow({
+      where: { id: theirs.id },
+    });
+    const open = await conflict(A);
+
+    const res = await resolveAll(A, { ...(await shown(A)), note: "bulk" });
+    expect(res.body.resolved).toBe(1);
+
+    expect(await prisma.bookingConflict.findUniqueOrThrow({ where: { id: theirs.id } })).toEqual(
+      theirsBefore,
+    );
+    expect(
+      (await prisma.bookingConflict.findUniqueOrThrow({ where: { id: open.id } })).resolutionNote,
+    ).toBe("bulk");
+  });
+
+  it("🔴 a conflict that arrives AFTER the list was read stays open", async () => {
+    const seen = await conflict(A);
+    const view = await shown(A);
+    // Recorded while the confirmation was on screen.
+    const late = await conflict(A, { detectedAt: new Date(Date.now() + 5_000) });
+
+    const res = await resolveAll(A, view);
+    expect(res.status).toBe(200);
+    expect(res.body.resolved).toBe(1);
+    expect(
+      (await prisma.bookingConflict.findUniqueOrThrow({ where: { id: seen.id } })).resolvedAt,
+    ).not.toBeNull();
+    expect(
+      (await prisma.bookingConflict.findUniqueOrThrow({ where: { id: late.id } })).resolvedAt,
+    ).toBeNull();
+  });
+
+  it("🔴 an asOf in the FUTURE is held to now - it cannot widen the sweep", async () => {
+    const now = await conflict(A);
+    const future = await conflict(A, { detectedAt: new Date(Date.now() + 60 * 60_000) });
+    const res = await resolveAll(A, {
+      asOf: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+      expected: 2,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.resolved).toBe(1);
+    expect(
+      (await prisma.bookingConflict.findUniqueOrThrow({ where: { id: now.id } })).resolvedAt,
+    ).not.toBeNull();
+    expect(
+      (await prisma.bookingConflict.findUniqueOrThrow({ where: { id: future.id } })).resolvedAt,
+    ).toBeNull();
+  });
+
+  it("🔴 MORE than was shown is refused, and NOTHING is written", async () => {
+    // Three are open at asOf, but the manager confirmed two - the third is the
+    // one whose transaction committed after the list was read.
+    const rows = [await conflict(A), await conflict(A), await conflict(A)];
+    const { asOf } = await shown(A);
+
+    const res = await resolveAll(A, { asOf, expected: 2 });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("conflicts_changed");
+    // Rolled back: not two of three, none of them.
+    for (const r of rows) {
+      expect(
+        (await prisma.bookingConflict.findUniqueOrThrow({ where: { id: r.id } })).resolvedAt,
+      ).toBeNull();
+    }
+  });
+
+  it("FEWER than shown is fine - a teammate got to some first", async () => {
+    const a = await conflict(A);
+    const b = await conflict(A);
+    const view = await shown(A);
+    await resolve(A, a.id, { note: "teammate" });
+
+    const res = await resolveAll(A, view);
+    expect(res.status).toBe(200);
+    expect(res.body.resolved).toBe(1);
+    expect(
+      (await prisma.bookingConflict.findUniqueOrThrow({ where: { id: b.id } })).resolvedAt,
+    ).not.toBeNull();
+  });
+
+  it("🔴 never touches another shop's conflicts", async () => {
+    await conflict(A);
+    const theirs = await conflict(B);
+    const res = await resolveAll(A, { ...(await shown(A)), expected: 5 });
+    expect(res.body.resolved).toBe(1);
+    expect(
+      (await prisma.bookingConflict.findUniqueOrThrow({ where: { id: theirs.id } })).resolvedAt,
+    ).toBeNull();
+  });
+
+  it("🔴 a BARBER seat is refused, and nothing changes", async () => {
+    const barberEmail = `cinbox-barber-all-${randomToken(6)}@test.local`.toLowerCase();
+    const signup = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: barberEmail, password, name: "Barber", smsAttested: true });
+    const barberUserId = signup.body.id as string;
+    const barberCookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
+    await prisma.shopMember.create({
+      data: { shopId: A.shopId, userId: barberUserId, role: "BARBER" },
+    });
+    const row = await conflict(A);
+
+    const tried = await request(app)
+      .post("/api/booking-conflicts/resolve-all")
+      .set("Cookie", barberCookie)
+      .send({ asOf: new Date().toISOString(), expected: 1 });
+    expect(tried.status).toBe(403);
+    expect(
+      (await prisma.bookingConflict.findUniqueOrThrow({ where: { id: row.id } })).resolvedAt,
+    ).toBeNull();
+
+    await prisma.shopMember.deleteMany({ where: { shopId: A.shopId, userId: barberUserId } });
+  });
+
+  it("refuses a request without the list's asOf and count", async () => {
+    await conflict(A);
+    expect((await resolveAll(A, {})).status).toBe(400);
+    expect((await resolveAll(A, { asOf: new Date().toISOString() })).status).toBe(400);
+    expect((await resolveAll(A, { asOf: "yesterday", expected: 1 })).status).toBe(400);
+    expect((await resolveAll(A, { asOf: new Date().toISOString(), expected: 0 })).status).toBe(
+      400,
+    );
+    expect(
+      (await resolveAll(A, { ...(await shown(A)), note: "x".repeat(281) })).status,
+    ).toBe(400);
+    expect((await list(A)).body.unresolvedCount).toBe(1);
+  });
+
+  it("🔴 changes NO booking, deletes NOTHING, sends NOTHING, moves NO availability", async () => {
+    const receipt = await appointment(A, 0);
+    const other = await appointment(A, 5, "BOOKED");
+    await conflict(A, { receiptId: receipt.id, conflictingId: other.id });
+    await conflict(A, { receiptId: receipt.id, conflictingId: "a-block", conflictingKind: "block" });
+
+    const bookingsBefore = await prisma.appointment.findMany({
+      where: { id: { in: [receipt.id, other.id] } },
+      orderBy: { id: "asc" },
+    });
+    const conflictsBefore = await prisma.bookingConflict.count({ where: { shopId: A.shopId } });
+    const genBefore = (
+      await prisma.shop.findUniqueOrThrow({
+        where: { id: A.shopId },
+        select: { availabilityGeneration: true },
+      })
+    ).availabilityGeneration;
+    const outboxBefore = await prisma.emailIntent.count({ where: { shopId: A.shopId } });
+    const paymentsBefore = await prisma.payment.count({ where: { shopId: A.shopId } });
+
+    expect((await resolveAll(A, await shown(A))).body.resolved).toBe(2);
+
+    expect(
+      await prisma.appointment.findMany({
+        where: { id: { in: [receipt.id, other.id] } },
+        orderBy: { id: "asc" },
+      }),
+    ).toEqual(bookingsBefore);
+    expect(await prisma.bookingConflict.count({ where: { shopId: A.shopId } })).toBe(
+      conflictsBefore,
+    );
+    expect(
+      (
+        await prisma.shop.findUniqueOrThrow({
+          where: { id: A.shopId },
+          select: { availabilityGeneration: true },
+        })
+      ).availabilityGeneration,
+    ).toBe(genBefore);
+    expect(await prisma.emailIntent.count({ where: { shopId: A.shopId } })).toBe(outboxBefore);
+    expect(await prisma.payment.count({ where: { shopId: A.shopId } })).toBe(paymentsBefore);
   });
 });

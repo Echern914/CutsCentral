@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { useVocab } from "@/components/VocabProvider";
 import {
   listConflictsAction,
+  resolveAllConflictsAction,
   resolveConflictAction,
   type ConflictCursor,
   type ConflictRow,
@@ -137,6 +138,12 @@ export function ConflictInbox({
    * can drift is how a badge ends up claiming work that is already done.
    */
   const [openCount, setOpenCount] = useState(0);
+  /**
+   * When the server read the count on screen. "Resolve all" is bounded by it
+   * and checked against that count - see POST /resolve-all.
+   */
+  const [asOf, setAsOf] = useState<string | null>(null);
+  const [confirmingAll, setConfirmingAll] = useState(false);
 
   const publishCount = useCallback(
     (n: number) => {
@@ -160,6 +167,7 @@ export function ConflictInbox({
       setRows(res.data.items);
       setCursor(res.data.nextCursor);
       publishCount(res.data.unresolvedCount);
+      setAsOf(res.data.asOf);
     },
     [publishCount],
   );
@@ -185,6 +193,40 @@ export function ConflictInbox({
     });
     setCursor(res.data.nextCursor);
     publishCount(res.data.unresolvedCount);
+    setAsOf(res.data.asOf);
+  }
+
+  async function confirmResolveAll() {
+    if (!asOf || openCount <= 0) return;
+    setSaving(true);
+    // Optimistic like the single resolve, and put back if it did not happen.
+    const before = openCount;
+    publishCount(0);
+    const res = await resolveAllConflictsAction({ asOf, expected: before, note });
+    setSaving(false);
+    if (!res.ok) {
+      publishCount(before);
+      if (res.error === "conflicts_changed") {
+        // Nothing was written. Show the real list and let them decide again.
+        setConfirmingAll(false);
+        setNotice(
+          "New conflicts came in while you were deciding. Nothing was changed — check the list and try again.",
+        );
+        void load(status);
+        return;
+      }
+      setNotice("Couldn't mark them resolved. Nothing was changed.");
+      return;
+    }
+    const n = res.resolved ?? 0;
+    setNotice(
+      n === 0
+        ? "They had already been resolved by a teammate."
+        : `Marked ${n} resolved. No booking was changed.`,
+    );
+    setConfirmingAll(false);
+    setNote("");
+    void load(status);
   }
 
   async function confirmResolve() {
@@ -239,28 +281,46 @@ export function ConflictInbox({
         </p>
       </Card>
 
-      <div
-        className="flex items-center gap-1 overflow-x-auto"
-        role="tablist"
-        aria-label="Conflict filter"
-      >
-        {(["open", "resolved", "all"] as const).map((s) => (
+      <div className="flex flex-wrap items-center gap-2">
+        <div
+          className="flex min-w-0 items-center gap-1 overflow-x-auto"
+          role="tablist"
+          aria-label="Conflict filter"
+        >
+          {(["open", "resolved", "all"] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              role="tab"
+              aria-selected={status === s}
+              onClick={() => setStatus(s)}
+              className={cn(
+                "rounded-full px-3 py-1 text-xs font-medium capitalize transition-colors duration-150",
+                status === s
+                  ? "bg-gold/15 text-gold"
+                  : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
+              )}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+        {/* The whole list in one go - for a shop that has already rung
+            everybody and should not have to confirm each one separately.
+            Outside the tablist: it is an action, not a filter. */}
+        {status !== "resolved" && openCount > 0 && asOf && !loading && (
           <button
-            key={s}
             type="button"
-            role="tab"
-            aria-selected={status === s}
-            onClick={() => setStatus(s)}
-            className={cn(
-              "rounded-full px-3 py-1 text-xs font-medium capitalize transition-colors duration-150",
-              status === s
-                ? "bg-gold/15 text-gold"
-                : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
-            )}
+            onClick={() => {
+              setNotice(null);
+              setNote("");
+              setConfirmingAll(true);
+            }}
+            className="ml-auto shrink-0 rounded-lg border border-subtle px-3 py-1.5 text-xs font-semibold text-offwhite transition-colors hover:border-gold/50 hover:text-gold"
           >
-            {s}
+            {`Resolve all (${openCount})`}
           </button>
-        ))}
+        )}
       </div>
 
       {notice && (
@@ -405,6 +465,59 @@ export function ConflictInbox({
               maxLength={280}
               onChange={(e) => setNote(e.target.value)}
               placeholder="Called the client, moved them to 3pm"
+              /* 16px floor: anything smaller makes iOS zoom on focus. */
+              className="rounded-lg border border-subtle bg-charcoal-800 px-3 py-2 text-base text-offwhite placeholder:text-muted/60 focus:border-gold/50"
+            />
+          </label>
+        </div>
+      </Dialog>
+
+      {/* 🔴 Same promise as the single one, said for the whole list. */}
+      <Dialog
+        open={confirmingAll}
+        onClose={() => {
+          if (!saving) setConfirmingAll(false);
+        }}
+        title={`Resolve all ${openCount}?`}
+        className="max-w-md"
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirmingAll(false)}
+              disabled={saving}
+              className="rounded-lg border border-subtle px-3 py-1.5 text-sm text-muted transition-colors hover:text-offwhite disabled:opacity-60"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void confirmResolveAll()}
+              disabled={saving}
+              className="rounded-lg bg-gold px-3 py-1.5 text-sm font-semibold text-charcoal-900 transition-colors hover:bg-gold/90 disabled:opacity-60"
+            >
+              {saving ? "Saving…" : `Resolve all ${openCount}`}
+            </button>
+          </div>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-offwhite">
+            {`This records that you’ve dealt with all ${openCount} open double-bookings, including any not shown on this page yet.`}
+          </p>
+          <p className="text-sm text-muted">
+            It does <strong className="text-offwhite">not</strong> cancel, move or refund any
+            booking, and it doesn&rsquo;t tell any customer anything. Every appointment stays
+            exactly as it is. Anything that comes in after you opened this list stays open.
+          </p>
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            <span>What did you do? (optional, saved on each one)</span>
+            <input
+              type="text"
+              value={note}
+              maxLength={280}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Called everyone and sorted it out"
               /* 16px floor: anything smaller makes iOS zoom on focus. */
               className="rounded-lg border border-subtle bg-charcoal-800 px-3 py-2 text-base text-offwhite placeholder:text-muted/60 focus:border-gold/50"
             />

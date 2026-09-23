@@ -48,6 +48,11 @@ export interface ConflictPage {
   nextCursor: ConflictCursor | null;
   /** Always the OPEN count, whatever the filter - it drives the tab badge. */
   unresolvedCount: number;
+  /**
+   * When the server read this page. "Resolve all" sends it back, with the
+   * count above, so it can never reach a conflict the manager was not shown.
+   */
+  asOf: string;
 }
 
 export type ConflictStatus = "open" | "resolved" | "all";
@@ -102,4 +107,33 @@ export async function resolveConflictAction(
     resolvedByName: res.data.resolvedByName,
     resolutionNote: res.data.resolutionNote,
   };
+}
+
+export interface ResolveAllResult {
+  ok: boolean;
+  /** How many THIS call resolved - fewer than asked if a teammate got there first. */
+  resolved?: number;
+  /**
+   * "conflicts_changed" = more were open than the manager was shown, so
+   * nothing was written. The list has to be re-read and confirmed again.
+   */
+  error?: string;
+}
+
+export async function resolveAllConflictsAction(opts: {
+  asOf: string;
+  expected: number;
+  note?: string;
+}): Promise<ResolveAllResult> {
+  const res = await apiSend<{ ok: boolean; resolved: number }>(
+    "POST",
+    "/api/booking-conflicts/resolve-all",
+    {
+      asOf: opts.asOf,
+      expected: opts.expected,
+      ...(opts.note && opts.note.trim() ? { note: opts.note.trim() } : {}),
+    },
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, resolved: res.data.resolved };
 }
