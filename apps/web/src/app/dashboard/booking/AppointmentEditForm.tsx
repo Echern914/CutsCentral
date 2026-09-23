@@ -56,10 +56,40 @@ function toLocalParts(iso: string, timezone: string): { date: string; time: stri
   };
 }
 
+/** The booking's current length in minutes, or null when the row has no end. */
+function spanMinutes(row: AgendaRow): number | null {
+  return row.end
+    ? Math.round((new Date(row.end).getTime() - new Date(row.start).getTime()) / 60_000)
+    : null;
+}
+
+/**
+ * 🔴 DURATION IS TEXT, NOT A NUMBER. Held as a number, clearing the box gave
+ * `Number("") === 0`, React wrote that 0 back into the input, and it could not
+ * be deleted - typing 30 then read "030". An empty box now stays empty, with a
+ * grey "0" placeholder, and the text is parsed only when it is compared or
+ * sent. Blank MEANS zero, so a booking with no length is not a change.
+ */
+const DURATION_MIN = 5;
+const DURATION_MAX = 600;
+
 export interface AppointmentEditState {
   ctx: EditContext | null;
   loadError: boolean;
   pending: boolean;
+  /**
+   * True once something on the form differs from the booking - including a
+   * value that is not valid yet, so tapping Save can say what is wrong with
+   * it. The footer's Save stays disabled until then.
+   */
+  dirty: boolean;
+  /**
+   * Why the last Save did not go through, in the barber's words. Rendered in
+   * the sheet's FOOTER, directly above Save: a toast draws beneath the
+   * dialog, so on a phone every refusal used to be invisible and a tap on
+   * Save looked like nothing happened. Cleared by the next edit or save.
+   */
+  saveError: string | null;
   /**
    * The footer hands this its click event, so it reads its argument
    * defensively - only a real confirmation string counts.
@@ -85,8 +115,9 @@ export interface AppointmentEditState {
     setDate: (v: string) => void;
     time: string;
     setTime: (v: string) => void;
-    durationMin: number;
-    setDurationMin: (v: number) => void;
+    /** Minutes, as typed. See DURATION IS TEXT above. */
+    duration: string;
+    setDuration: (v: string) => void;
     price: string;
     setPrice: (v: string) => void;
     notes: string;
@@ -128,11 +159,10 @@ export function useAppointmentEdit({
   const [staffId, setStaffId] = useState<string | null>(row.staffId ?? null);
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
-  const [durationMin, setDurationMin] = useState<number>(() =>
-    row.end
-      ? Math.round((new Date(row.end).getTime() - new Date(row.start).getTime()) / 60_000)
-      : 30,
-  );
+  const [duration, setDuration] = useState<string>(() => {
+    const min = spanMinutes(row) ?? 30;
+    return min > 0 ? String(min) : "";
+  });
   const [price, setPrice] = useState<string>(row.price != null ? String(row.price) : "");
   const [notes, setNotes] = useState<string>(row.notes ?? "");
   const [clientId, setClientId] = useState<string | null>(row.clientId ?? null);
@@ -142,6 +172,7 @@ export function useAppointmentEdit({
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [blockConflict, setBlockConflict] = useState<BlockConflict | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   // 🔴 NOT useTransition's `isPending` on its own. React 18 ends a transition
   // when the callback RETURNS, and an async callback returns its promise
   // immediately - so isPending is false for the entire time the request is
@@ -184,32 +215,36 @@ export function useAppointmentEdit({
     setEmail(detail.contact.email ?? "");
   }, [detail]);
 
-  function save(opts?: { confirmation?: string }) {
-    // The footer passes its click event straight through, so only an actual
-    // string is treated as a confirmation.
-    const externalBlockConfirmation =
-      typeof opts?.confirmation === "string" && opts.confirmation.length > 0
-        ? opts.confirmation
-        : undefined;
-    if (!ctx || inFlight.current) return;
-    const [y, m, d] = date.split("-").map(Number) as [number, number, number];
-    const [hh, mm] = time.split(":").map(Number) as [number, number];
-    if (!y || !m || !d || Number.isNaN(hh) || Number.isNaN(mm)) {
-      toast("Pick a valid date and time", "error");
-      return;
-    }
-    const startsAt = zonedWallTimeToUtc(y, m - 1, d, hh * 60 + mm, ctx.timezone);
-
+  /**
+   * What Save would send, worked out from the form as it stands. ONE function
+   * answers both "is there anything to save?" (the footer's enabled state) and
+   * "what does Save send?", so the button can never be live for a save that
+   * would then do nothing. Null until the context has loaded; `problem` is a
+   * value that cannot be sent as typed.
+   */
+  function draftEdit(): { patch: Record<string, unknown>; problem: string | null } | null {
+    if (!ctx) return null;
     // Send only what CHANGED. A field the barber never touched must not be
     // rewritten - that is how an untouched price silently becomes null.
     const patch: Record<string, unknown> = {};
+    const [y, m, d] = date.split("-").map(Number) as [number, number, number];
+    const [hh, mm] = time.split(":").map(Number) as [number, number];
+    if (!y || !m || !d || Number.isNaN(hh) || Number.isNaN(mm)) {
+      return { patch, problem: "Pick a valid date and time." };
+    }
+    const startsAt = zonedWallTimeToUtc(y, m - 1, d, hh * 60 + mm, ctx.timezone);
     if (startsAt.toISOString() !== row.start) patch.startsAt = startsAt.toISOString();
     if (staffId && staffId !== row.staffId) patch.staffId = staffId;
     if (serviceId && serviceId !== row.serviceId) patch.serviceId = serviceId;
-    const originalDuration = row.end
-      ? Math.round((new Date(row.end).getTime() - new Date(row.start).getTime()) / 60_000)
-      : null;
-    if (durationMin !== originalDuration) patch.durationMin = durationMin;
+    let problem: string | null = null;
+    const minutes = duration.trim() === "" ? 0 : Number(duration);
+    if (minutes !== spanMinutes(row)) {
+      if (Number.isInteger(minutes) && minutes >= DURATION_MIN && minutes <= DURATION_MAX) {
+        patch.durationMin = minutes;
+      } else {
+        problem = `Set a length between ${DURATION_MIN} and ${DURATION_MAX} minutes.`;
+      }
+    }
     const priceNum = price.trim() === "" ? null : Number(price);
     if (priceNum !== (row.price ?? null) && !Number.isNaN(priceNum)) patch.price = priceNum;
     if (notes !== (row.notes ?? "")) patch.notes = notes || null;
@@ -221,9 +256,35 @@ export function useAppointmentEdit({
       if (phone.trim() !== basePhone.trim()) patch.phone = phone.trim() || null;
       if (email.trim() !== baseEmail.trim()) patch.email = email.trim() || null;
     }
+    return { patch, problem };
+  }
 
+  const draft = draftEdit();
+  const dirty = draft !== null && (draft.problem !== null || Object.keys(draft.patch).length > 0);
+  // Any edit makes the last refusal stale: it was about a form that no longer
+  // exists, and leaving it up would blame the new values for the old ones.
+  const draftKey = draft ? JSON.stringify(draft) : "";
+  useEffect(() => {
+    setSaveError(null);
+  }, [draftKey]);
+
+  function save(opts?: { confirmation?: string }) {
+    // The footer passes its click event straight through, so only an actual
+    // string is treated as a confirmation.
+    const externalBlockConfirmation =
+      typeof opts?.confirmation === "string" && opts.confirmation.length > 0
+        ? opts.confirmation
+        : undefined;
+    if (inFlight.current) return;
+    const next = draftEdit();
+    if (!next) return;
+    if (next.problem) {
+      setSaveError(next.problem);
+      return;
+    }
+    const patch = next.patch;
     if (Object.keys(patch).length === 0) {
-      toast("Nothing to save yet");
+      setSaveError("Nothing has changed yet.");
       return;
     }
     // Answers the refusal the barber is looking at, and only that one: the
@@ -233,6 +294,7 @@ export function useAppointmentEdit({
 
     inFlight.current = true;
     setSaving(true);
+    setSaveError(null);
     start(async () => {
       let res;
       try {
@@ -254,12 +316,14 @@ export function useAppointmentEdit({
           return;
         }
         // Any other refusal is the authoritative answer now - the block banner
-        // is out of date, so it goes and the real error is what he sees.
+        // is out of date, so it goes and the real error is what he sees. Not
+        // a toast: see `saveError`.
         setBlockConflict(null);
-        toast(errorCopy(vocab)[res.error ?? ""] ?? "Couldn't save those changes", "error");
+        setSaveError(errorCopy(vocab)[res.error ?? ""] ?? "Couldn't save those changes. Try again.");
         return;
       }
       setBlockConflict(null);
+      setSaveError(null);
       // Honest about the Acuity half. A move whose block did not confirm is
       // NOT a clean success, and saying so is the whole point of reporting it.
       if (res.mirror === "unknown") {
@@ -277,6 +341,8 @@ export function useAppointmentEdit({
     ctx,
     loadError,
     pending: pending || saving,
+    dirty,
+    saveError,
     save,
     blockConflict,
     confirmBlock: () => save({ confirmation: blockConflict?.confirmation }),
@@ -292,8 +358,8 @@ export function useAppointmentEdit({
       setDate,
       time,
       setTime,
-      durationMin,
-      setDurationMin,
+      duration,
+      setDuration,
       price,
       setPrice,
       notes,
@@ -461,7 +527,7 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
               const id = e.target.value || null;
               f.setServiceId(id);
               const svc = ctx.services.find((s) => s.id === id);
-              if (svc) f.setDurationMin(svc.durationMin);
+              if (svc) f.setDuration(String(svc.durationMin));
             }}
             className={INPUT}
           >
@@ -525,11 +591,13 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
         <Field label="Duration" hint={`Minutes in the ${vocab.stationNoun}.`}>
           <input
             type="number"
-            min={5}
-            max={600}
+            inputMode="numeric"
+            min={DURATION_MIN}
+            max={DURATION_MAX}
             step={5}
-            value={f.durationMin}
-            onChange={(e) => f.setDurationMin(Number(e.target.value))}
+            value={f.duration}
+            onChange={(e) => f.setDuration(e.target.value)}
+            placeholder="0"
             className={INPUT}
           />
         </Field>
@@ -584,8 +652,13 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
 // name the workspace or the provider, and a module-level constant has no
 // vocabulary to read.
 const errorCopy = (vocab: BusinessVocabulary): Record<string, string> => ({
-  slot_taken: `That time is already taken on this ${vocab.stationNoun}.`,
-  invalid_slot: "That time is outside your booking hours.",
+  // Both of these come back for a LENGTH change as often as a move - a
+  // booking stretched into the next one is refused exactly like a booking
+  // moved onto it - so neither may talk only about "that time".
+  slot_taken: `That runs into another booking on this ${vocab.stationNoun}. Try a shorter length or another time.`,
+  // Hours are the staff member's AND the service's own: a service offered only
+  // 1-2:30 and 4:30-8 is refused at 3:00 even inside the working day.
+  invalid_slot: "That time isn't open for this service — it's outside your hours or the hours this service is offered.",
   // Only a FALLBACK: the server names the actual block and window, and that
   // sentence is what the banner shows. This is what it says if a refusal ever
   // arrives without one.

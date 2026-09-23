@@ -96,11 +96,24 @@ const detailFor = (phone: string) =>
  * button hands the CLICK EVENT to `save`, which is why `save` has to read its
  * argument defensively instead of trusting it to be a confirmation.
  */
-function Footer({ pending, onSave }: { pending: boolean; onSave: () => void }) {
+function Footer({
+  pending,
+  dirty,
+  error,
+  onSave,
+}: {
+  pending: boolean;
+  dirty: boolean;
+  error: string | null;
+  onSave: () => void;
+}) {
   return (
-    <button type="button" disabled={pending} onClick={onSave}>
-      {pending ? "Saving…" : "Save changes"}
-    </button>
+    <div data-qa="footer">
+      {error && <p role="alert">{error}</p>}
+      <button type="button" disabled={pending || !dirty} onClick={onSave}>
+        {pending ? "Saving…" : "Save changes"}
+      </button>
+    </div>
   );
 }
 
@@ -109,7 +122,12 @@ function Harness({ detail = null }: { detail?: AppointmentDetail | null }) {
   return (
     <div>
       <AppointmentEditFields state={state} />
-      <Footer pending={state.pending} onSave={state.save} />
+      <Footer
+        pending={state.pending}
+        dirty={state.dirty}
+        error={state.saveError}
+        onSave={state.save}
+      />
       {/* 🔴 TWO CONFIRMS IN ONE HANDLER. Separate clicks are separate tasks, so
           React re-renders between them and `disabled` alone stops the second -
           which means a disabled button cannot prove anything about re-entry.
@@ -291,11 +309,13 @@ describe("the edit sheet meets an external block", () => {
     save();
     await screen.findByRole("alertdialog");
 
-    // Someone took the slot in the meantime.
+    // Someone took the slot in the meantime. The answer is read above Save -
+    // a toast would draw beneath the sheet (AppointmentEditSave.test.tsx).
     editAppointment.mockResolvedValueOnce({ ok: false, error: "slot_taken" });
     fireEvent.click(screen.getByRole("button", { name: "Save over this block" }));
-    await waitFor(() => expect(toast).toHaveBeenCalled());
-    expect(toast.mock.calls[0]![0]).toMatch(/already taken/i);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/runs into another booking/i);
+    expect(toast).not.toHaveBeenCalled();
     // The block banner is gone - it is no longer the authoritative answer.
     expect(screen.queryByRole("alertdialog")).toBeNull();
     // The sheet is open and nothing he typed was lost.
