@@ -126,7 +126,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        and be one App Store Connect has not seen, and 42 was never uploaded.
   //
   // 1.1.0 = build 42. Minor, not patch: #423/#424/#426/#427 are features.
-  version: "1.1.1",
+  // 1.1.1 = build 44: ITMS-90683 purpose strings only (#463). 1.1.0 was approved,
+  //        so its train was closed - App Store Connect refused build 44 as 1.1.0.
+  // 1.2.0 = build 45: TAP TO PAY ON, the first build signed with the entitlement
+  //        for distribution. Minor, not patch - it is a feature. Built with
+  //        TAP_TO_PAY_NATIVE_ENABLED=true; a build without the flag is NOT this
+  //        build, whatever its number (see docs/tap-to-pay-setup.md).
+  version: "1.2.0",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
@@ -142,7 +148,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "44",
+    buildNumber: "45",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
