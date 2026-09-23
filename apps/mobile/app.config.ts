@@ -126,7 +126,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        and be one App Store Connect has not seen, and 42 was never uploaded.
   //
   // 1.1.0 = build 42. Minor, not patch: #423/#424/#426/#427 are features.
-  version: "1.1.0",
+  version: "1.1.1",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
@@ -142,7 +142,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "42",
+    buildNumber: "44",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
@@ -245,31 +245,37 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       "@react-native-google-signin/google-signin",
       { iosUrlScheme: GOOGLE_IOS_URL_SCHEME },
     ],
-    // Stripe Terminal, for Tap to Pay on iPhone - behind the SAME flag as the
-    // entitlement. The plugin writes the Info.plist permission strings the SDK
-    // requires: location is MANDATORY for Terminal (Stripe uses it for fraud
-    // and dispute evidence on card-present charges), not optional chrome we
-    // could drop for being intrusive.
+    // Stripe Terminal, for Tap to Pay on iPhone. The plugin writes the
+    // Info.plist permission strings the SDK requires: location is MANDATORY for
+    // Terminal (Stripe uses it for fraud and dispute evidence on card-present
+    // charges), plus Bluetooth and local network.
     //
-    // 🔴 GATED TOO, NOT JUST THE ENTITLEMENT. A build that cannot take a
-    // contactless payment has no business asking iOS for location, and App
-    // Review is entitled to ask why a barbershop app wants it. Off by default,
-    // there is no permission string and nothing to justify.
+    // 🔴 UNCONDITIONAL, UNLIKE THE ENTITLEMENT - and build 43 is why. This
+    // used to sit behind TAP_TO_PAY_NATIVE_ENABLED on the theory that a build
+    // which cannot take a payment should not ask for location. But the SDK is
+    // an ordinary dependency: it links into EVERY binary whether or not the
+    // flag is set. Build 43 shipped the SDK with the flag off, so App Store
+    // Connect saw Terminal's location/Bluetooth/local-network API usage with no
+    // purpose strings and raised ITMS-90683 - a review-rejection risk.
+    //
+    // The two describe different things. These strings describe what the
+    // binary CONTAINS, which is unconditional. The entitlement (above) and
+    // extra.tapToPayNativeEnabled (below) describe what the binary is
+    // PERMITTED and WILLING to do, and those stay behind the flag. A purpose
+    // string is only shown when code actually requests the permission, which
+    // happens only when the feature is armed - so a dark build carries them
+    // silently.
     //
     // 🔴 A CONFIG PLUGIN DOES NOTHING IN AN OTA UPDATE. This needs a new native
     // build, like expo-web-browser and expo-secure-store above.
-    ...(TAP_TO_PAY_NATIVE_ENABLED
-      ? [
-          [
-            "@stripe/stripe-terminal-react-native",
-            {
-              bluetoothBackgroundMode: false,
-              locationWhenInUsePermission:
-                "Location is required by our card processor to accept card payments at your chair.",
-            },
-          ] as [string, Record<string, unknown>],
-        ]
-      : []),
+    [
+      "@stripe/stripe-terminal-react-native",
+      {
+        bluetoothBackgroundMode: false,
+        locationWhenInUsePermission:
+          "Location is required by our card processor to accept card payments at your chair.",
+      },
+    ] as [string, Record<string, unknown>],
     // GoogleSignIn 9.x pulls in AppCheckCore (Swift) + GoogleUtilities /
     // RecaptchaInterop (no module maps); under Expo's static-library build that
     // breaks `pod install` unless those transitive pods get modular headers.
