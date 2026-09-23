@@ -294,7 +294,8 @@ export function AppointmentSheet({
     view === "edit" ? (
       <EditFooter
         pending={edit.pending}
-        disabled={!edit.ctx}
+        disabled={!edit.ctx || !edit.dirty}
+        error={edit.saveError}
         onCancel={() => setView("detail")}
         onSave={edit.save}
       />
@@ -2092,26 +2093,40 @@ function DetailFooter({
   );
 }
 
+/**
+ * Save is live only once something has changed, and a refusal is read HERE,
+ * directly above it - the same rule as FormFooter. A toast draws beneath the
+ * dialog, so on a phone the refusals were invisible and Save looked broken.
+ */
 function EditFooter({
   pending,
   disabled,
+  error,
   onCancel,
   onSave,
 }: {
   pending: boolean;
   disabled: boolean;
+  error: string | null;
   onCancel: () => void;
   onSave: () => void;
 }) {
   return (
-    <TwoUp
-      secondary={{ label: "Cancel", onClick: onCancel, disabled: pending }}
-      primary={{
-        label: pending ? "Saving…" : "Save changes",
-        onClick: onSave,
-        disabled: pending || disabled,
-      }}
-    />
+    <div className="flex w-full flex-col gap-2">
+      {error && (
+        <p role="alert" className="text-sm text-danger-soft">
+          {error}
+        </p>
+      )}
+      <TwoUp
+        secondary={{ label: "Cancel", onClick: onCancel, disabled: pending }}
+        primary={{
+          label: pending ? "Saving…" : "Save changes",
+          onClick: onSave,
+          disabled: pending || disabled,
+        }}
+      />
+    </div>
   );
 }
 
