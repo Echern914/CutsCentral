@@ -365,7 +365,8 @@ model Shop {
   // our own instructions, sent their visitors to the claimant's page.
   customDomain           String?   @unique
   customDomainVerifiedAt DateTime?
-  // The secret behind the TXT record `_chairback.<domain>`. Minted on connect
+  // The secret behind the ownership TXT record on the domain (`@`; the older
+  // `_chairback.<domain>` is still accepted). Minted on connect
   // (and lazily for a row that predates it), shown only to the owning shop,
   // cleared on disconnect. Possession of the zone is the only way to publish
   // it, which is what makes it proof.

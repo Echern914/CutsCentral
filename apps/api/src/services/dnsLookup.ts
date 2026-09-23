@@ -5,9 +5,9 @@ import { promises as dns } from "node:dns";
  *
  * Two jobs, and they are different in kind:
  *
- *   OWNERSHIP. The `_chairback.<domain>` TXT record carries a secret minted for
- *   one shop. Only somebody who can write that zone can publish it, so finding
- *   it is proof the shop making the claim controls the domain. This is the
+ *   OWNERSHIP. A TXT record on the domain carries a secret minted for one
+ *   shop. Only somebody who can write that zone can publish it, so finding it
+ *   is proof the shop making the claim controls the domain. This is the
  *   security property; nothing about it comes from Vercel.
  *
  *   DIAGNOSIS. What the apex and www records actually point at, so the
@@ -23,8 +23,29 @@ import { promises as dns } from "node:dns";
 export const VERCEL_APEX_A = "76.76.21.21";
 /** Vercel's stable CNAME target for www. */
 export const VERCEL_WWW_CNAME = "cname.vercel-dns.com";
-/** The host the ownership record lives on, under the shop's domain. */
-export const OWNERSHIP_TXT_HOST = "_chairback";
+/**
+ * Where we TELL owners to put the ownership record: the domain itself, `@` -
+ * the same Name as the A record, and where Google's and Microsoft's own
+ * verification records live. It sits alongside whatever TXT records are
+ * already there (SPF and friends); the prefix below is what picks ours out.
+ *
+ * It used to be `_chairback.<domain>`, and owners did not type that. Given an
+ * apex A record on `@`, they put the TXT on `@` too - the first real connection
+ * did exactly that - and the registrar that did catch the long name (GoDaddy)
+ * only did so by asking a question nobody should need to answer. A Name the
+ * owner types without being told twice is worth more than a tidy subdomain:
+ * three of three owners who connected a domain before this never finished.
+ */
+export const OWNERSHIP_TXT_NAME = "@";
+
+/**
+ * 🔴 The OLD location, still ACCEPTED - never shown. It was the instructed
+ * place for the ownership record from #461 until this change, owners have
+ * published it there, and a record that satisfied our own instructions must
+ * not quietly stop counting. Either location proves the same thing: whoever
+ * can write one can write the other.
+ */
+export const LEGACY_OWNERSHIP_TXT_HOST = "_chairback";
 /** The record's value prefix; the shop's token follows the `=`. */
 export const OWNERSHIP_TXT_PREFIX = "chairback-verify=";
 
@@ -69,14 +90,14 @@ function resolver(): DnsResolver {
 }
 
 /** The TXT record a shop must publish for `token`. */
-export function ownershipRecord(domain: string, token: string): {
+export function ownershipRecord(token: string): {
   type: "TXT";
   name: string;
   value: string;
 } {
   return {
     type: "TXT",
-    name: `${OWNERSHIP_TXT_HOST}.${domain}`,
+    name: OWNERSHIP_TXT_NAME,
     value: `${OWNERSHIP_TXT_PREFIX}${token}`,
   };
 }
@@ -115,10 +136,11 @@ export async function lookupDomainDns(
   expectedToken: string | null,
 ): Promise<DomainDnsReport> {
   const r = resolver();
-  const [apex, www, txt] = await Promise.all([
+  const [apex, www, txtRoot, txtLegacy] = await Promise.all([
     attempt(() => r.resolve4(domain)),
     attempt(() => r.resolveCname(`www.${domain}`)),
-    attempt(() => r.resolveTxt(`${OWNERSHIP_TXT_HOST}.${domain}`)),
+    attempt(() => r.resolveTxt(domain)),
+    attempt(() => r.resolveTxt(`${LEGACY_OWNERSHIP_TXT_HOST}.${domain}`)),
   ]);
 
   const apexReport: DomainDnsReport["apex"] = !apex.ok
@@ -133,29 +155,49 @@ export async function lookupDomainDns(
       ? { status: "points_here", found: VERCEL_WWW_CNAME }
       : { status: www.value.length ? "points_elsewhere" : "missing", found: www.value[0] ?? null };
 
-  let txtStatus: TxtStatus;
-  if (!txt.ok) {
-    txtStatus = txt.kind;
-  } else {
-    // A TXT answer is an array of chunk arrays; a long value arrives split.
-    const values = txt.value.map((chunks) => chunks.join(""));
-    const ours = values.filter((v) => v.startsWith(OWNERSHIP_TXT_PREFIX));
-    if (ours.length === 0) txtStatus = "missing";
-    else if (expectedToken && ours.includes(`${OWNERSHIP_TXT_PREFIX}${expectedToken}`)) {
-      txtStatus = "found";
-    } else {
-      // A record with our prefix but somebody else's token: a previous
-      // connection, or another shop's claim. Not proof for THIS shop.
-      txtStatus = "wrong";
-    }
-  }
-
   return {
     apex: apexReport,
     www: wwwReport,
-    txt: { status: txtStatus },
+    txt: {
+      status: strongestTxt(
+        txtAt(txtRoot, expectedToken),
+        txtAt(txtLegacy, expectedToken),
+      ),
+    },
     checkedAt: new Date().toISOString(),
   };
+}
+
+/** What ONE location's TXT answer says about this shop's token. */
+function txtAt(
+  answer: Awaited<ReturnType<typeof attempt<string[][]>>>,
+  expectedToken: string | null,
+): TxtStatus {
+  if (!answer.ok) return answer.kind;
+  // A TXT answer is an array of chunk arrays; a long value arrives split. On
+  // the root it also carries every OTHER record there (SPF, site
+  // verifications), which the prefix filters out.
+  const values = answer.value.map((chunks) => chunks.join(""));
+  const ours = values.filter((v) => v.startsWith(OWNERSHIP_TXT_PREFIX));
+  if (ours.length === 0) return "missing";
+  if (expectedToken && ours.includes(`${OWNERSHIP_TXT_PREFIX}${expectedToken}`)) return "found";
+  // A record with our prefix but somebody else's token: a previous
+  // connection, or another shop's claim. Not proof for THIS shop.
+  return "wrong";
+}
+
+/**
+ * Two locations, one verdict. `found` anywhere is proof. Past that, 🔴 an
+ * unreadable location outranks every negative: if one lookup failed, the
+ * token may be sitting exactly there, so neither "wrong" nor "missing" can be
+ * said - only "could not check". Then "wrong" (tell them to replace it) over
+ * "missing" (tell them to add it).
+ */
+function strongestTxt(a: TxtStatus, b: TxtStatus): TxtStatus {
+  for (const s of ["found", "error", "wrong"] as const) {
+    if (a === s || b === s) return s;
+  }
+  return "missing";
 }
 
 /**

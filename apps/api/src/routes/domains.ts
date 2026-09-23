@@ -35,8 +35,9 @@ import {
  *
  * 🔴 VERIFIED IS THE GATE. Until `customDomainVerifiedAt` is stamped, the
  * public by-domain resolver refuses the domain and nobody is redirected. It is
- * stamped only when the `_chairback` TXT record resolves with THIS shop's
- * token and the apex A record points at Vercel. Before this, the redirect was
+ * stamped only when the ownership TXT record (on `@`, or the older
+ * `_chairback` host) resolves with THIS shop's token and the apex A record
+ * points at Vercel. Before this, the redirect was
  * live on insert, and nothing proved the claimant controlled the domain -
  * Vercel's "verified" only means "not on another Vercel account", and its
  * "configured" means "some A record points at us", which is the REAL owner's
@@ -63,7 +64,7 @@ function dnsRecordsFor(domain: string | null, token: string | null): DnsRecord[]
     { type: "CNAME", name: "www", value: VERCEL_WWW_CNAME },
   ];
   if (domain && token) {
-    const txt = ownershipRecord(domain, token);
+    const txt = ownershipRecord(token);
     records.push({ type: "TXT", name: txt.name, value: txt.value });
   }
   return records;

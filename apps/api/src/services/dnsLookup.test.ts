@@ -30,12 +30,91 @@ function resolver(over: Partial<DnsResolver>): DnsResolver {
 afterEach(() => __setDnsResolverForTests(undefined));
 
 describe("ownershipRecord", () => {
-  it("names the _chairback host under the domain and prefixes the token", () => {
-    expect(ownershipRecord("example.com", "tok")).toEqual({
+  it("goes on @ - the same Name as the A record - and prefixes the token", () => {
+    expect(ownershipRecord("tok")).toEqual({
       type: "TXT",
-      name: "_chairback.example.com",
+      name: "@",
       value: `${OWNERSHIP_TXT_PREFIX}tok`,
     });
+  });
+});
+
+/**
+ * 🔴 THE TWO LOCATIONS. The record is SHOWN on `@` and ACCEPTED on `@` or the
+ * older `_chairback.<domain>`. These answer per HOST, unlike the classifier
+ * tests below, because "which host was it on" is the whole question.
+ */
+describe("TXT ownership - where the record may live", () => {
+  const ROOT = "example.com";
+  const LEGACY = "_chairback.example.com";
+  const tok = [`${OWNERSHIP_TXT_PREFIX}abc`];
+
+  /** A resolver whose TXT answer depends on the host asked. */
+  function txtBy(byHost: Record<string, string[][] | Error>): DnsResolver {
+    return resolver({
+      resolveTxt: async (host) => {
+        const a = byHost[host];
+        if (a === undefined) throw err("ENOTFOUND");
+        if (a instanceof Error) throw a;
+        return a;
+      },
+    });
+  }
+
+  it("found on the ROOT alone - what an owner types when the A record is on @", async () => {
+    __setDnsResolverForTests(txtBy({ [ROOT]: [["v=spf1 include:_spf.google.com ~all"], tok] }));
+    expect((await lookupDomainDns(ROOT, "abc")).txt.status).toBe("found");
+  });
+
+  it("🔴 still found on the OLD _chairback host alone - a record our own instructions asked for keeps counting", async () => {
+    __setDnsResolverForTests(txtBy({ [ROOT]: [["v=spf1 -all"]], [LEGACY]: [tok] }));
+    expect((await lookupDomainDns(ROOT, "abc")).txt.status).toBe("found");
+  });
+
+  it("asks exactly those two hosts, and no others", async () => {
+    const asked: string[] = [];
+    __setDnsResolverForTests(
+      resolver({
+        resolveTxt: async (host) => {
+          asked.push(host);
+          throw err("ENOTFOUND");
+        },
+      }),
+    );
+    await lookupDomainDns(ROOT, "abc");
+    expect(asked.sort()).toEqual([LEGACY, ROOT].sort());
+  });
+
+  it("found in one place beats somebody else's token in the other", async () => {
+    __setDnsResolverForTests(
+      txtBy({ [ROOT]: [[`${OWNERSHIP_TXT_PREFIX}old-connection`]], [LEGACY]: [tok] }),
+    );
+    expect((await lookupDomainDns(ROOT, "abc")).txt.status).toBe("found");
+  });
+
+  it("wrong when a stale token is on the root and nothing is on the old host", async () => {
+    __setDnsResolverForTests(txtBy({ [ROOT]: [[`${OWNERSHIP_TXT_PREFIX}old-connection`]] }));
+    expect((await lookupDomainDns(ROOT, "abc")).txt.status).toBe("wrong");
+  });
+
+  it("🔴 error - NOT missing - when one host could not be read and the other is empty", async () => {
+    // The token may be sitting exactly where we could not look.
+    __setDnsResolverForTests(txtBy({ [ROOT]: err("ETIMEOUT") }));
+    expect((await lookupDomainDns(ROOT, "abc")).txt.status).toBe("error");
+  });
+
+  it("🔴 error - NOT wrong - when one host could not be read and the other holds a stale token", async () => {
+    // "Replace it" would be bad advice if the right record is on the host we
+    // could not read.
+    __setDnsResolverForTests(
+      txtBy({ [ROOT]: err("ESERVFAIL"), [LEGACY]: [[`${OWNERSHIP_TXT_PREFIX}old-connection`]] }),
+    );
+    expect((await lookupDomainDns(ROOT, "abc")).txt.status).toBe("error");
+  });
+
+  it("an unreadable host does not hide proof found on the other", async () => {
+    __setDnsResolverForTests(txtBy({ [ROOT]: err("ETIMEOUT"), [LEGACY]: [tok] }));
+    expect((await lookupDomainDns(ROOT, "abc")).txt.status).toBe("found");
   });
 });
 
