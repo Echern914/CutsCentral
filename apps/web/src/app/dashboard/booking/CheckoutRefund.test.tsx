@@ -13,11 +13,11 @@ import type { CheckoutRefundable } from "./actions";
  *  - a payment that cannot be refunded here offers no button at all.
  */
 
-const getCheckoutAction = vi.fn();
+const getCheckoutRefundsAction = vi.fn();
 const refundCheckoutPaymentAction = vi.fn();
 
 vi.mock("./actions", () => ({
-  getCheckoutAction: (...a: unknown[]) => getCheckoutAction(...a),
+  getCheckoutRefundsAction: (...a: unknown[]) => getCheckoutRefundsAction(...a),
   refundCheckoutPaymentAction: (...a: unknown[]) => refundCheckoutPaymentAction(...a),
 }));
 
@@ -36,7 +36,7 @@ const payment = (over: Partial<CheckoutRefundable> = {}): CheckoutRefundable => 
 });
 
 function withRefunds(refunds: CheckoutRefundable[]) {
-  getCheckoutAction.mockResolvedValue({ ok: true, data: { refunds } });
+  getCheckoutRefundsAction.mockResolvedValue({ ok: true, refunds });
 }
 
 const toast = vi.fn();
@@ -45,7 +45,7 @@ const mount = () =>
   render(<CheckoutRefund appointmentId="appt_1" toast={toast} onRefunded={onRefunded} />);
 
 beforeEach(() => {
-  getCheckoutAction.mockReset();
+  getCheckoutRefundsAction.mockReset();
   refundCheckoutPaymentAction.mockReset();
   toast.mockReset();
   onRefunded.mockReset();
@@ -55,8 +55,18 @@ describe("the refund button", () => {
   it("renders nothing when this checkout took no card payment", async () => {
     withRefunds([]);
     const { container } = mount();
-    await waitFor(() => expect(getCheckoutAction).toHaveBeenCalled());
+    await waitFor(() => expect(getCheckoutRefundsAction).toHaveBeenCalled());
     expect(container.innerHTML).toBe("");
+  });
+
+  it("🔴 reads the refunds read, which answers for a CANCELLED appointment too", async () => {
+    // The checkout read refuses a cancelled appointment, and borrowing it is
+    // how cancelling a paid cut hid this button. The mock above offers no
+    // `getCheckoutAction` at all, so reaching for it again fails this suite.
+    withRefunds([payment()]);
+    mount();
+    expect(await screen.findByText("Refund $1.00")).toBeTruthy();
+    expect(getCheckoutRefundsAction).toHaveBeenCalledWith("appt_1");
   });
 
   it("🔴 the first tap refunds NOTHING - it only asks, with the figure and the card", async () => {
@@ -86,7 +96,7 @@ describe("the refund button", () => {
     });
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Refunded $1.00", "success"));
     expect(onRefunded).toHaveBeenCalled();
-    expect(getCheckoutAction).toHaveBeenCalledTimes(2);
+    expect(getCheckoutRefundsAction).toHaveBeenCalledTimes(2);
   });
 
   it("an unconfirmed refund says pressing again is safe", async () => {

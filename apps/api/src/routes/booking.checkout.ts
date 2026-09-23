@@ -280,6 +280,100 @@ async function loadCheckout(
   };
 }
 
+/**
+ * THE CARD PAYMENTS A CHECKOUT TOOK ON THIS APPOINTMENT, and whether each can be
+ * refunded from ChairBack. Deposits are not listed: they follow the cancellation
+ * rules. Cash is not listed: there is no card to put it back on, and it is
+ * handed back in person. `refundBlocker` is null only when the button would
+ * actually work.
+ *
+ * Deliberately blind to the APPOINTMENT's status - see the refunds route below.
+ */
+async function checkoutRefundables(shopId: string, appointmentId: string) {
+  const checkoutPayments = await runWithShop(shopId, (tx) =>
+    tx.payment.findMany({
+      where: { appointmentId, shopId, purpose: "service_checkout" },
+      select: {
+        id: true,
+        mode: true,
+        status: true,
+        amount: true,
+        capturedAmount: true,
+        refundedAmount: true,
+        ambiguousAt: true,
+        stripePaymentIntentId: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "asc" },
+    }),
+  );
+  const attemptCards = checkoutPayments.length
+    ? await runWithShop(shopId, (tx) =>
+        tx.checkoutAttempt.findMany({
+          where: {
+            appointmentId,
+            shopId,
+            stripePaymentIntentId: { in: checkoutPayments.map((p) => p.stripePaymentIntentId) },
+          },
+          select: { stripePaymentIntentId: true, cardBrand: true, cardLast4: true },
+        }),
+      )
+    : [];
+  const COLLECTED = new Set(["succeeded", "partially_refunded", "refunded"]);
+  return checkoutPayments
+    .filter((p) => COLLECTED.has(p.status))
+    .map((p) => {
+      const collected = p.capturedAmount ?? p.amount;
+      const refundable = Math.max(0, collected - p.refundedAmount);
+      const card = attemptCards.find((a) => a.stripePaymentIntentId === p.stripePaymentIntentId);
+      return {
+        paymentId: p.id,
+        method: p.mode === "terminal" ? "tap_to_pay" : "saved_card",
+        collectedCents: collected,
+        refundedCents: p.refundedAmount,
+        refundableCents: p.refundedAmount > 0 ? 0 : refundable,
+        refundBlocker:
+          refundable <= 0
+            ? "refunded"
+            : p.ambiguousAt
+              ? "unconfirmed_charge"
+              : p.refundedAmount > 0
+                ? "partially_refunded"
+                : null,
+        card: card?.cardBrand && card?.cardLast4 ? { brand: card.cardBrand, last4: card.cardLast4 } : null,
+        paidAt: p.createdAt,
+      };
+    });
+}
+
+/**
+ * GET /api/checkout/appointments/:id/refunds — what the Refund panel shows.
+ *
+ * 🔴 WHY THIS IS NOT JUST THE CHECKOUT READ. The checkout read loads only BOOKED
+ * and COMPLETED appointments, correctly: a cancelled cut has no balance to
+ * collect. But the refund panel used to read from it, so once a PAID
+ * appointment was cancelled the Refund button vanished - and cancelling does
+ * not refund a checkout payment. The first live Tap to Pay payment ended up
+ * exactly there: paid, then cancelled, the customer's dollar with no way back
+ * from ChairBack.
+ *
+ * So refunds get their own read that asks only "is this appointment this
+ * shop's?". The COLLECTION routes keep their status filter, which is what
+ * guarantees a cancelled appointment can never be CHARGED.
+ */
+checkoutRouter.get("/appointments/:id/refunds", async (req, res) => {
+  const shopId = req.shop!.id;
+  const appt = await forShop(shopId).appointment.findFirst({
+    where: { id: req.params.id!, shopId },
+    select: { id: true },
+  });
+  if (!appt) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ refunds: await checkoutRefundables(shopId, appt.id) });
+});
+
 /** The attempt, reduced to what a screen may see. Never the idempotency key. */
 function publicAttempt(a: AttemptRow) {
   return {
@@ -321,65 +415,7 @@ checkoutRouter.get("/appointments/:id", async (req, res) => {
       })
     : null;
   const connectAccountId = shop?.stripeConnectAccountId ?? null;
-
-  // THE CARD PAYMENTS THIS CHECKOUT TOOK, and whether each can be refunded from
-  // here. Deposits are not listed: they follow the cancellation rules. Cash is
-  // not listed: there is no card to put it back on, and it is handed back in
-  // person. `refundBlocker` is null only when the button would actually work.
-  const checkoutPayments = await runWithShop(shopId, (tx) =>
-    tx.payment.findMany({
-      where: { appointmentId: appt.id, shopId, purpose: "service_checkout" },
-      select: {
-        id: true,
-        mode: true,
-        status: true,
-        amount: true,
-        capturedAmount: true,
-        refundedAmount: true,
-        ambiguousAt: true,
-        stripePaymentIntentId: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-  );
-  const attemptCards = checkoutPayments.length
-    ? await runWithShop(shopId, (tx) =>
-        tx.checkoutAttempt.findMany({
-          where: {
-            appointmentId: appt.id,
-            shopId,
-            stripePaymentIntentId: { in: checkoutPayments.map((p) => p.stripePaymentIntentId) },
-          },
-          select: { stripePaymentIntentId: true, cardBrand: true, cardLast4: true },
-        }),
-      )
-    : [];
-  const COLLECTED = new Set(["succeeded", "partially_refunded", "refunded"]);
-  const refunds = checkoutPayments
-    .filter((p) => COLLECTED.has(p.status))
-    .map((p) => {
-      const collected = p.capturedAmount ?? p.amount;
-      const refundable = Math.max(0, collected - p.refundedAmount);
-      const card = attemptCards.find((a) => a.stripePaymentIntentId === p.stripePaymentIntentId);
-      return {
-        paymentId: p.id,
-        method: p.mode === "terminal" ? "tap_to_pay" : "saved_card",
-        collectedCents: collected,
-        refundedCents: p.refundedAmount,
-        refundableCents: p.refundedAmount > 0 ? 0 : refundable,
-        refundBlocker:
-          refundable <= 0
-            ? "refunded"
-            : p.ambiguousAt
-              ? "unconfirmed_charge"
-              : p.refundedAmount > 0
-                ? "partially_refunded"
-                : null,
-        card: card?.cardBrand && card?.cardLast4 ? { brand: card.cardBrand, last4: card.cardLast4 } : null,
-        paidAt: p.createdAt,
-      };
-    });
+  const refunds = await checkoutRefundables(shopId, appt.id);
 
   res.json({
     appointment: {
