@@ -75,7 +75,6 @@ const row: AgendaRow = {
 const REASON = "Blocked in your external calendar: Dentist, Sep 10, 12:00 PM - 2:00 PM";
 const DIGEST = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4";
 
-const toast = vi.fn();
 const onSaved = vi.fn();
 
 /**
@@ -118,7 +117,7 @@ function Footer({
 }
 
 function Harness({ detail = null }: { detail?: AppointmentDetail | null }) {
-  const state = useAppointmentEdit({ row, detail, toast, onSaved });
+  const state = useAppointmentEdit({ row, detail, onSaved });
   return (
     <div>
       <AppointmentEditFields state={state} />
@@ -161,7 +160,6 @@ const patchOf = (call: number) =>
 beforeEach(() => {
   editAppointment.mockReset();
   editAppointment.mockResolvedValue({ ok: true });
-  toast.mockReset();
   onSaved.mockReset();
 });
 
@@ -181,8 +179,7 @@ describe("the edit sheet meets an external block", () => {
 
     const banner = await screen.findByRole("alertdialog");
     expect(banner).toHaveTextContent(REASON);
-    // Not replacement copy, and not a toast that vanishes.
-    expect(toast).not.toHaveBeenCalled();
+    // Not replacement copy - and the hook has no toast to reach for any more.
     expect(document.activeElement).toBe(banner);
     // Every entered value is still there - the sheet stayed open on the edit.
     expect(screen.getByLabelText("Start")).toHaveValue("12:30");
@@ -315,7 +312,6 @@ describe("the edit sheet meets an external block", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save over this block" }));
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/runs into another booking/i);
-    expect(toast).not.toHaveBeenCalled();
     // The block banner is gone - it is no longer the authoritative answer.
     expect(screen.queryByRole("alertdialog")).toBeNull();
     // The sheet is open and nothing he typed was lost.

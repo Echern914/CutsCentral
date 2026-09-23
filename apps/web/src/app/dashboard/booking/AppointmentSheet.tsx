@@ -16,6 +16,7 @@ import {
 import {
   AppointmentEditFields,
   useAppointmentEdit,
+  type SavedNotice,
 } from "./AppointmentEditForm";
 import { CheckoutFlow } from "./CheckoutFlow";
 import { CheckoutRefund } from "./CheckoutRefund";
@@ -135,11 +136,20 @@ export function AppointmentSheet({
   }, [row.id, row.source]);
   useEffect(load, [load]);
 
+  // What the last edit's save said, shown in the footer of the booking it
+  // returns to. Stays until the next edit starts or the sheet closes - a
+  // confirmation that fades while the barber is looking elsewhere is one he
+  // never saw.
+  const [savedNotice, setSavedNotice] = useState<SavedNotice | null>(null);
+  useEffect(() => {
+    if (rawView === "edit") setSavedNotice(null);
+  }, [rawView]);
+
   const edit = useAppointmentEdit({
     row,
     detail,
-    toast,
-    onSaved: () => {
+    onSaved: (notice) => {
+      setSavedNotice(notice);
       setView("detail");
       onChanged();
       load();
@@ -323,7 +333,7 @@ export function AppointmentSheet({
         />
       )
     ) : (
-      <DetailFooter detail={detail} onEdit={() => setView("edit")} />
+      <DetailFooter detail={detail} notice={savedNotice} onEdit={() => setView("edit")} />
     );
 
   return (
@@ -2051,23 +2061,41 @@ function PayView({
  */
 function DetailFooter({
   detail,
+  notice,
   onEdit,
 }: {
   detail: AppointmentDetail | null;
+  /** What the last save said - see SavedNotice. Sits where Save just was. */
+  notice: SavedNotice | null;
   onEdit: () => void;
 }) {
   if (!detail) return null;
   if (detail.editable) {
     return (
-      <button
-        type="button"
-        onClick={onEdit}
-        data-qa="edit-appointment"
-        className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:w-auto sm:px-6"
-      >
-        <PencilIcon />
-        Edit appointment
-      </button>
+      // `sm:items-start` keeps the button its own width once the footer is a
+      // row, exactly as it was before the notice had somewhere to go.
+      <div className="flex w-full flex-col gap-2 sm:items-start">
+        {notice && (
+          <p
+            role="status"
+            className={cn(
+              "text-sm",
+              notice.tone === "success" ? "text-emerald-soft" : "text-amber-300",
+            )}
+          >
+            {notice.message}
+          </p>
+        )}
+        <button
+          type="button"
+          onClick={onEdit}
+          data-qa="edit-appointment"
+          className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:w-auto sm:px-6"
+        >
+          <PencilIcon />
+          Edit appointment
+        </button>
+      </div>
     );
   }
   // Read-only, and it says WHY rather than leaving a dead sheet: a booking

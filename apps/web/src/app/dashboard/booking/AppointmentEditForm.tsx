@@ -15,9 +15,18 @@ import type { AgendaRow } from "./page";
 import { Field, Group, INPUT } from "./formkit";
 import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
 
-/** Same local alias the sibling booking forms use - the provider's own
- * `Toast` interface is a toast OBJECT and is not exported. */
-type Toast = (msg: string, kind?: "success" | "error") => void;
+/**
+ * What a successful save says, for the sheet to show in its own footer.
+ *
+ * 🔴 NOT A TOAST. The toast layer draws beneath the dialog, so on a phone a
+ * save that worked looked exactly like one that did nothing - the barber
+ * pressed Save, the sheet flipped back, and there was no word that it had
+ * saved. `warning` is a save that landed here but not on Acuity.
+ */
+export interface SavedNotice {
+  message: string;
+  tone: "success" | "warning";
+}
 
 /**
  * EDITING AN APPOINTMENT — the fields, and the one save.
@@ -140,14 +149,13 @@ export interface AppointmentEditState {
 export function useAppointmentEdit({
   row,
   detail,
-  toast,
   onSaved,
 }: {
   row: AgendaRow;
   /** Null while the sheet is still loading - contact editing waits for it. */
   detail: AppointmentDetail | null;
-  toast: Toast;
-  onSaved: () => void;
+  /** Called once per successful save, with what to tell the barber. */
+  onSaved: (notice: SavedNotice) => void;
 }): AppointmentEditState {
   const vocab = useVocab();
   const [ctx, setCtx] = useState<EditContext | null>(null);
@@ -326,14 +334,19 @@ export function useAppointmentEdit({
       setSaveError(null);
       // Honest about the Acuity half. A move whose block did not confirm is
       // NOT a clean success, and saying so is the whole point of reporting it.
-      if (res.mirror === "unknown") {
-        toast("Saved — still confirming the time on Acuity", "success");
-      } else if (res.mirror === "failed") {
-        toast("Saved here, but Acuity didn't confirm — the old time stays held", "error");
-      } else {
-        toast(res.status === "PENDING" ? "Request updated" : "Appointment updated", "success");
-      }
-      onSaved();
+      onSaved(
+        res.mirror === "unknown"
+          ? { message: "Saved — still confirming the time on Acuity.", tone: "success" }
+          : res.mirror === "failed"
+            ? {
+                message: "Saved here, but Acuity didn't confirm — the old time stays held there.",
+                tone: "warning",
+              }
+            : {
+                message: res.status === "PENDING" ? "Saved. Request updated." : "Saved. Appointment updated.",
+                tone: "success",
+              },
+      );
     });
   }
 

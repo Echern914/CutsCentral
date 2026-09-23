@@ -211,6 +211,57 @@ describe("Save shows when there is something to save", () => {
   });
 });
 
+/**
+ * "IT PRESSES THE BUTTON AND DOESN'T SHOW CONFIRMATION." A save that worked
+ * was announced with a toast, which draws beneath the dialog - so on a phone
+ * the sheet flipped back to the booking and said nothing at all. The word now
+ * lands in the footer of the booking it returns to, where Save just was.
+ */
+describe("a save that worked says so", () => {
+  async function saveAMove() {
+    await openEdit();
+    fireEvent.change(screen.getByLabelText("Start"), { target: { value: "11:00" } });
+    fireEvent.click(saveButton());
+    return within(footer()).findByRole("status");
+  }
+
+  it("🔴 confirms in the sheet's own footer, not in a toast", async () => {
+    const status = await saveAMove();
+    expect(status).toHaveTextContent("Saved. Appointment updated.");
+    expect(status).toHaveClass("text-emerald-soft");
+    // Right next to the button he'd press to change it again.
+    expect(within(footer()).getByRole("button", { name: /edit appointment/i })).toBeInTheDocument();
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it("stays until the next edit starts, then clears", async () => {
+    await saveAMove();
+    fireEvent.click(within(footer()).getByRole("button", { name: /edit appointment/i }));
+    await screen.findByLabelText(/^Duration/);
+    expect(within(footer()).queryByRole("status")).toBeNull();
+  });
+
+  it("a request says request", async () => {
+    editAppointment.mockResolvedValue({ ok: true, status: "PENDING" });
+    expect(await saveAMove()).toHaveTextContent("Saved. Request updated.");
+  });
+
+  it("🔴 a move Acuity did not confirm is NOT announced as a clean save", async () => {
+    editAppointment.mockResolvedValue({ ok: true, status: "BOOKED", mirror: "failed" });
+    const status = await saveAMove();
+    expect(status).toHaveTextContent(
+      "Saved here, but Acuity didn't confirm — the old time stays held there.",
+    );
+    expect(status).toHaveClass("text-amber-300");
+    expect(status).not.toHaveClass("text-emerald-soft");
+  });
+
+  it("a move Acuity is still confirming says that", async () => {
+    editAppointment.mockResolvedValue({ ok: true, status: "BOOKED", mirror: "unknown" });
+    expect(await saveAMove()).toHaveTextContent("Saved — still confirming the time on Acuity.");
+  });
+});
+
 describe("a refused save is visible where the barber is looking", () => {
   it("🔴 a stretched booking that runs into the next one says so ABOVE Save, not in a toast", async () => {
     const user = userEvent.setup();
