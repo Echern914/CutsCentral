@@ -703,11 +703,9 @@ export interface CheckoutState {
     cashOther: CheckoutMethodState;
   };
   liveAttempt: CheckoutAttemptView | null;
-  /**
-   * The CARD payments this checkout took, and whether each can be refunded
-   * from ChairBack. Optional: a web deploy ahead of the API shows no button.
-   */
-  refunds?: CheckoutRefundable[];
+  // No `refunds` here on purpose, although the API still sends them: this read
+  // refuses a cancelled appointment. The Refund panel uses
+  // `getCheckoutRefundsAction`.
 }
 
 /** One checkout card payment, as the refund button needs it. */
@@ -779,6 +777,25 @@ export async function getCheckoutAction(
   const res = await apiGet<CheckoutState>(`/api/checkout/appointments/${appointmentId}`);
   if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
   return { ok: true, data: res.data };
+}
+
+/**
+ * The card payments the Refund panel may offer back, for ANY appointment this
+ * shop owns - cancelled included.
+ *
+ * 🔴 Not `getCheckoutAction`. That read refuses a cancelled appointment, since
+ * there is nothing left to collect, and the panel used to borrow it. So
+ * cancelling a paid appointment hid the only way to refund it, and cancelling
+ * refunds nothing.
+ */
+export async function getCheckoutRefundsAction(
+  appointmentId: string,
+): Promise<{ ok: boolean; refunds?: CheckoutRefundable[]; error?: string }> {
+  const res = await apiGet<{ refunds: CheckoutRefundable[] }>(
+    `/api/checkout/appointments/${appointmentId}/refunds`,
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, refunds: res.data.refunds ?? [] };
 }
 
 export type ChargeCardResult = Result & {

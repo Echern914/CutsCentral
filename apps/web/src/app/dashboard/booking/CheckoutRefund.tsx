@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 import { INPUT } from "./formkit";
 import {
-  getCheckoutAction,
+  getCheckoutRefundsAction,
   refundCheckoutPaymentAction,
   type CheckoutRefundable,
 } from "./actions";
@@ -81,10 +81,12 @@ export function CheckoutRefund({
   const load = useCallback(() => {
     let alive = true;
     void (async () => {
-      const res = await getCheckoutAction(appointmentId);
+      // Its own read, not the checkout's: a paid appointment that was then
+      // cancelled still needs this button, and cancelling refunds nothing.
+      const res = await getCheckoutRefundsAction(appointmentId);
       if (!alive) return;
       // Owners and managers only; anyone else gets no data and sees no button.
-      setPayments(res.ok ? (res.data?.refunds ?? []) : []);
+      setPayments(res.ok ? (res.refunds ?? []) : []);
     })();
     return () => {
       alive = false;

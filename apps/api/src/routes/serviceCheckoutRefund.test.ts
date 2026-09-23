@@ -179,9 +179,12 @@ async function seedPaid(opts: {
   alreadyRefundedAtStripe?: number;
   purpose?: string;
   feeCents?: number;
+  /** CANCELED = paid, then cancelled - which does not refund anything. */
+  status?: "BOOKED" | "CANCELED";
 }): Promise<{ apptId: string; paymentId: string; chargeId: string }> {
   const sid = opts.shopId ?? shopId;
   const startsAt = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  const status = opts.status ?? "BOOKED";
   const appt = await prisma.appointment.create({
     data: {
       shopId: sid,
@@ -191,7 +194,8 @@ async function seedPaid(opts: {
       lastName: "Customer",
       startsAt,
       endsAt: new Date(startsAt.getTime() + 30 * 60 * 1000),
-      status: "BOOKED",
+      status,
+      ...(status === "CANCELED" ? { canceledAt: new Date() } : {}),
       manageToken: randomToken(20),
       priceAtBooking: new Prisma.Decimal((opts.cents / 100).toFixed(2)),
       paidAt: new Date(),
@@ -236,6 +240,10 @@ async function seedPaid(opts: {
 
 const refund = (apptId: string, body: Record<string, unknown>, c = cookie) =>
   request(app).post(`/api/checkout/appointments/${apptId}/refund`).set("Cookie", c).send(body);
+
+/** What the Refund panel reads. */
+const refundable = (apptId: string, c = cookie) =>
+  request(app).get(`/api/checkout/appointments/${apptId}/refunds`).set("Cookie", c);
 
 const paymentRow = (id: string) =>
   prisma.payment.findUnique({ where: { id }, select: { status: true, refundedAmount: true } });
@@ -456,11 +464,63 @@ describe("what may be refunded from here", () => {
       }),
     ]);
 
+    // The panel's own read gives the same answer: one function computes both.
+    expect((await refundable(apptId)).body.refunds).toEqual(before.body.refunds);
+
     await refund(apptId, { paymentId, amountCents: 4000 });
     const after = await request(app).get(`/api/checkout/appointments/${apptId}`).set("Cookie", cookie);
     expect(after.body.refunds[0]).toMatchObject({ refundableCents: 0, refundedCents: 4000, refundBlocker: "refunded" });
     // A refund does not reopen the checkout: nothing is offered to charge again.
     expect(after.body.remainingCents).toBe(0);
     expect(after.body.methods.tapToPay.available).toBe(false);
+  });
+
+  it("another shop cannot read this appointment's refunds", async () => {
+    const { apptId } = await seedPaid({ cents: 4000 });
+    const res = await refundable(apptId, otherCookie);
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "not_found" });
+  });
+});
+
+describe("a paid appointment that was then cancelled", () => {
+  it("🔴 THE LIVE CASE, PART TWO: cancelling hid the refund - it is still offered, and it works", async () => {
+    // The first live Tap to Pay dollar again: paid, the barber's copy
+    // "refunded", then the appointment CANCELLED before ChairBack's button
+    // was used. Cancelling refunds nothing, so the button must still be there.
+    const { apptId, paymentId, chargeId } = await seedPaid({
+      cents: 100,
+      reversedCents: 100,
+      status: "CANCELED",
+    });
+
+    const listed = await refundable(apptId);
+    expect(listed.status).toBe(200);
+    expect(listed.body.refunds).toEqual([
+      expect.objectContaining({ paymentId, collectedCents: 100, refundableCents: 100, refundBlocker: null }),
+    ]);
+
+    const res = await refund(apptId, { paymentId, amountCents: 100 });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, result: "refunded", amountCents: 100 });
+    expect(fake.calls.refunds[0]!.params).toMatchObject({ charge: chargeId, amount: 100, reverse_transfer: false });
+    expect(fake.charges.get(chargeId)!.amount_refunded).toBe(100);
+    expect(await paymentRow(paymentId)).toEqual({ status: "refunded", refundedAmount: 100 });
+
+    const after = await refundable(apptId);
+    expect(after.body.refunds[0]).toMatchObject({ refundableCents: 0, refundBlocker: "refunded" });
+  });
+
+  it("🔴 ...and it still cannot be CHARGED: the checkout itself stays closed", async () => {
+    const { apptId } = await seedPaid({ cents: 4000, status: "CANCELED" });
+    const checkout = await request(app).get(`/api/checkout/appointments/${apptId}`).set("Cookie", cookie);
+    expect(checkout.status).toBe(404);
+    // 404, not the 409 `paid_already` a BOOKED appointment would get: the
+    // status filter refuses it before any money question is asked.
+    const charge = await request(app)
+      .post(`/api/checkout/appointments/${apptId}/cash`)
+      .set("Cookie", cookie)
+      .send({ amountCents: 4000, method: "cash", requestId: `req_${randomToken(10)}`, confirmed: true });
+    expect(charge.status).toBe(404);
   });
 });
