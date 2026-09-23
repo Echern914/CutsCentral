@@ -18,6 +18,7 @@ import {
   useAppointmentEdit,
 } from "./AppointmentEditForm";
 import { CheckoutFlow } from "./CheckoutFlow";
+import { CheckoutRefund } from "./CheckoutRefund";
 import {
   cancelAppointmentAction,
   checkoutAppointmentAction,
@@ -407,6 +408,11 @@ export function AppointmentSheet({
             onChanged();
             load();
           }}
+          showRefunds={newCheckout}
+          onRefunded={() => {
+            onChanged();
+            load();
+          }}
         />
       )}
     </Dialog>
@@ -434,6 +440,8 @@ function DetailView({
   onCheckout,
   onAct,
   onPriceSaved,
+  showRefunds,
+  onRefunded,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail | null;
@@ -458,6 +466,10 @@ function DetailView({
   ) => void;
   /** The price changed on the server: re-read the booking and the agenda. */
   onPriceSaved: () => void;
+  /** The new checkout is live for this shop, so its card payments can be refunded here. */
+  showRefunds: boolean;
+  /** Money went back to a customer: re-read the booking and the agenda. */
+  onRefunded: () => void;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -507,6 +519,12 @@ function DetailView({
             canCheckout={canCheckout}
             onCheckout={onCheckout}
           />
+          {/* Only where the new checkout is live, and only for a ChairBack
+              booking - another platform's payments are refunded there. Renders
+              nothing unless a card payment from this checkout exists. */}
+          {showRefunds && detail?.source === "appointment" && detail.origin === "chairback" && (
+            <CheckoutRefund appointmentId={detail.id} toast={toast} onRefunded={onRefunded} />
+          )}
         </div>
         <div className="flex min-w-0 flex-col gap-3">
           <ClientCard
