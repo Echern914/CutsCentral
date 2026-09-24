@@ -6,6 +6,7 @@ import { AFFILIATE_CLAIM_COOKIE } from "@chairback/config";
 import { apiSend } from "@/lib/api";
 import { clearActiveShopCookie } from "@/lib/activeShopCookie";
 import { mintAppReturnUrl } from "@/lib/mobileReturn";
+import { TEAM_LINK_COOKIE, teamKeyOk } from "@/lib/teamLinkCookie";
 
 interface ShopState {
   error?: string;
@@ -50,6 +51,7 @@ export async function createShopAction(
   // team's shop as this browser's active shop, and the rest of onboarding
   // (connecting a calendar, payments) must land on THEIR business, not the team's.
   clearActiveShopCookie();
+  await askTheTeamTheyCameFor();
   // If the native app started this in the system browser, the shop now EXISTS
   // and this is the moment to hand the session back. Same ordering rule as the
   // team invitation: what they came to do is done and committed before any of
@@ -62,4 +64,18 @@ export async function createShopAction(
   // optional polish they can finish in the app on a real dashboard.
   const returnUrl = await mintAppReturnUrl("new_shop");
   redirect(returnUrl ?? "/onboarding/connect");
+}
+
+/**
+ * They opened a shop's team link with no business, and set one up to join.
+ * Now it exists, so the request goes HERE - every way through onboarding
+ * passes this point, while the last screen can be skipped (the connect step
+ * has an exit straight to the dashboard, and the app hand-off returns early).
+ * Asking grants nothing: the owner approves, nothing is shared until the
+ * barber chooses. A failure costs nothing - the last screen offers it again.
+ */
+async function askTheTeamTheyCameFor(): Promise<void> {
+  const team = cookies().get(TEAM_LINK_COOKIE)?.value;
+  if (!teamKeyOk(team)) return;
+  await apiSend("POST", "/api/teams/join", { team });
 }

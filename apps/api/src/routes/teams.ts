@@ -68,10 +68,14 @@ teamsRouter.get("/", async (req, res) => {
 
 const teamKey = z.string().trim().min(1).max(120);
 
-/** Find a team by what its link carries: the page slug, or the shop id. */
+/**
+ * Find a team by what its link carries: the shop's id. Never its web address -
+ * that can change and be taken by another shop, and an old link would then
+ * send the request (and later the shared numbers) to the wrong owner.
+ */
 function findTeam(key: string) {
-  return prisma.shop.findFirst({
-    where: { OR: [{ slug: key }, { id: key }] },
+  return prisma.shop.findUnique({
+    where: { id: key },
     select: { id: true, name: true, ownerId: true },
   });
 }
@@ -115,12 +119,15 @@ teamsRouter.get("/preview", async (req, res) => {
 
 const joinSchema = z.object({ team: teamKey }).strict();
 
+/** A request made again (after leaving or a decline) emails the owner at most this often. */
+const REASK_EMAIL_GAP_MS = 24 * 60 * 60 * 1000;
+
 /**
  * POST /api/teams/join { team } - ask to join a shop's team.
  *
- * `team` is what the owner's link carries: their page slug (or, for a shop
- * without one, its id). Asking grants nothing: the link starts PENDING, shares
- * nothing, and the team's owner approves it.
+ * `team` is what the owner's link carries: their shop's id. Asking grants
+ * nothing: the link starts PENDING, shares nothing, and the team's owner
+ * approves it.
  */
 teamsRouter.post("/join", accountLimiter, async (req, res) => {
   const parsed = joinSchema.safeParse(req.body ?? {});
@@ -146,12 +153,12 @@ teamsRouter.post("/join", accountLimiter, async (req, res) => {
     return;
   }
 
-  let result: { id: string } | { already: string };
+  let result: { id: string; tellOwner: boolean } | { already: string };
   try {
     result = await runAsOwner(async (tx) => {
       const existing = await tx.teamLink.findUnique({
         where: { teamShopId_memberShopId: { teamShopId: team.id, memberShopId: business.id } },
-        select: { id: true, status: true },
+        select: { id: true, status: true, requestedAt: true },
       });
       if (existing && existing.status !== "ENDED") return { already: existing.status };
       if (existing) {
@@ -167,13 +174,17 @@ teamsRouter.post("/join", accountLimiter, async (req, res) => {
             ...NOTHING_SHARED,
           },
         });
-        return count === 1 ? { id: existing.id } : { already: "PENDING" };
+        // The request shows on the owner's Team page either way; the EMAIL
+        // goes at most once a day per business, so asking, leaving and asking
+        // again can't be used to keep mailing an owner.
+        const tellOwner = existing.requestedAt.getTime() < Date.now() - REASK_EMAIL_GAP_MS;
+        return count === 1 ? { id: existing.id, tellOwner } : { already: "PENDING" };
       }
       const created = await tx.teamLink.create({
         data: { teamShopId: team.id, memberShopId: business.id },
         select: { id: true },
       });
-      return { id: created.id };
+      return { id: created.id, tellOwner: true };
     });
   } catch (err) {
     // A double tap: both requests saw no link and one lost the unique race.
@@ -188,7 +199,7 @@ teamsRouter.post("/join", accountLimiter, async (req, res) => {
     return;
   }
 
-  await tellTeamOwner(team, business.name);
+  if (result.tellOwner) await tellTeamOwner(team, business.name);
   res.status(201).json({ ok: true, id: result.id, status: "PENDING", team: { name: team.name } });
 });
 

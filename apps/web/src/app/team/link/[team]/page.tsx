@@ -37,7 +37,10 @@ export default async function TeamLinkPage({ params }: { params: { team: string 
   }
 
   const res = await apiGet<Preview>(`/api/teams/preview?team=${encodeURIComponent(key)}`);
-  if (!res.ok || !res.data) return <InvalidLink />;
+  // Only "no such team" means the link is bad. A blip (a deploy, a timeout)
+  // says try again - otherwise a working link gets thrown away.
+  if (res.status === 404 || res.status === 400) return <InvalidLink />;
+  if (!res.ok || !res.data) return <TryAgain path={`/team/link/${key}`} />;
   const p = res.data;
 
   if (p.ownTeam) {
@@ -93,7 +96,7 @@ export default async function TeamLinkPage({ params }: { params: { team: string 
             </button>
           </form>
         }
-        footnote="When you're done, the last setup screen brings you back here to finish joining."
+        footnote={`Your request goes to ${p.team.name} as soon as your business is set up.`}
       >
         You join {p.team.name}&apos;s team with your own business on ChairBack. It&apos;s where your
         clients, bookings and payments live, and it stays yours if you ever leave.
@@ -102,6 +105,19 @@ export default async function TeamLinkPage({ params }: { params: { team: string 
   }
 
   return <JoinTeamClient team={key} teamName={p.team.name} businessName={p.business.name} />;
+}
+
+function TryAgain({ path }: { path: string }) {
+  return (
+    <FlowCard
+      title="Couldn't open this team link"
+      tone="problem"
+      glyph="!"
+      actions={<FlowPrimaryLink href={path}>Try again</FlowPrimaryLink>}
+    >
+      Something went wrong on our side. Try again in a moment.
+    </FlowCard>
+  );
 }
 
 function InvalidLink() {

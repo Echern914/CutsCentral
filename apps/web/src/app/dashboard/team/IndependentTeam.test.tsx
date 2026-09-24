@@ -26,7 +26,7 @@ const { IndependentTeam } = await import("./IndependentTeam");
 const vocab = vocabularyFor("barber");
 
 const base: TeamLinksData = {
-  joinUrl: "https://getchairback.com/team/link/united-barbershop",
+  joinUrl: "https://getchairback.com/team/link/cmteamshop0001",
   pending: [
     {
       id: "p1",
@@ -84,6 +84,20 @@ describe("approving", () => {
     resolve({ ok: true });
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Mike Fades is on your team", "success"));
     expect(screen.queryByText("Mike Fades")).toBeNull();
+  });
+
+  it("🔴 declining says 'Declining…' - never 'Approving…'", async () => {
+    let resolve!: (v: unknown) => void;
+    endLinkAction.mockReturnValue(new Promise((r) => (resolve = r)));
+    teamLinksAction.mockResolvedValue({ ...base, pending: [] });
+    render(<IndependentTeam initial={base} vocab={vocab} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Decline" }));
+    expect(screen.getByText("Declining…")).toBeTruthy();
+    expect(screen.queryByText("Approving…")).toBeNull();
+
+    resolve({ ok: true });
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Request declined", "success"));
   });
 
   it("a request someone already handled is explained, not reported as a failure to retry", async () => {

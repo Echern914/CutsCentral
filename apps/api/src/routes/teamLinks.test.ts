@@ -132,14 +132,14 @@ describe("asking to join", () => {
     const res = await request(app)
       .post("/api/teams/join")
       .set("Cookie", joeCookie)
-      .send({ team: team.slug });
+      .send({ team: team.id });
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ ok: true, status: "PENDING" });
     linkId = res.body.id as string;
 
     const view = await teamView();
     expect(view.status).toBe(200);
-    expect(view.body.joinUrl).toMatch(new RegExp(`/team/link/${team.slug}$`));
+    expect(view.body.joinUrl).toMatch(new RegExp(`/team/link/${team.id}$`));
     expect(view.body.active).toEqual([]);
     expect(view.body.pending).toEqual([
       expect.objectContaining({ id: linkId, ownerName: "Joe" }),
@@ -153,7 +153,7 @@ describe("asking to join", () => {
     const res = await request(app)
       .post("/api/teams/join")
       .set("Cookie", joeCookie)
-      .send({ team: team.slug });
+      .send({ team: team.id });
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: "already_linked", status: "PENDING" });
     const rows = await runAsOwner((tx) =>
@@ -162,11 +162,11 @@ describe("asking to join", () => {
     expect(rows).toBe(1);
   });
 
-  it("can't join your own team, a team that doesn't exist, or without a business", async () => {
+  it("can't join your own team, a team that doesn't exist, by web address, or without a business", async () => {
     const own = await request(app)
       .post("/api/teams/join")
       .set("Cookie", snowCookie)
-      .send({ team: team.slug });
+      .send({ team: team.id });
     expect(own.status).toBe(409);
     expect(own.body.error).toBe("own_team");
 
@@ -176,11 +176,24 @@ describe("asking to join", () => {
       .send({ team: `no-such-shop-${tag}` });
     expect(nowhere.status).toBe(404);
 
+    // 🔴 The shop's web address finds nothing: it can be changed and then
+    // taken by another shop, and an old link would ask to join THAT one.
+    const byAddress = await request(app)
+      .post("/api/teams/join")
+      .set("Cookie", joeCookie)
+      .send({ team: team.slug });
+    expect(byAddress.status).toBe(404);
+    const previewByAddress = await request(app)
+      .get("/api/teams/preview")
+      .query({ team: team.slug })
+      .set("Cookie", joeCookie);
+    expect(previewByAddress.status).toBe(404);
+
     const noBusinessCookie = await signup(`nobiz-${tag}@test.chairback`, "New");
     const noBusiness = await request(app)
       .post("/api/teams/join")
       .set("Cookie", noBusinessCookie)
-      .send({ team: team.slug });
+      .send({ team: team.id });
     expect(noBusiness.status).toBe(409);
     expect(noBusiness.body.error).toBe("no_business");
   });
@@ -347,7 +360,7 @@ describe("leaving and being removed", () => {
       .set("Cookie", snowCookie);
     expect(declined.status).toBe(200);
 
-    await request(app).post("/api/teams/join").set("Cookie", joeCookie).send({ team: team.slug });
+    await request(app).post("/api/teams/join").set("Cookie", joeCookie).send({ team: team.id });
     await request(app).post(`/api/team/links/${linkId}/approve`).set("Cookie", snowCookie);
     await share(joeCookie, { shareCuts: true });
     const appointmentsBefore = await prisma.appointment.count({ where: { shopId: joe.id } });
@@ -369,7 +382,7 @@ describe("leaving and being removed", () => {
   });
 
   it("the barber can only leave their own link", async () => {
-    await request(app).post("/api/teams/join").set("Cookie", joeCookie).send({ team: team.slug });
+    await request(app).post("/api/teams/join").set("Cookie", joeCookie).send({ team: team.id });
     const res = await request(app)
       .post(`/api/teams/${linkId}/leave`)
       .set("Cookie", strangerCookie);
@@ -439,7 +452,7 @@ describe("review evidence: fresh businesses, the whole lifecycle", () => {
     const before = await snapshot(m.shop.id);
     const teamBefore = await snapshot(team.id);
 
-    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.id });
     const id = asked.body.id as string;
     await request(app).post(`/api/team/links/${id}/approve`).set("Cookie", snowCookie);
     await request(app)
@@ -449,7 +462,7 @@ describe("review evidence: fresh businesses, the whole lifecycle", () => {
     await teamView();
     await request(app).patch(`/api/teams/${id}/sharing`).set("Cookie", m.cookie).send({ shareRevenue: false });
     await request(app).post(`/api/teams/${id}/leave`).set("Cookie", m.cookie);
-    await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.id });
     await request(app).post(`/api/team/links/${id}/approve`).set("Cookie", snowCookie);
     await request(app).post(`/api/team/links/${id}/end`).set("Cookie", snowCookie);
 
@@ -467,7 +480,7 @@ describe("review evidence: fresh businesses, the whole lifecycle", () => {
     const m = await freshMember("Race");
     const asks = await Promise.all(
       Array.from({ length: 5 }, () =>
-        request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug }),
+        request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.id }),
       ),
     );
     expect(asks.filter((r) => r.status === 201)).toHaveLength(1);
@@ -487,14 +500,14 @@ describe("review evidence: fresh businesses, the whole lifecycle", () => {
     const after = await runAsOwner((tx) => tx.teamLink.findUniqueOrThrow({ where: { id: rows[0]!.id } }));
     expect(after.status).toBe("ACTIVE");
     // Asking again while already on the team changes nothing.
-    const again = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    const again = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.id });
     expect(again.status).toBe(409);
     expect(again.body).toEqual({ error: "already_linked", status: "ACTIVE" });
   });
 
   it("🔴 an unrelated shop sees nothing of the relationship or its numbers anywhere it can look", async () => {
     const m = await freshMember("Priv");
-    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.id });
     const id = asked.body.id as string;
     await request(app).post(`/api/team/links/${id}/approve`).set("Cookie", snowCookie);
     await request(app)
@@ -505,7 +518,7 @@ describe("review evidence: fresh businesses, the whole lifecycle", () => {
     const looks = await Promise.all([
       request(app).get("/api/team/links").set("Cookie", strangerCookie),
       request(app).get("/api/teams").set("Cookie", strangerCookie),
-      request(app).get("/api/teams/preview").query({ team: team.slug }).set("Cookie", strangerCookie),
+      request(app).get("/api/teams/preview").query({ team: team.id }).set("Cookie", strangerCookie),
     ]);
     for (const r of looks) {
       expect(r.status).toBe(200);
@@ -545,7 +558,7 @@ describe("review evidence: fresh businesses, the whole lifecycle", () => {
 
   it("🔴 only the business OWNER decides - not a manager of the barber's own shop", async () => {
     const m = await freshMember("Mgr");
-    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.id });
     const id = asked.body.id as string;
     await request(app).post(`/api/team/links/${id}/approve`).set("Cookie", snowCookie);
     const email = `mgr-of-${randomToken(6).toLowerCase()}@test.chairback`;
@@ -563,13 +576,13 @@ describe("review evidence: fresh businesses, the whole lifecycle", () => {
 
   it("🔴 asking again after it ended always starts with nothing shared", async () => {
     const m = await freshMember("Reset");
-    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.id });
     const id = asked.body.id as string;
     // An ended link left holding a switch ON (older data, a manual fix).
     await runAsOwner((tx) =>
       tx.teamLink.update({ where: { id }, data: { status: "ENDED", endedAt: new Date(), shareRevenue: true, shareCuts: true } }),
     );
-    const again = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    const again = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.id });
     expect(again.status).toBe(201);
     const row = await runAsOwner((tx) => tx.teamLink.findUniqueOrThrow({ where: { id } }));
     expect(row).toMatchObject({ status: "PENDING", shareCuts: false, shareRevenue: false, shareClients: false, shareRating: false });
@@ -577,12 +590,39 @@ describe("review evidence: fresh businesses, the whole lifecycle", () => {
 
   it("🔴 sharing one number withholds each of the others (revenue on, cuts off)", async () => {
     const m = await freshMember("One");
-    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.id });
     const id = asked.body.id as string;
     await request(app).post(`/api/team/links/${id}/approve`).set("Cookie", snowCookie);
     await request(app).patch(`/api/teams/${id}/sharing`).set("Cookie", m.cookie).send({ shareRevenue: true });
     const view = await teamView();
     const entry = view.body.active.find((a: { id: string }) => a.id === id);
     expect(entry.numbers).toEqual({ cuts: null, revenueCents: 3500, clients: null, rating: null });
+  });
+
+  it("🔴 asking again emails the owner at most once a day - leave-and-ask can't be used to spam them", async () => {
+    const m = await freshMember("Reask");
+    const toOwner = () => sent.filter((x) => x.to === `snow-${tag}@test.chairback`).length;
+    const before = toOwner();
+    const ask = () => request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.id });
+    const leave = (id: string) => request(app).post(`/api/teams/${id}/leave`).set("Cookie", m.cookie);
+
+    const first = await ask();
+    expect(first.status).toBe(201);
+    const id = first.body.id as string;
+    for (let i = 0; i < 3; i++) {
+      expect((await leave(id)).status).toBe(200);
+      expect((await ask()).status).toBe(201);
+    }
+    expect(toOwner()).toBe(before + 1);
+    // Each request still shows on the owner's Team page.
+    expect((await teamView()).body.pending.map((p: { id: string }) => p.id)).toContain(id);
+
+    // A day after the last request, asking again tells the owner again.
+    await runAsOwner((tx) =>
+      tx.teamLink.update({ where: { id }, data: { requestedAt: new Date(Date.now() - 25 * 3_600_000) } }),
+    );
+    expect((await leave(id)).status).toBe(200);
+    expect((await ask()).status).toBe(201);
+    expect(toOwner()).toBe(before + 2);
   });
 });

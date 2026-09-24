@@ -58,12 +58,13 @@ export function IndependentTeam({
    * barber withdrew): the re-read makes it disappear, and the toast says why.
    */
   async function act(
-    id: string,
+    /** Which change is running, e.g. "approve:<id>" - so only its button says so. */
+    key: string,
     fn: () => Promise<{ ok: boolean; error?: string }>,
     done: string,
     failed: string,
   ) {
-    setBusy(id);
+    setBusy(key);
     const res = await fn();
     const fresh = await teamLinksAction();
     if (fresh) setData(fresh);
@@ -157,7 +158,7 @@ export function IndependentTeam({
                       disabled={busy !== null}
                       onClick={() =>
                         void act(
-                          p.id,
+                          `approve:${p.id}`,
                           () => approveLinkAction(p.id),
                           `${p.business.name} is on your team`,
                           "Couldn't approve that - try again",
@@ -166,14 +167,14 @@ export function IndependentTeam({
                       className={primary}
                       data-qa="approve-link"
                     >
-                      {busy === p.id ? "Approving…" : "Approve"}
+                      {busy === `approve:${p.id}` ? "Approving…" : "Approve"}
                     </button>
                     <button
                       type="button"
                       disabled={busy !== null}
                       onClick={() =>
                         void act(
-                          p.id,
+                          `decline:${p.id}`,
                           () => endLinkAction(p.id),
                           "Request declined",
                           "Couldn't decline that - try again",
@@ -181,7 +182,7 @@ export function IndependentTeam({
                       }
                       className={quiet}
                     >
-                      Decline
+                      {busy === `decline:${p.id}` ? "Declining…" : "Decline"}
                     </button>
                   </div>
                 </li>

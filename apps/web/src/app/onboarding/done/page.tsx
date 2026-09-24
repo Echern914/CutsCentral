@@ -58,7 +58,14 @@ export default async function OnboardingDonePage() {
             Imported {status.clientCount} clients and {status.visitCount} visits.
           </p>
         )}
-        {joining ? (
+        {joining?.status && (
+          <p role="status" className="text-sm text-emerald-soft" data-qa="team-request-sent">
+            {joining.status === "ACTIVE"
+              ? `You're on ${joining.teamName}'s team.`
+              : `Your request to join ${joining.teamName}'s team is sent. They'll approve it, and nothing is shared until you choose.`}
+          </p>
+        )}
+        {joining && !joining.status ? (
           <>
             {/* They set up this business to join a team: that's the next step. */}
             <Link
@@ -89,15 +96,23 @@ export default async function OnboardingDonePage() {
 
 /**
  * The team this person was joining when they started setup (a shop's team
- * link sent them here with no business yet). Null when there isn't one, or
- * they've already asked - then the dashboard is the next step as usual.
+ * link sent them here with no business yet). Creating the business already
+ * sent the request (onboarding/actions.ts), so `status` is normally PENDING
+ * and this screen confirms it; null means it didn't go through, and the
+ * screen offers the link back instead.
  */
-async function teamBeingJoined(): Promise<{ key: string; teamName: string } | null> {
+async function teamBeingJoined(): Promise<{
+  key: string;
+  teamName: string;
+  status: "PENDING" | "ACTIVE" | null;
+} | null> {
   const key = cookies().get(TEAM_LINK_COOKIE)?.value;
   if (!teamKeyOk(key)) return null;
-  const res = await apiGet<{ team: { name: string }; status: string | null; ownTeam: boolean }>(
-    `/api/teams/preview?team=${encodeURIComponent(key)}`,
-  );
-  if (!res.ok || !res.data || res.data.ownTeam || res.data.status) return null;
-  return { key, teamName: res.data.team.name };
+  const res = await apiGet<{
+    team: { name: string };
+    status: "PENDING" | "ACTIVE" | null;
+    ownTeam: boolean;
+  }>(`/api/teams/preview?team=${encodeURIComponent(key)}`);
+  if (!res.ok || !res.data || res.data.ownTeam) return null;
+  return { key, teamName: res.data.team.name, status: res.data.status };
 }

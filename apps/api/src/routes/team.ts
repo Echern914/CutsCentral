@@ -459,7 +459,9 @@ teamRouter.get("/links", requireOwner, async (req, res) => {
     ownerName: l.memberShop.owner.name,
   });
   res.json({
-    joinUrl: `${env.APP_BASE_URL}/team/link/${encodeURIComponent(shop.slug ?? shop.id)}`,
+    // The shop's id, never its web address: an address can be changed and
+    // then taken by another shop, and an old link would ask to join THAT one.
+    joinUrl: `${env.APP_BASE_URL}/team/link/${encodeURIComponent(shop.id)}`,
     pending: links
       .filter((l) => l.status === "PENDING")
       .map((l) => ({ ...card(l), requestedAt: l.requestedAt.toISOString() })),
@@ -504,7 +506,8 @@ teamRouter.post("/links/:id/approve", accountLimiter, requireOwner, async (req, 
         text: [
           `${shop.name} approved ${approved.memberShop.name} for their team on ${APP_NAME}.`,
           "",
-          "Your clients, bookings and payments stay yours. They see nothing until you choose what to share:",
+          // Not "they see nothing": a barber can turn sharing on while waiting.
+          "Your clients, bookings and payments stay yours. They see only what you choose to share - check or change it here:",
           `${env.APP_BASE_URL}/dashboard/teams`,
         ].join("\n"),
       });
