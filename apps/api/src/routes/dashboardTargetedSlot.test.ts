@@ -277,6 +277,33 @@ describe("booking into a special", () => {
     expect((picker.body.targetedSlots as PickerSpecial[]).map((t) => t.id)).not.toContain(id);
   });
 
+  it("🔴 the picker and the website AGREE about a special whose booking was cancelled", async () => {
+    // Cancelling from the dashboard does not release a special today (the
+    // customer's own cancel does) - so the slot stays linked to an appointment
+    // that no longer occupies the time. The shared filter cannot see that
+    // (nothing occupies the span any more); only the query's own
+    // `bookedAppointmentId: null` keeps the picker from offering a special the
+    // claim would then refuse. Asserted as AGREEMENT, not as a fixed outcome,
+    // so this stays true if cancel is ever taught to release it.
+    const at = tomorrowAt(14);
+    const id = await publish(at, { durationMin: 30, price: 45 });
+    const booked = await dashBook(at, { targetedSlotId: id });
+    expect(booked.status).toBe(201);
+    const cancel = await request(app)
+      .post(`/api/booking/appointments/${booked.body.id}/cancel`)
+      .set("Cookie", cookie);
+    expect(cancel.status).toBe(200);
+
+    const picker = await dashSlots();
+    const pickerOffers = (picker.body.targetedSlots as PickerSpecial[]).some((t) => t.id === id);
+    const pub = await request(app).get(`/api/book/${slug}`);
+    const websiteOffers = (pub.body.targetedSlots as { id: string }[]).some((t) => t.id === id);
+    expect(pickerOffers).toBe(websiteOffers);
+    // And whatever they say, the claim agrees with them.
+    const claim = await dashBook(at, { targetedSlotId: id });
+    expect(claim.status).toBe(pickerOffers ? 201 : 409);
+  });
+
   it("a second claim of the same special is refused", async () => {
     const at = tomorrowAt(21);
     const id = (await prisma.targetedSlot.findFirst({
