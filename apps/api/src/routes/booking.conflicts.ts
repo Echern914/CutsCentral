@@ -68,6 +68,21 @@ const resolveSchema = z.object({
   note: z.string().trim().max(280).optional(),
 });
 
+const resolveAllSchema = z.object({
+  /**
+   * The `asOf` the manager's list came back with. Only conflicts detected at
+   * or before it are touched: one that lands while the confirmation is open
+   * was never on the screen, and "resolve all" must not tick it off unseen.
+   */
+  asOf: z.string().datetime(),
+  /** The open count the manager was shown - see MORE THAN WAS SHOWN below. */
+  expected: z.number().int().min(1).max(100_000),
+  note: z.string().trim().max(280).optional(),
+});
+
+/** Thrown inside the transaction purely to roll it back. */
+class MoreThanShown extends Error {}
+
 /** The shape the inbox renders. Safe fields only - see the enrichment note. */
 interface ConflictView {
   id: string;
@@ -188,6 +203,9 @@ async function loadContext(
  */
 bookingConflictsRouter.get("/", async (req, res) => {
   const shopId = req.shop!.id;
+  // Taken BEFORE the read, so everything detected up to it had its chance to
+  // be counted. Handed back for "resolve all" to bound itself by.
+  const asOf = new Date();
   const parsed = listSchema.safeParse(req.query ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
@@ -280,7 +298,69 @@ bookingConflictsRouter.get("/", async (req, res) => {
     resolutionNote: r.resolutionNote,
   }));
 
-  res.json({ items, nextCursor, unresolvedCount });
+  res.json({ items, nextCursor, unresolvedCount, asOf: asOf.toISOString() });
+});
+
+/**
+ * POST /resolve-all - the manager has dealt with every one on the list.
+ *
+ * Exists because the list is worked one tap and one confirmation at a time,
+ * and a shop that has already rung everybody should not have to do that
+ * sixteen times. The same rules as a single resolve, applied to the batch:
+ *
+ * 🔴 CHANGES NOTHING ABOUT ANY BOOKING. Three fields on each conflict row,
+ * nothing else - no cancel, no move, no refund, no message to anyone.
+ *
+ * 🔴 FIRST WRITER STILL WINS. Only rows that are still open are touched, so a
+ * conflict a teammate already resolved keeps THEIR name and note.
+ *
+ * 🔴 NEVER MORE THAN WAS SHOWN. Bounded by `asOf`, and then checked against
+ * the count the manager confirmed: if the update would touch MORE rows than
+ * that, it is rolled back and refused. The bound alone leaves a gap - a
+ * conflict stamped just before `asOf` whose transaction committed after the
+ * list was read - and the count closes it. FEWER is fine (a teammate got to
+ * some first); the manager asked for all of them to be dealt with, and they
+ * are.
+ */
+bookingConflictsRouter.post("/resolve-all", async (req, res) => {
+  const shopId = req.shop!.id;
+  const userId = req.userId!;
+  const parsed = resolveAllSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const now = new Date();
+  // Never later than now: a client clock running ahead must not widen it.
+  const asOf = new Date(Math.min(new Date(parsed.data.asOf).getTime(), now.getTime()));
+  const note = parsed.data.note?.length ? parsed.data.note : null;
+
+  let resolved: number;
+  try {
+    resolved = await runWithShop(shopId, async (tx) => {
+      const { count } = await tx.bookingConflict.updateMany({
+        where: { shopId, resolvedAt: null, detectedAt: { lte: asOf } },
+        data: { resolvedAt: now, resolvedByUserId: userId, resolutionNote: note },
+      });
+      if (count > parsed.data.expected) throw new MoreThanShown();
+      return count;
+    });
+  } catch (err) {
+    if (err instanceof MoreThanShown) {
+      // Nothing was written. The UI reloads and asks again with the real count.
+      res.status(409).json({ error: "conflicts_changed" });
+      return;
+    }
+    throw err;
+  }
+
+  if (resolved > 0) {
+    logger.info(
+      { shopId, userId, resolved },
+      "booking conflicts marked resolved in bulk (no booking was changed)",
+    );
+  }
+  res.json({ ok: true, resolved });
 });
 
 /**
