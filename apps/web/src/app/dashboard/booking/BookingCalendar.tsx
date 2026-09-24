@@ -176,6 +176,8 @@ export function BookingCalendar({
   toast,
   openAppointmentId,
   tierOpenings = false,
+  pendingWaitlistBooking = null,
+  onPendingWaitlistBookingTaken,
 }: {
   initial: AgendaResponse;
   initialWaitlist: WaitlistRow[];
@@ -192,6 +194,15 @@ export function BookingCalendar({
    * on it meant finding the row and opening it, three or four taps in.
    */
   openAppointmentId?: string;
+  /**
+   * A waitlist "Book appointment" tapped on the WAITLIST TAB, where this
+   * calendar is not mounted and so could not hear the event. BookingManager
+   * catches it, switches here, and hands the entry over; the form opens on
+   * mount exactly as if the event had arrived. Cleared via the callback so a
+   * later remount never re-opens it.
+   */
+  pendingWaitlistBooking?: WaitlistBookDetail | null;
+  onPendingWaitlistBookingTaken?: () => void;
   /** Rewards are on, so there are tiers to hold an opening for. */
   tierOpenings?: boolean;
 }) {
@@ -203,8 +214,14 @@ export function BookingCalendar({
   // entry, the calendar opens the SAME create form it uses everywhere else,
   // prefilled. Keeps one booking flow in the app rather than two.
   const [waitlistBooking, setWaitlistBooking] = useState<WaitlistBookDetail | null>(
-    null,
+    pendingWaitlistBooking,
   );
+  // Handed over from the Waitlist tab: open it, then tell the manager it's taken.
+  useEffect(() => {
+    if (!pendingWaitlistBooking) return;
+    setWaitlistBooking(pendingWaitlistBooking);
+    onPendingWaitlistBookingTaken?.();
+  }, [pendingWaitlistBooking, onPendingWaitlistBookingTaken]);
   const [blockDay, setBlockDay] = useState<{ dayKey: string; hour: number } | null>(null);
   // "Offer to a tier" - the shop-tz day it opened on.
   const [tierDay, setTierDay] = useState<string | null>(null);
