@@ -13,7 +13,9 @@ import {
   type Sharing,
   type TeamNumbers,
 } from "@/lib/teamNumbers";
-import { leaveTeamAction, myTeamsAction, setSharingAction } from "./actions";
+import { hasRent, type RentSummary } from "@/lib/boothRent";
+import { MemberRent } from "../team/BoothRent";
+import { leaveTeamAction, myRentHistoryAction, myTeamsAction, setSharingAction } from "./actions";
 
 export interface MyTeamLink {
   id: string;
@@ -24,6 +26,8 @@ export interface MyTeamLink {
   sharing: Sharing;
   /** Exactly what the team's owner sees now. Null until they approve. */
   theySee: TeamNumbers | null;
+  /** Their booth rent with this team (ACTIVE only). */
+  rent: RentSummary | null;
 }
 
 export interface MyTeamsData {
@@ -211,6 +215,14 @@ export function TeamsClient({
                 )}
               </div>
 
+              {active && link.rent && (
+                <MemberRent
+                  teamName={link.team.name}
+                  rent={link.rent}
+                  loadHistory={() => myRentHistoryAction(link.id)}
+                />
+              )}
+
               {/* Left-aligned: on a phone the floating help button sits
                   bottom-right and would cover it at the end of the page. */}
               <div className="mt-4 flex justify-start">
@@ -259,6 +271,9 @@ export function TeamsClient({
         <p className="text-sm text-muted">
           They stop seeing your numbers right away. Your {vocab.clientNounPlural}, bookings and
           payments stay exactly as they are. You can ask to join again with their link.
+          {leaving?.rent && hasRent(leaving.rent)
+            ? " Booth rent stops at the end of the current period; what's recorded is kept."
+            : ""}
         </p>
       </Dialog>
     </div>

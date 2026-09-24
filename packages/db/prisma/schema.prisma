@@ -957,6 +957,10 @@ model TeamLink {
   shareRevenue Boolean        @default(false)
   shareClients Boolean        @default(false)
   shareRating  Boolean        @default(false)
+  // BOOTH RENT the member pays the team's shop: the rate history (set, change,
+  // stop) and the payments the owner records. See BoothRentRate.
+  rentRates    BoothRentRate[]
+  rentPayments BoothRentPayment[]
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
@@ -968,6 +972,57 @@ enum TeamLinkStatus {
   PENDING
   ACTIVE
   ENDED
+}
+
+enum RentPeriod {
+  WEEKLY
+  MONTHLY
+}
+
+// Booth rent's RATE HISTORY for one member: one row per "start", "change" or
+// "stop", never edited. Each row applies from startsOn until the next row;
+// periods (a week, or a month on the same day of the month) run from the
+// row's startsOn. A change always starts at the NEXT period boundary, so a
+// period that has begun keeps the rate it started with. amountCents null =
+// rent stopped from startsOn. When two rows share a startsOn, the later wins.
+// A row entered by mistake is VOIDED (the latest one only), like a payment.
+model BoothRentRate {
+  id          String      @id @default(cuid())
+  linkId      String
+  link        TeamLink    @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  amountCents Int?
+  period      RentPeriod?
+  startsOn    DateTime    @db.Date
+  createdById String
+  voidedAt    DateTime?
+  voidedById  String?
+  createdAt   DateTime    @default(now())
+
+  @@index([linkId, startsOn])
+}
+
+// Booth rent a team's owner recorded as received from one member.
+model BoothRentPayment {
+  id           String   @id @default(cuid())
+  linkId       String
+  link         TeamLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  amountCents  Int
+  // The day it was paid (the team shop's calendar).
+  paidOn       DateTime @db.Date
+  // cash | zelle | cashapp | venmo | card | other
+  method       String
+  note         String?
+  recordedById String
+  // The payment form's one-time id, so a retried submit records ONE payment.
+  clientRef    String
+  // A payment entered by mistake is VOIDED, not deleted: it stays in the
+  // history, struck through, and stops counting.
+  voidedAt     DateTime?
+  voidedById   String?
+  createdAt    DateTime @default(now())
+
+  @@unique([linkId, clientRef])
+  @@index([linkId, paidOn])
 }
 
 // A shop-designed promotion ("Spring special: 20% off weekday cuts"). Live =

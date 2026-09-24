@@ -12,6 +12,7 @@ import {
   sharingOf,
   teamNumbers,
 } from "../services/teamLinks.js";
+import { rateHistory, rentPayments, rentSummary, stopRentOnLeave } from "../services/boothRent.js";
 
 /**
  * TEAMS, from the member's side: a barber linking THEIR OWN business to a
@@ -61,9 +62,35 @@ teamsRouter.get("/", async (req, res) => {
                 now,
               )
             : null,
+        // Their own booth rent with this team - the same summary the owner sees.
+        rent:
+          l.status === "ACTIVE"
+            ? await runAsOwner((tx) => rentSummary(tx, l.id, l.teamShop.timezone, now))
+            : null,
       })),
     ),
   });
+});
+
+/** GET /api/teams/:id/rent - this business's rent to a team: the owner's own view. Read-only. */
+teamsRouter.get("/:id/rent", async (req, res) => {
+  const history = await runAsOwner(async (tx) => {
+    const link = await tx.teamLink.findFirst({
+      where: { id: req.params.id, memberShop: { ownerId: req.userId } },
+      select: { id: true, teamShop: { select: { timezone: true } } },
+    });
+    if (!link) return null;
+    return {
+      summary: await rentSummary(tx, link.id, link.teamShop.timezone),
+      payments: await rentPayments(tx, link.id),
+      rates: await rateHistory(tx, link.id),
+    };
+  });
+  if (!history) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json(history);
 });
 
 const teamKey = z.string().trim().min(1).max(120);
@@ -252,19 +279,28 @@ teamsRouter.patch("/:id/sharing", accountLimiter, async (req, res) => {
  * POST /api/teams/:id/leave - leave a team (or withdraw a request).
  *
  * Nothing in the business changes; the link ends and every share switch goes
- * back to off, so asking again later starts private.
+ * back to off, so asking again later starts private. Booth rent stops at the
+ * next period boundary; what's owed stays recorded.
  */
 teamsRouter.post("/:id/leave", accountLimiter, async (req, res) => {
-  const { count } = await runAsOwner((tx) =>
-    tx.teamLink.updateMany({
+  const count = await runAsOwner(async (tx) => {
+    const { count } = await tx.teamLink.updateMany({
       where: {
         id: req.params.id,
         memberShop: { ownerId: req.userId },
         status: { in: ["PENDING", "ACTIVE"] },
       },
       data: { status: "ENDED", endedAt: new Date(), ...NOTHING_SHARED },
-    }),
-  );
+    });
+    if (count > 0) {
+      const link = await tx.teamLink.findUniqueOrThrow({
+        where: { id: req.params.id },
+        select: { teamShop: { select: { timezone: true } } },
+      });
+      await stopRentOnLeave(tx, req.params.id!, link.teamShop.timezone, req.userId!);
+    }
+    return count;
+  });
   if (count === 0) {
     res.status(404).json({ error: "not_found" });
     return;
