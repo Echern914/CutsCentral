@@ -3482,6 +3482,50 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
   }
 });
 
+/**
+ * 🔴 THE BARBER'S OWN OPEN SPECIALS - one definition for every list in his
+ * New appointment form that offers them.
+ *
+ * The normal grid subtracts every open targeted slot on purpose - they are
+ * sold separately, at their own price - so until these lists existed the
+ * barber could see his specials on his website and nowhere in his own form.
+ * Same eligibility as the website: active, unbooked, not yet started, inside
+ * the window, and through the SAME filter that takes a special off sale when
+ * blocked time, a live appointment or a synced Acuity visit covers it.
+ * `staffId` omitted = every barber's, for a form where none is picked yet.
+ */
+async function openSpecialsFor(input: {
+  shopId: string;
+  timezone: string;
+  staffId?: string;
+  from: Date;
+  to: Date;
+  now: Date;
+}) {
+  const raw = await prisma.targetedSlot.findMany({
+    where: {
+      shopId: input.shopId,
+      ...(input.staffId ? { staffId: input.staffId } : {}),
+      active: true,
+      bookedAppointmentId: null,
+      startsAt: { gt: input.now, gte: input.from, lt: input.to },
+    },
+    orderBy: { startsAt: "asc" },
+    take: 100,
+    select: {
+      id: true,
+      staffId: true,
+      serviceId: true,
+      services: SLOT_SERVICES_SELECT,
+      label: true,
+      startsAt: true,
+      durationMin: true,
+      price: true,
+    },
+  });
+  return filterBlockedTargeted(input.shopId, input.timezone, raw);
+}
+
 // Open slots for the barber's "New Appointment" Time picker (native only). Same
 // engine as the public slots route, but authenticated + shop-from-session.
 const dashSlotsSchema = z.object({
@@ -3516,43 +3560,17 @@ bookingDashboardRouter.get("/slots", async (req, res) => {
     now,
   });
 
-  // 🔴 THE BARBER'S OWN SPECIALS. The grid above subtracts every open targeted
-  // slot on purpose - they are sold separately, at their own price - so until
-  // this list existed the barber could see his specials on his website and
-  // nowhere in his own booking form. Same eligibility as the website: this
-  // barber, listed under this service, active, unbooked, not yet started,
-  // and through the SAME filter that takes a special off sale when blocked
-  // time, a live appointment or a synced Acuity visit covers it.
-  const rawTargeted = await prisma.targetedSlot.findMany({
-    where: {
+  // The barber's own specials under THIS service (see openSpecialsFor).
+  const targeted = (
+    await openSpecialsFor({
       shopId,
+      timezone: shop.timezone,
       staffId: parsed.data.staffId,
-      active: true,
-      bookedAppointmentId: null,
-      startsAt: {
-        gt: now,
-        gte: parsed.data.from,
-        lt: parsed.data.to,
-      },
-    },
-    orderBy: { startsAt: "asc" },
-    take: 100,
-    select: {
-      id: true,
-      staffId: true,
-      serviceId: true,
-      services: SLOT_SERVICES_SELECT,
-      label: true,
-      startsAt: true,
-      durationMin: true,
-      price: true,
-    },
-  });
-  const targeted = await filterBlockedTargeted(
-    shopId,
-    shop.timezone,
-    rawTargeted.filter((t) => slotOffersService(t, parsed.data.serviceId)),
-  );
+      from: parsed.data.from,
+      to: parsed.data.to,
+      now,
+    })
+  ).filter((t) => slotOffersService(t, parsed.data.serviceId));
 
   res.json({
     timezone: shop.timezone,
@@ -3568,6 +3586,97 @@ bookingDashboardRouter.get("/slots", async (req, res) => {
       price: Number(t.price),
       label: t.label,
     })),
+  });
+});
+
+/**
+ * GET /specials - every open special in a window, across ALL services: the
+ * "specials open today" list at the top of the barber's Time picker.
+ *
+ * Asked for by a live shop in so many words - "a way where I can book from
+ * special slots open for the day". The per-service list (`/slots`) only shows
+ * a special once the barber has already picked the service it is listed
+ * under, so he had to know which service each special lived in before he
+ * could see it at all. Here the special comes first and picks its own service.
+ *
+ * 🔴 `serviceIds` IS WHAT THE WRITE WILL ACCEPT, not what the special lists.
+ * The create route refuses a service that is inactive or that this barber
+ * does not offer (its `offering` check), so offering one here would hand the
+ * barber a tap that can only end in "that time isn't available". Each
+ * special's listed services are narrowed to active ones its barber offers,
+ * in menu order - so the form's default (the first) is the menu's first - and
+ * a special left with none is not offered at all. Same for a barber who has
+ * been deactivated.
+ */
+const dashSpecialsSchema = z.object({
+  staffId: z.string().min(1).optional(),
+  from: z.coerce.date(),
+  to: z.coerce.date(),
+});
+
+bookingDashboardRouter.get("/specials", async (req, res) => {
+  const parsed = dashSpecialsSchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { bookingMode: true, timezone: true },
+  });
+  if (!shop || shop.bookingMode !== "native") {
+    res.status(400).json({ error: "not_native" });
+    return;
+  }
+  const [specials, services, offerings, staff] = await Promise.all([
+    openSpecialsFor({
+      shopId,
+      timezone: shop.timezone,
+      staffId: parsed.data.staffId,
+      from: parsed.data.from,
+      to: parsed.data.to,
+      now: new Date(),
+    }),
+    prisma.service.findMany({
+      where: { shopId, active: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true },
+    }),
+    prisma.serviceStaff.findMany({
+      where: { shopId },
+      select: { serviceId: true, staffId: true },
+    }),
+    prisma.staff.findMany({
+      where: { shopId, active: true },
+      select: { id: true },
+    }),
+  ]);
+  const menuOrder = new Map(services.map((s, i) => [s.id, i]));
+  const offered = new Set(offerings.map((o) => `${o.staffId}:${o.serviceId}`));
+  const activeStaff = new Set(staff.map((s) => s.id));
+
+  res.json({
+    timezone: shop.timezone,
+    specials: specials.flatMap((t) => {
+      if (!activeStaff.has(t.staffId)) return [];
+      const serviceIds = slotServiceIds(t)
+        .filter((id) => menuOrder.has(id) && offered.has(`${t.staffId}:${id}`))
+        .sort((a, b) => menuOrder.get(a)! - menuOrder.get(b)!);
+      if (serviceIds.length === 0) return [];
+      return [
+        {
+          id: t.id,
+          staffId: t.staffId,
+          serviceIds,
+          startsAt: t.startsAt.toISOString(),
+          endsAt: new Date(t.startsAt.getTime() + t.durationMin * 60_000).toISOString(),
+          durationMin: t.durationMin,
+          price: Number(t.price),
+          label: t.label,
+        },
+      ];
+    }),
   });
 });
 

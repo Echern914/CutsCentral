@@ -340,6 +340,34 @@ export interface DashSpecial {
 }
 
 /**
+ * A special as the day-wide list offers it: whose it is, and the services it
+ * can be booked as - already narrowed server-side to active services that
+ * barber offers, in menu order, so the first is a safe default.
+ */
+export interface DaySpecial extends DashSpecial {
+  staffId: string;
+  serviceIds: string[];
+}
+
+/**
+ * Every open special in a window, across ALL services - so the barber sees
+ * the day's specials before picking a service, and tapping one picks it.
+ * `staffId` null = every barber's.
+ */
+export async function getDaySpecialsAction(
+  staffId: string | null,
+  from: string,
+  to: string,
+): Promise<{ ok: boolean; specials?: DaySpecial[]; error?: string }> {
+  const qs = new URLSearchParams({ from, to, ...(staffId ? { staffId } : {}) }).toString();
+  const res = await apiGet<{ timezone: string; specials: DaySpecial[] }>(
+    `/api/booking/specials?${qs}`,
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, specials: res.data.specials };
+}
+
+/**
  * Open slots for a (staff, service) over a range - powers the Time picker -
  * plus the barber's specials under that service. Older API responses carry no
  * `targetedSlots`, which reads as none.

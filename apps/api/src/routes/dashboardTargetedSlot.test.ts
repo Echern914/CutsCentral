@@ -463,3 +463,111 @@ describe("the website and the barber reach for the same special", () => {
     expect(row?.bookedAppointmentId).toBe(appts[0]!.id);
   });
 });
+
+/**
+ * GET /specials - the day's open specials across EVERY service, so the barber
+ * sees them before he has picked one ("a way where I can book from special
+ * slots open for the day"). The special comes first and picks its service.
+ */
+describe("the day's specials, whatever service is picked", () => {
+  type DaySpecial = PickerSpecial & { staffId: string; serviceIds: string[] };
+
+  function daySpecials(forStaff?: string) {
+    const { from, to } = tomorrowWindow();
+    const qs = new URLSearchParams({ from, to, ...(forStaff ? { staffId: forStaff } : {}) });
+    return request(app).get(`/api/booking/specials?${qs}`).set("Cookie", cookie);
+  }
+
+  /** Straight to the table: a special listed under exactly these services. */
+  async function rawSpecial(at: Date, forStaff: string, serviceIds: string[]) {
+    return prisma.targetedSlot.create({
+      data: {
+        shopId,
+        staffId: forStaff,
+        serviceId: serviceIds[0]!,
+        startsAt: at,
+        durationMin: 30,
+        price: 40,
+        services: { create: serviceIds.map((sid) => ({ shopId, serviceId: sid })) },
+      },
+      select: { id: true },
+    });
+  }
+
+  const find = (body: { specials: DaySpecial[] }, id: string) =>
+    body.specials.find((t) => t.id === id);
+
+  it("lists specials under EVERY service, each with the services it can be booked as", async () => {
+    const retwist = await rawSpecial(tomorrowAt(9), staffId, [serviceId]);
+    const braids = await rawSpecial(tomorrowAt(9, 30), staffId, [unlistedServiceId]);
+    const res = await daySpecials(staffId);
+    expect(res.status).toBe(200);
+    expect(find(res.body, retwist.id)?.serviceIds).toEqual([serviceId]);
+    expect(find(res.body, braids.id)?.serviceIds).toEqual([unlistedServiceId]);
+    expect(find(res.body, retwist.id)).toMatchObject({ staffId, durationMin: 30, price: 40 });
+  });
+
+  it("a special listed under several services offers them in MENU order - the form picks the first", async () => {
+    // Listed Braids-first; the menu has Retwist first.
+    const both = await rawSpecial(tomorrowAt(10), staffId, [unlistedServiceId, serviceId]);
+    const res = await daySpecials(staffId);
+    expect(find(res.body, both.id)?.serviceIds).toEqual([serviceId, unlistedServiceId]);
+  });
+
+  it("only that barber's when one is named; every barber's when none is", async () => {
+    const kais = await rawSpecial(tomorrowAt(10, 30), otherStaffId, [serviceId]);
+    expect(find((await daySpecials(staffId)).body, kais.id)).toBeUndefined();
+    expect(find((await daySpecials()).body, kais.id)?.staffId).toBe(otherStaffId);
+  });
+
+  it("🔴 never offers a service the booking would refuse - one this barber does not offer", async () => {
+    // Kai does not offer Braids. Listed under Braids alone -> not offered at all;
+    // listed under both -> offered as Retwist only.
+    const onlyBraids = await rawSpecial(tomorrowAt(11), otherStaffId, [unlistedServiceId]);
+    const both = await rawSpecial(tomorrowAt(11, 30), otherStaffId, [unlistedServiceId, serviceId]);
+    const res = await daySpecials(otherStaffId);
+    expect(find(res.body, onlyBraids.id)).toBeUndefined();
+    expect(find(res.body, both.id)?.serviceIds).toEqual([serviceId]);
+  });
+
+  it("🔴 never offers an inactive service", async () => {
+    const svc = await request(app)
+      .post("/api/booking/services")
+      .set("Cookie", cookie)
+      .send({ name: "Seasonal", durationMin: 30, price: 50, staffIds: [staffId] });
+    const special = await rawSpecial(tomorrowAt(12), staffId, [svc.body.id]);
+    expect(find((await daySpecials(staffId)).body, special.id)).toBeDefined();
+    await prisma.service.update({ where: { id: svc.body.id }, data: { active: false } });
+    expect(find((await daySpecials(staffId)).body, special.id)).toBeUndefined();
+  });
+
+  it("a special under blocked time is not offered here either", async () => {
+    const at = tomorrowAt(12, 30);
+    const special = await rawSpecial(at, staffId, [serviceId]);
+    const block = await request(app)
+      .post(`/api/booking/staff/${staffId}/exceptions`)
+      .set("Cookie", cookie)
+      .send({ startsAt: at.toISOString(), endsAt: new Date(at.getTime() + 30 * 60_000).toISOString(), isBlock: true });
+    expect(block.status).toBe(201);
+    expect(find((await daySpecials(staffId)).body, special.id)).toBeUndefined();
+  });
+
+  it("🔴 what it lists, the booking accepts: book one as its first service", async () => {
+    const at = tomorrowAt(9, 45);
+    const special = await rawSpecial(at, staffId, [unlistedServiceId, serviceId]);
+    const listed = find((await daySpecials(staffId)).body, special.id)!;
+    const res = await dashBook(at, { targetedSlotId: special.id, serviceId: listed.serviceIds[0] });
+    expect(res.status).toBe(201);
+    // And it is gone from the list once taken.
+    expect(find((await daySpecials(staffId)).body, special.id)).toBeUndefined();
+  });
+
+  it("a deactivated barber's specials are not offered", async () => {
+    const lee = await addStaff(cookie, "Lee");
+    await prisma.serviceStaff.create({ data: { shopId, staffId: lee, serviceId } });
+    const special = await rawSpecial(tomorrowAt(8), lee, [serviceId]);
+    expect(find((await daySpecials()).body, special.id)).toBeDefined();
+    await prisma.staff.update({ where: { id: lee }, data: { active: false } });
+    expect(find((await daySpecials()).body, special.id)).toBeUndefined();
+  });
+});
