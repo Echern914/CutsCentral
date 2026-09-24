@@ -126,7 +126,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        and be one App Store Connect has not seen, and 42 was never uploaded.
   //
   // 1.1.0 = build 42. Minor, not patch: #423/#424/#426/#427 are features.
-  version: "1.1.1",
+  //
+  // 1.1.1 = build 44, uploaded 2026-09-22 (the ITMS-90683 purpose strings).
+  //
+  // 1.1.2 = build 46. Everything merged since 44 - booking a party (#460),
+  //        domain verification (#461), targeted slots in New appointment
+  //        (#474) - has never reached a phone. 45 is NOT a mistake: it is
+  //        taken by the Tap to Pay 1.2.0 archive, which is built and waiting
+  //        on Apple's distribution entitlement. The version string moves too,
+  //        not just the number, so this cannot hit the closed-version wall if
+  //        1.1.1 has been submitted (submission, not release, is the trigger).
+  version: "1.1.2",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
@@ -142,7 +152,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "44",
+    buildNumber: "46",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
