@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma, runAsOwner, type Prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
-import { rentSummary, setRent, voidRate as voidRateEntry } from "../services/boothRent.js";
+import { rateHistory, rentSummary, setRent, voidRate as voidRateEntry } from "../services/boothRent.js";
 
 /**
  * Booth rent: a manual tracker between a team's owner and one independent
@@ -561,6 +561,12 @@ describe("over time (the service, on a set clock)", () => {
     // Stopping before it starts cancels it.
     await set("2026-10-30", null);
     expect((await summary("2026-10-30")).scheduled).toBeNull();
+    // 🔴 Neither displaced start is deleted: both stay in the history, voided
+    // on the day the change that displaced them was made (Oct 30).
+    const trail = await run((tx) => rateHistory(tx, link2));
+    for (const startsOn of ["2026-11-02", "2026-11-09"]) {
+      expect(trail.find((r) => r.startsOn === startsOn)).toMatchObject({ status: "voided", voidedOn: "2026-10-30" });
+    }
   });
 
   it("🔴 two rent changes can't interleave: the second waits for the first", async () => {
