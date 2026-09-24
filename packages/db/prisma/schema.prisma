@@ -102,11 +102,6 @@ model User {
   // (/s, /book, /r) are deliberately untouched: customers always see the
   // shop's own branding, never the barber's dashboard preference.
   theme         String    @default("dark")
-  // The shop this account last chose to work in (the shop switcher), so the
-  // choice follows the person into the app and onto a new device. A HINT only:
-  // every request re-verifies it against ownership or a seat, so a stale id
-  // (seat removed, shop deleted) just falls back. No FK for the same reason.
-  activeShopId  String?
   // First-run welcome tour: stamped the first time the barber finishes (or
   // skips) the dashboard welcome carousel. null = never seen, so the tour
   // auto-opens once. Replaying it from the account card does NOT clear this.

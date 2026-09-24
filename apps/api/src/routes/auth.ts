@@ -33,7 +33,7 @@ import {
   verifyApple,
   verifyGoogle,
 } from "../auth/native.js";
-import { accessToShop, requireUser, resolveShopAccess } from "../middleware/auth.js";
+import { requireUser, resolveShopAccess } from "../middleware/auth.js";
 import { effectiveSeatRole } from "../auth/roles.js";
 import { accountLimiter, authLimiter } from "../middleware/rateLimit.js";
 import { billingEnabled, stripeClient } from "../billing/stripe.js";
@@ -234,12 +234,11 @@ authRouter.get("/me", requireUser, async (req, res) => {
     name: s.shop.name,
     role: effectiveSeatRole(s.role, false),
   }));
-  // Resolve the ACTIVE shop exactly as requireShop does - same hints, same
-  // order - so the switcher highlights the shop every other route acts on.
+  // Resolve the ACTIVE shop exactly as requireShop does, so the switcher
+  // highlights the shop every other route acts on.
   const access = await resolveShopAccess(
     req.userId!,
     req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as string | undefined,
-    req.rememberedShopId,
   );
   const activeShop = access?.shop ?? null;
   const { welcomeSeenAt, passwordHash, googleId, appleId, ...rest } = user;
@@ -310,35 +309,6 @@ authRouter.post("/welcome-seen", requireUser, async (req, res) => {
     data: { welcomeSeenAt: new Date() },
   });
   res.json({ ok: true });
-});
-
-const activeShopSchema = z.object({ shopId: z.string().min(1).max(64) }).strict();
-
-/**
- * POST /api/auth/active-shop - remember which shop this account works in.
- *
- * The shop switcher's choice, stored on the account so it follows the person
- * to the app and to a new device (the cookie it also sets is per-browser).
- * Only a shop they own or hold a seat in is accepted - the same check every
- * request makes - so this can never be used to point a session at someone
- * else's shop; and even a stored id is re-verified on every request.
- */
-authRouter.post("/active-shop", accountLimiter, requireUser, async (req, res) => {
-  const parsed = activeShopSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    res.status(400).json({ error: "invalid_input" });
-    return;
-  }
-  const access = await accessToShop(req.userId!, parsed.data.shopId);
-  if (!access) {
-    res.status(404).json({ error: "not_found" });
-    return;
-  }
-  await prisma.user.update({
-    where: { id: req.userId },
-    data: { activeShopId: access.shop.id },
-  });
-  res.json({ ok: true, shopId: access.shop.id, role: access.role });
 });
 
 // Update profile: display name and/or avatar. Both optional so the name form

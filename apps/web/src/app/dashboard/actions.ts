@@ -8,16 +8,11 @@ import { setActiveShopCookie } from "@/lib/activeShopCookie";
 /**
  * Switch which shop the dashboard acts on: another shop the person owns, or a
  * team they hold a seat on. The picker only offers shops from their own
- * `me.shops` and `me.teams`, and the API RE-VERIFIES every choice against
- * ownership or a seat - a stale/forged id falls back to their own shop, never
- * another tenant.
- *
- * Two writes: this browser's cookie, and the account's remembered shop so the
- * choice follows them into the app and onto other devices. The cookie is set
- * whatever the API says: it is only a hint, and a refused id is ignored there.
+ * `me.shops` and `me.teams`, and the API RE-VERIFIES the cookie against
+ * ownership or a seat on every request - a stale/forged id falls back to their
+ * own shop, never another tenant.
  */
 export async function switchShopAction(shopId: string): Promise<void> {
-  await apiSend("POST", "/api/auth/active-shop", { shopId });
   setActiveShopCookie(shopId);
   redirect("/dashboard");
 }

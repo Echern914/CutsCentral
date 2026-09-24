@@ -109,12 +109,11 @@ afterAll(async () => {
 });
 
 describe("a barber who owns a shop and joins a team", () => {
-  it("🔴 lands in the team after accepting - on a device with no choice of its own (the app)", async () => {
+  it("with no choice made, their own business is still where they land", async () => {
     const res = await me(barberCookie);
     expect(res.status).toBe(200);
-    expect(res.body.activeShopId).toBe(teamShopId);
-    expect(res.body.activeShopName).toBe("United Barbershop");
-    expect(res.body.shopRole).toBe("BARBER");
+    expect(res.body.activeShopId).toBe(ownShopId);
+    expect(res.body.shopRole).toBe("OWNER");
   });
 
   it("🔴 the switcher lists the team next to their own shop", async () => {
@@ -136,7 +135,14 @@ describe("a barber who owns a shop and joins a team", () => {
     expect(roster.status).toBe(403);
   });
 
-  it("a cookie naming their own shop is honored over the account's choice", async () => {
+  it("🔴 the switcher's cookie naming the team puts /me in the team too", async () => {
+    const res = await me(withShop(barberCookie, teamShopId));
+    expect(res.body.activeShopId).toBe(teamShopId);
+    expect(res.body.activeShopName).toBe("United Barbershop");
+    expect(res.body.shopRole).toBe("BARBER");
+  });
+
+  it("a cookie naming their own shop takes them back to it", async () => {
     const res = await me(withShop(barberCookie, ownShopId));
     expect(res.body.activeShopId).toBe(ownShopId);
     expect(res.body.shopRole).toBe("OWNER");
@@ -146,69 +152,15 @@ describe("a barber who owns a shop and joins a team", () => {
     expect(roster.status).toBe(200);
   });
 
-  it("a forged cookie naming a stranger's shop grants nothing and falls through", async () => {
+  it("🔴 a forged cookie naming a stranger's shop grants nothing and falls back to their own", async () => {
     const res = await me(withShop(barberCookie, strangerShopId));
-    expect(res.body.activeShopId).toBe(teamShopId);
-    expect(res.body.activeShopId).not.toBe(strangerShopId);
-  });
-});
-
-describe("POST /api/auth/active-shop - the account remembers the switcher's choice", () => {
-  it("switches the account back to their own shop, and every device follows", async () => {
-    const res = await request(app)
-      .post("/api/auth/active-shop")
-      .set("Cookie", barberCookie)
-      .send({ shopId: ownShopId });
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ ok: true, shopId: ownShopId, role: "OWNER" });
-    expect((await me(barberCookie)).body.activeShopId).toBe(ownShopId);
-
-    const back = await request(app)
-      .post("/api/auth/active-shop")
-      .set("Cookie", barberCookie)
-      .send({ shopId: teamShopId });
-    expect(back.body).toMatchObject({ ok: true, shopId: teamShopId, role: "BARBER" });
-    expect((await me(barberCookie)).body.activeShopId).toBe(teamShopId);
-  });
-
-  it("🔴 refuses a shop they neither own nor work in, and remembers nothing", async () => {
-    const res = await request(app)
-      .post("/api/auth/active-shop")
-      .set("Cookie", barberCookie)
-      .send({ shopId: strangerShopId });
-    expect(res.status).toBe(404);
-    const user = await prisma.user.findUniqueOrThrow({ where: { id: barberUserId } });
-    expect(user.activeShopId).toBe(teamShopId);
-  });
-
-  it("rejects junk input", async () => {
-    const res = await request(app)
-      .post("/api/auth/active-shop")
-      .set("Cookie", barberCookie)
-      .send({ shopId: teamShopId, extra: true });
-    expect(res.status).toBe(400);
-  });
-
-  it("needs a session", async () => {
-    const res = await request(app).post("/api/auth/active-shop").send({ shopId: teamShopId });
-    expect(res.status).toBe(401);
-  });
-
-  it("🔴 a remembered shop is a hint, not a grant: a stranger's id stored by hand still resolves to their own", async () => {
-    await prisma.user.update({
-      where: { id: barberUserId },
-      data: { activeShopId: strangerShopId },
-    });
-    try {
-      const res = await me(barberCookie);
-      expect(res.body.activeShopId).toBe(ownShopId);
-      expect(res.body.shopRole).toBe("OWNER");
-    } finally {
-      await prisma.user.update({
-        where: { id: barberUserId },
-        data: { activeShopId: teamShopId },
-      });
-    }
+    expect(res.body.activeShopId).toBe(ownShopId);
+    const roster = await request(app)
+      .get("/api/team")
+      .set("Cookie", withShop(barberCookie, strangerShopId));
+    // Their OWN roster, never the stranger's.
+    expect(roster.status).toBe(200);
+    expect(roster.body.ownerUserId).toBe(barberUserId);
   });
 });
 
@@ -283,11 +235,7 @@ describe("the Team page can give a member a chair after they joined", () => {
 });
 
 describe("joining when already on the team", () => {
-  it("🔴 answers already_member WITH the shop, and still takes them there", async () => {
-    await prisma.user.update({
-      where: { id: barberUserId },
-      data: { activeShopId: ownShopId },
-    });
+  it("🔴 answers already_member only when the seat really exists - and makes no second one", async () => {
     // A second live invitation for someone already seated (the invite route
     // refuses to mint one, so plant it the way an older link would exist).
     const token = randomToken();
@@ -307,13 +255,15 @@ describe("joining when already on the team", () => {
       .set("Cookie", barberCookie)
       .send({ token });
     expect(res.status).toBe(409);
-    expect(res.body).toEqual({ error: "already_member", shopId: teamShopId });
-    expect((await me(barberCookie)).body.activeShopId).toBe(teamShopId);
+    expect(res.body).toEqual({ error: "already_member" });
+    expect(
+      await prisma.shopMember.count({ where: { shopId: teamShopId, userId: barberUserId } }),
+    ).toBe(1);
   });
 });
 
 describe("losing the seat", () => {
-  it("🔴 a removed barber's cookie AND remembered choice both stop working at once", async () => {
+  it("🔴 a removed barber's team cookie stops working at once", async () => {
     const removed = await request(app)
       .delete(`/api/team/members/${seatId}`)
       .set("Cookie", ownerCookie);

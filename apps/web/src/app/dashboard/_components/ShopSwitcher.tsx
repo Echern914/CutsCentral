@@ -5,10 +5,9 @@ import { switchShopAction } from "../actions";
 
 /**
  * Which shop the dashboard is working in: the person's own shop(s), and every
- * team they hold a seat on. Selecting one sets the active shop (this browser
- * AND the account, so the app follows) and reloads the dashboard onto it. The
- * API re-verifies ownership or the seat, so this can only ever switch between
- * places the person already belongs.
+ * team they hold a seat on. Selecting one sets the active-shop cookie and
+ * reloads the dashboard onto it. The API re-verifies ownership or the seat, so
+ * this can only ever switch between places the person already belongs.
  *
  * Rendered only when there is somewhere else to go (2+ entries in total): a
  * one-shop owner with no team never sees it.

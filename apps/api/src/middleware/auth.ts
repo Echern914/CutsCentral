@@ -62,17 +62,15 @@ export async function accessToShop(
 /**
  * Resolve which shop this session acts in, and with what role.
  *
- * `hints` are the shops the person asked for, most specific first: this
- * device's active-shop cookie, then the choice remembered on the account. Each
- * is only ever a HINT, re-verified against ownership OR a seat by accessToShop,
- * so a forged or stale id naming someone else's shop grants nothing and falls
- * through to the next.
+ * The requested shop (the switcher's active-shop cookie) is only ever a HINT,
+ * re-verified against ownership OR a seat by accessToShop, so a forged or stale
+ * id naming someone else's shop grants nothing and falls through.
  *
  * 🔴 A HINT NAMING A TEAM SEAT MUST BE HONORED EVEN FOR SOMEONE WHO OWNS A
  * SHOP. It used to be checked against ownership alone, and an unmatched hint
- * fell straight back to the person's own shop - so an independent barber who
- * joined another shop's team could never act in it: every request, and the
- * switcher itself, landed them back in their own business.
+ * fell straight back to the person's own shop - so a barber with a business of
+ * their own who joined another shop's team could never act in it: every
+ * request, and the switcher itself, landed them back in their own shop.
  *
  * With no usable hint: the person's own oldest shop, then their oldest seat.
  * A seat is still never consulted while ownership answers, which is what keeps
@@ -80,13 +78,10 @@ export async function accessToShop(
  */
 export async function resolveShopAccess(
   userId: string,
-  ...hints: Array<string | null | undefined>
+  requestedShopId?: string,
 ): Promise<ShopAccess | null> {
-  const tried = new Set<string>();
-  for (const hint of hints) {
-    if (!hint || tried.has(hint)) continue;
-    tried.add(hint);
-    const access = await accessToShop(userId, hint);
+  if (requestedShopId) {
+    const access = await accessToShop(userId, requestedShopId);
     if (access) return access;
   }
 
@@ -117,12 +112,6 @@ declare global {
   namespace Express {
     interface Request {
       userId?: string;
-      /**
-       * The shop this account last chose to work in (User.activeShopId), read
-       * by requireUser in the same query as the revocation check. A HINT for
-       * resolveShopAccess, never a grant.
-       */
-      rememberedShopId?: string | null;
       shop?: Shop;
       /** True when the session carries the read-only demo claim. */
       demoSession?: boolean;
@@ -163,17 +152,18 @@ export async function requireUser(
   // Revocation check: a token minted before the user's current tokenVersion
   // (e.g. before a password change or logout) is dead even if its
   // signature/expiry hold. Cache per userId - both candidates usually agree.
-  const users = new Map<string, { tokenVersion: number; activeShopId: string | null } | null>();
+  const versions = new Map<string, number | null>();
   for (const payload of candidates) {
-    let user = users.get(payload.userId);
-    if (user === undefined) {
-      user = await prisma.user.findUnique({
+    let version = versions.get(payload.userId);
+    if (version === undefined) {
+      const user = await prisma.user.findUnique({
         where: { id: payload.userId },
-        select: { tokenVersion: true, activeShopId: true },
+        select: { tokenVersion: true },
       });
-      users.set(payload.userId, user);
+      version = user ? user.tokenVersion : null;
+      versions.set(payload.userId, version);
     }
-    if (user !== null && (payload.v ?? 0) === user.tokenVersion) {
+    if (version !== null && (payload.v ?? 0) === version) {
       if (payload.demo === true) {
         if (!demoSessionAllowed(req)) {
           res.status(403).json({
@@ -185,7 +175,6 @@ export async function requireUser(
         req.demoSession = true;
       }
       req.userId = payload.userId;
-      req.rememberedShopId = user.activeShopId;
       next();
       return;
     }
@@ -203,15 +192,13 @@ export async function requireShop(
     res.status(401).json({ error: "unauthorized" });
     return;
   }
-  // This device's switcher choice first, then the one remembered on the
-  // account (the app's WebView, a new laptop). Both re-verified inside
-  // resolveShopAccess. Someone with one shop and no team has neither and gets
-  // their one shop, unchanged.
-  const access = await resolveShopAccess(
-    req.userId,
-    req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as string | undefined,
-    req.rememberedShopId,
-  );
+  // Honor the active-shop cookie (the switcher: another shop they own, or a
+  // team they work on), re-verified inside resolveShopAccess. Someone with one
+  // shop and no team has no cookie and gets their one shop, unchanged.
+  const requestedShopId = req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as
+    | string
+    | undefined;
+  const access = await resolveShopAccess(req.userId, requestedShopId);
   if (!access) {
     res.status(404).json({ error: "no_shop", message: "Create a shop first." });
     return;

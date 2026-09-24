@@ -180,14 +180,6 @@ teamJoinRouter.post("/", accountLimiter, requireUser, async (req, res) => {
         previousStaffId: null,
         nextStaffId: staffId,
       });
-      // Land them in the shop they just joined - on this browser AND in the
-      // app, whose dashboard has its own cookie jar and would otherwise open
-      // their own shop (a barber who already has one) with no sign they had
-      // joined anything. A hint, re-verified on every request.
-      await tx.user.update({
-        where: { id: user.id },
-        data: { activeShopId: invite.shopId },
-      });
     });
   } catch (err) {
     if (err instanceof Error && err.message === "invite_race") {
@@ -203,12 +195,8 @@ teamJoinRouter.post("/", accountLimiter, requireUser, async (req, res) => {
       select: { id: true },
     });
     if (seat) {
-      // They have the access the link promised - still take them there.
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { activeShopId: invite.shopId },
-      });
-      res.status(409).json({ error: "already_member", shopId: invite.shopId });
+      // They have the access the link promised.
+      res.status(409).json({ error: "already_member" });
       return;
     }
     // Nothing was committed and the invitation is still unspent, so trying

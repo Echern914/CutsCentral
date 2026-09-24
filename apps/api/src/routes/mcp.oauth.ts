@@ -385,13 +385,7 @@ mcpOAuthRouter.post("/authorize/approve", oauthLimiter, requireUser, async (req,
   // 🔴 THE SHOP COMES FROM THE SESSION, NEVER FROM THE REQUEST. resolveShopAccess
   // re-derives which shop this user acts in and with what role; a shopId in the
   // body would be a cross-tenant grant waiting to happen.
-  // Same hints, same order as requireShop, so the grant binds to the shop the
-  // consent page just named.
-  const access = await resolveShopAccess(
-    userId,
-    req.cookies?.cb_active_shop,
-    req.rememberedShopId,
-  );
+  const access = await resolveShopAccess(userId, req.cookies?.cb_active_shop);
   if (!access) {
     oauthError(res, 403, "access_denied", "this account does not belong to a shop");
     return;
