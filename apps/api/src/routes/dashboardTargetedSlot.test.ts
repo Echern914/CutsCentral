@@ -278,13 +278,10 @@ describe("booking into a special", () => {
   });
 
   it("🔴 the picker and the website AGREE about a special whose booking was cancelled", async () => {
-    // Cancelling from the dashboard does not release a special today (the
-    // customer's own cancel does) - so the slot stays linked to an appointment
-    // that no longer occupies the time. The shared filter cannot see that
-    // (nothing occupies the span any more); only the query's own
-    // `bookedAppointmentId: null` keeps the picker from offering a special the
-    // claim would then refuse. Asserted as AGREEMENT, not as a fixed outcome,
-    // so this stays true if cancel is ever taught to release it.
+    // A cancel now RELEASES the special (cancelAppointment), so both offer it
+    // again and the claim succeeds. Asserted as agreement between picker,
+    // website and claim rather than as an outcome, as it was written before
+    // cancel was taught to release - the three must never disagree either way.
     const at = tomorrowAt(14);
     const id = await publish(at, { durationMin: 30, price: 45 });
     const booked = await dashBook(at, { targetedSlotId: id });
@@ -300,6 +297,30 @@ describe("booking into a special", () => {
     const websiteOffers = (pub.body.targetedSlots as { id: string }[]).some((t) => t.id === id);
     expect(pickerOffers).toBe(websiteOffers);
     // And whatever they say, the claim agrees with them.
+    const claim = await dashBook(at, { targetedSlotId: id });
+    expect(claim.status).toBe(pickerOffers ? 201 : 409);
+  });
+
+  it("🔴 ...and about a NO-SHOW, which keeps its special while no longer occupying the time", async () => {
+    // The one state where a special stays linked to an appointment that
+    // occupies nothing: a no-show keeps the special (the time was held), and a
+    // NO_SHOW row is not occupancy. The shared filter cannot see that link -
+    // only the picker query's own `bookedAppointmentId: null` keeps it from
+    // offering a special the claim would then refuse.
+    const at = tomorrowAt(13);
+    const id = await publish(at, { durationMin: 30, price: 45 });
+    const booked = await dashBook(at, { targetedSlotId: id });
+    expect(booked.status).toBe(201);
+    const noShow = await request(app)
+      .post(`/api/booking/appointments/${booked.body.id}/no-show`)
+      .set("Cookie", cookie);
+    expect(noShow.status).toBe(200);
+
+    const picker = await dashSlots();
+    const pickerOffers = (picker.body.targetedSlots as PickerSpecial[]).some((t) => t.id === id);
+    const pub = await request(app).get(`/api/book/${slug}`);
+    const websiteOffers = (pub.body.targetedSlots as { id: string }[]).some((t) => t.id === id);
+    expect(pickerOffers).toBe(websiteOffers);
     const claim = await dashBook(at, { targetedSlotId: id });
     expect(claim.status).toBe(pickerOffers ? 201 : 409);
   });
