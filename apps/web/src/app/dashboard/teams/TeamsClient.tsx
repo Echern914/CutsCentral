@@ -211,7 +211,9 @@ export function TeamsClient({
                 )}
               </div>
 
-              <div className="mt-4 flex justify-end">
+              {/* Left-aligned: on a phone the floating help button sits
+                  bottom-right and would cover it at the end of the page. */}
+              <div className="mt-4 flex justify-start">
                 <button
                   type="button"
                   onClick={() => setLeaving(link)}
