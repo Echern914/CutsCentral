@@ -386,6 +386,23 @@ const updateShopSchema = createShopSchema
   })
   .partial();
 
+/** Every field PATCH /me accepts - all of them the shop's own settings. */
+export const SHOP_SETTINGS_FIELDS = updateShopSchema.keyof().options;
+
+/**
+ * 🔴 What a BARBER seat may change through PATCH /me: an explicit allowlist,
+ * and it is EMPTY on purpose. Every field above belongs to the business - its
+ * name, public page, booking, review link, messages, loyalty, walk-ins, the
+ * owner's alerts - so only an owner or a manager changes it. A barber's own
+ * settings (profile, theme, their own alerts) live on PATCH /api/auth/me and
+ * PUT /api/notifications.
+ *
+ * Audited 2026-09-24: no screen an employee seat can open sends this request
+ * (their app is Home, Assistant and Account). Add a field here only when a
+ * barber screen genuinely needs it.
+ */
+export const BARBER_SETTINGS_ALLOWED: ReadonlySet<string> = new Set<string>([]);
+
 /**
  * Resolve a shop's gallery to the canonical {url, caption?} shape for any client
  * (editor + public page). Prefers galleryItems (Json, with captions); falls back
@@ -728,53 +745,19 @@ shopsRouter.patch(
 );
 
 shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (req, res) => {
+  // A barber seat: any field outside the allowlist refuses the WHOLE request,
+  // before validation, so nothing in it is half-saved and no value - valid or
+  // not - gets a different answer.
+  if (req.shopRole === "BARBER") {
+    const fields = req.body && typeof req.body === "object" ? Object.keys(req.body as object) : [];
+    if (fields.some((f) => !BARBER_SETTINGS_ALLOWED.has(f))) {
+      res.status(403).json({ error: "forbidden_role", required: ["OWNER", "MANAGER"] });
+      return;
+    }
+  }
   const parsed = updateShopSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
-    return;
-  }
-  // Walk-In Mode toggles are manager-only, enforced FIELD-LEVEL on purpose:
-  // this route deliberately carries no router-level role gate (a barber seat
-  // edits some settings), and silently widening or narrowing that here would
-  // change unrelated fields' behavior. Turning a customer-facing intake
-  // surface on/off is a manager decision, so exactly these keys are walled.
-  if (
-    (parsed.data.walkInEnabled !== undefined ||
-      parsed.data.walkInAcceptingNow !== undefined) &&
-    req.shopRole === "BARBER"
-  ) {
-    res.status(403).json({ error: "forbidden_role", required: ["OWNER", "MANAGER"] });
-    return;
-  }
-  // The loyalty ladder is the shop's program - what a customer has to do for
-  // Gold, and what Gold promises - and changing it re-stamps every client's
-  // badge. That is an owner's or manager's call, not a barber seat's.
-  if (
-    (parsed.data.tierRules !== undefined ||
-      parsed.data.tierThresholds !== undefined ||
-      parsed.data.tierPerks !== undefined) &&
-    req.shopRole === "BARBER"
-  ) {
-    res.status(403).json({ error: "forbidden_role", required: ["OWNER", "MANAGER"] });
-    return;
-  }
-  // 🔴 Where the shop can be FOUND, BOOKED, and where its owner gets TOLD: the
-  // public web address (slug), whether the page is online at all, how booking
-  // works and where the Book button goes, and the phone the owner's alerts go
-  // to. A barber seat changing any of these can move the booking link, take
-  // the page or its booking offline, send the shop's clients to their own
-  // booking page, or send the owner's alerts to their own phone - so they are
-  // owner/manager only. The whole request is refused, so nothing else in it
-  // is half-saved.
-  if (
-    (parsed.data.slug !== undefined ||
-      parsed.data.publicPageEnabled !== undefined ||
-      parsed.data.bookingMode !== undefined ||
-      parsed.data.bookingUrl !== undefined ||
-      parsed.data.notifyPhone !== undefined) &&
-    req.shopRole === "BARBER"
-  ) {
-    res.status(403).json({ error: "forbidden_role", required: ["OWNER", "MANAGER"] });
     return;
   }
   // `gallery` (items-with-captions) isn't a Shop column - it maps to galleryItems
