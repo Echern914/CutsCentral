@@ -5,11 +5,11 @@ import {
   serviceNounForShop,
   type BookingModeKey,
 } from "@chairback/config/constants";
-import { businessType } from "@chairback/config/businessTypes";
 import { apiPublicGet } from "@/lib/api";
 import { GetTheApp } from "@/components/GetTheApp";
 import { appleItunesApp } from "@/lib/appBanner";
 import { ShopPageClient } from "./ShopPageClient";
+import { shopJsonLd } from "./shopJsonLd";
 
 export interface ShopPageData {
   name: string;
@@ -60,7 +60,8 @@ export interface ShopPageData {
     extraPunches: number | null;
     endsAt: string | null;
   }[];
-  // Approved reviews only (the API never returns pending/hidden publicly).
+  // Approved reviews WITH TEXT only - the cards (the API never returns
+  // pending/hidden publicly, and never a star-only rating as a card).
   reviews: {
     id: string;
     rating: number;
@@ -68,7 +69,13 @@ export interface ShopPageData {
     authorName: string | null;
     createdAt: string;
   }[];
-  reviewSummary: { count: number; avgRating: number | null };
+  reviewSummary: {
+    /** Every approved RATING, star-only ones included - what the average covers. */
+    count: number;
+    avgRating: number | null;
+    /** Approved reviews with text (the list above is capped). Absent from an older API. */
+    writtenCount?: number;
+  };
 }
 
 // Cache the public shop-page data (theme, bio, reviews, promotions) for 60s.
@@ -107,49 +114,6 @@ export async function generateMetadata({
     },
     twitter: { card: "summary_large_image", title: data.name, description },
   };
-}
-
-/**
- * LocalBusiness structured data - the piece that makes the shop's ChairBack
- * page read as a BUSINESS to Google (name + address + rating rich results,
- * local-pack eligibility), not just a web page. Address is included only when
- * street + city are both set; aggregateRating only with 1+ approved reviews
- * (Google flags a rating block with zero reviews as spammy markup).
- */
-function shopJsonLd(data: ShopPageData): Record<string, unknown> {
-  const ld: Record<string, unknown> = {
-    "@context": "https://schema.org",
-    // From the registry, so a new vertical cannot silently fall back to a
-    // generic LocalBusiness and lose its rich-result eligibility - the old
-    // `Record<string,string>` + `?? "LocalBusiness"` degraded with nothing
-    // failing anywhere.
-    "@type": businessType(data.industry).schemaType,
-    name: data.name,
-    url: `https://getchairback.com/s/${encodeURIComponent(data.slug)}`,
-    ...(data.bio ? { description: data.bio } : {}),
-    ...(data.logoUrl ? { image: data.logoUrl } : {}),
-    ...(data.receptionistNumber ? { telephone: data.receptionistNumber } : {}),
-  };
-  if (data.addressStreet && data.addressCity) {
-    ld.address = {
-      "@type": "PostalAddress",
-      streetAddress: data.addressStreet,
-      addressLocality: data.addressCity,
-      ...(data.addressRegion ? { addressRegion: data.addressRegion } : {}),
-      ...(data.addressPostal ? { postalCode: data.addressPostal } : {}),
-      addressCountry: "US",
-    };
-  }
-  if (data.reviewSummary.count > 0 && data.reviewSummary.avgRating !== null) {
-    ld.aggregateRating = {
-      "@type": "AggregateRating",
-      ratingValue: Number(data.reviewSummary.avgRating.toFixed(2)),
-      reviewCount: data.reviewSummary.count,
-      bestRating: 5,
-      worstRating: 1,
-    };
-  }
-  return ld;
 }
 
 export default async function PublicShopPage({

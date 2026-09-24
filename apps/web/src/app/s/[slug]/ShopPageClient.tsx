@@ -532,32 +532,41 @@ function Reviews({
   surface: CSSProperties;
   preview: boolean;
 }) {
-  const real = data.reviews;
+  // 🔴 A CARD NEEDS WORDS (Drick: "only show the ones with words"). The API
+  // already sends only reviews with text; this says the same thing for a
+  // payload from an API deploy that predates it, since the two ship
+  // separately - otherwise a star-only rating is a card with nothing to read.
+  const real = data.reviews.filter((r) => r.body?.trim());
   const hasReal = real.length > 0;
   // In the editor preview with no real reviews yet, show labeled examples so the
   // barber sees the layout. Live page with no reviews: just the form, no examples.
   const showExamples = preview && !hasReal;
   const list = hasReal ? real : showExamples ? exampleReviews(serviceNounForShop(data)) : [];
   const avg = data.reviewSummary.avgRating;
+  // ...but the stars count EVERY approved rating, words or not. So the header
+  // stands on its own - a shop whose ratings are all star-only still shows its
+  // average - and it says "ratings", which is why "4.9 · 37 ratings" over
+  // fewer than 37 cards is not a contradiction.
+  const ratingCount = data.reviewSummary.count;
 
   return (
     <motion.section variants={fadeUp} className="mt-8" data-tour="reviews">
       <SectionTitle muted={theme.muted}>Reviews</SectionTitle>
 
       {/* Average rating header (real data only). */}
-      {hasReal && avg != null && (
+      {ratingCount > 0 && avg != null && (
         <div className="mb-3 flex items-center gap-2 px-1">
           <Stars value={Math.round(avg)} accent={accent} border={theme.border} />
           <span className="text-sm font-semibold">{avg.toFixed(1)}</span>
           <span className="text-xs" style={{ color: theme.muted }}>
-            ({data.reviewSummary.count} {data.reviewSummary.count === 1 ? "review" : "reviews"})
+            · {ratingCount} {ratingCount === 1 ? "rating" : "ratings"}
           </span>
         </div>
       )}
 
       {showExamples && (
         <p className="mb-3 px-1 text-[11px] uppercase tracking-wide" style={{ color: theme.muted }}>
-          Example — your approved reviews will appear here
+          Example — your approved written reviews will appear here
         </p>
       )}
 

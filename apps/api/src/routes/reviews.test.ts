@@ -25,10 +25,15 @@ import { createApp } from "../app.js";
 const app = createApp();
 const emailA = `rev-a-${randomToken(6)}@test.local`.toLowerCase();
 const emailB = `rev-b-${randomToken(6)}@test.local`.toLowerCase();
+// A shop with nothing but the reviews one test gives it, so its average and
+// counts are exact numbers rather than "at least".
+const emailC = `rev-c-${randomToken(6)}@test.local`.toLowerCase();
 const password = "supersecret123";
 let cookieA: string;
 let cookieB: string;
+let cookieC: string;
 let slugA: string;
+let slugC: string;
 
 let sent: SendMessageInput[] = [];
 
@@ -63,8 +68,11 @@ beforeAll(async () => {
   });
   cookieA = await signupAndShop(emailA, "Rev Cuts A");
   cookieB = await signupAndShop(emailB, "Rev Cuts B");
+  cookieC = await signupAndShop(emailC, "Rev Cuts C");
   const me = await request(app).get("/api/shops/me").set("Cookie", cookieA);
   slugA = me.body.slug;
+  const meC = await request(app).get("/api/shops/me").set("Cookie", cookieC);
+  slugC = meC.body.slug;
 });
 
 afterEach(async () => {
@@ -81,7 +89,7 @@ afterAll(async () => {
   else process.env.DRY_RUN = ORIGINAL_DRY_RUN;
   __resetEnvCacheForTests();
   __setMessageProviderForTests(undefined);
-  for (const email of [emailA, emailB]) {
+  for (const email of [emailA, emailB, emailC]) {
     const user = await prisma.user.findUnique({ where: { email } });
     if (user) {
       await prisma.shop.deleteMany({ where: { ownerId: user.id } });
@@ -93,9 +101,10 @@ afterAll(async () => {
 
 describe("public review submission", () => {
   it("404s on an unknown slug", async () => {
+    // A VALID review (rating + name), so it is the slug that fails, not the body.
     const res = await request(app)
       .post(`/api/page/no-such-shop/review`)
-      .send({ rating: 5 });
+      .send({ rating: 5, authorName: "Nobody" });
     expect(res.status).toBe(404);
   });
 
@@ -126,9 +135,36 @@ describe("public review submission", () => {
     expect(list.body.pendingCount).toBeGreaterThanOrEqual(1);
   });
 
-  it("accepts a rating-only review (no text or name)", async () => {
-    const res = await request(app).post(`/api/page/${slugA}/review`).send({ rating: 4 });
+  it("🔴 refuses a review without a name, and stores nothing", async () => {
+    // Drick: "make people's name / nickname mandatory". Missing, empty and
+    // whitespace-only are all no name - text or not.
+    const before = await prisma.review.count({ where: { shop: { slug: slugA } } });
+    for (const payload of [
+      { rating: 4 },
+      { rating: 4, body: "Great fade, no name" },
+      { rating: 4, authorName: "" },
+      { rating: 4, authorName: "   " },
+    ]) {
+      const res = await request(app).post(`/api/page/${slugA}/review`).send(payload);
+      expect(res.status, JSON.stringify(payload)).toBe(400);
+    }
+    expect(await prisma.review.count({ where: { shop: { slug: slugA } } })).toBe(before);
+  });
+
+  it("accepts a named rating with no text", async () => {
+    // Text stays optional: stars alone are a real rating (see "the public
+    // page" below for where it counts and where it does not show).
+    const res = await request(app)
+      .post(`/api/page/${slugA}/review`)
+      .send({ rating: 4, authorName: "  Stars Only  " });
     expect(res.status).toBe(201);
+    const saved = await prisma.review.findFirstOrThrow({
+      where: { shop: { slug: slugA } },
+      orderBy: { createdAt: "desc" },
+    });
+    // Stored trimmed, and an absent body is NULL - never "".
+    expect(saved.authorName).toBe("Stars Only");
+    expect(saved.body).toBeNull();
   });
 
   it("does NOT appear on the public page until approved", async () => {
@@ -176,7 +212,9 @@ describe("public review submission", () => {
     __resetEnvCacheForTests();
     __setMessageProviderForTests(undefined);
     try {
-      const r2 = await request(app).post(`/api/page/${slugA}/review`).send({ rating: 3 });
+      const r2 = await request(app)
+        .post(`/api/page/${slugA}/review`)
+        .send({ rating: 3, authorName: "Robin" });
       expect(r2.status).toBe(201);
       await settleBackgroundWork();
       expect(sent).toHaveLength(1); // still just the first
@@ -239,7 +277,11 @@ describe("public review submission", () => {
 describe("dashboard review moderation", () => {
   it("approves a review and it then shows publicly with an average", async () => {
     const list = await request(app).get("/api/dashboard/reviews").set("Cookie", cookieA);
-    const pending = list.body.reviews.find((r: { status: string }) => r.status === "PENDING");
+    // One WITH text: a star-only rating is approved into the average but is
+    // never a card (pinned in "the public page" below).
+    const pending = list.body.reviews.find(
+      (r: { status: string; body: string | null }) => r.status === "PENDING" && r.body,
+    );
     expect(pending).toBeTruthy();
 
     const approve = await request(app)
@@ -358,5 +400,69 @@ describe("dashboard review moderation", () => {
       .set("Cookie", cookieB)
       .send({ status: "APPROVED" });
     expect(res.status).toBe(404);
+  });
+});
+
+describe("the public page: cards need words, the rating counts everyone", () => {
+  it("🔴 lists only reviews with text; the average and count cover every approved rating", async () => {
+    // Drick: "Reviews should only show the ones with words". A star-only
+    // rating used to render as a card with nothing to read.
+    for (const payload of [
+      { rating: 5, authorName: "Marcus", body: "Cleanest fade in town" },
+      { rating: 2, authorName: "Stars Only" },
+      // Spaces are not words: trimmed to nothing and stored as NULL, so it
+      // can never slip onto the page as a blank card.
+      { rating: 4, authorName: "Blank", body: "    " },
+    ]) {
+      const res = await request(app).post(`/api/page/${slugC}/review`).send(payload);
+      expect(res.status, JSON.stringify(payload)).toBe(201);
+    }
+    const blank = await prisma.review.findFirstOrThrow({
+      where: { shop: { slug: slugC }, authorName: "Blank" },
+    });
+    expect(blank.body).toBeNull();
+
+    // Nothing is public until the shop approves it - then all three are.
+    const list = await request(app).get("/api/dashboard/reviews").set("Cookie", cookieC);
+    expect(list.body.reviews).toHaveLength(3);
+    for (const r of list.body.reviews as { id: string }[]) {
+      const approve = await request(app)
+        .post(`/api/dashboard/reviews/${r.id}`)
+        .set("Cookie", cookieC)
+        .send({ status: "APPROVED" });
+      expect(approve.status).toBe(200);
+    }
+
+    const pub = await request(app).get(`/api/page/${slugC}`);
+    expect(pub.status).toBe(200);
+    // ONE card: the review that says something.
+    expect(
+      pub.body.reviews.map((r: { authorName: string; body: string }) => [r.authorName, r.body]),
+    ).toEqual([["Marcus", "Cleanest fade in town"]]);
+    // ...while the stars count everybody: (5 + 2 + 4) / 3.
+    expect(pub.body.reviewSummary.count).toBe(3);
+    expect(pub.body.reviewSummary.avgRating).toBeCloseTo(11 / 3, 5);
+    // And the number of reviews WITH words, which the page's structured
+    // data reports as its reviewCount.
+    expect(pub.body.reviewSummary.writtenCount).toBe(1);
+  });
+
+  it("a hidden review with text leaves the cards and the count alike", async () => {
+    const list = await request(app).get("/api/dashboard/reviews").set("Cookie", cookieC);
+    const marcus = (list.body.reviews as { id: string; authorName: string }[]).find(
+      (r) => r.authorName === "Marcus",
+    );
+    expect(marcus).toBeTruthy();
+    await request(app)
+      .post(`/api/dashboard/reviews/${marcus!.id}`)
+      .set("Cookie", cookieC)
+      .send({ status: "HIDDEN" });
+
+    const pub = await request(app).get(`/api/page/${slugC}`);
+    expect(pub.body.reviews).toEqual([]);
+    expect(pub.body.reviewSummary.writtenCount).toBe(0);
+    // The two star-only ratings are still approved, still real: (2 + 4) / 2.
+    expect(pub.body.reviewSummary.count).toBe(2);
+    expect(pub.body.reviewSummary.avgRating).toBeCloseTo(3, 5);
   });
 });

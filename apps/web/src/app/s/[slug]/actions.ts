@@ -57,8 +57,10 @@ export async function joinWaitlistAction(
 
 export interface ReviewInput {
   rating: number;
+  /** Optional: stars alone count toward the average, but only words make a card. */
   body?: string;
-  authorName?: string;
+  /** Required - a name or a nickname. The API refuses a review without one. */
+  authorName: string;
 }
 
 /**

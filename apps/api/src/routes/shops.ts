@@ -954,7 +954,16 @@ publicPageRouter.get("/:slug", async (req, res) => {
     return;
   }
   const now = new Date();
-  const [rewards, approvedReviews, ratingAgg, promotions] = await Promise.all([
+  // 🔴 A CARD NEEDS WORDS. Only APPROVED reviews are ever public, and of those
+  // only the ones that say something become cards (Drick: "only show the ones
+  // with words") - a star-only rating made a card with nothing to read. They
+  // are still real ratings, so the average and the count below cover EVERY
+  // approved one, text or not - which is why the page labels that number
+  // "ratings", not "reviews".
+  // Blank text never reaches the column (the submit route stores it as null),
+  // so `not: null` is the whole of "has words".
+  const writtenReviews = { shopId: shop.id, status: "APPROVED", body: { not: null } };
+  const [rewards, approvedReviews, ratingAgg, promotions, writtenCount] = await Promise.all([
     // Rewards off = the public page simply has no rewards section (no empty
     // card, no dead copy) - everything else renders as usual.
     shop.rewardsEnabled
@@ -964,13 +973,14 @@ publicPageRouter.get("/:slug", async (req, res) => {
           select: { id: true, name: true, description: true, emoji: true, punchCost: true },
         })
       : Promise.resolve([]),
-    // Only APPROVED reviews are ever public. Newest first, capped.
+    // The cards. Newest first, capped.
     prisma.review.findMany({
-      where: { shopId: shop.id, status: "APPROVED" },
+      where: writtenReviews,
       orderBy: { createdAt: "desc" },
       take: 30,
       select: { id: true, rating: true, body: true, authorName: true, createdAt: true },
     }),
+    // The stars: every approved rating, with or without words.
     prisma.review.aggregate({
       where: { shopId: shop.id, status: "APPROVED" },
       _avg: { rating: true },
@@ -997,6 +1007,8 @@ publicPageRouter.get("/:slug", async (req, res) => {
         endsAt: true,
       },
     }),
+    // How many cards there are in all - the list above is capped.
+    prisma.review.count({ where: writtenReviews }),
   ]);
   res.json({
     name: shop.name,
@@ -1062,8 +1074,13 @@ publicPageRouter.get("/:slug", async (req, res) => {
     })),
     // Summary for the star header. avgRating is null when there are no reviews.
     reviewSummary: {
+      // Every approved RATING, star-only ones included.
       count: ratingAgg._count,
       avgRating: ratingAgg._avg.rating ?? null,
+      // How many of those have words - the ones that can be cards, and what
+      // the page's structured data calls reviews. Not `reviews.length`: that
+      // list stops at 30.
+      writtenCount,
     },
   });
 });
@@ -1472,12 +1489,18 @@ publicPageRouter.post("/waitlist/cancel/:token", waitlistLimiter, async (req, re
 // Customer review from the public page. UNauthenticated (slug resolves the shop);
 // the insert uses plain prisma (connection owner, bypasses FORCE RLS) like the
 // lead form. Approve-first: lands as PENDING and is invisible publicly until the
-// barber approves it. Rating 1-5 required; text + name optional. Anti-spam limit.
+// barber approves it. Anti-spam limit.
+//
+// Rating 1-5 and a NAME are required - a name or a nickname, the reviewer's
+// choice (Drick: "make people's name / nickname mandatory"). Whitespace is
+// not a name: it trims to nothing and fails min(1). Text stays optional: a
+// star-only rating still counts toward the shop's average, it just never
+// shows as a card on the page (see GET /:slug).
 const reviewSchema = z
   .object({
     rating: z.coerce.number().int().min(1).max(5),
     body: z.string().trim().max(1000).optional().or(z.literal("")),
-    authorName: z.string().trim().max(80).optional().or(z.literal("")),
+    authorName: z.string().trim().min(1).max(80),
   })
   .strict();
 
@@ -1514,8 +1537,11 @@ publicPageRouter.post("/:slug/review", leadLimiter, async (req, res) => {
       data: {
         shopId: shop.id,
         rating: d.rating,
+        // 🔴 Blank text is stored as NULL, never as "" or spaces (the schema
+        // trims first). The public list's "has words" test is `body: { not:
+        // null }`, so this line is what keeps an empty card off the page.
         body: d.body || null,
-        authorName: d.authorName || null,
+        authorName: d.authorName,
         // status defaults to PENDING - barber must approve before it shows.
       },
     });
