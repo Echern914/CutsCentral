@@ -698,6 +698,10 @@ model Shop {
   // Team: who else can sign in to this shop, and outstanding invites.
   members     ShopMember[]
   teamInvites TeamInvite[]
+  // Independent businesses linked to THIS shop's team, and the teams THIS
+  // business has linked itself to. See TeamLink.
+  teamLinks        TeamLink[] @relation("TeamLinkTeam")
+  memberOfTeams    TeamLink[] @relation("TeamLinkMember")
 
   // The code THIS shop hands out ("share this link, you both get a month").
   // Distinct from User.referralCode, which is the code a user ARRIVED with -
@@ -925,6 +929,45 @@ model TeamInvite {
   updatedAt   DateTime  @updatedAt
 
   @@index([shopId, email])
+}
+
+// A barber's OWN business linked to a shop's team - the booth-rent model, where
+// every barber is independent (Snow, United Barbershop). The opposite of a
+// ShopMember seat: a seat lets a person work INSIDE the shop, so their clients
+// and bookings become the shop's. A link moves nothing. The member's clients,
+// bookings, payments and reviews stay in memberShop, leaving deletes nothing,
+// and the team's owner sees only what the member switches on below.
+//
+// PENDING = the member asked to join and the team's owner hasn't approved;
+// ACTIVE = on the team; ENDED = left, removed or declined. One row per pair,
+// reused if they ask again.
+model TeamLink {
+  id           String         @id @default(cuid())
+  teamShopId   String
+  teamShop     Shop           @relation("TeamLinkTeam", fields: [teamShopId], references: [id], onDelete: Cascade)
+  memberShopId String
+  memberShop   Shop           @relation("TeamLinkMember", fields: [memberShopId], references: [id], onDelete: Cascade)
+  status       TeamLinkStatus @default(PENDING)
+  requestedAt  DateTime       @default(now())
+  approvedAt   DateTime?
+  endedAt      DateTime?
+  // What the team's owner may see, last 30 days. Set by the MEMBER only, off
+  // until they turn it on, and reset to off whenever the link ends.
+  shareCuts    Boolean        @default(false)
+  shareRevenue Boolean        @default(false)
+  shareClients Boolean        @default(false)
+  shareRating  Boolean        @default(false)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@unique([teamShopId, memberShopId])
+  @@index([memberShopId])
+}
+
+enum TeamLinkStatus {
+  PENDING
+  ACTIVE
+  ENDED
 }
 
 // A shop-designed promotion ("Spring special: 20% off weekday cuts"). Live =

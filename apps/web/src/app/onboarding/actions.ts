@@ -6,6 +6,7 @@ import { AFFILIATE_CLAIM_COOKIE } from "@chairback/config";
 import { apiSend } from "@/lib/api";
 import { clearActiveShopCookie } from "@/lib/activeShopCookie";
 import { mintAppReturnUrl } from "@/lib/mobileReturn";
+import { TEAM_LINK_COOKIE, clearTeamLinkCookie, teamKeyOk } from "@/lib/teamLinkCookie";
 
 interface ShopState {
   error?: string;
@@ -50,6 +51,7 @@ export async function createShopAction(
   // team's shop as this browser's active shop, and the rest of onboarding
   // (connecting a calendar, payments) must land on THEIR business, not the team's.
   clearActiveShopCookie();
+  await askTheTeamTheyCameFor();
   // If the native app started this in the system browser, the shop now EXISTS
   // and this is the moment to hand the session back. Same ordering rule as the
   // team invitation: what they came to do is done and committed before any of
@@ -62,4 +64,24 @@ export async function createShopAction(
   // optional polish they can finish in the app on a real dashboard.
   const returnUrl = await mintAppReturnUrl("new_shop");
   redirect(returnUrl ?? "/onboarding/connect");
+}
+
+/**
+ * They opened a shop's team link with no business, and set one up to join.
+ * Now it exists, so the request goes HERE - every way through onboarding
+ * passes this point, while the last screen can be skipped (the connect step
+ * has an exit straight to the dashboard, and the app hand-off returns early).
+ * Asking grants nothing: the owner approves, nothing is shared until the
+ * barber chooses.
+ *
+ * Once the API has answered for good (sent, already asked, or no such team)
+ * the cookie is forgotten, so it can never ask again - least of all for the
+ * next person to sign up in this browser. A failure that might pass (the
+ * network, a 5xx) keeps it, and the last screen offers the request again.
+ */
+async function askTheTeamTheyCameFor(): Promise<void> {
+  const team = cookies().get(TEAM_LINK_COOKIE)?.value;
+  if (!teamKeyOk(team)) return;
+  const res = await apiSend("POST", "/api/teams/join", { team });
+  if (res.ok || res.status === 409 || res.status === 404) clearTeamLinkCookie();
 }

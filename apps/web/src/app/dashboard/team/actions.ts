@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { apiGet, apiSend } from "@/lib/api";
 import type { TeamData } from "./page";
+import type { TeamLinksData } from "./IndependentTeam";
 
 /** Re-read the roster after any change (server is the source of truth). */
 export async function teamAction(): Promise<TeamData | null> {
@@ -54,6 +55,27 @@ export async function createChairForMemberAction(id: string): Promise<TeamAction
 
 export async function removeMemberAction(id: string): Promise<TeamActionResult> {
   const res = await apiSend<{ ok: boolean }>("DELETE", `/api/team/members/${id}`);
+  revalidatePath("/dashboard/team");
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
+}
+
+// ---- Independent businesses on the team (TeamLink) ----
+
+/** Re-read the team link card after any change (owner only). */
+export async function teamLinksAction(): Promise<TeamLinksData | null> {
+  const res = await apiGet<TeamLinksData>("/api/team/links");
+  return res.ok ? (res.data ?? null) : null;
+}
+
+export async function approveLinkAction(id: string): Promise<TeamActionResult> {
+  const res = await apiSend<{ ok: boolean }>("POST", `/api/team/links/${id}/approve`);
+  revalidatePath("/dashboard/team");
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
+}
+
+/** Decline a request, or take someone off the team. */
+export async function endLinkAction(id: string): Promise<TeamActionResult> {
+  const res = await apiSend<{ ok: boolean }>("POST", `/api/team/links/${id}/end`);
   revalidatePath("/dashboard/team");
   return res.ok ? { ok: true } : { ok: false, error: res.error };
 }

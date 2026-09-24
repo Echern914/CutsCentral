@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { useToast } from "@/components/ui/Toast";
@@ -72,9 +72,12 @@ function explain(code: string | undefined, v: BusinessVocabulary): string {
 export function TeamClient({
   initial,
   vocab,
+  children,
 }: {
   initial: TeamData;
   vocab: BusinessVocabulary;
+  /** Rendered right under the page title - the independent-team card. */
+  children?: ReactNode;
 }) {
   const { toast } = useToast();
   const [data, setData] = useState<TeamData>(initial);
@@ -138,11 +141,12 @@ export function TeamClient({
       <div>
         <h1 className="font-display text-2xl">Team</h1>
         <p className="mt-1 text-sm text-muted">
-          Everyone who can sign in to your shop. A login and a {vocab.stationNoun} are
-          separate things: link each {vocab.providerNoun} to their {vocab.stationNoun} below
-          so they can see their own day.
+          Independent {vocab.providerNounPlural} link their own business to your team. Staff
+          logins let someone work inside yours.
         </p>
       </div>
+
+      {children}
 
       {/* Invite */}
       {isOwner && (
@@ -243,7 +247,10 @@ export function TeamClient({
 
       {/* Members */}
       <Card className="overflow-hidden">
-        <CardHeader title="People" subtitle="Everyone with access to this shop." />
+        <CardHeader
+          title="Staff logins"
+          subtitle={`Everyone who can sign in to this shop. Link each ${vocab.providerNoun} to their ${vocab.stationNoun} so they can see their own day.`}
+        />
         <ul className="divide-y divide-subtle">
           {data.members.map((m) => {
             const isTheOwner = m.user.id === data.ownerUserId;
