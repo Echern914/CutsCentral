@@ -758,15 +758,19 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
     res.status(403).json({ error: "forbidden_role", required: ["OWNER", "MANAGER"] });
     return;
   }
-  // 🔴 Where the shop can be FOUND and where its owner gets TOLD: the public
-  // web address (slug), whether the page is online at all, and the phone the
-  // owner's alerts go to. A barber seat changing any of these can move the
-  // booking link, take the page offline, or send the owner's alerts to their
-  // own phone - so they are owner/manager only. The whole request is refused,
-  // so nothing else in it is half-saved.
+  // 🔴 Where the shop can be FOUND, BOOKED, and where its owner gets TOLD: the
+  // public web address (slug), whether the page is online at all, how booking
+  // works and where the Book button goes, and the phone the owner's alerts go
+  // to. A barber seat changing any of these can move the booking link, take
+  // the page or its booking offline, send the shop's clients to their own
+  // booking page, or send the owner's alerts to their own phone - so they are
+  // owner/manager only. The whole request is refused, so nothing else in it
+  // is half-saved.
   if (
     (parsed.data.slug !== undefined ||
       parsed.data.publicPageEnabled !== undefined ||
+      parsed.data.bookingMode !== undefined ||
+      parsed.data.bookingUrl !== undefined ||
       parsed.data.notifyPhone !== undefined) &&
     req.shopRole === "BARBER"
   ) {

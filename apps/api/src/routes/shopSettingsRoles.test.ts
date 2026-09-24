@@ -6,14 +6,15 @@ import { createApp } from "../app.js";
 
 /**
  * Shop settings a BARBER seat must not change: where the shop is found and
- * where its owner is told.
+ * booked, and where its owner is told.
  *
  * PATCH /api/shops/me is field-level for barber seats. Before this, a barber
  * could move the shop's public web address (slug), take its page offline
- * (publicPageEnabled), or point the owner's alert phone (Shop.notifyPhone) at
- * their own number. Owners and managers still can; a barber keeps their own
- * PERSONAL settings (profile, theme, their own notifications - including
- * their own alert phone), which live on other routes.
+ * (publicPageEnabled), take its booking offline or send the Book button to
+ * their own booking page (bookingMode, bookingUrl), or point the owner's alert
+ * phone (Shop.notifyPhone) at their own number. Owners and managers still can;
+ * a barber keeps their own PERSONAL settings (profile, theme, their own
+ * notifications - including their own alert phone), which live on other routes.
  */
 const app = createApp();
 const password = "correct horse battery staple";
@@ -47,7 +48,13 @@ beforeAll(async () => {
   shopId = created.body.id as string;
   await prisma.shop.update({
     where: { id: shopId },
-    data: { slug: `wall-shop-${tag}`, publicPageEnabled: true, notifyPhone: "+13025550100" },
+    data: {
+      slug: `wall-shop-${tag}`,
+      publicPageEnabled: true,
+      notifyPhone: "+13025550100",
+      bookingMode: "native",
+      bookingUrl: null,
+    },
   });
   const barber = await signup("barber");
   barberCookie = barber.cookie;
@@ -73,7 +80,7 @@ const patch = (cookie: string, body: object) =>
 const shop = () =>
   prisma.shop.findUniqueOrThrow({
     where: { id: shopId },
-    select: { slug: true, publicPageEnabled: true, notifyPhone: true, bio: true },
+    select: { slug: true, publicPageEnabled: true, notifyPhone: true, bio: true, bookingMode: true, bookingUrl: true },
   });
 
 describe("a BARBER seat", () => {
@@ -87,6 +94,17 @@ describe("a BARBER seat", () => {
     const res = await patch(barberCookie, { publicPageEnabled: false });
     expect(res.status).toBe(403);
     expect((await shop()).publicPageEnabled).toBe(true);
+  });
+
+  it("🔴 can't take booking offline, or send the Book button to another booking page", async () => {
+    for (const body of [
+      { bookingMode: "link", bookingUrl: "" },
+      { bookingMode: "link" },
+      { bookingUrl: "https://example.com/my-own-booking" },
+    ]) {
+      expect((await patch(barberCookie, body)).status).toBe(403);
+    }
+    expect(await shop()).toMatchObject({ bookingMode: "native", bookingUrl: null });
   });
 
   it("🔴 can't send the owner's alerts to another phone", async () => {
@@ -118,23 +136,37 @@ describe("a BARBER seat", () => {
 });
 
 describe("owners and managers still run the shop", () => {
-  it("a manager can change all three", async () => {
+  it("a manager can change all of them", async () => {
     const res = await patch(managerCookie, {
       slug: `wall-shop-m-${tag}`,
       publicPageEnabled: false,
       notifyPhone: "+13025550111",
+      bookingMode: "link",
+      bookingUrl: "https://example.com/book",
     });
     expect(res.status).toBe(200);
-    expect(await shop()).toMatchObject({ slug: `wall-shop-m-${tag}`, publicPageEnabled: false });
+    expect(await shop()).toMatchObject({
+      slug: `wall-shop-m-${tag}`,
+      publicPageEnabled: false,
+      bookingMode: "link",
+      bookingUrl: "https://example.com/book",
+    });
   });
 
-  it("the owner can change all three", async () => {
+  it("the owner can change all of them", async () => {
     const res = await patch(ownerCookie, {
       slug: `wall-shop-${tag}`,
       publicPageEnabled: true,
       notifyPhone: "+13025550100",
+      bookingMode: "native",
+      bookingUrl: "",
     });
     expect(res.status).toBe(200);
-    expect(await shop()).toMatchObject({ slug: `wall-shop-${tag}`, publicPageEnabled: true });
+    expect(await shop()).toMatchObject({
+      slug: `wall-shop-${tag}`,
+      publicPageEnabled: true,
+      bookingMode: "native",
+      bookingUrl: null,
+    });
   });
 });
