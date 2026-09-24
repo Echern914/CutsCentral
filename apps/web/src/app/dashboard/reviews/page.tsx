@@ -80,8 +80,16 @@ export default async function ReviewsPage() {
                         {r.authorName || "Anonymous"}
                       </span>
                     </div>
-                    {r.body && (
+                    {r.body ? (
                       <p className="mt-1.5 text-sm text-offwhite/90">{r.body}</p>
+                    ) : (
+                      // Approving one of these adds it to the average but never
+                      // puts a card on the public page. Said here, where the
+                      // approve decision is made, so it isn't a mystery later.
+                      <p className="mt-1.5 text-xs text-muted">
+                        Stars only — adds to your rating once approved, but only
+                        reviews with words show on your page.
+                      </p>
                     )}
                     <p className="mt-1.5 text-[11px] text-muted/70">
                       {new Date(r.createdAt).toLocaleString(undefined, {

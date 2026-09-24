@@ -18,6 +18,7 @@ export interface PageSettingsInput {
   addressCity: string;
   addressRegion: string;
   addressPostal: string;
+  addressPrivate: boolean;
   gallery: { url: string; caption?: string }[];
   fontKey: string;
   layoutStyle: string;
@@ -59,6 +60,7 @@ const PAGE_FIELDS = [
   "addressCity",
   "addressRegion",
   "addressPostal",
+  "addressPrivate",
   "gallery",
   "fontKey",
   "layoutStyle",

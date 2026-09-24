@@ -61,6 +61,7 @@ import {
 import { agendaWindowOf, mergeAgendaWindow } from "./agendaMerge";
 import { swipeAllowedFrom, swipeIntent } from "./daySwipe";
 import { dayTotals, type DayTotals } from "./dayTotals";
+import { nowAnchorHour } from "./nowAnchor";
 import { AppointmentForm } from "./AppointmentForm";
 import {
   WAITLIST_BOOK_EVENT,
@@ -157,6 +158,13 @@ type CalendarView = (typeof VIEWS)[number]["key"];
 // any booking outside it (e.g. a 6am or 1am appointment).
 const DEFAULT_START_HOUR = 8;
 const DEFAULT_END_HOUR = 23; // 11 PM row shown; midnight+ bookings widen it further
+/**
+ * How long the month view takes to open a day's planner under the grid. Shared
+ * with the scroll to "now", which has to wait it out: a row measured while the
+ * planner is still growing - or while the day it replaces is still closing
+ * above it - scrolls to where the row WAS, not to where it lands.
+ */
+const PLANNER_OPEN_MS = 200;
 
 export function BookingCalendar({
   initial,
@@ -617,6 +625,9 @@ export function BookingCalendar({
           <DayPlanner
             key={shownDay}
             standalone
+            // Remounts per day (the key), so paging back to today - the
+            // Today button, the week strip, a swipe - opens at "now" again.
+            isToday={shownDay === todayKey}
             rows={shownDayRows}
             categories={categories}
             title={dayTitle}
@@ -713,10 +724,15 @@ export function BookingCalendar({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
+            transition={{ duration: PLANNER_OPEN_MS / 1000, ease: "easeOut" }}
             className="overflow-hidden"
           >
             <DayPlanner
+              // The default view, so this is the planner most visits open on.
+              isToday={selectedDay === todayKey}
+              // The +100 is a few frames for AnimatePresence to drop a day
+              // that is closing above this one once its animation ends.
+              scrollDelayMs={PLANNER_OPEN_MS + 100}
               rows={selectedRows}
               categories={categories}
               title={
@@ -1472,6 +1488,8 @@ function DayPlanner({
   onOpenWaitlist,
   standalone = false,
   timezone,
+  isToday,
+  scrollDelayMs = 0,
 }: {
   rows: AgendaRow[];
   /** Gauge buckets (groups + ungrouped services) with their display-only targets. */
@@ -1500,6 +1518,10 @@ function DayPlanner({
   standalone?: boolean;
   /** The shop's zone, for the walk-in bar's time field. */
   timezone: string;
+  /** This is TODAY in the shop's zone, so the planner opens scrolled to "now". */
+  isToday: boolean;
+  /** How long to wait before that scroll - see PLANNER_OPEN_MS. */
+  scrollDelayMs?: number;
 }) {
   const vocab = useVocab();
   // ---- Day gauge: how full is this day, and in what? ----
@@ -1600,6 +1622,46 @@ function DayPlanner({
     if (prev?.kind === "blocked" && prev.endIso === covering.endIso) continue;
     hourRows.push({ kind: "blocked", hour: h, endIso: covering.endIso, allDay: covering.allDay });
   }
+
+  // ---- Open at "now" ----
+  // A planner showing TODAY scrolls the page so the row that matters right now
+  // is at the top of the screen, the way Acuity opens its day (which row, and
+  // why: nowAnchor.ts).
+  //
+  // 🔴 ONCE PER MOUNT, DECIDED AT MOUNT. The 20-second poll re-renders this
+  // list all day, and pulling the page back to "now" on any of those renders
+  // would fight the barber's own scrolling - so the effect has no deps, and
+  // the ref turns a re-run (StrictMode, fast refresh) into a no-op once it has
+  // scrolled. A planner that opened on another day never scrolls, even if
+  // midnight makes it today while it is on screen. Paging back to today
+  // remounts the planner, which is how the Today button scrolls again.
+  const listRef = useRef<HTMLDivElement>(null);
+  const openedAtNow = useRef(false);
+  const rowStartHours = hourRows.map((r) => r.hour);
+  useEffect(() => {
+    if (!isToday || openedAtNow.current) return;
+    const timer = window.setTimeout(() => {
+      openedAtNow.current = true;
+      const hour = nowAnchorHour(rows, rowStartHours, hourOf, Date.now());
+      const row =
+        hour === null
+          ? null
+          : listRef.current?.querySelector<HTMLElement>(`[data-hour="${hour}"]`);
+      // No glide for someone who asked their device for less motion (the
+      // demo tour's rule). Optional-called: not every runtime has matchMedia.
+      const reduced =
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      row?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+    }, scrollDelayMs);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Where a scrolled-to row comes to rest: below whatever is pinned over the
+  // top of the page, or "now" lands underneath it. In the month view that is
+  // the dashboard's sticky top bar (about 4rem). The day view also pins its
+  // week strip and total just under that bar (DayHeader, `top-16`, up to about
+  // 6rem tall), so it needs the bigger margin.
+  const rowScrollMargin = standalone ? "scroll-mt-44" : "scroll-mt-20";
 
   // ---- Day summary (the totals footer) ----
   // Shared with the pinned header above the planner (see DayHeader): two copies
@@ -1708,6 +1770,7 @@ function DayPlanner({
       )}
 
       <motion.div
+        ref={listRef}
         variants={staggerContainer}
         initial="hidden"
         animate="show"
@@ -1716,12 +1779,18 @@ function DayPlanner({
         {hourRows.map((item) => {
           // An hour sitting fully inside a block is NOT open - don't invite a
           // booking into it. One slim band covers the whole covered run.
+          // `data-hour` is the hour a row STARTS at - a band's first hour -
+          // which is how the scroll to "now" finds its row.
           if (item.kind === "blocked") {
             return (
               <motion.div
                 key={`blocked-${item.hour}`}
+                data-hour={item.hour}
                 variants={fadeUp}
-                className="flex gap-3 border-b border-subtle/60 py-2 last:border-b-0"
+                className={cn(
+                  "flex gap-3 border-b border-subtle/60 py-2 last:border-b-0",
+                  rowScrollMargin,
+                )}
               >
                 <div className="w-14 shrink-0 pt-0.5 text-right text-[11px] font-medium text-muted">
                   {formatHour(item.hour)}
@@ -1746,8 +1815,12 @@ function DayPlanner({
           return (
             <motion.div
               key={h}
+              data-hour={h}
               variants={fadeUp}
-              className="flex gap-3 border-b border-subtle/60 py-2 last:border-b-0"
+              className={cn(
+                "flex gap-3 border-b border-subtle/60 py-2 last:border-b-0",
+                rowScrollMargin,
+              )}
             >
               <div className="w-14 shrink-0 pt-0.5 text-right text-[11px] font-medium text-muted">
                 {formatHour(h)}

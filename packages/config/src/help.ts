@@ -927,7 +927,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "show-up-on-google",
     q: "How do I show up on Google?",
-    a: "Three things, all on your page settings (dashboard → More → Public shop page):\n\n1. Fill in your address — street, city, state, ZIP. That's what tells Google you're a real local business, which is how you appear for searches like \"barber near me.\" It's the single biggest lever.\n2. Keep your page live, with your services, photos, and reviews on it — that's the page Google reads and shows, at your getchairback.com/s/ link.\n3. Own a domain? Connect it in the same place, and people who type it land straight on your page.\n\nGoogle indexes on its own schedule, so a brand-new page can take days to appear — but the address is what does the heavy lifting.",
+    a: "Three things, all on your page settings (dashboard → More → Public shop page):\n\n1. Fill in your address — street, city, state, ZIP. That's what tells Google you're a real local business, which is how you appear for searches like \"barber near me.\" It's the single biggest lever. Rather not put your street on the map — say you work from home? Turn on \"Keep my street address private\" under it: Google then gets only your city and state, and clients who book still get the full address.\n2. Keep your page live, with your services, photos, and reviews on it — that's the page Google reads and shows, at your getchairback.com/s/ link.\n3. Own a domain? Connect it in the same place, and people who type it land straight on your page.\n\nGoogle indexes on its own schedule, so a brand-new page can take days to appear — but the address is what does the heavy lifting.",
     keywords: [
       "google", "search", "seo", "show up", "found", "findable", "searchable",
       "rank", "near me", "google maps", "search results", "visibility",
@@ -1243,7 +1243,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "shop-address",
     q: "Where do I set my shop's address?",
-    a: "Dashboard → Your page, in the \"About\" card: street, city, state and ZIP.\n\nBe aware of what it's actually for. It's what puts you in Google's results as a local business, and it's what fills in the location when a client saves the appointment to their calendar. It is not printed as text on your public page — if you want clients to read your address there, put it in the free-text hours or description field as well.",
+    a: "Dashboard → Your page, in the \"About\" card: street, city, state and ZIP.\n\nBe aware of what it's actually for. It's what puts you in Google's results as a local business, and it's what fills in the location when a client saves the appointment to their calendar. It is not printed as text on your public page — if you want clients to read your address there, put it in the free-text hours or description field as well.\n\nDon't want your street on Google? Turn on \"Keep my street address private\", right under the address. Your page and Google then get only your city and state, and so does anyone who texts your AI receptionist before booking. Clients who book still get the full address in their confirmation, reminders and calendar entry.",
     keywords: [
       "address", "location", "where is the shop", "street", "city", "zip", "postcode",
       "set my address", "shop address", "directions", "map",

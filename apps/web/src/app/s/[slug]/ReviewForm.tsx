@@ -6,9 +6,11 @@ import { submitReviewAction } from "./actions";
 
 /**
  * Public "Leave a review" form on the shop page. Theme-driven to match the page.
- * Rating (1-5 stars) is required; text + name are optional. Submitting lands the
- * review as PENDING - it does NOT appear on the page until the barber approves
- * it, so the confirmation says exactly that (no false "it's live" impression).
+ * Rating (1-5 stars) and a name or nickname are required; text is optional.
+ * Submitting lands the review as PENDING - it does NOT appear on the page until
+ * the barber approves it, so the confirmation says exactly that (no false "it's
+ * live" impression). Nor does a star-only one ever appear as a card - only
+ * reviews with words do - so its confirmation promises the rating, not a card.
  */
 export function ReviewForm({
   slug,
@@ -57,11 +59,19 @@ export function ReviewForm({
       setError("Please tap a star rating.");
       return;
     }
+    // Required (Drick: "make people's name / nickname mandatory"), and spaces
+    // are not a name. The API refuses one without it too; this just says so
+    // before the round trip, in words.
+    const name = authorName.trim();
+    if (!name) {
+      setError("Add your name or a nickname.");
+      return;
+    }
     startTransition(async () => {
       const res = await submitReviewAction(slug, {
         rating,
         body: body.trim() || undefined,
-        authorName: authorName.trim() || undefined,
+        authorName: name,
       });
       if (!res.ok) {
         setError("Something went wrong. Please try again.");
@@ -76,7 +86,11 @@ export function ReviewForm({
       <div role="status" className="p-5 text-center" style={fieldStyle}>
         <p className="text-sm font-semibold">Thanks for the review ✓</p>
         <p className="mt-1 text-xs" style={{ color: theme.muted }}>
-          {shopName} will review it shortly. Once approved it appears here.
+          {shopName} will review it shortly.{" "}
+          {body.trim()
+            ? "Once approved it appears here."
+            : // Stars alone are never a card, so don't promise one.
+              "Once approved, your stars count toward the rating shown here."}
         </p>
         {/* The hand-off to Google, once the review is already safely saved.
             Shown to EVERY reviewer regardless of the stars they gave: sending
@@ -175,8 +189,11 @@ export function ReviewForm({
           type="text"
           value={authorName}
           onChange={(e) => setAuthorName(e.target.value)}
-          placeholder="Your name (optional)"
-          aria-label="Your name"
+          placeholder="Your name or nickname"
+          aria-label="Your name or nickname"
+          aria-required="true"
+          aria-invalid={error && rating >= 1 && !authorName.trim() ? true : undefined}
+          aria-describedby={error && rating >= 1 && !authorName.trim() ? "review-error" : undefined}
           maxLength={80}
           className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}

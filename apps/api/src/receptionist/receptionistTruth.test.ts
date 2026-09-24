@@ -212,6 +212,22 @@ describe("hours, address, staff", () => {
     expect(text).not.toContain("don't quote an address");
   });
 
+  // "Gotta figure out how to add my address but not have it on Google." Anyone
+  // can text this line, so a private street must not reach the prompt at all -
+  // the model cannot repeat what it was never given.
+  it("🔴 a shop that keeps its address private gives a stranger the town, never the street", async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { addressPrivate: true } });
+    try {
+      const text = await render();
+      expect(text).not.toContain("123 Main St");
+      expect(text).not.toContain("19801");
+      expect(text).toContain("Wilmington, DE (area only)");
+      expect(text).toContain("exact address comes with their booking confirmation");
+    } finally {
+      await prisma.shop.update({ where: { id: shopId }, data: { addressPrivate: false } });
+    }
+  });
+
   it("says what a no-show costs on THIS channel: nothing is collected at the chair", async () => {
     const text = await render();
     expect(text).toContain("no charge for a no-show");
