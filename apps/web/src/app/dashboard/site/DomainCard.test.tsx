@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/Toast";
 import { DomainCard } from "./DomainCard";
 import type { DomainStatus } from "./domainActions";
@@ -149,5 +150,90 @@ describe("verified", () => {
     expect(screen.getByText("Connected")).toBeTruthy();
     expect(screen.getByText(/with or without www/i)).toBeTruthy();
     expect(screen.queryByText("TXT")).toBeNull(); // nothing left to set
+  });
+
+  it("offers no step-by-step guide - there is nothing left to do", () => {
+    mount(status({ domain: "example.com", records, verifiedAt: new Date().toISOString() }));
+    expect(screen.queryByRole("button", { name: /Step-by-step/i })).toBeNull();
+  });
+});
+
+/**
+ * The step-by-step guide. What it must get right is the thing the owner
+ * cannot check for themselves: what to type in THAT company's Name field.
+ */
+describe("step-by-step guide", () => {
+  const openGuide = async () => {
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /Step-by-step/i }));
+    return user;
+  };
+  /** The guide's own records table - the card has one too, so scope to the dialog. */
+  const guideRow = (type: string) =>
+    within(screen.getByRole("dialog")).getByText(type, { selector: "td" }).closest("tr")!;
+
+  it("sits beside Connect before a domain is connected, and says the records come after", async () => {
+    mount(status());
+    const user = await openGuide();
+    const dialog = screen.getByRole("dialog");
+    // Nothing preselected: how to tell WHICH company comes first.
+    expect(within(dialog).getByText(/usually where you bought it/i)).toBeTruthy();
+    expect(within(dialog).queryByText(/What to enter at/i)).toBeNull();
+
+    await user.click(within(dialog).getByRole("button", { name: "Namecheap" }));
+    expect(within(dialog).getByText(/Advanced DNS tab/i)).toBeTruthy();
+    expect(within(dialog).getByText(/appear here once you tap Connect/i)).toBeTruthy();
+  });
+
+  it("writes each record the way the chosen company wants it - Porkbun's root is BLANK", async () => {
+    mount(status({ domain: "example.com", records }));
+    const user = await openGuide();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Porkbun" }));
+
+    expect(within(guideRow("A")).getByText("leave blank")).toBeTruthy();
+    expect(within(guideRow("TXT")).getByText("leave blank")).toBeTruthy();
+    expect(within(guideRow("CNAME")).getByText("www")).toBeTruthy();
+    // The shop's own token, ready to copy.
+    expect(within(guideRow("TXT")).getByText("chairback-verify=tok123")).toBeTruthy();
+    // Porkbun calls the field Host.
+    expect(within(screen.getByRole("dialog")).getByRole("columnheader", { name: "Host" })).toBeTruthy();
+  });
+
+  it("GoDaddy writes the root as @ and warns about forwarding", async () => {
+    mount(status({ domain: "example.com", records }));
+    const user = await openGuide();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "GoDaddy" }));
+    expect(within(guideRow("TXT")).getByText("@")).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).getByText(/Forwarding turned on/i)).toBeTruthy();
+  });
+
+  it("🔴 Cloudflare marks the A and the CNAME DNS only - and not the TXT", async () => {
+    mount(status({ domain: "example.com", records }));
+    const user = await openGuide();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cloudflare" }));
+    expect(within(guideRow("A")).getByText(/DNS only/)).toBeTruthy();
+    expect(within(guideRow("CNAME")).getByText(/DNS only/)).toBeTruthy();
+    expect(within(guideRow("TXT")).queryByText(/DNS only/)).toBeNull();
+  });
+
+  it("🔴 Vercel's own challenge row is shown RELATIVE in both tables - never doubled by the registrar", async () => {
+    mount(
+      status({
+        domain: "example.com",
+        records,
+        vercel: {
+          verified: false,
+          misconfigured: true,
+          verification: [{ type: "TXT", domain: "_vercel.example.com", value: "vc-domain-verify=x1" }],
+        },
+      }),
+    );
+    // The card's own table.
+    expect(screen.getByText("_vercel")).toBeTruthy();
+    expect(screen.queryByText("_vercel.example.com")).toBeNull();
+    // And the guide's.
+    const user = await openGuide();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Namecheap" }));
+    expect(within(screen.getByRole("dialog")).getByText("_vercel")).toBeTruthy();
   });
 });

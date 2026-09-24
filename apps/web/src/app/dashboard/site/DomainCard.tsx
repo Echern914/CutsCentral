@@ -12,6 +12,8 @@ import {
   type DnsTxtStatus,
   type DomainStatus,
 } from "./domainActions";
+import { DomainGuideButton } from "./DomainGuide";
+import { relativeRecordName } from "./registrarGuides";
 
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
@@ -127,6 +129,9 @@ export function DomainCard({ initial }: { initial: DomainStatus }) {
                 {pending ? "Connecting…" : "Connect"}
               </button>
             </form>
+            <div>
+              <DomainGuideButton domain={null} records={[]} />
+            </div>
           </>
         )}
 
@@ -162,6 +167,19 @@ export function DomainCard({ initial }: { initial: DomainStatus }) {
                   </li>
                   <li>Come back and tap check again. Minutes, usually — up to 48 hours at worst.</li>
                 </ol>
+                <div>
+                  <DomainGuideButton
+                    domain={status.domain}
+                    records={[
+                      ...status.records,
+                      ...(status.vercel?.verification ?? []).map((v) => ({
+                        type: v.type,
+                        name: v.domain,
+                        value: v.value,
+                      })),
+                    ]}
+                  />
+                </div>
 
                 {/* The records table. Wide values scroll rather than wrap so
                     whoever copies them never grabs a line break. Each row
@@ -182,7 +200,9 @@ export function DomainCard({ initial }: { initial: DomainStatus }) {
                       {status.records.map((r) => (
                         <tr key={`${r.type}-${r.name}`} className="border-b border-subtle last:border-0">
                           <td className="px-3 py-2">{r.type}</td>
-                          <td className="px-3 py-2 break-all">{r.name}</td>
+                          <td className="px-3 py-2 break-all">
+                            {relativeRecordName(r.name, status.domain)}
+                          </td>
                           <td className="px-3 py-2 break-all">{r.value}</td>
                           <td className="px-3 py-2 font-sans">
                             <RecordSeen record={r} dns={status.dns} />
@@ -194,7 +214,9 @@ export function DomainCard({ initial }: { initial: DomainStatus }) {
                       {status.vercel?.verification.map((v) => (
                         <tr key={v.value} className="border-b border-subtle last:border-0">
                           <td className="px-3 py-2">{v.type}</td>
-                          <td className="px-3 py-2 break-all">{v.domain}</td>
+                          <td className="px-3 py-2 break-all">
+                            {relativeRecordName(v.domain, status.domain)}
+                          </td>
                           <td className="px-3 py-2 break-all">{v.value}</td>
                           <td className="px-3 py-2 font-sans text-muted">Also required</td>
                         </tr>
