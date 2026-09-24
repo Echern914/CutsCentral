@@ -378,3 +378,211 @@ describe("leaving and being removed", () => {
     expect(row.status).toBe("PENDING");
   });
 });
+
+describe("review evidence: fresh businesses, the whole lifecycle", () => {
+  /** A new barber with their own business and a little real data in it. */
+  async function freshMember(label: string) {
+    const email = `${label}-${randomToken(6)}@test.chairback`.toLowerCase();
+    const cookie = await signup(email, label);
+    const shop = await createShop(cookie, `${label} ${randomToken(4)}`);
+    const owner = await prisma.user.findUniqueOrThrow({ where: { email } });
+    const staff = await prisma.staff.create({ data: { shopId: shop.id, name: label } });
+    const service = await prisma.service.create({
+      data: { shopId: shop.id, name: "Cut", durationMin: 30, price: 35 },
+    });
+    const client = await prisma.client.create({
+      data: { shopId: shop.id, firstName: "Kim", acuityClientKey: `ev-${randomToken(6)}`, magicToken: randomToken() },
+    });
+    const when = daysAgo(2);
+    const appt = await prisma.appointment.create({
+      data: {
+        shopId: shop.id,
+        staffId: staff.id,
+        serviceId: service.id,
+        clientId: client.id,
+        firstName: "Kim",
+        status: "COMPLETED",
+        startsAt: when,
+        endsAt: new Date(when.getTime() + 30 * 60_000),
+        priceAtBooking: 35,
+        manageToken: randomToken(),
+      },
+    });
+    await prisma.payment.create({
+      data: {
+        shopId: shop.id,
+        appointmentId: appt.id,
+        stripePaymentIntentId: `pi_ev_${randomToken(8)}`,
+        stripeConnectAccountId: "acct_evidence",
+        mode: "ahead",
+        amount: 3500,
+        status: "succeeded",
+      },
+    });
+    return { cookie, shop, ownerId: owner.id };
+  }
+
+  /** Every row the business owns that a team could conceivably touch, as it stands. */
+  async function snapshot(shopId: string) {
+    const [shop, clients, appointments, payments, reviews] = await Promise.all([
+      prisma.shop.findUniqueOrThrow({ where: { id: shopId }, select: { ownerId: true, name: true, updatedAt: true } }),
+      prisma.client.findMany({ where: { shopId }, orderBy: { id: "asc" } }),
+      prisma.appointment.findMany({ where: { shopId }, orderBy: { id: "asc" } }),
+      prisma.payment.findMany({ where: { shopId }, orderBy: { id: "asc" } }),
+      prisma.review.findMany({ where: { shopId }, orderBy: { id: "asc" } }),
+    ]);
+    return JSON.stringify({ shop, clients, appointments, payments, reviews });
+  }
+
+  it("🔴 ask, approve, share, stop sharing, leave, ask again and be removed: the business is byte-for-byte unchanged", async () => {
+    const m = await freshMember("Ev");
+    const before = await snapshot(m.shop.id);
+    const teamBefore = await snapshot(team.id);
+
+    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    const id = asked.body.id as string;
+    await request(app).post(`/api/team/links/${id}/approve`).set("Cookie", snowCookie);
+    await request(app)
+      .patch(`/api/teams/${id}/sharing`)
+      .set("Cookie", m.cookie)
+      .send({ shareCuts: true, shareRevenue: true, shareClients: true, shareRating: true });
+    await teamView();
+    await request(app).patch(`/api/teams/${id}/sharing`).set("Cookie", m.cookie).send({ shareRevenue: false });
+    await request(app).post(`/api/teams/${id}/leave`).set("Cookie", m.cookie);
+    await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    await request(app).post(`/api/team/links/${id}/approve`).set("Cookie", snowCookie);
+    await request(app).post(`/api/team/links/${id}/end`).set("Cookie", snowCookie);
+
+    expect(await snapshot(m.shop.id)).toBe(before);
+    // Nothing of theirs landed in the team's shop either.
+    expect(await snapshot(team.id)).toBe(teamBefore);
+    // Ownership never moved: still the barber's, not the team owner's.
+    const shop = await prisma.shop.findUniqueOrThrow({ where: { id: m.shop.id } });
+    expect(shop.ownerId).toBe(m.ownerId);
+    // And no login seat in either direction was created by any of it.
+    expect(await prisma.shopMember.count({ where: { shopId: team.id, userId: m.ownerId } })).toBe(0);
+  });
+
+  it("🔴 five asks at once make one request; five approvals at once approve it once", async () => {
+    const m = await freshMember("Race");
+    const asks = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug }),
+      ),
+    );
+    expect(asks.filter((r) => r.status === 201)).toHaveLength(1);
+    expect(asks.filter((r) => r.status === 409)).toHaveLength(4);
+    const rows = await runAsOwner((tx) =>
+      tx.teamLink.findMany({ where: { teamShopId: team.id, memberShopId: m.shop.id } }),
+    );
+    expect(rows).toHaveLength(1);
+
+    const approvals = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        request(app).post(`/api/team/links/${rows[0]!.id}/approve`).set("Cookie", snowCookie),
+      ),
+    );
+    expect(approvals.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(approvals.filter((r) => r.status === 404)).toHaveLength(4);
+    const after = await runAsOwner((tx) => tx.teamLink.findUniqueOrThrow({ where: { id: rows[0]!.id } }));
+    expect(after.status).toBe("ACTIVE");
+    // Asking again while already on the team changes nothing.
+    const again = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    expect(again.status).toBe(409);
+    expect(again.body).toEqual({ error: "already_linked", status: "ACTIVE" });
+  });
+
+  it("🔴 an unrelated shop sees nothing of the relationship or its numbers anywhere it can look", async () => {
+    const m = await freshMember("Priv");
+    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    const id = asked.body.id as string;
+    await request(app).post(`/api/team/links/${id}/approve`).set("Cookie", snowCookie);
+    await request(app)
+      .patch(`/api/teams/${id}/sharing`)
+      .set("Cookie", m.cookie)
+      .send({ shareCuts: true, shareRevenue: true, shareClients: true, shareRating: true });
+
+    const looks = await Promise.all([
+      request(app).get("/api/team/links").set("Cookie", strangerCookie),
+      request(app).get("/api/teams").set("Cookie", strangerCookie),
+      request(app).get("/api/teams/preview").query({ team: team.slug }).set("Cookie", strangerCookie),
+    ]);
+    for (const r of looks) {
+      expect(r.status).toBe(200);
+      expect(JSON.stringify(r.body)).not.toContain(m.shop.id);
+      expect(JSON.stringify(r.body)).not.toContain(id);
+    }
+    // The preview says only what the team's public page already says.
+    expect(looks[2]!.body).toEqual({
+      team: { name: expect.any(String) },
+      ownTeam: false,
+      business: expect.any(Object),
+      status: null,
+    });
+    for (const r of [
+      await request(app).patch(`/api/teams/${id}/sharing`).set("Cookie", strangerCookie).send({ shareRevenue: false }),
+      await request(app).post(`/api/teams/${id}/leave`).set("Cookie", strangerCookie),
+      await request(app).post(`/api/team/links/${id}/end`).set("Cookie", strangerCookie),
+      await request(app).post(`/api/team/links/${id}/approve`).set("Cookie", strangerCookie),
+    ]) {
+      expect(r.status).toBe(404);
+    }
+    const row = await runAsOwner((tx) => tx.teamLink.findUniqueOrThrow({ where: { id } }));
+    expect(row).toMatchObject({ status: "ACTIVE", shareRevenue: true });
+
+    // 🔴 A forged active-shop cookie naming the barber's business buys the
+    // stranger nothing: the member-side routes re-check ownership.
+    const forged = `${strangerCookie}; cb_active_shop=${m.shop.id}`;
+    const theirs = await request(app).get("/api/teams").set("Cookie", forged);
+    expect(JSON.stringify(theirs.body)).not.toContain(id);
+    expect(theirs.body.business?.id).not.toBe(m.shop.id);
+    // Nor does it get the team's owner into the barber's business.
+    const snowForged = await request(app)
+      .get("/api/auth/me")
+      .set("Cookie", `${snowCookie}; cb_active_shop=${m.shop.id}`);
+    expect(snowForged.body.activeShopId).toBe(team.id);
+  });
+
+  it("🔴 only the business OWNER decides - not a manager of the barber's own shop", async () => {
+    const m = await freshMember("Mgr");
+    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    const id = asked.body.id as string;
+    await request(app).post(`/api/team/links/${id}/approve`).set("Cookie", snowCookie);
+    const email = `mgr-of-${randomToken(6).toLowerCase()}@test.chairback`;
+    const mgrCookie = await signup(email, "Their manager");
+    const mgr = await prisma.user.findUniqueOrThrow({ where: { email } });
+    await prisma.shopMember.create({ data: { shopId: m.shop.id, userId: mgr.id, role: "MANAGER" } });
+    const asManager = `${mgrCookie}; cb_active_shop=${m.shop.id}`;
+    expect(
+      (await request(app).patch(`/api/teams/${id}/sharing`).set("Cookie", asManager).send({ shareRevenue: true })).status,
+    ).toBe(404);
+    expect((await request(app).post(`/api/teams/${id}/leave`).set("Cookie", asManager)).status).toBe(404);
+    const row = await runAsOwner((tx) => tx.teamLink.findUniqueOrThrow({ where: { id } }));
+    expect(row).toMatchObject({ status: "ACTIVE", shareRevenue: false });
+  });
+
+  it("🔴 asking again after it ended always starts with nothing shared", async () => {
+    const m = await freshMember("Reset");
+    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    const id = asked.body.id as string;
+    // An ended link left holding a switch ON (older data, a manual fix).
+    await runAsOwner((tx) =>
+      tx.teamLink.update({ where: { id }, data: { status: "ENDED", endedAt: new Date(), shareRevenue: true, shareCuts: true } }),
+    );
+    const again = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    expect(again.status).toBe(201);
+    const row = await runAsOwner((tx) => tx.teamLink.findUniqueOrThrow({ where: { id } }));
+    expect(row).toMatchObject({ status: "PENDING", shareCuts: false, shareRevenue: false, shareClients: false, shareRating: false });
+  });
+
+  it("🔴 sharing one number withholds each of the others (revenue on, cuts off)", async () => {
+    const m = await freshMember("One");
+    const asked = await request(app).post("/api/teams/join").set("Cookie", m.cookie).send({ team: team.slug });
+    const id = asked.body.id as string;
+    await request(app).post(`/api/team/links/${id}/approve`).set("Cookie", snowCookie);
+    await request(app).patch(`/api/teams/${id}/sharing`).set("Cookie", m.cookie).send({ shareRevenue: true });
+    const view = await teamView();
+    const entry = view.body.active.find((a: { id: string }) => a.id === id);
+    expect(entry.numbers).toEqual({ cuts: null, revenueCents: 3500, clients: null, rating: null });
+  });
+});

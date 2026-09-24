@@ -11,9 +11,11 @@ import {
  * team's owner see.
  *
  * 🔴 PRIVACY IS DECIDED HERE, NOT IN THE PAGE. A number the member hasn't
- * shared is never computed - not computed and then hidden - so it cannot leak
- * through a payload, a log line or a cache. The team gets `null`, which the
- * page shows as "Hidden".
+ * shared never leaves this function: the team gets `null`, which the page
+ * shows as "Hidden". With nothing shared, nothing is read at all, and the
+ * rating query runs only when rating is shared. Cuts, revenue and clients come
+ * from ONE read of the member's bookings when any of them is shared, and only
+ * the shared ones are kept - nothing else is logged or cached.
  *
  * 🔴 SAME NUMBERS AS THE MEMBER'S OWN INSIGHTS. Cuts, revenue and clients use
  * the Insights "Last 30 days" window (the member's own timezone and days) and
