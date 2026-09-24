@@ -13,6 +13,7 @@ import {
   searchClientsAction,
   type ClientOption,
   type DashSlot,
+  type DashSpecial,
 } from "./actions";
 import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
 
@@ -26,6 +27,12 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  * scroll below the fold. Times come from the real slot engine; "Custom time"
  * forces a time outside computed availability (overlap still blocked).
  * Prefills the date + hour tapped in the calendar.
+ *
+ * 🔴 SPECIALS are listed above the regular times. The grid subtracts every open
+ * special on purpose (each is sold at its own price), and Custom time cannot
+ * land on one either - so before this list the only way to fill a special was
+ * a customer on the website. Picking one sends its id, and the server claims it
+ * exactly as the website does, at the special's own length and price.
  */
 export function AppointmentForm({
   staff,
@@ -76,6 +83,11 @@ export function AppointmentForm({
   const [startsAt, setStartsAt] = useState<string>(prefillISO);
   const [customTime, setCustomTime] = useState(false);
   const [slots, setSlots] = useState<DashSlot[]>([]);
+  const [specials, setSpecials] = useState<DashSpecial[]>([]);
+  // Set only by tapping a special. A regular time, Custom time, or a change of
+  // service or provider clears it - so nothing is ever booked as a special,
+  // at a special's price, without the barber having picked that special.
+  const [targetedSlotId, setTargetedSlotId] = useState<string | null>(null);
   const [loadingSlots, setLoadingSlots] = useState(false);
 
   const [clientId, setClientId] = useState<string | null>(null);
@@ -133,29 +145,37 @@ export function AppointmentForm({
 
   // Load open slots for the chosen (staff, service) on the prefill day.
   useEffect(() => {
+    // A special belongs to one (provider, service); any change forgets it.
+    setTargetedSlotId(null);
     if (!serviceId || !staffId || customTime) return;
     setLoadingSlots(true);
     const from = new Date(new Date(prefillISO).getTime() - 12 * 3600_000).toISOString();
     const to = new Date(new Date(prefillISO).getTime() + 36 * 3600_000).toISOString();
     getDashSlotsAction(staffId, serviceId, from, to).then((res) => {
       setLoadingSlots(false);
+      // Only times on the tapped calendar day (shop tz).
+      const onDay = (iso: string) =>
+        new Intl.DateTimeFormat("en-CA", {
+          timeZone: timezone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(new Date(iso)) === dayKey;
       if (res.ok && res.slots) {
-        // Only slots on the tapped calendar day (shop tz).
-        const sameDay = res.slots.filter(
-          (s) =>
-            new Intl.DateTimeFormat("en-CA", {
-              timeZone: timezone,
-              year: "numeric",
-              month: "2-digit",
-              day: "2-digit",
-            }).format(new Date(s.startsAt)) === dayKey,
-        );
-        setSlots(sameDay);
+        setSlots(res.slots.filter((s) => onDay(s.startsAt)));
+        setSpecials((res.specials ?? []).filter((t) => onDay(t.startsAt)));
       } else {
         setSlots([]);
+        setSpecials([]);
       }
     });
   }, [serviceId, staffId, customTime, prefillISO, dayKey, timezone]);
+
+  /** The special actually being booked - only while picking from the list. */
+  const special =
+    !customTime && targetedSlotId
+      ? (specials.find((t) => t.id === targetedSlotId) ?? null)
+      : null;
 
   // Debounced client search.
   useEffect(() => {
@@ -194,7 +214,9 @@ export function AppointmentForm({
       const [y, m, d] = until.split("-").map(Number);
       return zonedWallTimeToUtc(y!, m! - 1, d!, 23 * 60 + 59, timezone).toISOString();
     };
-    const recurrence = repeat
+    // A special is one physical time: it never repeats (the server refuses the
+    // combination too).
+    const recurrence = repeat && !special
       ? {
           interval: everyWeeks,
           ...(endMode === "count" ? { count } : { until: untilISO() }),
@@ -215,6 +237,8 @@ export function AppointmentForm({
         recurrence,
         // Atomic waitlist link - see CreateApptInput.
         waitlistEntryId: waitlist?.entryId,
+        // Claimed server-side in the same transaction, at its own price.
+        targetedSlotId: special?.id,
       });
       if (!res.ok) {
         if (res.error === "external_block") {
@@ -229,7 +253,9 @@ export function AppointmentForm({
         }
         setError(
           res.error === "slot_taken"
-            ? "That time is already booked."
+            ? special
+              ? "That special was just booked or taken off. Pick another time."
+              : "That time is already booked."
             : res.error === "invalid_slot"
               ? "That time isn't available. Use Custom time to force it."
               : "Couldn't schedule. Please try again.",
@@ -372,22 +398,74 @@ export function AppointmentForm({
             />
           ) : loadingSlots ? (
             <p className="text-sm text-muted">Loading times…</p>
-          ) : slots.length === 0 ? (
+          ) : slots.length === 0 && specials.length === 0 ? (
             <p className="text-xs text-muted">
               No open times this day. Use Custom time to force one.
             </p>
           ) : (
-            <div className="grid min-w-0 grid-cols-3 gap-1.5">
-              {slots.map((s) => (
-                <button
-                  key={s.startsAt}
-                  type="button"
-                  onClick={() => setStartsAt(s.startsAt)}
-                  className={chip(startsAt === s.startsAt, "min-w-0 px-1 text-center")}
-                >
-                  {timeFmt.format(new Date(s.startsAt))}
-                </button>
-              ))}
+            <div className="flex min-w-0 flex-col gap-3">
+              {specials.length > 0 && (
+                <div role="group" aria-label="Specials" className="flex min-w-0 flex-col gap-1.5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gold">
+                    Specials
+                  </p>
+                  {specials.map((t) => {
+                    const picked = targetedSlotId === t.id;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        aria-pressed={picked}
+                        onClick={() => {
+                          setStartsAt(t.startsAt);
+                          setTargetedSlotId(t.id);
+                          setRepeat(false);
+                        }}
+                        className={cn(
+                          "flex min-h-[2.75rem] w-full min-w-0 items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-left text-sm transition-colors duration-150 ease-out",
+                          picked ? "border-gold/60 bg-gold/15" : "border-gold/30 hover:bg-gold/5",
+                        )}
+                      >
+                        <span className="min-w-0">
+                          <span className="block font-medium text-offwhite">
+                            {timeFmt.format(new Date(t.startsAt))}
+                          </span>
+                          <span className="block truncate text-xs text-muted">
+                            {t.label ?? "Special"} · {t.durationMin} min
+                          </span>
+                        </span>
+                        <span className="shrink-0 font-semibold text-gold">
+                          {formatSpecialPrice(t.price)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {slots.length > 0 ? (
+                <div className="grid min-w-0 grid-cols-3 gap-1.5">
+                  {slots.map((s) => (
+                    <button
+                      key={s.startsAt}
+                      type="button"
+                      onClick={() => {
+                        setStartsAt(s.startsAt);
+                        setTargetedSlotId(null);
+                      }}
+                      className={chip(
+                        !targetedSlotId && startsAt === s.startsAt,
+                        "min-w-0 px-1 text-center",
+                      )}
+                    >
+                      {timeFmt.format(new Date(s.startsAt))}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted">
+                  No other open times this day. Use Custom time to force one.
+                </p>
+              )}
             </div>
           )}
         </Group>
@@ -488,22 +566,28 @@ export function AppointmentForm({
         </Group>
 
         <Group title="Repeat">
-          <div className="flex gap-1.5">
-            <button
-              type="button"
-              onClick={() => setRepeat(false)}
-              className={chip(!repeat, "flex-1")}
-            >
-              Does not repeat
-            </button>
-            <button
-              type="button"
-              onClick={() => setRepeat(true)}
-              className={chip(repeat, "flex-1")}
-            >
-              Weekly
-            </button>
-          </div>
+          {special ? (
+            <p className="text-xs text-muted">
+              A special is a one-off time, so it doesn&apos;t repeat.
+            </p>
+          ) : (
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={() => setRepeat(false)}
+                className={chip(!repeat, "flex-1")}
+              >
+                Does not repeat
+              </button>
+              <button
+                type="button"
+                onClick={() => setRepeat(true)}
+                className={chip(repeat, "flex-1")}
+              >
+                Weekly
+              </button>
+            </div>
+          )}
 
           {repeat && (
             <div className="flex flex-col gap-3 rounded-xl border border-subtle bg-charcoal-900/50 p-3">
@@ -569,6 +653,11 @@ export function AppointmentForm({
       </div>
     </Dialog>
   );
+}
+
+/** "$60", or "$62.50" - a special's price is exact, so it is never rounded. */
+export function formatSpecialPrice(price: number): string {
+  return Number.isInteger(price) ? `$${price}` : `$${price.toFixed(2)}`;
 }
 
 /**

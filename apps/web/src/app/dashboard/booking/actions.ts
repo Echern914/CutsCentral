@@ -325,19 +325,50 @@ export interface DashSlot {
   endsAt: string;
 }
 
-/** Open slots for a (staff, service) over a range - powers the Time picker. */
+/**
+ * One of the barber's own targeted slots (a "special"), offered in his New
+ * appointment picker. Its length and price are its OWN, not the service's -
+ * which is why it is a separate list rather than more chips in the grid.
+ */
+export interface DashSpecial {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+  durationMin: number;
+  price: number;
+  label: string | null;
+}
+
+/**
+ * Open slots for a (staff, service) over a range - powers the Time picker -
+ * plus the barber's specials under that service. Older API responses carry no
+ * `targetedSlots`, which reads as none.
+ */
 export async function getDashSlotsAction(
   staffId: string,
   serviceId: string,
   from: string,
   to: string,
-): Promise<{ ok: boolean; slots?: DashSlot[]; timezone?: string; error?: string }> {
+): Promise<{
+  ok: boolean;
+  slots?: DashSlot[];
+  specials?: DashSpecial[];
+  timezone?: string;
+  error?: string;
+}> {
   const qs = new URLSearchParams({ staffId, serviceId, from, to }).toString();
-  const res = await apiGet<{ timezone: string; slots: DashSlot[] }>(
-    `/api/booking/slots?${qs}`,
-  );
+  const res = await apiGet<{
+    timezone: string;
+    slots: DashSlot[];
+    targetedSlots?: DashSpecial[];
+  }>(`/api/booking/slots?${qs}`);
   if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
-  return { ok: true, slots: res.data.slots, timezone: res.data.timezone };
+  return {
+    ok: true,
+    slots: res.data.slots,
+    specials: res.data.targetedSlots ?? [],
+    timezone: res.data.timezone,
+  };
 }
 
 export interface ClientOption {
@@ -392,6 +423,12 @@ export interface CreateApptInput {
    * appointment, so a half-linked state cannot exist.
    */
   waitlistEntryId?: string;
+  /**
+   * Booking INTO one of the barber's specials. The server claims the slot in
+   * the same transaction (as the website does) and books it at the special's
+   * own length and price. Never combined with `recurrence`.
+   */
+  targetedSlotId?: string;
   // "Repeats every N weeks" — exactly one of count / until. Server generates the
   // occurrences and returns a series summary (booked + any skipped dates).
   recurrence?: {
