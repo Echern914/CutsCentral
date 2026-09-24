@@ -12,6 +12,7 @@ import {
   centsFromInput,
   dayRange,
   describeRate,
+  monthDay,
   hasRent,
   methodLabel,
   money,
@@ -41,12 +42,22 @@ const field =
   "mt-1 min-h-[40px] w-full rounded-xl border border-subtle bg-charcoal-700 px-3 text-sm text-offwhite outline-none focus:border-gold/50";
 
 /** The rent in effect, this period, the whole balance, and what's coming. */
-function RentLines({ rent, who }: { rent: RentSummary; who: "owner" | "member" }) {
+function RentLines({
+  rent,
+  who,
+}: {
+  rent: RentSummary;
+  who: "owner" | "member";
+}) {
   const l = rentLines(rent, who);
   return (
     <div className="min-w-0">
-      <p className="text-[11px] uppercase tracking-wide text-muted">Booth rent</p>
-      <p className={cn("text-sm", rent.rate ? "text-offwhite" : "text-muted")}>{l.rate}</p>
+      <p className="text-[11px] uppercase tracking-wide text-muted">
+        Booth rent
+      </p>
+      <p className={cn("text-sm", rent.rate ? "text-offwhite" : "text-muted")}>
+        {l.rate}
+      </p>
       {l.current && (
         <p className="text-xs text-offwhite/90" data-qa="rent-current">
           {l.current}
@@ -54,7 +65,12 @@ function RentLines({ rent, who }: { rent: RentSummary; who: "owner" | "member" }
       )}
       {l.total && (
         <p
-          className={cn("text-xs", l.total.tone === "owing" ? "font-semibold text-gold" : "text-emerald-soft")}
+          className={cn(
+            "text-xs",
+            l.total.tone === "owing"
+              ? "font-semibold text-gold"
+              : "text-emerald-soft",
+          )}
           data-qa="rent-total"
         >
           {l.total.label}
@@ -70,7 +86,15 @@ function RentLines({ rent, who }: { rent: RentSummary; who: "owner" | "member" }
 }
 
 /** "Void" with an inline "Void it / Keep" confirm. Resolves true once the server has it. */
-function VoidButton({ what, hint, onVoid }: { what: string; hint?: string; onVoid: () => Promise<boolean> }) {
+function VoidButton({
+  what,
+  hint,
+  onVoid,
+}: {
+  what: string;
+  hint?: string;
+  onVoid: () => Promise<boolean>;
+}) {
   const [state, setState] = useState<"idle" | "confirm" | "busy">("idle");
   if (state === "idle") {
     return (
@@ -107,7 +131,11 @@ function VoidButton({ what, hint, onVoid }: { what: string; hint?: string; onVoi
           Keep
         </button>
       </div>
-      {hint && <p className="max-w-[16rem] text-right text-[11px] text-muted">{hint}</p>}
+      {hint && (
+        <p className="max-w-[16rem] text-right text-[11px] text-muted">
+          {hint}
+        </p>
+      )}
     </div>
   );
 }
@@ -115,7 +143,9 @@ function VoidButton({ what, hint, onVoid }: { what: string; hint?: string; onVoi
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section>
-      <h3 className="text-[11px] uppercase tracking-wide text-muted">{title}</h3>
+      <h3 className="text-[11px] uppercase tracking-wide text-muted">
+        {title}
+      </h3>
       <div className="mt-1">{children}</div>
     </section>
   );
@@ -149,7 +179,9 @@ function HistoryDialog({
     voidRate: (r: RentRate) => Promise<boolean>;
   };
 }) {
-  const [data, setData] = useState<RentHistory | "loading" | "failed">("loading");
+  const [data, setData] = useState<RentHistory | "loading" | "failed">(
+    "loading",
+  );
 
   async function refresh() {
     setData("loading");
@@ -171,7 +203,9 @@ function HistoryDialog({
   else if (data === "failed") {
     body = (
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-muted">Couldn&apos;t load the rent history.</p>
+        <p className="text-sm text-muted">
+          Couldn&apos;t load the rent history.
+        </p>
         <button type="button" onClick={() => void refresh()} className={quiet}>
           Try again
         </button>
@@ -180,13 +214,22 @@ function HistoryDialog({
   } else {
     const { summary, payments } = data;
     const rates = [...data.rates].reverse(); // newest first, like the payments
-    const latestRate = rates.find((r) => !r.voided)?.id;
+    // Only the latest entry in effect can be voided, and never a stop (the
+    // API refuses both; this only avoids offering it).
+    const latest = rates.find((r) => r.status === "active");
+    const voidableRate =
+      latest && latest.amountCents !== null ? latest.id : null;
     const total = rentLines(summary, who).total;
     body = (
       <div className="flex flex-col gap-5">
         {total && (
           <p
-            className={cn("text-sm", total.tone === "owing" ? "font-semibold text-gold" : "text-emerald-soft")}
+            className={cn(
+              "text-sm",
+              total.tone === "owing"
+                ? "font-semibold text-gold"
+                : "text-emerald-soft",
+            )}
             data-qa="history-total"
           >
             {total.label}
@@ -198,8 +241,14 @@ function HistoryDialog({
           ) : (
             <ul className="divide-y divide-subtle">
               {summary.unpaid.map((u) => (
-                <li key={u.start} className="flex justify-between gap-3 py-2 text-sm" data-qa="rent-unpaid">
-                  <span className="text-offwhite">{dayRange(u.start, u.end)}</span>
+                <li
+                  key={u.start}
+                  className="flex justify-between gap-3 py-2 text-sm"
+                  data-qa="rent-unpaid"
+                >
+                  <span className="text-offwhite">
+                    {dayRange(u.start, u.end)}
+                  </span>
                   <span className="tabular-nums text-gold">
                     {u.dueCents < u.amountCents
                       ? `${money(u.dueCents)} left of ${money(u.amountCents)}`
@@ -217,8 +266,17 @@ function HistoryDialog({
           ) : (
             <ul className="divide-y divide-subtle">
               {payments.map((p) => (
-                <li key={p.id} className="flex items-center justify-between gap-3 py-2.5" data-qa="rent-payment">
-                  <div className={cn("min-w-0", p.voided && "text-muted line-through")}>
+                <li
+                  key={p.id}
+                  className="flex items-center justify-between gap-3 py-2.5"
+                  data-qa="rent-payment"
+                >
+                  <div
+                    className={cn(
+                      "min-w-0",
+                      p.voided && "text-muted line-through",
+                    )}
+                  >
                     <p className={cn("text-sm", !p.voided && "text-offwhite")}>
                       {money(p.amountCents)} · {methodLabel(p.method)}
                     </p>
@@ -228,7 +286,9 @@ function HistoryDialog({
                     </p>
                   </div>
                   {p.voided ? (
-                    <span className="shrink-0 text-[11px] text-muted">Voided</span>
+                    <span className="shrink-0 text-[11px] text-muted">
+                      Voided{p.voidedOn ? ` ${monthDay(p.voidedOn)}` : ""}
+                    </span>
                   ) : (
                     owner && (
                       <VoidButton
@@ -253,18 +313,33 @@ function HistoryDialog({
           ) : (
             <ul className="divide-y divide-subtle">
               {rates.map((r) => (
-                <li key={r.id} className="flex items-center justify-between gap-3 py-2.5" data-qa="rent-rate">
-                  <p className={cn("min-w-0 text-sm", r.voided ? "text-muted line-through" : "text-offwhite")}>
+                <li
+                  key={r.id}
+                  className="flex items-center justify-between gap-3 py-2.5"
+                  data-qa="rent-rate"
+                >
+                  <p
+                    className={cn(
+                      "min-w-0 text-sm",
+                      r.status === "active"
+                        ? "text-offwhite"
+                        : "text-muted line-through",
+                    )}
+                  >
                     {rateText(r)}
                   </p>
-                  {r.voided ? (
-                    <span className="shrink-0 text-[11px] text-muted">Voided</span>
+                  {r.status !== "active" ? (
+                    <span className="shrink-0 text-[11px] text-muted">
+                      {r.status === "voided"
+                        ? `Voided${r.voidedOn ? ` ${monthDay(r.voidedOn)}` : ""}`
+                        : "Replaced"}
+                    </span>
                   ) : (
                     owner &&
-                    r.id === latestRate && (
+                    r.id === voidableRate && (
                       <VoidButton
                         what={`the rent entry "${rateText(r)}"`}
-                        hint="For a mistake. The time it covered goes back to the rent before it."
+                        hint="For a mistake. From its start, the rent before it applies again; earlier weeks don't change."
                         onVoid={async () => {
                           const ok = await owner.voidRate(r);
                           if (ok) await reread();
@@ -305,7 +380,10 @@ export function OwnerRent({
   const [dialog, setDialog] = useState<null | "rent" | "pay" | "history">(null);
   const canPay = rent.rate !== null || rent.balanceCents > 0;
 
-  async function afterVoid(res: { ok: boolean; rent?: RentSummary }, done: string) {
+  async function afterVoid(
+    res: { ok: boolean; rent?: RentSummary },
+    done: string,
+  ) {
     if (res.ok && res.rent) {
       onRent(res.rent);
       toast(done, "success");
@@ -320,15 +398,30 @@ export function OwnerRent({
       <RentLines rent={rent} who="owner" />
       <div className="flex flex-wrap gap-2">
         {canPay && (
-          <button type="button" onClick={() => setDialog("pay")} className={primary} data-qa="record-payment">
+          <button
+            type="button"
+            onClick={() => setDialog("pay")}
+            className={primary}
+            data-qa="record-payment"
+          >
             Record payment
           </button>
         )}
-        <button type="button" onClick={() => setDialog("rent")} className={quiet} data-qa="set-rent">
+        <button
+          type="button"
+          onClick={() => setDialog("rent")}
+          className={quiet}
+          data-qa="set-rent"
+        >
           {rent.rate || rent.scheduled ? "Change" : "Set rent"}
         </button>
         {hasRent(rent) && (
-          <button type="button" onClick={() => setDialog("history")} className={quiet} data-qa="rent-history">
+          <button
+            type="button"
+            onClick={() => setDialog("history")}
+            className={quiet}
+            data-qa="rent-history"
+          >
             History
           </button>
         )}
@@ -365,8 +458,16 @@ export function OwnerRent({
         who="owner"
         load={() => rentHistoryAction(linkId)}
         owner={{
-          voidPayment: async (p) => afterVoid(await voidRentPaymentAction(linkId, p.id), "Payment voided"),
-          voidRate: async (r) => afterVoid(await voidRentRateAction(linkId, r.id), "Rent entry voided"),
+          voidPayment: async (p) =>
+            afterVoid(
+              await voidRentPaymentAction(linkId, p.id),
+              "Payment voided",
+            ),
+          voidRate: async (r) =>
+            afterVoid(
+              await voidRentRateAction(linkId, r.id),
+              "Rent entry voided",
+            ),
         }}
       />
     </div>
@@ -375,7 +476,6 @@ export function OwnerRent({
 
 const RENT_ERRORS: Record<string, string> = {
   start_required: "Pick the day rent starts.",
-  start_before_history: "The rent history already covers that day - pick a later start.",
   start_out_of_range: "Pick a start within a year of today.",
 };
 
@@ -403,12 +503,23 @@ function RentDialog({
     const cents = scheduled?.amountCents ?? inEffect?.amountCents ?? null;
     return cents ? String(cents / 100) : "";
   });
-  const [period, setPeriod] = useState<RentPeriod>(scheduled?.period ?? inEffect?.period ?? "WEEKLY");
-  const [startsOn, setStartsOn] = useState(!inEffect && scheduled ? scheduled.startsOn : todayYmd());
+  const [period, setPeriod] = useState<RentPeriod>(
+    scheduled?.period ?? inEffect?.period ?? "WEEKLY",
+  );
+  const [startsOn, setStartsOn] = useState(
+    !inEffect && scheduled ? scheduled.startsOn : todayYmd(),
+  );
   const [amountError, setAmountError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const stopScheduled = scheduled !== null && scheduled.amountCents === null;
+  // Rent never restarts before what's recorded, or before they (re)joined -
+  // the server enforces it; this says so before they press Save.
+  const earliest = rent.earliestStart;
+  const tooEarly = Boolean(earliest && startsOn && startsOn < earliest);
+  const tooEarlyMessage = earliest
+    ? `Pick ${shortDay(earliest)} or later - rent can't reach back over what's recorded, or before they joined again.`
+    : "Pick a later start.";
 
   async function save(stop: boolean) {
     setError(null);
@@ -422,14 +533,26 @@ function RentDialog({
       setError(RENT_ERRORS.start_required!);
       return;
     }
+    if (!stop && !inEffect && tooEarly) {
+      setError(tooEarlyMessage);
+      return;
+    }
     setSaving(true);
     const res = await setRentAction(
       linkId,
-      parsed ? { amountCents: parsed.cents, period, ...(inEffect ? {} : { startsOn }) } : { amountCents: null },
+      parsed
+        ? {
+            amountCents: parsed.cents,
+            period,
+            ...(inEffect ? {} : { startsOn }),
+          }
+        : { amountCents: null },
     );
     setSaving(false);
     if (res.ok && res.rent) {
-      const when = res.rent.scheduled ? shortDay(res.rent.scheduled.startsOn) : null;
+      const when = res.rent.scheduled
+        ? shortDay(res.rent.scheduled.startsOn)
+        : null;
       toast(
         stop
           ? inEffect && when
@@ -449,7 +572,10 @@ function RentDialog({
       setError(
         res.error === "not_found"
           ? `${businessName} is no longer on your team.`
-          : (RENT_ERRORS[res.error ?? ""] ?? "Couldn't confirm the change. Try again."),
+          : res.error === "start_too_early"
+            ? tooEarlyMessage
+            : (RENT_ERRORS[res.error ?? ""] ??
+              "Couldn't confirm the change. Try again."),
       );
     }
   }
@@ -477,7 +603,12 @@ function RentDialog({
             <button type="button" onClick={onClose} className={quiet}>
               Cancel
             </button>
-            <button type="button" disabled={saving} onClick={() => void save(false)} className={primary}>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void save(false)}
+              className={primary}
+            >
               {saving ? "Saving…" : "Save"}
             </button>
           </div>
@@ -509,7 +640,8 @@ function RentDialog({
         </div>
         {inEffect ? (
           <p className="text-xs text-muted" data-qa="takes-effect">
-            A change or a stop takes effect {shortDay(rent.nextChangeOn ?? inEffect.since)}. This{" "}
+            A change or a stop takes effect{" "}
+            {shortDay(rent.nextChangeOn ?? inEffect.since)}. This{" "}
             {periodNoun(inEffect.period)} stays {money(inEffect.amountCents)}.
           </p>
         ) : (
@@ -518,12 +650,14 @@ function RentDialog({
             <input
               type="date"
               value={startsOn}
+              min={earliest ?? undefined}
               onChange={(e) => setStartsOn(e.target.value)}
               className={field}
               data-qa="rent-starts-on"
             />
             <span className="mt-1 block text-[11px] text-muted">
               Rent is due from this day on. Nothing is owed before it.
+              {earliest ? ` ${shortDay(earliest)} or later.` : ""}
             </span>
           </label>
         )}
@@ -549,7 +683,9 @@ function PaymentDialog({
   const { toast } = useToast();
   // One period's rent is the usual payment; after a stop, what's left.
   const suggested = rent.rate?.amountCents ?? rent.balanceCents;
-  const [amount, setAmount] = useState(suggested > 0 ? String(suggested / 100) : "");
+  const [amount, setAmount] = useState(
+    suggested > 0 ? String(suggested / 100) : "",
+  );
   const [date, setDate] = useState(todayYmd());
   const [method, setMethod] = useState("cash");
   const [note, setNote] = useState("");
@@ -602,7 +738,13 @@ function PaymentDialog({
           <button type="button" onClick={onClose} className={quiet}>
             Cancel
           </button>
-          <button type="button" disabled={saving} onClick={() => void save()} className={primary} data-qa="save-payment">
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void save()}
+            className={primary}
+            data-qa="save-payment"
+          >
             {saving ? "Saving…" : "Record payment"}
           </button>
         </div>
@@ -616,14 +758,26 @@ function PaymentDialog({
           error={amountError}
           inputClassName="min-h-[40px]"
         />
-        <p className="-mt-2 text-[11px] text-muted">Payments go to the oldest unpaid period first.</p>
+        <p className="-mt-2 text-[11px] text-muted">
+          Payments go to the oldest unpaid period first.
+        </p>
         <label className="block">
           <span className="text-xs text-muted">Paid on</span>
-          <input type="date" value={date} max={todayYmd()} onChange={(e) => setDate(e.target.value)} className={field} />
+          <input
+            type="date"
+            value={date}
+            max={todayYmd()}
+            onChange={(e) => setDate(e.target.value)}
+            className={field}
+          />
         </label>
         <label className="block">
           <span className="text-xs text-muted">How</span>
-          <select value={method} onChange={(e) => setMethod(e.target.value)} className={field}>
+          <select
+            value={method}
+            onChange={(e) => setMethod(e.target.value)}
+            className={field}
+          >
             {PAYMENT_METHODS.map((m) => (
               <option key={m.key} value={m.key}>
                 {m.label}
@@ -633,7 +787,12 @@ function PaymentDialog({
         </label>
         <label className="block">
           <span className="text-xs text-muted">Note (optional)</span>
-          <input value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} className={field} />
+          <input
+            value={note}
+            maxLength={200}
+            onChange={(e) => setNote(e.target.value)}
+            className={field}
+          />
         </label>
         <FormError>{error}</FormError>
       </div>
@@ -641,7 +800,45 @@ function PaymentDialog({
   );
 }
 
-/** The member's own rent with a team: the same lines and history the owner sees. Read-only. */
+/**
+ * A rent record either side can read but not change: the member's own rent
+ * with a team, and - for either side - a relationship that has ended. The
+ * same lines and history the owner's card shows.
+ */
+export function ReadOnlyRent({
+  title,
+  who,
+  rent,
+  loadHistory,
+}: {
+  title: string;
+  who: "owner" | "member";
+  rent: RentSummary;
+  loadHistory: () => Promise<RentHistory | null>;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!hasRent(rent)) return null;
+  return (
+    <div
+      className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-subtle px-4 py-3"
+      data-qa="rent-readonly"
+    >
+      <RentLines rent={rent} who={who} />
+      <button type="button" onClick={() => setOpen(true)} className={quiet}>
+        History
+      </button>
+      <HistoryDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title={title}
+        who={who}
+        load={loadHistory}
+      />
+    </div>
+  );
+}
+
+/** The member's own rent with a team. Read-only. */
 export function MemberRent({
   teamName,
   rent,
@@ -651,21 +848,12 @@ export function MemberRent({
   rent: RentSummary;
   loadHistory: () => Promise<RentHistory | null>;
 }) {
-  const [open, setOpen] = useState(false);
-  if (!hasRent(rent)) return null;
   return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-subtle px-4 py-3">
-      <RentLines rent={rent} who="member" />
-      <button type="button" onClick={() => setOpen(true)} className={quiet}>
-        History
-      </button>
-      <HistoryDialog
-        open={open}
-        onClose={() => setOpen(false)}
-        title={`Booth rent · ${teamName}`}
-        who="member"
-        load={loadHistory}
-      />
-    </div>
+    <ReadOnlyRent
+      title={`Booth rent · ${teamName}`}
+      who="member"
+      rent={rent}
+      loadHistory={loadHistory}
+    />
   );
 }

@@ -15,7 +15,12 @@ import {
 } from "@/lib/teamNumbers";
 import { hasRent, type RentSummary } from "@/lib/boothRent";
 import { MemberRent } from "../team/BoothRent";
-import { leaveTeamAction, myRentHistoryAction, myTeamsAction, setSharingAction } from "./actions";
+import {
+  leaveTeamAction,
+  myRentHistoryAction,
+  myTeamsAction,
+  setSharingAction,
+} from "./actions";
 
 export interface MyTeamLink {
   id: string;
@@ -26,13 +31,20 @@ export interface MyTeamLink {
   sharing: Sharing;
   /** Exactly what the team's owner sees now. Null until they approve. */
   theySee: TeamNumbers | null;
-  /** Their booth rent with this team (ACTIVE only). */
+  /** Their booth rent with this team - also while asking to rejoin. */
   rent: RentSummary | null;
 }
 
 export interface MyTeamsData {
   business: { id: string; name: string } | null;
   links: MyTeamLink[];
+  /** Teams they've left where rent was recorded: read-only, rent only. */
+  past?: {
+    id: string;
+    endedAt: string | null;
+    team: { name: string };
+    rent: RentSummary;
+  }[];
 }
 
 /** What each switch shares, in plain words. */
@@ -49,7 +61,12 @@ function shareHint(key: ShareKey, v: BusinessVocabulary): string {
   }
 }
 
-const NOTHING: TeamNumbers = { cuts: null, revenueCents: null, clients: null, rating: null };
+const NOTHING: TeamNumbers = {
+  cuts: null,
+  revenueCents: null,
+  clients: null,
+  rating: null,
+};
 
 /**
  * A barber's own teams: what each shop may see, a preview of exactly what it
@@ -81,7 +98,9 @@ export function TeamsClient({
       setData((d) => ({
         ...d,
         links: d.links.map((l) =>
-          l.id === link.id ? { ...l, sharing: res.sharing!, theySee: res.theySee ?? null } : l,
+          l.id === link.id
+            ? { ...l, sharing: res.sharing!, theySee: res.theySee ?? null }
+            : l,
         ),
       }));
     } else {
@@ -111,7 +130,9 @@ export function TeamsClient({
     const gone = fresh ? !fresh.links.some((l) => l.id === link.id) : res.ok;
     if (gone) {
       toast(
-        link.status === "PENDING" ? "Request withdrawn" : `You left ${link.team.name}'s team`,
+        link.status === "PENDING"
+          ? "Request withdrawn"
+          : `You left ${link.team.name}'s team`,
         "success",
       );
     } else {
@@ -125,8 +146,9 @@ export function TeamsClient({
         <h1 className="font-display text-2xl">Teams</h1>
         <Card className="p-5">
           <p className="text-sm text-muted">
-            Teams are for {vocab.providerNounPlural} who run their own business on ChairBack.
-            Set up your business first, then open the shop&apos;s team link again.
+            Teams are for {vocab.providerNounPlural} who run their own business
+            on ChairBack. Set up your business first, then open the shop&apos;s
+            team link again.
           </p>
         </Card>
       </div>
@@ -138,8 +160,9 @@ export function TeamsClient({
       <div>
         <h1 className="font-display text-2xl">Teams</h1>
         <p className="mt-1 text-sm text-muted">
-          {data.business.name} stays yours: your {vocab.clientNounPlural}, bookings and payments
-          never move. A team only sees what you turn on here.
+          {data.business.name} stays yours: your {vocab.clientNounPlural},
+          bookings and payments never move. A team only sees what you turn on
+          here.
         </p>
       </div>
 
@@ -166,17 +189,24 @@ export function TeamsClient({
               }
             />
             <div className="px-5 py-4">
-              <p className="text-sm font-medium text-offwhite">What {link.team.name} can see</p>
+              <p className="text-sm font-medium text-offwhite">
+                What {link.team.name} can see
+              </p>
               <ul className="mt-1 divide-y divide-subtle">
                 {SHARE_KEYS.map((key) => {
                   const on = link.sharing[key];
                   const isSaving = saving === `${link.id}:${key}`;
                   const label = stats.find((s) => s.key === key)!.label;
                   return (
-                    <li key={key} className="flex items-center justify-between gap-4 py-2.5">
+                    <li
+                      key={key}
+                      className="flex items-center justify-between gap-4 py-2.5"
+                    >
                       <div className="min-w-0">
                         <p className="text-sm text-offwhite">{label}</p>
-                        <p className="text-xs text-muted">{shareHint(key, vocab)}</p>
+                        <p className="text-xs text-muted">
+                          {shareHint(key, vocab)}
+                        </p>
                       </div>
                       <button
                         type="button"
@@ -200,22 +230,30 @@ export function TeamsClient({
                 })}
               </ul>
 
-              <div className="mt-3 rounded-xl bg-charcoal-800/60 px-4 py-3" aria-live="polite">
+              <div
+                className="mt-3 rounded-xl bg-charcoal-800/60 px-4 py-3"
+                aria-live="polite"
+              >
                 <p className="text-[11px] uppercase tracking-wide text-muted">
-                  {active ? "What they see right now" : "What they'll see once approved"}
+                  {active
+                    ? "What they see right now"
+                    : "What they'll see once approved"}
                 </p>
                 {active ? (
                   <p className="mt-1 text-sm text-offwhite" data-qa="they-see">
-                    {stats.map((s) => `${s.label} ${s.value ?? "hidden"}`).join(" · ")}
+                    {stats
+                      .map((s) => `${s.label} ${s.value ?? "hidden"}`)
+                      .join(" · ")}
                   </p>
                 ) : (
                   <p className="mt-1 text-sm text-muted">
-                    Nothing until they approve you - then only what&apos;s shared above.
+                    Nothing until they approve you - then only what&apos;s
+                    shared above.
                   </p>
                 )}
               </div>
 
-              {active && link.rent && (
+              {link.rent && (
                 <MemberRent
                   teamName={link.team.name}
                   rent={link.rent}
@@ -238,6 +276,35 @@ export function TeamsClient({
           </Card>
         );
       })}
+
+      {(data.past ?? []).length > 0 && (
+        // A team they've left: the rent record stays readable - what was owed,
+        // paid and corrected - and nothing else of that shop.
+        <section data-qa="past-teams">
+          <Card className="p-5">
+            <h2 className="text-sm font-medium text-offwhite">Past teams</h2>
+            <p className="mt-0.5 text-xs text-muted">
+              Booth rent you had with teams you&apos;ve left. Read-only.
+            </p>
+            <ul className="mt-2 flex flex-col gap-3">
+              {data.past!.map((p) => (
+                <li key={p.id}>
+                  <p className="text-sm text-offwhite">{p.team.name}</p>
+                  <p className="text-xs text-muted">
+                    Left{" "}
+                    {p.endedAt ? new Date(p.endedAt).toLocaleDateString() : ""}
+                  </p>
+                  <MemberRent
+                    teamName={p.team.name}
+                    rent={p.rent}
+                    loadHistory={() => myRentHistoryAction(p.id)}
+                  />
+                </li>
+              ))}
+            </ul>
+          </Card>
+        </section>
+      )}
 
       <Dialog
         open={leaving !== null}
@@ -263,16 +330,21 @@ export function TeamsClient({
               onClick={() => leaving && void leave(leaving)}
               className="min-h-[40px] rounded-full bg-rose-500/90 px-4 text-xs font-semibold text-white transition-colors hover:bg-rose-500 disabled:opacity-50"
             >
-              {leaveBusy ? "Leaving…" : leaving?.status === "PENDING" ? "Withdraw" : "Leave team"}
+              {leaveBusy
+                ? "Leaving…"
+                : leaving?.status === "PENDING"
+                  ? "Withdraw"
+                  : "Leave team"}
             </button>
           </div>
         }
       >
         <p className="text-sm text-muted">
-          They stop seeing your numbers right away. Your {vocab.clientNounPlural}, bookings and
-          payments stay exactly as they are. You can ask to join again with their link.
+          They stop seeing your numbers right away. Your{" "}
+          {vocab.clientNounPlural}, bookings and payments stay exactly as they
+          are. You can ask to join again with their link.
           {leaving?.rent && hasRent(leaving.rent)
-            ? " Booth rent stops at the end of the current period; what's recorded is kept."
+            ? " Booth rent stops at the end of the current period; what's recorded stays readable here."
             : ""}
         </p>
       </Dialog>

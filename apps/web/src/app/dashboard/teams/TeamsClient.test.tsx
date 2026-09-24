@@ -144,3 +144,43 @@ describe("leaving", () => {
     expect(myTeamsAction).not.toHaveBeenCalled();
   });
 });
+
+describe("booth rent records", () => {
+  const owed = {
+    current: null,
+    balanceCents: 15000,
+    creditCents: 0,
+    unpaid: [{ start: "2026-09-17", end: "2026-09-23", amountCents: 15000, dueCents: 15000 }],
+    rate: null,
+    scheduled: null,
+    nextChangeOn: null,
+    earliestStart: "2026-09-24",
+    lastPayment: null,
+  };
+
+  it("🔴 a team they left keeps its rent readable - the name and the rent, nothing else", () => {
+    render(
+      <TeamsClient
+        initial={{
+          ...data(),
+          past: [{ id: "old1", endedAt: "2026-09-22T12:00:00.000Z", team: { name: "Old Shop" }, rent: owed }],
+        }}
+        vocab={vocab}
+      />,
+    );
+    const past = document.querySelector('[data-qa="past-teams"]')!;
+    expect(past.textContent).toContain("Old Shop");
+    expect(past.querySelector('[data-qa="rent-total"]')!.textContent).toBe(
+      "You owe $150 in total · unpaid since Sep 17",
+    );
+    // Read-only: History, and no switches or Leave for a team they're not on.
+    expect([...past.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["History"]);
+  });
+
+  it("🔴 asking to rejoin, the old record still shows", () => {
+    render(<TeamsClient initial={data({ status: "PENDING", approvedAt: null, theySee: null, rent: owed })} vocab={vocab} />);
+    expect(document.querySelector('[data-qa="rent-total"]')!.textContent).toBe(
+      "You owe $150 in total · unpaid since Sep 17",
+    );
+  });
+});

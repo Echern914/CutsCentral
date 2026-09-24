@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addPeriods, ledger, nextBoundary, periodsThrough, type RateRow } from "./boothRent.js";
+import { addPeriods, earliestStart, ledger, nextBoundary, periodsThrough, type RateRow } from "./boothRent.js";
 
 /**
  * The booth-rent ledger, pure: rate rows + the total paid + today in, the
@@ -112,3 +112,20 @@ describe("ledger: payments pay the oldest period first", () => {
     expect(l).toMatchObject({ current: null, balanceCents: 15000, creditCents: 0 });
   });
 });
+
+describe("earliestStart: where a (re)start may begin", () => {
+  const today = d("2026-10-10");
+
+  it("no history yet: no bound but the year window (a first start may reach back)", () => {
+    expect(earliestStart([], today, d("2026-10-01"))).toBeNull();
+    expect(earliestStart([row("2026-10-20", 10000)], today, d("2026-10-01"))).toBeNull();
+  });
+
+  it("🔴 after a stop: not before the stop, and not before they were last approved", () => {
+    const stopped = [row("2026-09-01", 10000), row("2026-09-22", null)];
+    expect(ymd(earliestStart(stopped, today, d("2026-09-10"))!)).toBe("2026-09-22");
+    // Rejoined and approved Oct 8: the time away can't be billed.
+    expect(ymd(earliestStart(stopped, today, d("2026-10-08"))!)).toBe("2026-10-08");
+  });
+});
+

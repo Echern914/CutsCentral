@@ -1,9 +1,9 @@
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma, runAsOwner, type Prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
-import { rentSummary, setRent } from "../services/boothRent.js";
+import { rentSummary, setRent, voidRate as voidRateEntry } from "../services/boothRent.js";
 
 /**
  * Booth rent: a manual tracker between a team's owner and one independent
@@ -14,8 +14,19 @@ import { rentSummary, setRent } from "../services/boothRent.js";
  *  - a change takes effect next period - the past keeps its rate;
  *  - a mistake is voided, never deleted; a form sent twice records once;
  *  - only the team's owner writes, and the member sees the very same numbers;
- *  - leaving stops the rent, and keeps what's owed.
+ *  - leaving stops the rent, keeps what's owed, and both sides can still read
+ *    it; rejoining bills nothing for the time away;
+ *  - a void never removes a stop or an earlier obligation.
+ *
+ * THE CLOCK IS PINNED: Thursday 2026-09-24, 15:00 UTC (the team shop runs on
+ * UTC). Rent starts Thursday Sep 10, and periods run from the start date, not
+ * the calendar week: Sep 10-16, Sep 17-23, Sep 24-30 (today's), then Oct 1-7.
+ * A period is owed in full from its first day. So "three weeks due" below is
+ * the same on whatever day the suite runs.
  */
+const TODAY = "2026-09-24";
+vi.useFakeTimers({ toFake: ["Date"], now: new Date(`${TODAY}T15:00:00Z`) });
+
 const app = createApp();
 const password = "correct horse battery staple";
 const emails: string[] = [];
@@ -44,9 +55,9 @@ let strangerShopId: string;
 let linkId: string;
 
 const DAY = 86_400_000;
-/** The team shop's calendar day `n` days from today (the shop runs on UTC here). */
+/** The team shop's calendar day `n` days from the pinned today (Sep 24). */
 const dayOffset = (n: number) =>
-  new Date(Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`) + n * DAY).toISOString().slice(0, 10);
+  new Date(Date.parse(`${TODAY}T00:00:00Z`) + n * DAY).toISOString().slice(0, 10);
 
 const putRent = (cookie: string, body: object) =>
   request(app).put(`/api/team/links/${linkId}/rent`).set("Cookie", cookie).send(body);
@@ -88,6 +99,7 @@ afterAll(async () => {
     }
   }
   await prisma.$disconnect();
+  vi.useRealTimers();
 });
 
 describe("starting rent", () => {
@@ -225,35 +237,41 @@ describe("changing the rent", () => {
     });
   });
 
-  it("changing it again before it starts replaces the pending change", async () => {
+  it("changing it again before it starts replaces the pending change - and the history shows both", async () => {
     const res = await putRent(snowCookie, { amountCents: 18000, period: "WEEKLY" });
     expect(res.body.rent.scheduled).toMatchObject({ amountCents: 18000, startsOn: dayOffset(7) });
-    const rates = (await ownerView()).body.rates;
-    expect(rates.map((r: { amountCents: number; startsOn: string }) => [r.amountCents, r.startsOn])).toEqual([
-      [15000, dayOffset(-14)],
-      [18000, dayOffset(7)],
+    const rates = (await ownerView()).body.rates as { amountCents: number; startsOn: string; status: string }[];
+    expect(rates.map((r) => [r.amountCents, r.startsOn, r.status])).toEqual([
+      [15000, dayOffset(-14), "active"],
+      [20000, dayOffset(7), "replaced"],
+      [18000, dayOffset(7), "active"],
     ]);
   });
 
-  it("🔴 a mistyped rent is voided - the latest entry only - and stays in the history", async () => {
-    const [start, change] = (await ownerView()).body.rates as { id: string }[];
+  it("🔴 a mistyped rent is voided - the latest entry only - and stays in the history, dated", async () => {
+    type Rate = { id: string; amountCents: number; status: string; voidedOn: string | null };
+    const [start, , change] = (await ownerView()).body.rates as Rate[];
     expect((await voidRate(joeCookie, change!.id)).status).toBe(404);
     // Undo one step at a time: the older entry can't go while a newer one stands.
     const early = await voidRate(snowCookie, start!.id);
     expect([early.status, early.body.error]).toEqual([409, "not_latest"]);
 
-    expect((await voidRate(snowCookie, change!.id)).body.rent.scheduled).toBeNull();
+    // Voiding the $180 change brings back the $200 it replaced: an undo.
+    expect((await voidRate(snowCookie, change!.id)).body.rent.scheduled).toMatchObject({ amountCents: 20000 });
+    const raise = ((await ownerView()).body.rates as Rate[]).find((r) => r.amountCents === 20000)!;
+    expect((await voidRate(snowCookie, raise.id)).body.rent.scheduled).toBeNull();
     // The start itself was the mistake: void it, and enter it again.
     const none = await voidRate(snowCookie, start!.id);
     expect(none.body.rent).toMatchObject({ rate: null, balanceCents: 0, creditCents: 55000 });
     const fixed = await putRent(snowCookie, { amountCents: 15000, period: "WEEKLY", startsOn: dayOffset(-14) });
     expect(fixed.body.rent).toMatchObject({ rate: { amountCents: 15000 }, balanceCents: 0, creditCents: 10000 });
 
-    const rates = (await ownerView()).body.rates as { amountCents: number; voided: boolean }[];
-    expect(rates.map((r) => [r.amountCents, r.voided])).toEqual([
-      [15000, true],
-      [15000, false],
-      [18000, true],
+    const rates = (await ownerView()).body.rates as Rate[];
+    expect(rates.map((r) => [r.amountCents, r.status, r.voidedOn])).toEqual([
+      [15000, "voided", TODAY],
+      [15000, "active", null],
+      [20000, "voided", TODAY],
+      [18000, "voided", TODAY],
     ]);
   });
 });
@@ -275,16 +293,92 @@ describe("both sides", () => {
 });
 
 describe("leaving", () => {
-  it("🔴 rent stops at next week; what's owed and every payment stay", async () => {
+  it("🔴 rent stops at the end of this week; what's owed and every payment stay", async () => {
     expect((await request(app).post(`/api/teams/${linkId}/leave`).set("Cookie", joeCookie)).status).toBe(200);
     const mine = await request(app).get(`/api/teams/${linkId}/rent`).set("Cookie", joeCookie);
-    const live = (mine.body.rates as { amountCents: number | null; startsOn: string; voided: boolean }[]).filter(
-      (r) => !r.voided,
+    const active = (mine.body.rates as { amountCents: number | null; startsOn: string; status: string }[]).filter(
+      (r) => r.status === "active",
     );
-    expect(live.at(-1)).toMatchObject({ amountCents: null, startsOn: dayOffset(7) });
+    // This week (Sep 24-30) is still owed; nothing from Oct 1.
+    expect(active.at(-1)).toMatchObject({ amountCents: null, startsOn: "2026-10-01" });
     expect(mine.body.payments).toHaveLength(4);
     expect(mine.body.summary).toMatchObject({ rate: { amountCents: 15000 }, creditCents: 10000 });
     expect((await ownerView()).body.summary).toEqual(mine.body.summary);
+  });
+
+  it("🔴 both sides still see the record - the rent, and nothing else of the other business", async () => {
+    const owner = await request(app).get("/api/team/links").set("Cookie", snowCookie);
+    const mine = await request(app).get("/api/teams").set("Cookie", joeCookie);
+    const ownerPast = owner.body.past.find((p: { id: string }) => p.id === linkId);
+    const myPast = mine.body.past.find((p: { id: string }) => p.id === linkId);
+    expect(Object.keys(ownerPast).sort()).toEqual(["business", "endedAt", "id", "rent", "status"]);
+    expect(ownerPast.business).toEqual({ name: `Rent Joe ${tag}` });
+    expect(Object.keys(myPast).sort()).toEqual(["endedAt", "id", "rent", "team"]);
+    expect(myPast.team).toEqual({ name: `Rent Team ${tag}` });
+    expect(myPast.rent).toEqual(ownerPast.rent);
+    expect(myPast.rent.creditCents).toBe(10000);
+    // Not on the team any more: no numbers, no sharing, no card.
+    expect(owner.body.active.find((a: { id: string }) => a.id === linkId)).toBeUndefined();
+    expect(mine.body.links.find((l: { id: string }) => l.id === linkId)).toBeUndefined();
+  });
+
+  it("🔴 and only read it: nothing can be recorded, changed or voided on it", async () => {
+    const history = (await ownerView()).body as { payments: { id: string }[]; rates: { id: string }[] };
+    expect((await pay(snowCookie, { amountCents: 100 })).status).toBe(404);
+    expect((await putRent(snowCookie, { amountCents: 100, period: "WEEKLY" })).status).toBe(404);
+    expect((await voidPayment(snowCookie, history.payments[0]!.id)).status).toBe(404);
+    expect((await voidRate(snowCookie, history.rates.at(-1)!.id)).status).toBe(404);
+    expect(await paymentRows()).toBe(4);
+  });
+});
+
+describe("rejoining", () => {
+  afterAll(() => vi.setSystemTime(new Date(`${TODAY}T15:00:00Z`)));
+
+  it("🔴 bills nothing for the time away, and the record carries on in one piece", async () => {
+    // Oct 10: the stop took effect Oct 1; Joe asks to come back.
+    vi.setSystemTime(new Date("2026-10-10T15:00:00Z"));
+    expect((await request(app).post("/api/teams/join").set("Cookie", joeCookie).send({ team: team.id })).status).toBe(201);
+    // Asking again: the owner still sees the rent record while deciding.
+    const asking = await request(app).get("/api/team/links").set("Cookie", snowCookie);
+    expect(asking.body.past.find((p: { id: string }) => p.id === linkId)).toMatchObject({ status: "PENDING" });
+    expect((await request(app).post(`/api/team/links/${linkId}/approve`).set("Cookie", snowCookie)).status).toBe(200);
+
+    const back = (await ownerView()).body.summary;
+    // Still three weeks owed (Sep 10-30) - no Oct 1-7 or Oct 8-14 appeared.
+    expect(back).toMatchObject({ rate: null, current: null, balanceCents: 0, creditCents: 10000 });
+    expect(back.earliestStart).toBe("2026-10-10");
+  });
+
+  it("🔴 rent restarts only from the day they were approved again", async () => {
+    for (const startsOn of ["2026-10-01", "2026-10-09"]) {
+      const early = await putRent(snowCookie, { amountCents: 15000, period: "WEEKLY", startsOn });
+      expect([early.status, early.body.error]).toEqual([400, "start_too_early"]);
+    }
+    const res = await putRent(snowCookie, { amountCents: 15000, period: "WEEKLY", startsOn: "2026-10-10" });
+    expect(res.body.rent).toMatchObject({
+      rate: { amountCents: 15000, since: "2026-10-10" },
+      current: { start: "2026-10-10", end: "2026-10-16" },
+      creditCents: 0,
+      balanceCents: 5000,
+    });
+  });
+
+  it("🔴 a stop can't be voided - it would bill the time away", async () => {
+    const rates = (await ownerView()).body.rates as { id: string; amountCents: number | null; status: string }[];
+    const stop = rates.find((r) => r.amountCents === null && r.status === "active")!;
+    const res = await voidRate(snowCookie, stop.id);
+    expect([res.status, res.body.error]).toEqual([409, "stop_not_voidable"]);
+  });
+
+  it("🔴 voiding the restart takes back only the restart: the time away stays unbilled", async () => {
+    const rates = (await ownerView()).body.rates as { id: string; startsOn: string; status: string }[];
+    const restart = rates.find((r) => r.startsOn === "2026-10-10" && r.status === "active")!;
+    const res = await voidRate(snowCookie, restart.id);
+    expect(res.body.rent).toMatchObject({ rate: null, balanceCents: 0, creditCents: 10000 });
+    // And both sides agree.
+    const mine = await request(app).get(`/api/teams/${linkId}/rent`).set("Cookie", joeCookie);
+    expect(mine.body).toEqual((await ownerView()).body);
   });
 });
 
@@ -343,7 +437,9 @@ describe("over time (the service, on a set clock)", () => {
 
   it("🔴 restarting needs a date, and can't reach back over what has happened", async () => {
     expect(await set("2026-10-30", 10000)).toEqual({ ok: false, error: "start_required" });
-    expect(await set("2026-10-30", 10000, "2026-09-20")).toEqual({ ok: false, error: "start_before_history" });
+    // Not before the stop (Sep 22), nor before this link was approved (Sep 24).
+    expect(await set("2026-10-30", 10000, "2026-09-20")).toEqual({ ok: false, error: "start_too_early" });
+    expect(await set("2026-10-30", 10000, "2026-09-23")).toEqual({ ok: false, error: "start_too_early" });
     expect(await set("2026-10-30", 10000, "2025-09-01")).toEqual({ ok: false, error: "start_out_of_range" });
     expect((await set("2026-10-30", 10000, "2026-11-02")).ok).toBe(true);
     expect((await set("2026-10-30", 11000, "2026-11-09")).ok).toBe(true);
@@ -379,5 +475,82 @@ describe("over time (the service, on a set clock)", () => {
     await first;
     expect((await second).ok).toBe(true);
     expect(await pendingRows("2026-11-02")).toBe(1);
+  });
+});
+
+describe("corrections (the service, on a set clock)", () => {
+  let link3: string;
+  const at = (s: string) => new Date(`${s}T15:00:00Z`);
+  const run = <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>) => runAsOwner(fn);
+  const set = (now: string, amountCents: number | null, startsOn?: string) =>
+    run((tx) =>
+      setRent(
+        tx,
+        {
+          linkId: link3,
+          amountCents,
+          period: amountCents === null ? null : "WEEKLY",
+          startsOn: startsOn ? new Date(`${startsOn}T00:00:00Z`) : null,
+          userId: snowUserId,
+        },
+        "UTC",
+        at(now),
+      ),
+    );
+  const summary = (now: string) => run((tx) => rentSummary(tx, link3, "UTC", at(now)));
+  const latestId = () =>
+    run(async (tx) => {
+      const rows = await tx.boothRentRate.findMany({
+        where: { linkId: link3, voidedAt: null },
+        orderBy: [{ startsOn: "desc" }, { createdAt: "desc" }],
+        take: 1,
+      });
+      return rows[0]!.id;
+    });
+  const voidLatest = async () => run(async (tx) => voidRateEntry(tx, link3, await latestId(), snowUserId));
+
+  beforeAll(async () => {
+    const cookie = await signup(`rent-y-${tag}@test.chairback`, "Why");
+    const member = await createShop(cookie, `Rent Why ${tag}`);
+    link3 = (
+      await run((tx) =>
+        tx.teamLink.create({
+          data: {
+            teamShopId: team.id,
+            memberShopId: member.id,
+            status: "ACTIVE",
+            approvedAt: new Date("2026-08-01T12:00:00Z"),
+          },
+        }),
+      )
+    ).id;
+  });
+
+  it("🔴 voiding a change keeps every earlier obligation; its weeks go back to the rate before", async () => {
+    // $100/week from Tue Sep 1; a change to $120 from Sep 15 (made Sep 10).
+    await set("2026-09-01", 10000, "2026-09-01");
+    await set("2026-09-10", 12000);
+    expect((await summary("2026-09-23")).unpaid.map((u) => u.amountCents)).toEqual([10000, 10000, 12000, 12000]);
+    expect(await voidLatest()).toEqual({ ok: true });
+    // Sep 1 and Sep 8 are untouched; Sep 15 and 22 are back at $100.
+    expect((await summary("2026-09-23")).unpaid.map((u) => [u.start, u.amountCents])).toEqual([
+      ["2026-09-01", 10000],
+      ["2026-09-08", 10000],
+      ["2026-09-15", 10000],
+      ["2026-09-22", 10000],
+    ]);
+  });
+
+  it("🔴 a same-day restart after a stop is an undo; voiding it brings the stop back, never a gap", async () => {
+    expect(await set("2026-09-23", null)).toEqual({ ok: true, startsOn: "2026-09-29" });
+    expect((await voidLatest())).toEqual({ ok: false, error: "stop_not_voidable" });
+    // Oct 5: the stop took effect Sep 29. Restarting ON the stop's day undoes it...
+    expect(await set("2026-10-05", 11000, "2026-09-29")).toEqual({ ok: true, startsOn: "2026-09-29" });
+    expect((await summary("2026-10-05")).unpaid.map((u) => u.start)).toContain("2026-09-29");
+    // ...and voiding that restart puts the stop back: Sep 29 on is unbilled again.
+    expect(await voidLatest()).toEqual({ ok: true });
+    const after = await summary("2026-10-05");
+    expect(after.rate).toBeNull();
+    expect(after.unpaid.map((u) => u.start)).not.toContain("2026-09-29");
   });
 });
