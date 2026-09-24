@@ -88,7 +88,13 @@ import {
   openingSpansForWeekday,
   parseServiceHours,
 } from "../engines/pricing.js";
-import { slotServiceIds } from "../engines/targetedSlotServices.js";
+import {
+  SLOT_SERVICES_SELECT,
+  slotOffersService,
+  slotServiceIds,
+} from "../engines/targetedSlotServices.js";
+import { filterBlockedTargeted } from "../engines/targetedSlotAvailability.js";
+import { staffSpanBlocked } from "../engines/blockedTime.js";
 import { validateUpgradeRule } from "../engines/serviceUpgradeRules.js";
 import {
   materializeSeries,
@@ -2886,6 +2892,12 @@ const createApptSchema = z
     // half-linked state cannot exist: either the appointment and the link are
     // both there, or neither is.
     waitlistEntryId: z.string().trim().max(60).optional(),
+    // Booking someone INTO one of the barber's own targeted slots (a special:
+    // its own time, length and price, often after hours). The slot is CLAIMED
+    // in this transaction exactly as the public booking page claims it, so the
+    // website stops offering it the instant this lands. A special is one
+    // physical time, so it never combines with a recurrence.
+    targetedSlotId: z.string().trim().min(1).max(60).optional(),
     // Optional "repeats every N weeks" rule. When present, the appointment above
     // is occurrence 0 (its startsAt sets the weekday + time-of-day), and N-1 more
     // are generated. Exactly one of count / until. Capped so a bad rule can't
@@ -3023,33 +3035,103 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     return;
   }
 
+  // BOOKING INTO A SPECIAL. Resolved before anything is computed from the
+  // service, because the slot's own length and price replace the service's.
+  //
+  // 🔴 SAME RULES AS THE PUBLIC CLAIM (routes/booking.public.ts), because it
+  // is the same slot: until now only a customer on the website could book one,
+  // and the barber's own picker could neither show it (the grid subtracts
+  // specials) nor force it (the guard refuses a normal booking over one).
+  //   - a mismatched slot (other shop, other barber, a service it is not listed
+  //     under, a different start) is a crafted request -> 400;
+  //   - a slot that is gone (booked, turned off, already started) -> 409;
+  //   - BLOCKED TIME WINS over the barber's own standing special, exactly as it
+  //     does on the website - the picker never offers one inside a block.
+  let targeted: {
+    id: string;
+    startsAt: Date;
+    durationMin: number;
+    price: Prisma.Decimal;
+  } | null = null;
+  if (d.targetedSlotId) {
+    if (d.recurrence) {
+      res.status(400).json({ error: "invalid_input", code: "TARGETED_SLOT_NOT_RECURRING" });
+      return;
+    }
+    const slot = await prisma.targetedSlot.findFirst({
+      where: { id: d.targetedSlotId, shopId },
+      select: {
+        id: true,
+        staffId: true,
+        serviceId: true,
+        services: SLOT_SERVICES_SELECT,
+        startsAt: true,
+        durationMin: true,
+        price: true,
+        active: true,
+        bookedAppointmentId: true,
+      },
+    });
+    if (
+      !slot ||
+      slot.staffId !== d.staffId ||
+      !slotOffersService(slot, d.serviceId) ||
+      slot.startsAt.getTime() !== d.startsAt.getTime()
+    ) {
+      res.status(400).json({ error: "invalid_slot" });
+      return;
+    }
+    if (!slot.active || slot.bookedAppointmentId !== null || slot.startsAt <= now) {
+      res.status(409).json({ error: "slot_taken" });
+      return;
+    }
+    if (
+      await staffSpanBlocked({
+        shopId,
+        staffId: slot.staffId,
+        startsAt: slot.startsAt,
+        endsAt: new Date(slot.startsAt.getTime() + slot.durationMin * 60_000),
+        timezone: shop.timezone,
+      })
+    ) {
+      res.status(409).json({ error: "slot_taken" });
+      return;
+    }
+    targeted = slot;
+  }
+
   const startsAt = d.startsAt;
   // Chosen add-ons extend the appointment + total (single create only; a
-  // recurring series is barber-planned and takes no add-ons in v1).
-  const addOns = d.recurrence
-    ? { snapshot: [], extraDurationMin: 0, extraPrice: 0 }
-    : await resolveAddOns(shopId, d.serviceId, d.addOnIds);
+  // recurring series is barber-planned and takes no add-ons in v1, and a
+  // special has its own fixed length and price, as on the website).
+  const addOns =
+    d.recurrence || targeted
+      ? { snapshot: [], extraDurationMin: 0, extraPrice: 0 }
+      : await resolveAddOns(shopId, d.serviceId, d.addOnIds);
   // Effective duration for the picked slot - weekday layer plus time-of-day
-  // windows (mirrors the effectivePriceAt snapshot just below).
-  const effectiveDuration = effectiveDurationAt(service.durationMin, {
-    at: startsAt,
-    timezone: shop.timezone,
-    weekdayOverrides: service.durationOverrides,
-    timeWindows: service.timeOverrides,
-  });
+  // windows (mirrors the effectivePriceAt snapshot just below). A special
+  // carries its own explicit length.
+  const effectiveDuration = targeted
+    ? targeted.durationMin
+    : effectiveDurationAt(service.durationMin, {
+        at: startsAt,
+        timezone: shop.timezone,
+        weekdayOverrides: service.durationOverrides,
+        timeWindows: service.timeOverrides,
+      });
   const endsAt = new Date(
     startsAt.getTime() + (effectiveDuration + addOns.extraDurationMin) * 60_000,
   );
-  const basePrice = effectivePriceAt(
-    service.price === null ? null : Number(service.price),
-    {
-      at: startsAt,
-      timezone: shop.timezone,
-      weekdayOverrides: service.priceOverrides,
-      dateOverrides: service.dateOverrides,
-      timeWindows: service.timeOverrides,
-    },
-  );
+  // A special snapshots ITS price - that is the point of publishing one.
+  const basePrice = targeted
+    ? Number(targeted.price)
+    : effectivePriceAt(service.price === null ? null : Number(service.price), {
+        at: startsAt,
+        timezone: shop.timezone,
+        weekdayOverrides: service.priceOverrides,
+        dateOverrides: service.dateOverrides,
+        timeWindows: service.timeOverrides,
+      });
   const effectivePrice =
     basePrice === null && addOns.extraPrice === 0
       ? null
@@ -3057,8 +3139,12 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
 
   // Unless the barber forced a custom time, the slot must be genuinely bookable
   // (inside hours, not blocked). Overlap is always enforced below regardless.
+  // A special is exempt: it is explicit inventory the barber published, very
+  // often OUTSIDE his hours - the grid check would refuse the whole point of it.
+  // Its blocked-time check ran above.
   if (
     !d.customTime &&
+    !targeted &&
     !(await isSlotBookable({
       shopId,
       staffId: d.staffId,
@@ -3184,6 +3270,11 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         // A live waitlist hold here is the shop's own automation - the barber
         // overrides it and the hold is RELEASED in this same transaction.
         overrideWaitlistHolds: true,
+        // Booking INTO a special: that special must not veto its own claim.
+        // Everything else - an appointment already on it, including one a
+        // customer just took on the website - still refuses, under this same
+        // lock. That, not the claim below, is what serialises the two.
+        targetedSlotIdToIgnore: targeted?.id,
       });
 
       // Resolve the client: an existing one, or create inline from the name.
@@ -3244,9 +3335,23 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
           priceAtBooking: effectivePrice ?? undefined,
           addOns: addOns.snapshot as unknown as Prisma.InputJsonValue,
           manageToken: randomToken(),
+          bookedVia: targeted ? "targeted_slot" : undefined,
         },
         select: { id: true },
       });
+
+      // Capacity-1 claim, the same one the website makes: only the update that
+      // flips bookedAppointmentId from NULL wins. The advisory lock above has
+      // already serialised same-barber writers, so this is the backstop - it
+      // also covers the special being turned off between the check and here.
+      // count 0 -> roll the whole booking back as slot_taken.
+      if (targeted) {
+        const claimed = await tx.targetedSlot.updateMany({
+          where: { id: targeted.id, bookedAppointmentId: null, active: true },
+          data: { bookedAppointmentId: appt.id },
+        });
+        if (claimed.count === 0) throw new SlotTakenError();
+      }
 
       // Outbound Acuity mirror intent, in the SAME transaction as the row.
       // Barber-driven, so dispatch after commit is best-effort (see below):
@@ -3401,19 +3506,67 @@ bookingDashboardRouter.get("/slots", async (req, res) => {
     res.status(400).json({ error: "not_native" });
     return;
   }
+  const now = new Date();
   const slots = await computeOpenSlots({
     shopId,
     staffId: parsed.data.staffId,
     serviceId: parsed.data.serviceId,
     fromDate: parsed.data.from,
     toDate: parsed.data.to,
-    now: new Date(),
+    now,
   });
+
+  // 🔴 THE BARBER'S OWN SPECIALS. The grid above subtracts every open targeted
+  // slot on purpose - they are sold separately, at their own price - so until
+  // this list existed the barber could see his specials on his website and
+  // nowhere in his own booking form. Same eligibility as the website: this
+  // barber, listed under this service, active, unbooked, not yet started,
+  // and through the SAME filter that takes a special off sale when blocked
+  // time, a live appointment or a synced Acuity visit covers it.
+  const rawTargeted = await prisma.targetedSlot.findMany({
+    where: {
+      shopId,
+      staffId: parsed.data.staffId,
+      active: true,
+      bookedAppointmentId: null,
+      startsAt: {
+        gt: now,
+        gte: parsed.data.from,
+        lt: parsed.data.to,
+      },
+    },
+    orderBy: { startsAt: "asc" },
+    take: 100,
+    select: {
+      id: true,
+      staffId: true,
+      serviceId: true,
+      services: SLOT_SERVICES_SELECT,
+      label: true,
+      startsAt: true,
+      durationMin: true,
+      price: true,
+    },
+  });
+  const targeted = await filterBlockedTargeted(
+    shopId,
+    shop.timezone,
+    rawTargeted.filter((t) => slotOffersService(t, parsed.data.serviceId)),
+  );
+
   res.json({
     timezone: shop.timezone,
     slots: slots.map((s) => ({
       startsAt: s.startsAt.toISOString(),
       endsAt: s.endsAt.toISOString(),
+    })),
+    targetedSlots: targeted.map((t) => ({
+      id: t.id,
+      startsAt: t.startsAt.toISOString(),
+      endsAt: new Date(t.startsAt.getTime() + t.durationMin * 60_000).toISOString(),
+      durationMin: t.durationMin,
+      price: Number(t.price),
+      label: t.label,
     })),
   });
 });
