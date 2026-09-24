@@ -3,6 +3,7 @@ import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { invalidate, useCustomer } from "@/src/customer/CustomerProvider";
 import { ApiError, errorCopy } from "@/src/customer/api";
+import { isShopLinkNotPersonal } from "@/src/customer/connectLink";
 import { color, radius, space, type } from "@/src/customer/theme";
 import { Button, Txt } from "@/src/customer/ui";
 
@@ -31,6 +32,18 @@ export default function ConnectScreen() {
   async function connect() {
     const value = link.trim();
     if (busy || !value) return;
+    // A ChairBack link that is NOT a personal /r/ link is the shop's own page or
+    // booking link - the one everyone has. It can never connect a profile, and
+    // the generic "doesn't match" left a customer retrying the same paste
+    // (getchairback.com/book/drickcuttinup, 2026-09-24). Say which link it is
+    // instead. Answered here, with no request, so it reveals nothing about any
+    // record either way.
+    if (isShopLinkNotPersonal(value)) {
+      setMessage(
+        "That's the shop's page link, not your personal one. Yours looks like getchairback.com/r/… and is in the text or email the shop sent you. Can't find it? Ask the shop to send your rewards link.",
+      );
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {

@@ -21,6 +21,7 @@ import {
   ExternalBlockError,
   lockStaffAndAssertSlotFree,
   lockStaffCalendar,
+  OverlapError,
   SlotTakenError,
 } from "../engines/bookingWrite.js";
 import { findConflicts, recordConflicts } from "../engines/bookingConflict.js";
@@ -30,6 +31,7 @@ import {
   blockedTimeIsTheOnlyObstacle,
   blockSentence,
   describeBlocks,
+  describeOverlap,
   recordExternalBlockOverrides,
 } from "../services/appointmentOverride.js";
 import {
@@ -2865,6 +2867,13 @@ const createApptSchema = z
      * same transaction. See engines/bookingWrite.ts.
      */
     externalBlockConfirmation: z.string().trim().min(1).max(200).optional(),
+    /**
+     * Custom time only: book OVER the exact bookings, synced visits and own
+     * specials a previous 409 `slot_taken` (code OVERLAP) named - its
+     * `confirmation` digest, replayed. The barber forcing his own calendar;
+     * anything new in the way since he looked is asked about again.
+     */
+    overlapConfirmation: z.string().trim().min(1).max(200).optional(),
     // Chosen service add-ons (ids). Extend the appointment length + total; the
     // choice is snapshotted. Invalid/foreign ids are dropped server-side.
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
@@ -3256,6 +3265,10 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         // customer just took on the website - still refuses, under this same
         // lock. That, not the claim below, is what serialises the two.
         targetedSlotIdToIgnore: targeted?.id,
+        // Custom time is the barber forcing his own calendar: he may book over
+        // what a first refusal named (OverlapError), once he has seen it. Not
+        // from the open-slots list - a slot_taken there is a race, not a choice.
+        overlapConfirmation: d.customTime ? (d.overlapConfirmation ?? null) : null,
       });
 
       // Resolve the client: an existing one, or create inline from the name.
@@ -3429,6 +3442,21 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       });
       return;
     }
+    // Custom time over other bookings / visits / his own specials: not a dead
+    // end. Name each one and hand back the confirmation that lets him book
+    // over exactly these - the "Book anyway" under the list.
+    if (err instanceof OverlapError && d.customTime) {
+      const described = await describeOverlap(shopId, err.rows, shop.timezone);
+      res.status(409).json({
+        error: "slot_taken",
+        code: "OVERLAP",
+        confirmable: true,
+        reason: described.reason,
+        conflicts: described.lines,
+        confirmation: err.confirmation,
+      });
+      return;
+    }
     const msg = (err as Error).message;
     if (msg === "slot_taken") {
       res.status(409).json({ error: "slot_taken" });
@@ -3442,7 +3470,12 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       err instanceof Prisma.PrismaClientKnownRequestError &&
       err.code === "P2002"
     ) {
-      res.status(409).json({ error: "slot_taken" });
+      // A forced booking cleared every overlap check and still hit the one
+      // rule that has no override: two live bookings cannot START at the same
+      // minute on one chair. Say that, not "already booked".
+      res
+        .status(409)
+        .json({ error: d.customTime && d.overlapConfirmation ? "same_start" : "slot_taken" });
       return;
     }
     // ENFORCING with a chair the mirror cannot protect. Same refusal the
