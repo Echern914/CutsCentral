@@ -5,11 +5,11 @@ import {
   serviceNounForShop,
   type BookingModeKey,
 } from "@chairback/config/constants";
-import { businessType } from "@chairback/config/businessTypes";
 import { apiPublicGet } from "@/lib/api";
 import { GetTheApp } from "@/components/GetTheApp";
 import { appleItunesApp } from "@/lib/appBanner";
 import { ShopPageClient } from "./ShopPageClient";
+import { shopJsonLd } from "./shopJsonLd";
 
 export interface ShopPageData {
   name: string;
@@ -29,6 +29,8 @@ export interface ShopPageData {
   /** Shop's Google "write a review" link; null = the CTA never renders. */
   googleReviewUrl: string | null;
   hoursText: string | null;
+  // The PUBLIC view of the address: a shop that keeps its address private
+  // sends street and ZIP as null (city and region still come through).
   addressStreet: string | null;
   addressCity: string | null;
   addressRegion: string | null;
@@ -107,49 +109,6 @@ export async function generateMetadata({
     },
     twitter: { card: "summary_large_image", title: data.name, description },
   };
-}
-
-/**
- * LocalBusiness structured data - the piece that makes the shop's ChairBack
- * page read as a BUSINESS to Google (name + address + rating rich results,
- * local-pack eligibility), not just a web page. Address is included only when
- * street + city are both set; aggregateRating only with 1+ approved reviews
- * (Google flags a rating block with zero reviews as spammy markup).
- */
-function shopJsonLd(data: ShopPageData): Record<string, unknown> {
-  const ld: Record<string, unknown> = {
-    "@context": "https://schema.org",
-    // From the registry, so a new vertical cannot silently fall back to a
-    // generic LocalBusiness and lose its rich-result eligibility - the old
-    // `Record<string,string>` + `?? "LocalBusiness"` degraded with nothing
-    // failing anywhere.
-    "@type": businessType(data.industry).schemaType,
-    name: data.name,
-    url: `https://getchairback.com/s/${encodeURIComponent(data.slug)}`,
-    ...(data.bio ? { description: data.bio } : {}),
-    ...(data.logoUrl ? { image: data.logoUrl } : {}),
-    ...(data.receptionistNumber ? { telephone: data.receptionistNumber } : {}),
-  };
-  if (data.addressStreet && data.addressCity) {
-    ld.address = {
-      "@type": "PostalAddress",
-      streetAddress: data.addressStreet,
-      addressLocality: data.addressCity,
-      ...(data.addressRegion ? { addressRegion: data.addressRegion } : {}),
-      ...(data.addressPostal ? { postalCode: data.addressPostal } : {}),
-      addressCountry: "US",
-    };
-  }
-  if (data.reviewSummary.count > 0 && data.reviewSummary.avgRating !== null) {
-    ld.aggregateRating = {
-      "@type": "AggregateRating",
-      ratingValue: Number(data.reviewSummary.avgRating.toFixed(2)),
-      reviewCount: data.reviewSummary.count,
-      bestRating: 5,
-      worstRating: 1,
-    };
-  }
-  return ld;
 }
 
 export default async function PublicShopPage({

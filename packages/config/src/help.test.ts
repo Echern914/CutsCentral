@@ -197,6 +197,22 @@ describe("findHelp — questions asked cold", () => {
     expectAnswer("can i charge more on saturday", "feature-day-pricing");
   });
 
+  // A live shop's words, verbatim. Every way of asking it lands on the Google
+  // answer - which used to say only "fill in your street, it's what Google
+  // reads" - so the address answers must offer the private-address switch.
+  it("tells a shop that wants its street off Google how to keep it private", () => {
+    expectAnswer(
+      "gotta figure out how to add my address but not have it on google",
+      "show-up-on-google",
+    );
+    expectAnswer("can i hide my address from google", "show-up-on-google");
+    expectAnswer("keep my address private", "show-up-on-google");
+    // The switch's label, word for word, as PageEditor renders it.
+    for (const id of ["show-up-on-google", "shop-address"]) {
+      expect(helpAnswerById(id)?.a, id).toContain("Keep my street address private");
+    }
+  });
+
   // The AI handles TEXTS. Someone asking about voice has to be told no, or
   // they'll buy the plan expecting a switchboard.
   it("does not let the receptionist imply it answers the phone", () => {

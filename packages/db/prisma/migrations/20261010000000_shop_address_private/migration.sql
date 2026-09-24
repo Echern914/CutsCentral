@@ -1,0 +1,21 @@
+-- A shop can keep its street address off Google without deleting it.
+--
+-- WHY. A shop that works from home, or from an unmarked suite, had one choice:
+-- publish the street - as LocalBusiness structured data on its public page,
+-- in the unauthenticated /api/page payload, and in the SMS receptionist's
+-- answer to anyone who texted "where are you?" - or leave the address blank,
+-- and send every booked client a confirmation with a time and no place.
+-- ("Gotta figure out how to add my address but not have it on Google.")
+--
+-- When this is true the public surfaces get the city and region only (a
+-- locality still places the shop in local search without putting its door on
+-- the map), while everyone who has BOOKED still gets the full address.
+--
+-- 🔴 VISIBILITY, NEVER DELETION. The street stays in addressStreet: booked
+-- clients' confirmations, reminders, calendar files, manage page and Wallet
+-- pass read it, broadcast emails must carry a postal address (CAN-SPAM), and
+-- Stripe Terminal locations are registered with it.
+--
+-- Additive, NOT NULL with a default: every existing shop reads false, which is
+-- exactly today's behaviour, so there is nothing to backfill.
+ALTER TABLE "Shop" ADD COLUMN "addressPrivate" BOOLEAN NOT NULL DEFAULT false;

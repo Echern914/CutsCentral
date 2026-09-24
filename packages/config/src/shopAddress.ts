@@ -71,3 +71,56 @@ export function mapsUrlFor(shop: ShopAddressInput): string | null {
   if (address === null) return null;
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 }
+
+/**
+ * The town, when the street is not ours to give: `"Wilmington, DE"`.
+ *
+ * Null without a city - a state on its own answers nobody's "where are you?".
+ */
+export function formatShopLocality(shop: ShopAddressInput): string | null {
+  const city = clean(shop.addressCity);
+  if (!city) return null;
+  const region = clean(shop.addressRegion);
+  return region ? `${city}, ${region}` : city;
+}
+
+/** A shop's address columns plus its "keep the street off Google" choice. */
+export interface PublicAddressInput extends ShopAddressInput {
+  addressPrivate?: boolean | null;
+}
+
+/** The four address fields as a STRANGER may see them. */
+export interface PublicShopAddress {
+  addressStreet: string | null;
+  addressCity: string | null;
+  addressRegion: string | null;
+  addressPostal: string | null;
+}
+
+/**
+ * The address as the PUBLIC may see it - the rule for every surface a
+ * stranger reaches. The unauthenticated page payload goes through this (and
+ * so the page's LocalBusiness JSON-LD, which is how an address reaches
+ * Google); the SMS receptionist, which needs a sentence rather than fields,
+ * tells whoever texts the same town via `formatShopLocality`.
+ *
+ * A shop that marked its address private - it works from home, or from a
+ * suite with no sign on the door - keeps its CITY and REGION: a locality still
+ * places it in local search without putting its door on the map. The street
+ * and the postal code, which narrows a town to a few blocks, are withheld.
+ *
+ * 🔴 NEVER CALL THIS FOR SOMEONE WHO HAS BOOKED. A booked client needs the
+ * door: confirmations, reminders, the calendar file, the manage page and the
+ * Wallet pass read the columns directly and must keep doing so. And privacy is
+ * visibility, never deletion - the street stays stored for exactly those
+ * surfaces, and because a broadcast email must carry a postal address.
+ */
+export function publicShopAddress(shop: PublicAddressInput): PublicShopAddress {
+  const hidden = shop.addressPrivate === true;
+  return {
+    addressStreet: hidden ? null : (shop.addressStreet ?? null),
+    addressCity: shop.addressCity ?? null,
+    addressRegion: shop.addressRegion ?? null,
+    addressPostal: hidden ? null : (shop.addressPostal ?? null),
+  };
+}

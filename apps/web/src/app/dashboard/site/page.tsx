@@ -25,10 +25,14 @@ export interface ShopPageSettings {
   instagramHandle: string | null;
   googleReviewUrl: string | null;
   hoursText: string | null;
+  // The owner's view: the full stored address, even when it is private.
   addressStreet: string | null;
   addressCity: string | null;
   addressRegion: string | null;
   addressPostal: string | null;
+  // Keep the street off the public page, Google and the receptionist. Optional
+  // only for the deploy window where this page is newer than the API.
+  addressPrivate?: boolean;
   gallery: { url: string; caption?: string }[];
   fontKey: string | null;
   layoutStyle: string | null;

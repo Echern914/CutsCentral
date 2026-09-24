@@ -371,13 +371,23 @@ model Shop {
   // cleared on disconnect. Possession of the zone is the only way to publish
   // it, which is what makes it proof.
   customDomainVerifyToken String?
-  // Street address, shown on the public page and emitted as LocalBusiness
-  // structured data - the real local-SEO lever ("barber near me"). All
-  // optional; JSON-LD includes the address only when street + city are set.
+  // Street address, emitted as LocalBusiness structured data on the public
+  // page - the real local-SEO lever ("barber near me") - and printed on every
+  // confirmation, reminder and calendar entry. All optional; JSON-LD carries
+  // the full address when street + city are set, the city alone without one.
   addressStreet String?
   addressCity   String?
   addressRegion String? // state/province abbreviation ("NY")
   addressPostal String?
+  // The shop works from somewhere it does not want on Google (a home, an
+  // unmarked suite). When true, every PUBLIC surface - the /api/page payload,
+  // its JSON-LD, the SMS receptionist - gets the city and region only
+  // (publicShopAddress / formatShopLocality in @chairback/config).
+  // 🔴 VISIBILITY, NEVER DELETION:
+  // booked clients still get the street (confirmations, reminders, .ics,
+  // manage page, Wallet pass read the columns above directly), broadcast
+  // emails need a postal address by law, and Terminal locations use it.
+  addressPrivate Boolean @default(false)
   // Coordinates for Apple Wallet LOCATION RELEVANCE - the only thing that makes
   // an appointment pass surface on the lock screen when the customer arrives at
   // the shop, rather than only near the appointment time. Apple's `locations`

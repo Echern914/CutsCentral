@@ -35,6 +35,7 @@ import {
   validateTierRules,
   TIER_WINDOWS,
   shopSlugFromName,
+  publicShopAddress,
 } from "@chairback/config";
 import { Prisma, prisma, runWithShop } from "@chairback/db";
 import { recomputeLoyaltyTiers } from "../engines/loyaltyTierRecompute.js";
@@ -280,6 +281,11 @@ const updateShopSchema = createShopSchema
     addressCity: z.string().trim().max(120).nullish().or(z.literal("")),
     addressRegion: z.string().trim().max(60).nullish().or(z.literal("")),
     addressPostal: z.string().trim().max(20).nullish().or(z.literal("")),
+    // Keep the street (and ZIP) off every public surface - the page payload,
+    // its JSON-LD, the SMS receptionist - while booked clients still get it
+    // (see publicShopAddress). Ungated, like the address fields themselves:
+    // whoever may set the street may decide who sees it.
+    addressPrivate: z.boolean(),
     // Legacy bare-URL gallery (still accepted from old clients). New clients send
     // `gallery` (items with captions); when present it wins, see the PATCH below.
     galleryUrls: z.array(httpUrl(500)).max(GALLERY_MAX),
@@ -1025,11 +1031,12 @@ publicPageRouter.get("/:slug", async (req, res) => {
     instagramHandle: shop.instagramHandle,
     googleReviewUrl: shop.googleReviewUrl,
     hoursText: shop.hoursText,
-    // Street address for the page footer + LocalBusiness JSON-LD (local SEO).
-    addressStreet: shop.addressStreet,
-    addressCity: shop.addressCity,
-    addressRegion: shop.addressRegion,
-    addressPostal: shop.addressPostal,
+    // The address for the LocalBusiness JSON-LD (local SEO) - as a STRANGER
+    // may see it. This payload is unauthenticated and feeds the indexable
+    // /s/[slug] page, so a shop that keeps its address private sends its city
+    // and region only: street and ZIP are null here, and stay in the columns
+    // for the booked-client surfaces that read them directly.
+    ...publicShopAddress(shop),
     gallery: readGallery(shop),
     fontKey: shop.fontKey,
     layoutStyle: shop.layoutStyle,
@@ -1583,6 +1590,7 @@ function serializeShop(shop: {
   addressCity: string | null;
   addressRegion: string | null;
   addressPostal: string | null;
+  addressPrivate: boolean;
   galleryUrls: string[];
   galleryItems: unknown;
   fontKey: string | null;
@@ -1641,10 +1649,13 @@ function serializeShop(shop: {
     instagramHandle: shop.instagramHandle,
     googleReviewUrl: shop.googleReviewUrl,
     hoursText: shop.hoursText,
+    // The OWNER's view: the full stored address, private or not - the editor
+    // has to show the street it is keeping private.
     addressStreet: shop.addressStreet,
     addressCity: shop.addressCity,
     addressRegion: shop.addressRegion,
     addressPostal: shop.addressPostal,
+    addressPrivate: shop.addressPrivate,
     gallery: readGallery(shop),
     fontKey: shop.fontKey,
     layoutStyle: shop.layoutStyle,
