@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   formatShopAddress,
+  formatShopLocality,
   hasShopAddress,
   mapsUrlFor,
+  publicShopAddress,
   shopAddressLines,
 } from "./shopAddress.js";
 
@@ -87,5 +89,52 @@ describe("mapsUrlFor", () => {
   it("is null when there is nowhere to send them", () => {
     expect(mapsUrlFor({})).toBeNull();
     expect(mapsUrlFor({ addressStreet: "123 Main St" })).toBeNull();
+  });
+});
+
+describe("formatShopLocality", () => {
+  it("is the town a stranger may be told", () => {
+    expect(formatShopLocality(FULL)).toBe("Brooklyn, NY");
+    expect(formatShopLocality({ addressCity: " Austin " })).toBe("Austin");
+  });
+
+  it("is null without a city - a state alone is not a place", () => {
+    expect(formatShopLocality({ addressRegion: "NY" })).toBeNull();
+    expect(formatShopLocality({ addressCity: "  ", addressRegion: "NY" })).toBeNull();
+  });
+});
+
+describe("publicShopAddress", () => {
+  it("is the stored address, untouched, for a shop that has not made it private", () => {
+    expect(publicShopAddress(FULL)).toEqual(FULL);
+    expect(publicShopAddress({ ...FULL, addressPrivate: false })).toEqual(FULL);
+    expect(publicShopAddress({ ...FULL, addressPrivate: null })).toEqual(FULL);
+  });
+
+  it("🔴 withholds the street and the ZIP of a private shop, and keeps its town", () => {
+    expect(publicShopAddress({ ...FULL, addressPrivate: true })).toEqual({
+      addressStreet: null,
+      addressCity: "Brooklyn",
+      addressRegion: "NY",
+      addressPostal: null,
+    });
+  });
+
+  it("🔴 leaves nothing a booked-client formatter could turn back into a door", () => {
+    // If the public shape ever reached a booked-client formatter, it must
+    // render no address at all rather than half of one.
+    const shown = publicShopAddress({ ...FULL, addressPrivate: true });
+    expect(formatShopAddress(shown)).toBeNull();
+    expect(mapsUrlFor(shown)).toBeNull();
+    expect(formatShopLocality(shown)).toBe("Brooklyn, NY");
+  });
+
+  it("always answers with all four fields, null where the shop left one out", () => {
+    expect(publicShopAddress({})).toEqual({
+      addressStreet: null,
+      addressCity: null,
+      addressRegion: null,
+      addressPostal: null,
+    });
   });
 });

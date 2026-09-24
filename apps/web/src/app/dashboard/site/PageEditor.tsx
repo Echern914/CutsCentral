@@ -24,6 +24,7 @@ import {
   type PageThemeKey,
   type RewardsSectionKey,
 } from "@chairback/config/constants";
+import { publicShopAddress } from "@chairback/config/shopAddress";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { useToast } from "@/components/ui/Toast";
@@ -67,6 +68,7 @@ const FIELD_LABELS: Record<string, string> = {
   publicPageEnabled: "Live toggle",
   takesRequests: "Requests toggle",
   waitlistEnabled: "Waitlist toggle",
+  addressPrivate: "Address privacy",
 };
 
 export function PageEditor({
@@ -93,6 +95,7 @@ export function PageEditor({
   const [addressCity, setAddressCity] = useState(settings.addressCity ?? "");
   const [addressRegion, setAddressRegion] = useState(settings.addressRegion ?? "");
   const [addressPostal, setAddressPostal] = useState(settings.addressPostal ?? "");
+  const [addressPrivate, setAddressPrivate] = useState(settings.addressPrivate ?? false);
   const [gallery, setGallery] = useState(settings.gallery ?? []);
   const [fontKey, setFontKey] = useState<PageFontKey>(
     (settings.fontKey as PageFontKey) in PAGE_FONTS ? (settings.fontKey as PageFontKey) : DEFAULT_PAGE_FONT,
@@ -166,6 +169,7 @@ export function PageEditor({
     addressCity: addressCity.trim(),
     addressRegion: addressRegion.trim(),
     addressPostal: addressPostal.trim(),
+    addressPrivate,
     gallery: gallery.map((g) => ({
       url: g.url,
       ...(g.caption?.trim() ? { caption: g.caption.trim() } : {}),
@@ -206,10 +210,15 @@ export function PageEditor({
       instagramHandle: instagramHandle.trim().replace(/^@/, "") || null,
       googleReviewUrl: googleReviewUrl.trim() || null,
       hoursText: hoursText.trim() || null,
-      addressStreet: addressStreet.trim() || null,
-      addressCity: addressCity.trim() || null,
-      addressRegion: addressRegion.trim() || null,
-      addressPostal: addressPostal.trim() || null,
+      // Through the same rule the public payload uses, so a private address
+      // is private in the preview too.
+      ...publicShopAddress({
+        addressStreet: addressStreet.trim() || null,
+        addressCity: addressCity.trim() || null,
+        addressRegion: addressRegion.trim() || null,
+        addressPostal: addressPostal.trim() || null,
+        addressPrivate,
+      }),
       gallery,
       fontKey,
       layoutStyle,
@@ -249,6 +258,7 @@ export function PageEditor({
       addressCity,
       addressRegion,
       addressPostal,
+      addressPrivate,
       gallery,
       fontKey,
       layoutStyle,
@@ -573,12 +583,18 @@ export function PageEditor({
                 </FormError>
               </label>
             </div>
-            {/* Street address: shown on the page and emitted as LocalBusiness
+            {/* Street address: printed on every booked client's confirmation,
+                reminder and calendar entry, and emitted as LocalBusiness
                 structured data - it's what makes the shop findable for
-                "barber near me" searches. All optional. */}
+                "barber near me" searches. Private = the page and Google get
+                the city and state only (publicShopAddress). All optional. */}
             <div>
-              <span className={labelCls}>Address (helps you show up on Google)</span>
-              <div className="mt-1 grid gap-3 sm:grid-cols-2">
+              <span className={labelCls}>Address</span>
+              <p className="mt-0.5 text-[11px] text-muted/80">
+                Goes on every booking confirmation, reminder and calendar entry,
+                and helps people nearby find you on Google.
+              </p>
+              <div className="mt-2 grid gap-3 sm:grid-cols-2">
                 <label className={labelCls}>
                   <span className="sr-only">Street address</span>
                   <input
@@ -619,6 +635,33 @@ export function PageEditor({
                     className={field}
                   />
                 </label>
+              </div>
+              {/* Visibility, never deletion: the street stays saved and still
+                  reaches everyone who books. */}
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm text-offwhite">Keep my street address private</p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    Clients still get the full address in their booking
+                    confirmation. Your public page and search engines like
+                    Google only get your city and state.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={addressPrivate}
+                  aria-label="Keep my street address private"
+                  onClick={() => setAddressPrivate((v) => !v)}
+                  className={cn(
+                    "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
+                    addressPrivate
+                      ? "bg-emerald-soft/15 text-emerald-soft"
+                      : "border border-subtle text-muted hover:bg-charcoal-700",
+                  )}
+                >
+                  {addressPrivate ? "On" : "Off"}
+                </button>
               </div>
             </div>
           </div>

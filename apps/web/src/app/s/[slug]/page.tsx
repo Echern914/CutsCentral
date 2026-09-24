@@ -29,6 +29,8 @@ export interface ShopPageData {
   /** Shop's Google "write a review" link; null = the CTA never renders. */
   googleReviewUrl: string | null;
   hoursText: string | null;
+  // The PUBLIC view of the address: a shop that keeps its address private
+  // sends street and ZIP as null (city and region still come through).
   addressStreet: string | null;
   addressCity: string | null;
   addressRegion: string | null;

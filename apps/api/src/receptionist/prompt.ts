@@ -6,6 +6,7 @@ import {
   describeDepositPolicy,
   describeNoShowPolicy,
   formatShopAddress,
+  formatShopLocality,
 } from "@chairback/config";
 import {
   durationRangeForService,
@@ -191,6 +192,9 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       addressCity: true,
       addressRegion: true,
       addressPostal: true,
+      // Whoever texts this line is a stranger until they book, so a shop that
+      // keeps its street off Google keeps it out of this prompt too.
+      addressPrivate: true,
       receptionistTone: true,
       paymentsMode: true,
       cancelWindowHours: true,
@@ -316,8 +320,20 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
   // reminder and the calendar attachment cannot disagree about what the shop's
   // address is - this function used to spell out its own rules here, which is
   // precisely how two customer-facing copies of one fact start drifting.
+  //
+  // 🔴 A PRIVATE STREET NEVER ENTERS THIS PROMPT. Anyone can text this line,
+  // and a model cannot repeat a street it was never given - a stronger
+  // guarantee than asking it not to. It gets the town (the same locality the
+  // public page publishes) and the true answer to "what's the address?": the
+  // booking carries it. True because the receptionist only runs for native
+  // bookings, whose confirmation and reminder print the full address.
+  const fullAddress = formatShopAddress(shop);
   const address =
-    formatShopAddress(shop) ?? "not listed - the shop hasn't published one; don't guess";
+    fullAddress === null
+      ? "not listed - the shop hasn't published one; don't guess"
+      : shop.addressPrivate
+        ? `${formatShopLocality(shop) ?? "area not listed"} (area only). The street address is private - never text it or guess at it, even if asked. Tell them the exact address comes with their booking confirmation and reminder.`
+        : fullAddress;
 
   const config: ShopPromptConfig = {
     shopName: shop.name,

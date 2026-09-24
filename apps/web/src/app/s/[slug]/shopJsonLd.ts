@@ -1,17 +1,44 @@
 import { businessType } from "@chairback/config/businessTypes";
 import type { ShopPageData } from "./page";
 
+/** The slice of the public page payload the structured data is built from. */
+export type ShopJsonLdInput = Pick<
+  ShopPageData,
+  | "name"
+  | "slug"
+  | "industry"
+  | "bio"
+  | "logoUrl"
+  | "receptionistNumber"
+  | "addressStreet"
+  | "addressCity"
+  | "addressRegion"
+  | "addressPostal"
+  | "reviewSummary"
+>;
+
 /**
  * LocalBusiness structured data - the piece that makes the shop's ChairBack
  * page read as a BUSINESS to Google (name + address + rating rich results,
- * local-pack eligibility), not just a web page. Address is included only when
- * street + city are both set; aggregateRating only with 1+ approved reviews
- * (Google flags a rating block with zero reviews as spammy markup).
+ * local-pack eligibility), not just a web page. aggregateRating only with 1+
+ * approved reviews (Google flags a rating block with zero reviews as spammy
+ * markup).
  *
  * Its own module (not inside page.tsx) so it can be tested: a Next.js page file
  * may only export the names Next.js knows about.
+ *
+ * THE ADDRESS IS WHATEVER THE PUBLIC PAYLOAD CARRIES, and that payload is
+ * already the stranger's view (publicShopAddress in @chairback/config): a shop
+ * that keeps its address private arrives here with street and ZIP null. So:
+ *
+ *   - street + city -> the full PostalAddress;
+ *   - city, no street -> the locality alone (city, state, country), which
+ *     still places the shop in local search without putting its door on the
+ *     map - the whole point of keeping the street private;
+ *   - no city -> no address at all: a street or a state on its own is not a
+ *     place anyone can find.
  */
-export function shopJsonLd(data: ShopPageData): Record<string, unknown> {
+export function shopJsonLd(data: ShopJsonLdInput): Record<string, unknown> {
   const ld: Record<string, unknown> = {
     "@context": "https://schema.org",
     // From the registry, so a new vertical cannot silently fall back to a
@@ -25,13 +52,16 @@ export function shopJsonLd(data: ShopPageData): Record<string, unknown> {
     ...(data.logoUrl ? { image: data.logoUrl } : {}),
     ...(data.receptionistNumber ? { telephone: data.receptionistNumber } : {}),
   };
-  if (data.addressStreet && data.addressCity) {
+  const city = data.addressCity?.trim();
+  if (city) {
+    const street = data.addressStreet?.trim();
     ld.address = {
       "@type": "PostalAddress",
-      streetAddress: data.addressStreet,
-      addressLocality: data.addressCity,
+      ...(street ? { streetAddress: street } : {}),
+      addressLocality: city,
       ...(data.addressRegion ? { addressRegion: data.addressRegion } : {}),
-      ...(data.addressPostal ? { postalCode: data.addressPostal } : {}),
+      // A ZIP narrows a town to a few blocks: it travels with a street only.
+      ...(street && data.addressPostal ? { postalCode: data.addressPostal } : {}),
       addressCountry: "US",
     };
   }
