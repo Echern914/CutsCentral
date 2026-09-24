@@ -921,3 +921,29 @@ describe("STOP + live-thread helpers", () => {
     expect(convos).toHaveLength(2);
   });
 });
+
+describe("texting switched off (SMS_ENABLED=false)", () => {
+  it("🔴 the model is never called: no answer is paid for that could never be sent", async () => {
+    const shop = await makeShop();
+    await makeBookable(shop.id);
+    const phone = freshPhone();
+    await makeClient(shop.id, phone);
+    const model = scriptedModel([textMsg("this reply must never be generated")]);
+    __setModelClientForTests(model);
+
+    process.env.SMS_ENABLED = "false";
+    __resetEnvCacheForTests();
+    try {
+      await processInboundText({ phone, text: "you got anything this week", now: NOW });
+    } finally {
+      process.env.SMS_ENABLED = "true";
+      __resetEnvCacheForTests();
+    }
+
+    expect(model.requests).toHaveLength(0);
+    expect(sms).toHaveLength(0);
+    // Not even a thread: the barber's inbox would show a conversation nobody
+    // could answer by text.
+    expect(await prisma.receptionistConversation.count({ where: { shopId: shop.id } })).toBe(0);
+  });
+});

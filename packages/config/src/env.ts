@@ -323,6 +323,14 @@ const apiSchema = z.object({
   ENABLE_SCHEDULER: boolish.default("false"),
   DB_RLS_ENFORCE: boolish.default("true"),
   DRY_RUN: boolish.default("true"),
+  // TEXTING ONLY, and OFF by default. Every SMS costs money, and on 2026-09-22
+  // the platform stopped paying for texts: while this is false no text is sent
+  // by anything (reminders, alerts, sign-in codes, the AI receptionist), and
+  // each message that has an email or app-notification version goes out that
+  // way instead. Not DRY_RUN - that simulates EVERY channel, and email and
+  // push must keep working. Turn texting back on with exactly `true`
+  // (boolish refuses anything else, and a refused value stops boot).
+  SMS_ENABLED: boolish.default("false"),
   // Waitlist phase F2. OFF by default and shipped dark: the sweep is the first
   // thing here that changes a customer's standing with nobody deciding to, so
   // it goes out inert, gets watched through its dry-run counts, and is turned

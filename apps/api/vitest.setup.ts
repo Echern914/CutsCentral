@@ -30,6 +30,12 @@ try {
   // env injected directly (CI) - fine.
 }
 
+// Texting is OFF by default in the app (SMS_ENABLED), but the suites that
+// cover the send paths inject fake providers and expect them to be used. So
+// tests run with texting ON unless the environment says otherwise; a test that
+// proves a path stays silent while it is off sets SMS_ENABLED=false itself.
+if (!("SMS_ENABLED" in process.env)) process.env.SMS_ENABLED = "true";
+
 // Hosts that are NEVER allowed to be a test target. Tests create and delete
 // shops freely, so they must run against a throwaway DB.
 const PROD_HOST_FRAGMENTS = ["supabase.co", "supabase.com"];

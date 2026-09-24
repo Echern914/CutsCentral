@@ -1,6 +1,7 @@
 import { Prisma, prisma } from "@chairback/db";
 import { apiEnv } from "@chairback/config";
 import { NOTIFY_DEFAULTS, type NotifyPrefs } from "./barberNotify.js";
+import { smsEnabled } from "../messaging/twilio.js";
 
 /**
  * "A customer left you a review" - who hears about it, and on what.
@@ -159,6 +160,12 @@ export async function reviewNotifyPrefs(
 
 /** Whether a channel is switched on for this recipient. */
 export function channelEnabled(prefs: NotifyPrefs, channel: ReviewChannel): boolean {
+  // While texting is off nothing goes by SMS, and whoever asked for this alert
+  // by text gets it by email instead (the same swap sendToBarber makes).
+  if (!smsEnabled()) {
+    if (channel === "sms") return false;
+    if (channel === "email") return Boolean(prefs.emailEnabled || prefs.smsEnabled);
+  }
   return Boolean(prefs[CHANNEL_SWITCH[channel]]);
 }
 

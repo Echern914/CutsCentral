@@ -2,7 +2,7 @@ import { prisma } from "@chairback/db";
 import { apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
 import { sendPushToClient } from "../messaging/push.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import {
   buildWalkInNextBody,
   buildWalkInReadyBody,
@@ -69,6 +69,13 @@ async function sendQueueSms(opts: {
   from: string | null;
   now: Date;
 }): Promise<void> {
+  if (!smsEnabled()) {
+    logger.info(
+      { shopId: opts.shopId, kind: opts.kind },
+      "walk-in notify: SMS skipped, texting is off",
+    );
+    return;
+  }
   try {
     const sent = await getMessageProvider().send({
       to: opts.phone,

@@ -22,7 +22,7 @@ import { cancelAppointment } from "../engines/appointmentPromotion.js";
 import { effectiveDurationAt, effectivePriceAt } from "../engines/pricing.js";
 import { formatApptTime } from "../messaging/templates.js";
 import { sendPushToUser } from "../messaging/push.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import type { ToolExecutionResult, ToolExecutor } from "./agent.js";
 
 /**
@@ -1421,10 +1421,10 @@ export async function escalateConversation(params: {
     );
 
     if (shop.notifyPhone) {
-      if (apiEnv().DRY_RUN) {
+      if (apiEnv().DRY_RUN || !smsEnabled()) {
         logger.info(
           { shopId: shop.id, to: shop.notifyPhone },
-          "escalation barber SMS (dry-run, not sent)",
+          "escalation barber SMS not sent (dry-run or texting off)",
         );
       } else {
         await getMessageProvider()

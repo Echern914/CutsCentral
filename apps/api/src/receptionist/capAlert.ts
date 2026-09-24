@@ -2,7 +2,7 @@ import { prisma } from "@chairback/db";
 import { apiEnv } from "@chairback/config";
 
 import { logger } from "../logger.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { sendPushToUser } from "../messaging/push.js";
 import type { ReplyCapReason } from "./replyCap.js";
 
@@ -130,10 +130,10 @@ export async function alertShopCapTripped(params: {
     );
 
     if (shop.notifyPhone) {
-      if (apiEnv().DRY_RUN) {
+      if (apiEnv().DRY_RUN || !smsEnabled()) {
         logger.info(
           { shopId: shop.id, to: shop.notifyPhone, reason: params.reason },
-          "receptionist cap alert SMS (dry-run, not sent)",
+          "receptionist cap alert SMS not sent (dry-run or texting off)",
         );
       } else {
         await getMessageProvider()

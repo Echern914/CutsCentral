@@ -2,6 +2,7 @@ import { Router, type Request } from "express";
 import { z } from "zod";
 import { runAsOwner } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
+import { smsEnabled } from "../messaging/twilio.js";
 import { mintCustomerSession } from "../auth/customerSession.js";
 import { customerAuthLimiter } from "../middleware/rateLimit.js";
 import { requireCustomerAccounts } from "../middleware/requireCustomer.js";
@@ -44,6 +45,9 @@ export function resolveIdentifier(body: unknown): Resolved {
   const parsed = identifierSchema.safeParse(body);
   if (!parsed.success) return { error: "invalid_input" };
   if (parsed.data.channel === "sms") {
+    // Texting is off: answer exactly as for a number we can't text, which
+    // every shipped app build already handles by offering email instead.
+    if (!smsEnabled()) return { error: "phone_not_supported" };
     const phone = normalizeSignInPhone(parsed.data.phone);
     if (phone) return { channel: "sms", identifier: phone };
     // A real number outside North America is a format fact, not an existence

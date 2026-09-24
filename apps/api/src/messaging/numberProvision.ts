@@ -2,6 +2,7 @@ import twilio from "twilio";
 import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
+import { smsEnabled } from "./twilio.js";
 
 /**
  * Per-shop number auto-provisioning: when a shop activates Premium AI, buy it
@@ -189,6 +190,9 @@ function getProvisioner(): NumberProvisioner {
  */
 export async function ensureShopNumber(shopId: string): Promise<void> {
   try {
+    // No texting, no number to text from: don't start a monthly charge for
+    // one. This is "ensure", so a call once texting is back on buys it.
+    if (!smsEnabled()) return;
     if (!apiEnv().TWILIO_MESSAGING_SERVICE_SID && !testProvisioner) return;
     const shop = await prisma.shop.findUnique({
       where: { id: shopId },

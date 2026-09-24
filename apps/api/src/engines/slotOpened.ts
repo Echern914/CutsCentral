@@ -6,7 +6,7 @@ import {
   buildSlotOpenedBarberPush,
   formatApptTime,
 } from "../messaging/templates.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { isSlotBookable } from "./slots.js";
 import { notifyOffer, offerFreedSlot } from "./waitlistOffer.js";
@@ -152,7 +152,10 @@ export async function notifySlotOpened(params: {
     // --- AI RECEPTIONIST gap-fill: it OWNS customer outreach when enabled ---
     // (loyalty-due -> overdue -> waitlist, one held offer over SMS). The legacy
     // push/email waitlist nudges below are superseded for these shops.
-    if (receptionistOn) {
+    // Gap-fill offers go out by TEXT only, so while texting is off a
+    // receptionist shop falls through to the push/email offer below instead
+    // of offering the slot to nobody.
+    if (receptionistOn && smsEnabled()) {
       void runGapFill({
         shop: {
           id: shop.id,
@@ -266,10 +269,10 @@ async function alertBarber(
       when,
       waitlistCount,
     });
-    if (apiEnv().DRY_RUN) {
+    if (apiEnv().DRY_RUN || !smsEnabled()) {
       logger.info(
         { shopId: shop.id, to: shop.notifyPhone },
-        "slot-opened barber SMS (dry-run, not sent)",
+        "slot-opened barber SMS not sent (dry-run or texting off)",
       );
     } else {
       await getMessageProvider()

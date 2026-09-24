@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Prisma, runAsOwner } from "@chairback/db";
 import { apiEnv, decrypt, encrypt, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
-import { NoopMessageProvider, getMessageProvider } from "../messaging/twilio.js";
+import { NoopMessageProvider, getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { ResendSendError, emailDispatchMode, sendEmail } from "../messaging/email.js";
 import { signInEmail, signInSmsBody } from "../services/customerSignInMessage.js";
 
@@ -294,13 +294,18 @@ export async function deliverSignInCode(params: {
   // provider must not spend the attempt budget. Terminal, like the email
   // outbox's SUPPRESSED - a switched-off channel is not a transient fault.
   const provider = channel === "sms" ? getMessageProvider() : null;
+  // Texting off is a switched-off channel too. The start route already refuses
+  // new SMS sign-ins; this settles any that were queued before the switch.
+  const textsOff = channel === "sms" && !smsEnabled();
   const suppressed =
-    channel === "sms" ? provider instanceof NoopMessageProvider : emailDispatchMode() !== "live";
+    channel === "sms"
+      ? textsOff || provider instanceof NoopMessageProvider
+      : emailDispatchMode() !== "live";
   if (suppressed) {
     await settle(delivery.id, params.claimToken, {
       status: "suppressed",
       sealed: null,
-      lastError: channel === "sms" ? "dry_run" : emailDispatchMode(),
+      lastError: channel === "sms" ? (textsOff ? "sms_disabled" : "dry_run") : emailDispatchMode(),
       claimedAt: null,
       claimToken: null,
       nextAttemptAt: null,
