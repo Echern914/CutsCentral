@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
-import { APP_NAME, apiEnv, randomToken } from "@chairback/config";
+import { APP_NAME, apiEnv, randomToken, vocabularyForShop } from "@chairback/config";
 import { forShop, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager, requireOwner } from "../auth/roles.js";
@@ -314,6 +314,14 @@ teamRouter.patch("/members/:id", requireOwner, async (req, res) => {
   res.json({ ok: true });
 });
 
+/** A public chair name from a person's name - never an email address. */
+function chairName(personName: string, shop: Parameters<typeof vocabularyForShop>[0]): string {
+  const name = personName.trim();
+  if (name && !name.includes("@")) return name.slice(0, 120);
+  const noun = vocabularyForShop(shop).providerNoun;
+  return `New ${noun}`;
+}
+
 /**
  * POST /api/team/members/:id/staff — give someone on the team a chair of their own.
  *
@@ -355,7 +363,10 @@ teamRouter.post("/members/:id/staff", requireOwner, async (req, res) => {
       const chair = await tx.staff.create({
         data: {
           shopId,
-          name: member.user.name,
+          // The chair's name is PUBLIC (the booking page). Some accounts carry
+          // an email address as their name (Apple sign-in without a name), and
+          // that must never be published - the owner renames it under Staff.
+          name: chairName(member.user.name, req.shop!),
           // Only an http(s) photo, the same boundary the staff editor enforces.
           imageUrl:
             member.user.avatarUrl && /^https?:\/\//i.test(member.user.avatarUrl)

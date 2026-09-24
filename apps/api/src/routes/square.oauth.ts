@@ -12,6 +12,7 @@ import { squareEnabled } from "../square/client.js";
 import { backfillSquareShop } from "../square/backfill.js";
 import { logger } from "../logger.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { requireManager } from "../auth/roles.js";
 
 const env = apiEnv();
 export const squareOAuthRouter: Router = Router();
@@ -40,7 +41,7 @@ async function fetchPrimaryLocationId(accessToken: string): Promise<string | nul
 }
 
 // Start: redirect the barber to Square's consent screen with a CSRF state.
-squareOAuthRouter.get("/start", requireUser, requireShop, (req, res) => {
+squareOAuthRouter.get("/start", requireUser, requireShop, requireManager, (req, res) => {
   if (!squareEnabled()) {
     res.status(503).json({ error: "square_disabled" });
     return;
@@ -166,7 +167,7 @@ squareOAuthRouter.get("/status", requireUser, requireShop, async (req, res) => {
 
 // Repair: re-run backfill for an already-connected shop (recovery path). No
 // re-OAuth; uses the stored token (refreshed transparently on 401).
-squareOAuthRouter.post("/repair", requireUser, requireShop, async (req, res) => {
+squareOAuthRouter.post("/repair", requireUser, requireShop, requireManager, async (req, res) => {
   const shop = req.shop!;
   const conn = await prisma.squareConnection.findUnique({ where: { shopId: shop.id } });
   if (!conn) {
@@ -190,7 +191,7 @@ squareOAuthRouter.post("/repair", requireUser, requireShop, async (req, res) => 
 // only stops future sync. Webhooks are app-level (one endpoint for all merchants),
 // so there's no per-shop subscription to tear down: once the row is gone, inbound
 // events for this merchant simply 200 as "unknown merchant". Idempotent.
-squareOAuthRouter.post("/disconnect", requireUser, requireShop, async (req, res) => {
+squareOAuthRouter.post("/disconnect", requireUser, requireShop, requireManager, async (req, res) => {
   const shop = req.shop!;
   await prisma.squareConnection.deleteMany({ where: { shopId: shop.id } });
   logger.info({ shopId: shop.id }, "square disconnected");

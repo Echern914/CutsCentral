@@ -10,6 +10,7 @@ import {
 } from "@chairback/config/nextPath";
 import { API_BASE, clientIpHeaders } from "@/lib/api";
 import { sessionCookieDomain } from "@/lib/sessionCookieDomain";
+import { clearActiveShopCookie } from "@/lib/activeShopCookie";
 
 /**
  * Auth server actions. They call the API, then copy the API's session cookie
@@ -193,5 +194,9 @@ export async function logoutAction(): Promise<void> {
       maxAge: 0,
     });
   }
+  // And which shop this browser was working in: on a shared front-desk device
+  // the next person to sign in must start in their own shop, not the last
+  // person's team.
+  clearActiveShopCookie();
   redirect("/login");
 }

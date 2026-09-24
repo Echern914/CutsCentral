@@ -58,6 +58,8 @@ let barberUserId: string;
 let ownShopId: string;
 let strangerShopId: string; // a shop Joe has nothing to do with
 let seatId: string;
+let kimCookie: string; // a pure employee: a seat on the team, no shop of her own
+let kimUserId: string;
 
 beforeAll(async () => {
   __setSendEmailForTests(async (input) => {
@@ -90,6 +92,21 @@ beforeAll(async () => {
     .send({ token: lastInviteToken });
   expect(joined.status).toBe(201);
   expect(joined.body.shopId).toBe(teamShopId);
+
+  // Kim: a pure employee - a seat on Snow's team and no shop of her own.
+  const kimEmail = `kim-${tag}@test.chairback`;
+  const kimInvite = await request(app)
+    .post("/api/team/invites")
+    .set("Cookie", ownerCookie)
+    .send({ email: kimEmail, role: "BARBER" });
+  expect(kimInvite.status).toBe(201);
+  kimCookie = await signup(kimEmail, "Kim");
+  kimUserId = (await prisma.user.findUniqueOrThrow({ where: { email: kimEmail } })).id;
+  const kimJoined = await request(app)
+    .post("/api/team/join")
+    .set("Cookie", kimCookie)
+    .send({ token: lastInviteToken });
+  expect(kimJoined.status).toBe(201);
 
   seatId = (await prisma.shopMember.findFirstOrThrow({
     where: { shopId: teamShopId, userId: barberUserId },
@@ -259,6 +276,68 @@ describe("joining when already on the team", () => {
     expect(
       await prisma.shopMember.count({ where: { shopId: teamShopId, userId: barberUserId } }),
     ).toBe(1);
+  });
+});
+
+describe("🔴 a barber seat can't touch the shop itself", () => {
+  // Found in review. These routes checked only "signed in to this shop", so
+  // ANY seat - an employee with no shop of her own, or an owner-barber whose
+  // switcher is on the team - could delete the shop, swap its calendar
+  // integration, or take over its web address. (PATCH /api/shops/me is
+  // deliberately field-level for barber seats and is not changed here.)
+  const seats = () => [
+    { who: "an employee with no shop of her own", cookie: kimCookie },
+    { who: "an owner-barber working in the team", cookie: withShop(barberCookie, teamShopId) },
+  ];
+
+  it("can't delete the shop", async () => {
+    for (const s of seats()) {
+      const res = await request(app)
+        .delete("/api/shops/me")
+        .set("Cookie", s.cookie)
+        .send({ confirm: "United Barbershop" });
+      expect(res.status, s.who).toBe(403);
+    }
+    expect(await prisma.shop.findUnique({ where: { id: teamShopId } })).not.toBeNull();
+  });
+
+  it("can't connect, repair or disconnect the shop's calendar, or change its web address", async () => {
+    for (const s of seats()) {
+      for (const [method, path] of [
+        ["get", "/api/acuity/oauth/start"],
+        ["post", "/api/acuity/oauth/repair"],
+        ["post", "/api/acuity/oauth/disconnect"],
+        ["get", "/api/square/oauth/start"],
+        ["post", "/api/square/oauth/repair"],
+        ["post", "/api/square/oauth/disconnect"],
+        ["post", "/api/domains"],
+        ["post", "/api/domains/verify"],
+        ["delete", "/api/domains"],
+      ] as const) {
+        const res = await request(app)[method](path).set("Cookie", s.cookie).send({});
+        expect(res.status, `${s.who}: ${method.toUpperCase()} ${path}`).toBe(403);
+      }
+    }
+  });
+
+  it("the owner still can run them (here: a settings save)", async () => {
+    const res = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", ownerCookie)
+      .send({ bio: "Walk-ins welcome" });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("a new chair's public name", () => {
+  it("🔴 is never an email address (accounts that stored one as their name)", async () => {
+    await prisma.user.update({ where: { id: kimUserId }, data: { name: "kim.private@example.com" } });
+    const seat = await prisma.shopMember.findFirstOrThrow({ where: { shopId: teamShopId, userId: kimUserId } });
+    const res = await request(app).post(`/api/team/members/${seat.id}/staff`).set("Cookie", ownerCookie);
+    expect(res.status).toBe(201);
+    const chair = await prisma.staff.findUniqueOrThrow({ where: { id: res.body.staffId } });
+    expect(chair.name).not.toContain("@");
+    expect(chair.name).toMatch(/^New /);
   });
 });
 
