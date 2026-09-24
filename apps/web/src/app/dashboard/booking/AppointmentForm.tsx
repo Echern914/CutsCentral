@@ -10,10 +10,11 @@ import type { ServiceRow, StaffRow } from "./page";
 import {
   createAppointmentAction,
   getDashSlotsAction,
+  getDaySpecialsAction,
   searchClientsAction,
   type ClientOption,
   type DashSlot,
-  type DashSpecial,
+  type DaySpecial,
 } from "./actions";
 import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
 
@@ -83,10 +84,13 @@ export function AppointmentForm({
   const [startsAt, setStartsAt] = useState<string>(prefillISO);
   const [customTime, setCustomTime] = useState(false);
   const [slots, setSlots] = useState<DashSlot[]>([]);
-  const [specials, setSpecials] = useState<DashSpecial[]>([]);
-  // Set only by tapping a special. A regular time, Custom time, or a change of
-  // service or provider clears it - so nothing is ever booked as a special,
-  // at a special's price, without the barber having picked that special.
+  // The DAY's specials, across every service - listed before a service is
+  // picked, because the special comes first and picks its own service.
+  const [specials, setSpecials] = useState<DaySpecial[]>([]);
+  // Set only by tapping a special. A regular time, Custom time, or switching
+  // to a service or provider the special is not offered under clears it - so
+  // nothing is ever booked as a special, at a special's price, without the
+  // barber having picked that special.
   const [targetedSlotId, setTargetedSlotId] = useState<string | null>(null);
   const [loadingSlots, setLoadingSlots] = useState(false);
 
@@ -143,39 +147,88 @@ export function AppointmentForm({
     [prefillISO, timezone],
   );
 
+  // Only times on the tapped calendar day (shop tz).
+  const onDay = useMemo(() => {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    return (iso: string) => fmt.format(new Date(iso)) === dayKey;
+  }, [timezone, dayKey]);
+  // The window around the tapped day both lists fetch; `onDay` trims it.
+  const windowFrom = new Date(new Date(prefillISO).getTime() - 12 * 3600_000).toISOString();
+  const windowTo = new Date(new Date(prefillISO).getTime() + 36 * 3600_000).toISOString();
+
   // Load open slots for the chosen (staff, service) on the prefill day.
   useEffect(() => {
-    // A special belongs to one (provider, service); any change forgets it.
-    setTargetedSlotId(null);
     if (!serviceId || !staffId || customTime) return;
     setLoadingSlots(true);
-    const from = new Date(new Date(prefillISO).getTime() - 12 * 3600_000).toISOString();
-    const to = new Date(new Date(prefillISO).getTime() + 36 * 3600_000).toISOString();
-    getDashSlotsAction(staffId, serviceId, from, to).then((res) => {
+    getDashSlotsAction(staffId, serviceId, windowFrom, windowTo).then((res) => {
       setLoadingSlots(false);
-      // Only times on the tapped calendar day (shop tz).
-      const onDay = (iso: string) =>
-        new Intl.DateTimeFormat("en-CA", {
-          timeZone: timezone,
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-        }).format(new Date(iso)) === dayKey;
-      if (res.ok && res.slots) {
-        setSlots(res.slots.filter((s) => onDay(s.startsAt)));
-        setSpecials((res.specials ?? []).filter((t) => onDay(t.startsAt)));
-      } else {
-        setSlots([]);
-        setSpecials([]);
-      }
+      setSlots(res.ok && res.slots ? res.slots.filter((s) => onDay(s.startsAt)) : []);
     });
-  }, [serviceId, staffId, customTime, prefillISO, dayKey, timezone]);
+  }, [serviceId, staffId, customTime, windowFrom, windowTo, onDay]);
 
-  /** The special actually being booked - only while picking from the list. */
+  // Load the DAY's specials: this provider's, or every provider's while none is
+  // picked. Independent of the service - that is the whole point.
+  useEffect(() => {
+    if (customTime) return;
+    let live = true;
+    getDaySpecialsAction(staffId, windowFrom, windowTo).then((res) => {
+      if (!live) return; // a provider change raced this answer
+      setSpecials(res.ok && res.specials ? res.specials.filter((t) => onDay(t.startsAt)) : []);
+    });
+    return () => {
+      live = false;
+    };
+  }, [staffId, customTime, windowFrom, windowTo, onDay]);
+
+  /**
+   * The special actually being booked: picked, not in Custom time, and offered
+   * under the provider and service now selected. Derived, so no path can send
+   * a special the form is no longer showing as chosen.
+   */
   const special =
     !customTime && targetedSlotId
-      ? (specials.find((t) => t.id === targetedSlotId) ?? null)
+      ? (specials.find(
+          (t) =>
+            t.id === targetedSlotId &&
+            t.staffId === staffId &&
+            serviceId !== null &&
+            t.serviceIds.includes(serviceId),
+        ) ?? null)
       : null;
+
+  /** Tap a special: it picks its own provider and service. */
+  function pickSpecial(t: DaySpecial) {
+    setStaffId(t.staffId);
+    // Keep the chosen service if the special is offered under it; otherwise the
+    // first it is offered under (the server lists them in menu order).
+    if (!serviceId || !t.serviceIds.includes(serviceId)) setServiceId(t.serviceIds[0]!);
+    setStartsAt(t.startsAt);
+    setTargetedSlotId(t.id);
+    setRepeat(false);
+  }
+
+  /** Switching service or provider forgets a special not offered under the new one. */
+  function chooseService(id: string) {
+    setServiceId(id);
+    const t = specials.find((x) => x.id === targetedSlotId);
+    if (t && !t.serviceIds.includes(id)) setTargetedSlotId(null);
+  }
+  function chooseStaff(id: string) {
+    setStaffId(id);
+    const t = specials.find((x) => x.id === targetedSlotId);
+    if (t && t.staffId !== id) setTargetedSlotId(null);
+  }
+
+  const serviceNames = (ids: string[]) =>
+    ids
+      .map((id) => activeServices.find((s) => s.id === id)?.name)
+      .filter(Boolean)
+      .join(" / ");
 
   // Debounced client search.
   useEffect(() => {
@@ -317,7 +370,7 @@ export function AppointmentForm({
               <button
                 key={s.id}
                 type="button"
-                onClick={() => setServiceId(s.id)}
+                onClick={() => chooseService(s.id)}
                 className={cn(
                   "flex min-h-[2.75rem] w-full min-w-0 items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left text-sm transition-colors duration-150 ease-out",
                   serviceId === s.id
@@ -353,7 +406,7 @@ export function AppointmentForm({
                 <button
                   key={s.id}
                   type="button"
-                  onClick={() => setStaffId(s.id)}
+                  onClick={() => chooseStaff(s.id)}
                   className={chip(staffId === s.id, "px-4")}
                 >
                   {s.name}
@@ -396,31 +449,29 @@ export function AppointmentForm({
                 );
               }}
             />
-          ) : loadingSlots ? (
-            <p className="text-sm text-muted">Loading times…</p>
-          ) : slots.length === 0 && specials.length === 0 ? (
-            <p className="text-xs text-muted">
-              No open times this day. Use Custom time to force one.
-            </p>
           ) : (
             <div className="flex min-w-0 flex-col gap-3">
+              {/* 🔴 THE DAY'S SPECIALS COME FIRST, whatever service is picked -
+                  before one is picked at all. A barber should not have to know
+                  which service a special is filed under to see it; tapping one
+                  picks its provider and service. */}
               {specials.length > 0 && (
                 <div role="group" aria-label="Specials" className="flex min-w-0 flex-col gap-1.5">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-gold">
                     Specials
                   </p>
                   {specials.map((t) => {
-                    const picked = targetedSlotId === t.id;
+                    const picked = special?.id === t.id;
+                    const who =
+                      activeStaff.length > 1
+                        ? activeStaff.find((s) => s.id === t.staffId)?.name
+                        : undefined;
                     return (
                       <button
                         key={t.id}
                         type="button"
                         aria-pressed={picked}
-                        onClick={() => {
-                          setStartsAt(t.startsAt);
-                          setTargetedSlotId(t.id);
-                          setRepeat(false);
-                        }}
+                        onClick={() => pickSpecial(t)}
                         className={cn(
                           "flex min-h-[2.75rem] w-full min-w-0 items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-left text-sm transition-colors duration-150 ease-out",
                           picked ? "border-gold/60 bg-gold/15" : "border-gold/30 hover:bg-gold/5",
@@ -429,9 +480,10 @@ export function AppointmentForm({
                         <span className="min-w-0">
                           <span className="block font-medium text-offwhite">
                             {timeFmt.format(new Date(t.startsAt))}
+                            {who ? <span className="font-normal text-muted"> · {who}</span> : null}
                           </span>
                           <span className="block truncate text-xs text-muted">
-                            {t.label ?? "Special"} · {t.durationMin} min
+                            {t.label ?? "Special"} · {serviceNames(t.serviceIds)} · {t.durationMin} min
                           </span>
                         </span>
                         <span className="shrink-0 font-semibold text-gold">
@@ -442,7 +494,19 @@ export function AppointmentForm({
                   })}
                 </div>
               )}
-              {slots.length > 0 ? (
+              {!serviceId ? (
+                // What the screen used to say here was "No open times this day"
+                // - true only because nothing had been asked for yet.
+                <p className="text-xs text-muted">
+                  {specials.length > 0
+                    ? "Pick a service to see its regular times."
+                    : "Pick a service to see open times."}
+                </p>
+              ) : !staffId ? (
+                <p className="text-xs text-muted">Pick a provider to see open times.</p>
+              ) : loadingSlots ? (
+                <p className="text-sm text-muted">Loading times…</p>
+              ) : slots.length > 0 ? (
                 <div className="grid min-w-0 grid-cols-3 gap-1.5">
                   {slots.map((s) => (
                     <button
@@ -453,7 +517,7 @@ export function AppointmentForm({
                         setTargetedSlotId(null);
                       }}
                       className={chip(
-                        !targetedSlotId && startsAt === s.startsAt,
+                        !special && startsAt === s.startsAt,
                         "min-w-0 px-1 text-center",
                       )}
                     >
@@ -463,7 +527,8 @@ export function AppointmentForm({
                 </div>
               ) : (
                 <p className="text-xs text-muted">
-                  No other open times this day. Use Custom time to force one.
+                  {specials.length > 0 ? "No other open times this day." : "No open times this day."}{" "}
+                  Use Custom time to force one.
                 </p>
               )}
             </div>
