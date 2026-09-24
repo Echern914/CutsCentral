@@ -418,6 +418,12 @@ export interface CreateApptInput {
    */
   externalBlockConfirmation?: string;
   /**
+   * Custom time only: book over the bookings / visits / own specials a previous
+   * `slot_taken` (code OVERLAP) named - its `confirmation`, replayed. Bound to
+   * exactly those rows; anything new in the way is asked about again.
+   */
+  overlapConfirmation?: string;
+  /**
    * Booking someone off the waitlist: the entry flips to BOOKED and takes
    * bookedAppointmentId INSIDE the same transaction that creates the
    * appointment, so a half-linked state cannot exist.
@@ -448,8 +454,12 @@ export type CreateApptResult = Result & {
   series?: SeriesSummary;
   /** For `external_block`: the block, in words, in the shop's zone. */
   reason?: string;
-  /** For `external_block`: what to send back to confirm THAT block. */
+  /** For `external_block` / OVERLAP: what to send back to confirm THAT conflict. */
   confirmation?: string;
+  /** The API's classification - `OVERLAP` marks a confirmable slot_taken. */
+  code?: string;
+  /** For OVERLAP: what the time sits on, one line each, in the shop's zone. */
+  conflicts?: string[];
 };
 
 export async function createAppointmentAction(
@@ -467,6 +477,8 @@ export async function createAppointmentAction(
       error: res.error ?? "failed",
       ...(res.reason ? { reason: res.reason } : {}),
       ...(res.confirmation ? { confirmation: res.confirmation } : {}),
+      ...(res.code ? { code: res.code } : {}),
+      ...(res.conflicts ? { conflicts: res.conflicts } : {}),
     };
   }
   return { ok: true, series: res.data?.series };

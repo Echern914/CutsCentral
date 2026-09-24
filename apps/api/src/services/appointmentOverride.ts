@@ -1,5 +1,5 @@
-import type { Prisma } from "@chairback/db";
-import type { ExternalBlockSpan } from "../engines/bookingWrite.js";
+import { prisma, type Prisma } from "@chairback/db";
+import type { ExternalBlockSpan, OverlapRows } from "../engines/bookingWrite.js";
 import { isSlotBookable } from "../engines/slots.js";
 
 /**
@@ -145,4 +145,74 @@ export function describeBlocks(blocks: ExternalBlockSpan[]): {
     endsAt: b.endsAt.toISOString(),
     reason: b.reason,
   }));
+}
+
+/**
+ * What a barber's Custom time would sit on, one line each, in the shop's zone -
+ * the list under "Book anyway". Read by id from the OverlapError's own rows, so
+ * it describes exactly what the confirmation is bound to. Other customers'
+ * names are fine here: this is the shop's own calendar, shown to the shop.
+ */
+export async function describeOverlap(
+  shopId: string,
+  rows: OverlapRows,
+  timezone: string,
+): Promise<{ reason: string; lines: string[] }> {
+  const time = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: timezone,
+  });
+  const span = (a: Date, b: Date | null) =>
+    b ? `${time.format(a)} - ${time.format(b)}` : time.format(a);
+  const [appts, visits, specials] = await Promise.all([
+    rows.appointmentIds.length
+      ? prisma.appointment.findMany({
+          where: { shopId, id: { in: rows.appointmentIds } },
+          select: {
+            firstName: true,
+            lastName: true,
+            startsAt: true,
+            endsAt: true,
+            service: { select: { name: true } },
+          },
+          orderBy: { startsAt: "asc" },
+        })
+      : [],
+    rows.visitIds.length
+      ? prisma.visit.findMany({
+          where: { shopId, id: { in: rows.visitIds } },
+          select: {
+            scheduledAt: true,
+            endAt: true,
+            serviceName: true,
+            client: { select: { firstName: true, lastName: true } },
+          },
+          orderBy: { scheduledAt: "asc" },
+        })
+      : [],
+    rows.targetedIds.length
+      ? prisma.targetedSlot.findMany({
+          where: { shopId, id: { in: rows.targetedIds } },
+          select: { startsAt: true, durationMin: true, label: true, price: true },
+          orderBy: { startsAt: "asc" },
+        })
+      : [],
+  ]);
+  const who = (f: string | null, l: string | null) =>
+    [f?.trim(), l?.trim() ? `${l.trim()[0]}.` : null].filter(Boolean).join(" ") || "A client";
+  const lines = [
+    ...appts.map(
+      (a) => `${who(a.firstName, a.lastName)} - ${a.service.name}, ${span(a.startsAt, a.endsAt)}`,
+    ),
+    ...visits.map(
+      (v) =>
+        `${who(v.client.firstName, v.client.lastName)} - ${v.serviceName?.trim() || "Acuity appointment"}, ${span(v.scheduledAt, v.endAt)}`,
+    ),
+    ...specials.map(
+      (t) =>
+        `Your special "${t.label?.trim() || "Special"}" at ${time.format(t.startsAt)} ($${Number(t.price)}) - comes off sale`,
+    ),
+  ];
+  return { reason: "That time overlaps what's already on your calendar:", lines };
 }

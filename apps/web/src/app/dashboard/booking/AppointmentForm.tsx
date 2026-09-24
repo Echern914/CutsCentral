@@ -16,6 +16,7 @@ import {
   type DashSpecial,
 } from "./actions";
 import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
+import { shopLocalInputValue } from "./shopLocalInput";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
 
@@ -25,12 +26,15 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  * footer), formkit's cards for the body. Service → provider → time → client →
  * note → repeat, then one solid-brass Schedule in the footer that can never
  * scroll below the fold. Times come from the real slot engine; "Custom time"
- * forces a time outside computed availability (overlap still blocked).
- * Prefills the date + hour tapped in the calendar.
+ * forces a time outside computed availability. If that time overlaps another
+ * booking, a synced visit or one of his own specials, the API names them and
+ * he can "Book anyway" (see OverlapError). Prefills the date + hour tapped in
+ * the calendar, and the Custom time picker opens on that same day.
  *
  * 🔴 SPECIALS are listed above the regular times. The grid subtracts every open
- * special on purpose (each is sold at its own price), and Custom time cannot
- * land on one either - so before this list the only way to fill a special was
+ * special on purpose (each is sold at its own price), and Custom time only
+ * lands on one after "Book anyway" (which takes it off sale) - so before this
+ * list the only way to fill a special AT ITS PRICE was
  * a customer on the website. Picking one sends its id, and the server claims it
  * exactly as the website does, at the special's own length and price.
  */
@@ -113,9 +117,26 @@ export function AppointmentForm({
    * it - which the API then records. Nothing is written until he does.
    */
   const [blockConflict, setBlockConflict] = useState<BlockConflict | null>(null);
+  /**
+   * Custom time only: the API refused because the time overlaps another
+   * booking, a synced visit or one of the barber's own specials, and named
+   * them. Same shape and banner as a block - he sees the list, then "Book
+   * anyway" replays the confirmation bound to exactly those rows.
+   */
+  const [overlapConflict, setOverlapConflict] = useState<BlockConflict | null>(null);
+  // The overlap he already said yes to, carried on the retry that follows - so
+  // confirming an overlap and THEN an Acuity block sends both answers. Forgotten
+  // the moment the time, service or provider changes (a different question).
+  const acceptedOverlap = useRef<string | null>(null);
   const [pending, start] = useTransition();
 
   const selectedService = activeServices.find((s) => s.id === serviceId) ?? null;
+
+  // A "Book anyway" answered ONE question: this time, this service, this chair.
+  useEffect(() => {
+    acceptedOverlap.current = null;
+    setOverlapConflict(null);
+  }, [startsAt, serviceId, staffId, customTime]);
 
   const dayFmt = useMemo(
     () =>
@@ -191,14 +212,19 @@ export function AppointmentForm({
     return () => clearTimeout(t);
   }, [query]);
 
-  function submit(opts?: { confirmation?: string }) {
+  function submit(opts?: { confirmation?: string; overlap?: string }) {
     // Read defensively: a footer button may hand us its click event, so only a
     // real string counts - never a truthiness test on whatever was passed.
     const externalBlockConfirmation =
       typeof opts?.confirmation === "string" && opts.confirmation.length > 0
         ? opts.confirmation
         : undefined;
+    if (typeof opts?.overlap === "string" && opts.overlap.length > 0) {
+      acceptedOverlap.current = opts.overlap;
+    }
+    const overlapConfirmation = customTime ? (acceptedOverlap.current ?? undefined) : undefined;
     setBlockConflict(null);
+    setOverlapConflict(null);
     setError(null);
     if (!serviceId) return setError("Pick a service.");
     if (!staffId) return setError("Pick a provider.");
@@ -234,6 +260,7 @@ export function AppointmentForm({
         note: note.trim() || undefined,
         customTime,
         externalBlockConfirmation,
+        overlapConfirmation,
         recurrence,
         // Atomic waitlist link - see CreateApptInput.
         waitlistEntryId: waitlist?.entryId,
@@ -251,14 +278,28 @@ export function AppointmentForm({
           });
           return;
         }
+        // Custom time over something already there: say WHAT, and let him
+        // book anyway (Drick: "it should bypass if I am force booking").
+        if (res.error === "slot_taken" && res.code === "OVERLAP" && res.confirmation) {
+          setOverlapConflict({
+            reason: res.reason ?? "That time overlaps what's already on your calendar:",
+            confirmation: res.confirmation,
+            details: res.conflicts,
+          });
+          return;
+        }
         setError(
-          res.error === "slot_taken"
-            ? special
-              ? "That special was just booked or taken off. Pick another time."
-              : "That time is already booked."
-            : res.error === "invalid_slot"
-              ? "That time isn't available. Use Custom time to force it."
-              : "Couldn't schedule. Please try again.",
+          res.error === "same_start"
+            ? "Another appointment starts at exactly that minute. Start this one a few minutes later (e.g. :05)."
+            : res.error === "slot_taken"
+              ? special
+                ? "That special was just booked or taken off. Pick another time."
+                : customTime
+                  ? "That time is already booked."
+                  : "That time was just taken. Pick another, or use Custom time to force it."
+              : res.error === "invalid_slot"
+                ? "That time isn't available. Use Custom time to force it."
+                : "Couldn't schedule. Please try again.",
         );
         return;
       }
@@ -309,6 +350,17 @@ export function AppointmentForm({
             consequence="Booking here puts an appointment on time you blocked off there. It will be recorded as an override."
             onConfirm={() => submit({ confirmation: blockConflict.confirmation })}
             onDismiss={() => setBlockConflict(null)}
+          />
+        )}
+        {overlapConflict && (
+          <ExternalBlockBanner
+            conflict={overlapConflict}
+            pending={pending}
+            confirmLabel="Book anyway"
+            pendingLabel="Booking…"
+            consequence="Both stay on your calendar. A special listed here comes off sale so nobody can book on top of this."
+            onConfirm={() => submit({ overlap: overlapConflict.confirmation })}
+            onDismiss={() => setOverlapConflict(null)}
           />
         )}
         <Group title="Service">
@@ -364,7 +416,11 @@ export function AppointmentForm({
         )}
 
         <Group
-          title={`Time · ${dayFmt.format(new Date(prefillISO))}`}
+          // Custom time can move the date, so the header follows the time that
+          // will actually be booked - never the day that was tapped. The two
+          // disagreeing ("FRI, SEP 25" over a value on Sep 24) is how a barber
+          // booked the wrong night without anything on screen telling him.
+          title={`Time · ${dayFmt.format(new Date(customTime && startsAt ? startsAt : prefillISO))}`}
           action={
             <button
               type="button"
@@ -382,6 +438,11 @@ export function AppointmentForm({
               type="datetime-local"
               aria-label="Custom date and time"
               className={INPUT}
+              // CONTROLLED, and seeded from the day he tapped. Uncontrolled and
+              // empty, iOS opens the picker on TODAY: tap Fri Sep 25, choose
+              // 8:00 PM, and the value was Thu Sep 24 8:00 PM - the wrong night,
+              // refused as "already booked" (Drick, 2026-09-24).
+              value={startsAt ? shopLocalInputValue(startsAt, timezone) : ""}
               onChange={(e) => {
                 // datetime-local is naive wall clock; interpret in the SHOP's
                 // zone (the schedule shown) - new Date(v) would use the device's

@@ -2,6 +2,7 @@ import { runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import type { AcuityBlock } from "./types.js";
+import { blockReference } from "../engines/acuityMirrorRules.js";
 
 /**
  * Sync Acuity's BLOCKED-OFF TIME into ExternalBlock rows.
@@ -93,7 +94,28 @@ export async function syncAcuityBlocks(
     const ownedExternalIds = new Set(
       owned.map((o) => `acuity:${o.acuityBlockId}`),
     );
-    rows = rows.filter((r) => !ownedExternalIds.has(r.externalId));
+    // ...AND by reference. An id only covers the block we got an answer for.
+    // An ambiguous create that Acuity honoured twice leaves a TWIN with a
+    // different id, and the id match waves it straight in - Drick's 10 AM,
+    // 2026-09-24: cancelled at 12:09, still blocked on ChairBack until the
+    // 12:30 sweep dropped exactly two of these. Every block we write carries
+    // `ChairBack ref <outbox id>` in its note, twins included, so a note that
+    // names one of THIS shop's outbox rows in the window is ours whatever its
+    // id. Scoped to real rows, never a bare prefix test, so a barber's own
+    // block can't be dropped by what he happens to type.
+    const ownedRows = await tx.acuityOutboundBlock.findMany({
+      where: { shopId, startsAt: { lt: to }, endsAt: { gt: from } },
+      select: { id: true },
+    });
+    const ownedRefs = new Set(ownedRows.map((o) => blockReference(o.id)));
+    rows = rows.filter(
+      (r) => !ownedExternalIds.has(r.externalId) && !(r.reason && ownedRefs.has(r.reason)),
+    );
+    if (ownedRefs.size > 0) {
+      await tx.externalBlock.deleteMany({
+        where: { shopId, reason: { in: [...ownedRefs] } },
+      });
+    }
     // Self-healing, not just preventive: any echo imported before this guard
     // existed (or before we learned the block id, as when an ambiguous create
     // is later recovered) is deleted here rather than left to block a chair

@@ -1,6 +1,7 @@
 import { Prisma, prisma, runWithShop } from "@chairback/db";
 import { AcuityError, getAcuityClientForShop, NotConnectedError } from "../acuity/client.js";
 import { logger } from "../logger.js";
+import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { isMappingStale } from "./acuityCalendarMap.js";
 import {
   appointmentOccupiesTime,
@@ -607,6 +608,7 @@ export async function releaseRow(outboxId: string): Promise<void> {
       acuityBlockId: row.acuityBlockId,
     });
     await sweepReferenceTwins(row);
+    await clearLocalCopies(row);
   } catch (err) {
     const { status, detail } = safeError(err);
     // Already gone in Acuity (the barber deleted it by hand) is a SUCCESS -
@@ -618,6 +620,7 @@ export async function releaseRow(outboxId: string): Promise<void> {
       });
       // The id we held is gone, but a twin created alongside it may not be.
       await sweepReferenceTwins(row);
+      await clearLocalCopies(row);
       return;
     }
     await prisma.acuityOutboundBlock.update({
@@ -627,6 +630,52 @@ export async function releaseRow(outboxId: string): Promise<void> {
     logTransition(
       "release failed - staying RELEASING for the reconciler",
       { shopId: row.shopId, outboxId: row.id, status, detail },
+      "warn",
+    );
+  }
+}
+
+/**
+ * The block is gone from Acuity - so every copy of it on OUR side must go NOW.
+ *
+ * Releasing only ever cleaned Acuity. Any inbound copy of this block that had
+ * already been imported as an ExternalBlock (the id we recorded, or a twin
+ * from an ambiguous create, which carries our reference note but its own id)
+ * stayed in ChairBack and kept blocking the chair until the 30-minute resync
+ * noticed it was missing: Drick's cancelled 10 AM stayed unbookable on
+ * ChairBack for 21 minutes after Acuity had already freed it (2026-09-24).
+ * Deleting by id AND by reference, then bumping availability, frees the time
+ * the moment the cancel lands. Never fatal: the resync is still the backstop.
+ */
+async function clearLocalCopies(row: {
+  id: string;
+  shopId: string;
+  acuityBlockId: string | null;
+}): Promise<void> {
+  try {
+    const removed = await runWithShop(row.shopId, (tx) =>
+      tx.externalBlock.deleteMany({
+        where: {
+          shopId: row.shopId,
+          OR: [
+            ...(row.acuityBlockId ? [{ externalId: `acuity:${row.acuityBlockId}` }] : []),
+            { reason: blockReference(row.id) },
+          ],
+        },
+      }),
+    );
+    if (removed.count > 0) {
+      await noteAvailabilityChanged(row.shopId);
+      logTransition("released block's local copies cleared", {
+        shopId: row.shopId,
+        outboxId: row.id,
+        removed: removed.count,
+      });
+    }
+  } catch (err) {
+    logTransition(
+      "could not clear a released block's local copies - the resync will",
+      { shopId: row.shopId, outboxId: row.id, detail: safeError(err).detail },
       "warn",
     );
   }

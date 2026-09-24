@@ -356,6 +356,78 @@ describe("self-echo", () => {
     expect(acuityMock.deleteBlock).toHaveBeenCalledWith("blk_mine");
     expect((await state(outboxId)).state).toBe("RELEASED");
   });
+
+  // 🔴 Drick, 2026-09-24: a cancelled 10 AM stayed blocked on ChairBack for 21
+  // minutes after Acuity freed it, until the 30-minute sweep removed exactly
+  // two rows. The id guard only knows the id we got an answer for; a TWIN from
+  // an ambiguous create has its own id and our reference note.
+  it("a TWIN of our block (our reference, a different id) is never imported", async () => {
+    acuityMock.createBlock.mockResolvedValue({ id: "blk_mine" });
+    const { outboxId } = await seed();
+    await dispatchCreate(outboxId);
+
+    // Imported before this guard existed: the next sweep must clear it too.
+    await prisma.externalBlock.create({
+      data: {
+        shopId,
+        externalId: "acuity:blk_twin_old",
+        startsAt: START,
+        endsAt: END,
+        reason: blockReference(outboxId),
+      },
+    });
+    const res = await syncAcuityBlocks(
+      shopId,
+      [
+        { id: "blk_mine", start: START.toISOString(), end: END.toISOString(), calendarID: CAL, notes: blockReference(outboxId) },
+        { id: "blk_twin", start: START.toISOString(), end: END.toISOString(), calendarID: CAL, notes: blockReference(outboxId) },
+        { id: "blk_lunch", start: LUNCH_START.toISOString(), end: LUNCH_END.toISOString(), calendarID: CAL, notes: "lunch" },
+      ] as AcuityBlock[],
+      WINDOW_FROM,
+      WINDOW_TO,
+    );
+    expect(res.upserted).toBe(1);
+    const rows = await prisma.externalBlock.findMany({ where: { shopId } });
+    expect(rows.map((r) => r.externalId)).toEqual(["acuity:blk_lunch"]);
+  });
+
+  it("a note that merely LOOKS like ours but names no row of this shop is still the barber's block", async () => {
+    const res = await syncAcuityBlocks(
+      shopId,
+      [
+        { id: "blk_fake", start: START.toISOString(), end: END.toISOString(), calendarID: CAL, notes: blockReference("not_a_real_outbox_row") },
+      ] as AcuityBlock[],
+      WINDOW_FROM,
+      WINDOW_TO,
+    );
+    expect(res.upserted).toBe(1);
+    expect(await prisma.externalBlock.count({ where: { shopId, externalId: "acuity:blk_fake" } })).toBe(1);
+  });
+
+  it("CANCELLING clears an already-imported twin at once - not at the next sweep", async () => {
+    acuityMock.createBlock.mockResolvedValue({ id: "blk_mine" });
+    acuityMock.deleteBlock.mockResolvedValue(undefined);
+    const { appointmentId, outboxId } = await seed();
+    await dispatchCreate(outboxId);
+    await prisma.externalBlock.create({
+      data: {
+        shopId,
+        externalId: "acuity:blk_twin",
+        startsAt: START,
+        endsAt: END,
+        reason: blockReference(outboxId),
+      },
+    });
+    acuityMock.listBlocks.mockResolvedValue([
+      { id: "blk_twin", start: START.toISOString(), end: END.toISOString(), calendarID: CAL, notes: blockReference(outboxId) },
+    ] as AcuityBlock[]);
+
+    await releaseForAppointment(shopId, appointmentId);
+
+    expect((await state(outboxId)).state).toBe("RELEASED");
+    // No syncAcuityBlocks call in between: the release itself freed the chair.
+    expect(await prisma.externalBlock.count({ where: { shopId } })).toBe(0);
+  });
 });
 
 describe("release", () => {

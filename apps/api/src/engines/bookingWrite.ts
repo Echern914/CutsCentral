@@ -78,6 +78,49 @@ export class ExternalBlockError extends SlotTakenError {
   }
 }
 
+/** The rows a write would sit on that a barber is allowed to book over. */
+export interface OverlapRows {
+  appointmentIds: string[];
+  visitIds: string[];
+  /** The barber's OWN unbooked specials - taken off sale if he books over them. */
+  targetedIds: string[];
+}
+
+/**
+ * The write overlaps another booking, a synced visit or an unbooked special.
+ *
+ * A SUBCLASS of SlotTakenError for the same reason ExternalBlockError is: every
+ * existing catch keeps answering "slot taken" unchanged. Only the barber's New
+ * appointment (Custom time) checks for this subclass, names what is in the way,
+ * and lets him book over it by replaying `confirmation`.
+ */
+export class OverlapError extends SlotTakenError {
+  readonly rows: OverlapRows;
+  readonly confirmation: string;
+  constructor(rows: OverlapRows) {
+    super();
+    this.name = "OverlapError";
+    this.rows = rows;
+    this.confirmation = overlapConfirmation(rows);
+  }
+}
+
+/**
+ * Digest of the exact rows an OverlapError named. Same reasoning as
+ * externalBlockConfirmation below: a BINDING, reproducible on every replica, so
+ * confirming authorises those rows and nothing that appeared since.
+ */
+export function overlapConfirmation(rows: OverlapRows): string {
+  const canonical = [
+    ...rows.appointmentIds.map((id) => `a:${id}`),
+    ...rows.visitIds.map((id) => `v:${id}`),
+    ...rows.targetedIds.map((id) => `t:${id}`),
+  ]
+    .sort()
+    .join(";");
+  return createHash("sha256").update(`overlap:v1:${canonical}`).digest("hex").slice(0, 32);
+}
+
 /**
  * 🔴 CONFIRMATION IS BOUND TO THE CONFLICT, NOT TO A BOOLEAN.
  *
@@ -300,6 +343,25 @@ export async function lockStaffAndAssertSlotFree(
      */
     externalBlockConfirmation?: string | null;
     /**
+     * The BARBER forcing a time onto his own calendar, answering an
+     * OverlapError this guard already gave: its `confirmation` digest, replayed.
+     *
+     * Same binding as `externalBlockConfirmation`, for the three sources a
+     * barber may knowingly book over - another booking, a synced Acuity/Square
+     * visit, and his OWN unbooked specials. The digest covers the exact rows the
+     * refusal named, recomputed here under the lock, so a booking that landed
+     * after he looked is refused again with the new conflict instead of being
+     * silently doubled. On a match:
+     *   - bookings and visits simply stop being refusals (a deliberate double),
+     *   - specials in the way are taken OFF SALE in this transaction, because
+     *     nothing may be sold on top of a booking he just made,
+     *   - the (staffId, startsAt) unique index still refuses an IDENTICAL start
+     *     (P2002 at the insert), which is the caller's to explain.
+     * Walk-ins, holds and external blocks keep their own rules. Only the
+     * dashboard's New appointment passes this, and only for a Custom time.
+     */
+    overlapConfirmation?: string | null;
+    /**
      * Does a walk-in still MID-CUT (recorded COMPLETED, span not yet elapsed)
      * block this write?
      *
@@ -379,7 +441,14 @@ export async function lockStaffAndAssertSlotFree(
                  AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
                  AND "endsAt" > ${overlapStart.toISOString()}::timestamp`,
   );
-  if (overlap.length > 0) throw new SlotTakenError();
+  // Collected, not thrown on the spot: a barber's forced write is decided on
+  // ALL of them at once (see overlapConfirmation). Everyone else still gets a
+  // SlotTakenError - OverlapError is one - from the single check below.
+  const overlapping: OverlapRows = {
+    appointmentIds: overlap.map((o) => o.id),
+    visitIds: [],
+    targetedIds: [],
+  };
 
   // Targeted slots: an ACTIVE, UNBOOKED barber-published slot owns its span
   // (buffer-padded like an appointment) so a NORMAL booking can't be laid over
@@ -405,7 +474,7 @@ export async function lockStaffAndAssertSlotFree(
                    AND "startsAt" < ${overlapEnd.toISOString()}::timestamp
                    AND ("startsAt" + "durationMin" * interval '1 minute') > ${overlapStart.toISOString()}::timestamp`,
     );
-    if (targetedOverlap.length > 0) throw new SlotTakenError();
+    overlapping.targetedIds = targetedOverlap.map((t) => t.id);
   }
 
   // Waitlist holds: a LIVE offer (OFFERED and unexpired) owns its span on this
@@ -523,7 +592,32 @@ export async function lockStaffAndAssertSlotFree(
                  AND v."scheduledAt" < ${overlapEnd.toISOString()}::timestamp
                  AND v."endAt" > ${overlapStart.toISOString()}::timestamp`,
   );
-  if (visitOverlap.length > 0) throw new SlotTakenError();
+  overlapping.visitIds = visitOverlap.map((v) => v.id);
+
+  // THE one decision on bookings, visits and specials in the way. No
+  // confirmation (every customer-driven write, and the barber's first try) is
+  // a refusal exactly as before. A confirmation that matches THESE rows is the
+  // barber booking over what he was shown; one that doesn't is a new question.
+  const overlapCount =
+    overlapping.appointmentIds.length +
+    overlapping.visitIds.length +
+    overlapping.targetedIds.length;
+  if (overlapCount > 0) {
+    const given = opts.overlapConfirmation?.trim() || null;
+    if (given === null || given !== overlapConfirmation(overlapping)) {
+      throw new OverlapError(overlapping);
+    }
+    if (overlapping.targetedIds.length > 0) {
+      await tx.targetedSlot.updateMany({
+        where: {
+          id: { in: overlapping.targetedIds },
+          shopId: opts.shopId,
+          bookedAppointmentId: null,
+        },
+        data: { active: false },
+      });
+    }
+  }
 
   // Time the barber BLOCKED OFF in the calendar he actually manages. Like a
   // synced visit it carries no staffId, so it blocks every chair for its span -
