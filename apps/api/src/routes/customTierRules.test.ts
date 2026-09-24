@@ -236,9 +236,9 @@ describe("🔴 the ladder is an owner's or manager's call", () => {
     expect(shop?.tierPerks).toBeNull();
   });
 
-  it("while the rest of their settings still save", async () => {
+  it("nor any other shop setting (shopSettingsRoles.test.ts covers every field)", async () => {
     const res = await request(app).patch("/api/shops/me").set("Cookie", barberCookie).send({ bio: "Walk-ins welcome" });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
   });
 });
 

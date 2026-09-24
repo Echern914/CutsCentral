@@ -148,14 +148,14 @@ describe("the settings round-trip + its role gate", () => {
     expect(shop!.walkInEnabled).toBe(true); // unchanged
   });
 
-  it("regression pin: the same barber seat can still PATCH other settings", async () => {
-    // The gate is deliberately FIELD-level; widening it to the whole route
-    // would silently change unrelated settings' behavior. Pin that.
+  it("nor any other shop setting: a barber seat's allowlist on this route is empty", async () => {
+    // Whether the shop takes requests is the shop's call, not a barber seat's
+    // (shopSettingsRoles.test.ts covers every field).
     const res = await request(app)
       .patch("/api/shops/me")
       .set("Cookie", barberCookie)
       .send({ takesRequests: false });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
   });
 });
 

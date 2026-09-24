@@ -3,18 +3,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
+import { SHOP_SETTINGS_FIELDS } from "./shops.js";
 
 /**
- * Shop settings a BARBER seat must not change: where the shop is found and
- * booked, and where its owner is told.
- *
- * PATCH /api/shops/me is field-level for barber seats. Before this, a barber
- * could move the shop's public web address (slug), take its page offline
- * (publicPageEnabled), take its booking offline or send the Book button to
- * their own booking page (bookingMode, bookingUrl), or point the owner's alert
- * phone (Shop.notifyPhone) at their own number. Owners and managers still can;
- * a barber keeps their own PERSONAL settings (profile, theme, their own
- * notifications - including their own alert phone), which live on other routes.
+ * PATCH /api/shops/me is the SHOP's settings, so a BARBER seat can change none
+ * of them: the route checks an explicit allowlist (BARBER_SETTINGS_ALLOWED),
+ * which is empty because no barber screen needs one. That covers where the shop
+ * is found and booked (slug, page, booking mode and link), where its owner is
+ * told (the shop's alert phone), and every other business setting - its name,
+ * review link, bio, requests, messages, loyalty. Owners and managers still can;
+ * a barber keeps their PERSONAL settings (profile, theme, their own alerts),
+ * which live on other routes.
  */
 const app = createApp();
 const password = "correct horse battery staple";
@@ -54,6 +53,9 @@ beforeAll(async () => {
       notifyPhone: "+13025550100",
       bookingMode: "native",
       bookingUrl: null,
+      googleReviewUrl: "https://g.page/wall-shop/review",
+      bio: "The owner's words",
+      takesRequests: true,
     },
   });
   const barber = await signup("barber");
@@ -80,8 +82,20 @@ const patch = (cookie: string, body: object) =>
 const shop = () =>
   prisma.shop.findUniqueOrThrow({
     where: { id: shopId },
-    select: { slug: true, publicPageEnabled: true, notifyPhone: true, bio: true, bookingMode: true, bookingUrl: true },
+    select: {
+      name: true,
+      slug: true,
+      publicPageEnabled: true,
+      notifyPhone: true,
+      bio: true,
+      bookingMode: true,
+      bookingUrl: true,
+      googleReviewUrl: true,
+      takesRequests: true,
+    },
   });
+/** The whole row - a refused write must not even touch updatedAt. */
+const wholeShop = async () => JSON.stringify(await prisma.shop.findUniqueOrThrow({ where: { id: shopId } }));
 
 describe("a BARBER seat", () => {
   it("🔴 can't move the shop's public web address", async () => {
@@ -115,12 +129,45 @@ describe("a BARBER seat", () => {
     expect((await shop()).notifyPhone).toBe("+13025550100");
   });
 
-  it("a refused field can't ride along with an allowed one - nothing is half-saved", async () => {
-    const res = await patch(barberCookie, { bio: "Sneaky", slug: `stolen-${tag}` });
-    expect(res.status).toBe(403);
-    const s = await shop();
-    expect(s.slug).toBe(`wall-shop-${tag}`);
-    expect(s.bio).not.toBe("Sneaky");
+  it("🔴 can't rename the shop, change its review link, bio, or whether it takes requests", async () => {
+    for (const body of [
+      { name: "Barber's Shop Now" },
+      { googleReviewUrl: "https://example.com/somewhere-else" },
+      { bio: "Changed by a barber" },
+      { takesRequests: false },
+    ]) {
+      expect((await patch(barberCookie, body)).status, JSON.stringify(body)).toBe(403);
+    }
+    expect(await shop()).toMatchObject({
+      name: `Wall Shop ${tag}`,
+      googleReviewUrl: "https://g.page/wall-shop/review",
+      bio: "The owner's words",
+      takesRequests: true,
+    });
+  });
+
+  it("🔴 every shop setting is refused, alone - whatever the value", async () => {
+    const before = await wholeShop();
+    for (const field of SHOP_SETTINGS_FIELDS) {
+      for (const value of [null, "x", true, 1]) {
+        const res = await patch(barberCookie, { [field]: value });
+        expect(res.status, `${field}=${JSON.stringify(value)}`).toBe(403);
+      }
+    }
+    expect(await wholeShop()).toBe(before);
+  });
+
+  it("🔴 mixed together, or with a field the route doesn't know, nothing is half-saved", async () => {
+    const before = await wholeShop();
+    for (const body of [
+      { bio: "Sneaky", slug: `stolen-${tag}` },
+      { name: "Sneaky", googleReviewUrl: "https://example.com/r", takesRequests: false },
+      { bio: "Sneaky", notAField: 1 },
+      { notAField: 1 },
+    ]) {
+      expect((await patch(barberCookie, body)).status, JSON.stringify(body)).toBe(403);
+    }
+    expect(await wholeShop()).toBe(before);
   });
 
   it("keeps their PERSONAL settings: profile, theme, and their own alert phone", async () => {
@@ -138,6 +185,10 @@ describe("a BARBER seat", () => {
 describe("owners and managers still run the shop", () => {
   it("a manager can change all of them", async () => {
     const res = await patch(managerCookie, {
+      name: `Wall Shop M ${tag}`,
+      googleReviewUrl: "https://g.page/wall-shop-m/review",
+      bio: "The manager's words",
+      takesRequests: false,
       slug: `wall-shop-m-${tag}`,
       publicPageEnabled: false,
       notifyPhone: "+13025550111",
@@ -146,6 +197,10 @@ describe("owners and managers still run the shop", () => {
     });
     expect(res.status).toBe(200);
     expect(await shop()).toMatchObject({
+      name: `Wall Shop M ${tag}`,
+      googleReviewUrl: "https://g.page/wall-shop-m/review",
+      bio: "The manager's words",
+      takesRequests: false,
       slug: `wall-shop-m-${tag}`,
       publicPageEnabled: false,
       bookingMode: "link",
@@ -155,6 +210,8 @@ describe("owners and managers still run the shop", () => {
 
   it("the owner can change all of them", async () => {
     const res = await patch(ownerCookie, {
+      name: `Wall Shop ${tag}`,
+      takesRequests: true,
       slug: `wall-shop-${tag}`,
       publicPageEnabled: true,
       notifyPhone: "+13025550100",
@@ -163,6 +220,8 @@ describe("owners and managers still run the shop", () => {
     });
     expect(res.status).toBe(200);
     expect(await shop()).toMatchObject({
+      name: `Wall Shop ${tag}`,
+      takesRequests: true,
       slug: `wall-shop-${tag}`,
       publicPageEnabled: true,
       bookingMode: "native",
