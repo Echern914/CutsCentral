@@ -578,10 +578,23 @@ teamRouter.post("/links/:id/end", accountLimiter, requireOwner, async (req, res)
 
 // ---- BOOTH RENT: a manual tracker (services/boothRent.ts has the rules).
 
-/** An ACTIVE member of THIS shop's team. */
+/** An ACTIVE member of THIS shop's team - the only kind rent can start or change for. */
 function activeMember(tx: Prisma.TransactionClient, shopId: string, linkId: string) {
   return tx.teamLink.findFirst({
     where: { id: linkId, teamShopId: shopId, status: "ACTIVE" },
+    select: { id: true },
+  });
+}
+
+/**
+ * A rental of THIS shop's team that can be SETTLED: an active member, or one
+ * who left (or is asking to come back) with rent already recorded. Settling -
+ * recording a late payment, voiding a mistake - never starts rent again,
+ * never changes who is on the team, and returns only the rent.
+ */
+function rentalToSettle(tx: Prisma.TransactionClient, shopId: string, linkId: string) {
+  return tx.teamLink.findFirst({
+    where: { id: linkId, teamShopId: shopId, OR: [{ status: "ACTIVE" }, HAS_RENT_RECORDS] },
     select: { id: true },
   });
 }
@@ -652,7 +665,10 @@ const paymentSchema = z
   })
   .strict();
 
-/** POST /api/team/links/:id/rent/payments - record rent the owner received. */
+/**
+ * POST /api/team/links/:id/rent/payments - record rent the owner received,
+ * including a late payment from a member who has left (rentalToSettle).
+ */
 teamRouter.post("/links/:id/rent/payments", accountLimiter, requireOwner, async (req, res) => {
   const parsed = paymentSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
@@ -667,7 +683,7 @@ teamRouter.post("/links/:id/rent/payments", accountLimiter, requireOwner, async 
     return;
   }
   const rent = await runAsOwner(async (tx) => {
-    const link = await activeMember(tx, shop.id, req.params.id!);
+    const link = await rentalToSettle(tx, shop.id, req.params.id!);
     if (!link) return null;
     await tx.boothRentPayment.createMany({
       data: [
@@ -700,7 +716,7 @@ teamRouter.post("/links/:id/rent/payments", accountLimiter, requireOwner, async 
 teamRouter.post("/links/:id/rent/payments/:paymentId/void", accountLimiter, requireOwner, async (req, res) => {
   const shop = req.shop!;
   const rent = await runAsOwner(async (tx) => {
-    const link = await activeMember(tx, shop.id, req.params.id!);
+    const link = await rentalToSettle(tx, shop.id, req.params.id!);
     if (!link) return null;
     const payment = await tx.boothRentPayment.findFirst({
       where: { id: req.params.paymentId, linkId: link.id },
@@ -728,7 +744,7 @@ teamRouter.post("/links/:id/rent/payments/:paymentId/void", accountLimiter, requ
 teamRouter.post("/links/:id/rent/rates/:rateId/void", accountLimiter, requireOwner, async (req, res) => {
   const shop = req.shop!;
   const result = await runAsOwner(async (tx) => {
-    const link = await activeMember(tx, shop.id, req.params.id!);
+    const link = await rentalToSettle(tx, shop.id, req.params.id!);
     if (!link) return { ok: false as const, error: "not_found" as const };
     const voided = await voidRate(tx, link.id, req.params.rateId!, req.userId!);
     return voided.ok ? { ok: true as const, rent: await rentSummary(tx, link.id, shop.timezone) } : voided;

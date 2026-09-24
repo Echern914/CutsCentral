@@ -19,12 +19,16 @@ vi.mock("./actions", () => ({
   approveLinkAction: (...a: unknown[]) => approveLinkAction(...a),
   endLinkAction: (...a: unknown[]) => endLinkAction(...a),
   teamLinksAction: (...a: unknown[]) => teamLinksAction(...a),
-  rentHistoryAction: vi.fn(),
 }));
 vi.mock("@/components/ui/Toast", () => ({ useToast: () => ({ toast }) }));
 vi.mock("./BoothRent", () => ({
-  OwnerRent: () => null,
-  ReadOnlyRent: ({ title }: { title: string }) => <div data-qa="readonly-rent">{title}</div>,
+  // Stands in for the rent card; says which rental it was given and whether
+  // it was told the member has left (settle only, no Change).
+  OwnerRent: ({ businessName, ended }: { businessName: string; ended?: boolean }) => (
+    <div data-qa="owner-rent" data-ended={String(Boolean(ended))}>
+      {businessName}
+    </div>
+  ),
 }));
 
 const { IndependentTeam } = await import("./IndependentTeam");
@@ -87,7 +91,7 @@ describe("the team table", () => {
 });
 
 describe("past booth rent", () => {
-  it("🔴 a member who left keeps a read-only rent record - their name and rent, nothing else", () => {
+  it("🔴 a member who left keeps their rent record - their name and rent, nothing else - to settle, not restart", () => {
     const past: TeamLinksData["past"] = [
       {
         id: "old1",
@@ -100,7 +104,9 @@ describe("past booth rent", () => {
     render(<IndependentTeam initial={{ ...base, past }} vocab={vocab} />);
     const section = document.querySelector('[data-qa="past-rent"]')!;
     expect(section.textContent).toContain("Dre The Barber");
-    expect(section.querySelector('[data-qa="readonly-rent"]')!.textContent).toBe("Booth rent · Dre The Barber");
+    const card = section.querySelector('[data-qa="owner-rent"]')!;
+    expect(card.textContent).toBe("Dre The Barber");
+    expect(card.getAttribute("data-ended")).toBe("true");
     // No numbers, no remove, no approve - only the rent.
     expect(section.querySelector("dd")).toBeNull();
     expect(section.querySelectorAll("button")).toHaveLength(0);

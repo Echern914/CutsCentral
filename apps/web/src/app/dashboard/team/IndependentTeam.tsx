@@ -8,13 +8,8 @@ import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import { teamStats, type Sharing, type TeamNumbers } from "@/lib/teamNumbers";
 import { hasRent, type RentSummary } from "@/lib/boothRent";
-import {
-  approveLinkAction,
-  endLinkAction,
-  rentHistoryAction,
-  teamLinksAction,
-} from "./actions";
-import { OwnerRent, ReadOnlyRent } from "./BoothRent";
+import { approveLinkAction, endLinkAction, teamLinksAction } from "./actions";
+import { OwnerRent } from "./BoothRent";
 
 export interface TeamLinksData {
   /** The one link the owner sends: /team/link/<their shop id>. */
@@ -37,7 +32,8 @@ export interface TeamLinksData {
   }[];
   /**
    * Booth rent with members who left (ENDED) or are asking to come back
-   * (PENDING): read-only, and only the rent - nothing else of their business.
+   * (PENDING): only the rent - nothing else of their business. The owner can
+   * still settle it (a late payment, voiding a mistake), never restart it.
    */
   past: {
     id: string;
@@ -324,13 +320,15 @@ export function IndependentTeam({
 
         {(data.past ?? []).length > 0 && (
           // The rent record outlives the team link: what's owed, paid and
-          // corrected stays readable. Nothing else of their business is here.
+          // corrected stays, and can still be settled. Nothing else of their
+          // business is here, and rent can't be started again from here.
           <section data-qa="past-rent">
             <h3 className="text-sm font-medium text-offwhite">
               Past booth rent
             </h3>
             <p className="mt-0.5 text-xs text-muted">
-              Read-only. Rent stopped when they left.
+              Rent stopped when they left. You can still record a late
+              payment or void a mistake.
             </p>
             <ul className="mt-2 flex flex-col gap-2">
               {data.past.map((m) => (
@@ -344,11 +342,17 @@ export function IndependentTeam({
                       ? "Asking to rejoin"
                       : `Left ${m.endedAt ? new Date(m.endedAt).toLocaleDateString() : "the team"}`}
                   </p>
-                  <ReadOnlyRent
-                    title={`Booth rent · ${m.business.name}`}
-                    who="owner"
+                  <OwnerRent
+                    linkId={m.id}
+                    businessName={m.business.name}
                     rent={m.rent}
-                    loadHistory={() => rentHistoryAction(m.id)}
+                    ended
+                    onRent={(rent) =>
+                      setData((d) => ({
+                        ...d,
+                        past: d.past.map((x) => (x.id === m.id ? { ...x, rent } : x)),
+                      }))
+                    }
                   />
                 </li>
               ))}
@@ -396,7 +400,7 @@ export function IndependentTeam({
           {vocab.clientNounPlural} and bookings are theirs and stay exactly as
           they are. They can ask to join again with your link.
           {removing && hasRent(removing.rent)
-            ? " Booth rent stops at the end of the current period; what's recorded stays readable under Past booth rent."
+            ? " Booth rent stops at the end of the current period; what's recorded stays under Past booth rent, where you can still settle it."
             : ""}
         </p>
       </Dialog>
