@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { APP_NAME, apiEnv, randomToken, vocabularyForShop } from "@chairback/config";
-import { forShop, prisma, runAsOwner } from "@chairback/db";
+import { forShop, prisma, runAsOwner, type Prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager, requireOwner } from "../auth/roles.js";
 import { accountLimiter, dashboardLimiter } from "../middleware/rateLimit.js";
@@ -10,6 +10,8 @@ import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { applyChairLink, releaseChairLink } from "../services/staffUserLink.js";
 import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
 import { NOTHING_SHARED, linksForTeam, sharingOf, teamNumbers } from "../services/teamLinks.js";
+import { PAYMENT_METHODS, rentPayments, rentSummary } from "../services/boothRent.js";
+import { shopLocalDay } from "../engines/insightsWindow.js";
 import { logger } from "../logger.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
@@ -473,6 +475,9 @@ teamRouter.get("/links", requireOwner, async (req, res) => {
           approvedAt: l.approvedAt?.toISOString() ?? null,
           sharing: sharingOf(l),
           numbers: await teamNumbers(l.memberShop, sharingOf(l), now),
+          // Booth rent is the owner's own ledger with this member, not one of
+          // the member's numbers - so it's always shown to the owner.
+          rent: await runAsOwner((tx) => rentSummary(tx, l, shop.timezone, now)),
         })),
     ),
   });
@@ -538,4 +543,139 @@ teamRouter.post("/links/:id/end", accountLimiter, requireOwner, async (req, res)
     return;
   }
   res.json({ ok: true });
+});
+
+// ---- BOOTH RENT: an amount per week or month, and payments the owner records.
+
+/** An ACTIVE member of THIS shop's team. */
+function activeMember(tx: Prisma.TransactionClient, shopId: string, linkId: string) {
+  return tx.teamLink.findFirst({
+    where: { id: linkId, teamShopId: shopId, status: "ACTIVE" },
+    select: { id: true, rentCents: true, rentPeriod: true },
+  });
+}
+
+const rentSchema = z
+  .object({
+    // Null turns rent off.
+    amountCents: z.number().int().min(1).max(10_000_000).nullable(),
+    period: z.enum(["WEEKLY", "MONTHLY"]).optional(),
+  })
+  .strict()
+  .refine((v) => v.amountCents === null || v.period !== undefined);
+
+/** PUT /api/team/links/:id/rent - set, change or turn off a member's rent. */
+teamRouter.put("/links/:id/rent", accountLimiter, requireOwner, async (req, res) => {
+  const parsed = rentSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const shop = req.shop!;
+  const rent = await runAsOwner(async (tx) => {
+    const link = await activeMember(tx, shop.id, req.params.id!);
+    if (!link) return null;
+    const next = {
+      rentCents: parsed.data.amountCents,
+      rentPeriod: parsed.data.amountCents === null ? null : parsed.data.period!,
+    };
+    await tx.teamLink.update({ where: { id: link.id }, data: next });
+    return rentSummary(tx, { id: link.id, ...next }, shop.timezone);
+  });
+  if (!rent) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ ok: true, rent });
+});
+
+const paymentSchema = z
+  .object({
+    amountCents: z.number().int().min(1).max(10_000_000),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    method: z.enum(PAYMENT_METHODS),
+    note: z.string().trim().max(200).optional(),
+    // The form's one-time id: a retried submit records one payment.
+    clientRef: z.string().min(8).max(64),
+  })
+  .strict();
+
+/** POST /api/team/links/:id/rent/payments - record rent the owner received. */
+teamRouter.post("/links/:id/rent/payments", accountLimiter, requireOwner, async (req, res) => {
+  const parsed = paymentSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const shop = req.shop!;
+  const paidOn = new Date(`${parsed.data.date}T00:00:00Z`);
+  // A real day, and not one that hasn't happened yet in the shop.
+  if (
+    Number.isNaN(paidOn.getTime()) ||
+    paidOn.toISOString().slice(0, 10) !== parsed.data.date ||
+    paidOn > shopLocalDay(new Date(), shop.timezone)
+  ) {
+    res.status(400).json({ error: "invalid_date" });
+    return;
+  }
+  const rent = await runAsOwner(async (tx) => {
+    const link = await activeMember(tx, shop.id, req.params.id!);
+    if (!link) return null;
+    await tx.boothRentPayment.createMany({
+      data: [
+        {
+          linkId: link.id,
+          amountCents: parsed.data.amountCents,
+          paidOn,
+          method: parsed.data.method,
+          note: parsed.data.note || null,
+          recordedById: req.userId!,
+          clientRef: parsed.data.clientRef,
+        },
+      ],
+      skipDuplicates: true, // same clientRef = the same payment, sent again
+    });
+    return rentSummary(tx, link, shop.timezone);
+  });
+  if (!rent) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.status(201).json({ ok: true, rent });
+});
+
+/** DELETE /api/team/links/:id/rent/payments/:paymentId - remove a payment recorded by mistake. */
+teamRouter.delete("/links/:id/rent/payments/:paymentId", accountLimiter, requireOwner, async (req, res) => {
+  const shop = req.shop!;
+  const rent = await runAsOwner(async (tx) => {
+    const link = await activeMember(tx, shop.id, req.params.id!);
+    if (!link) return null;
+    const { count } = await tx.boothRentPayment.deleteMany({
+      where: { id: req.params.paymentId, linkId: link.id },
+    });
+    return count === 0 ? null : rentSummary(tx, link, shop.timezone);
+  });
+  if (!rent) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ ok: true, rent });
+});
+
+/** GET /api/team/links/:id/rent - every payment from one member. */
+teamRouter.get("/links/:id/rent", requireOwner, async (req, res) => {
+  const shop = req.shop!;
+  const result = await runAsOwner(async (tx) => {
+    const link = await tx.teamLink.findFirst({
+      where: { id: req.params.id, teamShopId: shop.id },
+      select: { id: true, rentCents: true, rentPeriod: true },
+    });
+    if (!link) return null;
+    return { summary: await rentSummary(tx, link, shop.timezone), payments: await rentPayments(tx, link.id) };
+  });
+  if (!result) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json(result);
 });

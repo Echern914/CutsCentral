@@ -957,6 +957,11 @@ model TeamLink {
   shareRevenue Boolean        @default(false)
   shareClients Boolean        @default(false)
   shareRating  Boolean        @default(false)
+  // BOOTH RENT the member pays the team's shop, set by the team's owner: an
+  // amount per calendar week (Mon-Sun) or month. Null = no rent.
+  rentCents    Int?
+  rentPeriod   RentPeriod?
+  rentPayments BoothRentPayment[]
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
@@ -968,6 +973,31 @@ enum TeamLinkStatus {
   PENDING
   ACTIVE
   ENDED
+}
+
+enum RentPeriod {
+  WEEKLY
+  MONTHLY
+}
+
+// Booth rent a team's owner recorded as received from one member.
+model BoothRentPayment {
+  id           String   @id @default(cuid())
+  linkId       String
+  link         TeamLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  amountCents  Int
+  // The day it was paid (the team shop's calendar).
+  paidOn       DateTime @db.Date
+  // cash | zelle | cashapp | venmo | card | other
+  method       String
+  note         String?
+  recordedById String
+  // The payment form's one-time id, so a retried submit records ONE payment.
+  clientRef    String
+  createdAt    DateTime @default(now())
+
+  @@unique([linkId, clientRef])
+  @@index([linkId, paidOn])
 }
 
 // A shop-designed promotion ("Spring special: 20% off weekday cuts"). Live =

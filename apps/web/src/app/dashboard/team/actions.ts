@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { apiGet, apiSend } from "@/lib/api";
 import type { TeamData } from "./page";
 import type { TeamLinksData } from "./IndependentTeam";
+import type { RentPayment, RentPeriod, RentSummary } from "@/lib/boothRent";
 
 /** Re-read the roster after any change (server is the source of truth). */
 export async function teamAction(): Promise<TeamData | null> {
@@ -78,4 +79,46 @@ export async function endLinkAction(id: string): Promise<TeamActionResult> {
   const res = await apiSend<{ ok: boolean }>("POST", `/api/team/links/${id}/end`);
   revalidatePath("/dashboard/team");
   return res.ok ? { ok: true } : { ok: false, error: res.error };
+}
+
+// ---- Booth rent. Every write returns the server's summary afterwards. ----
+
+export interface RentResult {
+  ok: boolean;
+  error?: string;
+  rent?: RentSummary;
+}
+
+/** Set, change or turn off (amountCents null) a member's booth rent. */
+export async function setRentAction(
+  linkId: string,
+  input: { amountCents: number | null; period?: RentPeriod },
+): Promise<RentResult> {
+  const res = await apiSend<{ rent: RentSummary }>("PUT", `/api/team/links/${linkId}/rent`, input);
+  return res.ok && res.data ? { ok: true, rent: res.data.rent } : { ok: false, error: res.error };
+}
+
+/** Record rent received. `clientRef` makes a retried submit record one payment. */
+export async function recordRentPaymentAction(
+  linkId: string,
+  input: { amountCents: number; date: string; method: string; note?: string; clientRef: string },
+): Promise<RentResult> {
+  const res = await apiSend<{ rent: RentSummary }>("POST", `/api/team/links/${linkId}/rent/payments`, input);
+  return res.ok && res.data ? { ok: true, rent: res.data.rent } : { ok: false, error: res.error };
+}
+
+/** Remove a payment recorded by mistake. */
+export async function deleteRentPaymentAction(linkId: string, paymentId: string): Promise<RentResult> {
+  const res = await apiSend<{ rent: RentSummary }>(
+    "DELETE",
+    `/api/team/links/${linkId}/rent/payments/${paymentId}`,
+  );
+  return res.ok && res.data ? { ok: true, rent: res.data.rent } : { ok: false, error: res.error };
+}
+
+export async function rentHistoryAction(
+  linkId: string,
+): Promise<{ summary: RentSummary; payments: RentPayment[] } | null> {
+  const res = await apiGet<{ summary: RentSummary; payments: RentPayment[] }>(`/api/team/links/${linkId}/rent`);
+  return res.ok ? (res.data ?? null) : null;
 }

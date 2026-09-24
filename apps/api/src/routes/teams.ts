@@ -12,6 +12,7 @@ import {
   sharingOf,
   teamNumbers,
 } from "../services/teamLinks.js";
+import { rentPayments, rentSummary } from "../services/boothRent.js";
 
 /**
  * TEAMS, from the member's side: a barber linking THEIR OWN business to a
@@ -61,9 +62,32 @@ teamsRouter.get("/", async (req, res) => {
                 now,
               )
             : null,
+        // Their own booth rent with this team - the same summary the owner sees.
+        rent:
+          l.status === "ACTIVE"
+            ? await runAsOwner((tx) => rentSummary(tx, l, l.teamShop.timezone, now))
+            : null,
       })),
     ),
   });
+});
+
+/** GET /api/teams/:id/rent - this business's booth-rent payments to a team. Read-only. */
+teamsRouter.get("/:id/rent", async (req, res) => {
+  const history = await runAsOwner(async (tx) => {
+    const link = await tx.teamLink.findFirst({
+      where: { id: req.params.id, memberShop: { ownerId: req.userId } },
+      select: { id: true, rentCents: true, rentPeriod: true, teamShop: { select: { timezone: true } } },
+    });
+    if (!link) return null;
+    const summary = await rentSummary(tx, link, link.teamShop.timezone);
+    return { summary, payments: await rentPayments(tx, link.id) };
+  });
+  if (!history) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json(history);
 });
 
 const teamKey = z.string().trim().min(1).max(120);

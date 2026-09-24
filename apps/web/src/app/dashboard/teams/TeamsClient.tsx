@@ -13,7 +13,9 @@ import {
   type Sharing,
   type TeamNumbers,
 } from "@/lib/teamNumbers";
-import { leaveTeamAction, myTeamsAction, setSharingAction } from "./actions";
+import type { RentSummary } from "@/lib/boothRent";
+import { MemberRent } from "../team/BoothRent";
+import { leaveTeamAction, myRentHistoryAction, myTeamsAction, setSharingAction } from "./actions";
 
 export interface MyTeamLink {
   id: string;
@@ -24,6 +26,8 @@ export interface MyTeamLink {
   sharing: Sharing;
   /** Exactly what the team's owner sees now. Null until they approve. */
   theySee: TeamNumbers | null;
+  /** Their booth rent with this team (ACTIVE only). */
+  rent: RentSummary | null;
 }
 
 export interface MyTeamsData {
@@ -210,6 +214,14 @@ export function TeamsClient({
                   </p>
                 )}
               </div>
+
+              {active && link.rent && (
+                <MemberRent
+                  teamName={link.team.name}
+                  rent={link.rent}
+                  loadHistory={() => myRentHistoryAction(link.id)}
+                />
+              )}
 
               {/* Left-aligned: on a phone the floating help button sits
                   bottom-right and would cover it at the end of the page. */}

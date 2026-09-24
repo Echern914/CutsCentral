@@ -7,7 +7,9 @@ import { Dialog } from "@/components/ui/Dialog";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import { teamStats, type Sharing, type TeamNumbers } from "@/lib/teamNumbers";
+import type { RentSummary } from "@/lib/boothRent";
 import { approveLinkAction, endLinkAction, teamLinksAction } from "./actions";
+import { OwnerRent } from "./BoothRent";
 
 export interface TeamLinksData {
   /** The one link the owner sends: /team/link/<their page>. */
@@ -25,6 +27,8 @@ export interface TeamLinksData {
     approvedAt: string | null;
     sharing: Sharing;
     numbers: TeamNumbers;
+    /** Booth rent: the owner's own ledger with this member. */
+    rent: RentSummary;
   }[];
 }
 
@@ -236,6 +240,17 @@ export function IndependentTeam({
                       </div>
                     ))}
                   </dl>
+                  <OwnerRent
+                    linkId={m.id}
+                    businessName={m.business.name}
+                    rent={m.rent}
+                    onRent={(rent) =>
+                      setData((d) => ({
+                        ...d,
+                        active: d.active.map((x) => (x.id === m.id ? { ...x, rent } : x)),
+                      }))
+                    }
+                  />
                 </li>
               ))}
             </ul>

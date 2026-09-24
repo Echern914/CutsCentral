@@ -37,6 +37,7 @@ const data = (over: Partial<MyTeamsData["links"][number]> = {}): MyTeamsData => 
       team: { name: "United Barbershop" },
       sharing: NONE,
       theySee: { cuts: null, revenueCents: null, clients: null, rating: null },
+      rent: null,
       ...over,
     },
   ],
