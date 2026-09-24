@@ -62,7 +62,11 @@ export function JoinClient({
       setError(
         res.error === "email_mismatch"
           ? "This invitation is for a different email address."
-          : "This invitation is no longer valid. Ask for a new one.",
+          : // Nothing was saved and the invitation is still good - a retry is
+            // the fix, so don't send them off to ask for a new one.
+            res.error === "join_failed" || res.error === "network_error"
+            ? "That didn't go through. Try again."
+            : "This invitation is no longer valid. Ask for a new one.",
       );
     });
   }

@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { ACTIVE_SHOP_COOKIE_NAME } from "@chairback/config";
 import { prisma, type Shop } from "@chairback/db";
 import { SESSION_COOKIE_NAME, sessionFromToken } from "../auth/session.js";
-import type { ShopRole } from "../auth/roles.js";
+import { effectiveSeatRole, type ShopRole } from "../auth/roles.js";
 
 /**
  * Resolve which of an owner's shops is "active". A manager who owns several
@@ -29,48 +29,79 @@ export async function resolveOwnedShop(
   });
 }
 
-/**
- * Resolve which shop this session acts in, and with what role.
- *
- * OWNERSHIP IS CHECKED FIRST AND IS UNCHANGED - `Shop.ownerId` remains the
- * source of truth, so an owner's access can never depend on a ShopMember row
- * existing or being correct. Employee seats are a pure FALLBACK: only when the
- * user owns no matching shop do we look for a membership. That ordering is what
- * makes adding team seats safe for every shop that already exists.
- *
- * The requested-shop id is still only ever a HINT, re-verified here against
- * ownership or membership, so a forged cookie naming someone else's shop
- * resolves to null and falls back to this user's own.
- */
-export async function resolveShopAccess(
-  userId: string,
-  requestedShopId?: string,
-): Promise<{ shop: Shop; role: ShopRole; staffId: string | null } | null> {
-  const owned = await resolveOwnedShop(userId, requestedShopId);
-  if (owned) return { shop: owned, role: "OWNER", staffId: null };
+export interface ShopAccess {
+  shop: Shop;
+  role: ShopRole;
+  staffId: string | null;
+}
 
-  // Not an owner: is there a seat? Honor the active-shop hint, else the oldest
-  // membership - mirroring the deterministic owner fallback above.
-  const hinted = requestedShopId
-    ? await prisma.shopMember.findFirst({
-        where: { userId, shopId: requestedShopId },
-        include: { shop: true },
-      })
-    : null;
-  const seat =
-    hinted ??
-    (await prisma.shopMember.findFirst({
-      where: { userId },
-      orderBy: { createdAt: "asc" },
-      include: { shop: true },
-    }));
+/**
+ * Can this user act in THIS shop, and as what? Null when they can't.
+ *
+ * OWNERSHIP FIRST - `Shop.ownerId` is the source of truth, so an owner's access
+ * never depends on a ShopMember row existing or being correct. Only then a seat.
+ */
+export async function accessToShop(
+  userId: string,
+  shopId: string,
+): Promise<ShopAccess | null> {
+  const owned = await prisma.shop.findFirst({ where: { id: shopId, ownerId: userId } });
+  if (owned) return { shop: owned, role: "OWNER", staffId: null };
+  const seat = await prisma.shopMember.findFirst({
+    where: { userId, shopId },
+    include: { shop: true },
+  });
   if (!seat) return null;
   return {
     shop: seat.shop,
-    // A stored OWNER seat on a shop this user does NOT own (possible only if
-    // ownership were transferred without fixing seats) must not grant owner
-    // powers: ownership comes from Shop.ownerId above and nowhere else.
-    role: seat.shop.ownerId === userId ? "OWNER" : (seat.role as ShopRole),
+    role: effectiveSeatRole(seat.role, seat.shop.ownerId === userId),
+    staffId: seat.staffId,
+  };
+}
+
+/**
+ * Resolve which shop this session acts in, and with what role.
+ *
+ * `hints` are the shops the person asked for, most specific first: this
+ * device's active-shop cookie, then the choice remembered on the account. Each
+ * is only ever a HINT, re-verified against ownership OR a seat by accessToShop,
+ * so a forged or stale id naming someone else's shop grants nothing and falls
+ * through to the next.
+ *
+ * 🔴 A HINT NAMING A TEAM SEAT MUST BE HONORED EVEN FOR SOMEONE WHO OWNS A
+ * SHOP. It used to be checked against ownership alone, and an unmatched hint
+ * fell straight back to the person's own shop - so an independent barber who
+ * joined another shop's team could never act in it: every request, and the
+ * switcher itself, landed them back in their own business.
+ *
+ * With no usable hint: the person's own oldest shop, then their oldest seat.
+ * A seat is still never consulted while ownership answers, which is what keeps
+ * adding team seats safe for every shop that already exists.
+ */
+export async function resolveShopAccess(
+  userId: string,
+  ...hints: Array<string | null | undefined>
+): Promise<ShopAccess | null> {
+  const tried = new Set<string>();
+  for (const hint of hints) {
+    if (!hint || tried.has(hint)) continue;
+    tried.add(hint);
+    const access = await accessToShop(userId, hint);
+    if (access) return access;
+  }
+
+  const owned = await resolveOwnedShop(userId);
+  if (owned) return { shop: owned, role: "OWNER", staffId: null };
+
+  const seat = await prisma.shopMember.findFirst({
+    where: { userId },
+    orderBy: { createdAt: "asc" },
+    include: { shop: true },
+  });
+  if (!seat) return null;
+  return {
+    shop: seat.shop,
+    role: effectiveSeatRole(seat.role, seat.shop.ownerId === userId),
     staffId: seat.staffId,
   };
 }
@@ -86,6 +117,12 @@ declare global {
   namespace Express {
     interface Request {
       userId?: string;
+      /**
+       * The shop this account last chose to work in (User.activeShopId), read
+       * by requireUser in the same query as the revocation check. A HINT for
+       * resolveShopAccess, never a grant.
+       */
+      rememberedShopId?: string | null;
       shop?: Shop;
       /** True when the session carries the read-only demo claim. */
       demoSession?: boolean;
@@ -126,18 +163,17 @@ export async function requireUser(
   // Revocation check: a token minted before the user's current tokenVersion
   // (e.g. before a password change or logout) is dead even if its
   // signature/expiry hold. Cache per userId - both candidates usually agree.
-  const versions = new Map<string, number | null>();
+  const users = new Map<string, { tokenVersion: number; activeShopId: string | null } | null>();
   for (const payload of candidates) {
-    let version = versions.get(payload.userId);
-    if (version === undefined) {
-      const user = await prisma.user.findUnique({
+    let user = users.get(payload.userId);
+    if (user === undefined) {
+      user = await prisma.user.findUnique({
         where: { id: payload.userId },
-        select: { tokenVersion: true },
+        select: { tokenVersion: true, activeShopId: true },
       });
-      version = user ? user.tokenVersion : null;
-      versions.set(payload.userId, version);
+      users.set(payload.userId, user);
     }
-    if (version !== null && (payload.v ?? 0) === version) {
+    if (user !== null && (payload.v ?? 0) === user.tokenVersion) {
       if (payload.demo === true) {
         if (!demoSessionAllowed(req)) {
           res.status(403).json({
@@ -149,6 +185,7 @@ export async function requireUser(
         req.demoSession = true;
       }
       req.userId = payload.userId;
+      req.rememberedShopId = user.activeShopId;
       next();
       return;
     }
@@ -166,13 +203,15 @@ export async function requireShop(
     res.status(401).json({ error: "unauthorized" });
     return;
   }
-  // Honor the active-shop cookie (a manager switching between their own shops),
-  // re-verified against ownership inside resolveOwnedShop. Single-shop owners
-  // (everyone today) have no cookie and get their one shop unchanged.
-  const requestedShopId = req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as
-    | string
-    | undefined;
-  const access = await resolveShopAccess(req.userId, requestedShopId);
+  // This device's switcher choice first, then the one remembered on the
+  // account (the app's WebView, a new laptop). Both re-verified inside
+  // resolveShopAccess. Someone with one shop and no team has neither and gets
+  // their one shop, unchanged.
+  const access = await resolveShopAccess(
+    req.userId,
+    req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as string | undefined,
+    req.rememberedShopId,
+  );
   if (!access) {
     res.status(404).json({ error: "no_shop", message: "Create a shop first." });
     return;

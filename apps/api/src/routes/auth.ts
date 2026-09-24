@@ -33,7 +33,8 @@ import {
   verifyApple,
   verifyGoogle,
 } from "../auth/native.js";
-import { requireUser, resolveOwnedShop, resolveShopAccess } from "../middleware/auth.js";
+import { accessToShop, requireUser, resolveShopAccess } from "../middleware/auth.js";
+import { effectiveSeatRole } from "../auth/roles.js";
 import { accountLimiter, authLimiter } from "../middleware/rateLimit.js";
 import { billingEnabled, stripeClient } from "../billing/stripe.js";
 import { logger } from "../logger.js";
@@ -215,21 +216,30 @@ authRouter.get("/me", requireUser, async (req, res) => {
   }
   // Owned shops + the currently active one, so the dashboard can render a shop
   // switcher for a multi-shop manager (single-shop owners get a 1-item list).
-  // activeShopId is resolved the SAME way requireShop resolves it (cookie hint
-  // re-verified against ownership), so the switcher highlights the real active shop.
   const shops = await prisma.shop.findMany({
     where: { ownerId: req.userId },
     orderBy: { createdAt: "asc" },
     select: { id: true, name: true },
   });
-  // Resolve the ACTIVE shop the same way every API route does - ownership
-  // first, team seat as the fallback. It used to be resolveOwnedShop, which
-  // meant an invited barber (who owns nothing) had activeShopId null and no
-  // role: the web chrome had no way to know it was rendering for an employee,
-  // let alone which chair they work.
+  // Teams: seats in shops this person does NOT own. Without these the switcher
+  // offered only owned shops, so a barber with their own business who joined a
+  // team had no way to reach it.
+  const seats = await prisma.shopMember.findMany({
+    where: { userId: req.userId, shop: { ownerId: { not: req.userId } } },
+    orderBy: { createdAt: "asc" },
+    select: { role: true, shop: { select: { id: true, name: true } } },
+  });
+  const teams = seats.map((s) => ({
+    id: s.shop.id,
+    name: s.shop.name,
+    role: effectiveSeatRole(s.role, false),
+  }));
+  // Resolve the ACTIVE shop exactly as requireShop does - same hints, same
+  // order - so the switcher highlights the shop every other route acts on.
   const access = await resolveShopAccess(
     req.userId!,
     req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as string | undefined,
+    req.rememberedShopId,
   );
   const activeShop = access?.shop ?? null;
   const { welcomeSeenAt, passwordHash, googleId, appleId, ...rest } = user;
@@ -254,6 +264,7 @@ authRouter.get("/me", requireUser, async (req, res) => {
     hasGoogle: googleId !== null,
     hasApple: appleId !== null,
     shops,
+    teams,
     activeShopId: activeShop?.id ?? null,
     // The signed-in user's role in the ACTIVE shop, and the chair their seat
     // works. The web chrome branches on these: a BARBER gets the own-chair
@@ -299,6 +310,35 @@ authRouter.post("/welcome-seen", requireUser, async (req, res) => {
     data: { welcomeSeenAt: new Date() },
   });
   res.json({ ok: true });
+});
+
+const activeShopSchema = z.object({ shopId: z.string().min(1).max(64) }).strict();
+
+/**
+ * POST /api/auth/active-shop - remember which shop this account works in.
+ *
+ * The shop switcher's choice, stored on the account so it follows the person
+ * to the app and to a new device (the cookie it also sets is per-browser).
+ * Only a shop they own or hold a seat in is accepted - the same check every
+ * request makes - so this can never be used to point a session at someone
+ * else's shop; and even a stored id is re-verified on every request.
+ */
+authRouter.post("/active-shop", accountLimiter, requireUser, async (req, res) => {
+  const parsed = activeShopSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const access = await accessToShop(req.userId!, parsed.data.shopId);
+  if (!access) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  await prisma.user.update({
+    where: { id: req.userId },
+    data: { activeShopId: access.shop.id },
+  });
+  res.json({ ok: true, shopId: access.shop.id, role: access.role });
 });
 
 // Update profile: display name and/or avatar. Both optional so the name form

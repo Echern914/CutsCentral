@@ -17,6 +17,12 @@ export interface Me {
   hasApple: boolean;
   /** Shops this user owns (oldest first). 1 for a normal barber; >1 = manager. */
   shops: { id: string; name: string }[];
+  /**
+   * Teams: shops this user holds a seat on but does NOT own (oldest first) -
+   * e.g. a barber with their own business who also works in someone's shop.
+   * Optional so a web deploy ahead of the API just shows no teams.
+   */
+  teams?: { id: string; name: string; role: "OWNER" | "MANAGER" | "BARBER" }[];
   /** The shop the dashboard is currently acting on (the switcher's selection). */
   activeShopId: string | null;
   /** Name of the active shop. Set for MEMBERS too, who own no shop of their own. */

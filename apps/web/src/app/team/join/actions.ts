@@ -1,6 +1,7 @@
 "use server";
 
 import { apiSend } from "@/lib/api";
+import { clearActiveShopCookie, setActiveShopCookie } from "@/lib/activeShopCookie";
 import { mintAppReturnUrl } from "@/lib/mobileReturn";
 
 /**
@@ -11,16 +12,26 @@ import { mintAppReturnUrl } from "@/lib/mobileReturn";
  * second, so a barber whose app never reopens (dead battery, they closed the
  * sheet, they did this on a laptop) is still a member of the shop. Nothing
  * about their membership depends on the trip home succeeding.
+ *
+ * Then point this browser at the shop they joined. Someone who already runs
+ * their own shop would otherwise land straight back in it, with no sign they
+ * had joined anything. When the API names the shop, set it; when it doesn't
+ * (they were already on the team), drop this browser's choice so the one the
+ * API just remembered on the account decides.
  */
 export async function joinTeamAction(
   token: string,
 ): Promise<{ ok: boolean; error?: string; returnUrl?: string }> {
-  const res = await apiSend<{ ok: boolean }>("POST", "/api/team/join", { token });
+  const res = await apiSend<{ ok: boolean; shopId?: string }>("POST", "/api/team/join", {
+    token,
+  });
   // "already_member" is success as far as the person is concerned: they have
   // the access the link promised. Anything else is a real failure.
   if (!res.ok && res.error !== "already_member") {
     return { ok: false, error: res.error };
   }
+  if (res.data?.shopId) setActiveShopCookie(res.data.shopId);
+  else clearActiveShopCookie();
 
   const returnUrl = await mintAppReturnUrl("team_join");
   return { ok: true, ...(returnUrl ? { returnUrl } : {}) };

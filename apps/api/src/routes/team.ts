@@ -8,6 +8,7 @@ import { requireManager, requireOwner } from "../auth/roles.js";
 import { accountLimiter, dashboardLimiter } from "../middleware/rateLimit.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { applyChairLink, releaseChairLink } from "../services/staffUserLink.js";
+import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
 import { logger } from "../logger.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
@@ -311,6 +312,86 @@ teamRouter.patch("/members/:id", requireOwner, async (req, res) => {
     }
   });
   res.json({ ok: true });
+});
+
+/**
+ * POST /api/team/members/:id/staff — give someone on the team a chair of their own.
+ *
+ * The dead end this closes: a barber who joined without a chair is told "Ask the
+ * shop owner to link your login to your chair on the Team page", and the Team
+ * page could only link chairs that already existed - so an owner onboarding a
+ * whole team had to leave for Booking → Staff, create each chair, and come back.
+ * Here it is one step: a new active chair named after them, offered for every
+ * "offered by all" service, linked to their seat. Their hours are set the same
+ * way as any new chair's.
+ */
+teamRouter.post("/members/:id/staff", requireOwner, async (req, res) => {
+  const shopId = req.shop!.id;
+  const member = await prisma.shopMember.findFirst({
+    where: { id: req.params.id, shopId },
+    select: {
+      id: true,
+      userId: true,
+      staffId: true,
+      user: { select: { name: true, avatarUrl: true } },
+    },
+  });
+  if (!member) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (member.userId === req.shop!.ownerId) {
+    res.status(409).json({ error: "cannot_modify_owner" });
+    return;
+  }
+  if (member.staffId) {
+    res.status(409).json({ error: "already_has_chair" });
+    return;
+  }
+
+  let staffId: string;
+  try {
+    staffId = await prisma.$transaction(async (tx) => {
+      const chair = await tx.staff.create({
+        data: {
+          shopId,
+          name: member.user.name,
+          // Only an http(s) photo, the same boundary the staff editor enforces.
+          imageUrl:
+            member.user.avatarUrl && /^https?:\/\//i.test(member.user.avatarUrl)
+              ? member.user.avatarUrl
+              : null,
+          active: true,
+        },
+        select: { id: true },
+      });
+      // Conditional on the seat STILL having no chair, so a double-tap can't
+      // leave a second, orphaned chair behind: the loser matches nothing and
+      // its chair is rolled back with it.
+      const linked = await tx.shopMember.updateMany({
+        where: { id: member.id, shopId, staffId: null },
+        data: { staffId: chair.id },
+      });
+      if (linked.count === 0) throw new Error("already_has_chair");
+      await applyChairLink(tx, {
+        shopId,
+        userId: member.userId,
+        previousStaffId: null,
+        nextStaffId: chair.id,
+      });
+      return chair.id;
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message === "already_has_chair") {
+      res.status(409).json({ error: "already_has_chair" });
+      return;
+    }
+    throw err;
+  }
+  // After the commit, like the staff editor's create: a chair is real without
+  // its services, it just isn't offered for "all" of them until this lands.
+  await linkStaffToOfferedByAllServices(shopId, staffId);
+  res.status(201).json({ ok: true, staffId });
 });
 
 /**

@@ -61,9 +61,11 @@ export default async function DashboardLayout({
   // question (how many tabs); this answers an ACCESS one, and conflating them
   // is what hid every owner-only destination from owners.
   const seatRole: SeatRole = (me.data?.shopRole ?? "OWNER") as SeatRole;
-  // Multi-shop managers get a shop switcher; a normal single-shop barber never
-  // sees it (list has one entry).
+  // A shop switcher whenever there is somewhere else to go: several owned
+  // shops, or a team seat alongside (or instead of) a shop of their own. A
+  // one-shop owner with no team never sees it.
   const shops = me.data?.shops ?? [];
+  const teams = me.data?.teams ?? [];
   const activeShopId = me.data?.activeShopId ?? null;
   // Which premium features render locked (diamond badges). NO_LOCKS for
   // trialing/subscribed/comped shops, billing-off installs, demo, and employee
@@ -108,8 +110,8 @@ export default async function DashboardLayout({
                 employee too, and "what needs me" is the one thing a barber-only
                 dashboard should still surface. */}
             <NotificationBell signals={bellSignals} />
-            {shops.length > 1 && (
-              <ShopSwitcher shops={shops} activeShopId={activeShopId} />
+            {shops.length + teams.length > 1 && (
+              <ShopSwitcher shops={shops} teams={teams} activeShopId={activeShopId} />
             )}
             {/* Personal account page. Hidden for read-only demo sessions (shared
                 account). Deliberately NOT hidden in the native app: App Store
