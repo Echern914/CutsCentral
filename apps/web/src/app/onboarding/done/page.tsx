@@ -15,11 +15,15 @@ interface ShopStatus {
 }
 
 export default async function OnboardingDonePage() {
-  const [res, joining] = await Promise.all([
+  const [res, teamsRes, retry] = await Promise.all([
     apiGet<ShopStatus>("/api/shops/me"),
-    teamBeingJoined(),
+    // This business's teams, from the database - not from a cookie. A brand
+    // new business is only on a team (or waiting) because setup just asked.
+    apiGet<{ links: { id: string; status: "PENDING" | "ACTIVE"; team: { name: string } }[] }>("/api/teams"),
+    teamToRetry(),
   ]);
   const status = res.data;
+  const teams = teamsRes.ok ? (teamsRes.data?.links ?? []) : [];
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5">
@@ -58,21 +62,21 @@ export default async function OnboardingDonePage() {
             Imported {status.clientCount} clients and {status.visitCount} visits.
           </p>
         )}
-        {joining?.status && (
-          <p role="status" className="text-sm text-emerald-soft" data-qa="team-request-sent">
-            {joining.status === "ACTIVE"
-              ? `You're on ${joining.teamName}'s team.`
-              : `Your request to join ${joining.teamName}'s team is sent. They'll approve it, and nothing is shared until you choose.`}
+        {teams.map((t) => (
+          <p key={t.id} role="status" className="text-sm text-emerald-soft" data-qa="team-request-sent">
+            {t.status === "ACTIVE"
+              ? `You're on ${t.team.name}'s team.`
+              : `Your request to join ${t.team.name}'s team is sent. They'll approve it, and nothing is shared until you choose.`}
           </p>
-        )}
-        {joining && !joining.status ? (
+        ))}
+        {retry ? (
           <>
-            {/* They set up this business to join a team: that's the next step. */}
+            {/* Setup couldn't send the request they came for: offer it. */}
             <Link
-              href={`/team/link/${joining.key}`}
+              href={`/team/link/${retry.key}`}
               className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105"
             >
-              Finish joining {joining.teamName}&apos;s team
+              Finish joining {retry.teamName}&apos;s team
             </Link>
             <Link
               href="/dashboard"
@@ -95,17 +99,11 @@ export default async function OnboardingDonePage() {
 }
 
 /**
- * The team this person was joining when they started setup (a shop's team
- * link sent them here with no business yet). Creating the business already
- * sent the request (onboarding/actions.ts), so `status` is normally PENDING
- * and this screen confirms it; null means it didn't go through, and the
- * screen offers the link back instead.
+ * A team this person set up their business to join, whose request didn't go
+ * through (setup forgets the team once the API has it, so a cookie still here
+ * means it failed). Null otherwise - including when they've since asked.
  */
-async function teamBeingJoined(): Promise<{
-  key: string;
-  teamName: string;
-  status: "PENDING" | "ACTIVE" | null;
-} | null> {
+async function teamToRetry(): Promise<{ key: string; teamName: string } | null> {
   const key = cookies().get(TEAM_LINK_COOKIE)?.value;
   if (!teamKeyOk(key)) return null;
   const res = await apiGet<{
@@ -113,6 +111,6 @@ async function teamBeingJoined(): Promise<{
     status: "PENDING" | "ACTIVE" | null;
     ownTeam: boolean;
   }>(`/api/teams/preview?team=${encodeURIComponent(key)}`);
-  if (!res.ok || !res.data || res.data.ownTeam) return null;
-  return { key, teamName: res.data.team.name, status: res.data.status };
+  if (!res.ok || !res.data || res.data.ownTeam || res.data.status) return null;
+  return { key, teamName: res.data.team.name };
 }

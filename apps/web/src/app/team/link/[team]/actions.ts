@@ -3,7 +3,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { apiSend } from "@/lib/api";
-import { TEAM_LINK_COOKIE, teamKeyOk } from "@/lib/teamLinkCookie";
+import { TEAM_LINK_COOKIE, clearTeamLinkCookie, teamKeyOk } from "@/lib/teamLinkCookie";
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
@@ -24,7 +24,7 @@ export async function askToJoinAction(
   const res = await apiSend<{ ok: boolean }>("POST", "/api/teams/join", { team });
   if (!res.ok) return { ok: false, error: res.error };
   // The request exists now; onboarding has nothing left to finish.
-  cookies().set(TEAM_LINK_COOKIE, "", { ...COOKIE_OPTIONS, maxAge: 0 });
+  clearTeamLinkCookie();
   return { ok: true };
 }
 

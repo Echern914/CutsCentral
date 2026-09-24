@@ -6,7 +6,7 @@ import { AFFILIATE_CLAIM_COOKIE } from "@chairback/config";
 import { apiSend } from "@/lib/api";
 import { clearActiveShopCookie } from "@/lib/activeShopCookie";
 import { mintAppReturnUrl } from "@/lib/mobileReturn";
-import { TEAM_LINK_COOKIE, teamKeyOk } from "@/lib/teamLinkCookie";
+import { TEAM_LINK_COOKIE, clearTeamLinkCookie, teamKeyOk } from "@/lib/teamLinkCookie";
 
 interface ShopState {
   error?: string;
@@ -72,10 +72,16 @@ export async function createShopAction(
  * passes this point, while the last screen can be skipped (the connect step
  * has an exit straight to the dashboard, and the app hand-off returns early).
  * Asking grants nothing: the owner approves, nothing is shared until the
- * barber chooses. A failure costs nothing - the last screen offers it again.
+ * barber chooses.
+ *
+ * Once the API has answered for good (sent, already asked, or no such team)
+ * the cookie is forgotten, so it can never ask again - least of all for the
+ * next person to sign up in this browser. A failure that might pass (the
+ * network, a 5xx) keeps it, and the last screen offers the request again.
  */
 async function askTheTeamTheyCameFor(): Promise<void> {
   const team = cookies().get(TEAM_LINK_COOKIE)?.value;
   if (!teamKeyOk(team)) return;
-  await apiSend("POST", "/api/teams/join", { team });
+  const res = await apiSend("POST", "/api/teams/join", { team });
+  if (res.ok || res.status === 409 || res.status === 404) clearTeamLinkCookie();
 }

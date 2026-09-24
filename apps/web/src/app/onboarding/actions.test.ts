@@ -53,11 +53,35 @@ describe("creating a business from a team link", () => {
     expect(redirect).toHaveBeenCalledWith("/onboarding/connect");
   });
 
-  it("🔴 a failed request never blocks the business: onboarding carries on", async () => {
+  it("🔴 forgets the team once the request is in - it can't ask again for the next person in this browser", async () => {
+    cookieStore.set("cb_team_link", "cmteamshop0001");
+    apiSend.mockResolvedValue(created);
+    await createShopAction({}, form());
+    expect(cookieStore.has("cb_team_link")).toBe(false);
+    // The next person to set up a business here asks nobody.
+    apiSend.mockClear();
+    await createShopAction({}, form());
+    expect(apiSend.mock.calls.map((c) => c[1])).toEqual(["/api/shops"]);
+  });
+
+  it("already asked, or no such team: forgotten too", async () => {
+    for (const answer of [
+      { ok: false, status: 409, error: "already_linked" },
+      { ok: false, status: 404, error: "team_not_found" },
+    ]) {
+      cookieStore.set("cb_team_link", "cmteamshop0001");
+      apiSend.mockResolvedValueOnce(created).mockResolvedValueOnce(answer);
+      await createShopAction({}, form());
+      expect(cookieStore.has("cb_team_link")).toBe(false);
+    }
+  });
+
+  it("🔴 a failed request never blocks the business, and is kept so the last screen can offer it", async () => {
     cookieStore.set("cb_team_link", "cmteamshop0001");
     apiSend.mockResolvedValueOnce(created).mockResolvedValueOnce({ ok: false, status: 0, error: "network_error" });
     await createShopAction({}, form());
     expect(redirect).toHaveBeenCalledWith("/onboarding/connect");
+    expect(cookieStore.get("cb_team_link")).toBe("cmteamshop0001");
   });
 
   it("no team link (or a malformed one): no request", async () => {
