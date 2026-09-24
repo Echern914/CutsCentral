@@ -12,7 +12,13 @@ import {
   sharingOf,
   teamNumbers,
 } from "../services/teamLinks.js";
-import { rateHistory, rentPayments, rentSummary, stopRentOnLeave } from "../services/boothRent.js";
+import {
+  HAS_RENT_RECORDS,
+  rateHistory,
+  rentPayments,
+  rentSummary,
+  stopRentOnLeave,
+} from "../services/boothRent.js";
 
 /**
  * TEAMS, from the member's side: a barber linking THEIR OWN business to a
@@ -37,7 +43,7 @@ teamsRouter.get("/", async (req, res) => {
     req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as string | undefined,
   );
   if (!business) {
-    res.json({ business: null, links: [] });
+    res.json({ business: null, links: [], past: [] });
     return;
   }
   const links = await linksForMember(business.id);
@@ -62,13 +68,28 @@ teamsRouter.get("/", async (req, res) => {
                 now,
               )
             : null,
-        // Their own booth rent with this team - the same summary the owner sees.
-        rent:
-          l.status === "ACTIVE"
-            ? await runAsOwner((tx) => rentSummary(tx, l.id, l.teamShop.timezone, now))
-            : null,
+        // Their own booth rent with this team - the same summary the owner
+        // sees. Also while asking to rejoin: an old record never disappears.
+        rent: await runAsOwner((tx) => rentSummary(tx, l.id, l.teamShop.timezone, now)),
       })),
     ),
+    // Teams they've left, where booth rent was recorded: read-only, the rent
+    // and the team's name - nothing of the team, nothing of their numbers.
+    past: await runAsOwner(async (tx) => {
+      const ended = await tx.teamLink.findMany({
+        where: { memberShopId: business.id, status: "ENDED", ...HAS_RENT_RECORDS },
+        orderBy: { updatedAt: "desc" },
+        select: { id: true, endedAt: true, teamShop: { select: { name: true, timezone: true } } },
+      });
+      return Promise.all(
+        ended.map(async (l) => ({
+          id: l.id,
+          endedAt: l.endedAt?.toISOString() ?? null,
+          team: { name: l.teamShop.name },
+          rent: await rentSummary(tx, l.id, l.teamShop.timezone, now),
+        })),
+      );
+    }),
   });
 });
 

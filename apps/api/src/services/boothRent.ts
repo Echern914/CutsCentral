@@ -144,6 +144,11 @@ export interface RentSummary extends Ledger {
   scheduled: { amountCents: number | null; period: RentPeriod | null; startsOn: string } | null;
   /** When a change made today would take effect (null: no rent in effect). */
   nextChangeOn: string | null;
+  /**
+   * With no rent in effect: the earliest day a new start may use (null: only
+   * the year window applies - there's no history yet).
+   */
+  earliestStart: string | null;
   lastPayment: { date: string; amountCents: number; method: string } | null;
 }
 
@@ -153,6 +158,25 @@ function rates(tx: Tx, linkId: string) {
     where: { linkId, voidedAt: null },
     select: { id: true, amountCents: true, period: true, startsOn: true, createdAt: true },
   });
+}
+
+/**
+ * The earliest day rent may (re)start when none is in effect. Never before
+ * what has already taken effect - the past is never re-priced - and, once
+ * there is a history, never before the member was last approved onto the
+ * team, so rejoining can't bill the time they were away. A first start may
+ * reach back (a booth renter who was already paying before ChairBack).
+ */
+export function earliestStart(rows: RateRow[], today: Date, approvedDay: Date | null): Date | null {
+  const begun = rateOn(rows, today);
+  if (!begun) return null;
+  return approvedDay && approvedDay > begun.startsOn ? approvedDay : begun.startsOn;
+}
+
+/** The link's last approval, as the team shop's calendar day. */
+async function approvedDay(tx: Tx, linkId: string, timezone: string): Promise<Date | null> {
+  const link = await tx.teamLink.findUnique({ where: { id: linkId }, select: { approvedAt: true } });
+  return link?.approvedAt ? shopLocalDay(link.approvedAt, timezone) : null;
 }
 
 export async function rentSummary(
@@ -175,6 +199,7 @@ export async function rentSummary(
   const inEffect = rateOn(rows, today);
   const upcoming = effectiveRates(rows).find((r) => r.startsOn > today) ?? null;
   const next = nextBoundary(rows, today);
+  const earliest = next ? null : earliestStart(rows, today, await approvedDay(tx, linkId, timezone));
   return {
     ...ledger(rows, paid._sum.amountCents ?? 0, today),
     rate:
@@ -185,22 +210,18 @@ export async function rentSummary(
       ? { amountCents: upcoming.amountCents, period: upcoming.period, startsOn: ymd(upcoming.startsOn) }
       : null,
     nextChangeOn: next ? ymd(next) : null,
+    earliestStart: earliest ? ymd(earliest) : null,
     lastPayment: last ? { date: ymd(last.paidOn), amountCents: last.amountCents, method: last.method } : null,
   };
 }
 
 export type SetRentResult =
   | { ok: true; startsOn: string }
-  | { ok: false; error: "start_required" | "start_before_history" | "start_out_of_range" };
+  | { ok: false; error: "start_required" | "start_too_early" | "start_out_of_range" };
 
 /** One rent write per member at a time: two taps can't interleave. */
 async function lockLink(tx: Tx, linkId: string) {
   await tx.$queryRaw`SELECT id FROM "TeamLink" WHERE id = ${linkId} FOR UPDATE`;
-}
-
-/** A change that hasn't taken effect never applied to anything: a newer one replaces it. */
-function dropScheduled(tx: Tx, linkId: string, today: Date) {
-  return tx.boothRentRate.deleteMany({ where: { linkId, voidedAt: null, startsOn: { gt: today } } });
 }
 
 /**
@@ -208,8 +229,12 @@ function dropScheduled(tx: Tx, linkId: string, today: Date) {
  *  - Rent in effect: the new row starts at the NEXT period boundary; the
  *    current period and everything before it keep their rate.
  *  - No rent in effect: an explicit start date is required (none is
- *    invented), within a year of today, and not before a row that has
- *    already taken effect - the past is never re-priced.
+ *    invented), within a year of today, and not before `earliestStart`.
+ *
+ * A new row on the same day as an existing one supersedes it; voiding the new
+ * row brings the old one back (an undo, never a gap). A row scheduled for a
+ * different future day that this one displaces never took effect: it is
+ * voided - kept in the history, no longer counted.
  */
 export async function setRent(
   tx: Tx,
@@ -226,11 +251,20 @@ export async function setRent(
   await lockLink(tx, input.linkId);
   const today = shopLocalDay(now, timezone);
   const rows = await rates(tx, input.linkId);
+  const displace = (keep: Date | null) =>
+    tx.boothRentRate.updateMany({
+      where: {
+        linkId: input.linkId,
+        voidedAt: null,
+        startsOn: { gt: today, ...(keep ? { not: keep } : {}) },
+      },
+      data: { voidedAt: now, voidedById: input.userId },
+    });
   let startsOn = nextBoundary(rows, today);
   if (!startsOn) {
     if (input.amountCents === null) {
       // No rent in effect: stopping only cancels a start that hasn't begun.
-      await dropScheduled(tx, input.linkId, today);
+      await displace(null);
       return { ok: true, startsOn: ymd(today) };
     }
     if (!input.startsOn) return { ok: false, error: "start_required" };
@@ -238,11 +272,11 @@ export async function setRent(
     if (Math.abs(input.startsOn.getTime() - today.getTime()) > 366 * DAY_MS) {
       return { ok: false, error: "start_out_of_range" };
     }
-    const begun = rateOn(rows, today);
-    if (begun && input.startsOn < begun.startsOn) return { ok: false, error: "start_before_history" };
+    const earliest = earliestStart(rows, today, await approvedDay(tx, input.linkId, timezone));
+    if (earliest && input.startsOn < earliest) return { ok: false, error: "start_too_early" };
     startsOn = input.startsOn;
   }
-  await dropScheduled(tx, input.linkId, today);
+  await displace(startsOn);
   await tx.boothRentRate.create({
     data: {
       linkId: input.linkId,
@@ -258,50 +292,63 @@ export async function setRent(
 /**
  * A member left or was removed: rent stops at the next period boundary (the
  * period they were in is still owed), and a start that hasn't begun is
- * cancelled. What they owe and every payment stay recorded.
+ * cancelled. What they owe and every payment stay recorded - and visible to
+ * both sides, read-only.
  */
 export async function stopRentOnLeave(tx: Tx, linkId: string, timezone: string, userId: string) {
   await setRent(tx, { linkId, amountCents: null, period: null, startsOn: null, userId }, timezone);
 }
 
-export type VoidRateResult = { ok: true } | { ok: false; error: "not_found" | "not_latest" };
+export type VoidRateResult = { ok: true } | { ok: false; error: "not_found" | "not_latest" | "stop_not_voidable" };
 
 /**
- * Void a rent entry made by mistake (a wrong amount, a wrong start date).
- * Only the LATEST one, so a correction is undone one step at a time: the
- * periods it covered go back to the entry before it, or to no rent. It stays
- * in the history, marked void. Voiding twice changes nothing.
+ * Void a rent AMOUNT entered by mistake (a wrong amount, a wrong start date).
+ *  - Only the LATEST entry, so nothing agreed after it can change, and the
+ *    periods before its start keep their obligations.
+ *  - Never a stop: a stop records the rent ending (leaving, removal, or the
+ *    owner's choice). Voiding one would bill time with no agreement; rent
+ *    starts again only by entering it, with a date.
+ * The periods it covered go back to the entry before it (or to no rent). It
+ * stays in the history, marked void with when. Voiding twice changes nothing.
  */
 export async function voidRate(tx: Tx, linkId: string, rateId: string, userId: string): Promise<VoidRateResult> {
   await lockLink(tx, linkId);
   const row = await tx.boothRentRate.findFirst({
     where: { id: rateId, linkId },
-    select: { id: true, voidedAt: true },
+    select: { id: true, voidedAt: true, amountCents: true },
   });
   if (!row) return { ok: false, error: "not_found" };
   if (row.voidedAt) return { ok: true };
+  if (row.amountCents === null) return { ok: false, error: "stop_not_voidable" };
   if (effectiveRates(await rates(tx, linkId)).at(-1)?.id !== row.id) return { ok: false, error: "not_latest" };
   await tx.boothRentRate.update({ where: { id: row.id }, data: { voidedAt: new Date(), voidedById: userId } });
   return { ok: true };
 }
 
-/** The rent entries, oldest first: the ones that count, and voided ones marked. */
+export type RateStatus = "active" | "replaced" | "voided";
+
+/**
+ * Every rent entry, oldest first - the audit trail: the ones in effect, the
+ * ones a same-day entry replaced (they come back if it's voided), and the
+ * voided ones with the day they were voided.
+ */
 export async function rateHistory(tx: Tx, linkId: string) {
   const all = await tx.boothRentRate.findMany({
     where: { linkId },
     select: { id: true, amountCents: true, period: true, startsOn: true, createdAt: true, voidedAt: true },
   });
-  const shown = [...effectiveRates(all.filter((r) => !r.voidedAt)), ...all.filter((r) => r.voidedAt)];
-  return shown.sort(byStart).map((r) => ({
+  const active = new Set(effectiveRates(all.filter((r) => !r.voidedAt)).map((r) => r.id));
+  return [...all].sort(byStart).map((r) => ({
     id: r.id,
     amountCents: r.amountCents,
     period: r.period,
     startsOn: ymd(r.startsOn),
-    voided: r.voidedAt !== null,
+    status: (r.voidedAt ? "voided" : active.has(r.id) ? "active" : "replaced") as RateStatus,
+    voidedOn: r.voidedAt ? ymd(r.voidedAt) : null,
   }));
 }
 
-/** Every payment, newest first, voided ones included and marked. */
+/** Every payment, newest first, voided ones included and marked with when. */
 export async function rentPayments(tx: Tx, linkId: string) {
   const rows = await tx.boothRentPayment.findMany({
     where: { linkId },
@@ -309,5 +356,15 @@ export async function rentPayments(tx: Tx, linkId: string) {
     take: 500,
     select: { id: true, amountCents: true, paidOn: true, method: true, note: true, voidedAt: true },
   });
-  return rows.map(({ voidedAt, paidOn, ...r }) => ({ ...r, paidOn: ymd(paidOn), voided: voidedAt !== null }));
+  return rows.map(({ voidedAt, paidOn, ...r }) => ({
+    ...r,
+    paidOn: ymd(paidOn),
+    voided: voidedAt !== null,
+    voidedOn: voidedAt ? ymd(voidedAt) : null,
+  }));
 }
+
+/** A link that has any rent record at all - an entry or a payment, voided or not. */
+export const HAS_RENT_RECORDS = {
+  OR: [{ rentRates: { some: {} } }, { rentPayments: { some: {} } }],
+} satisfies Prisma.TeamLinkWhereInput;

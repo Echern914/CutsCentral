@@ -19,9 +19,13 @@ vi.mock("./actions", () => ({
   approveLinkAction: (...a: unknown[]) => approveLinkAction(...a),
   endLinkAction: (...a: unknown[]) => endLinkAction(...a),
   teamLinksAction: (...a: unknown[]) => teamLinksAction(...a),
+  rentHistoryAction: vi.fn(),
 }));
 vi.mock("@/components/ui/Toast", () => ({ useToast: () => ({ toast }) }));
-vi.mock("./BoothRent", () => ({ OwnerRent: () => null }));
+vi.mock("./BoothRent", () => ({
+  OwnerRent: () => null,
+  ReadOnlyRent: ({ title }: { title: string }) => <div data-qa="readonly-rent">{title}</div>,
+}));
 
 const { IndependentTeam } = await import("./IndependentTeam");
 const vocab = vocabularyFor("barber");
@@ -52,10 +56,12 @@ const base: TeamLinksData = {
         rate: null,
         scheduled: null,
         nextChangeOn: null,
+        earliestStart: null,
         lastPayment: null,
       },
     },
   ],
+  past: [],
 };
 
 beforeEach(() => {
@@ -77,6 +83,32 @@ describe("the team table", () => {
   it("an empty team says how to start", () => {
     render(<IndependentTeam initial={{ ...base, pending: [], active: [] }} vocab={vocab} />);
     expect(screen.getByText(/No one yet. Send your team link/)).toBeTruthy();
+  });
+});
+
+describe("past booth rent", () => {
+  it("🔴 a member who left keeps a read-only rent record - their name and rent, nothing else", () => {
+    const past: TeamLinksData["past"] = [
+      {
+        id: "old1",
+        status: "ENDED",
+        endedAt: "2026-09-20T12:00:00.000Z",
+        business: { name: "Dre The Barber" },
+        rent: base.active[0]!.rent,
+      },
+    ];
+    render(<IndependentTeam initial={{ ...base, past }} vocab={vocab} />);
+    const section = document.querySelector('[data-qa="past-rent"]')!;
+    expect(section.textContent).toContain("Dre The Barber");
+    expect(section.querySelector('[data-qa="readonly-rent"]')!.textContent).toBe("Booth rent · Dre The Barber");
+    // No numbers, no remove, no approve - only the rent.
+    expect(section.querySelector("dd")).toBeNull();
+    expect(section.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  it("with none, there's no section", () => {
+    render(<IndependentTeam initial={base} vocab={vocab} />);
+    expect(document.querySelector('[data-qa="past-rent"]')).toBeNull();
   });
 });
 

@@ -34,6 +34,7 @@ const none: RentSummary = {
   rate: null,
   scheduled: null,
   nextChangeOn: null,
+  earliestStart: null,
   lastPayment: null,
 };
 /** $150 a week since Sep 14; last week was missed, nothing paid this week. */
@@ -133,15 +134,13 @@ describe("setting rent", () => {
   });
 
   it("🔴 a refused or failed save keeps what was typed and never claims success", async () => {
-    setRentAction.mockResolvedValueOnce({ ok: false, error: "start_before_history" });
+    setRentAction.mockResolvedValueOnce({ ok: false, error: "start_too_early" });
     setRentAction.mockResolvedValueOnce({ ok: false, error: "network_error" });
-    view(none);
+    view({ ...none, earliestStart: "2026-01-01" });
     fireEvent.click(qa("set-rent")!);
     fireEvent.change(amountInput(), { target: { value: "150" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() =>
-      expect(screen.getByText("The rent history already covers that day - pick a later start.")).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByText(/^Pick Thu, Jan 1 or later/)).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.getByText("Couldn't confirm the change. Try again.")).toBeTruthy());
     expect(amountInput().value).toBe("150");
@@ -184,8 +183,18 @@ describe("recording a payment", () => {
 describe("history and voids", () => {
   const history = (voided: boolean): RentHistory => ({
     summary: behind,
-    payments: [{ id: "p1", amountCents: 15000, paidOn: "2026-09-21", method: "cash", note: null, voided }],
-    rates: [{ id: "r1", amountCents: 15000, period: "WEEKLY", startsOn: "2026-09-14", voided: false }],
+    payments: [
+      {
+        id: "p1",
+        amountCents: 15000,
+        paidOn: "2026-09-21",
+        method: "cash",
+        note: null,
+        voided,
+        voidedOn: voided ? "2026-09-24" : null,
+      },
+    ],
+    rates: [{ id: "r1", amountCents: 15000, period: "WEEKLY", startsOn: "2026-09-14", status: "active", voidedOn: null }],
   });
 
   it("🔴 lists every unpaid week; a void asks first, and the payment stays, marked", async () => {
@@ -199,7 +208,7 @@ describe("history and voids", () => {
     fireEvent.click(screen.getByRole("button", { name: "Void the $150 payment from Mon, Sep 21" }));
     expect(voidRentPaymentAction).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Void it" }));
-    await waitFor(() => expect(screen.getByText("Voided")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Voided Sep 24")).toBeTruthy());
     expect(voidRentPaymentAction).toHaveBeenCalledWith("tl1", "p1");
     expect(onRent).toHaveBeenCalledWith(behind);
     expect(toast).toHaveBeenCalledWith("Payment voided", "success");
@@ -214,7 +223,58 @@ describe("history and voids", () => {
     fireEvent.click(screen.getByRole("button", { name: "Void the $150 payment from Mon, Sep 21" }));
     fireEvent.click(screen.getByRole("button", { name: "Void it" }));
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't void it - try again", "error"));
-    expect(screen.queryByText("Voided")).toBeNull();
+    expect(screen.queryByText(/^Voided/)).toBeNull();
     expect(screen.getByRole("button", { name: "Void it" })).toBeTruthy();
+  });
+});
+
+describe("the rules a correction can't break", () => {
+  it("🔴 a stop is never offered for voiding; a replaced or voided entry says so, with when", async () => {
+    rentHistoryAction.mockResolvedValue({
+      summary: { ...behind, rate: null, current: null, earliestStart: "2026-10-01" },
+      payments: [],
+      rates: [
+        { id: "a", amountCents: 15000, period: "WEEKLY", startsOn: "2026-09-10", status: "active", voidedOn: null },
+        { id: "b", amountCents: 1500, period: "WEEKLY", startsOn: "2026-09-17", status: "voided", voidedOn: "2026-09-18" },
+        { id: "c", amountCents: 20000, period: "WEEKLY", startsOn: "2026-10-01", status: "replaced", voidedOn: null },
+        { id: "d", amountCents: null, period: null, startsOn: "2026-10-01", status: "active", voidedOn: null },
+      ],
+    } satisfies RentHistory);
+    view({ ...behind, rate: null, current: null, earliestStart: "2026-10-01" });
+    fireEvent.click(qa("rent-history")!);
+    await waitFor(() => expect(document.querySelectorAll('[data-qa="rent-rate"]')).toHaveLength(4));
+    expect(screen.queryByRole("button", { name: /^Void the rent entry/ })).toBeNull();
+    expect(screen.getByText("Voided Sep 18")).toBeTruthy();
+    expect(screen.getByText("Replaced")).toBeTruthy();
+  });
+
+  it("🔴 a start before the earliest allowed day is refused before it reaches the server", () => {
+    view({ ...none, balanceCents: 5000, earliestStart: "2026-10-01" });
+    fireEvent.click(qa("set-rent")!);
+    fireEvent.change(amountInput(), { target: { value: "150" } });
+    fireEvent.change(qa("rent-starts-on")!, { target: { value: "2026-09-24" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByText(/Pick Thu, Oct 1 or later/)).toBeTruthy();
+    expect(setRentAction).not.toHaveBeenCalled();
+  });
+});
+
+describe("a past relationship", () => {
+  it("🔴 is read-only: the lines and History, nothing to record, change or void", async () => {
+    const { ReadOnlyRent } = await import("./BoothRent");
+    rentHistoryAction.mockResolvedValue({
+      summary: behind,
+      payments: [{ id: "p1", amountCents: 15000, paidOn: "2026-09-21", method: "cash", note: null, voided: false, voidedOn: null }],
+      rates: [{ id: "r1", amountCents: 15000, period: "WEEKLY", startsOn: "2026-09-14", status: "active", voidedOn: null }],
+    } satisfies RentHistory);
+    render(
+      <ReadOnlyRent title="Booth rent · Joe's Shop" who="owner" rent={behind} loadHistory={() => rentHistoryAction("tl1")} />,
+    );
+    expect(qa("record-payment")).toBeNull();
+    expect(qa("set-rent")).toBeNull();
+    expect(qa("rent-total")!.textContent).toBe("Owes $300 in total · unpaid since Sep 14");
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    await waitFor(() => expect(document.querySelectorAll('[data-qa="rent-payment"]')).toHaveLength(1));
+    expect(screen.queryByRole("button", { name: /^Void/ })).toBeNull();
   });
 });
