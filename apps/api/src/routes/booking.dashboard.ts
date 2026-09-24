@@ -3635,11 +3635,13 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
     select: {
       id: true,
       staffId: true,
+      serviceId: true,
       status: true,
       canceledAt: true,
       visitId: true,
       startsAt: true,
       endsAt: true,
+      bookedVia: true,
       payments: { select: { id: true } },
     },
   });
@@ -3665,6 +3667,34 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
   let mirrorOutboxIds: string[] = [];
   try {
     await prisma.$transaction(async (tx) => {
+      // 🔴 A SPECIAL IS TAKEN BACK, NOT BOOKED OVER. Cancelling released it
+      // (cancelAppointment), so the special is open again and owns its span
+      // against any NORMAL write - left alone, it would veto its own undo and
+      // every undo of a special would come back slot_taken. So, for a booking
+      // that WAS a special: find that special (same barber, same start, listed
+      // under this service), still free, and claim it back exactly as the
+      // booking did. Gone - a customer took it, the barber turned it off, it
+      // was deleted - and this falls through to the plain guard, which refuses
+      // over the customer's booking and restores cleanly over a special that no
+      // longer exists. Read inside the transaction; the guard's lock and the
+      // CAS below settle any race with a customer claiming it right now.
+      const special =
+        appt.bookedVia === "targeted_slot"
+          ? ((
+              await tx.targetedSlot.findMany({
+                where: {
+                  shopId,
+                  staffId: appt.staffId,
+                  startsAt: appt.startsAt,
+                  active: true,
+                  bookedAppointmentId: null,
+                },
+                orderBy: { createdAt: "asc" },
+                select: { id: true, serviceId: true, services: SLOT_SERVICES_SELECT },
+              })
+            ).find((t) => slotOffersService(t, appt.serviceId)) ?? null)
+          : null;
+
       await lockStaffAndAssertSlotFree(tx, {
         // External blocks are ENFORCED here: this path has no override step.
         // A block that landed since the customer asked means the barber
@@ -3682,6 +3712,8 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
         // Barber-driven, same as the dashboard create and reschedule.
         serviceDayLimit: null,
         overrideWaitlistHolds: true,
+        // Taking its own special back must not be vetoed by that special.
+        targetedSlotIdToIgnore: special?.id,
       });
       await tx.appointment.update({
         where: { id: appt.id },
@@ -3698,6 +3730,15 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
           cancellationEmailSentAt: null,
         },
       });
+      // The capacity-1 claim, the same CAS every booking of a special makes:
+      // lost it since the read above -> the whole undo rolls back, slot_taken.
+      if (special) {
+        const claimed = await tx.targetedSlot.updateMany({
+          where: { id: special.id, bookedAppointmentId: null, active: true },
+          data: { bookedAppointmentId: appt.id },
+        });
+        if (claimed.count === 0) throw new SlotTakenError();
+      }
       mirrorOutboxIds = await recordMirrorIntent(tx, {
         shopId,
         now,
@@ -5374,7 +5415,7 @@ bookingDashboardRouter.post("/appointments/:id/decline", async (req, res) => {
     // A targeted-slot REQUEST claims its slot at create time (capacity 1 must
     // hold while the request waits). Declining means the barber never accepted
     // it, so the claim is RELEASED and the special slot goes back on sale -
-    // unlike a real (approved/booked) cancellation, which keeps it consumed.
+    // exactly as a real cancellation now does too (cancelAppointment).
     await forShop(shopId).targetedSlot.updateMany({
       where: { bookedAppointmentId: req.params.id! },
       data: { bookedAppointmentId: null },

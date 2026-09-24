@@ -254,6 +254,26 @@ export async function cancelAppointment(
     // refund, no second teardown.
     if (transitioned.count === 0) return null;
 
+    // 🔴 A CANCELLED SPECIAL GOES BACK ON SALE. A targeted slot is capacity-1
+    // (bookedAppointmentId is unique), and nothing else ever cleared it: a
+    // special booked and then cancelled - by the barber, the customer's own
+    // manage link, the receptionist or a series cancel, all of which land
+    // here - stayed "sold" to a booking that no longer existed, and never
+    // appeared on the website again. (Declining a request and a failed Acuity
+    // mirror already released it; a real cancel was the gap, recorded only as
+    // "a booked cancel still keeps it consumed" with no reason given.)
+    //
+    // In THIS transaction, behind the CAS above, so it happens exactly once
+    // and only when the cancel really did. A NO-SHOW keeps it: the time was
+    // held and has passed. Undoing the cancel re-claims it if it is still free
+    // - see POST /appointments/:id/restore.
+    if (outcome === "CANCELED") {
+      await tx.targetedSlot.updateMany({
+        where: { shopId, bookedAppointmentId: appt.id },
+        data: { bookedAppointmentId: null },
+      });
+    }
+
     // Already promoted: tear down the Visit's loyalty footprint.
     if (appt.visitId) {
       if (appt.clientId) {

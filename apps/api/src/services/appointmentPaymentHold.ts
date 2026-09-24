@@ -422,10 +422,27 @@ export async function refundUnhonoredHold(params: {
  * really held would spam a waitlist for time that was never taken - the same
  * reasoning the receptionist hold sweep records.
  */
-async function releasePaymentHoldRow(shopId: string, appointmentId: string): Promise<void> {
-  await prisma.appointment.updateMany({
-    where: { id: appointmentId, status: "PENDING", holdReason: "payment" },
-    data: { status: "CANCELED", canceledAt: new Date() },
+export async function releasePaymentHoldRow(
+  shopId: string,
+  appointmentId: string,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const { count } = await tx.appointment.updateMany({
+      where: { id: appointmentId, status: "PENDING", holdReason: "payment" },
+      data: { status: "CANCELED", canceledAt: new Date() },
+    });
+    // 🔴 A SPECIAL HELD FOR PAYMENT GOES BACK ON SALE WITH IT. A customer who
+    // opened checkout on a targeted slot claimed it (capacity 1 must hold while
+    // they pay), and a lapsed hold never gave it back: the sweep below says
+    // "a lapsed hold puts its chair back on sale", and for a special it did
+    // not. Only when THIS update cancelled the row - a payment that landed a
+    // moment earlier promoted it to BOOKED, and that booking keeps its special.
+    if (count > 0) {
+      await tx.targetedSlot.updateMany({
+        where: { shopId, bookedAppointmentId: appointmentId },
+        data: { bookedAppointmentId: null },
+      });
+    }
   });
   // Hand the chair back in Acuity. Unlike a receptionist hold, a payment hold
   // DOES take a block (see shouldMirrorOnCreate), so it has to give one back.
