@@ -11,6 +11,7 @@ import { applyChairLink, releaseChairLink } from "../services/staffUserLink.js";
 import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
 import { NOTHING_SHARED, linksForTeam, sharingOf, teamNumbers } from "../services/teamLinks.js";
 import {
+  HAS_RENT_RECORDS,
   PAYMENT_METHODS,
   rateHistory,
   rentPayments,
@@ -488,6 +489,24 @@ teamRouter.get("/links", requireOwner, async (req, res) => {
           rent: await runAsOwner((tx) => rentSummary(tx, l.id, shop.timezone, now)),
         })),
     ),
+    // Rent with members who left (or are asking to come back): the record
+    // stays, read-only - and nothing else of their business comes with it.
+    past: await runAsOwner(async (tx) => {
+      const ended = await tx.teamLink.findMany({
+        where: { teamShopId: shop.id, status: { in: ["PENDING", "ENDED"] }, ...HAS_RENT_RECORDS },
+        orderBy: { updatedAt: "desc" },
+        select: { id: true, status: true, endedAt: true, memberShop: { select: { name: true } } },
+      });
+      return Promise.all(
+        ended.map(async (l) => ({
+          id: l.id,
+          status: l.status,
+          endedAt: l.endedAt?.toISOString() ?? null,
+          business: { name: l.memberShop.name },
+          rent: await rentSummary(tx, l.id, shop.timezone, now),
+        })),
+      );
+    }),
   });
 });
 

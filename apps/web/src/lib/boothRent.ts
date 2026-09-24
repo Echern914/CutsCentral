@@ -22,6 +22,8 @@ export interface RentSummary {
   scheduled: { amountCents: number | null; period: RentPeriod | null; startsOn: string } | null;
   /** When a change made today would take effect (null: no rent in effect). */
   nextChangeOn: string | null;
+  /** With no rent in effect: the earliest day a new start may use (null: no bound yet). */
+  earliestStart: string | null;
   lastPayment: { date: string; amountCents: number; method: string } | null;
 }
 
@@ -32,15 +34,22 @@ export interface RentPayment {
   method: string;
   note: string | null;
   voided: boolean;
+  /** The day it was voided - the audit trail. */
+  voidedOn: string | null;
 }
 
-/** One rent entry: a start, a change, or a stop (amountCents null). */
+/**
+ * One rent entry: a start, a change, or a stop (amountCents null). "replaced":
+ * a later entry on the same day took its place (it comes back if that one is
+ * voided); "voided": no longer counts, since `voidedOn`.
+ */
 export interface RentRate {
   id: string;
   amountCents: number | null;
   period: RentPeriod | null;
   startsOn: string;
-  voided: boolean;
+  status: "active" | "replaced" | "voided";
+  voidedOn: string | null;
 }
 
 export interface RentHistory {
