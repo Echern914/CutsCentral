@@ -9,6 +9,7 @@ import { cap } from "@/components/VocabProvider";
 import type { BusinessVocabulary } from "@chairback/config";
 import type { ShopRole, TeamData } from "./page";
 import {
+  createChairForMemberAction,
   inviteMemberAction,
   removeMemberAction,
   revokeInviteAction,
@@ -32,7 +33,10 @@ const roleHint = (role: ShopRole, v: BusinessVocabulary): string =>
     ? "Full access, including billing and the team."
     : role === "MANAGER"
       ? "Runs the shop day to day. No billing or team changes."
-      : `Their own ${v.stationNoun}. Sign-in works; their dashboard is coming next.`;
+      : `Their own ${v.stationNoun}: they see their own day and their own clients, not the rest of the shop.`;
+
+/** The chair picker's "make one" choice - never a real staff id. */
+const NEW_CHAIR = "__new__";
 
 /** Turn an API error code into something a shop owner can act on. */
 function explain(code: string | undefined, v: BusinessVocabulary): string {
@@ -50,6 +54,8 @@ function explain(code: string | undefined, v: BusinessVocabulary): string {
     case "cannot_modify_owner":
     case "cannot_remove_owner":
       return "The owner's access can't be changed here.";
+    case "already_has_chair":
+      return `They already have a ${v.stationNoun}.`;
     case "forbidden_role":
       return "Only the owner can change the team.";
     default:
@@ -132,8 +138,9 @@ export function TeamClient({
       <div>
         <h1 className="font-display text-2xl">Team</h1>
         <p className="mt-1 text-sm text-muted">
-          Everyone who can sign in to your shop. Adding someone here does not
-          change your booking staff — a {vocab.stationNoun} and a login are separate things.
+          Everyone who can sign in to your shop. A login and a {vocab.stationNoun} are
+          separate things: link each {vocab.providerNoun} to their {vocab.stationNoun} below
+          so they can see their own day.
         </p>
       </div>
 
@@ -263,10 +270,53 @@ export function TeamClient({
                     {m.user.email}
                     {m.staffId && ` · ${staffName(m.staffId)}`}
                   </p>
+                  {/* Their own screen says "ask the owner to link your
+                      login" - so say it here too, where it can be fixed. */}
+                  {!isTheOwner && m.role === "BARBER" && !m.staffId && (
+                    <p className="mt-0.5 text-xs text-gold">
+                      No {vocab.stationNoun} yet, so they have no day to see.
+                    </p>
+                  )}
                 </div>
 
                 {isOwner && !isTheOwner && (
-                  <div className="flex shrink-0 items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={m.staffId ?? ""}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        if (next === NEW_CHAIR) {
+                          run(
+                            () => createChairForMemberAction(m.id),
+                            `New ${vocab.stationNoun} for ${m.user.name}`,
+                          );
+                          return;
+                        }
+                        run(
+                          () => updateMemberAction(m.id, { staffId: next || null }),
+                          next
+                            ? `${cap(vocab.stationNoun)} linked`
+                            : `${cap(vocab.stationNoun)} unlinked`,
+                        );
+                      }}
+                      disabled={pending}
+                      data-qa="member-chair"
+                      aria-label={`${cap(vocab.stationNoun)} for ${m.user.name}`}
+                      className="max-w-[11rem] truncate rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+                    >
+                      <option value="">No {vocab.stationNoun}</option>
+                      {m.staffId && (
+                        <option value={m.staffId}>{staffName(m.staffId)}</option>
+                      )}
+                      {freeStaff.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                      {!m.staffId && (
+                        <option value={NEW_CHAIR}>+ New {vocab.stationNoun} for them</option>
+                      )}
+                    </select>
                     <select
                       value={m.role}
                       onChange={(e) =>

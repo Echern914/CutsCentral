@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AFFILIATE_CLAIM_COOKIE } from "@chairback/config";
 import { apiSend } from "@/lib/api";
+import { clearActiveShopCookie } from "@/lib/activeShopCookie";
 import { mintAppReturnUrl } from "@/lib/mobileReturn";
 
 interface ShopState {
@@ -45,6 +46,10 @@ export async function createShopAction(
   // actually guarantees one attribution per shop; this is hygiene, not the
   // guard, and a failure to clear costs nothing.
   cookies().delete(AFFILIATE_CLAIM_COOKIE);
+  // Work in the shop they just made. Someone who joined a team first has the
+  // team's shop as this browser's active shop, and the rest of onboarding
+  // (connecting a calendar, payments) must land on THEIR business, not the team's.
+  clearActiveShopCookie();
   // If the native app started this in the system browser, the shop now EXISTS
   // and this is the moment to hand the session back. Same ordering rule as the
   // team invitation: what they came to do is done and committed before any of

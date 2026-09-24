@@ -5,6 +5,7 @@ import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { accountLimiter } from "../middleware/rateLimit.js";
 import { applyChairLink } from "../services/staffUserLink.js";
+import { logger } from "../logger.js";
 
 /**
  * Accepting a team invitation.
@@ -185,9 +186,23 @@ teamJoinRouter.post("/", accountLimiter, requireUser, async (req, res) => {
       res.status(410).json({ error: "invite_invalid" });
       return;
     }
-    // Unique (shopId, userId): they already had a seat. Treat as success —
-    // they have the access the link promised.
-    res.status(409).json({ error: "already_member" });
+    // Already on the team? Decided by READING the seat, not by guessing from
+    // the error: every failure used to be answered "already_member", so a join
+    // that simply failed (a chair claimed in the same instant, the database
+    // having a bad second) told the barber they were in when they weren't.
+    const seat = await prisma.shopMember.findFirst({
+      where: { shopId: invite.shopId, userId: user.id },
+      select: { id: true },
+    });
+    if (seat) {
+      // They have the access the link promised.
+      res.status(409).json({ error: "already_member" });
+      return;
+    }
+    // Nothing was committed and the invitation is still unspent, so trying
+    // again is safe (and a chair taken meanwhile is simply skipped next time).
+    logger.error({ err, shopId: invite.shopId }, "team join failed");
+    res.status(503).json({ error: "join_failed" });
     return;
   }
   res.status(201).json({ ok: true, shopId: invite.shopId });

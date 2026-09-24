@@ -53,6 +53,20 @@ export function requireRole(...allowed: ShopRole[]) {
   };
 }
 
+/**
+ * The role a stored seat actually grants.
+ *
+ * Ownership comes from `Shop.ownerId` and nowhere else, so an OWNER seat on a
+ * shop the user does NOT own (reachable only if ownership were ever moved
+ * without fixing seats) must degrade, never escalate: it acts as MANAGER. The
+ * shop resolver and the MCP seat check both use this, so they can't disagree.
+ */
+export function effectiveSeatRole(stored: string, ownsShop: boolean): ShopRole {
+  if (ownsShop) return "OWNER";
+  if (stored === "MANAGER" || stored === "OWNER") return "MANAGER";
+  return "BARBER";
+}
+
 /** Owner-only: billing, integrations, team management, shop deletion. */
 export const requireOwner = requireRole("OWNER");
 

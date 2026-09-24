@@ -42,7 +42,9 @@ export default async function AccountPage() {
         name={me.data?.name ?? ""}
         email={me.data?.email ?? ""}
         avatarUrl={me.data?.avatarUrl ?? ""}
-        shopName={shopRes.data?.name ?? ""}
+        // Only the OWNER can delete a shop (the API enforces it too). A team
+        // seat gets no delete-shop form for the shop they merely work in.
+        shopName={(me.data?.shopRole ?? "OWNER") === "OWNER" ? (shopRes.data?.name ?? "") : ""}
         hasPassword={me.data?.hasPassword ?? true}
         hasGoogle={me.data?.hasGoogle ?? false}
         hasApple={me.data?.hasApple ?? false}

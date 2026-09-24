@@ -45,6 +45,13 @@ export async function updateMemberAction(
   return res.ok ? { ok: true } : { ok: false, error: res.error };
 }
 
+/** Give a member a brand-new chair of their own, named after them, and link it. */
+export async function createChairForMemberAction(id: string): Promise<TeamActionResult> {
+  const res = await apiSend<{ ok: boolean }>("POST", `/api/team/members/${id}/staff`);
+  revalidatePath("/dashboard/team");
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
+}
+
 export async function removeMemberAction(id: string): Promise<TeamActionResult> {
   const res = await apiSend<{ ok: boolean }>("DELETE", `/api/team/members/${id}`);
   revalidatePath("/dashboard/team");

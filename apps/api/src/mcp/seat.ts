@@ -1,5 +1,5 @@
 import { prisma } from "@chairback/db";
-import type { ShopRole } from "../auth/roles.js";
+import { effectiveSeatRole, type ShopRole } from "../auth/roles.js";
 
 /**
  * "Does this user still have a seat at this shop, and as what?"
@@ -37,7 +37,7 @@ export async function resolveMcpSeat(userId: string, shopId: string): Promise<Mc
 
   if (owned) return { role: "OWNER", staffId: null };
   if (!seat) return null;
-  return { role: (seat.role as ShopRole) ?? "BARBER", staffId: seat.staffId ?? null };
+  return { role: effectiveSeatRole(seat.role, false), staffId: seat.staffId ?? null };
 }
 
 /** The boolean form, for the places that only need "still allowed?". */

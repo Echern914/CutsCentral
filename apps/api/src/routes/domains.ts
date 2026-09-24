@@ -4,6 +4,7 @@ import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireActiveAccess } from "../middleware/billing.js";
+import { requireManager } from "../auth/roles.js";
 import {
   attachDomain,
   detachDomain,
@@ -186,7 +187,7 @@ const connectSchema = z.object({ domain: z.string().min(4).max(300) }).strict();
 
 // Connect (or replace) the shop's domain: attach apex + www on Vercel, mint the
 // ownership token, store, and return the three DNS records to set.
-domainsRouter.post("/", requireUser, requireShop, requireActiveAccess, async (req, res) => {
+domainsRouter.post("/", requireUser, requireShop, requireManager, requireActiveAccess, async (req, res) => {
   if (!vercelDomainsConfigured()) {
     res.status(503).json({ error: "domains_not_configured" });
     return;
@@ -282,7 +283,7 @@ domainsRouter.post("/", requireUser, requireShop, requireActiveAccess, async (re
 // host at all - but `verifiedAt` is written only when the TXT record carries
 // this shop's token and the apex points here. That is the ownership proof,
 // and it is the one thing Vercel's status can never tell us.
-domainsRouter.post("/verify", requireUser, requireShop, requireActiveAccess, async (req, res) => {
+domainsRouter.post("/verify", requireUser, requireShop, requireManager, requireActiveAccess, async (req, res) => {
   const shop = req.shop!;
   if (!shop.customDomain) {
     res.status(404).json({ error: "no_domain" });
@@ -324,7 +325,7 @@ domainsRouter.post("/verify", requireUser, requireShop, requireActiveAccess, asy
 // domain simply stops resolving to us; nothing else about the shop changes.
 // The records are returned one last time so the dashboard can tell the owner
 // exactly what to remove at their registrar.
-domainsRouter.delete("/", requireUser, requireShop, requireActiveAccess, async (req, res) => {
+domainsRouter.delete("/", requireUser, requireShop, requireManager, requireActiveAccess, async (req, res) => {
   const shop = req.shop!;
   if (!shop.customDomain) {
     res.status(404).json({ error: "no_domain" });

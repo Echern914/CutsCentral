@@ -20,6 +20,7 @@ import {
   reconcileShop,
 } from "../engines/acuityMirror.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { requireManager } from "../auth/roles.js";
 
 const env = apiEnv();
 export const acuityOAuthRouter: Router = Router();
@@ -29,7 +30,7 @@ function nowSeconds() {
 }
 
 // Start: redirect the barber to Acuity's consent screen with a CSRF state.
-acuityOAuthRouter.get("/start", requireUser, requireShop, (req, res) => {
+acuityOAuthRouter.get("/start", requireUser, requireShop, requireManager, (req, res) => {
   const state = createOAuthState(req.shop!.id, nowSeconds());
   res.cookie(OAUTH_STATE_COOKIE, state, {
     httpOnly: true,
@@ -177,7 +178,7 @@ acuityOAuthRouter.get("/status", requireUser, requireShop, async (req, res) => {
 // using the stored token. Recovery path for connections made before the
 // dotted-event fix, or any transient subscription failure - no re-OAuth needed.
 // Idempotent: ingest dedupes via unique constraints; we replace webhook ids.
-acuityOAuthRouter.post("/repair", requireUser, requireShop, async (req, res) => {
+acuityOAuthRouter.post("/repair", requireUser, requireShop, requireManager, async (req, res) => {
   const shop = req.shop!;
   const conn = await prisma.acuityConnection.findUnique({ where: { shopId: shop.id } });
   if (!conn) {
@@ -233,7 +234,7 @@ acuityOAuthRouter.post("/repair", requireUser, requireShop, async (req, res) => 
 // connection so the shop can reconnect (or switch to another booking source).
 // Visits/clients already ingested are KEPT — disconnect only stops future sync,
 // it never deletes loyalty history. Idempotent: a missing connection still 200s.
-acuityOAuthRouter.post("/disconnect", requireUser, requireShop, async (req, res) => {
+acuityOAuthRouter.post("/disconnect", requireUser, requireShop, requireManager, async (req, res) => {
   const shop = req.shop!;
   const conn = await prisma.acuityConnection.findUnique({ where: { shopId: shop.id } });
 

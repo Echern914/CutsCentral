@@ -40,7 +40,7 @@ import {
 import { Prisma, prisma, runWithShop } from "@chairback/db";
 import { recomputeLoyaltyTiers } from "../engines/loyaltyTierRecompute.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
-import { requireManager } from "../auth/roles.js";
+import { requireManager, requireOwner } from "../auth/roles.js";
 import { linkReferralOnShopCreate } from "../services/referral.js";
 import { AFFILIATE_CLAIM_COOKIE } from "@chairback/config";
 import {
@@ -1568,7 +1568,7 @@ publicPageRouter.post("/:slug/review", leadLimiter, async (req, res) => {
 // Danger zone: delete the shop and ALL its data (clients, visits, punches,
 // nudges, Acuity connection) via cascading deletes. Requires the shop name as
 // a typed confirmation to prevent accidents.
-shopsRouter.delete("/me", requireUser, requireShop, async (req, res) => {
+shopsRouter.delete("/me", requireUser, requireShop, requireOwner, async (req, res) => {
   const confirm = String(req.body?.confirm ?? "");
   if (confirm !== req.shop!.name) {
     res.status(400).json({ error: "confirm_mismatch" });
