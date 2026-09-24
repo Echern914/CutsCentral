@@ -6,6 +6,7 @@ import { requireUser } from "../middleware/auth.js";
 import { requireAdmin } from "../middleware/admin.js";
 import { readBookingRefusals } from "../services/bookingRefusal.js";
 import { readEmailDeliverySummary } from "../services/emailDelivery.js";
+import { readPlatformSwitch, setPlatformSwitch } from "../services/platformSwitches.js";
 import {
   readLatestRotationRun,
   rotateAllEnabled,
@@ -274,6 +275,39 @@ adminPortalRouter.get("/preflight", async (_req, res) => {
       web,
     ),
   );
+});
+
+/**
+ * THE TEXTING SWITCH. Every text costs money; email and app notifications do
+ * not. Off stops every SMS on the platform (reminders, alerts, sign-in codes,
+ * the AI receptionist) and moves what has an email or push version there. It
+ * takes effect in this process at once and in every other within
+ * services/platformSwitches.ts REFRESH_MS - no deploy, no restart.
+ *
+ * GET answers from the DATABASE, not this process's copy, so the page shows
+ * what every replica is converging to. `source` says whether an admin has set
+ * it yet or the SMS_ENABLED environment default still applies.
+ */
+adminPortalRouter.get("/switches/sms", async (_req, res) => {
+  const stored = await readPlatformSwitch("sms");
+  res.json({
+    enabled: stored ? stored.enabled : apiEnv().SMS_ENABLED,
+    source: stored ? "admin" : "default",
+    updatedAt: stored ? stored.updatedAt.toISOString() : null,
+    updatedByEmail: stored?.updatedByEmail ?? null,
+  });
+});
+
+const smsSwitchSchema = z.object({ enabled: z.boolean() }).strict();
+
+adminPortalRouter.post("/switches/sms", async (req, res) => {
+  const parsed = smsSwitchSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const saved = await setPlatformSwitch("sms", parsed.data.enabled, req.userId!);
+  res.json({ ok: true, enabled: saved.enabled, updatedAt: saved.updatedAt.toISOString() });
 });
 
 // Comp a shop to free full access (or revoke it). The one operator write that

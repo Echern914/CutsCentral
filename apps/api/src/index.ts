@@ -4,6 +4,7 @@ import { prisma } from "@chairback/db";
 import { createApp } from "./app.js";
 import { logger } from "./logger.js";
 import { startScheduler } from "./scheduler.js";
+import { startPlatformSwitchRefresh } from "./services/platformSwitches.js";
 import { logIntegrationStatusAtBoot } from "./ops/bootReport.js";
 import { ensureWalletDomainsAtBoot } from "./billing/paymentMethodDomains.js";
 import { billingEnabled, connectEnabled } from "./billing/stripe.js";
@@ -25,6 +26,10 @@ const PORT = Number(
 );
 
 const app = createApp();
+
+// The admin portal's runtime switches (texting on/off): read now, then follow
+// every REFRESH_MS so a flip on another replica lands here within seconds.
+startPlatformSwitchRefresh();
 
 // Bind to 0.0.0.0 so the container is reachable from outside (not just localhost).
 const server = app.listen(PORT, "0.0.0.0", () => {

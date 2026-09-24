@@ -7,6 +7,7 @@ import { LocalDate } from "@/components/ui/LocalDate";
 import { CompToggle } from "./CompToggle";
 import { AnalyticsSection, type Analytics } from "./Analytics";
 import { PreflightSection, type Preflight } from "./Preflight";
+import { TextingSwitch, type TextingState } from "./TextingSwitch";
 import {
   AffiliatesSection,
   type AdminAccount,
@@ -56,12 +57,13 @@ interface AdminShop {
  * This page never trusts a client flag - the API session check is the gate.
  */
 export default async function AdminPage() {
-  const [metricsRes, shopsRes, analyticsRes, preflightRes, affApps, affAccounts, affRewards, affLiability, affFlags, affCredits] =
+  const [metricsRes, shopsRes, analyticsRes, preflightRes, textingRes, affApps, affAccounts, affRewards, affLiability, affFlags, affCredits] =
     await Promise.all([
       apiGet<Metrics>("/api/admin-portal/metrics"),
       apiGet<{ shops: AdminShop[] }>("/api/admin-portal/shops"),
       apiGet<Analytics>("/api/admin-portal/analytics?days=30"),
       apiGet<Preflight>("/api/admin-portal/preflight"),
+      apiGet<TextingState>("/api/admin-portal/switches/sms"),
       // The affiliate program answers 404 while its flag is off; the whole
       // section then stays out of the page rather than rendering empty.
       apiGet<{ applications: AdminApplication[] }>("/api/admin-portal/affiliate/applications?status=PENDING"),
@@ -76,6 +78,7 @@ export default async function AdminPage() {
   const shops = shopsRes.data?.shops ?? [];
   const analytics = analyticsRes.data;
   const preflight = preflightRes.data;
+  const texting = textingRes.data;
   const affiliateProgramLive = affFlags.ok && Boolean(affFlags.data);
 
   return (
@@ -112,6 +115,8 @@ export default async function AdminPage() {
             <Stat label="Clients" value={m.totalClients} hint={`${m.totalVisits} visits`} />
           </div>
         )}
+
+        {texting && <TextingSwitch initial={texting} />}
 
         {preflight && <PreflightSection p={preflight} />}
 

@@ -4502,6 +4502,20 @@ model PlatformOperationPassTask {
   @@index([operationId, status])
 }
 
+/// PLATFORM SWITCHES - on/off controls an operator flips from the admin portal
+/// that take effect WITHOUT a deploy. One row per key (CHECK-pinned vocabulary:
+/// 'sms'). No row = nobody has used the switch yet, so the environment default
+/// applies (SMS_ENABLED for 'sms'). Default-deny like PlatformOperation: the
+/// tenant role holds no privileges, only the owner connection reads it.
+model PlatformSwitch {
+  key         String   @id
+  enabled     Boolean
+  /// The admin who last flipped it - who turned texting back on is a question
+  /// with a bill attached.
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
  // EMAIL DELIVERY LEDGER - what actually happened to a transactional email.
  // 
  // Before this, the provider message id was logged and thrown away and there
