@@ -42,6 +42,7 @@ import { TimeSelect } from "@/components/ui/TimeSelect";
 import { ImageField } from "../site/ImageField";
 import { Segmented } from "@/components/ui/Segmented";
 import { WaitlistBoard } from "./WaitlistBoard";
+import { useWaitlistBookHandoff } from "./useWaitlistBookHandoff";
 import { WalkInQueueBoard } from "./WalkInQueueBoard";
 import { WalkInSettingsCard } from "./WalkInSettingsCard";
 import {
@@ -220,6 +221,13 @@ export function BookingManager({
   // trap, same class #128 fixed for the old Hours tab).
   const groupUnsavedRef = useRef<(() => EditorGuardState) | null>(null);
 
+  // "Book appointment" on the Waitlist tab, where the calendar isn't mounted
+  // to hear it: switch to the calendar and hand the entry over.
+  const switchTabRef = useRef<(next: Tab) => void>(() => {});
+  const waitlistHandoff = useWaitlistBookHandoff(tab === "Appointments", () =>
+    switchTabRef.current("Appointments"),
+  );
+
   function switchTab(next: Tab) {
     if (next === tab) return;
     const st = groupUnsavedRef.current?.();
@@ -236,6 +244,8 @@ export function BookingManager({
     }
     setTab(next);
   }
+
+  switchTabRef.current = switchTab;
 
   // Dashboard demo tour: its steps on this page live behind tabs, so follow
   // the tour by switching to the tab that hosts the active step's anchor —
@@ -381,6 +391,8 @@ export function BookingManager({
             toast={toast}
             openAppointmentId={openAppointmentId}
             tierOpenings={shop.rewardsEnabled}
+            pendingWaitlistBooking={waitlistHandoff.pending}
+            onPendingWaitlistBookingTaken={waitlistHandoff.taken}
           />
         </div>
       )}
