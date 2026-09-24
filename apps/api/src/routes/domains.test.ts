@@ -21,6 +21,8 @@ function fakeDns(zone: {
   a?: string[];
   cname?: string[];
   txt?: string[];
+  /** Answer TXT on this host ONLY. Omitted, TXT answers on every host. */
+  txtHost?: string;
   /** Simulate a resolver that cannot answer at all (timeout / SERVFAIL). */
   down?: boolean;
 }): DnsResolver {
@@ -37,9 +39,10 @@ function fakeDns(zone: {
       if (!zone.cname) throw notFound();
       return zone.cname;
     },
-    async resolveTxt() {
+    async resolveTxt(host: string) {
       if (zone.down) throw down();
       if (!zone.txt) throw notFound();
+      if (zone.txtHost !== undefined && host !== zone.txtHost) throw notFound();
       return zone.txt.map((v) => [v]);
     },
   };
@@ -303,7 +306,10 @@ describe("owner routes with the Vercel seam SET (mocked fetch)", () => {
     const types = res.body.records.map((r: { type: string }) => r.type);
     expect(types).toEqual(["A", "CNAME", "TXT"]);
     const txt = res.body.records[2];
-    expect(txt.name).toBe(`_chairback.${domainB}`);
+    // On @, beside the A record - not `_chairback.<domain>`, which owners
+    // retyped as @ anyway and which one registrar doubled into
+    // `_chairback.<domain>.<domain>`.
+    expect(txt.name).toBe("@");
     expect(txt.value.startsWith(OWNERSHIP_TXT_PREFIX)).toBe(true);
     // The token on the row is the one in the record - and it is a secret this
     // shop alone was shown.
@@ -371,6 +377,10 @@ describe("owner routes with the Vercel seam SET (mocked fetch)", () => {
         a: [VERCEL_APEX_A],
         cname: [`${VERCEL_WWW_CNAME}.`], // a trailing-dot answer, as resolvers give
         txt: [`${OWNERSHIP_TXT_PREFIX}${row?.customDomainVerifyToken}`],
+        // 🔴 ONLY on the root - exactly the record the dashboard now shows.
+        // With the TXT answering everywhere this would pass even if the lookup
+        // still asked only the old `_chairback` host.
+        txtHost: domainB,
       }),
     );
     const res = await request(app).post("/api/domains/verify").set("Cookie", cookieB);

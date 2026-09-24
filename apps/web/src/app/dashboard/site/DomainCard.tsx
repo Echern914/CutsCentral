@@ -157,7 +157,8 @@ export function DomainCard({ initial }: { initial: DomainStatus }) {
                   <li>
                     If there&apos;s already an A record or a &quot;parking&quot; record
                     on <span className="font-mono text-offwhite">@</span>, delete it.
-                    Two A records on @ and the wrong one wins.
+                    Two A records on @ and the wrong one wins. Leave any other TXT
+                    records on @ where they are — those are usually your email.
                   </li>
                   <li>Come back and tap check again. Minutes, usually — up to 48 hours at worst.</li>
                 </ol>
@@ -201,10 +202,14 @@ export function DomainCard({ initial }: { initial: DomainStatus }) {
                     </tbody>
                   </table>
                 </div>
+                {/* 🔴 This used to say a full TXT name was "fine". It is not: a
+                    registrar that appends the domain itself stores it twice
+                    (`name.example.com.example.com`), and the owner - having
+                    typed exactly what they were shown - cannot see why. */}
                 <p className="text-xs text-muted">
-                  Some registrars want the name blank instead of @, and show the
-                  TXT name as just <span className="font-mono">_chairback</span> —
-                  both are fine.
+                  @ means your domain itself — some registrars want that field left
+                  blank instead. Type only what&apos;s in the Name column; your
+                  registrar adds the rest.
                   {status.dns ? ` Last checked ${new Date(status.dns.checkedAt).toLocaleTimeString()}.` : ""}
                 </p>
               </>

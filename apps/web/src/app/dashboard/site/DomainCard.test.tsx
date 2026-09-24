@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { ToastProvider } from "@/components/ui/Toast";
 import { DomainCard } from "./DomainCard";
 import type { DomainStatus } from "./domainActions";
@@ -19,7 +19,8 @@ vi.mock("./domainActions", () => ({
 const records = [
   { type: "A", name: "@", value: "76.76.21.21" },
   { type: "CNAME", name: "www", value: "cname.vercel-dns.com" },
-  { type: "TXT", name: "_chairback.example.com", value: "chairback-verify=tok123" },
+  // On @, as the API now hands it back - beside the A record.
+  { type: "TXT", name: "@", value: "chairback-verify=tok123" },
 ];
 
 function status(over: Partial<DomainStatus> = {}): DomainStatus {
@@ -52,16 +53,26 @@ describe("before connecting", () => {
 describe("connected, not yet verified", () => {
   it("shows all three records and, before any check, says so", () => {
     mount(status({ domain: "example.com", records }));
-    expect(screen.getByText("TXT")).toBeTruthy();
-    expect(screen.getByText("_chairback.example.com")).toBeTruthy();
-    expect(screen.getByText("chairback-verify=tok123")).toBeTruthy();
+    const txtRow = screen.getByText("TXT").closest("tr")!;
+    const [, name, value] = within(txtRow).getAllByRole("cell");
+    expect(name!.textContent).toBe("@");
+    expect(value!.textContent).toBe("chairback-verify=tok123");
     expect(screen.getAllByText("Not checked yet")).toHaveLength(3);
     expect(screen.getByText("Not connected yet")).toBeTruthy();
   });
 
-  it("tells the owner to delete a parking record on @", () => {
+  it("tells the owner to delete a parking record on @ - and to keep the email TXT records there", () => {
     mount(status({ domain: "example.com", records }));
     expect(screen.getByText(/Two A records on @ and the wrong one wins/i)).toBeTruthy();
+    // The TXT now lives on @ too, so "clear out @" must not reach their SPF.
+    expect(screen.getByText(/Leave any other TXT records on @ where they are/i)).toBeTruthy();
+  });
+
+  it("🔴 never names the old _chairback host, and never calls a full name 'fine'", () => {
+    const { container } = mount(status({ domain: "example.com", records }));
+    expect(container.textContent).not.toMatch(/_chairback/);
+    expect(container.textContent).not.toMatch(/both are fine/i);
+    expect(screen.getByText(/Type only what's in the Name column/i)).toBeTruthy();
   });
 
   it("names what each record currently points at, per row", () => {
