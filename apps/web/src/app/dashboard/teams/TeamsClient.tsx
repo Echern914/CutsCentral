@@ -13,7 +13,7 @@ import {
   type Sharing,
   type TeamNumbers,
 } from "@/lib/teamNumbers";
-import type { RentSummary } from "@/lib/boothRent";
+import { hasRent, type RentSummary } from "@/lib/boothRent";
 import { MemberRent } from "../team/BoothRent";
 import { leaveTeamAction, myRentHistoryAction, myTeamsAction, setSharingAction } from "./actions";
 
@@ -271,6 +271,9 @@ export function TeamsClient({
         <p className="text-sm text-muted">
           They stop seeing your numbers right away. Your {vocab.clientNounPlural}, bookings and
           payments stay exactly as they are. You can ask to join again with their link.
+          {leaving?.rent && hasRent(leaving.rent)
+            ? " Booth rent stops at the end of the current period; what's recorded is kept."
+            : ""}
         </p>
       </Dialog>
     </div>

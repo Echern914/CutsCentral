@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { apiGet, apiSend } from "@/lib/api";
 import type { Sharing, TeamNumbers } from "@/lib/teamNumbers";
-import type { RentPayment, RentSummary } from "@/lib/boothRent";
+import type { RentHistory } from "@/lib/boothRent";
 import type { MyTeamsData } from "./TeamsClient";
 
 /** Re-read after any change - the server is the source of truth. */
@@ -30,13 +30,9 @@ export async function setSharingAction(
   return { ok: true, sharing: res.data.sharing, theySee: res.data.theySee };
 }
 
-/** This business's booth-rent payments to one team. Read-only. */
-export async function myRentHistoryAction(
-  linkId: string,
-): Promise<{ summary: RentSummary; payments: RentPayment[] } | null> {
-  const res = await apiGet<{ summary: RentSummary; payments: RentPayment[] }>(
-    `/api/teams/${linkId}/rent`,
-  );
+/** This business's booth rent with one team - the owner's own view. Read-only. */
+export async function myRentHistoryAction(linkId: string): Promise<RentHistory | null> {
+  const res = await apiGet<RentHistory>(`/api/teams/${linkId}/rent`);
   return res.ok ? (res.data ?? null) : null;
 }
 

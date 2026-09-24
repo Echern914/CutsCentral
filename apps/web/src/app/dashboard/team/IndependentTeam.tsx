@@ -7,12 +7,12 @@ import { Dialog } from "@/components/ui/Dialog";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import { teamStats, type Sharing, type TeamNumbers } from "@/lib/teamNumbers";
-import type { RentSummary } from "@/lib/boothRent";
+import { hasRent, type RentSummary } from "@/lib/boothRent";
 import { approveLinkAction, endLinkAction, teamLinksAction } from "./actions";
 import { OwnerRent } from "./BoothRent";
 
 export interface TeamLinksData {
-  /** The one link the owner sends: /team/link/<their page>. */
+  /** The one link the owner sends: /team/link/<their shop id>. */
   joinUrl: string;
   pending: {
     id: string;
@@ -297,6 +297,9 @@ export function IndependentTeam({
         <p className="text-sm text-muted">
           They stop sharing numbers with you. Their business, {vocab.clientNounPlural} and bookings
           are theirs and stay exactly as they are. They can ask to join again with your link.
+          {removing && hasRent(removing.rent)
+            ? " Booth rent stops at the end of the current period; what's recorded is kept."
+            : ""}
         </p>
       </Dialog>
     </Card>

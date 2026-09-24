@@ -44,7 +44,16 @@ const base: TeamLinksData = {
       approvedAt: "2026-09-20T00:00:00.000Z",
       sharing: { shareCuts: true, shareRevenue: false, shareClients: false, shareRating: true },
       numbers: { cuts: 42, revenueCents: null, clients: null, rating: { average: 4.86, count: 37 } },
-      rent: { amountCents: null, period: null, paidThisPeriodCents: 0, dueCents: 0, lastPayment: null },
+      rent: {
+        current: null,
+        balanceCents: 0,
+        creditCents: 0,
+        unpaid: [],
+        rate: null,
+        scheduled: null,
+        nextChangeOn: null,
+        lastPayment: null,
+      },
     },
   ],
 };

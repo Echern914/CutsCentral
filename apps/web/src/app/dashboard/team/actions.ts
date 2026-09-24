@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { apiGet, apiSend } from "@/lib/api";
 import type { TeamData } from "./page";
 import type { TeamLinksData } from "./IndependentTeam";
-import type { RentPayment, RentPeriod, RentSummary } from "@/lib/boothRent";
+import type { RentHistory, RentPeriod, RentSummary } from "@/lib/boothRent";
 
 /** Re-read the roster after any change (server is the source of truth). */
 export async function teamAction(): Promise<TeamData | null> {
@@ -89,10 +89,13 @@ export interface RentResult {
   rent?: RentSummary;
 }
 
-/** Set, change or turn off (amountCents null) a member's booth rent. */
+/**
+ * Start, change or stop (amountCents null) a member's booth rent. `startsOn`
+ * only counts when no rent is in effect; a change waits for the next period.
+ */
 export async function setRentAction(
   linkId: string,
-  input: { amountCents: number | null; period?: RentPeriod },
+  input: { amountCents: number | null; period?: RentPeriod; startsOn?: string },
 ): Promise<RentResult> {
   const res = await apiSend<{ rent: RentSummary }>("PUT", `/api/team/links/${linkId}/rent`, input);
   return res.ok && res.data ? { ok: true, rent: res.data.rent } : { ok: false, error: res.error };
@@ -107,18 +110,23 @@ export async function recordRentPaymentAction(
   return res.ok && res.data ? { ok: true, rent: res.data.rent } : { ok: false, error: res.error };
 }
 
-/** Remove a payment recorded by mistake. */
-export async function deleteRentPaymentAction(linkId: string, paymentId: string): Promise<RentResult> {
+/** Void a payment recorded by mistake: it stays in the history, marked, and stops counting. */
+export async function voidRentPaymentAction(linkId: string, paymentId: string): Promise<RentResult> {
   const res = await apiSend<{ rent: RentSummary }>(
-    "DELETE",
-    `/api/team/links/${linkId}/rent/payments/${paymentId}`,
+    "POST",
+    `/api/team/links/${linkId}/rent/payments/${paymentId}/void`,
   );
   return res.ok && res.data ? { ok: true, rent: res.data.rent } : { ok: false, error: res.error };
 }
 
-export async function rentHistoryAction(
-  linkId: string,
-): Promise<{ summary: RentSummary; payments: RentPayment[] } | null> {
-  const res = await apiGet<{ summary: RentSummary; payments: RentPayment[] }>(`/api/team/links/${linkId}/rent`);
+/** Void the latest rent entry (a wrong amount or start date), kept in the history. */
+export async function voidRentRateAction(linkId: string, rateId: string): Promise<RentResult> {
+  const res = await apiSend<{ rent: RentSummary }>("POST", `/api/team/links/${linkId}/rent/rates/${rateId}/void`);
+  return res.ok && res.data ? { ok: true, rent: res.data.rent } : { ok: false, error: res.error };
+}
+
+/** One member's rent: the summary, every payment and every rent entry. */
+export async function rentHistoryAction(linkId: string): Promise<RentHistory | null> {
+  const res = await apiGet<RentHistory>(`/api/team/links/${linkId}/rent`);
   return res.ok ? (res.data ?? null) : null;
 }
