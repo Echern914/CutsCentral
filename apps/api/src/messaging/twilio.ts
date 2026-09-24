@@ -1,6 +1,7 @@
 import twilio from "twilio";
 import { apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
+import { platformSwitch } from "../services/platformSwitches.js";
 import type { MessageProvider, SendMessageInput, SendMessageResult } from "./provider.js";
 
 const env = apiEnv();
@@ -41,8 +42,9 @@ export class NoopMessageProvider implements MessageProvider {
 }
 
 /**
- * Is texting switched on at all? `SMS_ENABLED`, read fresh so a test can flip
- * it with __resetEnvCacheForTests().
+ * Is texting switched on at all? The admin portal's Texting switch, and until
+ * anyone has used it the `SMS_ENABLED` default (read fresh, so a test can flip
+ * it with __resetEnvCacheForTests()).
  *
  * 🔴 CHECK THIS BEFORE ANYTHING IS SPENT, not by catching a failed send. A send
  * that fails is written down as FAILED and tried again - the 24h reminder
@@ -52,7 +54,9 @@ export class NoopMessageProvider implements MessageProvider {
  * or answers "texting is off", or sends the email/app version instead.
  */
 export function smsEnabled(): boolean {
-  return apiEnv().SMS_ENABLED;
+  // The admin portal's switch wins once anyone has used it; until then the
+  // environment default applies (services/platformSwitches.ts).
+  return platformSwitch("sms") ?? apiEnv().SMS_ENABLED;
 }
 
 /** What a button that can only text says while texting is off. */
