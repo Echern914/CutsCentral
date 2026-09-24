@@ -18,7 +18,9 @@ import { createApp } from "../app.js";
 const app = createApp();
 const password = "correct horse battery staple";
 const emails: string[] = [];
-const tag = randomToken(6).toLowerCase();
+// Slug-safe: randomToken is base64url, and a "_" or a trailing "-" would fail
+// the web-address format check (400) before the role check this file is about.
+const tag = randomToken(6).toLowerCase().replace(/[^a-z0-9]/g, "0");
 
 let shopId: string;
 let ownerCookie: string;
