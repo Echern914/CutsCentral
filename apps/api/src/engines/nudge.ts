@@ -3,7 +3,7 @@ import { forShop, prisma, runWithShop, type Shop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { buildNudgeBody, buildNudgePush } from "../messaging/templates.js";
 import { redactForAudit } from "../messaging/auditBody.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { sendPushToClient } from "../messaging/push.js";
 import { isNudgeEligible, isNudgeDueByCadence } from "./eligibility.js";
 import { inQuietHours } from "./quietHours.js";
@@ -152,9 +152,15 @@ async function doSweepShop(
   // lets a push-only client be rebooked at any hour). A dry-run preview is exempt
   // - it sends nothing and the barber may preview at any hour. Previously this
   // short-circuited the WHOLE sweep; now it only suppresses the SMS fallback.
-  const smsBlocked = !dryRun && inQuietHours(shop.timezone, now);
+  // Texting switched off blocks the SMS leg in the PREVIEW too, so a barber
+  // is never asked "Send 12 texts now?" about texts that cannot go out.
+  const textsOff = !smsEnabled();
+  const smsBlocked = textsOff || (!dryRun && inQuietHours(shop.timezone, now));
   if (smsBlocked) {
-    logger.info({ shopId: shop.id }, "sweep: quiet hours - SMS leg suppressed, push still active");
+    logger.info(
+      { shopId: shop.id, reason: textsOff ? "texting_off" : "quiet_hours" },
+      "sweep: SMS leg suppressed, push still active",
+    );
   }
 
   // Construct the SMS provider lazily and ONLY for a real send. A dry-run

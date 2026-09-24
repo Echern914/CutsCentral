@@ -1,6 +1,6 @@
 import { Prisma, prisma, runAsOwner } from "@chairback/db";
 import { apiEnv } from "@chairback/config";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { logger } from "../logger.js";
 import {
   billableSegments,
@@ -48,7 +48,8 @@ export type ResendRefusal =
   | "no_consent"
   | "too_soon"
   | "too_many_today"
-  | "send_failed";
+  | "send_failed"
+  | "texting_off";
 
 export type ResendResult = { ok: true } | { ok: false; refusal: ResendRefusal };
 
@@ -97,6 +98,11 @@ export const RESEND_REFUSAL_HTTP: Record<
     error: "send_failed",
     message: "Couldn't send that text just now. Try again in a moment.",
   },
+  texting_off: {
+    status: 503,
+    error: "texting_off",
+    message: "Texting is turned off right now, so the link can't be sent by text.",
+  },
 };
 
 export async function resendRewardsLink(params: {
@@ -108,6 +114,7 @@ export async function resendRewardsLink(params: {
   const { shopId, client } = params;
   const now = params.now ?? new Date();
 
+  if (!smsEnabled()) return { ok: false, refusal: "texting_off" };
   if (!client.phone) return { ok: false, refusal: "no_phone" };
   if (client.optedOut) {
     return {

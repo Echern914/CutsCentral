@@ -9,6 +9,7 @@ import {
   SlotTakenError,
 } from "../engines/bookingWrite.js";
 import { formatApptTime } from "../messaging/templates.js";
+import { smsEnabled } from "../messaging/twilio.js";
 import { runAgentTurn } from "./agent.js";
 import { renderPromptForShop } from "./prompt.js";
 import {
@@ -212,6 +213,10 @@ export async function runGapFill(input: GapFillInput): Promise<void> {
   const now = input.now ?? new Date();
   const { shop, appt } = input;
   try {
+    if (!smsEnabled()) {
+      logger.info({ shopId: shop.id }, "gap-fill skipped: texting is off");
+      return;
+    }
     // TCPA quiet hours: proactive outreach SKIPS (an offer for a same-day slot
     // queued to 8am would usually be stale anyway).
     if (inQuietHours(shop.timezone, now)) {

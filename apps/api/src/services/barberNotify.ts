@@ -2,7 +2,7 @@ import { prisma, runWithShop } from "@chairback/db";
 import { apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
 import { sendPushToUser } from "../messaging/push.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { sendEmail } from "../messaging/email.js";
 
 /**
@@ -267,7 +267,11 @@ export async function sendToBarber(params: {
       params.kind === "nextUp" || params.kind === "dayAhead"
         ? prefs.smsRemindersEnabled
         : prefs.smsEnabled;
-    if (smsAllowed && to) {
+    // Texting switched off: nothing goes by SMS, and a barber who wanted this
+    // alert by text gets it by EMAIL below instead - otherwise turning texts
+    // off would silently drop every alert for a barber without the app.
+    const textsOff = !smsEnabled();
+    if (smsAllowed && to && !textsOff) {
       if (apiEnv().DRY_RUN) {
         logger.info(
           { shopId: params.shopId, to, kind: params.kind },
@@ -288,7 +292,7 @@ export async function sendToBarber(params: {
       }
     }
 
-    if (prefs.emailEnabled) {
+    if (prefs.emailEnabled || (textsOff && smsAllowed && Boolean(to))) {
       const user = await prisma.user.findUnique({
         where: { id: params.userId },
         select: { email: true },

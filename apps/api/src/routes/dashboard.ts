@@ -62,7 +62,7 @@ import { sweepShopWinback } from "../engines/winback.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { buildNudgeBody } from "../messaging/templates.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { TEXTING_OFF_MESSAGE, getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { pokeWalletPass } from "../wallet/pass.js";
 import { toE164 } from "../acuity/clientKey.js";
 import {
@@ -401,6 +401,10 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
   const client = await db.client.findFirst({ where: { id: req.params.clientId } });
   if (!client) {
     res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (!smsEnabled()) {
+    res.status(503).json({ error: "texting_off", reason: TEXTING_OFF_MESSAGE });
     return;
   }
   if (client.optedOut || !client.phone) {
@@ -1379,6 +1383,10 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
   }
   const { action, clientIds } = parsed.data;
   // Opt-in/out list hygiene stays free; only bulk TEXTING needs active access.
+  if (action === "nudge" && !smsEnabled()) {
+    res.status(503).json({ error: "texting_off", reason: TEXTING_OFF_MESSAGE });
+    return;
+  }
   if (action === "nudge" && !hasActiveAccess(shop)) {
     res.status(402).json({
       error: "subscription_required",
@@ -2980,6 +2988,10 @@ dashboardRouter.post(
       return;
     }
 
+    if (!smsEnabled()) {
+      res.status(503).json({ error: "texting_off", reason: TEXTING_OFF_MESSAGE });
+      return;
+    }
     const sent = await sendReceptionistSms({
       shopId: shop.id,
       clientId,

@@ -10,7 +10,7 @@ import { loadEligibilityData } from "../engines/nudge.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { buildPromoBody } from "../messaging/templates.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { TEXTING_OFF_MESSAGE, getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { hasPremiumAccess } from "../billing/entitlements.js";
 import { remainingMonthlySms } from "../billing/quota.js";
@@ -293,6 +293,12 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
   const now = new Date();
   if (promoStatus(promo, now) !== "live") {
     res.status(400).json({ error: "not_live", status: promoStatus(promo, now) });
+    return;
+  }
+  // Texting off refuses the preview too: planning a blast that cannot be
+  // sent is the same dead end one step later.
+  if (!smsEnabled()) {
+    res.status(503).json({ error: "texting_off", reason: TEXTING_OFF_MESSAGE });
     return;
   }
   // TCPA quiet hours block a REAL blast outside 8am-9pm shop-local time; the

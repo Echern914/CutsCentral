@@ -5,6 +5,7 @@ import {
   hasActiveAccess,
   type BillingShop,
 } from "../billing/stripe.js";
+import { smsEnabled } from "../messaging/twilio.js";
 
 /**
  * The ONE place that decides whether the AI receptionist runs for a shop.
@@ -152,6 +153,10 @@ export function receptionistSkipReason(
   opts: { now?: Date } = {},
 ): string | null {
   if (!receptionistConfigured()) return "no_anthropic_key";
+  // It only ever answers by text. Checked HERE, not just in the inbound
+  // handler, because the client-facing pages publish the shop's text line on
+  // this same verdict - a number nobody answers must not be advertised.
+  if (!smsEnabled()) return "texting_off";
   if (!shop.receptionistEnabled) return "receptionist_disabled";
   if (shop.receptionistTermsAcceptedAt === null) return "terms_not_accepted";
   if (shop.bookingMode !== "native") return "booking_mode_not_native";

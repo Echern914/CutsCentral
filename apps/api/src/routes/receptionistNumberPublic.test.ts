@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { createApp } from "../app.js";
 
 /**
@@ -91,6 +91,29 @@ describe("client-facing receptionist number", () => {
     await setShop({ receptionistEnabled: false });
     expect(await publicNumber()).toBeNull();
     expect(await rewardsNumber()).toBeNull();
+  });
+
+  it("🔴 is withheld while TEXTING is switched off - nothing would answer it", async () => {
+    // A key of its own, so this proves the texting gate even where the
+    // environment has no Anthropic key (the case above then publishes null
+    // for the wrong reason).
+    const originalKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = "test-key-never-used";
+    __resetEnvCacheForTests();
+    try {
+      await setShop({});
+      expect(await publicNumber()).toBe(NUMBER); // the premise: it WOULD answer
+
+      process.env.SMS_ENABLED = "false";
+      __resetEnvCacheForTests();
+      expect(await publicNumber()).toBeNull();
+      expect(await rewardsNumber()).toBeNull();
+    } finally {
+      process.env.SMS_ENABLED = "true";
+      if (originalKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = originalKey;
+      __resetEnvCacheForTests();
+    }
   });
 
   // The ENTITLEMENT gate (no Premium AI, no add-on, no comp) can't be exercised

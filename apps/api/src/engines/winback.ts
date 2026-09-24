@@ -3,7 +3,7 @@ import { forShop, prisma, runWithShop, type Shop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { redactForAudit } from "../messaging/auditBody.js";
 import { buildWinbackBody, buildWinbackPush } from "../messaging/templates.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { sendPushToClient } from "../messaging/push.js";
 import { isWinbackDue, isWinbackEligible } from "./winbackEligibility.js";
 import { inQuietHours } from "./quietHours.js";
@@ -171,9 +171,14 @@ async function doSweepShopWinback(
   // TCPA quiet hours gate the SMS leg ONLY (push is a silent-capable
   // notification, not a call/text). A dry-run preview sends nothing, so it is
   // exempt and may run at any hour.
-  const smsBlocked = !dryRun && inQuietHours(shop.timezone, now);
+  // Texting switched off blocks the SMS leg in the preview too (see nudge.ts).
+  const textsOff = !smsEnabled();
+  const smsBlocked = textsOff || (!dryRun && inQuietHours(shop.timezone, now));
   if (smsBlocked) {
-    logger.info({ shopId: shop.id }, "winback: quiet hours - SMS leg suppressed, push still active");
+    logger.info(
+      { shopId: shop.id, reason: textsOff ? "texting_off" : "quiet_hours" },
+      "winback: SMS leg suppressed, push still active",
+    );
   }
 
   // Build the provider lazily and only for a real send (a dry-run preview must

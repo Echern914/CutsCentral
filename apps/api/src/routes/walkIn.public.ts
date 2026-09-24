@@ -10,7 +10,7 @@ import {
   kioskWriteLimiter,
 } from "../middleware/rateLimit.js";
 import { hasActiveAccess } from "../billing/stripe.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import {
   buildWalkInLinkBody,
   buildWalkInVerificationBody,
@@ -251,6 +251,14 @@ walkInPublicRouter.post("/kiosk/challenge", kioskSmsLimiter, async (req, res) =>
     return;
   }
 
+  // Self check-in hangs on a texted code, so while texting is off the kiosk
+  // gets the answer it already shows for a shop not taking walk-ins. Staff can
+  // still add walk-ins from the dashboard.
+  if (!smsEnabled()) {
+    res.status(409).json({ error: "not_accepting" });
+    return;
+  }
+
   const now = new Date();
   const outcome = await issueChallenge({ shopId: shop.id, phone, now });
   if (outcome.send) {
@@ -403,7 +411,7 @@ walkInPublicRouter.post("/kiosk/check-in", kioskWriteLimiter, async (req, res) =
       where: { shopId: shop.id, phone, archivedAt: null, optedOut: true },
       select: { id: true },
     });
-    if (!optedOut) {
+    if (!optedOut && smsEnabled()) {
       const url = `${apiEnv().APP_BASE_URL.replace(/\/$/, "")}/line#t=${result.trackToken}`;
       try {
         const sent = await getMessageProvider().send({

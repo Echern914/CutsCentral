@@ -8,7 +8,7 @@ import {
   buildRewardRedeemedBody,
   buildRewardRedeemedPush,
 } from "../messaging/templates.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { sendPushToClient } from "../messaging/push.js";
 import { pokeWalletPass } from "../wallet/pass.js";
 import { inQuietHours } from "../engines/quietHours.js";
@@ -109,6 +109,7 @@ function skipReason(
   // any channel (there's nothing earned to announce anyway - earning is gated).
   if (!shop.rewardsEnabled) return "rewards_disabled";
   if (!shop.loyaltyTextsEnabled) return "loyalty_texts_disabled";
+  if (!smsEnabled()) return "sms_disabled";
   if (!hasActiveAccess(shop, { now })) return "no_active_access";
   // Texts are a Premium feature; loyalty PUSH stays available on every plan
   // (loyaltyPushEligible below deliberately does not check this).

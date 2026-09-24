@@ -20,6 +20,7 @@ import {
   type ConversationRow,
 } from "./conversation.js";
 import { sendReceptionistSms } from "./outbound.js";
+import { smsEnabled } from "../messaging/twilio.js";
 import { alertShopCapTripped } from "./capAlert.js";
 import { receptionistReplyCapReason } from "./replyCap.js";
 
@@ -339,6 +340,9 @@ export async function processInboundText(params: {
 }): Promise<void> {
   const now = params.now ?? new Date();
   try {
+    // Every reply it writes is a text: while texting is off, don't pay the
+    // model for an answer that could never be sent.
+    if (!smsEnabled()) return;
     if (!receptionistConfigured()) return;
     const resolved = await resolveInbound(params.phone, now, params.to);
     if (!resolved) return; // unknown number / no enabled shop -> no AI (v1)

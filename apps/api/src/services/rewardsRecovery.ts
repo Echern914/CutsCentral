@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { Prisma, prisma, runAsOwner } from "@chairback/db";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { apiEnv, decrypt, encrypt, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import {
@@ -319,6 +319,9 @@ export async function requestRecoveryChallenge(opts: {
   now: Date;
 }): Promise<void> {
   const { phone, ip, now } = opts;
+  // Texting off: no challenge, no allowance spent, nothing to send. Both doors
+  // still answer ok - the same answer a number we don't know gets.
+  if (!smsEnabled()) return;
   const outcome = await issueRecoveryChallenge({ phone, ip, now });
   if (!outcome.send) {
     // Safe aggregate counters only - never for "ineligible", which would turn

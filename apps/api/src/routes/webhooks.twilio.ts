@@ -6,6 +6,7 @@ import { toE164 } from "../acuity/clientKey.js";
 import { logger } from "../logger.js";
 import { closeConversationsForPhone } from "../receptionist/conversation.js";
 import { hasLiveConversation, processInboundText } from "../receptionist/inbound.js";
+import { smsEnabled } from "../messaging/twilio.js";
 
 const env = apiEnv();
 
@@ -84,7 +85,8 @@ twilioWebhookRouter.post(
       });
       logger.info({ from, count }, "twilio START - opted in");
       // Confirm the opt-in (carriers do NOT auto-reply to START).
-      if (count > 0) reply = OPT_IN_REPLY;
+      // The confirmation is itself a text: none while texting is off.
+      if (count > 0 && smsEnabled()) reply = OPT_IN_REPLY;
     } else if (from) {
       // Not a compliance keyword: offer it to the AI receptionist. Fire and
       // forget AFTER we ACK - the reply (if any) goes out via REST, not TwiML.

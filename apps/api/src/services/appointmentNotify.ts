@@ -12,7 +12,7 @@ import {
   buildSyncedVisitReminderEmail,
   formatApptTime,
 } from "../messaging/templates.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { appointmentDeepLink, resolveNotifyPrefs, sendToBarber } from "./barberNotify.js";
 import { sendPushToUser } from "../messaging/push.js";
@@ -97,6 +97,8 @@ function skipReason(
   client: ApptClient,
   now: Date,
 ): string | null {
+  // Texting switched off platform-wide: every client gets the EMAIL twin.
+  if (!smsEnabled()) return "sms_disabled";
   if (!hasActiveAccess(shop, { now })) return "no_active_access";
   // Texts are a Premium feature; a Starter shop's clients get the EMAIL twin
   // (emailSkipReason below deliberately does not check this).

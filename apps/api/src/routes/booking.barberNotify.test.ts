@@ -1,8 +1,9 @@
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
-import { __setMessageProviderForTests } from "../messaging/twilio.js";
+import { SmsDisabledProvider, __setMessageProviderForTests } from "../messaging/twilio.js";
+import { __setSendEmailForTests } from "../messaging/email.js";
 import type { SendMessageInput } from "../messaging/provider.js";
 import {
   __setPushSenderForTests,
@@ -294,6 +295,50 @@ describe("barber booking alerts", () => {
         where: { id: staffId },
         data: { userId: null },
       });
+    }
+  });
+});
+
+describe("while texting is switched off (SMS_ENABLED=false)", () => {
+  let emails: Array<{ to: string; subject: string }> = [];
+
+  beforeAll(() => {
+    process.env.SMS_ENABLED = "false";
+    __resetEnvCacheForTests();
+    __setSendEmailForTests(async (input) => {
+      emails.push({ to: input.to, subject: input.subject });
+      return { id: `em-${emails.length}`, status: "sent" };
+    });
+  });
+  beforeEach(() => {
+    emails = [];
+  });
+  afterAll(() => {
+    process.env.SMS_ENABLED = "true";
+    __resetEnvCacheForTests();
+    __setSendEmailForTests(undefined);
+  });
+
+  it("🔴 a booking texts nobody: the barber hears by push, and by EMAIL where the text would have gone", async () => {
+    // Every path is meant to skip BEFORE the provider; one that reached it
+    // would throw here rather than text - so "never called" is the proof.
+    const refused = vi.spyOn(SmsDisabledProvider.prototype, "send");
+    try {
+      await book(futureAtHour(7, 10), "Tariq");
+      await waitFor(
+        () =>
+          pushes.some((p) => p.payload.title === "New booking") &&
+          emails.some((e) => e.to === emailOwner),
+      );
+
+      expect(sent).toHaveLength(0); // not the barber, not the customer
+      expect(refused).not.toHaveBeenCalled();
+      // The text's replacement: this barber texted by default and never chose
+      // email, so without the swap a barber without the app hears nothing.
+      const swapped = emails.find((e) => e.to === emailOwner)!;
+      expect(swapped.subject).toBe("Notify Cuts: New booking");
+    } finally {
+      refused.mockRestore();
     }
   });
 });

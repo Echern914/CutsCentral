@@ -50,7 +50,7 @@ import { collectCapabilities, collectReadinessFacts } from "../services/readines
 import { buildReadiness } from "../engines/readiness.js";
 import { previewNudgeBody } from "../messaging/templates.js";
 import { toE164 } from "../acuity/clientKey.js";
-import { getMessageProvider } from "../messaging/twilio.js";
+import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { enqueueReviewNotifications } from "../services/reviewNotify.js";
 import { kickReviewNotifications } from "../engines/reviewNotifyOutbox.js";
@@ -1125,8 +1125,11 @@ publicPageRouter.post("/:slug/request", leadLimiter, async (req, res) => {
   // not just the nudge engine - this texts the barber's own number, but it's
   // still a real (billable) send.
   if (shop.notifyPhone) {
-    if (apiEnv().DRY_RUN) {
-      logger.info({ shopId: shop.id, to: shop.notifyPhone }, "lead notify SMS (dry-run, not sent)");
+    if (apiEnv().DRY_RUN || !smsEnabled()) {
+      logger.info(
+        { shopId: shop.id, to: shop.notifyPhone },
+        "lead notify SMS not sent (dry-run or texting off)",
+      );
     } else {
       try {
         await getMessageProvider().send({ to: shop.notifyPhone, body });
@@ -1368,10 +1371,10 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
   const contact = phone ?? email ?? "no contact info";
   const body = `New waitlist join at ${shop.name} from ${d.firstName} (${contact})`;
   if (shop.notifyPhone) {
-    if (apiEnv().DRY_RUN) {
+    if (apiEnv().DRY_RUN || !smsEnabled()) {
       logger.info(
         { shopId: shop.id, to: shop.notifyPhone },
-        "waitlist notify SMS (dry-run, not sent)",
+        "waitlist notify SMS not sent (dry-run or texting off)",
       );
     } else {
       try {
