@@ -2,13 +2,14 @@ import { createHash } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { APP_NAME, apiEnv, randomToken, vocabularyForShop } from "@chairback/config";
-import { forShop, prisma } from "@chairback/db";
+import { forShop, prisma, runAsOwner } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager, requireOwner } from "../auth/roles.js";
 import { accountLimiter, dashboardLimiter } from "../middleware/rateLimit.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { applyChairLink, releaseChairLink } from "../services/staffUserLink.js";
 import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
+import { NOTHING_SHARED, linksForTeam, sharingOf, teamNumbers } from "../services/teamLinks.js";
 import { logger } from "../logger.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
@@ -437,5 +438,101 @@ teamRouter.delete("/members/:id", requireOwner, async (req, res) => {
       staffId: member.staffId,
     });
   });
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// INDEPENDENT BUSINESSES on this shop's team (TeamLink). The owner shares one
+// link, approves who joins, and sees each member's numbers - only the ones
+// that member shares (services/teamLinks.ts decides; this never widens it).
+// Owner-only: the members share with the shop's OWNER, not with its managers.
+// ---------------------------------------------------------------------------
+
+/** GET /api/team/links - the team link to share, requests waiting, and the team. */
+teamRouter.get("/links", requireOwner, async (req, res) => {
+  const shop = req.shop!;
+  const links = await linksForTeam(shop.id);
+  const now = new Date();
+  const card = (l: (typeof links)[number]) => ({
+    id: l.id,
+    business: { name: l.memberShop.name, logoUrl: l.memberShop.logoUrl },
+    ownerName: l.memberShop.owner.name,
+  });
+  res.json({
+    joinUrl: `${env.APP_BASE_URL}/team/link/${encodeURIComponent(shop.slug ?? shop.id)}`,
+    pending: links
+      .filter((l) => l.status === "PENDING")
+      .map((l) => ({ ...card(l), requestedAt: l.requestedAt.toISOString() })),
+    active: await Promise.all(
+      links
+        .filter((l) => l.status === "ACTIVE")
+        .map(async (l) => ({
+          ...card(l),
+          approvedAt: l.approvedAt?.toISOString() ?? null,
+          sharing: sharingOf(l),
+          numbers: await teamNumbers(l.memberShop, sharingOf(l), now),
+        })),
+    ),
+  });
+});
+
+/** POST /api/team/links/:id/approve - let a business that asked onto the team. */
+teamRouter.post("/links/:id/approve", accountLimiter, requireOwner, async (req, res) => {
+  const shop = req.shop!;
+  const approved = await runAsOwner(async (tx) => {
+    // Only a link to THIS shop, and only while it is still waiting: a double
+    // tap, or a request withdrawn a moment ago, matches nothing.
+    const { count } = await tx.teamLink.updateMany({
+      where: { id: req.params.id, teamShopId: shop.id, status: "PENDING" },
+      data: { status: "ACTIVE", approvedAt: new Date() },
+    });
+    if (count === 0) return null;
+    return tx.teamLink.findUnique({
+      where: { id: req.params.id },
+      select: { memberShop: { select: { name: true, owner: { select: { email: true } } } } },
+    });
+  });
+  if (!approved) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (emailEnabled()) {
+    try {
+      await sendEmail({
+        to: approved.memberShop.owner.email,
+        subject: `You're on ${shop.name}'s team`,
+        text: [
+          `${shop.name} approved ${approved.memberShop.name} for their team on ${APP_NAME}.`,
+          "",
+          "Your clients, bookings and payments stay yours. They see nothing until you choose what to share:",
+          `${env.APP_BASE_URL}/dashboard/teams`,
+        ].join("\n"),
+      });
+    } catch (err) {
+      logger.warn({ err, teamShopId: shop.id }, "team approval email failed");
+    }
+  }
+  res.json({ ok: true });
+});
+
+/**
+ * POST /api/team/links/:id/end - decline a request, or take someone off the
+ * team. Their business is untouched; their share switches go back to off.
+ */
+teamRouter.post("/links/:id/end", accountLimiter, requireOwner, async (req, res) => {
+  const { count } = await runAsOwner((tx) =>
+    tx.teamLink.updateMany({
+      where: {
+        id: req.params.id,
+        teamShopId: req.shop!.id,
+        status: { in: ["PENDING", "ACTIVE"] },
+      },
+      data: { status: "ENDED", endedAt: new Date(), ...NOTHING_SHARED },
+    }),
+  );
+  if (count === 0) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
   res.json({ ok: true });
 });

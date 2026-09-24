@@ -34,6 +34,9 @@ export const LOGIN_NEXT_ALLOWLIST = [
   "/onboarding",
   "/admin",
   "/team/join",
+  // A shop's team link: an independent barber asking to join a team with
+  // their own business.
+  "/team/link",
   // The MCP consent screen. An assistant sends a barber here to approve access;
   // if they are not signed in the middleware bounces them to /login, and losing
   // this destination means they land on the dashboard with the authorization
@@ -49,8 +52,12 @@ export const LOGIN_NEXT_ALLOWLIST = [
  * a shop owner signs up for). An INVITED barber is the exception: they are
  * joining a shop that already exists, must not be walked through creating one,
  * and must not have to find the invitation email a second time.
+ *
+ * /team/link is the other kind of team invitation - a shop's link for
+ * independent barbers. Its page sends someone with no business yet on to
+ * /onboarding itself, then brings them back.
  */
-export const SIGNUP_NEXT_ALLOWLIST = ["/team/join"] as const;
+export const SIGNUP_NEXT_ALLOWLIST = ["/team/join", "/team/link"] as const;
 
 /**
  * Where the NATIVE APP's browser hand-off may be sent.

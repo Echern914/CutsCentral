@@ -728,12 +728,34 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     // this is who can SIGN IN to the dashboard.
     id: "team",
     name: "Team logins",
-    synonyms: ["team", "employees", "invite", "seats", "staff logins", "roles"],
-    description: "Invite the people in your shop and manage who can sign in",
+    synonyms: [
+      "team",
+      "employees",
+      "invite",
+      "seats",
+      "staff logins",
+      "roles",
+      "independent",
+      "booth renters",
+      "team link",
+    ],
+    description:
+      "Your team: independent providers who link their own business, and who can sign in",
     href: "/dashboard/team",
     category: "account",
     minRole: "OWNER",
     questions: ["how do I invite a team member"],
+  },
+  {
+    // The MEMBER's side of an independent team: a business linked to someone
+    // else's shop, and the switches for what that shop can see.
+    id: "teams",
+    name: "Teams you're on",
+    synonyms: ["join a team", "shop team", "leave team", "what my shop sees", "share my numbers"],
+    description: "Link your business to a shop's team, and choose what they can see",
+    href: "/dashboard/teams",
+    category: "account",
+    minRole: "OWNER",
   },
   {
     id: "receptionist",

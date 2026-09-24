@@ -84,6 +84,7 @@ describe("FEATURE_INDEX", () => {
       "/dashboard/rewards",
       "/dashboard/site",
       "/dashboard/team",
+      "/dashboard/teams",
     ];
     const indexed = new Set(FEATURE_INDEX.map((f) => f.href));
     for (const href of REQUIRED_HREFS) {

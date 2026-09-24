@@ -50,6 +50,7 @@ import { mcpConnectionsRouter } from "./routes/mcp.connections.js";
 import { readinessRouter } from "./routes/readiness.js";
 import { teamRouter } from "./routes/team.js";
 import { teamJoinRouter } from "./routes/teamJoin.js";
+import { teamsRouter } from "./routes/teams.js";
 import { bookingPublicRouter } from "./routes/booking.public.js";
 import { bookingGroupRouter } from "./routes/booking.group.js";
 import { bookingDashboardRouter } from "./routes/booking.dashboard.js";
@@ -217,6 +218,10 @@ export function createApp(): Express {
   // shop, so it must not sit behind requireShop.
   app.use("/api/team/join", dashboardLimiter, teamJoinRouter);
   app.use("/api/team", dashboardLimiter, teamRouter);
+  // The member's side of a team: a barber's own business joining a shop's
+  // team and choosing what it sees. Session only - it acts on businesses the
+  // person owns, whichever shop the switcher has open.
+  app.use("/api/teams", dashboardLimiter, teamsRouter);
 
   // Existing dashboard surface. The employee (BARBER) role is refused inside
   // each of these routers, right after their own requireShop — see
