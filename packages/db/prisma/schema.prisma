@@ -5353,3 +5353,104 @@ model BookingConflict {
   @@unique([shopId, receiptId, conflictingKind, conflictingId])
   @@index([shopId, resolvedAt, detectedAt])
 }
+
+// ---------------------------------------------------------------------------
+// PARTNER PROGRAM - cash for PEOPLE who bring businesses to ChairBack (Drick's
+// proposal: "every person that signs up using code ERIC C gets Eric $5").
+// Rules live in packages/config/src/partnerProgram.ts. Nothing here moves
+// money: a cashout is a REQUEST that a platform admin pays by hand and then
+// marks paid.
+//
+// Why three new tables rather than a flag on the affiliate tables above: an
+// AffiliateAccount is a SHOP, minted by an application, earning subscription
+// credit ("never cash" is in its terms). A partner is a person - Eric, a
+// barber coach - who may own no shop at all, has a code they can say out loud,
+// is created by an admin, and is paid in cash.
+//
+// All three are default-deny (REVOKE from chairback_app, RLS FORCED, no
+// policy): platform money, read and written only on the API's owner path.
+// ---------------------------------------------------------------------------
+
+// A partner: one person, one code. Exists so a code resolves to exactly one
+// payee - `codeKey` (the code with case and spaces removed) is UNIQUE, so
+// "ERIC C" and "eric c" can never belong to two people.
+model Partner {
+  id      String @id @default(cuid())
+  name    String
+  // The code as the admin typed it, shown back as-is ("ERIC C").
+  code    String
+  // normalizePartnerCode(code) - what a typed code is matched against.
+  codeKey String @unique
+  // The ChairBack login that sees this partner's earnings and asks for
+  // cashouts. Null = a partner who doesn't use ChairBack; an admin can still
+  // see their balance and pay them. Plain id, no relation (the WaitlistEvent
+  // stance): deleting a login must not take a payee's history with it.
+  userId  String? @unique
+
+  // Set by an admin to switch the partner off: the code stops working for new
+  // signups and cashout requests are refused. History and earnings stay;
+  // clearing it switches them back on.
+  deactivatedAt DateTime?
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  referrals PartnerReferral[]
+  cashouts  PartnerCashout[]
+}
+
+// One row per business that signed up with a partner's code, written in the
+// shop-creation transaction. Exists because attribution and the one-time
+// reward are ONE fact about ONE business: referredShopId is UNIQUE (a business
+// is attributed at most once, ever), and the credit columns are set once,
+// under a compare-and-set on creditedAt IS NULL - so a Stripe replay, a
+// renewal, or a cancel-and-resubscribe can never pay twice.
+//
+// No foreign key to Shop, on purpose: this is the evidence a payment rests on
+// and it must outlive the shop it describes.
+model PartnerReferral {
+  id             String  @id @default(cuid())
+  partnerId      String
+  partner        Partner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  referredShopId String  @unique
+  // The code exactly as the signup typed it.
+  codeUsed       String
+  createdAt      DateTime @default(now())
+
+  // Set together, once: when the business first paid for a qualifying plan.
+  // creditedAt is also the instant the cashout-unlock window counts.
+  creditedAt      DateTime?
+  creditCents     Int?
+  creditPlan      String?
+  // The Stripe invoice that earned it. Unique: one invoice pays one reward.
+  creditInvoiceId String?   @unique
+
+  // Set once when the money that earned the reward went back (a refund, a
+  // dispute or a credit note against creditInvoiceId). A reversed reward is
+  // not earned and does not count toward unlocking - and, because creditedAt
+  // stays set, it can never be credited again.
+  reversedAt     DateTime?
+  reversalReason String? // invoice_refunded | payment_disputed | credit_note
+
+  @@index([partnerId, creditedAt])
+}
+
+// A partner asking to be paid. Exists because payment is by hand: the request
+// is the durable record of what was asked, and PAID records who paid it and
+// when. Requested and paid cashouts both come off the available balance, so
+// the same money can't be asked for twice while an admin is still paying.
+model PartnerCashout {
+  id                String    @id @default(cuid())
+  partnerId         String
+  partner           Partner   @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  amountCents       Int
+  status            String    @default("REQUESTED") // REQUESTED | PAID (CHECK-pinned)
+  requestedByUserId String
+  requestedAt       DateTime  @default(now())
+  paidAt            DateTime?
+  paidByUserId      String?
+
+  @@index([status, requestedAt])
+  @@index([partnerId])
+}

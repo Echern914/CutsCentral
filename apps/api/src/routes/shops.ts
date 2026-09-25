@@ -42,6 +42,7 @@ import { recomputeLoyaltyTiers } from "../engines/loyaltyTierRecompute.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager, requireOwner } from "../auth/roles.js";
 import { linkReferralOnShopCreate } from "../services/referral.js";
+import { recordPartnerReferralInTx, resolvePartnerCode } from "../services/partnerProgram.js";
 import { AFFILIATE_CLAIM_COOKIE } from "@chairback/config";
 import {
   applyAttributionInTx,
@@ -216,6 +217,9 @@ const createShopSchema = z
     // signup form, so onboarding (shop creation) is where those users first
     // affirm it. Must be literally true. (Form-signup users already attested.)
     smsAttested: z.literal(true),
+    // Optional partner code ("ERIC C") typed at signup. Checked before the
+    // business exists; see services/partnerProgram.ts.
+    partnerCode: z.string().max(64).optional(),
   })
   .strict();
 
@@ -247,6 +251,7 @@ const updateShopSchema = createShopSchema
   .omit({
     rewardThreshold: true,
     rewardLabel: true,
+    partnerCode: true,
     smsAttested: true,
     industry: true,
   })
@@ -454,8 +459,13 @@ shopsRouter.post("/", requireUser, async (req, res) => {
     return;
   }
   // smsAttested is a gate, not a Shop column - pull it out before the spread.
-  const { rewardLabel, rewardThreshold, smsAttested: _smsAttested, ...shopData } =
-    parsed.data;
+  const {
+    rewardLabel,
+    rewardThreshold,
+    smsAttested: _smsAttested,
+    partnerCode,
+    ...shopData
+  } = parsed.data;
   // Normalize an omitted/empty booking link to null (no external booking source).
   shopData.bookingUrl = shopData.bookingUrl?.trim() ? shopData.bookingUrl.trim() : null;
   // Did a human actually pick a vertical, or did the caller just not say? Only an
@@ -467,9 +477,22 @@ shopsRouter.post("/", requireUser, async (req, res) => {
   const industryKey = shopData.industry ?? "other";
   const type = businessType(industryKey);
   const slug = await availableSlug(parsed.data.name);
-  const claimToken = (req.cookies as Record<string, string> | undefined)?.[
-    AFFILIATE_CLAIM_COOKIE
-  ];
+  // A partner code is checked BEFORE the business exists, so a typo is an
+  // answer the form can show rather than a business created without it.
+  const partner = partnerCode?.trim()
+    ? await resolvePartnerCode(partnerCode, req.userId!)
+    : null;
+  if (partner && !partner.ok) {
+    res.status(400).json({ error: partner.error });
+    return;
+  }
+  // 🔴 ONE referral program per business. A code the owner typed is the most
+  // deliberate signal there is, so a partner code wins: the affiliate cookie
+  // and the legacy share link are not applied on top of it (each would pay
+  // someone else for the same signup).
+  const claimToken = partner
+    ? undefined
+    : (req.cookies as Record<string, string> | undefined)?.[AFFILIATE_CLAIM_COOKIE];
 
   /**
    * 🔴 ONE TRANSACTION, ONE LOCK, IN THIS ORDER:
@@ -551,6 +574,15 @@ shopsRouter.post("/", requireUser, async (req, res) => {
     if (attribution) {
       await applyAttributionInTx(tx, attribution, created.id);
     }
+    // Partner attribution: the LAST statement, as recordPartnerReferralInTx
+    // requires.
+    if (partner?.ok) {
+      await recordPartnerReferralInTx(tx, {
+        partnerId: partner.partnerId,
+        referredShopId: created.id,
+        codeUsed: partner.codeUsed,
+      });
+    }
     return { created } as const;
   });
 
@@ -569,11 +601,13 @@ shopsRouter.post("/", requireUser, async (req, res) => {
     where: { id: req.userId! },
     select: { referralCode: true },
   });
-  const referred = await linkReferralOnShopCreate({
-    shopId: shop.id,
-    ownerId: req.userId!,
-    code: owner?.referralCode,
-  });
+  const referred = partner
+    ? false
+    : await linkReferralOnShopCreate({
+        shopId: shop.id,
+        ownerId: req.userId!,
+        code: owner?.referralCode,
+      });
   // Re-read only when a referral actually landed, so the response carries the
   // extended trialEndsAt instead of the pre-referral value.
   const fresh = referred

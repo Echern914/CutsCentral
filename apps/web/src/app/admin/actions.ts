@@ -77,3 +77,21 @@ export async function markAffiliateCreditAppliedAction(operationId: string, stri
 export async function releaseAffiliateCreditAction(operationId: string): Promise<AdminResult> {
   return affiliate(`/credits/${operationId}/release`);
 }
+
+//  Partner program (cash for people with a code; the API owns every rule)
+
+async function partners(path: string, body?: unknown): Promise<AdminResult> {
+  const res = await apiSend("POST", `/api/admin-portal/partners${path}`, body ?? {});
+  revalidatePath("/admin");
+  return { ok: res.ok, error: res.error };
+}
+
+export async function createPartnerAction(name: string, code: string, email: string): Promise<AdminResult> {
+  return partners("", { name, code, ...(email.trim() ? { email: email.trim() } : {}) });
+}
+export async function setPartnerActiveAction(partnerId: string, active: boolean): Promise<AdminResult> {
+  return partners(`/${encodeURIComponent(partnerId)}/active`, { active });
+}
+export async function markPartnerCashoutPaidAction(cashoutId: string): Promise<AdminResult> {
+  return partners(`/cashouts/${encodeURIComponent(cashoutId)}/paid`);
+}

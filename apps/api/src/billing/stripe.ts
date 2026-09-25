@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import { apiEnv } from "@chairback/config";
+import { PAID_PLAN_KEYS, apiEnv } from "@chairback/config";
 import { Prisma, prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { ensureShopNumber } from "../messaging/numberProvision.js";
@@ -8,6 +8,7 @@ import { stripeErrorFacts } from "./stripeErrors.js";
 // functions that need a Stripe client) so the cycle never exists at module
 // evaluation time.
 import { flagReferralForReview, grantReferralReward } from "../services/referral.js";
+import { creditPartnerReferral, reversePartnerCredit } from "../services/partnerProgram.js";
 
 /**
  * Stripe billing. Two base tiers ("pro" = Premium, "pro_ai" = Premium AI) on
@@ -169,6 +170,41 @@ export function priceIdForTier(tier: CheckoutTier): string | null {
 export function planForTierMetadata(tier: string | undefined): CheckoutTier {
   if (tier === "pro_ai" || tier === "starter") return tier;
   return "pro";
+}
+
+/**
+ * Which base plan this invoice billed, from its line items' price ids - or
+ * null when it billed none (an add-on, a one-time charge, or a price this
+ * process doesn't know). Reads both line shapes Stripe has shipped: `price`
+ * on older API versions, `pricing.price_details.price` on newer ones.
+ */
+export function basePlanOnInvoice(invoice: Stripe.Invoice): CheckoutTier | null {
+  for (const raw of invoice.lines?.data ?? []) {
+    const line = raw as unknown as {
+      price?: { id?: string } | string | null;
+      pricing?: { price_details?: { price?: string | { id?: string } } } | null;
+    };
+    const legacy = typeof line.price === "string" ? line.price : line.price?.id;
+    const modern = line.pricing?.price_details?.price;
+    const priceId = legacy ?? (typeof modern === "string" ? modern : modern?.id);
+    if (!priceId) continue;
+    const tier = PAID_PLAN_KEYS.find((t) => priceIdForTier(t) === priceId);
+    if (tier) return tier;
+  }
+  return null;
+}
+
+/**
+ * What this invoice actually brought in, less tax (tax is never ChairBack's
+ * money). Reads `tax` on older API versions and `total_taxes` on newer ones.
+ */
+export function amountPaidBeforeTax(invoice: Stripe.Invoice): number {
+  const raw = invoice as unknown as { tax?: number | null; total_taxes?: { amount?: number }[] | null };
+  const tax =
+    typeof raw.tax === "number"
+      ? raw.tax
+      : (raw.total_taxes ?? []).reduce((sum, t) => sum + (t.amount ?? 0), 0);
+  return Math.max(0, (invoice.amount_paid ?? 0) - tax);
 }
 
 /**
@@ -615,6 +651,21 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
       // back on its own: a month already used cannot be un-used, and a credit
       // already consumed by an invoice is a decision, not a reflex.
       await grantReferralReward(paidShop.id, { qualifyingInvoiceId: invoice.id ?? null });
+      // The partner program's one-time reward (services/partnerProgram.ts).
+      // Unlike the referral month above it counts only the BASE plan: the plan
+      // is read off this invoice's own lines, so an add-on invoice, or one
+      // that lands before the subscription event has updated Shop.plan, is
+      // judged by what was actually billed. Replays and renewals are no-ops.
+      if (invoice.id) {
+        const paidAtSec = invoice.status_transitions?.paid_at;
+        await creditPartnerReferral({
+          shopId: paidShop.id,
+          invoiceId: invoice.id,
+          plan: basePlanOnInvoice(invoice),
+          amountPaidCents: amountPaidBeforeTax(invoice),
+          paidAt: paidAtSec ? new Date(paidAtSec * 1000) : new Date(),
+        });
+      }
       return;
     }
     case "charge.refunded":
@@ -628,14 +679,16 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
       const invoiceId =
         typeof obj.invoice === "string" ? obj.invoice : (obj.invoice?.id ?? null);
       if (!invoiceId) return;
-      await flagReferralForReview(
-        invoiceId,
+      const reason =
         event.type === "charge.dispute.created"
           ? "payment_disputed"
           : event.type === "credit_note.created"
             ? "credit_note"
-            : "invoice_refunded",
-      );
+            : "invoice_refunded";
+      await flagReferralForReview(invoiceId, reason);
+      // A partner reward earned by this invoice is taken back. Any money going
+      // back counts, a partial refund included: the simple, conservative rule.
+      await reversePartnerCredit(invoiceId, reason);
       return;
     }
     default:

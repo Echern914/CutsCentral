@@ -100,3 +100,35 @@ describe("creating a business from a team link", () => {
     expect(apiSend).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a referral code at signup", () => {
+  it("is sent with the business, trimmed; left blank it isn't sent at all", async () => {
+    apiSend.mockResolvedValue(created);
+    const f = form();
+    f.set("partnerCode", "  eric c ");
+    await createShopAction({}, f);
+    expect(apiSend.mock.calls[0]![2]).toMatchObject({ partnerCode: "eric c" });
+    apiSend.mockClear();
+    const blank = form();
+    blank.set("partnerCode", "   ");
+    await createShopAction({}, blank);
+    expect(apiSend.mock.calls[0]![2]).not.toHaveProperty("partnerCode");
+  });
+
+  it("🔴 a code that can't be used is explained on the field, and nothing moves on", async () => {
+    for (const [error, says] of [
+      ["unknown_referral_code", /don't recognize/],
+      ["inactive_referral_code", /no longer active/],
+      ["own_referral_code", /your own referral code/],
+    ] as const) {
+      redirect.mockReset();
+      apiSend.mockResolvedValueOnce({ ok: false, status: 400, error });
+      const f = form();
+      f.set("partnerCode", "NOPE");
+      const res = await createShopAction({}, f);
+      expect(res.field).toBe("partnerCode");
+      expect(res.error).toMatch(says);
+      expect(redirect).not.toHaveBeenCalled();
+    }
+  });
+});

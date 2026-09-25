@@ -3,6 +3,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AFFILIATE_CLAIM_COOKIE } from "@chairback/config";
+import { PARTNER_CODE_ERROR_COPY } from "@chairback/config/partnerProgram";
 import { apiSend } from "@/lib/api";
 import { clearActiveShopCookie } from "@/lib/activeShopCookie";
 import { mintAppReturnUrl } from "@/lib/mobileReturn";
@@ -10,6 +11,8 @@ import { TEAM_LINK_COOKIE, clearTeamLinkCookie, teamKeyOk } from "@/lib/teamLink
 
 interface ShopState {
   error?: string;
+  /** Which field the error is about, when it is about one. */
+  field?: "partnerCode";
 }
 
 export async function createShopAction(
@@ -28,6 +31,7 @@ export async function createShopAction(
   // type design exists to prevent. Omitting the field creates an UNSELECTED shop
   // that renders neutral wording and gets asked once, which is the honest result.
   const industry = String(formData.get("industry") ?? "").trim();
+  const partnerCode = String(formData.get("partnerCode") ?? "").trim();
   const res = await apiSend("POST", "/api/shops", {
     name: String(formData.get("name") ?? ""),
     ...(industry ? { industry } : {}),
@@ -36,7 +40,12 @@ export async function createShopAction(
     rewardThreshold: Number(formData.get("rewardThreshold") ?? 10),
     rewardLabel: String(formData.get("rewardLabel") ?? "").trim() || undefined,
     smsAttested: true,
+    ...(partnerCode ? { partnerCode } : {}),
   });
+  // A referral code that can't be used stops here with its reason, before any
+  // business exists - never a silent "continued without it".
+  const codeError = res.status === 400 && res.error ? PARTNER_CODE_ERROR_COPY[res.error] : undefined;
+  if (codeError) return { error: codeError, field: "partnerCode" };
   if (!res.ok && res.status !== 409) {
     return { error: "Could not create your shop. Check the booking URL." };
   }

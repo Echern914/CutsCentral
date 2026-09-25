@@ -3,6 +3,7 @@ import { getVocabulary } from "@/lib/vocab";
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import { ReferralShare, type ReferralRow } from "./ReferralShare";
+import { PartnerEarnings, type PartnerMe } from "./PartnerEarnings";
 
 export const metadata: Metadata = { title: "Refer a {vocab.providerNoun}" };
 
@@ -16,7 +17,12 @@ interface ReferralData {
 
 export default async function ReferralsPage() {
   const vocab = await getVocabulary();
-  const res = await apiGet<ReferralData>("/api/dashboard/referrals");
+  // A partner (someone ChairBack pays for bringing businesses in) sees their
+  // earnings here too. 404 for everyone else, and then nothing renders.
+  const [res, partner] = await Promise.all([
+    apiGet<ReferralData>("/api/dashboard/referrals"),
+    apiGet<PartnerMe>("/api/partner/me"),
+  ]);
   const data = res.data;
   const appBase = process.env.APP_BASE_URL ?? "";
 
@@ -35,6 +41,8 @@ export default async function ReferralsPage() {
         Send your link. They get an extra month free, and you get a free month
         once they&rsquo;re a paying shop.
       </p>
+
+      {partner.data ? <PartnerEarnings me={partner.data} /> : null}
 
       {data?.code ? (
         <ReferralShare
