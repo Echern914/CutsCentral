@@ -69,7 +69,7 @@ let beardId: string;
 let otherUserId: string;
 let otherShopId: string;
 
-const booker = { firstName: "Eric", phone: "+12015550134", email: "eric@test.chairback" };
+const booker = { firstName: "Eric", lastName: "Chern", phone: "+12015550134", email: "eric@test.chairback" };
 
 async function makeShop(prefix: string, calendarId: string | null) {
   const user = await prisma.user.create({

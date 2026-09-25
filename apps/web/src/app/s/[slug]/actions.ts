@@ -31,6 +31,9 @@ export async function submitRequestAction(
 
 export interface WaitlistInput {
   firstName: string;
+  /** A last name or an Instagram handle - at least one (config clientIdentity). */
+  lastName?: string;
+  instagram?: string;
   phone?: string;
   email?: string;
   /** Structured preference windows (lib/waitlistRows); omitted = Any/Any server-side. */
@@ -45,13 +48,14 @@ export interface WaitlistInput {
 export async function joinWaitlistAction(
   slug: string,
   input: WaitlistInput,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; message?: string }> {
   const res = await apiPublicSend(
     "POST",
     `/api/page/${encodeURIComponent(slug)}/waitlist`,
     input,
   );
-  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  // `message` is the server's own sentence for a refusal the customer can fix.
+  if (!res.ok) return { ok: false, error: res.error ?? "failed", message: res.message };
   return { ok: true };
 }
 

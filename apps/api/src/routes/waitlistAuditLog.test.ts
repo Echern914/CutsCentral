@@ -49,6 +49,7 @@ let otherShopId: string;
 const CUSTOMER = {
   firstName: "Marcus",
   lastName: "Reed",
+  instagram: "marcus.reed.cuts",
   phone: "+12025550171",
   email: "marcus.reed@test.local",
 };
@@ -182,6 +183,7 @@ describe("what the customer does", () => {
   it("🔑 a duplicate join is recorded against the entry it collided with", async () => {
     const body = {
       firstName: "Dup",
+      lastName: "Test",
       email: `dup-${randomToken(5)}@test.local`,
       windows: [{ startDate: null, endDate: null }],
     };
@@ -228,7 +230,7 @@ describe("what the barber does", () => {
     const res = await request(app)
       .post("/api/dashboard/waitlist")
       .set("Cookie", cookie)
-      .send({ firstName: "Walkin", phone: "+12025550188", windows: [{ startDate: null, endDate: null }] });
+      .send({ lastName: "Test", firstName: "Walkin", phone: "+12025550188", windows: [{ startDate: null, endDate: null }] });
     expect(res.status).toBe(201);
 
     const [ev] = await events(res.body.id);
@@ -505,6 +507,7 @@ describe("nothing personal ever lands in it", () => {
     for (const needle of [
       CUSTOMER.firstName,
       CUSTOMER.lastName,
+      CUSTOMER.instagram,
       CUSTOMER.email,
       CUSTOMER.phone,
       "2025550171",

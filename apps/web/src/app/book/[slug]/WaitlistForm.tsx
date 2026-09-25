@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { checkTellApart, TELL_APART_MESSAGE } from "@chairback/config/clientIdentity";
 import { readableOn } from "@/lib/contrast";
 import {
   browserTimezone,
@@ -59,6 +60,8 @@ export function WaitlistForm({
   onDone?: () => void;
 }) {
   const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [instagram, setInstagram] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [rows, setRows] = useState<Row[]>([{ ...EMPTY_ROW }]);
@@ -90,6 +93,12 @@ export function WaitlistForm({
       setError("Add a phone or email so they can reach you.");
       return;
     }
+    // The server runs the same rule; checked here so it costs no round trip.
+    const who = checkTellApart({ lastName, instagram });
+    if (!who.ok) {
+      setError(who.message);
+      return;
+    }
     const windows: WaitlistWindowInput[] = [];
     for (const row of rows) {
       const res = rowToWindow(row);
@@ -103,6 +112,8 @@ export function WaitlistForm({
     startTransition(async () => {
       const res = await joinWaitlistAction(slug, {
         firstName: firstName.trim(),
+        lastName: who.lastName ?? undefined,
+        instagram: who.instagram ?? undefined,
         phone: phone.trim() || undefined,
         email: email.trim() || undefined,
         serviceId: serviceId || undefined,
@@ -113,7 +124,7 @@ export function WaitlistForm({
         smsConsent: smsConsent && Boolean(phone.trim()),
       });
       if (!res.ok) {
-        setError("Something went wrong. Please try again.");
+        setError(res.message ?? "Something went wrong. Please try again.");
         return;
       }
       setEmailed(Boolean(email.trim()));
@@ -163,11 +174,34 @@ export function WaitlistForm({
       <div className="mt-4 flex flex-col gap-3">
         <input
           className={input}
-          placeholder="Your name"
-          aria-label="Your name"
+          placeholder="First name"
+          aria-label="First name"
+          autoComplete="given-name"
           value={firstName}
           onChange={(e) => setFirstName(e.target.value)}
         />
+        <input
+          className={input}
+          placeholder="Last name"
+          aria-label="Last name"
+          autoComplete="family-name"
+          value={lastName}
+          onChange={(e) => setLastName(e.target.value)}
+        />
+        <input
+          className={input}
+          placeholder="Instagram @handle"
+          aria-label="Instagram"
+          aria-describedby="waitlist-tell-apart"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          value={instagram}
+          onChange={(e) => setInstagram(e.target.value)}
+        />
+        <p id="waitlist-tell-apart" className="-mt-1 text-xs text-muted">
+          {TELL_APART_MESSAGE}.
+        </p>
         <input
           className={input}
           type="tel"

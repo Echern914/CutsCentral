@@ -165,6 +165,49 @@ describe("the sequence and total are the SERVER's", () => {
   });
 });
 
+/** The booker's details: a first name and, since Drick's rule, a last name. */
+function fillBooker(details: { last?: string; instagram?: string } = { last: "Chern" }) {
+  fireEvent.change(screen.getByPlaceholderText("Your first name"), {
+    target: { value: "Eric" },
+  });
+  if (details.last !== undefined) {
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: details.last } });
+  }
+  if (details.instagram !== undefined) {
+    fireEvent.change(screen.getByLabelText("Instagram"), { target: { value: details.instagram } });
+  }
+}
+
+describe("🔴 the booker can be told apart (a last name or Instagram)", () => {
+  it("a first name alone is refused in place, and nothing is sent", async () => {
+    await reachReview();
+    fillBooker({});
+    fireEvent.click(screen.getByRole("button", { name: /Confirm 2 appointments/ }));
+    expect(
+      await screen.findByText("Add your last name or Instagram so the shop can tell you apart"),
+    ).toBeTruthy();
+    expect(createAction).not.toHaveBeenCalled();
+  });
+
+  it("an Instagram handle alone is enough, and goes as the bare handle", async () => {
+    createAction.mockResolvedValue({ kind: "booked", groupId: "grp_1", manageToken: "tok_1" });
+    await reachReview();
+    fillBooker({ instagram: " @Eric.Fades " });
+    fireEvent.click(screen.getByRole("button", { name: /Confirm 2 appointments/ }));
+    await screen.findByText(/You're booked/);
+    expect(createAction.mock.calls[0]![1]).toMatchObject({ instagram: "eric.fades" });
+    expect(createAction.mock.calls[0]![1].lastName).toBeUndefined();
+  });
+
+  it("shows the server's sentence when the server refuses", async () => {
+    createAction.mockResolvedValue({ kind: "invalid", message: "From the server." });
+    await reachReview();
+    fillBooker();
+    fireEvent.click(screen.getByRole("button", { name: /Confirm 2 appointments/ }));
+    expect(await screen.findByText("From the server.")).toBeTruthy();
+  });
+});
+
 describe("🔴 one submission, whatever the customer does", () => {
   it("a double click books ONE group", async () => {
     let resolve!: (v: { kind: "booked"; groupId: string; manageToken: string }) => void;
@@ -174,9 +217,7 @@ describe("🔴 one submission, whatever the customer does", () => {
       }),
     );
     await reachReview();
-    fireEvent.change(screen.getByPlaceholderText("Your first name"), {
-      target: { value: "Eric" },
-    });
+    fillBooker();
 
     const confirm = screen.getByRole("button", { name: /Confirm 2 appointments/ });
     fireEvent.click(confirm);
@@ -195,9 +236,7 @@ describe("🔴 one submission, whatever the customer does", () => {
       .mockResolvedValueOnce({ kind: "network" })
       .mockResolvedValueOnce({ kind: "booked", groupId: "grp_1", manageToken: "tok_1" });
     await reachReview();
-    fireEvent.change(screen.getByPlaceholderText("Your first name"), {
-      target: { value: "Eric" },
-    });
+    fillBooker();
     const confirm = screen.getByRole("button", { name: /Confirm 2 appointments/ });
 
     fireEvent.click(confirm);
@@ -220,9 +259,7 @@ describe("🔴 202 is not a failure", () => {
       manageToken: "tok_1",
     });
     await reachReview();
-    fireEvent.change(screen.getByPlaceholderText("Your first name"), {
-      target: { value: "Eric" },
-    });
+    fillBooker();
     fireEvent.click(screen.getByRole("button", { name: /Confirm 2 appointments/ }));
 
     await screen.findByText(/Almost there/);
@@ -240,9 +277,7 @@ describe("🔴 202 is not a failure", () => {
       manageToken: "tok_1",
     });
     await reachReview();
-    fireEvent.change(screen.getByPlaceholderText("Your first name"), {
-      target: { value: "Eric" },
-    });
+    fillBooker();
     fireEvent.click(screen.getByRole("button", { name: /Confirm 2 appointments/ }));
     await screen.findByText(/Almost there/);
 
@@ -259,9 +294,7 @@ describe("a conflict books nothing", () => {
   it("says nothing was booked and sends them back to the times", async () => {
     createAction.mockResolvedValue({ kind: "slot_taken" });
     await reachReview();
-    fireEvent.change(screen.getByPlaceholderText("Your first name"), {
-      target: { value: "Eric" },
-    });
+    fillBooker();
     fireEvent.click(screen.getByRole("button", { name: /Confirm 2 appointments/ }));
 
     expect(await screen.findByText(/Nothing was booked/)).toBeTruthy();
@@ -273,9 +306,7 @@ describe("a shop that takes money at booking", () => {
   it("says so plainly instead of failing at Confirm", async () => {
     createAction.mockResolvedValue({ kind: "payments" });
     await reachReview();
-    fireEvent.change(screen.getByPlaceholderText("Your first name"), {
-      target: { value: "Eric" },
-    });
+    fillBooker();
     fireEvent.click(screen.getByRole("button", { name: /Confirm 2 appointments/ }));
     expect(
       await screen.findByText(/Group booking isn't available online/),

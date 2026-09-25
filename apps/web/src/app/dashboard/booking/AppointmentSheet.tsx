@@ -32,6 +32,7 @@ import {
   type DetailHistoryItem,
 } from "./actions";
 import type { AgendaRow } from "./page";
+import { InstagramHandle } from "@/components/InstagramHandle";
 
 /** Same local alias the sibling booking forms use - the provider's own
  * `Toast` interface is a toast OBJECT and is not exported. */
@@ -711,6 +712,11 @@ function Hero({
           >
             {name}
           </h3>
+        )}
+        {detail?.clientInstagram && (
+          <p className="mt-1 text-sm">
+            <InstagramHandle handle={detail.clientInstagram} />
+          </p>
         )}
 
         <div className="mt-2.5 flex flex-wrap items-center justify-center gap-1.5">

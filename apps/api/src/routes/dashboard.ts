@@ -731,6 +731,8 @@ dashboardRouter.get("/clients", async (req, res) => {
   let searchIds: string[] | null = null;
   if (q) {
     const like = `%${q}%`;
+    // Handles are stored bare, so "@mike.fades" searches as "mike.fades".
+    const igLike = `%${q.replace(/^@+/, "")}%`;
     const filterSql = buildClientFilterSql(filter, tier);
     const ranked = await runWithShop(shop.id, (tx) =>
       tx.$queryRaw<{ id: string }[]>`
@@ -742,6 +744,7 @@ dashboardRouter.get("/clients", async (req, res) => {
             OR ${FULL_NAME_FOLDED} ILIKE ${foldedValue(like)}
             OR coalesce("phone", '') ILIKE ${like}
             OR lower(coalesce("email", '')) ILIKE lower(${like})
+            OR coalesce("instagram", '') ILIKE ${igLike}
           )
         ORDER BY
           -- exact substring first, then trigram similarity, then most-recent.
@@ -804,6 +807,7 @@ dashboardRouter.get("/clients", async (req, res) => {
       id: c.id,
       name: appNames.get(c.id) ?? name(c),
       nameFromApp: appNames.has(c.id),
+      instagram: c.instagram,
       phone: c.phone,
       email: c.email,
       optedOut: c.optedOut,
@@ -2033,6 +2037,7 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       nameFromApp,
       firstName: client.firstName,
       lastName: client.lastName,
+      instagram: client.instagram,
       phone: client.phone,
       email: client.email,
       optedOut: client.optedOut,
@@ -2483,6 +2488,7 @@ dashboardRouter.get("/waitlist", async (req, res) => {
       id: e.id,
       firstName: e.firstName,
       lastName: e.lastName,
+      instagram: e.instagram,
       phone: e.phone,
       email: e.email,
       serviceId: e.serviceId,

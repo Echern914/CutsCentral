@@ -261,6 +261,29 @@ describe("missing contact", () => {
     expect(res.body.contact.email).toBeNull();
   });
 
+  it("carries the client's Instagram handle, so two clients with one name can be told apart", async () => {
+    const handle = `mike_${randomToken(5).toLowerCase()}`;
+    const mike = await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `anon:${randomToken(6)}`,
+        magicToken: randomToken(),
+        firstName: "Mike",
+        instagram: handle,
+      },
+    });
+    const first = await makeAppt({ clientId: mike.id });
+    const withHandle = await getAppt(first.id);
+    expect(withHandle.body.clientInstagram).toBe(handle);
+    await prisma.appointment.delete({ where: { id: first.id } });
+    const without = await getAppt((await makeAppt()).id);
+    expect(without.body.clientInstagram).toBeNull();
+
+    // The client page says it too.
+    const page = await agent.get(`/api/dashboard/clients/${mike.id}`);
+    expect(page.body.client.instagram).toBe(handle);
+  });
+
   it("a clientless walk-in falls back to what the booker typed", async () => {
     const a = await makeAppt({
       clientId: null,

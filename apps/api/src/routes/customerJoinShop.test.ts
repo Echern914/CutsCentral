@@ -131,8 +131,8 @@ describe("Join shop - an open shop", () => {
   it("pressing Join twice is still one client", async () => {
     const phone = randomPhone();
     const me = await account({ phone });
-    expect((await join(me.token, { handle: open.slug, firstName: "Twice" })).body.status).toBe("joined");
-    expect((await join(me.token, { handle: open.slug, firstName: "Twice" })).body.status).toBe("joined");
+    expect((await join(me.token, { handle: open.slug, firstName: "Twice", lastName: "T" })).body.status).toBe("joined");
+    expect((await join(me.token, { handle: open.slug, firstName: "Twice", lastName: "T" })).body.status).toBe("joined");
     expect(await clientsAt(open.id, phone)).toHaveLength(1);
   });
 
@@ -167,6 +167,8 @@ describe("Join shop - an open shop", () => {
         data: { shopId: open.id, acuityClientKey: `shared:${randomToken(8)}`, magicToken: randomToken(), phone, firstName },
       });
     }
+    // No last name and no handle: a customer the shop already knows is never
+    // turned away over that - nothing new is made either way.
     const res = await join(me.token, { handle: open.slug, firstName: "Intruder" });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("needs_connecting");
@@ -180,6 +182,7 @@ describe("Join shop - an open shop", () => {
     await prisma.client.create({
       data: { shopId: open.id, acuityClientKey: `tel:${phone}`, magicToken: randomToken(), phone, firstName: "Booked" },
     });
+    // 🔴 First name only, and still joined: a returning client is never blocked.
     const res = await join(me.token, { handle: open.slug, firstName: "Renamed" });
     expect(res.body.status).toBe("joined");
     const records = await clientsAt(open.id, phone);
@@ -191,7 +194,7 @@ describe("Join shop - an open shop", () => {
     const me = await account({ firstName: "Saver", phone: randomPhone() });
     await request(app).post("/api/me/shops/saved").set("Authorization", `Bearer ${me.token}`).send({ handle: open.slug });
     expect(await prisma.customerSavedShop.count({ where: { accountId: me.id } })).toBe(1);
-    expect((await join(me.token, { handle: open.slug, firstName: "Saver" })).body.status).toBe("joined");
+    expect((await join(me.token, { handle: open.slug, firstName: "Saver", lastName: "S" })).body.status).toBe("joined");
     expect(await prisma.customerSavedShop.count({ where: { accountId: me.id } })).toBe(0);
   });
 });
@@ -257,7 +260,7 @@ describe("Join shop - a shop that approves new clients", () => {
     expect(await clientsAt(open.id, phone)).toHaveLength(0);
 
     const asker = await account({ phone: randomPhone() });
-    await join(asker.token, { handle: otherShop.slug, firstName: "Else" });
+    await join(asker.token, { handle: otherShop.slug, firstName: "Else", lastName: "E" });
     const theirs = await prisma.customerSavedShop.findFirstOrThrow({ where: { accountId: asker.id, shopId: otherShop.id } });
     for (const action of ["accept", "decline"]) {
       const res = await request(app).post(`/api/dashboard/saved-by/${theirs.id}/${action}`).set("Cookie", ownerCookie);
@@ -268,11 +271,101 @@ describe("Join shop - a shop that approves new clients", () => {
 
   it("the customer can take their request back", async () => {
     const me = await account({ phone: randomPhone() });
-    await join(me.token, { handle: otherShop.slug, firstName: "Undo" });
+    await join(me.token, { handle: otherShop.slug, firstName: "Undo", lastName: "U" });
     const row = (await home(me.token)).saved.find((s) => s.handle === otherShop.slug)!;
     const res = await request(app).delete(`/api/me/shops/saved/${row.key}`).set("Authorization", `Bearer ${me.token}`);
     expect(res.status).toBe(200);
     expect(await prisma.customerSavedShop.count({ where: { accountId: me.id } })).toBe(0);
+  });
+});
+
+describe("🔴 Join shop - a last name or an Instagram handle, so the shop can tell them apart", () => {
+  it("a first name alone makes no record, at an open shop or an approving one", async () => {
+    for (const shop of [open, vetted]) {
+      const phone = randomPhone();
+      const me = await account({ phone });
+      const res = await join(me.token, { handle: shop.slug, firstName: "Mike" });
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({
+        error: "name_or_instagram_required",
+        message: "Add your last name or Instagram so the shop can tell you apart",
+      });
+      expect(await clientsAt(shop.id, phone)).toHaveLength(0);
+      expect(await prisma.customerSavedShop.count({ where: { accountId: me.id } })).toBe(0);
+    }
+  });
+
+  it("an Instagram handle alone is enough, stored bare and lowercase on the client and the account", async () => {
+    const phone = randomPhone();
+    const me = await account({ phone });
+    const res = await join(me.token, {
+      handle: open.slug,
+      firstName: "Mike",
+      instagram: " https://www.instagram.com/Mike.Fades/?hl=en ",
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("joined");
+    const [client] = await clientsAt(open.id, phone);
+    expect(client).toMatchObject({ firstName: "Mike", lastName: null, instagram: "mike.fades" });
+    const profile = await request(app).get("/api/me").set("Authorization", `Bearer ${me.token}`);
+    expect(profile.body.profile.instagram).toBe("mike.fades");
+  });
+
+  it("a last name the account already has counts - it is asked for only when missing", async () => {
+    const phone = randomPhone();
+    const me = await account({ phone });
+    await prisma.customerAccount.update({ where: { id: me.id }, data: { lastName: "Already" } });
+    const res = await join(me.token, { handle: open.slug, firstName: "Kept" });
+    expect(res.body.status).toBe("joined");
+    expect((await clientsAt(open.id, phone))[0]).toMatchObject({ lastName: "Already" });
+  });
+
+  it("a handle that cannot be one is refused and saves nothing", async () => {
+    const phone = randomPhone();
+    const me = await account({ phone });
+    const res = await join(me.token, { handle: open.slug, firstName: "Mike", lastName: "Jones", instagram: "mike fades!" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_instagram");
+    expect(await clientsAt(open.id, phone)).toHaveLength(0);
+    expect((await prisma.customerAccount.findUniqueOrThrow({ where: { id: me.id } })).lastName).toBeNull();
+  });
+
+  it("an approving shop's accept carries the handle onto the client", async () => {
+    const phone = randomPhone();
+    const me = await account({ phone });
+    const tag = randomToken(4).toLowerCase();
+    await join(me.token, { handle: otherShop.slug, firstName: `Ig${tag}`, instagram: `@ig_${tag}` });
+    const req = (await savedBy(otherCookie)).requests.find((r) => r.name.startsWith(`Ig${tag}`));
+    const ok = await request(app).post(`/api/dashboard/saved-by/${req!.id}/accept`).set("Cookie", otherCookie);
+    expect(ok.body.status).toBe("joined");
+    expect((await clientsAt(otherShop.id, phone))[0]).toMatchObject({ instagram: `ig_${tag}` });
+  });
+
+  it("🔴 an approving shop that already has their number on file still takes the request, name or no name", async () => {
+    const phone = randomPhone();
+    const me = await account({ phone });
+    // Two records share the number, so neither opens on it alone - the shop
+    // knows this person, the app just cannot say which record is theirs yet.
+    for (const firstName of ["Parent", "Child"]) {
+      await prisma.client.create({
+        data: { shopId: vetted.id, acuityClientKey: `shared:${randomToken(8)}`, magicToken: randomToken(), phone, firstName },
+      });
+    }
+    const res = await join(me.token, { handle: vetted.slug, firstName: "Known" });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("pending");
+  });
+
+  it("🔴 a barber accepting an OLD request (no last name, no handle) is never blocked", async () => {
+    const phone = randomPhone();
+    const me = await account({ firstName: "Legacy", phone });
+    // Recorded before the rule existed: a request row, and a first name only.
+    const row = await prisma.customerSavedShop.create({
+      data: { accountId: me.id, shopId: otherShop.id, joinRequestedAt: new Date() },
+    });
+    const ok = await request(app).post(`/api/dashboard/saved-by/${row.id}/accept`).set("Cookie", otherCookie);
+    expect(ok.body.status).toBe("joined");
+    expect(await clientsAt(otherShop.id, phone)).toHaveLength(1);
   });
 });
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition, type CSSProperties } from "react";
+import { checkTellApart, TELL_APART_MESSAGE } from "@chairback/config/clientIdentity";
 import { readableOn } from "@/lib/contrast";
 import {
   browserTimezone,
@@ -49,6 +50,8 @@ export function ShopWaitlistForm({
 }) {
   const [open, setOpen] = useState(false);
   const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [instagram, setInstagram] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [rows, setRows] = useState<Row[]>([{ ...EMPTY_ROW }]);
@@ -87,6 +90,12 @@ export function ShopWaitlistForm({
       setError("Add a phone or email so they can reach you.");
       return;
     }
+    // The server runs the same rule; checked here so it costs no round trip.
+    const who = checkTellApart({ lastName, instagram });
+    if (!who.ok) {
+      setError(who.message);
+      return;
+    }
     const windows: WaitlistWindowInput[] = [];
     for (const row of rows) {
       const res = rowToWindow(row);
@@ -99,6 +108,8 @@ export function ShopWaitlistForm({
     startTransition(async () => {
       const res = await joinWaitlistAction(slug, {
         firstName: firstName.trim(),
+        lastName: who.lastName ?? undefined,
+        instagram: who.instagram ?? undefined,
         phone: phone.trim() || undefined,
         email: email.trim() || undefined,
         windows,
@@ -107,7 +118,7 @@ export function ShopWaitlistForm({
         smsConsent: smsConsent && Boolean(phone.trim()),
       });
       if (!res.ok) {
-        setError("Something went wrong. Please try again.");
+        setError(res.message ?? "Something went wrong. Please try again.");
         return;
       }
       setEmailed(Boolean(email.trim()));
@@ -166,8 +177,9 @@ export function ShopWaitlistForm({
           type="text"
           value={firstName}
           onChange={(e) => setFirstName(e.target.value)}
-          placeholder="Your name"
-          aria-label="Your name"
+          placeholder="First name"
+          aria-label="First name"
+          autoComplete="given-name"
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? "waitlist-error" : undefined}
           // The form only renders after the "Join the waitlist" tap — move
@@ -176,6 +188,32 @@ export function ShopWaitlistForm({
           className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
           style={inputStyle}
         />
+        <input
+          type="text"
+          value={lastName}
+          onChange={(e) => setLastName(e.target.value)}
+          placeholder="Last name"
+          aria-label="Last name"
+          autoComplete="family-name"
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
+          style={inputStyle}
+        />
+        <input
+          type="text"
+          value={instagram}
+          onChange={(e) => setInstagram(e.target.value)}
+          placeholder="Instagram @handle"
+          aria-label="Instagram"
+          aria-describedby="shop-waitlist-tell-apart"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
+          style={inputStyle}
+        />
+        <p id="shop-waitlist-tell-apart" className="-mt-1 text-xs" style={{ color: theme.muted }}>
+          {TELL_APART_MESSAGE}.
+        </p>
         <input
           type="tel"
           inputMode="tel"

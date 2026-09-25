@@ -22,5 +22,6 @@ export * from "./shopPolicy.js";
 export * from "./tierPerks.js";
 export * from "./tierRules.js";
 export * from "./shopHandle.js";
+export * from "./clientIdentity.js";
 export * from "./checkoutConsent.js";
 export * from "./walkInBackdate.js";

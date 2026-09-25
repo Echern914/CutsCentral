@@ -114,6 +114,8 @@ export interface AppointmentDetail {
   checkInStatus: string | null;
   clientId: string | null;
   clientName: string;
+  /** The client's Instagram handle (bare), so two Mikes can be told apart. */
+  clientInstagram: string | null;
   serviceName: string | null;
   staffName: string | null;
   startsAt: string;
@@ -438,6 +440,7 @@ export function registerAppointmentDetail(router: Router): void {
           select: {
             phone: true,
             email: true,
+            instagram: true,
             optedOut: true,
             smsConsentAt: true,
           },
@@ -469,6 +472,7 @@ export function registerAppointmentDetail(router: Router): void {
       client: {
         phone: string | null;
         email: string | null;
+        instagram: string | null;
         optedOut: boolean;
         smsConsentAt: Date | null;
       } | null;
@@ -522,6 +526,7 @@ export function registerAppointmentDetail(router: Router): void {
       checkInStatus: appt.checkInStatus,
       clientId: appt.clientId,
       clientName: fullName(appt.firstName, appt.lastName) || "Client",
+      clientInstagram: appt.client?.instagram ?? null,
       serviceName: appt.service?.name ?? null,
       staffName: appt.staff?.name ?? null,
       startsAt: appt.startsAt.toISOString(),
@@ -584,6 +589,7 @@ export function registerAppointmentDetail(router: Router): void {
           select: {
             firstName: true,
             lastName: true,
+            instagram: true,
             phone: true,
             email: true,
             optedOut: true,
@@ -602,6 +608,7 @@ export function registerAppointmentDetail(router: Router): void {
       client: {
         firstName: string | null;
         lastName: string | null;
+        instagram: string | null;
         phone: string | null;
         email: string | null;
         optedOut: boolean;
@@ -633,6 +640,7 @@ export function registerAppointmentDetail(router: Router): void {
       clientName:
         fullName(visit.client?.firstName ?? null, visit.client?.lastName ?? null) ||
         "Booked elsewhere",
+      clientInstagram: visit.client?.instagram ?? null,
       serviceName: visit.serviceName,
       staffName: null, // a Visit carries no staff — the source doesn't send one
       startsAt: visit.scheduledAt.toISOString(),

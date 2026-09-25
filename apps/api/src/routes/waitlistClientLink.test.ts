@@ -166,7 +166,7 @@ describe("joining stamps the link", () => {
     const client = await makeClient(shopId, hit.stored);
     const res = await request(app)
       .post(`/api/page/${slug}/waitlist`)
-      .send({ firstName: "Linked", phone: hit.raw });
+      .send({ lastName: "Test", firstName: "Linked", phone: hit.raw });
     expect(res.status).toBe(201);
 
     const linked = await prisma.waitlistEntry.findFirst({
@@ -181,7 +181,7 @@ describe("joining stamps the link", () => {
     await makeClient(shopId, dup.stored);
     const res2 = await request(app)
       .post(`/api/page/${slug}/waitlist`)
-      .send({ firstName: "Ambiguous", phone: dup.raw });
+      .send({ lastName: "Test", firstName: "Ambiguous", phone: dup.raw });
     expect(res2.status).toBe(201);
     const amb = await prisma.waitlistEntry.findFirst({
       where: { shopId, firstName: "Ambiguous" },
@@ -193,7 +193,7 @@ describe("joining stamps the link", () => {
   it("public join with no phone at all still joins, unlinked", async () => {
     const res = await request(app)
       .post(`/api/page/${slug}/waitlist`)
-      .send({ firstName: "NoPhone", email: `np-${randomToken(5)}@test.local` });
+      .send({ lastName: "Test", firstName: "NoPhone", email: `np-${randomToken(5)}@test.local` });
     expect(res.status).toBe(201);
     const e = await prisma.waitlistEntry.findFirst({
       where: { shopId, firstName: "NoPhone" },
@@ -208,7 +208,7 @@ describe("joining stamps the link", () => {
     const res = await request(app)
       .post("/api/dashboard/waitlist")
       .set("Cookie", cookie)
-      .send({ firstName: "Counter", phone: hit.raw });
+      .send({ lastName: "Test", firstName: "Counter", phone: hit.raw });
     expect(res.status).toBe(201);
     const e = await prisma.waitlistEntry.findFirst({
       where: { shopId, firstName: "Counter" },
@@ -222,7 +222,7 @@ describe("joining stamps the link", () => {
     await makeClient(otherShopId, hit.stored);
     const res = await request(app)
       .post(`/api/page/${slug}/waitlist`)
-      .send({ firstName: "CrossShop", phone: hit.raw });
+      .send({ lastName: "Test", firstName: "CrossShop", phone: hit.raw });
     expect(res.status).toBe(201);
     const e = await prisma.waitlistEntry.findFirst({
       where: { shopId, firstName: "CrossShop" },
@@ -380,7 +380,7 @@ describe("joining stamps the rank", () => {
     await makeClient(shopId, hit.stored, { loyaltyTier: "GOLD" });
     const res = await request(app)
       .post(`/api/page/${slug}/waitlist`)
-      .send({ firstName: "GoldJoin", phone: hit.raw });
+      .send({ lastName: "Test", firstName: "GoldJoin", phone: hit.raw });
     expect(res.status).toBe(201);
     const e = await prisma.waitlistEntry.findFirst({
       where: { shopId, firstName: "GoldJoin" },
@@ -395,7 +395,7 @@ describe("joining stamps the rank", () => {
     const res = await request(app)
       .post("/api/dashboard/waitlist")
       .set("Cookie", cookie)
-      .send({ firstName: "SilverCounter", phone: hit.raw });
+      .send({ lastName: "Test", firstName: "SilverCounter", phone: hit.raw });
     expect(res.status).toBe(201);
     const e = await prisma.waitlistEntry.findFirst({
       where: { shopId, firstName: "SilverCounter" },
@@ -407,7 +407,7 @@ describe("joining stamps the rank", () => {
   it("an unlinked join gets the no-standing rank, not a missing one", async () => {
     const res = await request(app)
       .post(`/api/page/${slug}/waitlist`)
-      .send({ firstName: "Stranger", email: `st-${randomToken(5)}@test.local` });
+      .send({ lastName: "Test", firstName: "Stranger", email: `st-${randomToken(5)}@test.local` });
     expect(res.status).toBe(201);
     const e = await prisma.waitlistEntry.findFirst({
       where: { shopId, firstName: "Stranger" },
@@ -434,7 +434,7 @@ describe("joining stamps the rank", () => {
 
     const res = await request(app)
       .post(`/api/page/${slug}/waitlist`)
-      .send({ firstName: "Promoted", phone: hit.raw });
+      .send({ lastName: "Test", firstName: "Promoted", phone: hit.raw });
     expect(res.status).toBe(201);
     const joined = await prisma.waitlistEntry.findFirstOrThrow({
       where: { shopId, firstName: "Promoted" },
@@ -469,7 +469,7 @@ describe("joining stamps the rank", () => {
     });
     const again = await request(app)
       .post(`/api/page/${slug}/waitlist`)
-      .send({ firstName: "PromotedAgain", phone: hit.raw });
+      .send({ lastName: "Test", firstName: "PromotedAgain", phone: hit.raw });
     expect(again.status).toBe(201);
     const next = await prisma.waitlistEntry.findFirstOrThrow({
       where: { shopId, firstName: "PromotedAgain" },

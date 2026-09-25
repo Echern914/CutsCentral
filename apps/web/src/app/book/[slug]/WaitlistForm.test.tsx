@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { WaitlistForm, rowToWindow } from "./WaitlistForm";
+import { joinWaitlistAction } from "./actions";
 
 vi.mock("./actions", () => ({
   joinWaitlistAction: vi.fn(async () => ({ ok: true })),
@@ -118,7 +119,7 @@ describe("the form", () => {
     fireEvent.click(screen.getByText("Join the waitlist", { selector: "button" }));
     expect(screen.getByRole("alert").textContent).toMatch(/name/i);
 
-    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Wanda" } });
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Wanda" } });
     fireEvent.click(screen.getByText("Join the waitlist", { selector: "button" }));
     expect(screen.getByRole("alert").textContent).toMatch(/phone or email/i);
   });
@@ -194,7 +195,8 @@ describe("both entry points", () => {
 
   it("a phone-only confirmation says the shop reaches out personally", async () => {
     render(<WaitlistForm {...base} />);
-    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Wanda" } });
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Wanda" } });
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Maximoff" } });
     fireEvent.change(screen.getByLabelText("Mobile number"), {
       target: { value: "3025550100" },
     });
@@ -206,7 +208,8 @@ describe("both entry points", () => {
 
   it("both land on a confirmation screen that mentions the cancel link", async () => {
     render(<WaitlistForm {...base} />);
-    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Wanda" } });
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Wanda" } });
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Maximoff" } });
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: "w@test.local" },
     });
@@ -215,5 +218,43 @@ describe("both entry points", () => {
     expect(screen.getByText(/on the waitlist/i)).toBeTruthy();
     // The cancel link only exists if we emailed them.
     expect(screen.getByText(/take yourself back off the list/i)).toBeTruthy();
+  });
+});
+
+describe("🔴 the shop can tell them apart: a last name or Instagram", () => {
+  const base = { slug: "cuts", shopName: "Cuts", accent: "#c9a24a" };
+  const mockJoin = vi.mocked(joinWaitlistAction);
+  const submit = () => fireEvent.click(screen.getByText("Join the waitlist", { selector: "button" }));
+
+  it("says so under the fields before anyone submits", () => {
+    render(<WaitlistForm {...base} />);
+    expect(screen.getByText(/so the shop can tell you apart/)).toBeTruthy();
+  });
+
+  it("a first name alone is refused with the shared sentence, and nothing is sent", () => {
+    mockJoin.mockClear();
+    render(<WaitlistForm {...base} />);
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Mike" } });
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "m@test.local" } });
+    submit();
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Add your last name or Instagram so the shop can tell you apart",
+    );
+    expect(mockJoin).not.toHaveBeenCalled();
+  });
+
+  it("an Instagram handle alone joins, sent as the bare lowercase handle", async () => {
+    mockJoin.mockClear();
+    render(<WaitlistForm {...base} />);
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Mike" } });
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "m@test.local" } });
+    fireEvent.change(screen.getByLabelText("Instagram"), { target: { value: "@Mike_Fades" } });
+    submit();
+    expect(await screen.findByRole("status")).toBeTruthy();
+    expect(mockJoin.mock.calls[0]![1]).toMatchObject({
+      firstName: "Mike",
+      lastName: undefined,
+      instagram: "mike_fades",
+    });
   });
 });

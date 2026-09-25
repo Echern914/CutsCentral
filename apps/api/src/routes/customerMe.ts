@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
-import { DEMO } from "@chairback/config";
+import { DEMO, normalizeInstagramHandle, tellApartRefusal } from "@chairback/config";
 import { runAsOwner, runWithShop } from "@chairback/db";
 import { customerApiLimiter } from "../middleware/rateLimit.js";
 import { requireCustomer, requireCustomerAccounts } from "../middleware/requireCustomer.js";
@@ -179,15 +179,23 @@ const nameField = z
 /**
  * "Join shop": become this shop's client, from the app.
  *
- * The customer fills in their name for the shop; their phone and email are the
- * ones this account PROVED (services/joinShop.ts says why never a typed one).
+ * The customer fills in their name for the shop - with a last name or an
+ * Instagram handle when joining makes a new record, so the shop can tell them
+ * apart (config clientIdentity.ts; services/joinShop.ts decides when). Their
+ * phone and email are the ones this account PROVED (services/joinShop.ts says
+ * why never a typed one).
  * The shop is found with the same exact lookup as "Find a shop", with the same
  * single refusal for every miss. A shop that approves new clients answers
  * "pending" and gets a request on its Clients page; any other answers "joined"
  * and the shop is in My ChairBack with its Book button straight away.
  */
 const joinSchema = z
-  .object({ handle: z.string().min(1).max(200), firstName: nameField, lastName: nameField.optional() })
+  .object({
+    handle: z.string().min(1).max(200),
+    firstName: nameField,
+    lastName: nameField.optional(),
+    instagram: z.string().max(200).optional(),
+  })
   .strict();
 
 customerMeRouter.post("/shops/join", async (req, res) => {
@@ -196,9 +204,17 @@ customerMeRouter.post("/shops/join", async (req, res) => {
     res.status(400).json({ error: "invalid_input" });
     return;
   }
-  const { handle, firstName, lastName } = parsed.data;
+  const { handle, firstName, lastName, instagram } = parsed.data;
   if (!firstName) {
     res.status(400).json({ error: "name_required" });
+    return;
+  }
+  // The handle's SHAPE is checked here; whether a last name or handle is
+  // needed at all is joinShop's call, because only a join that makes a record
+  // needs one - a customer the shop already knows is never turned away.
+  const ig = normalizeInstagramHandle(instagram);
+  if (!ig.ok) {
+    res.status(400).json(tellApartRefusal("INVALID_INSTAGRAM"));
     return;
   }
   const shop = await findShopByHandle(handle);
@@ -209,11 +225,19 @@ customerMeRouter.post("/shops/join", async (req, res) => {
   const settings = await runAsOwner(async (tx) => {
     await tx.customerAccount.update({
       where: { id },
-      data: { firstName, ...(lastName !== undefined ? { lastName } : {}) },
+      data: {
+        firstName,
+        ...(lastName !== undefined ? { lastName } : {}),
+        ...(instagram !== undefined ? { instagram: ig.handle } : {}),
+      },
     });
     return tx.shop.findUniqueOrThrow({ where: { id: shop.id }, select: { approveNewClients: true } });
   });
   const status = await joinShop(id, { id: shop.id, approveNewClients: settings.approveNewClients });
+  if (status === "details_required") {
+    res.status(400).json(tellApartRefusal("NAME_OR_INSTAGRAM_REQUIRED"));
+    return;
+  }
   res.json({ status, shop: { name: shop.name, handle: shop.handle, logoUrl: shop.logoUrl, town: shop.town } });
 });
 
@@ -331,6 +355,7 @@ async function profile(id: string) {
       select: {
         firstName: true,
         lastName: true,
+        instagram: true,
         phoneE164: true,
         emailNormalized: true,
         pushEnabled: true,
@@ -341,6 +366,7 @@ async function profile(id: string) {
   return {
     firstName: a.firstName,
     lastName: a.lastName,
+    instagram: a.instagram,
     phone: a.phoneE164,
     email: a.emailNormalized,
     pushEnabled: a.pushEnabled,

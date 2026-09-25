@@ -35,16 +35,16 @@ beforeEach(() => mockJoin.mockClear());
 describe("collapsed by default", () => {
   it("expands on tap and moves focus into the form", () => {
     render(<ShopWaitlistForm {...props} />);
-    expect(screen.queryByLabelText("Your name")).toBeNull();
+    expect(screen.queryByLabelText("First name")).toBeNull();
     open();
-    const name = screen.getByLabelText("Your name");
+    const name = screen.getByLabelText("First name");
     expect(document.activeElement).toBe(name);
   });
 
   it("preview mode never expands (the dashboard's page preview is inert)", () => {
     render(<ShopWaitlistForm {...props} preview />);
     open();
-    expect(screen.queryByLabelText("Your name")).toBeNull();
+    expect(screen.queryByLabelText("First name")).toBeNull();
   });
 });
 
@@ -75,7 +75,8 @@ describe("windows, not free text", () => {
   it("surfaces a row error instead of submitting half a window", () => {
     render(<ShopWaitlistForm {...props} />);
     open();
-    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Sam" } });
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Sam" } });
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Stone" } });
     fireEvent.change(screen.getByLabelText("Mobile number"), {
       target: { value: "3025550100" },
     });
@@ -104,7 +105,8 @@ describe("the wire shape", () => {
   it("a default join sends one Any/Any window, the browser zone, and NO consent", async () => {
     render(<ShopWaitlistForm {...props} />);
     open();
-    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Sam" } });
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Sam" } });
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Stone" } });
     fireEvent.change(screen.getByLabelText("Mobile number"), {
       target: { value: "3025550100" },
     });
@@ -112,6 +114,8 @@ describe("the wire shape", () => {
     expect(await screen.findByRole("status")).toBeTruthy();
     expect(mockJoin).toHaveBeenCalledWith("cuts", {
       firstName: "Sam",
+      lastName: "Stone",
+      instagram: undefined,
       phone: "3025550100",
       email: undefined,
       windows: [{ startDate: null, endDate: null, startMin: null, endMin: null }],
@@ -123,7 +127,8 @@ describe("the wire shape", () => {
   it("a ticked box with a phone sends smsConsent: true", async () => {
     render(<ShopWaitlistForm {...props} />);
     open();
-    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Sam" } });
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Sam" } });
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Stone" } });
     fireEvent.change(screen.getByLabelText("Mobile number"), {
       target: { value: "3025550100" },
     });
@@ -136,7 +141,8 @@ describe("the wire shape", () => {
   it("a picked date rides along as a real window", async () => {
     render(<ShopWaitlistForm {...props} />);
     open();
-    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Sam" } });
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Sam" } });
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Stone" } });
     fireEvent.change(screen.getByLabelText("Email"), { target: { value: "s@test.local" } });
     fireEvent.click(screen.getByText("A date"));
     fireEvent.change(screen.getByLabelText("Option 1 date"), {
@@ -170,7 +176,8 @@ describe("the confirmation", () => {
   it("an email join mentions the cancel link; a phone-only join does not", async () => {
     const { unmount } = render(<ShopWaitlistForm {...props} />);
     open();
-    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Sam" } });
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Sam" } });
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Stone" } });
     fireEvent.change(screen.getByLabelText("Email"), { target: { value: "s@test.local" } });
     join();
     expect(await screen.findByRole("status")).toBeTruthy();
@@ -179,12 +186,64 @@ describe("the confirmation", () => {
 
     render(<ShopWaitlistForm {...props} />);
     open();
-    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Sam" } });
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Sam" } });
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Stone" } });
     fireEvent.change(screen.getByLabelText("Mobile number"), {
       target: { value: "3025550100" },
     });
     join();
     expect(await screen.findByRole("status")).toBeTruthy();
     expect(screen.queryByText(/take yourself back off the list/i)).toBeNull();
+  });
+});
+
+describe("🔴 the shop can tell them apart: a last name or Instagram", () => {
+  const nameAndEmail = () => {
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Mike" } });
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "m@test.local" } });
+  };
+
+  it("a first name alone is refused with the shared sentence, and nothing is sent", () => {
+    render(<ShopWaitlistForm {...props} />);
+    open();
+    nameAndEmail();
+    join();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Add your last name or Instagram so the shop can tell you apart",
+    );
+    expect(mockJoin).not.toHaveBeenCalled();
+  });
+
+  it("an Instagram handle alone joins, sent as the bare lowercase handle", async () => {
+    render(<ShopWaitlistForm {...props} />);
+    open();
+    nameAndEmail();
+    fireEvent.change(screen.getByLabelText("Instagram"), {
+      target: { value: "https://www.instagram.com/Mike.Fades/?hl=en" },
+    });
+    join();
+    expect(await screen.findByRole("status")).toBeTruthy();
+    expect(mockJoin.mock.calls[0]![1]).toMatchObject({ instagram: "mike.fades", lastName: undefined });
+  });
+
+  it("a handle that cannot be one is refused, even with a last name", () => {
+    render(<ShopWaitlistForm {...props} />);
+    open();
+    nameAndEmail();
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Jones" } });
+    fireEvent.change(screen.getByLabelText("Instagram"), { target: { value: "mike fades!" } });
+    join();
+    expect(screen.getByRole("alert").textContent).toMatch(/doesn't look like an Instagram username/);
+    expect(mockJoin).not.toHaveBeenCalled();
+  });
+
+  it("the server's own sentence is shown when it refuses", async () => {
+    mockJoin.mockResolvedValueOnce({ ok: false, error: "x", message: "From the server." });
+    render(<ShopWaitlistForm {...props} />);
+    open();
+    nameAndEmail();
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Jones" } });
+    join();
+    expect(await screen.findByText("From the server.")).toBeTruthy();
   });
 });

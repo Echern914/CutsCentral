@@ -112,7 +112,8 @@ export type GroupCreateOutcome =
   | { kind: "confirming"; groupId: string; manageToken: string }
   | { kind: "slot_taken" }
   | { kind: "payments" }
-  | { kind: "invalid" }
+  /** `message`: the server's own sentence, when it named something to fix. */
+  | { kind: "invalid"; message?: string }
   /** The request never completed. SAFE TO RETRY with the same key. */
   | { kind: "network" }
   | { kind: "error" };
@@ -122,7 +123,9 @@ export interface GroupCreateInput {
   startsAt: string;
   attendees: GroupAttendeeInput[];
   firstName: string;
+  /** A last name or an Instagram handle - at least one (config clientIdentity). */
   lastName?: string;
+  instagram?: string;
   phone?: string;
   email?: string;
   smsConsent?: boolean;
@@ -175,6 +178,6 @@ export async function groupCreateAction(
   if (res.error === "slot_taken" || res.error === "slot_unavailable_external") {
     return { kind: "slot_taken" };
   }
-  if (res.status === 400 || res.status === 422) return { kind: "invalid" };
+  if (res.status === 400 || res.status === 422) return { kind: "invalid", message: res.message };
   return { kind: "error" };
 }

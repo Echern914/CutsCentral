@@ -32,8 +32,13 @@ export function useSavedShopActions() {
     router.push({ pathname: "/customer/link", params: { url: shopPageFor(shop), name: shop.name } });
   }
 
-  async function join(handle: string, firstName: string, lastName: string): Promise<JoinStatus> {
-    const res = await api.send<{ status: JoinStatus }>("POST", "/api/me/shops/join", { handle, firstName, lastName });
+  async function join(handle: string, firstName: string, lastName: string, instagram: string): Promise<JoinStatus> {
+    const res = await api.send<{ status: JoinStatus }>("POST", "/api/me/shops/join", {
+      handle,
+      firstName,
+      lastName,
+      instagram,
+    });
     // The name is the account's too (the greeting), and the shop lists change.
     invalidate("/api/me");
     return res.status;

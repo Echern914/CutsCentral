@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
+import { checkTellApart, TELL_APART_MESSAGE } from "@chairback/config/clientIdentity";
 import type { BookShopData } from "../page";
 import {
   groupCreateAction,
@@ -100,6 +101,8 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
 
   // Booker details.
   const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [instagram, setInstagram] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
 
@@ -188,6 +191,12 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
 
   async function confirm() {
     if (!staffId || !startsAt || submitting) return; // 🔴 one submission only
+    // The server runs the same rule; checked here so it costs no round trip.
+    const who = checkTellApart({ lastName, instagram });
+    if (!who.ok) {
+      setNotice(who.message);
+      return;
+    }
     const key = idempotencyKey ?? newIdempotencyKey();
     setIdempotencyKey(key);
     setSubmitting(true);
@@ -198,6 +207,8 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
       startsAt,
       attendees,
       firstName: firstName.trim(),
+      lastName: who.lastName ?? undefined,
+      instagram: who.instagram ?? undefined,
       phone: phone.trim() || undefined,
       email: email.trim() || undefined,
       idempotencyKey: key,
@@ -225,7 +236,7 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
     }
     setNotice(
       res.kind === "invalid"
-        ? "Please check the names and your details."
+        ? (res.message ?? "Please check the names and your details.")
         : "Something went wrong. Nothing was booked.",
     );
   }
@@ -438,6 +449,26 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
               maxLength={60}
               onChange={(e) => setFirstName(e.target.value)}
             />
+            <input
+              className="mt-2 w-full rounded-xl border border-subtle bg-charcoal-900 px-4 py-3 text-offwhite"
+              placeholder="Your last name"
+              aria-label="Last name"
+              autoComplete="family-name"
+              value={lastName}
+              maxLength={60}
+              onChange={(e) => setLastName(e.target.value)}
+            />
+            <input
+              className="mt-2 w-full rounded-xl border border-subtle bg-charcoal-900 px-4 py-3 text-offwhite"
+              placeholder="Instagram @handle"
+              aria-label="Instagram"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              value={instagram}
+              onChange={(e) => setInstagram(e.target.value)}
+            />
+            <p className="mt-1 text-sm text-muted">{TELL_APART_MESSAGE}.</p>
             <input
               className="mt-2 w-full rounded-xl border border-subtle bg-charcoal-900 px-4 py-3 text-offwhite"
               placeholder="Mobile number"

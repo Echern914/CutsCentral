@@ -1,5 +1,5 @@
 import { Prisma, runAsOwner } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { checkTellApart, randomToken } from "@chairback/config";
 import { deriveAcuityClientKey } from "../acuity/clientKey.js";
 import { syncCustomerView } from "./customerIdentity.js";
 
@@ -17,23 +17,24 @@ import { syncCustomerView } from "./customerIdentity.js";
  * open is the identity rules' call (customerIdentity.settleClientLinks), the
  * same call sign-in makes - so joining can never open a record sign-in would
  * not, and never writes over one somebody else may own.
+ *
+ * 🔴 A NEW RECORD NEEDS A LAST NAME OR AN INSTAGRAM HANDLE (config
+ * clientIdentity.ts), read from the account after the join form saved them.
+ * Asked only where a record would be MADE or requested: a customer the shop
+ * already knows (linked, or holding a contact on file) is never turned away
+ * over a name, and a barber accepting a request is never blocked by one.
  */
 
-export type JoinResult = "joined" | "pending" | "needs_connecting";
+export type JoinResult = "joined" | "pending" | "needs_connecting" | "details_required";
 
-/** Make the account a client of the shop now; the shop's approval, if any, is behind us. */
-export async function becomeClient(accountId: string, shopId: string, now = new Date()): Promise<Exclude<JoinResult, "pending">> {
-  const before = await syncCustomerView(accountId, now);
-  if (before.links.some((l) => l.shopId === shopId)) return "joined";
+const canBeToldApart = (a: { lastName: string | null; instagram: string | null }) =>
+  checkTellApart({ lastName: a.lastName, instagram: a.instagram }).ok;
 
-  const account = await runAsOwner((tx) =>
-    tx.customerAccount.findUnique({
-      where: { id: accountId },
-      select: { firstName: true, lastName: true, phoneE164: true, emailNormalized: true, isDemo: true },
-    }),
-  );
-  if (!account || account.isDemo || (!account.phoneE164 && !account.emailNormalized)) return "needs_connecting";
-
+/** Does the shop already hold a record carrying one of the account's proven contacts? */
+async function contactOnFile(
+  shopId: string,
+  account: { phoneE164: string | null; emailNormalized: string | null },
+): Promise<boolean> {
   const onFile = await runAsOwner((tx) =>
     tx.$queryRaw<{ n: number }[]>(Prisma.sql`
       SELECT count(*)::int AS n FROM "Client"
@@ -41,7 +42,29 @@ export async function becomeClient(accountId: string, shopId: string, now = new 
          AND (("phone" IS NOT NULL AND "phone" = ${account.phoneE164})
            OR ("email" IS NOT NULL AND lower("email") = ${account.emailNormalized}))`),
   );
-  if ((onFile[0]?.n ?? 0) > 0) return "needs_connecting";
+  return (onFile[0]?.n ?? 0) > 0;
+}
+
+/** Make the account a client of the shop now; the shop's approval, if any, is behind us. */
+export async function becomeClient(
+  accountId: string,
+  shopId: string,
+  now = new Date(),
+  opts: { requireTellApart?: boolean } = {},
+): Promise<Exclude<JoinResult, "pending">> {
+  const before = await syncCustomerView(accountId, now);
+  if (before.links.some((l) => l.shopId === shopId)) return "joined";
+
+  const account = await runAsOwner((tx) =>
+    tx.customerAccount.findUnique({
+      where: { id: accountId },
+      select: { firstName: true, lastName: true, instagram: true, phoneE164: true, emailNormalized: true, isDemo: true },
+    }),
+  );
+  if (!account || account.isDemo || (!account.phoneE164 && !account.emailNormalized)) return "needs_connecting";
+
+  if (await contactOnFile(shopId, account)) return "needs_connecting";
+  if (opts.requireTellApart && !canBeToldApart(account)) return "details_required";
 
   const acuityClientKey = deriveAcuityClientKey({
     phone: account.phoneE164,
@@ -58,6 +81,7 @@ export async function becomeClient(accountId: string, shopId: string, now = new 
         magicToken: randomToken(),
         firstName: account.firstName?.trim() || "ChairBack customer",
         lastName: account.lastName?.trim() || null,
+        instagram: account.instagram,
         phone: account.phoneE164,
         email: account.emailNormalized,
         source: "manual",
@@ -84,6 +108,13 @@ export async function joinShop(
   if (shop.approveNewClients) {
     const view = await syncCustomerView(accountId, now);
     if (view.links.some((l) => l.shopId === shop.id)) return "joined";
+    const account = await runAsOwner((tx) =>
+      tx.customerAccount.findUniqueOrThrow({
+        where: { id: accountId },
+        select: { lastName: true, instagram: true, phoneE164: true, emailNormalized: true },
+      }),
+    );
+    if (!canBeToldApart(account) && !(await contactOnFile(shop.id, account))) return "details_required";
     await runAsOwner(async (tx) => {
       await tx.customerSavedShop.upsert({
         where: { accountId_shopId: { accountId, shopId: shop.id } },
@@ -99,7 +130,7 @@ export async function joinShop(
     return "pending";
   }
 
-  const result = await becomeClient(accountId, shop.id, now);
+  const result = await becomeClient(accountId, shop.id, now, { requireTellApart: true });
   if (result === "joined") {
     await runAsOwner((tx) => tx.customerSavedShop.deleteMany({ where: { accountId, shopId: shop.id } }));
   }
