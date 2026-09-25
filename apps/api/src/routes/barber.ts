@@ -1,8 +1,14 @@
 import { Router } from "express";
 import { z } from "zod";
-import { forShop, prisma, runAsOwner } from "@chairback/db";
+import { forShop, prisma, runAsOwner, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireRole } from "../auth/roles.js";
+import {
+  TARGETED_SLOT_ORIGIN,
+  specialKindOf,
+  specialKinds,
+  type SpecialKind,
+} from "../engines/specialBooking.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
 /**
@@ -103,6 +109,8 @@ barberRouter.get("/home", async (req, res) => {
       etaMinutes: true,
       runningLate: true,
       priceAtBooking: true,
+      staffId: true,
+      bookedVia: true,
       service: { select: { name: true, color: true } },
     },
   })) as unknown as {
@@ -116,6 +124,8 @@ barberRouter.get("/home", async (req, res) => {
     etaMinutes: number | null;
     runningLate: boolean | null;
     priceAtBooking: { toString(): string } | null;
+    staffId: string;
+    bookedVia: string | null;
     service: { name: string; color: string | null };
   }[];
 
@@ -148,6 +158,18 @@ barberRouter.get("/home", async (req, res) => {
   // would roll over at the wrong midnight.
   const todays = rows.filter((r) => dayKeyIn(shop.timezone, r.startsAt) === todayKey);
 
+  // A booking into one of his specials carries the same "After hours" /
+  // "Special" chip the owner's calendar shows (engines/specialBooking.ts) -
+  // this is the only book an employee seat can open. The hours read runs only
+  // when today actually holds a special.
+  const specials: Map<string, SpecialKind> = todays.some(
+    (r) => r.bookedVia === TARGETED_SLOT_ORIGIN,
+  )
+    ? await runWithShop(req.shop!.id, (tx) =>
+        specialKinds(tx, req.shop!.id, shop.timezone, todays),
+      )
+    : new Map();
+
   res.json({
     chair: staff ? { id: staff.id, name: staff.name } : null,
     shop: { name: shop.name, timezone: shop.timezone },
@@ -165,6 +187,7 @@ barberRouter.get("/home", async (req, res) => {
       runningLate: Boolean(r.runningLate),
       // Decimal doesn't survive JSON as a number.
       price: r.priceAtBooking?.toString() ?? null,
+      ...specialKindOf(specials, r.id),
     })),
     counts,
     reason: null,

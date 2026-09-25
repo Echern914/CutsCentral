@@ -32,6 +32,7 @@ const config: Config = {
         muted: "rgb(var(--cb-fg-muted) / <alpha-value>)", // secondary text
         emerald: { soft: "rgb(var(--cb-emerald) / <alpha-value>)" },
         danger: { soft: "rgb(var(--cb-danger) / <alpha-value>)" },
+        indigo: { soft: "rgb(var(--cb-indigo) / <alpha-value>)" },
       },
       borderRadius: {
         "2xl": "1rem",

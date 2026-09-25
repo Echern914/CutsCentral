@@ -53,6 +53,7 @@ import {
 } from "../engines/targetedSlotServices.js";
 import { resolveAddOns } from "../engines/addOns.js";
 import { filterBlockedTargeted } from "../engines/targetedSlotAvailability.js";
+import { TARGETED_SLOT_ORIGIN } from "../engines/specialBooking.js";
 import {
   bookingQuestionsForShop,
   questionsForService,
@@ -3200,6 +3201,8 @@ bookingPublicRouter.post(
         serviceId: true,
         status: true,
         startsAt: true,
+        // Booked into a special? Moving it gives the special back (below).
+        bookedVia: true,
         // The BOOKING payment: what the customer prepaid to hold this slot.
         // A balance collected at the chair belongs to a cut that already
         // happened and must not gate rescheduling a future one.
@@ -3359,8 +3362,26 @@ bookingPublicRouter.post(
             checkedInAt: null,
             etaMinutes: null,
             runningLate: false,
+            // 🔴 LEAVING A SPECIAL. The only times this route accepts are
+            // regular-grid ones (isSlotBookable above), and the price was just
+            // re-measured from the service - so a moved special is now an
+            // ordinary booking. Clear its origin marker, or the barber's
+            // calendar and his "moved" alert keep calling a 2 PM regular-price
+            // booking "After hours" (and the undo-cancel path would go hunting
+            // for a special at the new time).
+            ...(appt.bookedVia === TARGETED_SLOT_ORIGIN ? { bookedVia: null } : {}),
           },
         });
+        // ...and hand the special itself back, in the same write, so it goes
+        // back on sale. Left claimed, it stayed "booked" forever by a booking
+        // that no longer sits in it - the same release cancel, decline and
+        // hold expiry already make.
+        if (appt.bookedVia === TARGETED_SLOT_ORIGIN) {
+          await tx.targetedSlot.updateMany({
+            where: { shopId: appt.shopId, bookedAppointmentId: appt.id },
+            data: { bookedAppointmentId: null },
+          });
+        }
         publicReschedOutboxIds = await swapForReschedule(tx, {
           shopId: appt.shopId,
           now,
