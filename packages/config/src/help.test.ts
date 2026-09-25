@@ -403,3 +403,33 @@ describe("findHelp — App Store 3.1.1", () => {
     }
   });
 });
+
+/**
+ * Drick asked for "send to only gold or whatever tier member" when the
+ * Clients-page composer already did it - by app notification or email, on any
+ * plan, with texting off. Nothing in help named it: "email my gold members"
+ * answered the cancellation email and "broadcast" answered the Premium SMS
+ * blast. These pin the route to the one that works for everyone.
+ */
+describe("findHelp — messaging many clients", () => {
+  it.each([
+    "email my gold members",
+    "how do I email all my clients",
+    "send a message to my gold members",
+    "send a notification to all my clients",
+    "broadcast",
+  ])("%s -> the Clients-page composer", (q) => expectAnswer(q, "message-all-clients"));
+
+  it("texting everyone still answers the text blast, and names the other way", () => {
+    expectAnswer("how do I text all my clients at once", "text-everyone");
+    expect(helpAnswerById("text-everyone")?.a).toMatch(/app notification or an email/);
+  });
+
+  it("a promo aimed at Gold is offered both ways", () => {
+    const res = findHelp("send a promo to only my gold members");
+    const ids = [res.answer?.id, ...res.suggestions.map((s) => s.id)];
+    expect(ids).toContain("message-all-clients");
+    expect(ids).toContain("promotions");
+    expect(helpAnswerById("promotions")?.a).toMatch(/Email or notify/);
+  });
+});

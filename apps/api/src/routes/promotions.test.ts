@@ -218,6 +218,79 @@ describe("promotions", () => {
     expect(promo.textsSent).toBe(2);
   });
 
+  describe("only these tiers", () => {
+    const blast = (body: Record<string, unknown>) =>
+      request(app).post(`/api/promos/${promoId}/blast`).set("Cookie", cookieA).send(body);
+
+    beforeAll(async () => {
+      // clientOne is Gold; +0102 has no tier yet; +0103 is Gold but texted
+      // STOP - a tier must never override consent.
+      await prisma.client.update({ where: { id: clientOne }, data: { loyaltyTier: "GOLD" } });
+      await prisma.client.updateMany({
+        where: { shopId: shopIdA, phone: "+13025550103" },
+        data: { loyaltyTier: "GOLD" },
+      });
+    });
+
+    it("the preview counts only that tier's opted-in members", async () => {
+      const res = await blast({ audience: "tiers", tiers: ["GOLD"], dryRun: true });
+      expect(res.status).toBe(200);
+      expect(res.body.eligible).toBe(1);
+      expect(res.body.sent).toBe(1);
+
+      const silver = await blast({ audience: "tiers", tiers: ["SILVER"], dryRun: true });
+      expect(silver.body.eligible).toBe(0);
+    });
+
+    it("the real send texts exactly who the preview counted, and nobody else", async () => {
+      const preview = await blast({ audience: "tiers", tiers: ["GOLD", "SILVER"], dryRun: true });
+      sentBodies.length = 0;
+      const res = await blast({ audience: "tiers", tiers: ["GOLD", "SILVER"], dryRun: false });
+      expect(res.status).toBe(200);
+      expect(res.body.sent).toBe(preview.body.sent);
+      expect(sentBodies.map((m) => m.to)).toEqual(["+13025550101"]);
+    });
+
+    it("a client who leaves the tier after the preview is not texted", async () => {
+      expect((await blast({ audience: "tiers", tiers: ["GOLD"], dryRun: true })).body.sent).toBe(1);
+      await prisma.client.update({ where: { id: clientOne }, data: { loyaltyTier: "SILVER" } });
+      try {
+        sentBodies.length = 0;
+        const res = await blast({ audience: "tiers", tiers: ["GOLD"], dryRun: false });
+        expect(res.body.sent).toBe(0);
+        expect(sentBodies).toHaveLength(0);
+      } finally {
+        await prisma.client.update({ where: { id: clientOne }, data: { loyaltyTier: "GOLD" } });
+      }
+    });
+
+    it("refuses 'only these tiers' with no tier picked", async () => {
+      const empty = await blast({ audience: "tiers", tiers: [], dryRun: true });
+      expect(empty.status).toBe(400);
+      expect(empty.body.message).toBe("Pick at least one tier.");
+      const missing = await blast({ audience: "tiers", dryRun: true });
+      expect(missing.status).toBe(400);
+    });
+
+    it("refuses a tier that is not one of the shop's, and tiers on another audience", async () => {
+      const unknown = await blast({ audience: "tiers", tiers: ["PLATINUM"], dryRun: true });
+      expect(unknown.status).toBe(400);
+      const mixed = await blast({ audience: "all", tiers: ["GOLD"], dryRun: true });
+      expect(mixed.status).toBe(400);
+    });
+
+    it("refuses a tier audience while rewards are off", async () => {
+      await prisma.shop.update({ where: { id: shopIdA }, data: { rewardsEnabled: false } });
+      try {
+        const res = await blast({ audience: "tiers", tiers: ["GOLD"], dryRun: true });
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe("tiers_need_rewards");
+      } finally {
+        await prisma.shop.update({ where: { id: shopIdA }, data: { rewardsEnabled: true } });
+      }
+    });
+  });
+
   it("records a walk-in use against the promo", async () => {
     const res = await request(app)
       .post(`/api/promos/${promoId}/use`)

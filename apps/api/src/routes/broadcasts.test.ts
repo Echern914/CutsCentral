@@ -241,6 +241,60 @@ describe("🔴 what the send request actually does", () => {
     expect(skipped.map((s) => s.reason)).toEqual(["not_in_audience"]);
   });
 
+  it("🔴 the tier is read when the audience freezes, not when the preview ran", async () => {
+    const stays = await makeClient({ tier: "GOLD" });
+    const dropped = await makeClient({ tier: "GOLD" });
+    const promoted = await makeClient({ tier: "SILVER" });
+    // Another shop's Gold member: same tier key, never this shop's audience.
+    const owner = await prisma.user.create({
+      data: { email: `bc-o-${randomToken(6)}@test.local`.toLowerCase(), passwordHash: "x", name: "O" },
+      select: { id: true, email: true },
+    });
+    emails.push(owner.email);
+    const other = await prisma.shop.create({
+      data: {
+        name: "Other Gold Cuts",
+        ownerId: owner.id,
+        slug: `other-gold-${randomToken(4).toLowerCase().replace(/[^a-z0-9]/g, "")}`,
+        bookingUrl: "https://o.test",
+        webhookSecret: randomToken(16),
+        rewardsEnabled: true,
+      },
+      select: { id: true },
+    });
+    shopIds.push(other.id);
+    await makeClient({ tier: "GOLD", shop: other.id });
+
+    expect((await preview({ channel: "email", tiers: ["GOLD"] })).body.reachable).toBe(2);
+    const created = await draft({ channel: "email", tiers: ["GOLD"], subject: "Gold", body: "Gold week." });
+
+    // The recompute moves two people between the preview and the press.
+    await prisma.client.update({ where: { id: dropped.id }, data: { loyaltyTier: "SILVER" } });
+    await prisma.client.update({ where: { id: promoted.id }, data: { loyaltyTier: "GOLD" } });
+
+    const res = await send(created.body.id as string);
+    expect(res.body.recipients).toBe(2);
+    const rows = await prisma.broadcastSend.findMany({
+      where: { broadcastId: created.body.id as string },
+      select: { clientId: true, status: true, reason: true },
+    });
+    const pending = rows.filter((r) => r.status === "PENDING").map((r) => r.clientId).sort();
+    expect(pending).toEqual([stays.id, promoted.id].sort());
+    expect(rows.find((r) => r.clientId === dropped.id)).toMatchObject({
+      status: "SKIPPED",
+      reason: "not_in_audience",
+    });
+    // Only this shop's book was ever considered.
+    expect(rows).toHaveLength(3);
+  });
+
+  it("refuses a tier that is not one of the shop's", async () => {
+    expect((await preview({ channel: "push", tiers: ["PLATINUM"] })).status).toBe(400);
+    expect(
+      (await draft({ channel: "push", tiers: ["PLATINUM"], subject: "Hi", body: "Hello." })).status,
+    ).toBe(400);
+  });
+
   it("🔴 THE API CAN RESTART IMMEDIATELY AFTER THE 202 AND THE BLAST STILL GOES", async () => {
     // The failure this replaces: the route answered 202 and then ran the whole
     // send in a floating promise. A deploy in the following seconds killed it

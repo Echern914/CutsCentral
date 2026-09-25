@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { redactForAudit } from "../messaging/auditBody.js";
-import { apiEnv } from "@chairback/config";
+import { LOYALTY_TIER_KEYS, apiEnv, type LoyaltyTierKey } from "@chairback/config";
 import { forShop, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -243,28 +243,53 @@ promotionsRouter.post("/:id/use", async (req, res) => {
 
 const blastSchema = z
   .object({
-    audience: z.enum(["all", "atRisk"]).default("all"),
+    audience: z.enum(["all", "atRisk", "tiers"]).default("all"),
+    // audience "tiers" only: which loyalty tiers ("only the gold members").
+    // The keys are the platform's three - a shop sets what each one TAKES,
+    // never what they are, so anything else is not one of this shop's tiers.
+    tiers: z
+      .array(z.enum(LOYALTY_TIER_KEYS as [LoyaltyTierKey, ...LoyaltyTierKey[]]))
+      .max(LOYALTY_TIER_KEYS.length)
+      .optional(),
     // Optional (no default) so an omitted value falls back to env.DRY_RUN, the
     // global kill switch - matching the nudge sweep. An explicit false is still
     // a deliberate "send for real" from the UI.
     dryRun: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  // 🔴 "ONLY THESE TIERS" WITH NONE PICKED IS NOT "EVERYONE". Reading an empty
+  // pick as no filter would text the whole book when the barber aimed at a
+  // few - so it is refused, and tiers on any other audience are too.
+  .refine((v) => (v.audience === "tiers" ? (v.tiers?.length ?? 0) > 0 : v.tiers === undefined), {
+    message: "Pick at least one tier.",
+    path: ["tiers"],
+  });
 
 /**
  * Text this promo to clients. "all" = every opted-in client with a phone (a
  * deliberate barber action, like bulk nudge); "atRisk" = only clients the nudge
- * engine currently considers overdue. Both respect the shop's daily send cap
- * (shared with nudges) and record write-ahead Nudge rows (kind='promo').
+ * engine currently considers overdue; "tiers" = only clients on the loyalty
+ * tiers picked. All respect the shop's daily send cap (shared with nudges) and
+ * record write-ahead Nudge rows (kind='promo').
  */
 promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
   const shop = req.shop!;
   const parsed = blastSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
-    res.status(400).json({ error: "invalid_input" });
+    res.status(400).json({ error: "invalid_input", message: parsed.error.issues[0]?.message });
     return;
   }
-  const { audience } = parsed.data;
+  const { audience, tiers } = parsed.data;
+  // A tier is part of rewards: with rewards off the shop has told its clients
+  // there is no program, so a text to "the gold members" would be the program
+  // speaking after it was switched off. Same rule as broadcasts.
+  if (audience === "tiers" && !shop.rewardsEnabled) {
+    res.status(409).json({
+      error: "tiers_need_rewards",
+      message: "Rewards are off, so there are no tier members to text. Send it to everyone, or turn rewards on first.",
+    });
+    return;
+  }
   const dryRun = parsed.data.dryRun ?? apiEnv().DRY_RUN;
   // Previews stay free; real sends require an active trial/subscription.
   if (!dryRun && !hasActiveAccess(shop)) {
@@ -320,6 +345,10 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
       smsConsentAt: { not: null },
       phone: { not: null },
       archivedAt: null,
+      // Client.loyaltyTier is the stored badge config/tierRules.ts stamps -
+      // the same one the client book, the rewards page and broadcasts read.
+      // A client with no tier yet is on none of them.
+      ...(audience === "tiers" ? { loyaltyTier: { in: tiers! } } : {}),
     },
   });
   const considered = candidates.length;

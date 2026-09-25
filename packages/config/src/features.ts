@@ -673,7 +673,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "clients",
     name: "Client book",
-    synonyms: ["customers", "customer list", "contacts", "contact list", "client list", "crm", "export", "csv", "import", "import clients", "merge", "merge clients", "duplicate client", "opt out", "consent", "unsubscribe", "client notes", "notes", "tags"],
+    synonyms: ["customers", "customer list", "contacts", "contact list", "client list", "crm", "export", "csv", "import", "import clients", "merge", "merge clients", "duplicate client", "opt out", "consent", "unsubscribe", "client notes", "notes", "tags", "broadcast", "message all clients", "email my clients", "notify my clients", "announcement"],
     description: "Your client list — yours to keep, filter, and export",
     href: "/dashboard/clients",
     category: "data",
