@@ -2021,6 +2021,9 @@ model BroadcastSend {
   @@unique([broadcastId, clientId])
   @@index([shopId, createdAt])
   @@index([broadcastId, status])
+  // My ChairBack's announcements bell: one customer's delivered rows, newest
+  // first. Without it every home load scans every blast's whole audience.
+  @@index([clientId, sentAt])
   // The worker's claim scan: due, unclaimed (or stale), oldest first.
   @@index([status, nextAttemptAt])
   // 🔴 ONE MORE CONSTRAINT LIVES ONLY IN SQL: a composite foreign key on
@@ -4367,6 +4370,12 @@ model CustomerAccount {
   // The App Review / "just looking" account: read-only, linked only to the
   // seeded demo shop, never registers a device.
   isDemo Boolean @default(false)
+
+  // How far this customer has read their shops' announcements (broadcasts
+  // delivered to them). Anything delivered after it is unread on the bell. One marker for the account rather than a row per message: the
+  // bell only has to answer "anything new since you last looked?", and it is
+  // the same answer on every phone the customer signs in on.
+  announcementsSeenAt DateTime?
 
   lastSeenAt DateTime?
   createdAt  DateTime  @default(now())

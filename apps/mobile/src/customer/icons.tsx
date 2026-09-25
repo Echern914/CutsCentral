@@ -99,3 +99,12 @@ export function Offline({ size, color }: IconProps) {
     </Frame>
   );
 }
+
+export function Bell({ size, color }: IconProps) {
+  return (
+    <Frame size={size}>
+      <Path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z" stroke={color} {...STROKE} />
+      <Path d="M10 20.5a2.2 2.2 0 0 0 4 0" stroke={color} {...STROKE} />
+    </Frame>
+  );
+}

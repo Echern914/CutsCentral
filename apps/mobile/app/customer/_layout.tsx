@@ -56,6 +56,7 @@ function Gate() {
         {/* Reached by the gate, not by a tap: it appears, it doesn't slide in. */}
         <Stack.Screen name="sign-in" options={{ animation: "none" }} />
         <Stack.Screen name="appointment/[id]" options={{ headerShown: true, title: "", headerBackTitle: "Back" }} />
+        <Stack.Screen name="announcements" options={{ headerShown: true, title: "Announcements", headerBackTitle: "Back" }} />
         <Stack.Screen name="shop/[key]" options={{ presentation: "fullScreenModal", headerShown: true }} />
         <Stack.Screen name="manage/[id]" options={{ presentation: "modal", headerShown: true, title: "Your appointment" }} />
         <Stack.Screen name="link" options={{ headerShown: true, title: "" }} />
