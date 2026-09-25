@@ -150,10 +150,20 @@ export function initials(name: string): string {
     .join("");
 }
 
-/** "2 of 5 visits" / "6 of 10 punches". */
+/** "1 visit" / "3 visits" / "1 punch" / "4 punches". */
+export function countLabel(n: number, unit: "visits" | "punches"): string {
+  const one = unit === "visits" ? "visit" : "punch";
+  return `${n} ${n === 1 ? one : unit}`;
+}
+
+/**
+ * "2 of 5 visits" / "6 of 10 punches". Never below 0: a visit taken back after
+ * a reward was redeemed leaves the balance at -1 on the books, and "-1 of 10"
+ * is nothing a customer can act on.
+ */
 export function progressLine(balance: number, cost: number, unit: "visits" | "punches"): string {
-  const shown = Math.min(balance, cost);
-  return `${shown} of ${cost} ${unit === "visits" ? (cost === 1 ? "visit" : "visits") : cost === 1 ? "punch" : "punches"}`;
+  const shown = Math.max(0, Math.min(balance, cost));
+  return `${shown} of ${countLabel(cost, unit)}`;
 }
 
 /** "3 more visits until $10 off" / "1 more punch until a free treatment". */

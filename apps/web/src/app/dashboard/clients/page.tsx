@@ -6,6 +6,7 @@ import { BroadcastCard } from "./BroadcastCard";
 import { ClientsControls } from "./ClientsControls";
 import { ClientsList, type ClientRow } from "./ClientsList";
 import { SavedByCard, type SavedByPerson } from "./SavedByCard";
+import { JoinRequestsCard, type JoinRequest } from "./JoinRequestsCard";
 
 interface ClientsResponse {
   clients: ClientRow[];
@@ -26,7 +27,7 @@ export default async function ClientsPage({
   const [res, dupes, savedBy, me] = await Promise.all([
     apiGet<ClientsResponse>(`/api/dashboard/clients?${qs.toString()}`),
     apiGet<{ total: number }>("/api/dashboard/clients/duplicates"),
-    apiGet<{ total: number; people: SavedByPerson[] }>("/api/dashboard/saved-by"),
+    apiGet<{ total: number; people: SavedByPerson[]; requests?: JoinRequest[] }>("/api/dashboard/saved-by"),
     // Memoized per render - the layout already fetched it.
     getMe(),
   ]);
@@ -82,6 +83,13 @@ export default async function ClientsPage({
       <div className="mb-5">
         <BroadcastCard rewardsEnabled={me.data?.rewardsEnabled ?? true} />
       </div>
+      {/* People asking to join from the app (a shop that approves new clients
+          first). Above everything else here: someone is waiting on an answer. */}
+      {savedBy.data?.requests && savedBy.data.requests.length > 0 && (
+        <div className="mb-5">
+          <JoinRequestsCard requests={savedBy.data.requests} />
+        </div>
+      )}
       {/* People who added the shop in their app. Nothing renders until someone
           has, or if this read fails - it is a nice-to-know, never a reason the
           client list can't load. */}

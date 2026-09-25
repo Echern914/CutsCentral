@@ -318,6 +318,19 @@ describe("the home", () => {
     expect(home.vocabulary).toEqual({ providerNounPlural: "providers", serviceNoun: "visit" });
   });
 
+  it("'Recent visits' is visits that happened - never a cancelled booking for next week", async () => {
+    const phone = randomPhone();
+    const c = await client(shopA, { phone });
+    const me = await account({ phone });
+    const cancelledAhead = await appointment(shopA, c.id, { status: "CANCELED", startsAt: from(5 * DAY) });
+    const done = await appointment(shopA, c.id, { status: "COMPLETED", startsAt: from(-3 * DAY) });
+    const recent = (await get("/api/me/home", me.token)).body.recent as { id: string }[];
+    expect(recent.map((r) => r.id)).toEqual([`a_${done.id}`]);
+    // It is still history, on the appointments tab.
+    const past = (await get("/api/me/appointments", me.token)).body.past as { id: string }[];
+    expect(past.map((r) => r.id)).toContain(`a_${cancelledAhead.id}`);
+  });
+
   it("a customer of barbershops only is spoken to in barbershop words", async () => {
     const phone = randomPhone();
     await client(shopA, { phone });

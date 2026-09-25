@@ -5,6 +5,7 @@ import {
   displayPhone,
   initials,
   money,
+  countLabel,
   progressLine,
   remainingLine,
   shortDate,
@@ -85,5 +86,12 @@ describe("the small words", () => {
     expect(progressLine(1, 1, "punches")).toBe("1 of 1 punch");
     expect(remainingLine(3, "$10 off", "visits")).toBe("3 more visits until $10 off");
     expect(remainingLine(1, "a free treatment", "punches")).toBe("1 more punch until a free treatment");
+  });
+
+  it("never '-1 of 10' (a visit taken back after a redeem), and never '1 visits'", () => {
+    expect(progressLine(-1, 10, "visits")).toBe("0 of 10 visits");
+    expect(countLabel(1, "visits")).toBe("1 visit");
+    expect(countLabel(1, "punches")).toBe("1 punch");
+    expect(countLabel(4, "punches")).toBe("4 punches");
   });
 });

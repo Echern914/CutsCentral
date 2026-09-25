@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { color, space } from "./theme";
 import { Txt } from "./ui";
 
@@ -8,9 +7,10 @@ import { Txt } from "./ui";
  * The scroll every tab is built on.
  *
  * `contentInsetAdjustmentBehavior="automatic"` lets iOS keep content clear of
- * the native tab bar (and the home indicator) the way system apps do; the top
- * inset is applied by hand because tab screens here draw their own header
- * rather than a navigation bar. Pull to refresh is the native control.
+ * the status bar, the native tab bar and the home indicator the way system
+ * apps do. It already insets the top by the status bar, so adding the safe
+ * area again by hand (as this once did) left a status bar's worth of empty
+ * space above every tab's first line. Pull to refresh is the native control.
  */
 export function Screen({
   title,
@@ -30,12 +30,11 @@ export function Screen({
   /** A pushed screen with a native navigation bar: iOS insets for it already. */
   underNavBar?: boolean;
 }) {
-  const insets = useSafeAreaInsets();
   return (
     <ScrollView
       style={styles.root}
       contentInsetAdjustmentBehavior="automatic"
-      contentContainerStyle={[styles.content, { paddingTop: underNavBar ? space.s2 : insets.top + space.s1 }]}
+      contentContainerStyle={[styles.content, { paddingTop: underNavBar ? space.s2 : space.s1 }]}
       keyboardShouldPersistTaps="handled"
       refreshControl={
         onRefresh ? (

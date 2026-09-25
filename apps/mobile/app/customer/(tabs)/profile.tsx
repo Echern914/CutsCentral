@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Alert, KeyboardAvoidingView, Linking, Platform, StyleSheet, Switch, TextInput, View } from "react-native";
+import * as PushPermissions from "expo-notifications";
+import { Alert, AppState, KeyboardAvoidingView, Linking, Platform, StyleSheet, Switch, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import Constants from "expo-constants";
 import { WEB_ORIGIN } from "@/src/config";
@@ -33,8 +34,10 @@ export default function ProfileScreen() {
   // so they sit above everything else on this screen.
   const openings = useResource<{ openings: Opening[] }>("/api/me/openings");
   const held = openings.data?.openings ?? [];
+  const [deleting, setDeleting] = useState(false);
 
   async function confirmDelete() {
+    if (deleting) return;
     Alert.alert(
       "Delete your My ChairBack account?",
       "This removes your sign-in, your saved phones and your notification settings. Each shop keeps its own record of your visits; you can ask a shop to delete it from their page.",
@@ -44,10 +47,14 @@ export default function ProfileScreen() {
           text: "Delete account",
           style: "destructive",
           onPress: async () => {
+            // One delete. A second tap mid-request would get a 401 from the
+            // already-deleted account and say "Something went wrong".
+            setDeleting(true);
             try {
               await api.send("DELETE", "/api/me");
               await signOut();
             } catch (err) {
+              setDeleting(false);
               Alert.alert(errorCopy(err).title, errorCopy(err).body);
             }
           },
@@ -82,7 +89,7 @@ export default function ProfileScreen() {
         {/* Who they are and the tier they wear, then where they stand at each
             shop. Rewards that fail to load leave the hero with no ring rather
             than an error: the rest of Profile still has to work. */}
-        {me ? <ProfileHero name={displayName(me)} best={best} line={heroLine(best, programs)} /> : null}
+        {me ? <ProfileHero name={displayName(me)} best={best} line={rewards.data ? heroLine(best, programs) : ""} /> : null}
 
         {/* A slot a shop is keeping for their tier, and the time it runs out. */}
         {held.length > 0 ? (
@@ -161,7 +168,7 @@ export default function ProfileScreen() {
         </Group>
 
         {!isDemo ? (
-          <Tap onPress={confirmDelete} accessibilityLabel="Delete account" style={styles.delete}>
+          <Tap onPress={confirmDelete} disabled={deleting} accessibilityLabel="Delete account" style={styles.delete}>
             <Txt variant="subhead" tone="secondary">
               Delete account
             </Txt>
@@ -213,6 +220,7 @@ function NameEditor({ profile, disabled, onSaved }: { profile: Profile; disabled
         placeholderTextColor={color.textTertiary}
         autoCapitalize="words"
         textContentType="givenName"
+        maxLength={40}
         autoComplete="given-name"
         returnKeyType="done"
         onSubmitEditing={() => dirty && void save()}
@@ -227,6 +235,7 @@ function NameEditor({ profile, disabled, onSaved }: { profile: Profile; disabled
         placeholderTextColor={color.textTertiary}
         autoCapitalize="words"
         textContentType="familyName"
+        maxLength={40}
         autoComplete="family-name"
         returnKeyType="done"
         onSubmitEditing={() => dirty && void save()}
@@ -391,6 +400,21 @@ function NotificationSettings({ disabled }: { disabled: boolean }) {
   const prefs = useResource<Notifications>("/api/me/notifications");
   const [saving, setSaving] = useState(false);
   const data = prefs.data;
+  // The phone's own permission outranks the account switch: once iOS has been
+  // told no, reminders cannot arrive whatever the switch says - so it reads
+  // Off, and turning it on goes to Settings (iOS never asks a second time).
+  const [osBlocked, setOsBlocked] = useState(false);
+  useEffect(() => {
+    const check = () =>
+      PushPermissions.getPermissionsAsync()
+        .then((p) => setOsBlocked(p.status === "denied"))
+        .catch(() => undefined);
+    void check();
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") void check();
+    });
+    return () => sub.remove();
+  }, []);
 
   async function patch(body: object) {
     setSaving(true);
@@ -415,10 +439,10 @@ function NotificationSettings({ disabled }: { disabled: boolean }) {
           <Group>
             <SwitchRow
               title="Push notifications"
-              subtitle="Reminders and rewards from your shops"
-              value={data.push.enabled}
+              subtitle={osBlocked ? "Off in your phone's Settings. Turn on to open them." : "Reminders and rewards from your shops"}
+              value={data.push.enabled && !osBlocked}
               disabled={disabled || saving}
-              onChange={(v) => void patch({ push: v })}
+              onChange={(v) => (v && osBlocked ? void Linking.openSettings() : void patch({ push: v }))}
             />
           </Group>
           {data.texts.length > 0 ? (
