@@ -1,5 +1,6 @@
 export * from "./affiliateAttribution.js";
 export * from "./affiliateProgram.js";
+export * from "./partnerProgram.js";
 export * from "./businessTypes.js";
 export * from "./constants.js";
 export * from "./serviceColor.js";

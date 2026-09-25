@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { LOYALTY_TIERS, LOYALTY_TIER_KEYS } from "@chairback/config/constants";
+import { describeTierAudience } from "@chairback/config/tierRules";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { useVocab } from "@/components/VocabProvider";
@@ -43,11 +45,10 @@ const CHANNELS: { value: BroadcastChannel; label: string; hint: string }[] = [
   { value: "email", label: "Email", hint: "Counts against your monthly allowance" },
 ];
 
-const TIERS: { value: LoyaltyTierKey; label: string }[] = [
-  { value: "GOLD", label: "Gold" },
-  { value: "SILVER", label: "Silver" },
-  { value: "BRONZE", label: "Bronze" },
-];
+/** Highest first. The labels are the ones every other rewards surface shows. */
+const TIERS: { value: LoyaltyTierKey; label: string }[] = [...LOYALTY_TIER_KEYS]
+  .reverse()
+  .map((k) => ({ value: k, label: LOYALTY_TIERS[k].label }));
 
 /**
  * What fits, per channel. Mirrors BODY_LIMITS/SUBJECT_LIMITS in the API - the
@@ -68,17 +69,31 @@ const IN_FLIGHT = new Set(["QUEUED", "SENDING"]);
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
-export function BroadcastCard({ rewardsEnabled = true }: { rewardsEnabled?: boolean }) {
+/** A message started elsewhere (a promo's "Email or notify"), opened ready to edit. */
+export interface BroadcastDraft {
+  subject: string;
+  body: string;
+  tiers: LoyaltyTierKey[];
+}
+
+export function BroadcastCard({
+  rewardsEnabled = true,
+  draft = null,
+}: {
+  rewardsEnabled?: boolean;
+  draft?: BroadcastDraft | null;
+}) {
   const { toast } = useToast();
   const vocab = useVocab();
   const [pending, start] = useTransition();
   const [channel, setChannel] = useState<BroadcastChannel>("push");
-  const [tiers, setTiers] = useState<LoyaltyTierKey[]>([]);
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
+  // A draft's tiers only when tiers exist - the API refuses them otherwise.
+  const [tiers, setTiers] = useState<LoyaltyTierKey[]>(rewardsEnabled ? (draft?.tiers ?? []) : []);
+  const [subject, setSubject] = useState(draft?.subject ?? "");
+  const [body, setBody] = useState(draft?.body ?? "");
   const [preview, setPreview] = useState<BroadcastPreview | null>(null);
   const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(draft !== null);
   const [history, setHistory] = useState<BroadcastRow[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -146,7 +161,7 @@ export function BroadcastCard({ rewardsEnabled = true }: { rewardsEnabled?: bool
     const who =
       tiers.length === 0
         ? `all ${reachable} of your ${vocab.clientNounPlural}`
-        : `${reachable} ${tiers.map((t) => t.toLowerCase()).join(" and ")} ${vocab.clientNounPlural}`;
+        : `${reachable} ${describeTierAudience(tiers)}`;
     const how = channel === "email" ? "an email" : "an app notification";
     // 🔴 A blast cannot be recalled. The confirm names the real number and the
     // channel, because "are you sure?" on its own tells nobody anything.
@@ -385,6 +400,9 @@ function BroadcastHistory({ rows, vocab }: { rows: BroadcastRow[]; vocab: string
               <p className="truncate text-sm text-offwhite">{b.subject || b.body}</p>
               <p className="mt-0.5 text-xs text-muted">
                 {b.channel === "email" ? "Email" : "App notification"} ·{" "}
+                {/* Who it was aimed at, so "Gold members · 42 sent" still says
+                    a year later that the rest of the book never got it. */}
+                {(b.audienceTiers?.length ?? 0) > 0 && `${describeTierAudience(b.audienceTiers)} · `}
                 {describe(b, vocab)}
               </p>
             </div>

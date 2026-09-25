@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { apiGet, apiPublicGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
@@ -22,12 +23,15 @@ export default async function AccountPage() {
   // anyway). Same gate as the card's old overview placement.
   if (me.data?.demo) redirect("/dashboard");
 
-  const [shopRes, emailChange, notify] = await Promise.all([
+  const [shopRes, emailChange, notify, partner] = await Promise.all([
     // Only the name is needed (the delete-shop typed confirmation). A 404
     // (no shop yet / just deleted) simply hides that form.
     apiGet<{ name: string }>("/api/shops/me"),
     apiPublicGet<{ available: boolean }>("/api/auth/email-change/available"),
     apiGet<NotificationsResponse>("/api/notifications"),
+    // A partner's earnings live on the referrals page, which nothing else
+    // links for a team seat - this page is reachable from every seat.
+    apiGet<unknown>("/api/partner/me"),
   ]);
 
   return (
@@ -38,6 +42,20 @@ export default async function AccountPage() {
           Your profile, how you sign in, and the buttons we hope you never need.
         </p>
       </header>
+      {partner.ok ? (
+        <Link
+          href="/dashboard/referrals"
+          className="mb-6 flex items-center justify-between rounded-2xl border border-subtle bg-charcoal-800 px-5 py-4 text-sm transition-colors duration-150 ease-out hover:border-gold/40"
+        >
+          <span>
+            <span className="font-medium text-offwhite">Affiliate earnings</span>
+            <span className="block text-muted">Your code, your balance, and cashouts.</span>
+          </span>
+          <span className="text-gold" aria-hidden>
+            →
+          </span>
+        </Link>
+      ) : null}
       <AccountCard
         name={me.data?.name ?? ""}
         email={me.data?.email ?? ""}

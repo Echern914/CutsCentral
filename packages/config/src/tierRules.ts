@@ -441,3 +441,25 @@ export function describeTierGap(
 export function tierLabel(key: LoyaltyTierKey): string {
   return LOYALTY_TIERS[key].label;
 }
+
+/**
+ * Who a tier-aimed message goes to, in words: "Gold members", "Gold and Silver
+ * members". Highest tier first, whatever order they were picked in, so the
+ * same audience always reads the same way - in the composer, the preview and
+ * the history line afterwards.
+ *
+ * A key this build does not know (history written by a later release) still
+ * reads as a tier audience rather than vanishing: a blank would make a message
+ * to the Gold members look like one to everyone.
+ */
+export function describeTierAudience(tiers: readonly string[]): string {
+  if (tiers.length === 0) return "";
+  const labels = [...LOYALTY_TIER_KEYS]
+    .reverse()
+    .filter((k) => tiers.includes(k))
+    .map((k) => LOYALTY_TIERS[k].label);
+  if (labels.length === 0) return "Loyalty tier members";
+  const list =
+    labels.length === 1 ? labels[0]! : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+  return `${list} members`;
+}

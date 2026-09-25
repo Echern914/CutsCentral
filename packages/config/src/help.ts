@@ -26,6 +26,7 @@
  */
 
 import { BILLING, DEFAULTS, PLANS } from "./constants.js";
+import { PARTNER_PROGRAM } from "./partnerProgram.js";
 
 export type HelpCategoryId =
   | "start"
@@ -93,6 +94,9 @@ export interface HelpAnswer {
   hidesInApp?: boolean;
 }
 
+const dollars = (cents: number) => `$${cents / 100}`;
+const partnerReward = dollars(PARTNER_PROGRAM.rewardCents);
+const partnerCashouts = PARTNER_PROGRAM.cashoutAmountsCents.map(dollars).join(" or ");
 const proPrice = `$${PLANS.pro.priceMonthlyUsd}`;
 const proAiPrice = `$${PLANS.pro_ai.priceMonthlyUsd}`;
 const proTexts = PLANS.pro.smsMonthlyQuota.toLocaleString();
@@ -604,7 +608,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "promotions",
     q: "How do I run a promotion?",
-    a: "Set up a promo and it shows on your public page — and you can text it out to the clients you choose.\n\nGood for filling a specific dead window: a slow Tuesday, a new barber's first month, a holiday push.",
+    a: "Set up a promo and it shows on your public page — and you can text it out to the clients you choose: everyone, just the ones who are overdue, or only a loyalty tier such as your Gold members.\n\nTexting uses your text allowance. To send the same promo as an app notification or an email instead — also to just one tier — tap Email or notify on it.\n\nGood for filling a specific dead window: a slow Tuesday, a new barber's first month, a holiday push.",
     keywords: ["promo", "promotion", "deal", "special", "discount", "sale", "offer", "blast", "campaign"],
     category: "clients",
     action: { label: "Open promotions", featureId: "promotions" },
@@ -622,6 +626,18 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     q: "Do I get anything for referring another barber?",
     a: "Yes. Send your referral link — they get an extra month on top of their trial the moment they sign up, and you get a free month once their first invoice clears.\n\nNo cap on how many you refer.",
     keywords: ["referral", "refer", "refer a friend", "affiliate", "free month", "invite barber", "share link"],
+    category: "clients",
+    hidesInApp: true,
+    action: { label: "Open referrals", featureId: "referrals" },
+  },
+  {
+    // The PARTNER program (partnerProgram.ts): a person's code, paid in cash.
+    // Multi-word keywords only, no primaryFor - "cash" or "code" alone must not
+    // pull payout or booking questions here.
+    id: "partner-program",
+    q: "How do partner referral codes work?",
+    a: `If someone gave you a referral code, type it when you set up your business. It's optional, and it's entered once, at signup.\n\nPartners earn ${partnerReward}, once, for each business that signs up with their code and pays for a plan. Cashout unlocks at ${PARTNER_PROGRAM.unlock.referrals} paying businesses within ${PARTNER_PROGRAM.unlock.windowDays} days of the first, in ${partnerCashouts} amounts, from the partner's earnings page.`,
+    keywords: ["referral code", "partner code", "partner program", "partner earnings", "affiliate earnings", "cash out referral", "referral money"],
     category: "clients",
     hidesInApp: true,
     action: { label: "Open referrals", featureId: "referrals" },
@@ -1380,13 +1396,34 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "text-everyone",
     q: "How do I text all my clients at once?",
-    a: "Write it as a promotion and send it out — that's the blast. It only goes to clients who haven't opted out, and it counts against your monthly text allowance.\n\nOne piece of advice worth more than the feature: a blast to everyone converts worse than a rebooking nudge to the twenty people who are actually overdue. Use it for genuine news, not for filling a Tuesday.",
+    a: "Write it as a promotion and send it out — that's the blast. It only goes to clients who haven't opted out, and it counts against your monthly text allowance.\n\nIt doesn't have to be a text: Message your clients on the Clients page sends the same news as an app notification or an email — to everyone, or just one loyalty tier — and uses no texts at all.\n\nOne piece of advice worth more than the feature: a blast to everyone converts worse than a rebooking nudge to the twenty people who are actually overdue. Use it for genuine news, not for filling a Tuesday.",
     keywords: [
       "text everyone", "text all", "blast", "mass text", "bulk text", "send to everyone",
-      "message all clients", "text my list", "announcement", "broadcast", "everyone at once",
+      "text my list", "everyone at once",
     ],
     category: "texting",
     action: { label: "Open promotions", featureId: "promotions" },
+  },
+  {
+    // The free channel, and the one Drick went looking for on Promotions
+    // ("send to only gold or whatever tier member"). Announcement / broadcast
+    // questions used to land on text-everyone and send the barber to spend SMS
+    // allowance on something an app notification does for nothing - and a text
+    // never reaches the client's Announcements.
+    // Multi-word keywords only: a bare "email" would swallow every email question.
+    id: "message-all-clients",
+    q: "How do I send an announcement to all my clients, or just my Gold members?",
+    a: "Use Message your clients on the Clients page. Send it as an app notification — free, and it reaches everyone signed in to the ChairBack app — or as an email, which counts against your monthly email allowance. Send it to everyone, or only the loyalty tiers you pick, like just your Gold members.\n\nIt uses no texts and works on every plan. Every message that reaches a client also stays in their Announcements, the bell in the ChairBack app, so it's still there after they swipe the notification away.\n\nRunning a promo? Tap Email or notify on it and the message starts already written. Want to text everyone instead? That's a promotion, and it uses your text allowance.",
+    keywords: [
+      "announcement", "announcements", "broadcast", "newsletter", "send news",
+      "message all clients", "message my clients", "message everyone", "message my gold",
+      "gold members", "silver members", "bronze members", "tier members", "only gold", "only my gold",
+      "email all my clients", "email my clients", "email everyone", "email my gold",
+      "notify my clients", "notify all my clients", "notification to all", "app notification",
+      "app notification to everyone", "push notification",
+    ],
+    category: "clients",
+    action: { label: "Open clients", featureId: "clients" },
   },
   {
     id: "who-is-overdue",

@@ -474,7 +474,7 @@ async function deliverRecipient(params: {
         payload: {
           title: ctx.subject?.trim() || ctx.shop.name,
           body: ctx.body,
-          url: pushLandingFor(ctx.shop),
+          url: pushLandingFor(ctx.shop, ctx.id),
           tag: broadcastCollapseTag(ctx.id),
         },
       });
@@ -483,7 +483,7 @@ async function deliverRecipient(params: {
         // Push has no provider message id and no delivery ledger, but it gets
         // the same claim check: a worker whose claim aged out mid-send must
         // not write over whatever its successor has since decided.
-        return (await settleSent({ rowId: row.id, claimToken: params.claimToken, now }))
+        return (await settleSent({ rowId: row.id, claimToken: params.claimToken, now: params.clock() }))
           ? "sent"
           : "stale_claim";
       }
@@ -554,7 +554,7 @@ async function deliverRecipient(params: {
       const settled = await settleSent({
         rowId: row.id,
         claimToken: params.claimToken,
-        now,
+        now: params.clock(),
         messageId: result.id,
         delivery: { kind: "broadcast", shopId: ctx.shopId, clientId: client.id },
       });
@@ -600,10 +600,15 @@ async function deliverRecipient(params: {
  * OS, a notification centre and anything mirroring it - a promotion does not
  * need a session key to say "two chairs open Friday", and the booking page is
  * where somebody who taps it actually wants to go.
+ *
+ * `?announcement=` is the app's cue (apps/mobile/src/pushTap.ts): a tap in
+ * My ChairBack opens the Announcements screen, where the message stays after
+ * the notification is swiped away. The booking page ignores it. It is the
+ * broadcast's id, which names a shop's message and no person.
  */
-function pushLandingFor(shop: BroadcastShop): string {
+export function pushLandingFor(shop: BroadcastShop, broadcastId: string): string {
   const base = apiEnv().APP_BASE_URL;
-  return shop.slug ? `${base}/book/${shop.slug}` : base;
+  return `${shop.slug ? `${base}/book/${shop.slug}` : base}?announcement=${encodeURIComponent(broadcastId)}`;
 }
 
 /**
@@ -901,6 +906,14 @@ async function transientAmbiguousPush(
 async function settleSent(params: {
   rowId: string;
   claimToken: string;
+  /**
+   * 🔴 THIS ROW'S settlement instant (`clock()`), NOT the pass start. It
+   * becomes `sentAt`, and My ChairBack's bell counts a send as unread when its
+   * sentAt is after the customer's read marker - so a row settled late in a
+   * pass must carry a later time than one the customer already opened.
+   * Stamping every row with the pass start let a send that landed after the
+   * list was read count as read.
+   */
   now: Date;
   messageId?: string;
   delivery?: { kind: string; shopId: string; clientId: string };

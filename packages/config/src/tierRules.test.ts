@@ -7,6 +7,7 @@ import {
 } from "./constants.js";
 import {
   describeRequirementProgress,
+  describeTierAudience,
   describeTierGap,
   describeTierRule,
   parseTierRules,
@@ -247,5 +248,19 @@ describe("validateTierRules refuses, naming the tier", () => {
         GOLD: { visits: { min: 3, windowDays: 30 }, spend: null, match: "all" },
       }).ok,
     ).toBe(true);
+  });
+});
+
+describe("describeTierAudience", () => {
+  it("names the tiers highest first, whatever order they were picked in", () => {
+    expect(describeTierAudience(["GOLD"])).toBe("Gold members");
+    expect(describeTierAudience(["SILVER", "GOLD"])).toBe("Gold and Silver members");
+    expect(describeTierAudience(["BRONZE", "GOLD", "SILVER"])).toBe("Gold, Silver and Bronze members");
+    expect(describeTierAudience([])).toBe("");
+  });
+
+  it("never blanks a tier audience it cannot name", () => {
+    expect(describeTierAudience(["PLATINUM"])).toBe("Loyalty tier members");
+    expect(describeTierAudience(["PLATINUM", "GOLD"])).toBe("Gold members");
   });
 });

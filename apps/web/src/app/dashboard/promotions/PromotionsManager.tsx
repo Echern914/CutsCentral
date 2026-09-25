@@ -1,7 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { cap, useVocab } from "@/components/VocabProvider";
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
+import { LOYALTY_TIERS, LOYALTY_TIER_KEYS, type LoyaltyTierKey } from "@chairback/config/constants";
+import { describeTierAudience } from "@chairback/config/tierRules";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
@@ -9,11 +12,13 @@ import { cn } from "@/lib/cn";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { PlanBadge } from "../_components/PlanBadge";
 import type { Promo } from "./page";
+import { promoBroadcastHref, valueLabel } from "./promoDraft";
 import {
   blastPromoAction,
   createPromoAction,
   deletePromoAction,
   updatePromoAction,
+  type BlastAudience,
   type BlastSummary,
   type PromoInput,
 } from "./actions";
@@ -32,17 +37,54 @@ const KIND_LABELS: Record<Promo["kind"], string> = {
   EXTRA_PUNCHES: "Extra punches",
 };
 
-function valueLabel(p: Promo): string {
-  switch (p.kind) {
-    case "PERCENT_OFF":
-      return `${p.percentOff}% off`;
-    case "AMOUNT_OFF":
-      return `$${p.amountOff} off`;
-    case "FREE_ADDON":
-      return "Free add-on";
-    case "EXTRA_PUNCHES":
-      return `+${p.extraPunches} ${p.extraPunches === 1 ? "punch" : "punches"} per visit`;
+/** Highest first - the order a barber thinks about them in. */
+const TIERS_TOP_DOWN = [...LOYALTY_TIER_KEYS].reverse();
+
+/** A preview, stamped with the audience it counted - which is what Send sends. */
+interface BlastPreview {
+  summary: BlastSummary;
+  audience: BlastAudience;
+  tiers: LoyaltyTierKey[];
+}
+
+type BlastResult = Awaited<ReturnType<typeof blastPromoAction>>;
+
+const NOT_A_TEXT = "Email or notify sends this promo without texting.";
+
+/**
+ * What a refused preview or send says.
+ *
+ * 🔴 THE API'S SENTENCE IS SHOWN ONLY WHERE THIS SURFACE KNOWS WHAT IT SAYS.
+ * The 402s carry "Upgrade your plan..." - and this page runs inside the iOS
+ * app, where upgrade steering is a Guideline 3.1.1 rejection. So a plan refusal
+ * gets our own words (no upgrade hint in the app), texting-off gets the API's
+ * `reason` (it has no `message`), and only the two refusals written for the
+ * barber about THIS form pass their message through.
+ */
+function blastErrorText(r: BlastResult, inApp: boolean | null, fallback: string): string {
+  switch (r.error) {
+    case "subscription_required":
+    case "premium_required":
+      // Not-yet-known reads as the app: the careful copy is right in both.
+      return inApp === false
+        ? `Promo blasts are a Premium feature - upgrade from the Billing page. ${NOT_A_TEXT}`
+        : `Promo blasts are a Premium feature. ${NOT_A_TEXT}`;
+    case "texting_off":
+      return `${r.reason ?? "Texting is turned off right now."} ${NOT_A_TEXT}`;
+    case "quiet_hours":
+      return "Texting is paused 9pm-8am (client local time). Try again in the morning.";
+    case "invalid_input":
+    case "tiers_need_rewards":
+      return r.message ?? fallback;
+    default:
+      return fallback;
   }
+}
+
+function toastKind(r: BlastResult): "info" | "error" {
+  return r.error === "subscription_required" || r.error === "premium_required" || r.error === "texting_off"
+    ? "info"
+    : "error";
 }
 
 const STATUS_STYLES: Record<Promo["status"], string> = {
@@ -61,10 +103,13 @@ function fmtDate(iso: string | null): string {
 export function PromotionsManager({
   promotions,
   premiumLocked = false,
+  rewardsEnabled = false,
 }: {
   promotions: Promo[];
   /** Lapsed shop: the blast trigger carries the diamond and says so up front. */
   premiumLocked?: boolean;
+  /** Tiers exist only while rewards are on - no tier audience without them. */
+  rewardsEnabled?: boolean;
 }) {
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
@@ -110,7 +155,12 @@ export function PromotionsManager({
       ) : (
         <ul className="divide-y divide-subtle">
           {promotions.map((promo) => (
-            <PromoRow key={promo.id} promo={promo} premiumLocked={premiumLocked} />
+            <PromoRow
+              key={promo.id}
+              promo={promo}
+              premiumLocked={premiumLocked}
+              rewardsEnabled={rewardsEnabled}
+            />
           ))}
         </ul>
       )}
@@ -118,7 +168,15 @@ export function PromotionsManager({
   );
 }
 
-function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: boolean }) {
+function PromoRow({
+  promo,
+  premiumLocked,
+  rewardsEnabled,
+}: {
+  promo: Promo;
+  premiumLocked?: boolean;
+  rewardsEnabled?: boolean;
+}) {
   const vocab = useVocab();
   const { toast } = useToast();
   // No "upgrade" steering inside the iOS app (Guideline 3.1.1).
@@ -126,8 +184,27 @@ function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: bool
   const [pending, startTransition] = useTransition();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [blastOpen, setBlastOpen] = useState(false);
-  const [preview, setPreview] = useState<BlastSummary | null>(null);
-  const [audience, setAudience] = useState<"all" | "atRisk">("all");
+  const [preview, setPreview] = useState<BlastPreview | null>(null);
+  const [audience, setAudience] = useState<BlastAudience>("all");
+  const [tiers, setTiers] = useState<LoyaltyTierKey[]>([]);
+  // "Only these tiers" with none picked is not a question the API will answer
+  // (it would otherwise read as "everyone"), so it is not one we ask.
+  const needsTier = audience === "tiers" && tiers.length === 0;
+  // 🔴 A PREVIEW BELONGS TO THE QUESTION IT ANSWERED. Every change of audience
+  // bumps this, and a preview that comes back for an older question is thrown
+  // away - otherwise "Gold" counted 3, the barber adds Silver while it loads,
+  // the screen says "Would text 3 ... Gold and Silver members" and Send texts 43.
+  const asked = useRef(0);
+
+  function clearPreview() {
+    asked.current++;
+    setPreview(null);
+  }
+
+  function toggleTier(t: LoyaltyTierKey) {
+    setTiers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+    clearPreview();
+  }
 
   const dates =
     promo.status === "scheduled"
@@ -174,12 +251,22 @@ function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: bool
               <button
                 onClick={() => {
                   setBlastOpen((v) => !v);
-                  setPreview(null);
+                  clearPreview();
                 }}
                 className="rounded-full border border-gold/50 px-3 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
               >
                 Text clients
               </button>
+              {/* The same promo to the same people, without texting: the
+                  Clients-page composer (app notification or email) works on
+                  every plan and while texting is off. It opens written out
+                  from this promo, aimed at the tiers picked here. */}
+              <Link
+                href={promoBroadcastHref(promo.id, audience === "tiers" ? tiers : [])}
+                className={smallBtn}
+              >
+                Email or notify
+              </Link>
             </span>
           )}
           <button
@@ -229,26 +316,65 @@ function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: bool
             Send to
             <select
               value={audience}
+              disabled={pending}
               onChange={(e) => {
-                setAudience(e.target.value as "all" | "atRisk");
-                setPreview(null);
+                setAudience(e.target.value as BlastAudience);
+                clearPreview();
               }}
               className={`mt-1 ${field}`}
             >
               <option value="all">All opted-in clients</option>
               <option value="atRisk">Only overdue (at-risk) clients</option>
+              {rewardsEnabled && <option value="tiers">Only these tiers…</option>}
             </select>
           </label>
+          {audience === "tiers" && (
+            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Tiers">
+              {TIERS_TOP_DOWN.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  disabled={pending}
+                  onClick={() => toggleTier(t)}
+                  aria-pressed={tiers.includes(t)}
+                  className={cn(
+                    "rounded-full px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50",
+                    tiers.includes(t)
+                      ? "bg-gold/20 text-gold"
+                      : "border border-subtle text-muted hover:text-offwhite",
+                  )}
+                >
+                  {LOYALTY_TIERS[t].label}
+                </button>
+              ))}
+              {needsTier && <span className="text-xs text-muted">Pick at least one tier.</span>}
+            </div>
+          )}
+          {/* Only the TEXT is aimed. The promo itself is still public, and an
+              extra-punch promo still earns on every visit - saying so here
+              stops "text it to Gold" being read as "a Gold-only offer". */}
+          {audience === "tiers" && (
+            <p className="w-full text-xs text-muted">
+              Only the text goes to these tiers. The promo still shows on your page and every{" "}
+              {vocab.clientNoun}&apos;s rewards page
+              {promo.kind === "EXTRA_PUNCHES" ? ", and its extra punches count on everyone's visits" : ""}.
+            </p>
+          )}
           {preview === null ? (
             <button
-              disabled={pending}
-              onClick={() =>
+              disabled={pending || needsTier}
+              onClick={() => {
+                // Snapshot the question; the answer is kept only if it is
+                // still the question when the answer lands.
+                const q = { audience, tiers: [...tiers] };
+                const id = ++asked.current;
                 startTransition(async () => {
-                  const r = await blastPromoAction(promo.id, audience, true);
-                  if (r.summary) setPreview(r.summary);
-                  else toast("Could not preview", "error");
-                })
-              }
+                  const r = await blastPromoAction(promo.id, q.audience, true, q.tiers);
+                  if (id !== asked.current) return;
+                  if (r.summary) setPreview({ summary: r.summary, ...q });
+                  else toast(blastErrorText(r, inApp, "Could not preview"), toastKind(r));
+                });
+              }}
               className={smallBtn}
             >
               {pending ? "…" : "Preview"}
@@ -256,29 +382,23 @@ function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: bool
           ) : (
             <>
               <span className="text-xs text-offwhite">
-                Would text <span className="font-semibold text-gold">{preview.sent}</span>{" "}
-                of {preview.eligible} eligible
-                {preview.skippedCap > 0 ? ` (${preview.skippedCap} over today's cap)` : ""}
+                Would text <span className="font-semibold text-gold">{preview.summary.sent}</span>{" "}
+                of {preview.summary.eligible} eligible
+                {preview.audience === "tiers" ? ` ${describeTierAudience(preview.tiers)}` : ""}
+                {preview.summary.skippedCap > 0 ? ` (${preview.summary.skippedCap} over today's cap)` : ""}
               </span>
               <button
-                disabled={pending || preview.sent === 0}
+                disabled={pending || preview.summary.sent === 0}
                 onClick={() =>
                   startTransition(async () => {
-                    const r = await blastPromoAction(promo.id, audience, false);
+                    // Sends exactly the audience that was counted, never
+                    // whatever the controls say by the time this is tapped.
+                    const r = await blastPromoAction(promo.id, preview.audience, false, preview.tiers);
                     setBlastOpen(false);
-                    setPreview(null);
+                    clearPreview();
                     if (r.summary)
                       toast(`Sent ${r.summary.sent} text${r.summary.sent === 1 ? "" : "s"}`, "success");
-                    else if (r.error === "subscription_required")
-                      toast(
-                        inApp
-                          ? "Promo blasts are a Premium feature"
-                          : "Promo blasts are a Premium feature - upgrade from the Billing page",
-                        "info",
-                      );
-                    else if (r.error === "quiet_hours")
-                      toast("Texting is paused 9pm-8am (client local time). Try again in the morning.", "error");
-                    else toast("Send failed", "error");
+                    else toast(blastErrorText(r, inApp, "Send failed"), toastKind(r));
                   })
                 }
                 className={goldBtn}
@@ -290,7 +410,7 @@ function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: bool
           <button
             onClick={() => {
               setBlastOpen(false);
-              setPreview(null);
+              clearPreview();
             }}
             className={smallBtn}
           >

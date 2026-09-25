@@ -26,6 +26,7 @@ import { receptionistConfigured } from "../receptionist/config.js";
 import { buildPreflight } from "../ops/preflight.js";
 import { fetchWebConfig } from "../ops/webConfig.js";
 import { affiliateAdminRouter } from "./adminPortal.affiliate.js";
+import { partnerAdminRouter } from "./adminPortal.partners.js";
 
 /**
  * Operator portal API (the founder's own admin surface). Session-gated to
@@ -40,6 +41,9 @@ adminPortalRouter.use(requireUser, requireAdmin);
 // the AFFILIATE_PROGRAM_ENABLED dark-launch check - while the program is off,
 // even an admin sees 404 here).
 adminPortalRouter.use("/affiliate", affiliateAdminRouter);
+
+// Partner program (cash for people with a code; its own file, same gates).
+adminPortalRouter.use("/partners", partnerAdminRouter);
 
 const MS_PER_DAY = 86_400_000;
 

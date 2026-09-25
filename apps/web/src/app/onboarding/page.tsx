@@ -137,6 +137,25 @@ export default function OnboardingShopPage() {
                 />
               </div>
             </div>
+            {/* Optional partner code ("ERIC C"). Case and spaces don't
+                matter; a code that can't be used is explained right here and
+                nothing is created until it is fixed or cleared. */}
+            <input
+              name="partnerCode"
+              placeholder="Referral code (optional)"
+              aria-label="Referral code (optional)"
+              autoCapitalize="characters"
+              autoComplete="off"
+              maxLength={64}
+              aria-invalid={state.field === "partnerCode" || undefined}
+              aria-describedby={state.field === "partnerCode" ? "partner-code-error" : undefined}
+              className={field}
+            />
+            {state.field === "partnerCode" ? (
+              <FormError id="partner-code-error" className="-mt-1">
+                {state.error}
+              </FormError>
+            ) : null}
             <label className="mt-1 flex items-start gap-2.5 text-xs leading-relaxed text-muted">
               <input
                 type="checkbox"
@@ -150,7 +169,9 @@ export default function OnboardingShopPage() {
                 behalf.
               </span>
             </label>
-            <FormError className="text-sm">{state.error}</FormError>
+            <FormError className="text-sm">
+              {state.field === "partnerCode" ? undefined : state.error}
+            </FormError>
             <div className="mt-1">
               <Submit />
             </div>

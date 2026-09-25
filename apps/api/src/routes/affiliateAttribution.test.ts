@@ -817,3 +817,42 @@ describe("attribution: admin correction is the only way it ever moves", () => {
     }
   });
 });
+
+describe("attribution: one referral program per business", () => {
+  it("a partner code at signup keeps the affiliate claim cookie from ALSO attributing the business", async () => {
+    programOn();
+    const code = `PVA${randomToken(6).toUpperCase().replace(/[^A-Z0-9]/g, "X")}`;
+    let partnerId: string | null = null;
+    try {
+      const affiliate = await newAffiliate("pva-aff");
+      const partnerUser = await signup("pva-partner");
+      partnerId = (
+        await prisma.partner.create({
+          data: { name: "PVA", code, codeKey: code, userId: partnerUser.userId, createdByUserId: partnerUser.userId },
+        })
+      ).id;
+
+      // Control: the same kind of claim, with no partner code, DOES attribute -
+      // so the null below is the partner guard, not a bad claim.
+      const control = await createShop(await signup("pva-control"), "pva-control", claimFor(affiliate.code));
+      expect(control.status).toBe(201);
+      expect(await attributionFor(control.shopId!)).not.toBeNull();
+
+      const owner = await signup("pva-owner");
+      const res = await request(app)
+        .post("/api/shops")
+        .set("Cookie", [owner.cookie, `${AFFILIATE_CLAIM_COOKIE}=${claimFor(affiliate.code)}`])
+        .send({ name: "pva-owner Shop", smsAttested: true, partnerCode: code });
+      expect(res.status).toBe(201);
+      shopIds.push(res.body.id as string);
+      expect(await attributionFor(res.body.id as string)).toBeNull();
+      expect(await prisma.partnerReferral.count({ where: { referredShopId: res.body.id as string } })).toBe(1);
+    } finally {
+      programReset();
+      if (partnerId) {
+        await prisma.partnerReferral.deleteMany({ where: { partnerId } });
+        await prisma.partner.delete({ where: { id: partnerId } });
+      }
+    }
+  });
+});

@@ -65,6 +65,7 @@ import { connectWebhookRouter } from "./routes/webhooks.connect.js";
 import { paymentsDashboardRouter } from "./routes/payments.dashboard.js";
 import { checkoutRouter } from "./routes/booking.checkout.js";
 import { adminPortalRouter } from "./routes/adminPortal.js";
+import { partnerRouter } from "./routes/partner.js";
 import { demoRouter } from "./routes/demo.js";
 import { captureError } from "./sentry.js";
 import {
@@ -313,6 +314,9 @@ export function createApp(): Express {
   // AFFILIATE_PROGRAM_ENABLED.
   app.use("/api/affiliate/claim", affiliateClaimLimiter, affiliateClaimRouter);
   app.use("/api/affiliate", dashboardLimiter, affiliateDashboardRouter);
+  // Partner program: a partner's own earnings page. Signed-in login only - a
+  // partner need not run a business here.
+  app.use("/api/partner", dashboardLimiter, partnerRouter);
   // The operator surface gets an optional IP allowlist (requireAdminIp) ahead of
   // its credential gates. Fail-open when ADMIN_IP_ALLOWLIST is unset.
   app.use("/api/admin-portal", requireAdminIp, dashboardLimiter, adminPortalRouter);

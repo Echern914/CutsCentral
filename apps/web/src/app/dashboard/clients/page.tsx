@@ -2,7 +2,9 @@ import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { DemoTour } from "@/components/tour/DemoTour";
-import { BroadcastCard } from "./BroadcastCard";
+import { BroadcastCard, type BroadcastDraft } from "./BroadcastCard";
+import type { Promo } from "../promotions/page";
+import { draftTiersFromParam, promoBroadcastDraft } from "../promotions/promoDraft";
 import { ClientsControls } from "./ClientsControls";
 import { ClientsList, type ClientRow } from "./ClientsList";
 import { SavedByCard, type SavedByPerson } from "./SavedByCard";
@@ -18,7 +20,16 @@ interface ClientsResponse {
 export default async function ClientsPage({
   searchParams,
 }: {
-  searchParams: { q?: string; sort?: string; filter?: string; tier?: string; page?: string };
+  searchParams: {
+    q?: string;
+    sort?: string;
+    filter?: string;
+    tier?: string;
+    page?: string;
+    /** "Email or notify" on a promo: which promo to write out, aimed at which tiers. */
+    promo?: string;
+    tiers?: string;
+  };
 }) {
   const qs = new URLSearchParams();
   for (const k of ["q", "sort", "filter", "tier", "page"] as const) {
@@ -32,6 +43,14 @@ export default async function ClientsPage({
     getMe(),
   ]);
   const data = res.data;
+  // Written from the shop's own promo, looked up here rather than carried in
+  // the link, so the words in the box are always ones the barber wrote.
+  let draft: BroadcastDraft | null = null;
+  if (searchParams.promo) {
+    const promos = await apiGet<{ promotions: Promo[] }>("/api/promos");
+    const promo = promos.data?.promotions.find((p) => p.id === searchParams.promo);
+    if (promo) draft = { ...promoBroadcastDraft(promo), tiers: draftTiersFromParam(searchParams.tiers) };
+  }
   const duplicateGroups = dupes.data?.total ?? 0;
   const clients = data?.clients ?? [];
   const page = data?.page ?? 1;
@@ -81,7 +100,11 @@ export default async function ClientsPage({
           Unknown rewards state reads as ON, like the nav: the API refuses a
           tier audience for a rewards-off shop regardless. */}
       <div className="mb-5">
-        <BroadcastCard rewardsEnabled={me.data?.rewardsEnabled ?? true} />
+        <BroadcastCard
+          key={searchParams.promo ?? "blank"}
+          rewardsEnabled={me.data?.rewardsEnabled ?? true}
+          draft={draft}
+        />
       </div>
       {/* People asking to join from the app (a shop that approves new clients
           first). Above everything else here: someone is waiting on an answer. */}

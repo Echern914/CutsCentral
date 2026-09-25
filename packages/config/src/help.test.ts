@@ -213,6 +213,17 @@ describe("findHelp — questions asked cold", () => {
     }
   });
 
+  // The partner program (a person's code, paid in cash) is not the legacy
+  // free-month link, and "cash out" is not a Stripe bank payout.
+  it("answers partner-code questions with the partner program, without stealing payout questions", () => {
+    expectAnswer("where do i enter my referral code", "partner-program");
+    expectAnswer("how do i cash out my referral money", "partner-program");
+    expectAnswer("what are my partner earnings", "partner-program");
+    expectAnswer("do i get anything for referring another barber", "referrals");
+    expect(findHelp("when do i get paid").answer?.id).not.toBe("partner-program");
+    expect(helpAnswerById("partner-program")?.a).toContain("$5");
+  });
+
   // The AI handles TEXTS. Someone asking about voice has to be told no, or
   // they'll buy the plan expecting a switchboard.
   it("does not let the receptionist imply it answers the phone", () => {
@@ -249,6 +260,12 @@ describe("findHelp — questions asked cold", () => {
     // Clients
     expectAnswer("how do i add a client", "add-client-manually");
     expectAnswer("how do i text all my clients", "text-everyone");
+    expectAnswer("can i mass text everyone", "text-everyone");
+    // The free channel, which is what feeds the client's Announcements bell.
+    expectAnswer("how do i send an announcement to my clients", "message-all-clients");
+    expectAnswer("how do i send an app notification to all my clients", "message-all-clients");
+    expectAnswer("broadcast a message", "message-all-clients");
+    expectAnswer("can i email all my clients", "message-all-clients");
     expectAnswer("can i see who hasnt been in a while", "who-is-overdue");
     expectAnswer("how do i give someone a free cut", "comp-a-cut");
     expectAnswer("can i send a photo in a text", "picture-message");
@@ -395,5 +412,35 @@ describe("findHelp — App Store 3.1.1", () => {
     for (const q of priced) {
       expect(findHelp(q, { inApp: true }).suggestions.length).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * Drick asked for "send to only gold or whatever tier member" when the
+ * Clients-page composer already did it - by app notification or email, on any
+ * plan, with texting off. Nothing in help named it: "email my gold members"
+ * answered the cancellation email and "broadcast" answered the Premium SMS
+ * blast. These pin the route to the one that works for everyone.
+ */
+describe("findHelp — messaging many clients", () => {
+  it.each([
+    "email my gold members",
+    "how do I email all my clients",
+    "send a message to my gold members",
+    "send a notification to all my clients",
+    "broadcast",
+  ])("%s -> the Clients-page composer", (q) => expectAnswer(q, "message-all-clients"));
+
+  it("texting everyone still answers the text blast, and names the other way", () => {
+    expectAnswer("how do I text all my clients at once", "text-everyone");
+    expect(helpAnswerById("text-everyone")?.a).toMatch(/app notification or an email/);
+  });
+
+  it("a promo aimed at Gold is offered both ways", () => {
+    const res = findHelp("send a promo to only my gold members");
+    const ids = [res.answer?.id, ...res.suggestions.map((s) => s.id)];
+    expect(ids).toContain("message-all-clients");
+    expect(ids).toContain("promotions");
+    expect(helpAnswerById("promotions")?.a).toMatch(/Email or notify/);
   });
 });
