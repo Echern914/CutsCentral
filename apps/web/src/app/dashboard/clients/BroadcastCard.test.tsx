@@ -91,3 +91,24 @@ describe("BroadcastCard history", () => {
     expect(screen.getAllByText(/members/)).toHaveLength(1);
   });
 });
+
+/**
+ * "Email or notify" on a promo lands here: the composer opens already written
+ * out from the promo and aimed at the tiers picked there, ready to edit.
+ */
+describe("BroadcastCard from a promo", () => {
+  const draft = { subject: "Gold week", body: "20% off. Show code GOLD20.", tiers: ["GOLD" as const] };
+
+  it("opens written out and aimed", () => {
+    render(<BroadcastCard rewardsEnabled draft={draft} />);
+    expect((screen.getByLabelText("Notification title") as HTMLInputElement).value).toBe("Gold week");
+    expect((screen.getByLabelText("Message") as HTMLTextAreaElement).value).toBe("20% off. Show code GOLD20.");
+    expect(screen.getByRole("button", { name: "Gold" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Everyone" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("drops the tiers when rewards are off", () => {
+    render(<BroadcastCard rewardsEnabled={false} draft={draft} />);
+    expect(screen.getByRole("button", { name: "Everyone" }).getAttribute("aria-pressed")).toBe("true");
+  });
+});

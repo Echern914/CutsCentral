@@ -604,7 +604,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "promotions",
     q: "How do I run a promotion?",
-    a: "Set up a promo and it shows on your public page — and you can text it out to the clients you choose: everyone, just the ones who are overdue, or only a loyalty tier such as your Gold members.\n\nGood for filling a specific dead window: a slow Tuesday, a new barber's first month, a holiday push.",
+    a: "Set up a promo and it shows on your public page — and you can text it out to the clients you choose: everyone, just the ones who are overdue, or only a loyalty tier such as your Gold members.\n\nTexting uses your text allowance. To send the same promo as an app notification or an email instead — also to just one tier — tap Email or notify on it.\n\nGood for filling a specific dead window: a slow Tuesday, a new barber's first month, a holiday push.",
     keywords: ["promo", "promotion", "deal", "special", "discount", "sale", "offer", "blast", "campaign"],
     category: "clients",
     action: { label: "Open promotions", featureId: "promotions" },
@@ -1380,13 +1380,29 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "text-everyone",
     q: "How do I text all my clients at once?",
-    a: "Write it as a promotion and send it out — that's the blast. It only goes to clients who haven't opted out, and it counts against your monthly text allowance.\n\nOne piece of advice worth more than the feature: a blast to everyone converts worse than a rebooking nudge to the twenty people who are actually overdue. Use it for genuine news, not for filling a Tuesday.",
+    a: "Write it as a promotion and send it out — that's the blast. It only goes to clients who haven't opted out, and it counts against your monthly text allowance.\n\nIt doesn't have to be a text: Message your clients on the Clients page sends the same news as an app notification or an email — to everyone, or just one loyalty tier — and uses no texts at all.\n\nOne piece of advice worth more than the feature: a blast to everyone converts worse than a rebooking nudge to the twenty people who are actually overdue. Use it for genuine news, not for filling a Tuesday.",
     keywords: [
       "text everyone", "text all", "blast", "mass text", "bulk text", "send to everyone",
-      "message all clients", "text my list", "announcement", "broadcast", "everyone at once",
+      "text my list", "everyone at once",
     ],
     category: "texting",
     action: { label: "Open promotions", featureId: "promotions" },
+  },
+  {
+    // The composer Drick went looking for on Promotions ("send to only gold or
+    // whatever tier member"). It already did that - nothing here named it.
+    // Multi-word keywords only: a bare "email" would swallow every email question.
+    id: "message-clients",
+    q: "How do I send a message to all my clients, or just my Gold members?",
+    a: "Use Message your clients on the Clients page. Write it once and send it as an app notification (free) or an email (counts against your monthly email allowance) — to everyone, or only the loyalty tiers you pick, like just your Gold members.\n\nIt uses no texts and works on every plan. Running a promo? Tap Email or notify on it and the message starts already written.",
+    keywords: [
+      "message all clients", "message my clients", "message my gold", "gold members", "silver members",
+      "bronze members", "tier members", "only gold", "only my gold", "email all my clients", "email my clients",
+      "email everyone", "email my gold", "notify my clients", "notification to all", "app notification",
+      "push notification", "announcement", "broadcast", "newsletter",
+    ],
+    category: "clients",
+    action: { label: "Open clients", featureId: "clients" },
   },
   {
     id: "who-is-overdue",

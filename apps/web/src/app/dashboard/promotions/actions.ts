@@ -63,14 +63,16 @@ export async function blastPromoAction(
   dryRun: boolean,
   /** audience "tiers" only: which loyalty tiers to text. */
   tiers?: LoyaltyTierKey[],
-): Promise<{ summary: BlastSummary | null; error?: string; message?: string }> {
+): Promise<{ summary: BlastSummary | null; error?: string; message?: string; reason?: string }> {
   const res = await apiSend<BlastSummary>("POST", `/api/promos/${promoId}/blast`, {
     audience,
     dryRun,
     ...(audience === "tiers" ? { tiers } : {}),
   });
   if (!dryRun) revalidatePath("/dashboard/promotions");
-  return { summary: res.data, error: res.error, message: res.message };
+  // `reason` too: texting_off and quiet_hours explain themselves there, not
+  // in `message`, and dropping it left the barber with a bare "Could not preview".
+  return { summary: res.data, error: res.error, message: res.message, reason: res.reason };
 }
 
 export async function recordPromoUseAction(

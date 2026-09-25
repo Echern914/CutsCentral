@@ -69,17 +69,31 @@ const IN_FLIGHT = new Set(["QUEUED", "SENDING"]);
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
-export function BroadcastCard({ rewardsEnabled = true }: { rewardsEnabled?: boolean }) {
+/** A message started elsewhere (a promo's "Email or notify"), opened ready to edit. */
+export interface BroadcastDraft {
+  subject: string;
+  body: string;
+  tiers: LoyaltyTierKey[];
+}
+
+export function BroadcastCard({
+  rewardsEnabled = true,
+  draft = null,
+}: {
+  rewardsEnabled?: boolean;
+  draft?: BroadcastDraft | null;
+}) {
   const { toast } = useToast();
   const vocab = useVocab();
   const [pending, start] = useTransition();
   const [channel, setChannel] = useState<BroadcastChannel>("push");
-  const [tiers, setTiers] = useState<LoyaltyTierKey[]>([]);
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
+  // A draft's tiers only when tiers exist - the API refuses them otherwise.
+  const [tiers, setTiers] = useState<LoyaltyTierKey[]>(rewardsEnabled ? (draft?.tiers ?? []) : []);
+  const [subject, setSubject] = useState(draft?.subject ?? "");
+  const [body, setBody] = useState(draft?.body ?? "");
   const [preview, setPreview] = useState<BroadcastPreview | null>(null);
   const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(draft !== null);
   const [history, setHistory] = useState<BroadcastRow[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
