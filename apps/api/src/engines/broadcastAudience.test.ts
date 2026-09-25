@@ -59,6 +59,15 @@ describe("who cannot be reached", () => {
     expect(split.reasonCounts.unsubscribed).toBe(1);
   });
 
+  it("🔴 an unsubscribe with no address left is still the unsubscribe", () => {
+    // The bell shows a no_email row and never an unsubscribed one, so the
+    // customer's choice has to win the label.
+    const split = splitAudience([client({ emailOptedOut: true, email: null })], "email", []);
+    expect(split.reachable).toHaveLength(0);
+    expect(split.reasonCounts.unsubscribed).toBe(1);
+    expect(split.reasonCounts.no_email).toBe(0);
+  });
+
   it("push needs a device - nobody can be notified without the app", () => {
     const split = splitAudience([client({ pushDevices: 0 })], "push", []);
     expect(split.reachable).toHaveLength(0);
