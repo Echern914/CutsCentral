@@ -136,7 +136,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        on Apple's distribution entitlement. The version string moves too,
   //        not just the number, so this cannot hit the closed-version wall if
   //        1.1.1 has been submitted (submission, not release, is the trigger).
-  version: "1.1.2",
+  //
+  // 1.1.3 = build 47. Join shop and the customer-side fixes (#490): the client
+  //        form, Pending at shops that approve new clients, "Your shops", the
+  //        doubled top gap, the sign-in name and code-button fixes. The
+  //        version moves with the number, so it cannot hit the closed-version
+  //        wall whatever became of 1.1.2 after it went up.
+  version: "1.1.3",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
@@ -152,7 +158,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "46",
+    buildNumber: "47",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
