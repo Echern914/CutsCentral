@@ -56,7 +56,12 @@ async function signup(label: string): Promise<{ cookie: string; userId: string }
   };
 }
 
-async function makeAppointment(staffId: string, startsAt: Date, who: string) {
+async function makeAppointment(
+  staffId: string,
+  startsAt: Date,
+  who: string,
+  bookedVia?: string,
+) {
   return prisma.appointment.create({
     data: {
       shopId,
@@ -67,6 +72,7 @@ async function makeAppointment(staffId: string, startsAt: Date, who: string) {
       startsAt,
       endsAt: new Date(startsAt.getTime() + 30 * 60 * 1000),
       manageToken: randomToken(16),
+      bookedVia,
     },
   });
 }
@@ -140,6 +146,39 @@ describe("barber home: their own chair", () => {
     expect(names).toContain("Mine");
     // The colleague's client must not appear, by name or by count.
     expect(names).not.toContain("NotMine");
+  });
+
+  it("🔴 a booking into one of his specials carries the chip flags - this is the only book an employee sees", async () => {
+    // His regular hours: 9-5 every day.
+    const hours = await request(app)
+      .put(`/api/booking/staff/${chairA}/availability`)
+      .set("Cookie", ownerCookie)
+      .send({
+        rules: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({
+          weekday,
+          startMin: 9 * 60,
+          endMin: 17 * 60,
+        })),
+      });
+    expect(hours.status).toBe(200);
+    const late = await makeAppointment(chairA, todayAtUtc(20), "LateSpecial", "targeted_slot");
+    const lunch = await makeAppointment(chairA, todayAtUtc(13), "LunchSpecial", "targeted_slot");
+    const plain = await makeAppointment(chairA, todayAtUtc(11), "Plain");
+
+    const w = window();
+    const res = await request(app)
+      .get(`/api/barber/home?from=${encodeURIComponent(w.from)}&to=${encodeURIComponent(w.to)}`)
+      .set("Cookie", barberCookie);
+    expect(res.status).toBe(200);
+    type Row = { id: string; special: boolean; afterHours: boolean };
+    const byId = new Map((res.body.today as Row[]).map((r) => [r.id, r]));
+    expect(byId.get(late.id)).toMatchObject({ special: true, afterHours: true });
+    expect(byId.get(lunch.id)).toMatchObject({ special: true, afterHours: false });
+    expect(byId.get(plain.id)).toMatchObject({ special: false, afterHours: false });
+
+    await prisma.appointment.deleteMany({
+      where: { id: { in: [late.id, lunch.id, plain.id] } },
+    });
   });
 
   it("ignores a staffId supplied by the client (no reading a colleague's book)", async () => {

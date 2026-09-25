@@ -110,11 +110,15 @@ function overlapsWindow(row: AgendaRow, fromMs: number, toMs: number): boolean {
  * every 20 seconds. Missing a field here is a stale pill, so it covers every
  * value that drives a visible state: the span, the status pill and its check-in
  * sub-state, the money row (which flips the button to "Paid ✓"), the day-gauge
- * bucket, and the nudge counter.
+ * bucket, the nudge counter, and the Special / After hours chip by the name.
  */
 function sameRow(a: AgendaRow, b: AgendaRow): boolean {
   return (
     a.start === b.start &&
+    // Normalized: an API that predates the flags sends nothing, the new one
+    // sends false - the same chip (none), so not a change worth a re-render.
+    !!a.special === !!b.special &&
+    !!a.afterHours === !!b.afterHours &&
     a.end === b.end &&
     a.status === b.status &&
     a.clientName === b.clientName &&

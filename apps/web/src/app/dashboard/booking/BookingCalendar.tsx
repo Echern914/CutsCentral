@@ -68,7 +68,7 @@ import {
   type WaitlistBookDetail,
 } from "./WaitlistBoard";
 import { AppointmentSheet, type SheetView } from "./AppointmentSheet";
-import { AfterHoursChip } from "../_components/AfterHoursChip";
+import { SpecialChip } from "../_components/SpecialChip";
 import { BlockOffForm } from "./BlockOffForm";
 import { TierOpeningForm } from "./TierOpeningForm";
 import { useRouter } from "next/navigation";
@@ -2383,7 +2383,7 @@ export function AppointmentBlock({
           <span className={cn(NAME_WRAP_CLS, "text-[17px]")}>
             {row.clientName || "Client"}
           </span>
-          {row.afterHours && <AfterHoursChip />}
+          {row.special && <SpecialChip afterHours={row.afterHours} />}
         </span>
         <span
           aria-hidden

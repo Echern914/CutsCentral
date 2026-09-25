@@ -19,6 +19,7 @@ import { sendPushToUser } from "../messaging/push.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { trackBackgroundWork } from "../backgroundWork.js";
+import { specialKindOf, specialKinds, specialNameSuffix } from "../engines/specialBooking.js";
 import { hasPremiumAccess } from "../billing/entitlements.js";
 
 /**
@@ -816,8 +817,8 @@ async function notifyBarberBookingEventImpl(params: {
       },
     });
     if (!shop) return;
-    const appt = await runWithShop(params.shopId, (tx) =>
-      tx.appointment.findFirst({
+    const found = await runWithShop(params.shopId, async (tx) => {
+      const row = await tx.appointment.findFirst({
         // No status filter: a "canceled" event reads the row it just canceled.
         where: { id: params.appointmentId, shopId: params.shopId },
         select: {
@@ -825,13 +826,20 @@ async function notifyBarberBookingEventImpl(params: {
           startsAt: true,
           firstName: true,
           lastName: true,
+          staffId: true,
           bookedVia: true,
           service: { select: { name: true } },
           staff: { select: { name: true, userId: true } },
         },
-      }),
-    );
-    if (!appt) return;
+      });
+      if (!row) return null;
+      // Booked into one of his specials - and is that outside his hours? The
+      // same answer the calendar chip gives (engines/specialBooking.ts).
+      const kinds = await specialKinds(tx, params.shopId, shop.timezone, [row]);
+      return { appt: row, special: specialKindOf(kinds, row.id) };
+    });
+    if (!found) return;
+    const { appt, special } = found;
 
     // The barber whose chair it is, else the owner - and HIS preferences.
     // A cancel and a new booking are separately switchable, so a barber who
@@ -843,11 +851,11 @@ async function notifyBarberBookingEventImpl(params: {
     }
 
     // Booked into one of his specials: say so by the name, the same label the
-    // calendar shows, so he knows before he opens it that this is after hours.
-    const afterHours = appt.bookedVia === "targeted_slot" ? " (After hours)" : "";
+    // calendar shows ("After hours", or "Special" for one inside his hours),
+    // so he knows before he opens it.
     const who =
       ([appt.firstName, appt.lastName].filter(Boolean).join(" ") || "A customer") +
-      afterHours;
+      specialNameSuffix(special);
     const when = formatApptTime(appt.startsAt, shop.timezone);
     const what = `${appt.service.name} with ${appt.staff.name}`;
     const body =

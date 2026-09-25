@@ -153,8 +153,14 @@ export interface AgendaRow {
    */
   syncedExternal?: boolean;
   /**
-   * Booked INTO one of the barber's specials (a targeted slot). Shows the
-   * "After hours" chip by the client's name. Native appointment rows only.
+   * Booked INTO one of the barber's specials (a targeted slot): a chip by the
+   * client's name. Native appointment rows only. Cleared when the CUSTOMER
+   * moves it to a regular time through their manage link.
+   */
+  special?: boolean;
+  /**
+   * That special starts outside the barber's regular hours, so the chip says
+   * "After hours" rather than "Special". Only ever true when `special` is.
    */
   afterHours?: boolean;
   /**
