@@ -483,7 +483,7 @@ async function deliverRecipient(params: {
         // Push has no provider message id and no delivery ledger, but it gets
         // the same claim check: a worker whose claim aged out mid-send must
         // not write over whatever its successor has since decided.
-        return (await settleSent({ rowId: row.id, claimToken: params.claimToken, now }))
+        return (await settleSent({ rowId: row.id, claimToken: params.claimToken, now: params.clock() }))
           ? "sent"
           : "stale_claim";
       }
@@ -554,7 +554,7 @@ async function deliverRecipient(params: {
       const settled = await settleSent({
         rowId: row.id,
         claimToken: params.claimToken,
-        now,
+        now: params.clock(),
         messageId: result.id,
         delivery: { kind: "broadcast", shopId: ctx.shopId, clientId: client.id },
       });
@@ -906,6 +906,14 @@ async function transientAmbiguousPush(
 async function settleSent(params: {
   rowId: string;
   claimToken: string;
+  /**
+   * 🔴 THIS ROW'S settlement instant (`clock()`), NOT the pass start. It
+   * becomes `sentAt`, and My ChairBack's bell counts a send as unread when its
+   * sentAt is after the customer's read marker - so a row settled late in a
+   * pass must carry a later time than one the customer already opened.
+   * Stamping every row with the pass start let a send that landed after the
+   * list was read count as read.
+   */
   now: Date;
   messageId?: string;
   delivery?: { kind: string; shopId: string; clientId: string };

@@ -5,6 +5,7 @@ import { Screen } from "@/src/customer/Screen";
 import { errorCopy } from "@/src/customer/api";
 import { ANNOUNCEMENTS_PATH, readThrough, sentLabel, type Announcement, type Announcements } from "@/src/customer/announcements";
 import { color, space } from "@/src/customer/theme";
+import { useAnnouncementWake } from "@/src/customer/useAnnouncementWake";
 import { Avatar, EmptyState, ErrorState, Group, Placeholder, StaleBanner, Txt } from "@/src/customer/ui";
 
 /**
@@ -19,6 +20,8 @@ import { Avatar, EmptyState, ErrorState, Group, Placeholder, StaleBanner, Txt } 
 export default function AnnouncementsScreen() {
   const { api } = useCustomer();
   const res = useResource<Announcements>(ANNOUNCEMENTS_PATH);
+  // A new one arriving while this is open (or on top when the app wakes).
+  useAnnouncementWake(res.reload);
   const data = res.data;
 
   // Which ones were new when they were shown, kept for this visit: after the

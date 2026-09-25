@@ -1,10 +1,13 @@
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 import { mintCustomerSession } from "../auth/customerSession.js";
-import { pushLandingFor } from "../engines/broadcastWorker.js";
+import { pushLandingFor, runBroadcastWorker } from "../engines/broadcastWorker.js";
+import { queueBroadcast } from "../engines/broadcast.js";
+import { __setExpoSenderForTests } from "../messaging/push.js";
+import { mergeClients } from "../services/client.js";
 
 /**
  * /api/me/announcements - the customer's bell.
@@ -403,6 +406,150 @@ describe("POST /api/me/announcements/read", () => {
     await markRead(X.token).expect(200);
     const after = await prisma.customerAccount.findUniqueOrThrow({ where: { id: Y.id }, select: { announcementsSeenAt: true } });
     expect(after.announcementsSeenAt).toEqual(before.announcementsSeenAt);
+  });
+});
+
+/**
+ * Through the REAL freeze and worker, not hand-written rows: what a barber's
+ * "App notification" (the composer's default) actually does for a customer
+ * whose only device is the one My ChairBack registered on their account.
+ */
+describe("a real push broadcast, end to end", () => {
+  let shopD: string;
+  const pushed: string[] = [];
+
+  beforeAll(async () => {
+    shopD = (
+      await prisma.shop.create({
+        data: {
+          ownerId,
+          name: "Delta Barbers",
+          slug: `ann-${randomToken(6)}`.toLowerCase(),
+          bookingMode: "native",
+          webhookSecret: randomToken(),
+          compAccess: true,
+          timezone: "America/New_York",
+        },
+        select: { id: true },
+      })
+    ).id;
+  });
+
+  beforeEach(() => {
+    pushed.length = 0;
+    __setExpoSenderForTests({ send: async (to) => void pushed.push(to) });
+  });
+
+  afterEach(() => {
+    __setExpoSenderForTests(undefined);
+  });
+
+  /** A customer of Delta whose only device is on their My ChairBack account. */
+  async function appCustomer(opts: { pushEnabled?: boolean } = {}) {
+    const phone = randomPhone();
+    const c = await client(shopD, phone);
+    const me = await account(phone);
+    if (opts.pushEnabled === false) {
+      await prisma.customerAccount.update({ where: { id: me.id }, data: { pushEnabled: false } });
+    }
+    const token = `ExponentPushToken[${randomToken(12)}]`;
+    await prisma.customerDevice.create({ data: { accountId: me.id, expoPushToken: token, platform: "ios" } });
+    // Their first read links the record, as opening the app does.
+    await get(me.token).expect(200);
+    return { ...me, clientId: c.id, device: token };
+  }
+
+  async function sendPush(body: string) {
+    const b = await prisma.broadcast.create({
+      data: { shopId: shopD, createdByUserId: ownerId, channel: "push", audienceTiers: [], body, status: "DRAFT" },
+      select: { id: true },
+    });
+    const outcome = await queueBroadcast({ shopId: shopD, broadcastId: b.id });
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    return b.id;
+  }
+
+  const rowFor = (broadcastId: string, clientId: string) =>
+    prisma.broadcastSend.findUniqueOrThrow({ where: { broadcastId_clientId: { broadcastId, clientId } } });
+
+  it("reaches an app-only customer's phone, and stays in their Announcements", async () => {
+    const me = await appCustomer();
+    const b = await sendPush("Closed Monday for the holiday");
+    // Frozen as reachable, not written off as "hasn't installed the app".
+    expect((await rowFor(b, me.clientId)).status).toBe("PENDING");
+
+    await runBroadcastWorker({ shopId: shopD });
+    expect((await rowFor(b, me.clientId)).status).toBe("SENT");
+    expect(pushed).toContain(me.device);
+    expect((await get(me.token)).body).toMatchObject({ announcements: [{ id: b }], unreadCount: 1 });
+  });
+
+  it("a customer who switched notifications off is still left out, as delivery would", async () => {
+    const me = await appCustomer({ pushEnabled: false });
+    // Somebody reachable, so the blast itself is not refused as "no recipients".
+    await appCustomer();
+    const b = await sendPush("Walk-ins welcome Saturday");
+    expect(await rowFor(b, me.clientId)).toMatchObject({ status: "SKIPPED", reason: "no_app" });
+    await runBroadcastWorker({ shopId: shopD });
+    expect(pushed).not.toContain(me.device);
+    expect(await idsOf(me.token)).not.toContain(b);
+  });
+
+  it("a send that settles after the list was read is still new, even within one worker pass", async () => {
+    const me = await appCustomer();
+    const first = await sendPush("Open late Friday");
+    const second = await sendPush("Correction: open late THURSDAY");
+
+    // One pass settles both, one after the other. Each row carries the moment
+    // IT settled - so marking read through the first (what the customer saw
+    // when its push brought them in) leaves the second one new.
+    await runBroadcastWorker({ shopId: shopD });
+    const a = await rowFor(first, me.clientId);
+    const z = await rowFor(second, me.clientId);
+    expect(a.status).toBe("SENT");
+    expect(z.status).toBe("SENT");
+    expect(z.sentAt!.getTime()).toBeGreaterThan(a.sentAt!.getTime());
+
+    await markRead(me.token, { through: a.sentAt!.toISOString() }).expect(200);
+    const after = (await get(me.token)).body;
+    expect(after.announcements.map((x: { id: string }) => x.id)).toEqual([second, first]);
+    expect(after.unreadCount).toBe(1);
+  });
+});
+
+describe("a shop merging duplicate records", () => {
+  it("keeps what reached either record in the customer's list, once each", async () => {
+    const phone = randomPhone();
+    const winner = await client(shopC, phone);
+    // The duplicate carries a different number, so it never linked on its own.
+    const loser = await client(shopC, randomPhone());
+    const me = await account(phone);
+    const toLoser = await broadcast(shopC, {
+      body: "Sent to the duplicate",
+      queuedAt: ago(40 * 60_000),
+      sends: [{ clientId: loser.id, status: "SENT" }],
+    });
+    const toBoth = await broadcast(shopC, {
+      body: "Sent to both records",
+      queuedAt: ago(30 * 60_000),
+      sends: [
+        { clientId: winner.id, status: "SENT" },
+        { clientId: loser.id, status: "SENT" },
+      ],
+    });
+    expect(await idsOf(me.token)).toEqual([toBoth]);
+
+    const merged = await mergeClients(shopC, winner.id, loser.id);
+    expect(merged.ok).toBe(true);
+    expect(await idsOf(me.token)).toEqual([toBoth, toLoser]);
+
+    // Anything the archived duplicate is sent AFTER the merge is not theirs.
+    const afterMerge = await broadcast(shopC, {
+      body: "After the merge",
+      queuedAt: new Date(Date.now() + 1000),
+      sends: [{ clientId: loser.id, status: "SENT" }],
+    });
+    expect(await idsOf(me.token)).not.toContain(afterMerge);
   });
 });
 

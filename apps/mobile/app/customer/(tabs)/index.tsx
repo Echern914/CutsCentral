@@ -4,6 +4,7 @@ import { useRegisterDevice, useResource } from "@/src/customer/CustomerProvider"
 import { Screen } from "@/src/customer/Screen";
 import { errorCopy } from "@/src/customer/api";
 import { ANNOUNCEMENTS_PATH, type Announcements } from "@/src/customer/announcements";
+import { useAnnouncementWake } from "@/src/customer/useAnnouncementWake";
 import { greeting } from "@/src/customer/format";
 import { openAppointment, openDirections, openManage, openStorefront } from "@/src/customer/navigate";
 import { useSavedShopActions } from "@/src/customer/savedShops";
@@ -44,6 +45,8 @@ export default function HomeScreen() {
   // The bell's count. Its own request, so an API older than the bell (or a
   // failed call) costs only the badge - never the home.
   const announcements = useResource<Announcements>(ANNOUNCEMENTS_PATH);
+  // Back from the background, or a push while open: focus alone would miss both.
+  useAnnouncementWake(announcements.reload);
   useRegisterDevice();
 
   const data = home.data;

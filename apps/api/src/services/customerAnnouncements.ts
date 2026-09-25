@@ -1,4 +1,4 @@
-import { runAsOwner } from "@chairback/db";
+import { runAsOwner, type Prisma } from "@chairback/db";
 import { syncCustomerLinks } from "./customerIdentity.js";
 
 /**
@@ -45,12 +45,21 @@ export async function announcementsForAccount(
   // is its client's shop, so a linked client id can only ever bring that
   // client's own shop's broadcasts.
   //
-  // Timed by the SEND's sentAt - when it reached this client - not by when
-  // the barber pressed the button: a row that settles after the customer last
+  // Timed by the SEND's sentAt - the moment the worker settled THAT row
+  // (broadcastWorker settleSent), not when the barber pressed the button or
+  // when the worker's pass began: a row that settles after the customer last
   // looked is new to them, however early the blast was queued.
-  const rows = await runAsOwner((tx) =>
-    tx.broadcastSend.findMany({
-      where: { clientId: { in: links.map((l) => l.clientId) }, status: "SENT", sentAt: { not: null } },
+  const rows = await runAsOwner(async (tx) => {
+    const merged = await mergedInto(tx, links);
+    return tx.broadcastSend.findMany({
+      where: {
+        OR: [
+          { clientId: { in: links.map((l) => l.clientId) } },
+          ...merged.map((m) => ({ clientId: m.clientId, sentAt: { lte: m.mergedAt } })),
+        ],
+        status: "SENT",
+        sentAt: { not: null },
+      },
       orderBy: [{ sentAt: "desc" }, { id: "desc" }],
       // Two profiles at one shop (a parent and a child) are two rows of one
       // broadcast; the extra room keeps the de-dupe below from coming up short.
@@ -60,8 +69,8 @@ export async function announcementsForAccount(
         sentAt: true,
         broadcast: { select: { subject: true, body: true, shop: { select: { name: true, logoUrl: true } } } },
       },
-    }),
-  );
+    });
+  });
 
   const seen = new Set<string>();
   const announcements: CustomerAnnouncement[] = [];
@@ -82,6 +91,46 @@ export async function announcementsForAccount(
   const since = account.announcementsSeenAt;
   const unreadCount = announcements.filter((a) => since === null || new Date(a.sentAt) > since).length;
   return { announcements, unreadCount };
+}
+
+/** How many merges deep a chain is followed (A into B into C...). */
+const MERGE_HOPS = 5;
+
+/**
+ * The duplicates a shop MERGED INTO one of these linked records, each with the
+ * moment it was merged.
+ *
+ * A merge moves a record's visits and bookings onto the survivor but leaves
+ * its BroadcastSend rows where they are - on purpose: they are the barber's
+ * frozen per-blast report and the worker's live queue, and re-pointing them
+ * would rewrite past totals or redirect a send in flight. So the bell reads
+ * them where they are. Only sends from BEFORE the merge: the shop ruled the
+ * two records one person at that moment (a merge of a pair marked "different
+ * people" is refused), and says nothing about whoever the archived record
+ * might reach afterwards.
+ */
+async function mergedInto(
+  tx: Prisma.TransactionClient,
+  links: { clientId: string; shopId: string }[],
+): Promise<{ clientId: string; mergedAt: Date }[]> {
+  const shopIds = [...new Set(links.map((l) => l.shopId))];
+  const known = new Set(links.map((l) => l.clientId));
+  const out: { clientId: string; mergedAt: Date }[] = [];
+  let frontier = [...known];
+  for (let hop = 0; hop < MERGE_HOPS && frontier.length > 0; hop++) {
+    const events = await tx.clientMergeEvent.findMany({
+      where: { shopId: { in: shopIds }, survivorClientId: { in: frontier } },
+      select: { mergedClientId: true, createdAt: true },
+    });
+    frontier = [];
+    for (const e of events) {
+      if (known.has(e.mergedClientId)) continue;
+      known.add(e.mergedClientId);
+      frontier.push(e.mergedClientId);
+      out.push({ clientId: e.mergedClientId, mergedAt: e.createdAt });
+    }
+  }
+  return out;
 }
 
 /**
