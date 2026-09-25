@@ -364,17 +364,23 @@ function HistoryDialog({
   );
 }
 
-/** The owner's booth rent for one member: the lines, and Record payment / Set / History. */
+/**
+ * The owner's booth rent for one member: the lines, and Record payment / Set /
+ * History. `ended`: a member who left - the owner can still settle it (a late
+ * payment, voiding a mistake) but never start or change rent again.
+ */
 export function OwnerRent({
   linkId,
   businessName,
   rent,
   onRent,
+  ended = false,
 }: {
   linkId: string;
   businessName: string;
   rent: RentSummary;
   onRent: (next: RentSummary) => void;
+  ended?: boolean;
 }) {
   const { toast } = useToast();
   const [dialog, setDialog] = useState<null | "rent" | "pay" | "history">(null);
@@ -407,14 +413,16 @@ export function OwnerRent({
             Record payment
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => setDialog("rent")}
-          className={quiet}
-          data-qa="set-rent"
-        >
-          {rent.rate || rent.scheduled ? "Change" : "Set rent"}
-        </button>
+        {!ended && (
+          <button
+            type="button"
+            onClick={() => setDialog("rent")}
+            className={quiet}
+            data-qa="set-rent"
+          >
+            {rent.rate || rent.scheduled ? "Change" : "Set rent"}
+          </button>
+        )}
         {hasRent(rent) && (
           <button
             type="button"

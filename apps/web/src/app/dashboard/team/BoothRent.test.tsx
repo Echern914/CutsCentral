@@ -72,13 +72,13 @@ describe("the rent card", () => {
   it("🔴 shows this week AND the whole balance, with the oldest unpaid week", () => {
     view(behind);
     expect(screen.getByText("$150 / week")).toBeTruthy();
-    expect(qa("rent-current")!.textContent).toBe("This week (Sep 21–27): $150 due");
+    expect(qa("rent-current")!.textContent).toBe("This week (Mon Sep 21 – Sun Sep 27): $150 due");
     expect(qa("rent-total")!.textContent).toBe("Owes $300 in total · unpaid since Sep 14");
   });
 
   it("a partly paid week says what's left of it", () => {
     view({ ...behind, current: { ...behind.current!, paidCents: 5000, dueCents: 10000 } });
-    expect(qa("rent-current")!.textContent).toBe("This week (Sep 21–27): $100 of $150 due");
+    expect(qa("rent-current")!.textContent).toBe("This week (Mon Sep 21 – Sun Sep 27): $100 of $150 due");
   });
 
   it("paid ahead shows a credit; fully paid says so", () => {
@@ -87,6 +87,27 @@ describe("the rent card", () => {
     expect(qa("rent-total")!.textContent).toBe("$100 credit (paid ahead)");
     view(paid);
     expect(screen.getAllByText("All paid up")).toHaveLength(1);
+  });
+
+  it("🔴 a period reads as the rent's own days, not the calendar's", () => {
+    // Rent that started on a Thursday: its week is Thursday to Wednesday...
+    view({
+      ...behind,
+      current: { start: "2026-09-24", end: "2026-09-30", amountCents: 15000, paidCents: 0, dueCents: 15000 },
+      scheduled: { amountCents: null, period: null, startsOn: "2026-10-01" },
+    });
+    expect(qa("rent-current")!.textContent).toBe("This week (Thu Sep 24 – Wed Sep 30): $150 due");
+    // ...and a stop names the first day with no rent.
+    expect(qa("rent-next")!.textContent).toBe("No rent from Thu, Oct 1");
+  });
+
+  it("a month from the 15th reads as the 15th to the 14th", () => {
+    view({
+      ...behind,
+      rate: { amountCents: 60000, period: "MONTHLY", since: "2026-08-15" },
+      current: { start: "2026-09-15", end: "2026-10-14", amountCents: 60000, paidCents: 0, dueCents: 60000 },
+    });
+    expect(qa("rent-current")!.textContent).toBe("This month (Sep 15 – Oct 14): $600 due");
   });
 
   it("a change that hasn't started yet is shown with its date", () => {
@@ -256,6 +277,28 @@ describe("the rules a correction can't break", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(screen.getByText(/Pick Thu, Oct 1 or later/)).toBeTruthy();
     expect(setRentAction).not.toHaveBeenCalled();
+  });
+});
+
+describe("a member who left (owner's side)", () => {
+  it("🔴 can be settled - a late payment, History with Void - but rent can't be set or changed", async () => {
+    rentHistoryAction.mockResolvedValue({
+      summary: { ...behind, rate: null, current: null },
+      payments: [{ id: "p1", amountCents: 15000, paidOn: "2026-09-21", method: "cash", note: null, voided: false, voidedOn: null }],
+      rates: [
+        { id: "r1", amountCents: 15000, period: "WEEKLY", startsOn: "2026-09-14", status: "active", voidedOn: null },
+        { id: "r2", amountCents: null, period: null, startsOn: "2026-10-01", status: "active", voidedOn: null },
+      ],
+    } satisfies RentHistory);
+    const departed = { ...behind, rate: null, current: null };
+    render(<OwnerRent linkId="tl1" businessName="Joe's Shop" rent={departed} onRent={vi.fn()} ended />);
+    expect(qa("set-rent")).toBeNull();
+    expect(qa("record-payment")).toBeTruthy();
+    fireEvent.click(qa("rent-history")!);
+    await waitFor(() => expect(document.querySelectorAll('[data-qa="rent-payment"]')).toHaveLength(1));
+    // A payment can be voided; the stop that ended the rent can't.
+    expect(screen.getByRole("button", { name: "Void the $150 payment from Mon, Sep 21" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Void the rent entry/ })).toBeNull();
   });
 });
 

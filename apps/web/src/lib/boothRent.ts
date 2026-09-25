@@ -91,10 +91,18 @@ export function monthDay(ymd: string): string {
   return day(ymd).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
-/** "Sep 21–27", or "Sep 28–Oct 4" across a month. */
+/** "Thu, Sep 24" -> "Thu Sep 24": a weekday before the date, no comma. */
+const weekdayDay = (ymd: string) =>
+  day(ymd).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }).replace(",", "");
+
+/**
+ * A rent period's days. Periods run from the rent's START date, not the
+ * calendar, so a week names its weekdays - "Thu Sep 24 – Wed Sep 30" - rather
+ * than reading like Monday to Sunday. Longer periods: "Sep 15 – Oct 14".
+ */
 export function dayRange(start: string, end: string): string {
-  const sameMonth = start.slice(0, 7) === end.slice(0, 7);
-  return `${monthDay(start)}–${sameMonth ? String(Number(end.slice(8, 10))) : monthDay(end)}`;
+  const days = (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000;
+  return days <= 6 ? `${weekdayDay(start)} – ${weekdayDay(end)}` : `${monthDay(start)} – ${monthDay(end)}`;
 }
 
 /** Anything to show at all: rent now or coming, money owed or ahead, a payment. */
@@ -105,7 +113,7 @@ export function hasRent(r: RentSummary): boolean {
 export interface RentLines {
   /** "$150 / week", or "Not set". */
   rate: string;
-  /** "This week (Sep 21–27): $150 due". */
+  /** "This week (Thu Sep 24 – Wed Sep 30): $150 due". */
   current: string | null;
   /** The whole balance, never just this period's. */
   total: { label: string; tone: "owing" | "credit" | "settled" } | null;
@@ -143,7 +151,8 @@ export function rentLines(r: RentSummary, who: "owner" | "member"): RentLines {
   let next: string | null = null;
   const s = r.scheduled;
   if (s) {
-    if (s.amountCents === null || s.period === null) next = `Stops on ${shortDay(s.startsOn)}`;
+    // The first day with no rent - the day before it is the last one owed.
+    if (s.amountCents === null || s.period === null) next = `No rent from ${shortDay(s.startsOn)}`;
     else if (r.rate) next = `Changes to ${describeRate(s.amountCents, s.period)} on ${shortDay(s.startsOn)}`;
     else next = `Starts ${shortDay(s.startsOn)} at ${describeRate(s.amountCents, s.period)}`;
   }

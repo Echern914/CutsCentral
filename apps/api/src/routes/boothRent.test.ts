@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma, runAsOwner, type Prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
-import { rentSummary, setRent, voidRate as voidRateEntry } from "../services/boothRent.js";
+import { rateHistory, rentSummary, setRent, voidRate as voidRateEntry } from "../services/boothRent.js";
 
 /**
  * Booth rent: a manual tracker between a team's owner and one independent
@@ -292,6 +292,67 @@ describe("both sides", () => {
   });
 });
 
+describe("the live checklist, exactly: $1 a week from Thu Sep 17, checked Thu Sep 24", () => {
+  // Two periods have begun (Sep 17-23, Sep 24-30), so $2 is owed. Pay $1, pay
+  // $3 (a $2 credit), void the $3: $2 - $1 = $1 is owed again - on BOTH sides.
+  let seqLink: string;
+  let seqCookie: string;
+  const url = (path: string) => `/api/team/links/${seqLink}${path}`;
+  const bothSides = async () => {
+    const [ownerList, ownerHistory, memberList, memberHistory] = await Promise.all([
+      request(app).get("/api/team/links").set("Cookie", snowCookie),
+      request(app).get(url("/rent")).set("Cookie", snowCookie),
+      request(app).get("/api/teams").set("Cookie", seqCookie),
+      request(app).get(`/api/teams/${seqLink}/rent`).set("Cookie", seqCookie),
+    ]);
+    const ownerCard = ownerList.body.active.find((a: { id: string }) => a.id === seqLink).rent;
+    const memberCard = memberList.body.links.find((l: { id: string }) => l.id === seqLink).rent;
+    // Four views, one set of numbers.
+    expect(ownerHistory.body.summary).toEqual(ownerCard);
+    expect(memberCard).toEqual(ownerCard);
+    expect(memberHistory.body.summary).toEqual(ownerCard);
+    return ownerCard as { balanceCents: number; creditCents: number; unpaid: { start: string; dueCents: number }[] };
+  };
+  const payDollars = (dollars: number) =>
+    request(app)
+      .post(url("/rent/payments"))
+      .set("Cookie", snowCookie)
+      .send({ amountCents: dollars * 100, date: TODAY, method: "cash", clientRef: randomToken(8) });
+
+  beforeAll(async () => {
+    seqCookie = await signup(`rent-seq-${tag}@test.chairback`, "Seq");
+    await createShop(seqCookie, `Rent Seq ${tag}`);
+    seqLink = (await request(app).post("/api/teams/join").set("Cookie", seqCookie).send({ team: team.id })).body.id;
+    await request(app).post(url("/approve")).set("Cookie", snowCookie);
+  });
+
+  it("🔴 $2 owed, pay $1, pay $3, void the $3: $1 is still owed on the owner's and the barber's views", async () => {
+    const start = await request(app)
+      .put(url("/rent"))
+      .set("Cookie", snowCookie)
+      .send({ amountCents: 100, period: "WEEKLY", startsOn: "2026-09-17" });
+    expect(start.status).toBe(200);
+    expect(await bothSides()).toMatchObject({ balanceCents: 200, creditCents: 0 });
+
+    expect((await payDollars(1)).status).toBe(201);
+    const afterOne = await bothSides();
+    expect(afterOne).toMatchObject({ balanceCents: 100, creditCents: 0 });
+    // The $1 cleared the OLDER week; this week is the one still due.
+    expect(afterOne.unpaid).toEqual([expect.objectContaining({ start: "2026-09-24", dueCents: 100 })]);
+
+    const three = await payDollars(3);
+    expect(three.status).toBe(201);
+    expect(await bothSides()).toMatchObject({ balanceCents: 0, creditCents: 200 });
+
+    const history = await request(app).get(url("/rent")).set("Cookie", snowCookie);
+    const threeId = history.body.payments.find((p: { amountCents: number }) => p.amountCents === 300).id;
+    expect((await request(app).post(url(`/rent/payments/${threeId}/void`)).set("Cookie", snowCookie)).status).toBe(200);
+    const afterVoid = await bothSides();
+    expect(afterVoid).toMatchObject({ balanceCents: 100, creditCents: 0 });
+    expect(afterVoid.unpaid).toEqual([expect.objectContaining({ start: "2026-09-24", dueCents: 100 })]);
+  });
+});
+
 describe("leaving", () => {
   it("🔴 rent stops at the end of this week; what's owed and every payment stay", async () => {
     expect((await request(app).post(`/api/teams/${linkId}/leave`).set("Cookie", joeCookie)).status).toBe(200);
@@ -322,13 +383,63 @@ describe("leaving", () => {
     expect(mine.body.links.find((l: { id: string }) => l.id === linkId)).toBeUndefined();
   });
 
-  it("🔴 and only read it: nothing can be recorded, changed or voided on it", async () => {
-    const history = (await ownerView()).body as { payments: { id: string }[]; rates: { id: string }[] };
-    expect((await pay(snowCookie, { amountCents: 100 })).status).toBe(404);
+  it("🔴 the owner can still settle it: a late payment, and a correction - audited, and both sides agree", async () => {
+    const late = await pay(snowCookie, { amountCents: 5000, note: "paid after leaving" });
+    expect(late.status).toBe(201);
+    expect(late.body.rent).toMatchObject({ creditCents: 15000, rate: { amountCents: 15000 } });
+    const mine = await request(app).get("/api/teams").set("Cookie", joeCookie);
+    expect(mine.body.past.find((p: { id: string }) => p.id === linkId).rent).toEqual(late.body.rent);
+
+    // Entered by mistake: void it. It stays in both histories, dated.
+    const lateId = (await ownerView()).body.payments.find((p: { note: string | null }) => p.note === "paid after leaving").id;
+    expect((await voidPayment(snowCookie, lateId)).body.rent.creditCents).toBe(10000);
+    const theirs = await request(app).get(`/api/teams/${linkId}/rent`).set("Cookie", joeCookie);
+    expect(theirs.body.payments.find((p: { id: string }) => p.id === lateId)).toMatchObject({ voided: true, voidedOn: TODAY });
+    expect(theirs.body).toEqual((await ownerView()).body);
+    expect(await paymentRows()).toBe(5);
+  });
+
+  it("🔴 settling never restarts rent, restores the team, or opens anything else", async () => {
+    // Rent can't be started or changed on it...
     expect((await putRent(snowCookie, { amountCents: 100, period: "WEEKLY" })).status).toBe(404);
-    expect((await voidPayment(snowCookie, history.payments[0]!.id)).status).toBe(404);
-    expect((await voidRate(snowCookie, history.rates.at(-1)!.id)).status).toBe(404);
-    expect(await paymentRows()).toBe(4);
+    // ...the stop that ended it can't be voided...
+    const rates = (await ownerView()).body.rates as { id: string; amountCents: number | null; status: string }[];
+    const stop = rates.find((r) => r.amountCents === null && r.status === "active")!;
+    expect((await voidRate(snowCookie, stop.id)).body.error).toBe("stop_not_voidable");
+    // ...still ENDED, still no card, no numbers, no sharing - only the rent.
+    const row = await runAsOwner((tx) => tx.teamLink.findUniqueOrThrow({ where: { id: linkId } }));
+    expect(row.status).toBe("ENDED");
+    const owner = await request(app).get("/api/team/links").set("Cookie", snowCookie);
+    expect(owner.body.active.find((a: { id: string }) => a.id === linkId)).toBeUndefined();
+    expect(Object.keys(owner.body.past.find((p: { id: string }) => p.id === linkId)).sort()).toEqual([
+      "business",
+      "endedAt",
+      "id",
+      "rent",
+      "status",
+    ]);
+    // Nothing is owed after Sep 30: the rent still stops Oct 1.
+    expect((await ownerView()).body.summary.unpaid).toEqual([]);
+  });
+
+  it("🔴 the former member only reads; strangers get nothing", async () => {
+    for (const cookie of [joeCookie, strangerCookie]) {
+      expect((await pay(cookie, { amountCents: 100 })).status).toBe(404);
+    }
+    expect((await pay(managerCookie, { amountCents: 100 })).status).toBe(403);
+    expect((await request(app).get(`/api/teams/${linkId}/rent`).set("Cookie", strangerCookie)).status).toBe(404);
+  });
+
+  it("a link that ended with no rent ever recorded has nothing to settle", async () => {
+    const cookie = await signup(`rent-norent-${tag}@test.chairback`, "NoRent");
+    await createShop(cookie, `Rent NoRent ${tag}`);
+    const id = (await request(app).post("/api/teams/join").set("Cookie", cookie).send({ team: team.id })).body.id;
+    await request(app).post(`/api/team/links/${id}/end`).set("Cookie", snowCookie);
+    const res = await request(app)
+      .post(`/api/team/links/${id}/rent/payments`)
+      .set("Cookie", snowCookie)
+      .send({ amountCents: 100, date: TODAY, method: "cash", clientRef: randomToken(8) });
+    expect(res.status).toBe(404);
   });
 });
 
@@ -450,6 +561,12 @@ describe("over time (the service, on a set clock)", () => {
     // Stopping before it starts cancels it.
     await set("2026-10-30", null);
     expect((await summary("2026-10-30")).scheduled).toBeNull();
+    // 🔴 Neither displaced start is deleted: both stay in the history, voided
+    // on the day the change that displaced them was made (Oct 30).
+    const trail = await run((tx) => rateHistory(tx, link2));
+    for (const startsOn of ["2026-11-02", "2026-11-09"]) {
+      expect(trail.find((r) => r.startsOn === startsOn)).toMatchObject({ status: "voided", voidedOn: "2026-10-30" });
+    }
   });
 
   it("🔴 two rent changes can't interleave: the second waits for the first", async () => {
