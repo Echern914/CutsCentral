@@ -333,7 +333,9 @@ describe("🔴 Join shop - a last name or an Instagram handle, so the shop can t
   it("an approving shop's accept carries the handle onto the client", async () => {
     const phone = randomPhone();
     const me = await account({ phone });
-    const tag = randomToken(4).toLowerCase();
+    // base64url can carry "-", which no Instagram handle can: keep the tag to
+    // handle characters or the join is (rightly) refused about 1 run in 11.
+    const tag = randomToken(4).toLowerCase().replace(/[^a-z0-9]/g, "0");
     await join(me.token, { handle: otherShop.slug, firstName: `Ig${tag}`, instagram: `@ig_${tag}` });
     const req = (await savedBy(otherCookie)).requests.find((r) => r.name.startsWith(`Ig${tag}`));
     // The barber deciding who this is sees the handle the customer was asked for.
