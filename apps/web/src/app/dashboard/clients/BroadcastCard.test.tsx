@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { BroadcastCard } from "./BroadcastCard";
+import { listBroadcastsAction } from "./broadcastActions";
 
 vi.mock("./broadcastActions", () => ({
   listBroadcastsAction: vi.fn(async () => ({ ok: true, broadcasts: [] })),
@@ -57,5 +58,36 @@ describe("BroadcastCard audience", () => {
       expect(screen.queryByRole("button", { name: tier })).toBeNull();
     }
     expect(screen.getByText(/needs rewards turned on/i)).toBeTruthy();
+  });
+});
+
+describe("BroadcastCard history", () => {
+  it("says which tiers a sent message was aimed at", async () => {
+    const row = {
+      channel: "push",
+      subject: "Gold week",
+      body: "Free lineups",
+      status: "SENT",
+      recipientCount: 42,
+      sentCount: 42,
+      failedCount: 0,
+      skippedCount: 0,
+      pendingCount: 0,
+      queuedAt: null,
+      sentAt: null,
+      createdAt: "2026-09-01T00:00:00Z",
+    };
+    vi.mocked(listBroadcastsAction).mockResolvedValueOnce({
+      ok: true,
+      broadcasts: [
+        { ...row, id: "b1", audienceTiers: ["SILVER", "GOLD"] },
+        { ...row, id: "b2", subject: "Everyone", audienceTiers: [] },
+      ] as never,
+    });
+    render(<BroadcastCard rewardsEnabled />);
+
+    expect(await screen.findByText(/Gold and Silver members · 42 sent/)).toBeTruthy();
+    // An everyone-message names no group.
+    expect(screen.getAllByText(/members/)).toHaveLength(1);
   });
 });

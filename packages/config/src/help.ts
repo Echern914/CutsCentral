@@ -604,7 +604,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "promotions",
     q: "How do I run a promotion?",
-    a: "Set up a promo and it shows on your public page — and you can text it out to the clients you choose.\n\nGood for filling a specific dead window: a slow Tuesday, a new barber's first month, a holiday push.",
+    a: "Set up a promo and it shows on your public page — and you can text it out to the clients you choose: everyone, just the ones who are overdue, or only a loyalty tier such as your Gold members.\n\nGood for filling a specific dead window: a slow Tuesday, a new barber's first month, a holiday push.",
     keywords: ["promo", "promotion", "deal", "special", "discount", "sale", "offer", "blast", "campaign"],
     category: "clients",
     action: { label: "Open promotions", featureId: "promotions" },

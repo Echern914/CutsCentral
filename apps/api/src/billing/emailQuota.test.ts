@@ -85,7 +85,7 @@ beforeEach(async () => {
 
 const period = () => monthStartUtc(new Date());
 
-async function makeClient() {
+async function makeClient(tier: "GOLD" | "SILVER" = "GOLD") {
   return prisma.client.create({
     data: {
       shopId,
@@ -93,7 +93,7 @@ async function makeClient() {
       magicToken: randomToken(),
       firstName: "Client",
       email: `c${randomToken(6)}@example.com`,
-      loyaltyTier: "GOLD",
+      loyaltyTier: tier,
     },
     select: { id: true },
   });
@@ -225,6 +225,24 @@ describe("🔴 two broadcasts racing for the last of the allowance", () => {
     // shop cannot start two blasts on the same last 400 and let the second one
     // discover the problem halfway through.
     expect(await remainingMonthlyEmails(shopId)).toBe(1);
+  });
+
+  it("a tier blast reserves only the tier, not the whole book", async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { rewardsEnabled: true } });
+    await makeClient("GOLD");
+    await makeClient("GOLD");
+    for (let i = 0; i < 3; i++) await makeClient("SILVER");
+    // Room for the two Gold members and not for the five clients: a blast
+    // that counted the whole book would be refused here.
+    await leaveRemaining(2);
+    const id = await draft();
+    await prisma.broadcast.update({ where: { id }, data: { audienceTiers: ["GOLD"] } });
+
+    const res = await queueBroadcast({ shopId, broadcastId: id });
+    expect(res).toMatchObject({ ok: true, recipients: 2 });
+    const row = await prisma.broadcast.findUnique({ where: { id } });
+    expect(row!.emailsReserved).toBe(2);
+    expect(await remainingMonthlyEmails(shopId)).toBe(0);
   });
 
   it("a notification blast costs nothing, which is the point of offering it", async () => {

@@ -21,6 +21,8 @@ export interface BroadcastPreview {
 export interface BroadcastRow {
   id: string;
   channel: BroadcastChannel;
+  /** Who it was aimed at: [] = everyone, else only these loyalty tiers. */
+  audienceTiers: LoyaltyTierKey[];
   subject: string | null;
   body: string;
   status: "DRAFT" | "QUEUED" | "SENDING" | "SENT" | "PARTIAL" | "FAILED";

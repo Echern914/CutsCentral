@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import type { LoyaltyTierKey } from "@chairback/config/constants";
 import { apiSend } from "@/lib/api";
 
 export interface PromoInput {
@@ -54,17 +55,22 @@ export interface BlastSummary {
   dryRun: boolean;
 }
 
+export type BlastAudience = "all" | "atRisk" | "tiers";
+
 export async function blastPromoAction(
   promoId: string,
-  audience: "all" | "atRisk",
+  audience: BlastAudience,
   dryRun: boolean,
-): Promise<{ summary: BlastSummary | null; error?: string }> {
+  /** audience "tiers" only: which loyalty tiers to text. */
+  tiers?: LoyaltyTierKey[],
+): Promise<{ summary: BlastSummary | null; error?: string; message?: string }> {
   const res = await apiSend<BlastSummary>("POST", `/api/promos/${promoId}/blast`, {
     audience,
     dryRun,
+    ...(audience === "tiers" ? { tiers } : {}),
   });
   if (!dryRun) revalidatePath("/dashboard/promotions");
-  return { summary: res.data, error: res.error };
+  return { summary: res.data, error: res.error, message: res.message };
 }
 
 export async function recordPromoUseAction(

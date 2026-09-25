@@ -2,6 +2,8 @@
 
 import { cap, useVocab } from "@/components/VocabProvider";
 import { useState, useTransition } from "react";
+import { LOYALTY_TIERS, LOYALTY_TIER_KEYS, type LoyaltyTierKey } from "@chairback/config/constants";
+import { describeTierAudience } from "@chairback/config/tierRules";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
@@ -14,6 +16,7 @@ import {
   createPromoAction,
   deletePromoAction,
   updatePromoAction,
+  type BlastAudience,
   type BlastSummary,
   type PromoInput,
 } from "./actions";
@@ -45,6 +48,9 @@ function valueLabel(p: Promo): string {
   }
 }
 
+/** Highest first - the order a barber thinks about them in. */
+const TIERS_TOP_DOWN = [...LOYALTY_TIER_KEYS].reverse();
+
 const STATUS_STYLES: Record<Promo["status"], string> = {
   live: "bg-emerald-soft/15 text-emerald-soft",
   scheduled: "bg-gold/15 text-gold",
@@ -61,10 +67,13 @@ function fmtDate(iso: string | null): string {
 export function PromotionsManager({
   promotions,
   premiumLocked = false,
+  rewardsEnabled = false,
 }: {
   promotions: Promo[];
   /** Lapsed shop: the blast trigger carries the diamond and says so up front. */
   premiumLocked?: boolean;
+  /** Tiers exist only while rewards are on - no tier audience without them. */
+  rewardsEnabled?: boolean;
 }) {
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
@@ -110,7 +119,12 @@ export function PromotionsManager({
       ) : (
         <ul className="divide-y divide-subtle">
           {promotions.map((promo) => (
-            <PromoRow key={promo.id} promo={promo} premiumLocked={premiumLocked} />
+            <PromoRow
+              key={promo.id}
+              promo={promo}
+              premiumLocked={premiumLocked}
+              rewardsEnabled={rewardsEnabled}
+            />
           ))}
         </ul>
       )}
@@ -118,7 +132,15 @@ export function PromotionsManager({
   );
 }
 
-function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: boolean }) {
+function PromoRow({
+  promo,
+  premiumLocked,
+  rewardsEnabled,
+}: {
+  promo: Promo;
+  premiumLocked?: boolean;
+  rewardsEnabled?: boolean;
+}) {
   const vocab = useVocab();
   const { toast } = useToast();
   // No "upgrade" steering inside the iOS app (Guideline 3.1.1).
@@ -127,7 +149,16 @@ function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: bool
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [blastOpen, setBlastOpen] = useState(false);
   const [preview, setPreview] = useState<BlastSummary | null>(null);
-  const [audience, setAudience] = useState<"all" | "atRisk">("all");
+  const [audience, setAudience] = useState<BlastAudience>("all");
+  const [tiers, setTiers] = useState<LoyaltyTierKey[]>([]);
+  // "Only these tiers" with none picked is not a question the API will answer
+  // (it would otherwise read as "everyone"), so it is not one we ask.
+  const needsTier = audience === "tiers" && tiers.length === 0;
+
+  function toggleTier(t: LoyaltyTierKey) {
+    setTiers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+    setPreview(null);
+  }
 
   const dates =
     promo.status === "scheduled"
@@ -230,23 +261,45 @@ function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: bool
             <select
               value={audience}
               onChange={(e) => {
-                setAudience(e.target.value as "all" | "atRisk");
+                setAudience(e.target.value as BlastAudience);
                 setPreview(null);
               }}
               className={`mt-1 ${field}`}
             >
               <option value="all">All opted-in clients</option>
               <option value="atRisk">Only overdue (at-risk) clients</option>
+              {rewardsEnabled && <option value="tiers">Only these tiers…</option>}
             </select>
           </label>
+          {audience === "tiers" && (
+            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Tiers">
+              {TIERS_TOP_DOWN.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => toggleTier(t)}
+                  aria-pressed={tiers.includes(t)}
+                  className={cn(
+                    "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                    tiers.includes(t)
+                      ? "bg-gold/20 text-gold"
+                      : "border border-subtle text-muted hover:text-offwhite",
+                  )}
+                >
+                  {LOYALTY_TIERS[t].label}
+                </button>
+              ))}
+              {needsTier && <span className="text-xs text-muted">Pick at least one tier.</span>}
+            </div>
+          )}
           {preview === null ? (
             <button
-              disabled={pending}
+              disabled={pending || needsTier}
               onClick={() =>
                 startTransition(async () => {
-                  const r = await blastPromoAction(promo.id, audience, true);
+                  const r = await blastPromoAction(promo.id, audience, true, tiers);
                   if (r.summary) setPreview(r.summary);
-                  else toast("Could not preview", "error");
+                  else toast(r.message ?? "Could not preview", "error");
                 })
               }
               className={smallBtn}
@@ -258,13 +311,14 @@ function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: bool
               <span className="text-xs text-offwhite">
                 Would text <span className="font-semibold text-gold">{preview.sent}</span>{" "}
                 of {preview.eligible} eligible
+                {audience === "tiers" ? ` ${describeTierAudience(tiers)}` : ""}
                 {preview.skippedCap > 0 ? ` (${preview.skippedCap} over today's cap)` : ""}
               </span>
               <button
                 disabled={pending || preview.sent === 0}
                 onClick={() =>
                   startTransition(async () => {
-                    const r = await blastPromoAction(promo.id, audience, false);
+                    const r = await blastPromoAction(promo.id, audience, false, tiers);
                     setBlastOpen(false);
                     setPreview(null);
                     if (r.summary)
@@ -278,7 +332,7 @@ function PromoRow({ promo, premiumLocked }: { promo: Promo; premiumLocked?: bool
                       );
                     else if (r.error === "quiet_hours")
                       toast("Texting is paused 9pm-8am (client local time). Try again in the morning.", "error");
-                    else toast("Send failed", "error");
+                    else toast(r.message ?? "Send failed", "error");
                   })
                 }
                 className={goldBtn}

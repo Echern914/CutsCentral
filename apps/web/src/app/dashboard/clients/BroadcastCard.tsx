@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { LOYALTY_TIERS, LOYALTY_TIER_KEYS } from "@chairback/config/constants";
+import { describeTierAudience } from "@chairback/config/tierRules";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { useVocab } from "@/components/VocabProvider";
@@ -43,11 +45,10 @@ const CHANNELS: { value: BroadcastChannel; label: string; hint: string }[] = [
   { value: "email", label: "Email", hint: "Counts against your monthly allowance" },
 ];
 
-const TIERS: { value: LoyaltyTierKey; label: string }[] = [
-  { value: "GOLD", label: "Gold" },
-  { value: "SILVER", label: "Silver" },
-  { value: "BRONZE", label: "Bronze" },
-];
+/** Highest first. The labels are the ones every other rewards surface shows. */
+const TIERS: { value: LoyaltyTierKey; label: string }[] = [...LOYALTY_TIER_KEYS]
+  .reverse()
+  .map((k) => ({ value: k, label: LOYALTY_TIERS[k].label }));
 
 /**
  * What fits, per channel. Mirrors BODY_LIMITS/SUBJECT_LIMITS in the API - the
@@ -146,7 +147,7 @@ export function BroadcastCard({ rewardsEnabled = true }: { rewardsEnabled?: bool
     const who =
       tiers.length === 0
         ? `all ${reachable} of your ${vocab.clientNounPlural}`
-        : `${reachable} ${tiers.map((t) => t.toLowerCase()).join(" and ")} ${vocab.clientNounPlural}`;
+        : `${reachable} ${describeTierAudience(tiers)}`;
     const how = channel === "email" ? "an email" : "an app notification";
     // 🔴 A blast cannot be recalled. The confirm names the real number and the
     // channel, because "are you sure?" on its own tells nobody anything.
@@ -385,6 +386,9 @@ function BroadcastHistory({ rows, vocab }: { rows: BroadcastRow[]; vocab: string
               <p className="truncate text-sm text-offwhite">{b.subject || b.body}</p>
               <p className="mt-0.5 text-xs text-muted">
                 {b.channel === "email" ? "Email" : "App notification"} ·{" "}
+                {/* Who it was aimed at, so "Gold members · 42 sent" still says
+                    a year later that the rest of the book never got it. */}
+                {(b.audienceTiers?.length ?? 0) > 0 && `${describeTierAudience(b.audienceTiers)} · `}
                 {describe(b, vocab)}
               </p>
             </div>

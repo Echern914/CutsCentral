@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { apiGet } from "@/lib/api";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
+import { getMe } from "@/lib/me";
 import { PromotionsManager } from "./PromotionsManager";
 import { UpgradeCallout } from "../_components/UpgradeCallout";
 
@@ -29,6 +30,8 @@ export default async function PromotionsPage() {
   // Sequential on purpose — memoized fetch; keeps apiGet's generic intact
   // (the dual-React `cache` typing hole would otherwise any-poison the tuple).
   const locks = featureLocks(await getBillingSummary());
+  // Tiers exist only while rewards are on; the tier audience follows suit.
+  const me = await getMe();
   if (!res.ok || !res.data) {
     return <main className="p-8 text-muted">Could not load your promotions.</main>;
   }
@@ -52,7 +55,11 @@ export default async function PromotionsPage() {
           </UpgradeCallout>
         </div>
       )}
-      <PromotionsManager promotions={res.data.promotions} premiumLocked={locks.premium} />
+      <PromotionsManager
+        promotions={res.data.promotions}
+        premiumLocked={locks.premium}
+        rewardsEnabled={me.data?.rewardsEnabled ?? false}
+      />
     </main>
   );
 }
