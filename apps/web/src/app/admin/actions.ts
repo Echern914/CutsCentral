@@ -77,3 +77,29 @@ export async function markAffiliateCreditAppliedAction(operationId: string, stri
 export async function releaseAffiliateCreditAction(operationId: string): Promise<AdminResult> {
   return affiliate(`/credits/${operationId}/release`);
 }
+
+//  Partner program (cash for people with a code; the API owns every rule)
+
+async function partners(path: string, body?: unknown): Promise<AdminResult> {
+  const res = await apiSend("POST", `/api/admin-portal/partners${path}`, body ?? {});
+  revalidatePath("/admin");
+  return { ok: res.ok, error: res.error };
+}
+
+export async function createPartnerAction(name: string, code: string, email: string): Promise<AdminResult> {
+  return partners("", { name, code, email: email.trim() });
+}
+export async function setPartnerActiveAction(partnerId: string, active: boolean): Promise<AdminResult> {
+  return partners(`/${encodeURIComponent(partnerId)}/active`, { active });
+}
+/**
+ * `override` records a payment the API says is no longer covered (the partner
+ * was paused, or rewards behind it were reversed) - for when the money has
+ * already been sent by hand and the record has to say so.
+ */
+export async function markPartnerCashoutPaidAction(cashoutId: string, override = false): Promise<AdminResult> {
+  return partners(`/cashouts/${encodeURIComponent(cashoutId)}/paid`, override ? { override: true } : {});
+}
+export async function declinePartnerCashoutAction(cashoutId: string): Promise<AdminResult> {
+  return partners(`/cashouts/${encodeURIComponent(cashoutId)}/decline`);
+}

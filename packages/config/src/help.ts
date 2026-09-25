@@ -26,6 +26,7 @@
  */
 
 import { BILLING, DEFAULTS, PLANS } from "./constants.js";
+import { PARTNER_PROGRAM } from "./partnerProgram.js";
 
 export type HelpCategoryId =
   | "start"
@@ -93,6 +94,9 @@ export interface HelpAnswer {
   hidesInApp?: boolean;
 }
 
+const dollars = (cents: number) => `$${cents / 100}`;
+const partnerReward = dollars(PARTNER_PROGRAM.rewardCents);
+const partnerCashouts = PARTNER_PROGRAM.cashoutAmountsCents.map(dollars).join(" or ");
 const proPrice = `$${PLANS.pro.priceMonthlyUsd}`;
 const proAiPrice = `$${PLANS.pro_ai.priceMonthlyUsd}`;
 const proTexts = PLANS.pro.smsMonthlyQuota.toLocaleString();
@@ -622,6 +626,18 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     q: "Do I get anything for referring another barber?",
     a: "Yes. Send your referral link — they get an extra month on top of their trial the moment they sign up, and you get a free month once their first invoice clears.\n\nNo cap on how many you refer.",
     keywords: ["referral", "refer", "refer a friend", "affiliate", "free month", "invite barber", "share link"],
+    category: "clients",
+    hidesInApp: true,
+    action: { label: "Open referrals", featureId: "referrals" },
+  },
+  {
+    // The PARTNER program (partnerProgram.ts): a person's code, paid in cash.
+    // Multi-word keywords only, no primaryFor - "cash" or "code" alone must not
+    // pull payout or booking questions here.
+    id: "partner-program",
+    q: "How do partner referral codes work?",
+    a: `If someone gave you a referral code, type it when you set up your business. It's optional, and it's entered once, at signup.\n\nPartners earn ${partnerReward}, once, for each business that signs up with their code and pays for a plan. Cashout unlocks at ${PARTNER_PROGRAM.unlock.referrals} paying businesses within ${PARTNER_PROGRAM.unlock.windowDays} days of the first, in ${partnerCashouts} amounts, from the partner's earnings page.`,
+    keywords: ["referral code", "partner code", "partner program", "partner earnings", "affiliate earnings", "cash out referral", "referral money"],
     category: "clients",
     hidesInApp: true,
     action: { label: "Open referrals", featureId: "referrals" },

@@ -30,6 +30,7 @@
     "./tierPerks": "./src/tierPerks.ts",
     "./tierRules": "./src/tierRules.ts",
     "./affiliateProgram": "./src/affiliateProgram.ts",
+    "./partnerProgram": "./src/partnerProgram.ts",
     "./supportCapabilities": "./src/supportCapabilities.ts",
     "./supportEngine": "./src/supportEngine.ts",
     "./checkoutConsent": "./src/checkoutConsent.ts",

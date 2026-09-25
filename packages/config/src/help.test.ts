@@ -213,6 +213,17 @@ describe("findHelp — questions asked cold", () => {
     }
   });
 
+  // The partner program (a person's code, paid in cash) is not the legacy
+  // free-month link, and "cash out" is not a Stripe bank payout.
+  it("answers partner-code questions with the partner program, without stealing payout questions", () => {
+    expectAnswer("where do i enter my referral code", "partner-program");
+    expectAnswer("how do i cash out my referral money", "partner-program");
+    expectAnswer("what are my partner earnings", "partner-program");
+    expectAnswer("do i get anything for referring another barber", "referrals");
+    expect(findHelp("when do i get paid").answer?.id).not.toBe("partner-program");
+    expect(helpAnswerById("partner-program")?.a).toContain("$5");
+  });
+
   // The AI handles TEXTS. Someone asking about voice has to be told no, or
   // they'll buy the plan expecting a switchboard.
   it("does not let the receptionist imply it answers the phone", () => {
