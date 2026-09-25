@@ -2130,6 +2130,11 @@ interface AgendaRow {
   // id. null = uncategorized: a block, or a synced visit whose serviceName
   // matched no service. Uncategorized rows still count in the "All" total.
   categoryId: string | null;
+  // Native rows only: this booking was made INTO one of the barber's targeted
+  // slots ("specials" - the openings he publishes outside regular hours). The
+  // calendar shows "After hours" by the name. Read from the origin marker the
+  // booking write stamps (bookedVia), never guessed from the time.
+  afterHours?: boolean;
 }
 
 /**
@@ -2229,6 +2234,7 @@ type ApptAgendaRow = {
   runningLate: boolean;
   staffId: string;
   notes: string | null;
+  bookedVia: string | null;
   service: { id: string; name: string; color: string | null } | null;
   // Frozen AddOnSnapshotItem[] (see engines/addOns.ts) - JSON on the row.
   addOns: Prisma.JsonValue | null;
@@ -2474,6 +2480,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         runningLate: true,
         staffId: true,
         notes: true,
+        bookedVia: true,
         service: { select: { id: true, name: true, color: true } },
         addOns: true,
         // Chair-side checkout state + any Stripe pre-payment, so the row can
@@ -2594,6 +2601,14 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
           ? (rewardReadyByClient.get(a.clientId) ?? null)
           : null,
       categoryId: (a.service && categoryOfService.get(a.service.id)) ?? null,
+      // 🔑 The WRITE-TIME marker, not the slot link and not the clock. The
+      // TargetedSlot.bookedAppointmentId link is capacity, not history: a
+      // cancel, a declined request or an expired payment hold hands it back,
+      // and from then on the special can be re-sold, edited, turned off or
+      // deleted. "Does a special cover this time" is wrong both ways: a
+      // barber can book a regular client OVER a special (which turns it off),
+      // and a special booking he later moves is still the special he sold.
+      afterHours: a.bookedVia === "targeted_slot",
     }));
 
     // Blocked time (barber "Block Off Time") shows on the calendar too, as

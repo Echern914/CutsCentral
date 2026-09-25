@@ -200,6 +200,33 @@ describe("barber booking alerts", () => {
     expect(sms.body).toMatch(/ - \w{3}, \w{3} \d{1,2}.* \d{1,2}:\d{2}\s[AP]M$/);
   });
 
+  it("a booking INTO a special says 'After hours' by the name - and only that booking", async () => {
+    const at = futureAtHour(2, 20);
+    const pub = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({ staffId, serviceId, startsAt: at.toISOString(), durationMin: 60, price: 60 });
+    expect(pub.status).toBe(201);
+    const slot = await prisma.targetedSlot.findFirst({
+      where: { shopId, staffId, startsAt: at },
+      select: { id: true },
+    });
+    const res = await request(app).post(`/api/book/${slug}`).send({
+      staffId,
+      serviceId,
+      startsAt: at.toISOString(),
+      firstName: "Isaiah",
+      lastName: "C",
+      email: "isaiah-special@example.com",
+      targetedSlotId: slot!.id,
+    });
+    expect(res.status).toBe(201);
+    await waitFor(() => pushes.some((p) => p.payload.title === "New booking"));
+
+    const push = pushes.find((p) => p.payload.title === "New booking")!;
+    expect(push.payload.body).toContain("Isaiah C (After hours) just booked Haircut with Sam");
+  });
+
   it("approval-mode request pushes 'New booking request' with request wording", async () => {
     await request(app)
       .patch("/api/shops/me")

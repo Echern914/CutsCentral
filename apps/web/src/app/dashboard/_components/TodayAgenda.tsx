@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { resolveServiceColor } from "@chairback/config/serviceColor";
 import { NAME_WRAP_CLS, initialsOf } from "./appointmentCardStyles";
+import { AfterHoursChip } from "./AfterHoursChip";
 
 /** One row of today's agenda (the subset of /api/booking/agenda we render). */
 export interface TodayRow {
@@ -14,6 +15,8 @@ export interface TodayRow {
   price: number | null;
   status: "pending" | "upcoming" | "completed" | "canceled" | "no_show" | "blocked";
   addOns?: { id: string; name: string }[];
+  /** Booked into one of the barber's specials - "After hours" by the name. */
+  afterHours?: boolean;
 }
 
 /**
@@ -133,12 +136,15 @@ export function TodayAgenda({
                     {initialsOf(r.clientName)}
                   </span>
                   {/* Never truncated: the client's full name is the point. */}
-                  <p
-                    className={`${NAME_WRAP_CLS} flex-1 text-[17px]`}
-                    style={{ textDecoration: closed ? "line-through" : undefined }}
-                  >
-                    {r.clientName}
-                  </p>
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                    <p
+                      className={`${NAME_WRAP_CLS} text-[17px]`}
+                      style={{ textDecoration: closed ? "line-through" : undefined }}
+                    >
+                      {r.clientName}
+                    </p>
+                    {r.afterHours && <AfterHoursChip />}
+                  </div>
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 pl-[38px] text-xs text-muted">
                   {r.serviceName && (

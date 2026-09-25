@@ -32,6 +32,7 @@ import {
   type DetailHistoryItem,
 } from "./actions";
 import type { AgendaRow } from "./page";
+import { AfterHoursChip } from "../_components/AfterHoursChip";
 
 /** Same local alias the sibling booking forms use - the provider's own
  * `Toast` interface is a toast OBJECT and is not exported. */
@@ -734,6 +735,7 @@ function Hero({
               ↻ Weekly
             </span>
           )}
+          {row.afterHours && <AfterHoursChip className="px-2.5 py-1" />}
         </div>
       </div>
 

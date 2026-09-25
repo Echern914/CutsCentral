@@ -825,6 +825,7 @@ async function notifyBarberBookingEventImpl(params: {
           startsAt: true,
           firstName: true,
           lastName: true,
+          bookedVia: true,
           service: { select: { name: true } },
           staff: { select: { name: true, userId: true } },
         },
@@ -841,8 +842,12 @@ async function notifyBarberBookingEventImpl(params: {
       return;
     }
 
+    // Booked into one of his specials: say so by the name, the same label the
+    // calendar shows, so he knows before he opens it that this is after hours.
+    const afterHours = appt.bookedVia === "targeted_slot" ? " (After hours)" : "";
     const who =
-      [appt.firstName, appt.lastName].filter(Boolean).join(" ") || "A customer";
+      ([appt.firstName, appt.lastName].filter(Boolean).join(" ") || "A customer") +
+      afterHours;
     const when = formatApptTime(appt.startsAt, shop.timezone);
     const what = `${appt.service.name} with ${appt.staff.name}`;
     const body =

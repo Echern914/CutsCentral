@@ -153,6 +153,11 @@ export interface AgendaRow {
    */
   syncedExternal?: boolean;
   /**
+   * Booked INTO one of the barber's specials (a targeted slot). Shows the
+   * "After hours" chip by the client's name. Native appointment rows only.
+   */
+  afterHours?: boolean;
+  /**
    * Block rows only: how many IDENTICAL external blocks this row stands for.
    * 1 (or absent) is the normal case. Higher means the external calendar holds
    * several byte-identical blocks for the same span — shown as a "×N" chip
