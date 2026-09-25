@@ -806,6 +806,10 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
       "share",
       "free month",
       "referral link",
+      // The partner program's card lives on this page too.
+      "referral code",
+      "partner earnings",
+      "affiliate earnings",
     ],
     description: "Send your link — they get an extra month, you get one free",
     href: "/dashboard/referrals",

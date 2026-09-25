@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { apiGet, apiSend } from "@/lib/api";
 import { getMe } from "@/lib/me";
+import { homeWithoutShop } from "@/lib/partnerHome";
 import { StatCards, type Stats } from "./_components/StatCards";
 import { HomeQrCard } from "./_components/HomeQrCard";
 import { TrendsChart, type TrendPoint } from "./_components/TrendsChart";
@@ -128,7 +129,7 @@ export default async function DashboardPage({
   const locks = featureLocks(await getBillingSummary());
 
   if (shopRes.status === 401) redirect("/login");
-  if (shopRes.status === 404) redirect("/onboarding");
+  if (shopRes.status === 404) redirect(await homeWithoutShop());
   // A transient API failure (5xx) must NOT bounce an authenticated barber to
   // the login page - let error.tsx render its "Try again" instead.
   if (!shopRes.ok || !shopRes.data) throw new Error("Failed to load your shop");

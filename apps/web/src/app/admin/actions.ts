@@ -87,11 +87,19 @@ async function partners(path: string, body?: unknown): Promise<AdminResult> {
 }
 
 export async function createPartnerAction(name: string, code: string, email: string): Promise<AdminResult> {
-  return partners("", { name, code, ...(email.trim() ? { email: email.trim() } : {}) });
+  return partners("", { name, code, email: email.trim() });
 }
 export async function setPartnerActiveAction(partnerId: string, active: boolean): Promise<AdminResult> {
   return partners(`/${encodeURIComponent(partnerId)}/active`, { active });
 }
-export async function markPartnerCashoutPaidAction(cashoutId: string): Promise<AdminResult> {
-  return partners(`/cashouts/${encodeURIComponent(cashoutId)}/paid`);
+/**
+ * `override` records a payment the API says is no longer covered (the partner
+ * was paused, or rewards behind it were reversed) - for when the money has
+ * already been sent by hand and the record has to say so.
+ */
+export async function markPartnerCashoutPaidAction(cashoutId: string, override = false): Promise<AdminResult> {
+  return partners(`/cashouts/${encodeURIComponent(cashoutId)}/paid`, override ? { override: true } : {});
+}
+export async function declinePartnerCashoutAction(cashoutId: string): Promise<AdminResult> {
+  return partners(`/cashouts/${encodeURIComponent(cashoutId)}/decline`);
 }

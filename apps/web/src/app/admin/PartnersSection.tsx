@@ -9,7 +9,12 @@ import { Card } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { LocalDate } from "@/components/ui/LocalDate";
 import { useToast } from "@/components/ui/Toast";
-import { createPartnerAction, markPartnerCashoutPaidAction, setPartnerActiveAction } from "./actions";
+import {
+  createPartnerAction,
+  declinePartnerCashoutAction,
+  markPartnerCashoutPaidAction,
+  setPartnerActiveAction,
+} from "./actions";
 
 /** GET /api/admin-portal/partners - see services/partnerProgram.ts partnersForAdmin. */
 export interface AdminPartners {
@@ -31,15 +36,30 @@ export interface AdminPartners {
       paidOutCents: number;
     };
   }[];
-  pendingCashouts: { id: string; partnerId: string; partnerName: string; amountCents: number; requestedAt: string }[];
+  pendingCashouts: {
+    id: string;
+    partnerId: string;
+    partnerName: string;
+    amountCents: number;
+    requestedAt: string;
+    /** Null while the request would still be allowed today; otherwise why not. */
+    uncovered: "inactive" | "locked" | "insufficient_balance" | null;
+  }[];
 }
+
+/** Why a pending request is no longer backed - shown BEFORE the admin pays. */
+const UNCOVERED_COPY: Record<string, string> = {
+  inactive: "Partner is paused",
+  locked: "Cashout relocked (a reward was reversed)",
+  insufficient_balance: "Rewards behind it were reversed",
+};
 
 const CREATE_ERRORS: Record<string, string> = {
   invalid_code: "Codes are letters and numbers (spaces are fine).",
   code_taken: "Another partner already has that code (case and spaces don't count).",
-  no_such_user: `No ${APP_NAME} login has that email. Leave it blank for a partner without one.`,
+  no_such_user: `No ${APP_NAME} login has that email. The partner signs up first, then you add them.`,
   user_taken: "That login is already a partner.",
-  invalid_input: "Give the partner a name and a code.",
+  invalid_input: `Give the partner a name, a code and their ${APP_NAME} login email.`,
 };
 
 const SHORT_DATE: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
@@ -49,7 +69,10 @@ const SHORT_DATE: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" 
  *
  * Nothing on this card moves money. A partner asks for a cashout from their own
  * page; the admin pays it outside ChairBack, then presses "Mark paid" here -
- * which only records that it was paid. Every number is recomputed by the API
+ * which only records that it was paid - or "Decline", which gives the amount
+ * back to the partner's balance. A request that is no longer covered (partner
+ * paused, rewards reversed since the ask) says so next to it, and recording it
+ * paid takes a deliberate "Paid anyway". Every number is recomputed by the API
  * from the rows, and the page re-reads after each action rather than guessing.
  */
 export function PartnersSection({ data }: { data: AdminPartners }) {
@@ -114,21 +137,47 @@ export function PartnersSection({ data }: { data: AdminPartners }) {
           <p className="mb-2 text-xs uppercase tracking-wide text-muted">Cashouts to pay</p>
           <ul className="divide-y divide-subtle/60 text-sm">
             {data.pendingCashouts.map((c) => (
-              <li key={c.id} className="flex items-center justify-between gap-3 py-2">
+              <li key={c.id} className="flex flex-wrap items-center justify-between gap-3 py-2">
                 <span>
                   <span className="font-medium text-offwhite">{c.partnerName}</span> ·{" "}
                   {money(c.amountCents)} · asked <LocalDate iso={c.requestedAt} options={SHORT_DATE} />
+                  {c.uncovered ? (
+                    <span className="block text-xs text-danger-soft" data-testid="cashout-uncovered">
+                      Not covered: {UNCOVERED_COPY[c.uncovered] ?? "no longer allowed"}. Decline it, or record
+                      it only if you already paid.
+                    </span>
+                  ) : null}
                 </span>
-                <button
-                  type="button"
-                  disabled={busy !== null}
-                  onClick={() =>
-                    void run(c.id, () => markPartnerCashoutPaidAction(c.id), `Marked ${money(c.amountCents)} paid`)
-                  }
-                  className="rounded-full border border-subtle px-3 py-1 text-xs hover:bg-charcoal-700 disabled:opacity-50"
-                >
-                  {busy === c.id ? "Saving…" : "Mark paid"}
-                </button>
+                <span className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() =>
+                      void run(
+                        c.id,
+                        () => markPartnerCashoutPaidAction(c.id, c.uncovered !== null),
+                        `Marked ${money(c.amountCents)} paid`,
+                      )
+                    }
+                    className="rounded-full border border-subtle px-3 py-1 text-xs hover:bg-charcoal-700 disabled:opacity-50"
+                  >
+                    {busy === c.id ? "Saving…" : c.uncovered ? "Paid anyway" : "Mark paid"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() =>
+                      void run(
+                        `decline:${c.id}`,
+                        () => declinePartnerCashoutAction(c.id),
+                        `Declined ${money(c.amountCents)}`,
+                      )
+                    }
+                    className="rounded-full border border-subtle px-3 py-1 text-xs text-muted hover:bg-charcoal-700 disabled:opacity-50"
+                  >
+                    {busy === `decline:${c.id}` ? "Saving…" : "Decline"}
+                  </button>
+                </span>
               </li>
             ))}
           </ul>
@@ -154,7 +203,7 @@ export function PartnersSection({ data }: { data: AdminPartners }) {
                 <tr key={p.id} className="border-b border-subtle/60 last:border-0">
                   <td className="px-4 py-3">
                     <p className="font-medium text-offwhite">{p.name}</p>
-                    <p className="text-xs text-muted">{p.email ?? "No login"}</p>
+                    <p className="text-xs text-muted">{p.email ?? "Login deleted"}</p>
                   </td>
                   <td className="px-4 py-3 font-mono text-xs">{p.code}</td>
                   <td className="px-4 py-3 text-muted">
@@ -226,12 +275,15 @@ export function PartnersSection({ data }: { data: AdminPartners }) {
       >
         <input name="name" required maxLength={80} placeholder="Name" aria-label="Partner name" className={field} />
         <input name="code" required maxLength={64} placeholder='Code, e.g. "ERIC C"' aria-label="Partner code" className={field} />
+        {/* Required: the partner's login is what asks for a cashout, and a
+            cashout is the only record that a payment happened. */}
         <input
           name="email"
           type="email"
+          required
           maxLength={254}
-          placeholder={`Their ${APP_NAME} login email (optional)`}
-          aria-label="Partner login email (optional)"
+          placeholder={`Their ${APP_NAME} login email`}
+          aria-label="Partner login email"
           className={`${field} min-w-[16rem]`}
         />
         <button

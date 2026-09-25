@@ -5425,6 +5425,11 @@ model PartnerReferral {
   creditPlan      String?
   // The Stripe invoice that earned it. Unique: one invoice pays one reward.
   creditInvoiceId String?   @unique
+  // The PaymentIntent that paid that invoice. Exists because a refund
+  // (charge.refunded on API 2025-03-31.basil and later) and a dispute (every
+  // version) name the payment, never the invoice - without it neither could
+  // find the reward to reverse. Null when the invoice was paid another way.
+  creditPaymentIntentId String?
 
   // Set once when the money that earned the reward went back (a refund, a
   // dispute or a credit note against creditInvoiceId). A reversed reward is
@@ -5434,6 +5439,7 @@ model PartnerReferral {
   reversalReason String? // invoice_refunded | payment_disputed | credit_note
 
   @@index([partnerId, creditedAt])
+  @@index([creditPaymentIntentId])
 }
 
 // A partner asking to be paid. Exists because payment is by hand: the request
@@ -5445,11 +5451,16 @@ model PartnerCashout {
   partnerId         String
   partner           Partner   @relation(fields: [partnerId], references: [id], onDelete: Restrict)
   amountCents       Int
-  status            String    @default("REQUESTED") // REQUESTED | PAID (CHECK-pinned)
+  status            String    @default("REQUESTED") // REQUESTED | PAID | DECLINED (CHECK-pinned)
   requestedByUserId String
   requestedAt       DateTime  @default(now())
   paidAt            DateTime?
   paidByUserId      String?
+  // An admin declined the request instead of paying it (a partner paused for
+  // abuse, or rewards reversed after the ask). A declined request stops
+  // holding the partner's balance.
+  declinedAt        DateTime?
+  declinedByUserId  String?
 
   @@index([status, requestedAt])
   @@index([partnerId])

@@ -120,30 +120,43 @@ export interface PartnerUnlock {
  *  - A window opens at the partner's FIRST qualifying referral and runs
  *    90 days, inclusive: a referral exactly 90 days later still counts, one a
  *    millisecond past does not.
- *  - 5 qualifying referrals inside one window unlock cashout for good. (The
- *    caller passes only rewards that still stand, so a refund that takes back
- *    one of the five that did it takes the unlock back with it.)
+ *  - 5 qualifying referrals inside one window unlock cashout for good. (Only
+ *    rewards that still stand count, so a refund that takes back one of the
+ *    five that did it takes the unlock back with it.)
  *  - A window that closes short does not reset anything: the next qualifying
  *    referral opens a NEW window, counting from 1. Nothing earned is lost -
  *    earnings from a lapsed window stay locked, and are released with
  *    everything else the moment cashout unlocks.
+ *  - 🔴 A REVERSAL CAN ONLY TAKE AWAY. A reward that was credited and later
+ *    reversed (`reversedAt`) still marks where its window opened - it just
+ *    doesn't count toward the 5. Without that, refunding the reward that
+ *    opened a window would slide every later window's start forward, and a
+ *    refund could CREATE an unlock that didn't exist before.
  *
- * Pure: `qualifiedAt` is every qualifying referral's instant (any order),
+ * Pure: `qualifiedAt` is every qualifying reward that still stands,
+ * `reversedAt` every one that was credited and then reversed (any order).
  * `now` only decides whether the last window is still open.
  */
-export function partnerUnlock(qualifiedAt: readonly Date[], now: Date): PartnerUnlock {
+export function partnerUnlock(
+  qualifiedAt: readonly Date[],
+  now: Date,
+  reversedAt: readonly Date[] = [],
+): PartnerUnlock {
   const { referrals, windowDays } = PARTNER_PROGRAM.unlock;
   const spanMs = windowDays * DAY_MS;
-  const sorted = [...qualifiedAt].sort((a, b) => a.getTime() - b.getTime());
+  const sorted = [
+    ...qualifiedAt.map((at) => ({ at, stands: true })),
+    ...reversedAt.map((at) => ({ at, stands: false })),
+  ].sort((a, b) => a.at.getTime() - b.at.getTime());
   let opensAt: Date | null = null;
   let count = 0;
-  for (const at of sorted) {
+  for (const { at, stands } of sorted) {
     if (opensAt === null || at.getTime() - opensAt.getTime() > spanMs) {
       opensAt = at;
-      count = 1;
-    } else {
-      count += 1;
+      count = 0;
     }
+    if (!stands) continue;
+    count += 1;
     if (count >= referrals) return { unlocked: true, unlockedAt: at, window: null };
   }
   if (opensAt === null) return { unlocked: false, unlockedAt: null, window: null };

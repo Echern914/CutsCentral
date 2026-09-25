@@ -26,6 +26,28 @@ export default async function ReferralsPage() {
   const data = res.data;
   const appBase = process.env.APP_BASE_URL ?? "";
 
+  // A partner with no business here (or only a seat in someone else's) has no
+  // shop link to share: this page is just their earnings. The shop-referral
+  // copy and its "isn't ready yet" fallback are for owners, and would only
+  // mislead them.
+  if (partner.data && !data) {
+    return (
+      <main className="mx-auto w-full max-w-2xl px-5 py-8">
+        <h1 className="mb-6 mt-1 font-display text-3xl tracking-tight">Your earnings</h1>
+        <PartnerEarnings me={partner.data} />
+        {res.status === 404 ? (
+          <p className="text-sm text-muted">
+            Run a business yourself?{" "}
+            <Link href="/onboarding" className="text-gold hover:underline">
+              Set it up
+            </Link>
+            .
+          </p>
+        ) : null}
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto w-full max-w-2xl px-5 py-8">
       <Link

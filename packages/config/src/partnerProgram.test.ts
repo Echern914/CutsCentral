@@ -56,6 +56,23 @@ describe("the cashout unlock policy", () => {
     expect(u).toEqual({ unlocked: true, unlockedAt: day(189), window: null });
   });
 
+  it("a reversal can only take away: refunding the window's opener never CREATES an unlock", () => {
+    // Windows [0,90] holds 2, [95,185] holds 4: locked.
+    const standing = [day(60), day(95), day(100), day(110), day(120)];
+    expect(partnerUnlock([day(0), ...standing], day(130)).unlocked).toBe(false);
+    // Day 0's reward is refunded. It still anchors the first window, so day 60
+    // can't slide the second window back to catch five.
+    const u = partnerUnlock(standing, day(130), [day(0)]);
+    expect(u.unlocked).toBe(false);
+    expect(u.window).toEqual({ opensAt: day(95), closesAt: day(185), count: 4, open: true });
+  });
+
+  it("a reversal that takes back one of the five still relocks", () => {
+    const u = partnerUnlock([day(0), day(1), day(2), day(3)], day(10), [day(4)]);
+    expect(u.unlocked).toBe(false);
+    expect(u.window?.count).toBe(4);
+  });
+
   it("stays unlocked for good - later gaps do not relock", () => {
     const five = [day(0), day(1), day(2), day(3), day(4)];
     expect(partnerUnlock([...five, day(400)], day(900)).unlocked).toBe(true);

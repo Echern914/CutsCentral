@@ -8,7 +8,11 @@ import { stripeErrorFacts } from "./stripeErrors.js";
 // functions that need a Stripe client) so the cycle never exists at module
 // evaluation time.
 import { flagReferralForReview, grantReferralReward } from "../services/referral.js";
-import { creditPartnerReferral, reversePartnerCredit } from "../services/partnerProgram.js";
+import {
+  creditPartnerReferral,
+  paymentIntentForInvoice,
+  reversePartnerCredit,
+} from "../services/partnerProgram.js";
 
 /**
  * Stripe billing. Two base tiers ("pro" = Premium, "pro_ai" = Premium AI) on
@@ -664,6 +668,9 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
           plan: basePlanOnInvoice(invoice),
           amountPaidCents: amountPaidBeforeTax(invoice),
           paidAt: paidAtSec ? new Date(paidAtSec * 1000) : new Date(),
+          // Recorded so a refund or dispute - which names the payment, not the
+          // invoice - can find this reward again.
+          paymentIntentId: () => paymentIntentForInvoice(invoice),
         });
       }
       return;
@@ -673,22 +680,33 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
     case "credit_note.created": {
       // The subscription side of these three. (Connect payments handle
       // charge.refunded separately in billing/payments.ts, by Payment row.)
-      // Each carries the invoice it is against; if that invoice is the one
-      // that paid a referrer, the referral is flagged - never reversed here.
-      const obj = event.data.object as { invoice?: string | { id?: string } | null };
+      //
+      // 🔴 Only a credit note reliably names its invoice. A Dispute has never
+      // carried `invoice`, and a Charge lost it in API 2025-03-31.basil - both
+      // name the PAYMENT INTENT. So the partner reward is matched by either:
+      // the invoice when there is one, else the payment intent the credit
+      // recorded. (The legacy referral flag below still keys on the invoice.)
+      const obj = event.data.object as {
+        invoice?: string | { id?: string } | null;
+        payment_intent?: string | { id?: string } | null;
+      };
       const invoiceId =
         typeof obj.invoice === "string" ? obj.invoice : (obj.invoice?.id ?? null);
-      if (!invoiceId) return;
+      const paymentIntentId =
+        typeof obj.payment_intent === "string"
+          ? obj.payment_intent
+          : (obj.payment_intent?.id ?? null);
+      if (!invoiceId && !paymentIntentId) return;
       const reason =
         event.type === "charge.dispute.created"
           ? "payment_disputed"
           : event.type === "credit_note.created"
             ? "credit_note"
             : "invoice_refunded";
-      await flagReferralForReview(invoiceId, reason);
+      if (invoiceId) await flagReferralForReview(invoiceId, reason);
       // A partner reward earned by this invoice is taken back. Any money going
       // back counts, a partial refund included: the simple, conservative rule.
-      await reversePartnerCredit(invoiceId, reason);
+      await reversePartnerCredit({ invoiceId, paymentIntentId }, reason);
       return;
     }
     default:

@@ -30,7 +30,13 @@ export interface PartnerMe {
     requestedCents: number;
     paidOutCents: number;
   };
-  cashouts: { id: string; amountCents: number; status: "REQUESTED" | "PAID"; requestedAt: string; paidAt: string | null }[];
+  cashouts: {
+    id: string;
+    amountCents: number;
+    status: "REQUESTED" | "PAID" | "DECLINED";
+    requestedAt: string;
+    paidAt: string | null;
+  }[];
 }
 
 const REFUSAL_COPY: Record<string, string> = {
@@ -137,7 +143,7 @@ export function PartnerEarnings({ me }: { me: PartnerMe }) {
                 <LocalDate iso={c.requestedAt} options={SHORT_DATE} className="text-muted" />
               </span>
               <span className={c.status === "PAID" ? "text-emerald-soft" : "text-muted"}>
-                {c.status === "PAID" ? "Paid" : "Requested"}
+                {c.status === "PAID" ? "Paid" : c.status === "DECLINED" ? "Declined" : "Requested"}
               </span>
             </li>
           ))}

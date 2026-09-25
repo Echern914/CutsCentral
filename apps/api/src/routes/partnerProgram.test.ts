@@ -1,6 +1,6 @@
 import request from "supertest";
 import type Stripe from "stripe";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { PARTNER_PROGRAM, __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { raceBehindRowLock, winners } from "../testing/raceBarrier.js";
@@ -12,8 +12,20 @@ import { raceBehindRowLock, winners } from "../testing/raceBarrier.js";
  *
  * Price ids are set BEFORE the app is imported so the invoice lines below map
  * to real plans; STRIPE_SECRET_KEY is left unset, so nothing here can reach
- * Stripe.
+ * Stripe. The one Stripe read the program makes - which payment paid an
+ * invoice, asked only when a reward is about to be set - is mocked, and
+ * answers the way API 2025-03-31.basil and later do (the invoice itself no
+ * longer names its payment).
  */
+const { listInvoicePayments } = vi.hoisted(() => ({
+  listInvoicePayments: vi.fn(async ({ invoice }: { invoice: string }) => ({
+    data: [{ status: "paid", payment: { type: "payment_intent", payment_intent: `pi_for_${invoice}` } }],
+  })),
+}));
+vi.mock("../billing/stripe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../billing/stripe.js")>();
+  return { ...actual, stripeClient: () => ({ invoicePayments: { list: listInvoicePayments } }) };
+});
 const STARTER = "price_partner_starter";
 const PRO = "price_partner_pro";
 const ADDON = "price_partner_receptionist";
@@ -31,7 +43,10 @@ let barberCookie: string;
 let partnerCookie: string;
 let partnerUserId: string;
 let partnerId: string;
+let ownerEmailForTests: string;
 const CODE = `ERIC ${tag}`;
+/** A second partner, for the money-back cases, so the first one's counts stay put. */
+const CODE2 = `REFUNDS ${tag}`;
 
 async function signup(label: string): Promise<{ cookie: string; userId: string; email: string }> {
   const email = `partner-${label}-${randomToken(6)}@test.local`.toLowerCase();
@@ -73,7 +88,10 @@ function invoicePaid(opts: {
   priceId: string;
   amountPaid: number;
   tax?: number;
-  /** Newer Stripe API versions put the price at pricing.price_details.price. */
+  /**
+   * The shape API 2025-03-31.basil and later send: the price at
+   * pricing.price_details.price and tax under total_taxes (no top-level tax).
+   */
   modernLines?: boolean;
 }): Stripe.Event {
   eventSeq += 1;
@@ -87,7 +105,9 @@ function invoicePaid(opts: {
         object: "invoice",
         customer: opts.customer,
         amount_paid: opts.amountPaid,
-        tax: opts.tax ?? 0,
+        ...(opts.modernLines
+          ? { total_taxes: opts.tax ? [{ amount: opts.tax, tax_behavior: "exclusive" }] : [] }
+          : { tax: opts.tax ?? 0 }),
         status_transitions: { paid_at: Math.floor(Date.now() / 1000) },
         lines: {
           data: [
@@ -126,6 +146,10 @@ beforeAll(async () => {
   process.env.STRIPE_PRICE_ID = PRO;
   process.env.STRIPE_RECEPTIONIST_PRICE_ID = ADDON;
   __resetEnvCacheForTests();
+  // The service FIRST: billing/stripe.ts and it import each other, and only
+  // this order hands the service the mocked stripeClient (referral.ts's
+  // integrity test relies on the same order).
+  await import("../services/partnerProgram.js");
   ({ applyStripeEvent } = await import("../billing/stripe.js"));
   const { createApp } = await import("../app.js");
   app = createApp();
@@ -144,8 +168,16 @@ beforeAll(async () => {
     .set("Cookie", adminCookie)
     .send({ name: "Eric C", code: CODE, email: partnerUser.email });
   expect(created.status).toBe(201);
+  ownerEmailForTests = barber.email;
   partnerId = created.body.id;
   partnerIds.push(partnerId);
+  const second = await signup("coach2");
+  const created2 = await request(app)
+    .post("/api/admin-portal/partners")
+    .set("Cookie", adminCookie)
+    .send({ name: "Refund Coach", code: CODE2, email: second.email });
+  expect(created2.status).toBe(201);
+  partnerIds.push(created2.body.id);
 });
 
 afterAll(async () => {
@@ -166,6 +198,7 @@ describe("admin gate", () => {
       () => request(app).post("/api/admin-portal/partners").send({ name: "X", code: "SNEAKY" }),
       () => request(app).post(`/api/admin-portal/partners/${partnerId}/active`).send({ active: false }),
       () => request(app).post("/api/admin-portal/partners/cashouts/anything/paid"),
+      () => request(app).post("/api/admin-portal/partners/cashouts/anything/decline"),
     ];
     for (const call of calls) {
       expect((await call().set("Cookie", barberCookie)).status).toBe(404);
@@ -181,9 +214,18 @@ describe("codes", () => {
     const res = await request(app)
       .post("/api/admin-portal/partners")
       .set("Cookie", adminCookie)
-      .send({ name: "Copycat", code: CODE.toLowerCase().replace(" ", "   ") });
+      .send({ name: "Copycat", code: CODE.toLowerCase().replace(" ", "   "), email: ownerEmailForTests });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("code_taken");
+  });
+
+  it("refuses a partner with no login: nothing could ever record paying them", async () => {
+    const code = `NOLOGIN ${tag}`;
+    for (const body of [{ name: "Coach D", code }, { name: "Coach D", code, email: "" }]) {
+      const res = await request(app).post("/api/admin-portal/partners").set("Cookie", adminCookie).send(body);
+      expect(res.status).toBe(400);
+    }
+    expect(await prisma.partner.count({ where: { name: "Coach D", code } })).toBe(0);
   });
 
   it("a signup matches the code ignoring case and spaces", async () => {
@@ -279,16 +321,38 @@ describe("crediting from Stripe", () => {
     expect(await prisma.partnerReferral.count({ where: { referredShopId: res.body.id } })).toBe(0);
   });
 
-  it("a refund against the invoice that earned it takes the reward back, for good", async () => {
-    const { shopId, customer } = await referredShop();
-    const invoiceId = `in_partner_${randomToken(8)}`;
-    await applyStripeEvent(invoicePaid({ customer, invoiceId, priceId: PRO, amountPaid: 3499 }));
-    await applyStripeEvent({
-      id: `evt_partner_refund_${tag}`,
-      type: "charge.refunded",
+  /** A charge / dispute exactly as API 2025-03-31.basil and later send it: no `invoice`. */
+  function moneyBack(type: "charge.refunded" | "charge.dispute.created", paymentIntent: string): Stripe.Event {
+    eventSeq += 1;
+    const object =
+      type === "charge.refunded"
+        ? { id: `ch_${randomToken(8)}`, object: "charge", payment_intent: paymentIntent, refunded: true, amount_refunded: 500 }
+        : { id: `dp_${randomToken(8)}`, object: "dispute", charge: `ch_${randomToken(8)}`, payment_intent: paymentIntent };
+    return {
+      id: `evt_partner_back_${tag}_${eventSeq}`,
+      type,
       created: Math.floor(Date.now() / 1000),
-      data: { object: { id: "ch_x", object: "charge", invoice: invoiceId } },
-    } as unknown as Stripe.Event);
+      data: { object },
+    } as unknown as Stripe.Event;
+  }
+
+  it("records the payment that paid the crediting invoice, asked only when a reward is set", async () => {
+    const { shopId, customer } = await referredShop(CODE2);
+    const invoiceId = `in_partner_${randomToken(8)}`;
+    listInvoicePayments.mockClear();
+    await applyStripeEvent(invoicePaid({ customer, invoiceId, priceId: PRO, amountPaid: 3499, modernLines: true }));
+    expect((await referralOf(shopId)).creditPaymentIntentId).toBe(`pi_for_${invoiceId}`);
+    expect(listInvoicePayments).toHaveBeenCalledTimes(1);
+    // A renewal has no reward to set, so it costs no Stripe call.
+    await applyStripeEvent(invoicePaid({ customer, priceId: PRO, amountPaid: 3499, modernLines: true }));
+    expect(listInvoicePayments).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refund (basil+ charge: no invoice id) takes the reward back, for good", async () => {
+    const { shopId, customer } = await referredShop(CODE2);
+    const invoiceId = `in_partner_${randomToken(8)}`;
+    await applyStripeEvent(invoicePaid({ customer, invoiceId, priceId: PRO, amountPaid: 3499, modernLines: true }));
+    await applyStripeEvent(moneyBack("charge.refunded", `pi_for_${invoiceId}`));
     const row = await referralOf(shopId);
     expect(row.reversedAt).not.toBeNull();
     expect(row.reversalReason).toBe("invoice_refunded");
@@ -297,6 +361,40 @@ describe("crediting from Stripe", () => {
     const again = await referralOf(shopId);
     expect(again.creditInvoiceId).toBe(invoiceId);
     expect(again.reversedAt).toEqual(row.reversedAt);
+  });
+
+  it("a chargeback (a Dispute never carries an invoice id) takes the reward back", async () => {
+    const { shopId, customer } = await referredShop(CODE2);
+    const invoiceId = `in_partner_${randomToken(8)}`;
+    await applyStripeEvent(invoicePaid({ customer, invoiceId, priceId: STARTER, amountPaid: 2000 }));
+    // Someone else's dispute touches nothing.
+    await applyStripeEvent(moneyBack("charge.dispute.created", "pi_someone_else"));
+    expect((await referralOf(shopId)).reversedAt).toBeNull();
+    await applyStripeEvent(moneyBack("charge.dispute.created", `pi_for_${invoiceId}`));
+    const row = await referralOf(shopId);
+    expect(row.reversedAt).not.toBeNull();
+    expect(row.reversalReason).toBe("payment_disputed");
+  });
+
+  it("a credit note (which names its invoice) takes the reward back", async () => {
+    const { shopId, customer } = await referredShop(CODE2);
+    const invoiceId = `in_partner_${randomToken(8)}`;
+    await applyStripeEvent(invoicePaid({ customer, invoiceId, priceId: STARTER, amountPaid: 2000 }));
+    eventSeq += 1;
+    await applyStripeEvent({
+      id: `evt_partner_cn_${tag}_${eventSeq}`,
+      type: "credit_note.created",
+      created: Math.floor(Date.now() / 1000),
+      data: { object: { id: `cn_${randomToken(8)}`, object: "credit_note", invoice: invoiceId } },
+    } as unknown as Stripe.Event);
+    expect((await referralOf(shopId)).reversalReason).toBe("credit_note");
+  });
+
+  it("tax under total_taxes (basil+) is not ChairBack's money either", async () => {
+    const { shopId, customer } = await referredShop(CODE2);
+    // $7.50 of plan plus $1.50 tax: short of the margin.
+    await applyStripeEvent(invoicePaid({ customer, priceId: STARTER, amountPaid: 900, tax: 150, modernLines: true }));
+    expect((await referralOf(shopId)).creditedAt).toBeNull();
   });
 
   it("the database refuses a second attribution for the same business", async () => {
@@ -391,6 +489,7 @@ describe("the partner's page and cashouts", () => {
     const pending = list.body.pendingCashouts.filter((c: { partnerId: string }) => c.partnerId === partnerId);
     expect(pending).toHaveLength(1);
     expect(pending[0].partnerName).toBe("Eric C");
+    expect(pending[0].uncovered).toBeNull();
 
     const paid = await request(app)
       .post(`/api/admin-portal/partners/cashouts/${pending[0].id}/paid`)
@@ -442,5 +541,75 @@ describe("the partner's page and cashouts", () => {
       .set("Cookie", partnerCookie)
       .send({ amountCents: 2500 });
     expect(retry.status).toBe(201);
+  });
+  it("a request that stops being covered is flagged, refused without override, and can be declined", async () => {
+    const pendingMine = async () => {
+      const list = await request(app).get("/api/admin-portal/partners").set("Cookie", adminCookie);
+      return list.body.pendingCashouts.filter((c: { partnerId: string }) => c.partnerId === partnerId);
+    };
+    // The $25 asked for above is covered - until the partner is paused.
+    const [asked] = await pendingMine();
+    expect(asked.uncovered).toBeNull();
+    await request(app)
+      .post(`/api/admin-portal/partners/${partnerId}/active`)
+      .set("Cookie", adminCookie)
+      .send({ active: false });
+    expect((await pendingMine())[0].uncovered).toBe("inactive");
+    const refused = await request(app)
+      .post(`/api/admin-portal/partners/cashouts/${asked.id}/paid`)
+      .set("Cookie", adminCookie);
+    expect(refused.status).toBe(409);
+    expect(refused.body).toEqual({ error: "not_covered", reason: "inactive" });
+    expect((await prisma.partnerCashout.findUniqueOrThrow({ where: { id: asked.id } })).status).toBe("REQUESTED");
+
+    // Declined: it leaves the queue and stops holding the balance.
+    const before = await request(app).get("/api/partner/me").set("Cookie", partnerCookie);
+    const declined = await request(app)
+      .post(`/api/admin-portal/partners/cashouts/${asked.id}/decline`)
+      .set("Cookie", adminCookie);
+    expect(declined.status).toBe(200);
+    const row = await prisma.partnerCashout.findUniqueOrThrow({ where: { id: asked.id } });
+    expect(row.status).toBe("DECLINED");
+    expect(row.declinedAt).not.toBeNull();
+    expect(row.paidAt).toBeNull();
+    expect(await pendingMine()).toHaveLength(0);
+    const after = await request(app).get("/api/partner/me").set("Cookie", partnerCookie);
+    expect(after.body.standing.availableCents).toBe(before.body.standing.availableCents + 2500);
+    expect(after.body.cashouts.find((c: { id: string }) => c.id === asked.id).status).toBe("DECLINED");
+    for (const action of ["decline", "paid"]) {
+      const again = await request(app)
+        .post(`/api/admin-portal/partners/cashouts/${asked.id}/${action}`)
+        .set("Cookie", adminCookie);
+      expect(again.status).toBe(409);
+      expect(again.body.error).toBe("already_settled");
+    }
+
+    // Back on, asked again - then a reward behind it is refunded.
+    await request(app)
+      .post(`/api/admin-portal/partners/${partnerId}/active`)
+      .set("Cookie", adminCookie)
+      .send({ active: true });
+    const ask = await request(app)
+      .post("/api/partner/me/cashouts")
+      .set("Cookie", partnerCookie)
+      .send({ amountCents: 2500 });
+    expect(ask.status).toBe(201);
+    const { reversePartnerCredit } = await import("../services/partnerProgram.js");
+    expect(
+      await reversePartnerCredit({ invoiceId: `in_late_${tag}_0`, paymentIntentId: null }, "credit_note"),
+    ).toBe(true);
+    expect((await pendingMine())[0].uncovered).toBe("insufficient_balance");
+    const short = await request(app)
+      .post(`/api/admin-portal/partners/cashouts/${ask.body.id}/paid`)
+      .set("Cookie", adminCookie);
+    expect(short.status).toBe(409);
+    expect(short.body.reason).toBe("insufficient_balance");
+    // The admin already sent it by hand: the record must be able to say so.
+    const recorded = await request(app)
+      .post(`/api/admin-portal/partners/cashouts/${ask.body.id}/paid`)
+      .set("Cookie", adminCookie)
+      .send({ override: true });
+    expect(recorded.status).toBe(200);
+    expect((await prisma.partnerCashout.findUniqueOrThrow({ where: { id: ask.body.id } })).status).toBe("PAID");
   });
 });
