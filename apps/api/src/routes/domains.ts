@@ -23,11 +23,11 @@ import {
 } from "../services/dnsLookup.js";
 
 /**
- * A shop's custom domain (REDIRECT model): the owner's own domain becomes a
- * clean pointer to getchairback.com/s/[slug]. Google indexes and shows the
- * ChairBack URL - that is the deliberate SEO choice, not a limitation - so
- * nothing here touches canonicals or per-host rendering. The web middleware
- * does the actual redirecting; these routes manage the domain's lifecycle:
+ * A shop's custom domain: the owner's own domain serves their ChairBack page
+ * and booking, rendered by the web app on that host (apps/web middleware +
+ * app/custom-domain). Google still indexes and shows the getchairback.com URL,
+ * named by the page's canonical link - the deliberate SEO choice, not a
+ * limitation. These routes manage the domain's lifecycle:
  *
  *   connect -> we attach apex + www to the Vercel project, mint an ownership
  *   token, and hand back THREE DNS records -> the owner sets them at their
@@ -35,7 +35,7 @@ import {
  *   only then does the domain start landing on their page.
  *
  * 🔴 VERIFIED IS THE GATE. Until `customDomainVerifiedAt` is stamped, the
- * public by-domain resolver refuses the domain and nobody is redirected. It is
+ * public by-domain resolver refuses the domain and no page is served on it. It is
  * stamped only when the ownership TXT record (on `@`, or the older
  * `_chairback` host) resolves with THIS shop's token and the apex A record
  * points at Vercel. Before this, the redirect was
