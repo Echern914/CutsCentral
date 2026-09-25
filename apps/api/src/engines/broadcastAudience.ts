@@ -110,12 +110,16 @@ export function splitAudience(
       continue;
     }
     if (channel === "email") {
-      if (!c.email?.trim()) {
-        skip(c, "no_email");
-        continue;
-      }
+      // The customer's own choice outranks a missing address: the Announcements
+      // bell shows a no_email row (the shop meant it for them) but never an
+      // unsubscribed one, so an opt-out whose address was later cleared must
+      // still be recorded as the opt-out.
       if (c.emailOptedOut) {
         skip(c, "unsubscribed");
+        continue;
+      }
+      if (!c.email?.trim()) {
+        skip(c, "no_email");
         continue;
       }
       // 🔴 A BOUNCE IS NOT AN UNSUBSCRIBE. The mailbox is gone, or its owner

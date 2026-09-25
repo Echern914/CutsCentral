@@ -1,21 +1,27 @@
 import { runAsOwner, type Prisma } from "@chairback/db";
+import type { SkipReason } from "../engines/broadcastAudience.js";
 import { syncCustomerLinks } from "./customerIdentity.js";
 
 /**
  * My ChairBack's announcements bell: the broadcasts a customer's shops sent
  * THEM, newest first, and how many arrived since they last looked.
  *
- * 🔴 ONLY WHAT WAS DELIVERED TO ONE OF THEIR OWN PROFILES. A broadcast freezes
- * a BroadcastSend row for EVERY client in the shop's book - the ones it reached
- * and the ones it skipped (not in the group picked, unsubscribed, archived, no
- * address, no app) - so "a row exists" is not "this was sent to you". Only a
- * SENT row counts: the provider accepted it for this client.
- *   SKIPPED   - never. An unsubscribed client must not find in the app the very
- *               promotion they opted out of, and "not in the group you picked"
- *               means the barber chose not to send it to them.
- *   FAILED, ABANDONED - not either. The bell is a record of what reached you,
- *               and these did not (or nobody knows whether they did).
- *   PENDING   - not yet; it appears once it has gone.
+ * 🔴 WHAT THE SHOP MEANT FOR ONE OF THEIR OWN PROFILES - whether or not the
+ * email or push got through. The bell is a channel of its own: a customer who
+ * switched notifications off, or whose shop has no email for them, still opens
+ * the app and should find the news there. A broadcast freezes a BroadcastSend
+ * row for EVERY client in the shop's book, so "a row exists" is not "this was
+ * meant for you"; what decides it is why a row was skipped:
+ *   SENT, PENDING, FAILED, ABANDONED - yes. The shop sent it to this client;
+ *               whether the email or push landed is the delivery's business,
+ *               not the bell's.
+ *   SKIPPED no_app, no_email, undeliverable - yes. Meant for them, only no
+ *               way to deliver it outside the app.
+ *   SKIPPED not_in_audience, archived - never: the barber did not send it to
+ *               them ("only my Gold members", or no longer a client).
+ *   SKIPPED unsubscribed - never. A client who opted out must not find in the
+ *               app the very promotion they opted out of.
+ * An allowlist, so a skip reason added later stays out until someone decides.
  *
  * The profiles are the account's ACTIVE links, re-derived now (the same engine
  * every /api/me read uses): a disowned, archived or re-numbered record drops
@@ -24,12 +30,17 @@ import { syncCustomerLinks } from "./customerIdentity.js";
 
 const LIMIT = 50;
 
+/** SKIPPED rows the shop still meant for the client - see above. */
+const SHOWN_SKIP_REASONS = ["no_app", "no_email", "undeliverable"] satisfies SkipReason[];
+
 export interface CustomerAnnouncement {
   id: string;
   shop: { name: string; logoUrl: string | null };
   /** The email subject or push title; null when the shop gave none. */
   title: string | null;
   body: string;
+  /** When the shop sent it (queued the blast). Named before the bell showed
+   *  undelivered rows too; kept because shipped app builds read it. */
   sentAt: string;
 }
 
@@ -45,28 +56,32 @@ export async function announcementsForAccount(
   // is its client's shop, so a linked client id can only ever bring that
   // client's own shop's broadcasts.
   //
-  // Timed by the SEND's sentAt - the moment the worker settled THAT row
-  // (broadcastWorker settleSent), not when the barber pressed the button or
-  // when the worker's pass began: a row that settles after the customer last
-  // looked is new to them, however early the blast was queued.
+  // Timed by the row's createdAt - the moment the shop queued the blast, which
+  // is also the moment it becomes visible here (the rows are written in the
+  // same transaction that queues it). Not sentAt: an undelivered row never
+  // gets one, and a push that lands later is news the bell already had.
   const rows = await runAsOwner(async (tx) => {
     const merged = await mergedInto(tx, links);
     return tx.broadcastSend.findMany({
       where: {
         OR: [
           { clientId: { in: links.map((l) => l.clientId) } },
-          ...merged.map((m) => ({ clientId: m.clientId, sentAt: { lte: m.mergedAt } })),
+          ...merged.map((m) => ({ clientId: m.clientId, createdAt: { lte: m.mergedAt } })),
         ],
-        status: "SENT",
-        sentAt: { not: null },
+        AND: {
+          OR: [
+            { status: { in: ["SENT", "PENDING", "FAILED", "ABANDONED"] } },
+            { status: "SKIPPED", reason: { in: SHOWN_SKIP_REASONS } },
+          ],
+        },
       },
-      orderBy: [{ sentAt: "desc" }, { id: "desc" }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       // Two profiles at one shop (a parent and a child) are two rows of one
       // broadcast; the extra room keeps the de-dupe below from coming up short.
       take: LIMIT * 2,
       select: {
         broadcastId: true,
-        sentAt: true,
+        createdAt: true,
         broadcast: { select: { subject: true, body: true, shop: { select: { name: true, logoUrl: true } } } },
       },
     });
@@ -82,7 +97,7 @@ export async function announcementsForAccount(
       shop: { name: r.broadcast.shop.name, logoUrl: r.broadcast.shop.logoUrl },
       title: r.broadcast.subject?.trim() || null,
       body: r.broadcast.body,
-      sentAt: r.sentAt!.toISOString(),
+      sentAt: r.createdAt.toISOString(),
     });
   }
   const account = await runAsOwner((tx) =>
