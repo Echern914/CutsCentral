@@ -2021,6 +2021,9 @@ model BroadcastSend {
   @@unique([broadcastId, clientId])
   @@index([shopId, createdAt])
   @@index([broadcastId, status])
+  // My ChairBack's announcements bell: one customer's delivered rows, newest
+  // first. Without it every home load scans every blast's whole audience.
+  @@index([clientId, sentAt])
   // The worker's claim scan: due, unclaimed (or stale), oldest first.
   @@index([status, nextAttemptAt])
   // 🔴 ONE MORE CONSTRAINT LIVES ONLY IN SQL: a composite foreign key on
@@ -3253,7 +3256,13 @@ model Appointment {
   // prevent. shouldMirrorOnCreate reads this. Everything else - the busy set,
   // the overlap guards, the sweep - treats both kinds identically.
   holdReason    String?
-  // Origin marker: "receptionist" for AI-created rows; null for everything else.
+  // Origin marker, stamped at create: "receptionist" (AI-created),
+  // "targeted_slot" (booked into a barber's special - the calendar's "After
+  // hours" / "Special" chip reads this), "waitlist_offer", "tier_opening",
+  // "walk_in_queue"; null for an ordinary booking. The one rewrite: a
+  // CUSTOMER rescheduling a special through their manage link clears
+  // "targeted_slot" (they land on a regular-grid time at the regular price,
+  // and the special is released) - a barber's own move keeps it.
   bookedVia     String?
   // Client check-in ("On my way"). A nullable TEXT sub-state of BOOKED, not an
   // AppointmentStatus value (enum adds need an isolated migration; the string
@@ -4361,6 +4370,12 @@ model CustomerAccount {
   // The App Review / "just looking" account: read-only, linked only to the
   // seeded demo shop, never registers a device.
   isDemo Boolean @default(false)
+
+  // How far this customer has read their shops' announcements (broadcasts
+  // delivered to them). Anything delivered after it is unread on the bell. One marker for the account rather than a row per message: the
+  // bell only has to answer "anything new since you last looked?", and it is
+  // the same answer on every phone the customer signs in on.
+  announcementsSeenAt DateTime?
 
   lastSeenAt DateTime?
   createdAt  DateTime  @default(now())

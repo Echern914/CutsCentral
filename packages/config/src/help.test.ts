@@ -260,6 +260,12 @@ describe("findHelp — questions asked cold", () => {
     // Clients
     expectAnswer("how do i add a client", "add-client-manually");
     expectAnswer("how do i text all my clients", "text-everyone");
+    expectAnswer("can i mass text everyone", "text-everyone");
+    // The free channel, which is what feeds the client's Announcements bell.
+    expectAnswer("how do i send an announcement to my clients", "message-all-clients");
+    expectAnswer("how do i send an app notification to all my clients", "message-all-clients");
+    expectAnswer("broadcast a message", "message-all-clients");
+    expectAnswer("can i email all my clients", "message-all-clients");
     expectAnswer("can i see who hasnt been in a while", "who-is-overdue");
     expectAnswer("how do i give someone a free cut", "comp-a-cut");
     expectAnswer("can i send a photo in a text", "picture-message");

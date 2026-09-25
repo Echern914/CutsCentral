@@ -1,5 +1,5 @@
 import { apiEnv, marketingEmailConfigError } from "@chairback/config";
-import { Prisma, forShop, prisma, runWithShop, type LoyaltyTier } from "@chairback/db";
+import { Prisma, asOwnerWithin, forShop, prisma, runAsOwner, runWithShop, type LoyaltyTier } from "@chairback/db";
 import { logger } from "../logger.js";
 import { emailEnabled, wrapEmailHtml } from "../messaging/email.js";
 import {
@@ -134,7 +134,51 @@ async function withDeviceCounts(
     });
   const devices = tx ? await group(tx) : await runWithShop(shopId, group);
   const byClient = new Map(devices.map((d) => [d.clientId, d._count._all]));
-  return rows.map((r) => ({ ...r, pushDevices: byClient.get(r.id) ?? 0 }));
+
+  // 🔴 AND THE PHONES SIGNED IN TO MY CHAIRBACK. The customer app registers a
+  // device on the ACCOUNT (CustomerDevice), never as a shop PushSubscription,
+  // and sendPushToClient already delivers to it. Counting only the shop's rows
+  // froze every app-only customer as "no_app" before the worker ever ran - so
+  // the default channel reached almost nobody, and their Announcements stayed
+  // empty. Platform tables, so read as owner: inside the caller's transaction
+  // when there is one (one connection, one snapshot with the list being
+  // frozen), in its own otherwise. The worker re-derives the link at delivery
+  // (accountForClientPush), so a link that has gone stale since costs one
+  // FAILED row, never a push to the wrong phone.
+  const clientIds = rows.map((r) => r.id);
+  const accountDevices = tx
+    ? await asOwnerWithin(tx, (otx) => accountDeviceCounts(otx, shopId, clientIds))
+    : await runAsOwner((otx) => accountDeviceCounts(otx, shopId, clientIds));
+
+  return rows.map((r) => ({
+    ...r,
+    pushDevices: (byClient.get(r.id) ?? 0) + (accountDevices.get(r.id) ?? 0),
+  }));
+}
+
+/**
+ * Per client: the devices of the My ChairBack account actively linked to it,
+ * under the same rules delivery uses (accountForClientPush +
+ * deliverToAccountDevices) - not the demo account, and not an account that
+ * switched push off.
+ */
+async function accountDeviceCounts(
+  db: Prisma.TransactionClient,
+  shopId: string,
+  clientIds: string[],
+): Promise<Map<string, number>> {
+  const links = await db.customerClientLink.findMany({
+    where: {
+      shopId,
+      clientId: { in: clientIds },
+      status: "active",
+      account: { isDemo: false, pushEnabled: true },
+    },
+    select: { clientId: true, account: { select: { _count: { select: { devices: true } } } } },
+  });
+  const out = new Map<string, number>();
+  for (const l of links) out.set(l.clientId, (out.get(l.clientId) ?? 0) + l.account._count.devices);
+  return out;
 }
 
 /** Every client of this shop, for the preview (its own transaction). */

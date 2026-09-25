@@ -1399,10 +1399,26 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     a: "Write it as a promotion and send it out — that's the blast. It only goes to clients who haven't opted out, and it counts against your monthly text allowance.\n\nOne piece of advice worth more than the feature: a blast to everyone converts worse than a rebooking nudge to the twenty people who are actually overdue. Use it for genuine news, not for filling a Tuesday.",
     keywords: [
       "text everyone", "text all", "blast", "mass text", "bulk text", "send to everyone",
-      "message all clients", "text my list", "announcement", "broadcast", "everyone at once",
+      "text my list", "everyone at once",
     ],
     category: "texting",
     action: { label: "Open promotions", featureId: "promotions" },
+  },
+  {
+    // The free channel. Announcement / broadcast questions used to land on
+    // text-everyone and send the barber to spend SMS allowance on something
+    // an app notification does for nothing - and a text never reaches the
+    // client's Announcements.
+    id: "message-all-clients",
+    q: "How do I send an announcement to all my clients?",
+    a: "Use Message your clients, in your client book. Send it as an app notification — free, and it reaches everyone signed in to the ChairBack app — or as an email, which counts against your monthly email allowance. Send it to everyone, or just one loyalty group.\n\nEvery message that reaches a client also stays in their Announcements, the bell in the ChairBack app, so it's still there after they swipe the notification away.\n\nWant to text everyone instead? That's a promotion, and it uses your text allowance.",
+    keywords: [
+      "announcement", "announcements", "broadcast", "message all clients", "message my clients",
+      "message everyone", "email all my clients", "email everyone", "notify all my clients",
+      "app notification to everyone", "send news",
+    ],
+    category: "clients",
+    action: { label: "Open clients", featureId: "clients" },
   },
   {
     id: "who-is-overdue",

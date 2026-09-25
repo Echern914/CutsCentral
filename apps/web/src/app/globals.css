@@ -34,6 +34,7 @@
   --cb-gold-deep: 140 110 27; /* #8C6E1B */
   --cb-emerald: 74 222 128; /* #4ADE80 */
   --cb-danger: 248 113 113; /* #F87171 */
+  --cb-indigo: 165 180 252; /* #A5B4FC - the "Special"/"After hours" chip */
   --cb-border-a: 0.08;
   --cb-border-a-strong: 0.14;
   --cb-shadow: 0 0 0;
@@ -57,6 +58,7 @@
   --cb-gold-deep: 110 86 20;
   --cb-emerald: 21 128 61; /* #15803D */
   --cb-danger: 220 38 38; /* #DC2626 */
+  --cb-indigo: 67 56 202; /* #4338CA ≈ 7:1 on white (#A5B4FC was ~1.7:1) */
   --cb-border-a: 0.12;
   --cb-border-a-strong: 0.2;
   --cb-shadow: 28 25 23; /* warm ink, not pitch black */

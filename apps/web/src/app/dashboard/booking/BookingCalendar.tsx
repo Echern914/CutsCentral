@@ -68,6 +68,7 @@ import {
   type WaitlistBookDetail,
 } from "./WaitlistBoard";
 import { AppointmentSheet, type SheetView } from "./AppointmentSheet";
+import { SpecialChip } from "../_components/SpecialChip";
 import { BlockOffForm } from "./BlockOffForm";
 import { TierOpeningForm } from "./TierOpeningForm";
 import { useRouter } from "next/navigation";
@@ -2376,8 +2377,13 @@ export function AppointmentBlock({
         >
           {initialsOf(row.clientName || "Client")}
         </span>
-        <span className={cn(NAME_WRAP_CLS, "flex-1 text-[17px]")}>
-          {row.clientName || "Client"}
+        {/* The chip rides WITH the name (Drick: "in the name it should say
+            after hour"), wrapping under it rather than squeezing it. */}
+        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className={cn(NAME_WRAP_CLS, "text-[17px]")}>
+            {row.clientName || "Client"}
+          </span>
+          {row.special && <SpecialChip afterHours={row.afterHours} />}
         </span>
         <span
           aria-hidden
