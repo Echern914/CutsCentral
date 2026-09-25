@@ -454,6 +454,13 @@ model Shop {
   // agenda. Off by default so existing shops are unchanged. Native-only.
   requireBookingApproval Boolean @default(false)
 
+  // "Approve new clients": a customer who presses Join shop in the app waits
+  // for the shop's OK (a request on the Clients page) instead of becoming a
+  // client at once. Separate from requireBookingApproval, which vets every
+  // booking; this vets a person once. Off by default - a findable shop takes
+  // new clients openly.
+  approveNewClients Boolean @default(false)
+
   // AI receptionist (paid add-on). The master toggle is receptionistEnabled;
   // the feature additionally requires bookingMode=native, active base billing,
   // the add-on entitlement (receptionistCompAccess OR an active add-on
@@ -4330,7 +4337,9 @@ model CustomerAccount {
   id String @id @default(cuid())
 
   // What the customer calls themselves, for the greeting. Never copied into a
-  // shop's Client row - a shop's record of a name is the shop's.
+  // shop's Client row behind their back - a shop's record of a name is the
+  // shop's. The one exception is "Join shop", where the customer submits these
+  // as their details FOR that shop.
   firstName String?
   lastName  String?
 
@@ -4420,7 +4429,9 @@ model CustomerClientLink {
 // discover a shop that finding could not.
 //
 // 🔴 The shop may see WHO saved it - the saver's name from this account, and
-// when - through an owner read filtered to that shop. Never a phone or email.
+// when - through an owner read filtered to that shop. Never a phone or email,
+// except on a JOIN REQUEST (joinRequestedAt), where pressing Join shop was the
+// customer's agreement to hand the shop their verified contacts.
 // Platform-owned like every Customer* table: REVOKEd from the tenant role, RLS
 // forced with no policies.
 model CustomerSavedShop {
@@ -4430,6 +4441,12 @@ model CustomerSavedShop {
   shopId    String
   shop      Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
   createdAt DateTime        @default(now())
+
+  // Set when this row is a JOIN REQUEST - "Join shop" at a shop that approves
+  // new clients - rather than a name-only save. Only a request carries the
+  // customer's consent to hand the shop their verified phone and email, so only
+  // a request can be accepted into a client record; a plain save never can.
+  joinRequestedAt DateTime?
 
   // Saving twice is still one save.
   @@unique([accountId, shopId])

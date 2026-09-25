@@ -19,6 +19,8 @@ export interface BookingShop {
   waitlistEnabled: boolean;
   slotOpenedTextsEnabled: boolean;
   requireBookingApproval: boolean;
+  /** "Join shop" in the customer app waits for the shop's OK. */
+  approveNewClients: boolean;
   bookingGroupsFirst: boolean;
   pushReminder24hEnabled: boolean;
   pushReminder2hEnabled: boolean;

@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
+import { DEMO } from "@chairback/config";
 import { runAsOwner, runWithShop } from "@chairback/db";
 import { customerApiLimiter } from "../middleware/rateLimit.js";
 import { requireCustomer, requireCustomerAccounts } from "../middleware/requireCustomer.js";
@@ -24,6 +25,7 @@ import {
 } from "../services/customerSignIn.js";
 import { consentView, optInClientInTx, optOutClientInTx } from "../services/clientConsent.js";
 import { findShopByHandle } from "../services/shopByHandle.js";
+import { joinShop } from "../services/joinShop.js";
 import { resolveIdentifier } from "./customerAuth.js";
 import { logger } from "../logger.js";
 import { claimTierOpening, openingsForAccount } from "../engines/tierOpenings.js";
@@ -167,6 +169,54 @@ customerMeRouter.delete("/shops/saved/:key", async (req, res) => {
   res.json({ ok: true });
 });
 
+/** A name as the customer types it: trimmed, and "" means none. */
+const nameField = z
+  .string()
+  .trim()
+  .max(40)
+  .transform((s) => (s.length === 0 ? null : s));
+
+/**
+ * "Join shop": become this shop's client, from the app.
+ *
+ * The customer fills in their name for the shop; their phone and email are the
+ * ones this account PROVED (services/joinShop.ts says why never a typed one).
+ * The shop is found with the same exact lookup as "Find a shop", with the same
+ * single refusal for every miss. A shop that approves new clients answers
+ * "pending" and gets a request on its Clients page; any other answers "joined"
+ * and the shop is in My ChairBack with its Book button straight away.
+ */
+const joinSchema = z
+  .object({ handle: z.string().min(1).max(200), firstName: nameField, lastName: nameField.optional() })
+  .strict();
+
+customerMeRouter.post("/shops/join", async (req, res) => {
+  const parsed = joinSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const { handle, firstName, lastName } = parsed.data;
+  if (!firstName) {
+    res.status(400).json({ error: "name_required" });
+    return;
+  }
+  const shop = await findShopByHandle(handle);
+  // The App Review shop is findable but takes nobody: its clients are seeded.
+  if (!shop || shop.handle === DEMO.SHOP_SLUG) return notFound(res);
+
+  const id = accountId(req);
+  const settings = await runAsOwner(async (tx) => {
+    await tx.customerAccount.update({
+      where: { id },
+      data: { firstName, ...(lastName !== undefined ? { lastName } : {}) },
+    });
+    return tx.shop.findUniqueOrThrow({ where: { id: shop.id }, select: { approveNewClients: true } });
+  });
+  const status = await joinShop(id, { id: shop.id, approveNewClients: settings.approveNewClients });
+  res.json({ status, shop: { name: shop.name, handle: shop.handle, logoUrl: shop.logoUrl, town: shop.town } });
+});
+
 /**
  * Connect a profile the contact alone could not: the customer produces the
  * shop's own link to it (/r/<token>, from their text or email). Accepts the
@@ -301,12 +351,6 @@ async function profile(id: string) {
 customerMeRouter.get("/", async (req, res) => {
   res.json({ profile: await profile(accountId(req)) });
 });
-
-const nameField = z
-  .string()
-  .trim()
-  .max(40)
-  .transform((s) => (s.length === 0 ? null : s));
 
 const profileSchema = z
   .object({ firstName: nameField.optional(), lastName: nameField.optional() })

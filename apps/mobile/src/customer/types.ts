@@ -60,6 +60,8 @@ export interface AmbiguousShop {
 }
 
 export interface Shop extends ShopRef {
+  /** The shop's handle, so "Find a shop" knows it is already theirs. Absent from older API builds. */
+  handle?: string | null;
   heroImageUrl: string | null;
   lastVisitAt: string | null;
   usualService: string | null;
@@ -90,8 +92,9 @@ export interface Home {
   /** Shops with a profile that needs the shop's own link to connect. */
   ambiguous: AmbiguousShop[];
   /**
-   * Shops added by name ("Add to my shops"). Optional: this app can outlive the
-   * API build that answers it, and an older answer simply has none.
+   * Shops added by name, or asked to join and still waiting ("pending").
+   * Optional: this app can outlive the API build that answers it, and an older
+   * answer simply has none.
    */
   saved?: SavedShop[];
 }
@@ -105,6 +108,8 @@ export interface SavedShop {
   logoUrl: string | null;
   town: string | null;
   bookUrl: string;
+  /** Asked to join a shop that approves new clients, not answered yet. Absent from older API builds. */
+  pending?: boolean;
 }
 
 export interface History {

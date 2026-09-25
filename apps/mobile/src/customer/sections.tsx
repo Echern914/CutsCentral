@@ -2,6 +2,7 @@ import { StyleSheet, View } from "react-native";
 import { color, radius, space, TOUCH } from "./theme";
 import {
   calendarBlock,
+  countLabel,
   dayLabel,
   progressLine,
   remainingLine,
@@ -179,7 +180,7 @@ export function ShopList({ shops, onOpen, now }: { shops: Shop[]; onOpen: (shop:
           <Row
             onPress={() => onOpen(shop)}
             chevron={false}
-            leading={<Avatar uri={shop.heroImageUrl ?? shop.logoUrl} name={shop.name} size={52} />}
+            leading={<Avatar uri={shop.logoUrl ?? shop.heroImageUrl} name={shop.name} size={52} />}
             title={shop.name}
             subtitle={shopSubtitle(shop, now)}
             trailing={
@@ -197,9 +198,12 @@ export function ShopList({ shops, onOpen, now }: { shops: Shop[]; onOpen: (shop:
 }
 
 /**
- * Shops added by name. The row opens the shop's booking page; the trailing
- * "Remove" is its own target, so taking a shop off the list is never a
- * mis-tap on the row.
+ * Shops added by name, and shops asked to join that haven't answered yet.
+ *
+ * The row opens the shop's page. The trailing action - "Remove", or "Cancel"
+ * for a waiting request - is its own 44pt target beside the row rather than
+ * inside it (the history row's pattern), so it is never a mis-tap on the row
+ * and VoiceOver reaches it as a button of its own.
  */
 export function SavedShopList({
   shops,
@@ -212,27 +216,44 @@ export function SavedShopList({
 }) {
   return (
     <Group>
-      {shops.map((shop, i) => (
-        <View key={shop.key}>
-          {i > 0 ? <Separator inset={space.s2 + 52 + 12} /> : null}
-          <Row
-            onPress={() => onOpen(shop)}
-            chevron={false}
-            leading={<Avatar uri={shop.logoUrl} name={shop.name} size={52} />}
-            title={shop.name}
-            subtitle={shop.town ? `Saved · ${shop.town}` : "Saved"}
-            trailing={
-              <Tap onPress={() => onRemove(shop)} accessibilityLabel={`Remove ${shop.name} from your shops`}>
+      {shops.map((shop, i) => {
+        const status = shop.pending ? "Pending" : "Saved";
+        const subtitle = shop.town ? `${status} · ${shop.town}` : status;
+        const spoken = shop.pending ? "Pending: waiting for them to accept you" : "Saved";
+        return (
+          <View key={shop.key}>
+            {i > 0 ? <Separator inset={space.s2 + 52 + 12} /> : null}
+            <View style={styles.historyRow}>
+              <Tap
+                onPress={() => onOpen(shop)}
+                accessibilityLabel={`${shop.name}. ${spoken}${shop.town ? `, ${shop.town}` : ""}`}
+                accessibilityHint="Opens the shop's page"
+                pressedStyle={styles.rowPressed}
+                style={styles.savedMain}
+              >
+                <Avatar uri={shop.logoUrl} name={shop.name} size={52} />
+                <View style={styles.flex}>
+                  <Txt variant="body" numberOfLines={2}>
+                    {shop.name}
+                  </Txt>
+                  <Txt variant="subhead" tone="secondary" numberOfLines={2}>
+                    {subtitle}
+                  </Txt>
+                </View>
+              </Tap>
+              <Tap
+                onPress={() => onRemove(shop)}
+                accessibilityLabel={shop.pending ? `Cancel your request to join ${shop.name}` : `Remove ${shop.name} from your shops`}
+                style={styles.again}
+              >
                 <Txt variant="subhead" tone="secondary">
-                  Remove
+                  {shop.pending ? "Cancel" : "Remove"}
                 </Txt>
               </Tap>
-            }
-            accessibilityLabel={`${shop.name}, saved${shop.town ? `, ${shop.town}` : ""}`}
-            accessibilityHint="Opens the shop's booking page"
-          />
-        </View>
-      ))}
+            </View>
+          </View>
+        );
+      })}
     </Group>
   );
 }
@@ -355,7 +376,7 @@ export function RewardProgramCard({ program, now = new Date() }: { program: Rewa
       ) : null}
 
       {program.cards.map((card) => {
-        const line = card.next ? progressLine(card.balance, card.next.cost, card.unit) : `${card.balance} ${card.unit}`;
+        const line = card.next ? progressLine(card.balance, card.next.cost, card.unit) : countLabel(Math.max(0, card.balance), card.unit);
         const ready = card.rewards.filter((r) => r.ready);
         return (
           <View key={card.name ?? "default"} style={styles.cardBlock}>
@@ -394,7 +415,7 @@ export function RewardProgramCard({ program, now = new Date() }: { program: Rewa
                       ) : null}
                     </View>
                     <Txt variant="footnote" tone={r.ready ? "gold" : "tertiary"}>
-                      {r.ready ? "Ready" : `${r.cost} ${card.unit === "visits" ? "visits" : "punches"}`}
+                      {r.ready ? "Ready" : countLabel(r.cost, card.unit)}
                     </Txt>
                   </View>
                 ))}
@@ -636,5 +657,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   historyStatus: { marginTop: space.half, flexDirection: "row" },
+  savedMain: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingLeft: space.s2,
+    paddingRight: space.s1,
+    paddingVertical: space.s1 + 4,
+    minHeight: TOUCH + 20,
+  },
   again: { minHeight: TOUCH, justifyContent: "center", paddingHorizontal: space.s2 },
 });

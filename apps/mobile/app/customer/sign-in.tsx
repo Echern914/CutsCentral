@@ -108,15 +108,22 @@ export default function SignInScreen() {
   }
 
   async function finishName(skip: boolean) {
-    if (!pendingToken) return;
+    if (!pendingToken || busy) return;
     setBusy(true);
+    setMessage(null);
     try {
       if (!skip && name.trim()) {
-        await fetch(`${API_ORIGIN}/api/me`, {
+        const res = await fetch(`${API_ORIGIN}/api/me`, {
           method: "PATCH",
           headers: { Authorization: `Bearer ${pendingToken}`, "Content-Type": "application/json" },
           body: JSON.stringify({ firstName: name.trim() }),
         }).catch(() => null);
+        // Signing in anyway would drop the name without a word - and shops
+        // they join are shown this name.
+        if (!res?.ok) {
+          setMessage("We couldn't save your name. Try again, or skip and add it in Profile.");
+          return;
+        }
       }
       await signIn(pendingToken);
     } finally {
@@ -180,10 +187,12 @@ export default function SignInScreen() {
                 {message}
               </Txt>
             ) : null}
+            {/* Back here from "Change number" inside the resend wait: the button
+                counts down rather than being a tap that silently does nothing. */}
             <Button
-              label={channel === "sms" ? "Text me a code" : "Email me a code"}
+              label={`${channel === "sms" ? "Text me a code" : "Email me a code"}${cooldown > 0 ? ` (${cooldown}s)` : ""}`}
               busy={busy}
-              disabled={!contact.trim()}
+              disabled={!contact.trim() || cooldown > 0}
               onPress={() => void sendCode()}
               style={styles.primary}
             />
@@ -258,7 +267,7 @@ export default function SignInScreen() {
               What should we call you?
             </Txt>
             <Txt variant="body" tone="secondary" style={styles.lede}>
-              Just your first name. Shops keep their own records - this is only for your home screen.
+              Just your first name. It's how we greet you, and what shops see when you join them.
             </Txt>
             <TextInput
               value={name}
@@ -272,8 +281,14 @@ export default function SignInScreen() {
               placeholder="First name"
               placeholderTextColor={color.textTertiary}
               accessibilityLabel="First name"
+              maxLength={40}
               style={styles.input}
             />
+            {message ? (
+              <Txt variant="footnote" tone="secondary" accessibilityLiveRegion="polite" style={styles.message}>
+                {message}
+              </Txt>
+            ) : null}
             <Button label="Continue" busy={busy} onPress={() => void finishName(false)} style={styles.primary} />
             <Button label="Skip" variant="plain" onPress={() => void finishName(true)} />
           </View>

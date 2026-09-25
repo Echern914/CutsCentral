@@ -79,6 +79,7 @@ import { recordWaitlistEvent } from "../engines/waitlistAudit.js";
 import { sendReceptionistSms } from "../receptionist/outbound.js";
 import { appendMessage } from "../receptionist/conversation.js";
 import { logger } from "../logger.js";
+import { becomeClient } from "../services/joinShop.js";
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
@@ -589,38 +590,101 @@ function buildClientFilterSql(filter: string, tier: string): Prisma.Sql {
 }
 
 /**
- * Who added this shop to their My ChairBack - "saved your shop".
+ * Who added this shop to their My ChairBack - "saved your shop" - and who is
+ * asking to JOIN it (a shop that approves new clients).
  *
- * 🔴 NAMES AND DATES, NOTHING ELSE. No phone, no email, and nothing that says
- * whether a saver is also a client here: a customer who saved a shop agreed to
- * be seen by name, not to hand over a way to text them. Read as owner - the
- * table is platform-owned and a shop session sees none of it - and filtered to
- * THIS shop in the query itself. Demo accounts never appear.
+ * 🔴 A PLAIN SAVE IS NAMES AND DATES, NOTHING ELSE. No phone, no email, and
+ * nothing that says whether a saver is also a client here: a customer who saved
+ * a shop agreed to be seen by name, not to hand over a way to text them.
+ *
+ * A JOIN REQUEST also shows the verified phone and email, because pressing
+ * Join shop was the customer's agreement to give this shop exactly those, and
+ * the shop is deciding whether to take them on.
+ *
+ * Read as owner - the table is platform-owned and a shop session sees none of
+ * it - and filtered to THIS shop in the query itself. Demo accounts never appear.
  */
 dashboardRouter.get("/saved-by", async (req, res) => {
   const shopId = req.shop!.id;
   const data = await runAsOwner(async (tx) => {
-    const where = { shopId, account: { isDemo: false } };
-    const total = await tx.customerSavedShop.count({ where });
+    const saves = { shopId, joinRequestedAt: null, account: { isDemo: false } };
+    const total = await tx.customerSavedShop.count({ where: saves });
     const rows = await tx.customerSavedShop.findMany({
-      where,
+      where: saves,
       orderBy: { createdAt: "desc" },
       take: 100,
       select: { createdAt: true, account: { select: { firstName: true, lastName: true } } },
     });
-    return { total, rows };
+    const requests = await tx.customerSavedShop.findMany({
+      where: { shopId, joinRequestedAt: { not: null }, account: { isDemo: false } },
+      orderBy: { joinRequestedAt: "asc" },
+      take: 100,
+      select: {
+        id: true,
+        joinRequestedAt: true,
+        account: { select: { firstName: true, lastName: true, phoneE164: true, emailNormalized: true } },
+      },
+    });
+    return { total, rows, requests };
   });
+  const nameOf = (a: { firstName: string | null; lastName: string | null }) =>
+    [a.firstName, a.lastName]
+      .map((part) => part?.trim())
+      .filter(Boolean)
+      .join(" ") || "A ChairBack customer";
   res.json({
     total: data.total,
-    people: data.rows.map((r) => ({
-      name:
-        [r.account.firstName, r.account.lastName]
-          .map((part) => part?.trim())
-          .filter(Boolean)
-          .join(" ") || "A ChairBack customer",
-      savedAt: r.createdAt.toISOString(),
+    people: data.rows.map((r) => ({ name: nameOf(r.account), savedAt: r.createdAt.toISOString() })),
+    requests: data.requests.map((r) => ({
+      id: r.id,
+      name: nameOf(r.account),
+      phone: r.account.phoneE164,
+      email: r.account.emailNormalized,
+      requestedAt: r.joinRequestedAt!.toISOString(),
     })),
   });
+});
+
+/**
+ * Answer a join request. Accept makes them a client exactly as an open shop
+ * would have (services/joinShop.ts: proven contacts only, never a second
+ * record); either answer takes the request off the list. Only a JOIN REQUEST
+ * at THIS shop matches - a plain save, or another shop's row, is the same 404
+ * as an id that never existed.
+ */
+function findJoinRequest(shopId: string, id: string) {
+  return runAsOwner((tx) =>
+    tx.customerSavedShop.findFirst({
+      where: { id, shopId, joinRequestedAt: { not: null }, account: { isDemo: false } },
+      select: { id: true, accountId: true },
+    }),
+  );
+}
+
+const dropJoinRequest = (id: string) =>
+  runAsOwner((tx) => tx.customerSavedShop.deleteMany({ where: { id } }));
+
+dashboardRouter.post("/saved-by/:id/accept", async (req, res) => {
+  const request = await findJoinRequest(req.shop!.id, String(req.params.id));
+  if (!request) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // The client first, then the request: a failure in between leaves a request
+  // that accepting again finishes (becoming a client twice is still once).
+  const status = await becomeClient(request.accountId, req.shop!.id);
+  await dropJoinRequest(request.id);
+  res.json({ ok: true, status });
+});
+
+dashboardRouter.post("/saved-by/:id/decline", async (req, res) => {
+  const request = await findJoinRequest(req.shop!.id, String(req.params.id));
+  if (!request) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  await dropJoinRequest(request.id);
+  res.json({ ok: true });
 });
 
 dashboardRouter.get("/clients", async (req, res) => {

@@ -115,7 +115,7 @@ function HomeBody({ data, onChanged }: { data: Home; onChanged: () => void }) {
       {/* No section action: every row IS "Book" - a third one here was noise. */}
       {data.shops.length > 0 || saved.length > 0 ? (
         <>
-          <SectionHeader title={`Your ${data.vocabulary.providerNounPlural}`} />
+          <SectionHeader title="Your shops" />
           {data.shops.length > 0 ? (
             <ShopList shops={data.shops} onOpen={(shop) => openStorefront(router, shop)} />
           ) : null}
@@ -133,10 +133,10 @@ function HomeBody({ data, onChanged }: { data: Home; onChanged: () => void }) {
         </>
       ) : ambiguous.length === 0 ? (
         <>
-          <SectionHeader title={`Your ${data.vocabulary.providerNounPlural}`} />
+          <SectionHeader title="Your shops" />
           <View style={styles.findCard}>
             <Txt variant="subhead" tone="secondary">
-              Shops you've booked with show up here once you've signed in with the same number or email you gave them. You can also find a shop by name and add it.
+              Shops you've booked with show up here once you've signed in with the same number or email you gave them. You can also find a shop by name and join it.
             </Txt>
             <Button label="Find a shop" variant="secondary" onPress={() => router.navigate("/customer/book")} style={styles.findButton} />
           </View>

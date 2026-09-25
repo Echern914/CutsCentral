@@ -314,6 +314,9 @@ const updateShopSchema = createShopSchema
     slotOpenedTextsEnabled: z.boolean(),
     // Request-before-booking: public native bookings land PENDING until approved.
     requireBookingApproval: z.boolean(),
+    // "Join shop" in the customer app waits for the shop's OK (a request on the
+    // Clients page) instead of making a client at once.
+    approveNewClients: z.boolean(),
     // Automatic appointment reminder PUSHES, per tier (24h / 2h before start).
     // Default ON (push is free; reminders are expected) - see pushReminders.ts.
     pushReminder24hEnabled: z.boolean(),
@@ -1635,6 +1638,7 @@ function serializeShop(shop: {
   walkInAcceptingNow: boolean;
   slotOpenedTextsEnabled: boolean;
   requireBookingApproval: boolean;
+  approveNewClients: boolean;
   pushReminder24hEnabled: boolean;
   pushReminder2hEnabled: boolean;
   notifyPhone: string | null;
@@ -1699,6 +1703,7 @@ function serializeShop(shop: {
     walkInAcceptingNow: shop.walkInAcceptingNow,
     slotOpenedTextsEnabled: shop.slotOpenedTextsEnabled,
     requireBookingApproval: shop.requireBookingApproval,
+    approveNewClients: shop.approveNewClients,
     pushReminder24hEnabled: shop.pushReminder24hEnabled,
     pushReminder2hEnabled: shop.pushReminder2hEnabled,
     notifyPhone: shop.notifyPhone,

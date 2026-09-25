@@ -85,6 +85,8 @@ export interface PortalAppointmentDetail extends PortalAppointment {
 }
 
 export interface PortalShop extends PortalShopRef {
+  /** The shop's handle, so "Find a shop" can tell it is already theirs. */
+  handle: string | null;
   heroImageUrl: string | null;
   lastVisitAt: string | null;
   usualService: string | null;
@@ -131,7 +133,7 @@ export interface PortalHome {
   recent: PortalAppointment[];
   /** Shops with a profile that needs the shop's own link to connect. */
   ambiguous: PortalAmbiguousShop[];
-  /** Shops the customer added by name and has no linked profile at. */
+  /** Shops the customer added by name or asked to join, with no linked profile there. */
   saved: PortalSavedShop[];
 }
 
@@ -151,6 +153,8 @@ export interface PortalSavedShop {
   logoUrl: string | null;
   town: string | null;
   bookUrl: string;
+  /** A "Join shop" request the shop has not answered yet: no Book button until it does. */
+  pending: boolean;
 }
 
 interface ShopRow {
@@ -563,6 +567,7 @@ function shopCards(bundles: PortalShopBundle[], now: Date): PortalShop[] {
       const vocab = vocabularyOf(b.shop);
       return {
         ...b.ref,
+        handle: b.shop.slug,
         heroImageUrl: b.shop.heroImageUrl,
         lastVisitAt,
         usualService: done.find((e) => e.serviceName)?.serviceName ?? null,
@@ -612,7 +617,9 @@ export async function buildHome(accountId: string, now = new Date()): Promise<Po
     upcomingCount: upcoming.length,
     shops: shopCards(bundles, now),
     rewards: programs.map(summarize).filter((s): s is PortalRewardSummary => s !== null),
-    recent: past.slice(0, 3),
+    // Visits that happened. "Past" also holds a cancelled booking for next
+    // week, which is history but not a recent visit.
+    recent: past.filter((e) => Date.parse(e.startsAt) <= now.getTime()).slice(0, 3),
     ambiguous,
     saved,
   };
@@ -629,7 +636,7 @@ async function savedShops(accountId: string, linkedShopIds: Set<string>): Promis
     tx.customerSavedShop.findMany({
       where: { accountId },
       orderBy: { createdAt: "desc" },
-      select: { id: true, shop: { select: PUBLIC_SHOP_SELECT } },
+      select: { id: true, joinRequestedAt: true, shop: { select: PUBLIC_SHOP_SELECT } },
     }),
   );
   const out: PortalSavedShop[] = [];
@@ -644,6 +651,7 @@ async function savedShops(accountId: string, linkedShopIds: Set<string>): Promis
       logoUrl: shop.logoUrl,
       town: shop.town,
       bookUrl: shop.bookUrl,
+      pending: row.joinRequestedAt !== null,
     });
   }
   return out;

@@ -43,7 +43,8 @@ export default function AppointmentScreen() {
         <Txt variant="title3" tone="secondary">
           {timeRange(a.startsAt, a.endsAt, a.timezone)}
         </Txt>
-        {upcoming && until ? (
+        {/* "Tomorrow" is already the title; saying it again is noise. */}
+        {upcoming && until && until !== "tomorrow" ? (
           <Txt variant="subhead" tone="secondary">
             {until[0]!.toUpperCase() + until.slice(1)}
           </Txt>

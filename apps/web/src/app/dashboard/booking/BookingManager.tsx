@@ -424,6 +424,8 @@ function SettingsTab({
   const [buffer, setBuffer] = useState(shop.bookingBufferMin);
   const [slotOpened, setSlotOpened] = useState(shop.slotOpenedTextsEnabled);
   const [requireApproval, setRequireApproval] = useState(shop.requireBookingApproval);
+  // Older API answers lack the field: that is "off", the default.
+  const [approveClients, setApproveClients] = useState(shop.approveNewClients ?? false);
   const [groupsFirst, setGroupsFirst] = useState(shop.bookingGroupsFirst);
   const [remind24h, setRemind24h] = useState(shop.pushReminder24hEnabled);
   const [remind2h, setRemind2h] = useState(shop.pushReminder2hEnabled);
@@ -435,6 +437,7 @@ function SettingsTab({
       bookingUrl: string;
       slotOpened: boolean;
       requireApproval: boolean;
+      approveClients: boolean;
       groupsFirst: boolean;
       remind24h: boolean;
       remind2h: boolean;
@@ -451,6 +454,9 @@ function SettingsTab({
         bookingBufferMin: buffer,
         slotOpenedTextsEnabled: next.slotOpened ?? slotOpened,
         requireBookingApproval: next.requireApproval ?? requireApproval,
+        // Only its own toggle sends it, like the booking link: an unrelated
+        // save never depends on it.
+        ...(next.approveClients !== undefined ? { approveNewClients: next.approveClients } : {}),
         bookingGroupsFirst: next.groupsFirst ?? groupsFirst,
         pushReminder24hEnabled: next.remind24h ?? remind24h,
         pushReminder2hEnabled: next.remind2h ?? remind2h,
@@ -480,6 +486,13 @@ function SettingsTab({
     const next = !requireApproval;
     setRequireApproval(next);
     persist({ requireApproval: next });
+  }
+
+  // Flip "approve new clients who join from the app" and save.
+  function toggleApproveClients() {
+    const next = !approveClients;
+    setApproveClients(next);
+    persist({ approveClients: next });
   }
 
   // Flip "open the public menu with group cards" and save.
@@ -735,6 +748,36 @@ function SettingsTab({
           </div>
         </Card>
       )}
+
+      {/* Every booking mode: joining from the app is about who is a client,
+          not how they book. */}
+      <Card className="p-5">
+        <CardHeader
+          title="Approve new clients"
+          subtitle="Customers can find your shop by name in the ChairBack app and press Join shop. When on, they wait for you to accept them on your Clients page before your shop shows up for them to book."
+        />
+        <div className="mt-4 flex items-center justify-between gap-4">
+          <p className="text-sm text-muted">
+            {approveClients
+              ? "On — new clients wait for you to accept them."
+              : "Off — anyone who joins becomes a client straight away."}
+          </p>
+          <button
+            onClick={toggleApproveClients}
+            disabled={pending}
+            aria-pressed={approveClients}
+            aria-label="Approve new clients"
+            className={cn(
+              "min-h-[40px] shrink-0 rounded-full px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
+              approveClients
+                ? "bg-emerald-soft/15 text-emerald-soft"
+                : "border border-subtle text-muted hover:bg-charcoal-700",
+            )}
+          >
+            {approveClients ? "On" : "Off"}
+          </button>
+        </div>
+      </Card>
 
       <WalkInSettingsCard
         initialEnabled={shop.walkInEnabled}

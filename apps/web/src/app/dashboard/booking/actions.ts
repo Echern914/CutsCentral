@@ -74,6 +74,7 @@ export async function saveBookingSettingsAction(input: {
   bookingBufferMin: number;
   slotOpenedTextsEnabled?: boolean;
   requireBookingApproval?: boolean;
+  approveNewClients?: boolean;
   bookingGroupsFirst?: boolean;
   pushReminder24hEnabled?: boolean;
   pushReminder2hEnabled?: boolean;

@@ -1,48 +1,55 @@
 import { Alert } from "react-native";
 import { useRouter } from "expo-router";
-import { ApiError, errorCopy } from "./api";
+import { WEB_ORIGIN } from "../config";
+import { errorCopy } from "./api";
 import { invalidate, useCustomer } from "./CustomerProvider";
 import type { SavedShop } from "./types";
 
-export type AddOutcome = "added" | "name_required" | "not_found" | "failed";
+export type JoinStatus = "joined" | "pending" | "needs_connecting";
 
 /**
- * "Add to my shops", and taking a shop back off - shared by Home and Book.
+ * Where a shop row opens: the booking page when it is ChairBack's own, else the
+ * shop's page here. A shop that books through Acuity, Square or its own site
+ * has a bookUrl off ChairBack, which the in-app page refuses to load - its
+ * ChairBack page is what carries the Book button that links out.
+ */
+export function shopPageFor(shop: { bookUrl: string; handle: string }): string {
+  return shop.bookUrl.startsWith(`${WEB_ORIGIN}/`) ? shop.bookUrl : `${WEB_ORIGIN}/s/${shop.handle}`;
+}
+
+/**
+ * Joining a shop, and taking a saved shop or a waiting request back off - shared
+ * by Home and Book.
  *
- * Adding is the moment a shop learns this person's name, so the screens say so
- * before the tap, and the API refuses an account with no name (name_required)
- * rather than showing the shop a blank. Removing says the other half out loud:
- * the shop stops seeing that they saved it.
+ * Joining hands the shop the customer's name and proven contacts, so the join
+ * screen says so before the tap. Removing says the other half out loud.
  */
 export function useSavedShopActions() {
   const router = useRouter();
   const { api } = useCustomer();
 
-  function open(shop: { bookUrl: string; name: string }): void {
-    router.push({ pathname: "/customer/link", params: { url: shop.bookUrl, name: shop.name } });
+  function open(shop: SavedShop): void {
+    router.push({ pathname: "/customer/link", params: { url: shopPageFor(shop), name: shop.name } });
   }
 
-  async function add(handle: string): Promise<AddOutcome> {
-    try {
-      await api.send("POST", "/api/me/shops/saved", { handle });
-      invalidate("/api/me/home");
-      return "added";
-    } catch (err) {
-      if (err instanceof ApiError && err.code === "name_required") return "name_required";
-      if (err instanceof ApiError && err.status === 404) return "not_found";
-      Alert.alert(errorCopy(err).title, errorCopy(err).body);
-      return "failed";
-    }
+  async function join(handle: string, firstName: string, lastName: string): Promise<JoinStatus> {
+    const res = await api.send<{ status: JoinStatus }>("POST", "/api/me/shops/join", { handle, firstName, lastName });
+    // The name is the account's too (the greeting), and the shop lists change.
+    invalidate("/api/me");
+    return res.status;
   }
 
   function remove(shop: SavedShop, onRemoved: () => void): void {
+    const pending = shop.pending === true;
     Alert.alert(
-      `Remove ${shop.name}?`,
-      `It comes off your shops, and ${shop.name} will no longer see that you saved them.`,
+      pending ? `Cancel your request to join ${shop.name}?` : `Remove ${shop.name}?`,
+      pending
+        ? `${shop.name} won't see your request any more. You can ask again later.`
+        : `It comes off your shops, and ${shop.name} will no longer see that you saved them.`,
       [
-        { text: "Keep", style: "cancel" },
+        { text: pending ? "Keep waiting" : "Keep", style: "cancel" },
         {
-          text: "Remove",
+          text: pending ? "Cancel request" : "Remove",
           style: "destructive",
           onPress: async () => {
             try {
@@ -58,5 +65,5 @@ export function useSavedShopActions() {
     );
   }
 
-  return { open, add, remove };
+  return { open, join, remove };
 }

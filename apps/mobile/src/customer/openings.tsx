@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Alert, StyleSheet, View } from "react-native";
 import { ApiError, errorCopy } from "./api";
 import { invalidate, useCustomer } from "./CustomerProvider";
-import { dayLabel, timeLabel, timeRange } from "./format";
+import { dayLabel, money, timeLabel, timeRange } from "./format";
 import { color, radius, space } from "./theme";
 import type { Opening } from "./types";
 import { Avatar, Button, Txt } from "./ui";
@@ -55,7 +55,7 @@ export function OpeningCard({
       Alert.alert(
         res.pending ? "Requested" : "You're booked",
         res.pending
-          ? `${opening.shop.name} will confirm your ${dayLabel(opening.startsAt, tz, now).toLowerCase()} time.`
+          ? `${opening.shop.name} will confirm your time: ${dayLabel(opening.startsAt, tz, now)} at ${timeLabel(opening.startsAt, tz)}.`
           : `${dayLabel(opening.startsAt, tz, now)} at ${timeLabel(opening.startsAt, tz)}. It's on your appointments.`,
       );
     } catch (err) {
@@ -90,7 +90,7 @@ export function OpeningCard({
       <Txt variant="title3">{`${dayLabel(opening.startsAt, tz, now)} · ${timeRange(opening.startsAt, opening.endsAt, tz)}`}</Txt>
       {what ? (
         <Txt variant="subhead" tone="secondary">
-          {opening.price === null ? what : `${what} · $${opening.price}`}
+          {opening.price === null ? what : `${what} · ${money(Math.round(opening.price * 100))}`}
         </Txt>
       ) : null}
       <Txt variant="footnote" tone="secondary">

@@ -127,6 +127,9 @@ export function errorCopy(err: unknown): { title: string; body: string } {
       return { title: "One moment", body: "That was a lot of requests at once. Try again in a minute." };
     case "not_found":
       return { title: "Not found", body: "This isn't available any more." };
+    case "invalid":
+      // A write the API refused as malformed is not "couldn't load".
+      return { title: "Check that", body: "Something there didn't look right. Check it and try again." };
     default:
       return { title: "Something went wrong", body: "We couldn't load this. Try again." };
   }

@@ -10,8 +10,9 @@ import {
   type ReactNode,
 } from "react";
 import { Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "expo-router";
-import { API_ORIGIN } from "@/src/config";
+import { API_ORIGIN, STORAGE } from "@/src/config";
 import { getExpoPushToken } from "@/src/push";
 import { ApiError, createApiClient, type ApiClient } from "./api";
 import { clearCustomerSession, loadCustomerSession, saveCustomerSession } from "./sessionStore";
@@ -97,6 +98,10 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
     if (device && token.current && !isDemo) {
       await api.send("POST", "/api/me/devices/remove", { expoPushToken: device }).catch(() => {});
     }
+    // The last shop link opened here is somebody's own record. Signing out is
+    // "I'm done on this phone": the next person must not get it in one tap
+    // from the sign-in screen.
+    await AsyncStorage.removeItem(STORAGE.lastToken).catch(() => {});
     await dropLocal();
   }, [api, dropLocal, isDemo]);
 

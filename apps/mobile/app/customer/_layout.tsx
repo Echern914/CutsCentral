@@ -59,6 +59,8 @@ function Gate() {
         <Stack.Screen name="shop/[key]" options={{ presentation: "fullScreenModal", headerShown: true }} />
         <Stack.Screen name="manage/[id]" options={{ presentation: "modal", headerShown: true, title: "Your appointment" }} />
         <Stack.Screen name="link" options={{ headerShown: true, title: "" }} />
+        {/* The client form for a shop found on Book; dismissing it is "not now". */}
+        <Stack.Screen name="join" options={{ presentation: "modal", headerShown: true, title: "" }} />
         {/* Connecting a profile is a deliberate detour from the home, and
             nothing else can happen until it is answered or dismissed. */}
         <Stack.Screen
