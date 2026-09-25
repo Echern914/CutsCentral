@@ -200,6 +200,70 @@ describe("barber booking alerts", () => {
     expect(sms.body).toMatch(/ - \w{3}, \w{3} \d{1,2}.* \d{1,2}:\d{2}\s[AP]M$/);
   });
 
+  /** Publish a special at `at` and book it as `firstName` C; the manage token. */
+  async function bookSpecial(at: Date, firstName: string): Promise<string> {
+    const pub = await request(app)
+      .post("/api/booking/targeted-slots")
+      .set("Cookie", cookie)
+      .send({ staffId, serviceId, startsAt: at.toISOString(), durationMin: 60, price: 60 });
+    expect(pub.status).toBe(201);
+    const slot = await prisma.targetedSlot.findFirst({
+      where: { shopId, staffId, startsAt: at },
+      select: { id: true },
+    });
+    const res = await request(app).post(`/api/book/${slug}`).send({
+      staffId,
+      serviceId,
+      startsAt: at.toISOString(),
+      firstName,
+      lastName: "C",
+      email: `${firstName.toLowerCase()}-special@example.com`,
+      targetedSlotId: slot!.id,
+    });
+    expect(res.status).toBe(201);
+    return res.body.manageToken as string;
+  }
+
+  it("a booking INTO an evening special says 'After hours' by the name - push AND text", async () => {
+    await bookSpecial(futureAtHour(2, 20), "Isaiah");
+    await waitFor(() => pushes.some((p) => p.payload.title === "New booking"));
+    const push = pushes.find((p) => p.payload.title === "New booking")!;
+    expect(push.payload.body).toContain("Isaiah C (After hours) just booked Haircut with Sam");
+    // The text leg says it too - and waiting on it means it can never land in
+    // the NEXT test's `sent` after beforeEach has cleared it.
+    await waitFor(() =>
+      barberSms().some((s) => s.body.includes("Isaiah C (After hours) just booked Haircut with Sam")),
+    );
+  });
+
+  it("🔴 a DAYTIME special says 'Special', never 'After hours'", async () => {
+    // Noon, inside the 9-5 hours: a lunch special.
+    await bookSpecial(futureAtHour(7, 12), "Jordan");
+    await waitFor(() =>
+      barberSms().some((s) => s.body.includes("Jordan C (Special) just booked Haircut with Sam")),
+    );
+    const push = pushes.find((p) => p.payload.title === "New booking")!;
+    expect(push.payload.body).toContain("Jordan C (Special) just booked");
+    expect(push.payload.body).not.toContain("After hours");
+  });
+
+  it("🔴 a customer moving a special to a regular time: the 'moved' alert no longer calls it After hours", async () => {
+    const manageToken = await bookSpecial(futureAtHour(8, 20), "Mo");
+    await waitFor(() => barberSms().some((s) => s.body.includes("Mo C (After hours) just booked")));
+    pushes = [];
+    sent = [];
+
+    const res = await request(app)
+      .post(`/api/book/manage/${manageToken}/reschedule`)
+      .send({ startsAt: futureAtHour(8, 14).toISOString() });
+    expect(res.status).toBe(200);
+    await waitFor(() => barberSms().some((s) => s.body.includes("moved their")));
+    const push = pushes.find((p) => p.payload.title === "Booking moved")!;
+    expect(push.payload.body).toContain("Mo C moved their Haircut with Sam to");
+    expect(push.payload.body).not.toContain("After hours");
+    expect(push.payload.body).not.toContain("Special");
+  });
+
   it("approval-mode request pushes 'New booking request' with request wording", async () => {
     await request(app)
       .patch("/api/shops/me")

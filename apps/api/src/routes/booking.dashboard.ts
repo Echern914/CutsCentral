@@ -96,6 +96,7 @@ import {
   slotServiceIds,
 } from "../engines/targetedSlotServices.js";
 import { filterBlockedTargeted } from "../engines/targetedSlotAvailability.js";
+import { specialKindOf, specialKinds } from "../engines/specialBooking.js";
 import { staffSpanBlocked } from "../engines/blockedTime.js";
 import { validateUpgradeRule } from "../engines/serviceUpgradeRules.js";
 import {
@@ -2130,6 +2131,13 @@ interface AgendaRow {
   // id. null = uncategorized: a block, or a synced visit whose serviceName
   // matched no service. Uncategorized rows still count in the "All" total.
   categoryId: string | null;
+  // Native rows only: this booking was made INTO one of the barber's targeted
+  // slots ("specials"), read from the origin marker the booking write stamps
+  // (bookedVia). `afterHours` narrows it: the special starts outside his
+  // regular weekly hours. The calendar shows "After hours" or "Special" by the
+  // name accordingly - specials can be daytime ones. See engines/specialBooking.
+  special?: boolean;
+  afterHours?: boolean;
 }
 
 /**
@@ -2229,6 +2237,7 @@ type ApptAgendaRow = {
   runningLate: boolean;
   staffId: string;
   notes: string | null;
+  bookedVia: string | null;
   service: { id: string; name: string; color: string | null } | null;
   // Frozen AddOnSnapshotItem[] (see engines/addOns.ts) - JSON on the row.
   addOns: Prisma.JsonValue | null;
@@ -2474,6 +2483,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         runningLate: true,
         staffId: true,
         notes: true,
+        bookedVia: true,
         service: { select: { id: true, name: true, color: true } },
         addOns: true,
         // Chair-side checkout state + any Stripe pre-payment, so the row can
@@ -2485,6 +2495,11 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       },
     })) as unknown as ApptAgendaRow[];
     if (rows.length >= BOOKING_CAP) truncated = true;
+
+    // Booked into a special, and whether that is outside the barber's regular
+    // hours (the chip by the name). One hours read, and only when the window
+    // holds a special at all - see engines/specialBooking.ts.
+    const specialByAppt = await specialKinds(tx, shopId, shop.timezone, rows);
 
     // Nudge affordances, batched: which clients have a push device at all, and
     // how many nudges each appointment already used (max 2, server-enforced).
@@ -2594,6 +2609,17 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
           ? (rewardReadyByClient.get(a.clientId) ?? null)
           : null,
       categoryId: (a.service && categoryOfService.get(a.service.id)) ?? null,
+      // 🔑 `special` is the WRITE-TIME marker, not the slot link: that link
+      // is capacity, not history (a cancel, a declined request or an expired
+      // payment hold hands it back, and the special can then be re-sold or
+      // deleted). "Does a special cover this time" is wrong both ways too: a
+      // barber can book a regular client OVER a special (which turns it off).
+      // The BARBER moving a special keeps the marker - he moved his own
+      // special. A CUSTOMER moving it through their manage link clears it:
+      // they can only land on a regular-grid time at the regular price.
+      // `afterHours` is the time half: a special can be a daytime one, and
+      // only one outside his regular hours is called "After hours".
+      ...specialKindOf(specialByAppt, a.id),
     }));
 
     // Blocked time (barber "Block Off Time") shows on the calendar too, as

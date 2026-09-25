@@ -3253,7 +3253,13 @@ model Appointment {
   // prevent. shouldMirrorOnCreate reads this. Everything else - the busy set,
   // the overlap guards, the sweep - treats both kinds identically.
   holdReason    String?
-  // Origin marker: "receptionist" for AI-created rows; null for everything else.
+  // Origin marker, stamped at create: "receptionist" (AI-created),
+  // "targeted_slot" (booked into a barber's special - the calendar's "After
+  // hours" / "Special" chip reads this), "waitlist_offer", "tier_opening",
+  // "walk_in_queue"; null for an ordinary booking. The one rewrite: a
+  // CUSTOMER rescheduling a special through their manage link clears
+  // "targeted_slot" (they land on a regular-grid time at the regular price,
+  // and the special is released) - a barber's own move keeps it.
   bookedVia     String?
   // Client check-in ("On my way"). A nullable TEXT sub-state of BOOKED, not an
   // AppointmentStatus value (enum adds need an isolated migration; the string
