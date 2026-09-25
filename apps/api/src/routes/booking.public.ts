@@ -31,6 +31,7 @@ import {
 import { materializeSeries, type RecurrencePattern } from "../engines/recurringSeries.js";
 import { prisma, Prisma } from "@chairback/db";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
+import { lastNameHasLetter } from "@chairback/config/clientIdentity";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { staffSpanBlocked } from "../engines/blockedTime.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
@@ -1416,7 +1417,11 @@ const createSchema = z
     // books for someone (dashboard walk-ins, the SMS receptionist): those write
     // Appointment rows directly and a first name is often genuinely all he has.
     // A customer filling in his own details always knows his surname.
-    lastName: z.string().trim().min(1).max(80),
+    // 🔴 At least one LETTER (config clientIdentity.ts lastNameHasLetter): "."
+    // or "-" typed to get past the field is not a name. Not the stricter
+    // two-letter bar the waitlist holds - this page has no Instagram way in,
+    // so that bar would lock out a real one-letter surname.
+    lastName: z.string().trim().min(1).max(80).refine(lastNameHasLetter),
     phone: z.string().trim().max(40).optional().or(z.literal("")),
     // REQUIRED while confirmation SMS is off - see publicBookingEmailRequired().
     // Email is then the only channel a customer is told their booking exists on,

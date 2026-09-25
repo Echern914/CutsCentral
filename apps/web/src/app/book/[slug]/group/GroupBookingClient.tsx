@@ -300,7 +300,10 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
 
   return (
     <Shell title="Book for 2 or 3 people">
-      {notice && (
+      {/* On the review step the notice renders above Confirm instead (below):
+          that step is taller than a phone screen, and a message up here is
+          out of view of the button the customer just tapped. */}
+      {notice && step !== "review" && (
         <p
           role="status"
           className="mb-4 rounded-xl border border-gold/40 bg-gold/10 p-3 text-sm text-offwhite"
@@ -456,7 +459,10 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
               autoComplete="family-name"
               value={lastName}
               maxLength={60}
-              onChange={(e) => setLastName(e.target.value)}
+              onChange={(e) => {
+                setLastName(e.target.value);
+                setNotice(null);
+              }}
             />
             <input
               className="mt-2 w-full rounded-xl border border-subtle bg-charcoal-900 px-4 py-3 text-offwhite"
@@ -466,7 +472,10 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
               autoCorrect="off"
               spellCheck={false}
               value={instagram}
-              onChange={(e) => setInstagram(e.target.value)}
+              onChange={(e) => {
+                setInstagram(e.target.value);
+                setNotice(null);
+              }}
             />
             <p className="mt-1 text-sm text-muted">{TELL_APART_MESSAGE}.</p>
             <input
@@ -489,6 +498,14 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
           </Field>
 
           <Secondary onClick={() => setStep("when")} label="Pick another time" />
+          {notice && (
+            <p
+              role="alert"
+              className="mb-3 rounded-xl border border-gold/40 bg-gold/10 p-3 text-sm text-offwhite"
+            >
+              {notice}
+            </p>
+          )}
           {/* 🔴 THE ONE EXPLICIT CONFIRMATION, and the only place a party is
               written. Disabled while submitting so a double tap cannot fire
               twice; the idempotency key makes a retry safe even if it did. */}

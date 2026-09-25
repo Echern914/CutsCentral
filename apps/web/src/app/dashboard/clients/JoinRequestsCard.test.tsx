@@ -34,6 +34,12 @@ describe("JoinRequestsCard", () => {
     expect(screen.getByText(/\+16265550142 · a@example\.com/)).toBeTruthy();
   });
 
+  it("shows the Instagram handle a first-name-only asker gave, linked", () => {
+    render(<JoinRequestsCard requests={[{ ...req("a", "Mike"), instagram: "mike.fades" }, req("b", "Mike")]} />);
+    const link = screen.getByRole("link", { name: "@mike.fades" });
+    expect(link.getAttribute("href")).toBe("https://instagram.com/mike.fades");
+  });
+
   it("accepting removes the row once the server confirms", async () => {
     answer.mockResolvedValue({ ok: true });
     render(<JoinRequestsCard requests={[req("a", "Pat Joiner"), req("b", "Lee Rowe")]} />);

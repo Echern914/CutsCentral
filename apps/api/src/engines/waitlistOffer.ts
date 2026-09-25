@@ -904,12 +904,19 @@ export async function claimOffer(params: {
         update: {
           firstName,
           lastName: lastName ?? undefined,
-          instagram: instagram ?? undefined,
           phone: phone ?? undefined,
           email: email ?? undefined,
         },
         select: { id: true },
       });
+      // FILL a missing handle, never replace one: the claim's phone is typed,
+      // not proven, and the barber is the one who corrects a handle.
+      if (instagram) {
+        await tx.client.updateMany({
+          where: { id: client.id, instagram: null },
+          data: { instagram },
+        });
+      }
 
       const priceAtBooking = service
         ? effectivePriceAt(service.price === null ? null : Number(service.price), {

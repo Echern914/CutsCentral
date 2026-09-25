@@ -1387,7 +1387,8 @@ model WaitlistEntry {
   shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
   firstName     String
   lastName      String?
-  // Bare, lowercase handle. Carried onto the Client when the offer is claimed.
+  // Bare, lowercase handle. Carried onto the Client when the offer is claimed
+  // or the barber books the entry from the board (filled, never overwritten).
   instagram     String?
   phone         String? // E.164 when parseable, else raw input
   email         String?

@@ -188,6 +188,47 @@ describe("🔴 the booker can be told apart: a last name or an Instagram handle"
     expect((await bookerClient())?.lastName).toBe("Chern");
   });
 
+  it("🔴 a typed phone fills a missing handle but never replaces one on file", async () => {
+    // The form is unauthenticated: anyone who knows a regular's number could
+    // otherwise relabel him "@someone.else" on every screen.
+    const phone = "+12015550177";
+    const regular = await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `tel:${phone}`,
+        magicToken: randomToken(),
+        firstName: "Marcus",
+        lastName: "Reed",
+        phone,
+        instagram: "marcus.reed",
+      },
+    });
+    const res = await createGroup(party(), { phone, email: undefined, instagram: "someone.else" });
+    expect(res.status).toBe(201);
+    expect((await prisma.client.findUniqueOrThrow({ where: { id: regular.id } })).instagram).toBe("marcus.reed");
+
+    await prisma.client.update({ where: { id: regular.id }, data: { instagram: null } });
+    await prisma.appointment.deleteMany({ where: { shopId } });
+    const again = await createGroup(party(), { phone, email: undefined, instagram: "marcus.r" });
+    expect(again.status).toBe(201);
+    expect((await prisma.client.findUniqueOrThrow({ where: { id: regular.id } })).instagram).toBe("marcus.r");
+  });
+
+  it("🔴 two contactless Mikes told apart by handle stay two clients", async () => {
+    // No phone, no email: the key falls back to the name, and the handle is
+    // what the rule accepted as telling them apart - so it is in the key.
+    const noContact = { firstName: "Mike", lastName: undefined, phone: undefined, email: undefined };
+    const a = await createGroup(party(), { ...noContact, instagram: "mike.a" });
+    expect(a.status).toBe(201);
+    const b = await createGroup(party(), { ...noContact, instagram: "mike.b" }, at(16 * 60));
+    expect(b.status).toBe(201);
+    const mikes = await prisma.client.findMany({
+      where: { shopId, firstName: "Mike", instagram: { in: ["mike.a", "mike.b"] } },
+      select: { instagram: true },
+    });
+    expect(mikes.map((m) => m.instagram).sort()).toEqual(["mike.a", "mike.b"]);
+  });
+
   it("a handle that cannot be one is refused, even with a last name", async () => {
     const res = await createGroup(party(), { instagram: "eric chern!" });
     expect(res.status).toBe(400);

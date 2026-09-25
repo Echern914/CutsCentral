@@ -173,6 +173,26 @@ describe("client merge routes", () => {
     expect(merged?.smsConsentSource).toBe("join_page"); // source of the earliest
   });
 
+  it("carries the loser's Instagram handle onto a winner without one - and never replaces the winner's", async () => {
+    // The handle is the one field that told two first-name-only records apart;
+    // the duplicates review usually keeps the OLDER record (no handle), so a
+    // merge that dropped it would lose exactly what the customer gave.
+    async function mergeWith(winnerIg: string | null, loserIg: string | null) {
+      const winner = await addClient(cookieA, "WHandle");
+      const loser = await addClient(cookieA, "LHandle");
+      await forShop(shopIdA).client.update({ where: { id: winner }, data: { instagram: winnerIg } });
+      await forShop(shopIdA).client.update({ where: { id: loser }, data: { instagram: loserIg } });
+      const res = await request(app)
+        .post(`/api/dashboard/clients/${winner}/merge`)
+        .set("Cookie", cookieA)
+        .send({ loserId: loser });
+      expect(res.status).toBe(200);
+      return (await forShop(shopIdA).client.findFirst({ where: { id: winner } }))?.instagram;
+    }
+    expect(await mergeWith(null, "mike.fades")).toBe("mike.fades");
+    expect(await mergeWith("own.handle", "mike.fades")).toBe("own.handle");
+  });
+
   it("keeps balance correct when the loser's ledger had a reversal", async () => {
     const winner = await addClient(cookieA, "WRev");
     const loser = await addClient(cookieA, "LRev");

@@ -1546,6 +1546,8 @@ export interface AppointmentDetail {
   clientName: string;
   /** Bare Instagram handle, so two clients with one name can be told apart. */
   clientInstagram?: string | null;
+  /** Group members only: the BOOKER's handle (the member is someone else). */
+  bookedByInstagram?: string | null;
   serviceName: string | null;
   staffName: string | null;
   startsAt: string;

@@ -556,12 +556,17 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
     return;
   }
   const plan = result.plan;
-  const acuityClientKey = deriveAcuityClientKey({
+  const baseKey = deriveAcuityClientKey({
     phone,
     email: d.email || null,
     firstName: d.firstName,
     lastName: who.lastName,
   });
+  // No phone and no email: the key is only the name. The handle is what the
+  // rule accepted as telling this booker apart, so it has to be in the key -
+  // or two contactless "Mike"s become one client. (Handles are [a-z0-9._].)
+  const acuityClientKey =
+    baseKey.startsWith("anon:") && who.instagram ? `${baseKey}@ig:${who.instagram}` : baseKey;
   const consented = d.smsConsent === true;
 
   // Collected inside the transaction, acted on after it commits.
@@ -603,12 +608,19 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
         update: {
           firstName: d.firstName,
           lastName: who.lastName ?? undefined,
-          instagram: who.instagram ?? undefined,
           phone: phone ?? undefined,
           email: d.email || undefined,
         },
         select: { id: true },
       });
+      // A typed phone FILLS a missing handle and never replaces one: this form
+      // is unauthenticated, and the barber is the one who corrects a handle.
+      if (who.instagram) {
+        await tx.client.updateMany({
+          where: { id: client.id, instagram: null },
+          data: { instagram: who.instagram },
+        });
+      }
       if (consented) {
         await tx.client.updateMany({
           where: { id: client.id, smsConsentAt: null },

@@ -718,6 +718,13 @@ function Hero({
             <InstagramHandle handle={detail.clientInstagram} />
           </p>
         )}
+        {/* A group member points at the booker's client: labelled, never
+            shown bare under the attendee's name as if it were theirs. */}
+        {detail?.bookedByInstagram && (
+          <p className="mt-1 text-sm text-muted">
+            Booked by <InstagramHandle handle={detail.bookedByInstagram} />
+          </p>
+        )}
 
         <div className="mt-2.5 flex flex-wrap items-center justify-center gap-1.5">
           <span

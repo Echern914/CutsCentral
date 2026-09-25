@@ -1411,7 +1411,11 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
 
   // Best-effort barber alert (identical to the lead form). Never fails the join.
   const contact = phone ?? email ?? "no contact info";
-  const body = `New waitlist join at ${shop.name} from ${d.firstName} (${contact})`;
+  // The whole name and the handle: the detail the join now requires is the
+  // detail that tells this Mike from the last one, straight from the alert.
+  const joiner =
+    [d.firstName, who.lastName].filter(Boolean).join(" ") + (who.instagram ? ` @${who.instagram}` : "");
+  const body = `New waitlist join at ${shop.name} from ${joiner} (${contact})`;
   if (shop.notifyPhone) {
     if (apiEnv().DRY_RUN || !smsEnabled()) {
       logger.info(

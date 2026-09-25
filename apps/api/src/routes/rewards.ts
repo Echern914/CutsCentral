@@ -691,6 +691,21 @@ rewardsRouter.post("/:magicToken/delete", async (req, res) => {
       where: { clientId: client.id },
       data: { firstName: "Deleted", lastName: null, phone: null, email: null },
     });
+    // Waitlist entries linked to this client carry their own copy of the name,
+    // Instagram handle, contact and a freeform note. The row stays (the shop's
+    // waitlist history); the person does not.
+    await tx.waitlistEntry.updateMany({
+      where: { clientId: client.id },
+      data: {
+        firstName: "Deleted",
+        lastName: null,
+        instagram: null,
+        phone: null,
+        email: null,
+        note: null,
+        smsConsentPhone: null,
+      },
+    });
     // Strip every identifier, kill the link, and mark the row opted-out +
     // archived so it drops off the shop's active book. acuityClientKey is unique
     // per (shop, key) and holds the normalized phone, so it must be replaced
@@ -700,6 +715,7 @@ rewardsRouter.post("/:magicToken/delete", async (req, res) => {
       data: {
         firstName: null,
         lastName: null,
+        instagram: null,
         phone: null,
         email: null,
         notes: null,

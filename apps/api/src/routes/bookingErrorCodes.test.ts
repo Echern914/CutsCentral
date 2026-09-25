@@ -205,6 +205,19 @@ describe("an invalid email is an EMAIL problem", () => {
     // The legacy string is untouched, so nothing that already reads it breaks.
     expect(res.body.error).toBe("invalid_input");
   });
+
+  it("🔴 punctuation typed to get past the field is not a last name", async () => {
+    // The page REQUIRES a last name so two Mikes can be told apart; "." or "-"
+    // satisfied that bar before and told the barber nothing.
+    for (const lastName of [".", "-", " ? "]) {
+      const startsAt = await anOpenSlot(21);
+      const res = await request(app)
+        .post(`/api/book/${slug}`)
+        .send(validBody(startsAt, { lastName }));
+      expect(res.status).toBe(400);
+      expect(res.body.field).toBe("lastName");
+    }
+  });
 });
 
 describe("only the calendar may say the slot is gone", () => {

@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useToast } from "@/components/ui/Toast";
+import { INVALID_INSTAGRAM_MESSAGE } from "@chairback/config/clientIdentity";
 import {
   archiveClientAction,
   editClientAction,
@@ -22,6 +23,7 @@ export function EditClient({
   lastName,
   phone,
   email,
+  instagram,
   archived,
 }: {
   clientId: string;
@@ -29,6 +31,8 @@ export function EditClient({
   lastName: string | null;
   phone: string | null;
   email: string | null;
+  /** Bare handle; the barber is the one who can correct or clear it. */
+  instagram: string | null;
   archived: boolean;
 }) {
   const { toast } = useToast();
@@ -40,6 +44,7 @@ export function EditClient({
   const [fLast, setFLast] = useState(lastName ?? "");
   const [fPhone, setFPhone] = useState(phone ?? "");
   const [fEmail, setFEmail] = useState(email ?? "");
+  const [fInstagram, setFInstagram] = useState(instagram ?? "");
 
   function save() {
     const first = fFirst.trim();
@@ -54,11 +59,13 @@ export function EditClient({
       lastName?: string | null;
       phone?: string | null;
       email?: string | null;
+      instagram?: string | null;
     } = {};
     if (first !== (firstName ?? "")) fields.firstName = first;
     if (fLast.trim() !== (lastName ?? "")) fields.lastName = fLast.trim();
     if (fPhone.trim() !== (phone ?? "")) fields.phone = fPhone.trim();
     if (fEmail.trim() !== (email ?? "")) fields.email = fEmail.trim();
+    if (fInstagram.trim() !== (instagram ?? "")) fields.instagram = fInstagram.trim();
 
     if (Object.keys(fields).length === 0) {
       setEditing(false);
@@ -71,6 +78,8 @@ export function EditClient({
         toast("Client updated", "success");
       } else if (r.error === "invalid_phone") {
         toast("That phone number isn't valid. Use a US number like (302) 555-0142.", "error");
+      } else if (r.error === "invalid_instagram") {
+        toast(INVALID_INSTAGRAM_MESSAGE, "error");
       } else {
         toast("Couldn't update client.", "error");
       }
@@ -126,6 +135,17 @@ export function EditClient({
             type="email"
             placeholder="Email"
             maxLength={160}
+            className={field}
+          />
+          <input
+            value={fInstagram}
+            onChange={(e) => setFInstagram(e.target.value)}
+            placeholder="Instagram @handle"
+            aria-label="Instagram"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            maxLength={200}
             className={field}
           />
         </div>

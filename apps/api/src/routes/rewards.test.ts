@@ -224,7 +224,7 @@ describe("POST /api/rewards/:magicToken/delete", () => {
     // runAsOwner (RLS off) - with a visit, a push device, a wallet pass, and a
     // nudge whose body carries the first name (the off-row PII we must scrub).
     const delToken = randomToken();
-    const { clientId, visitId, nudgeId, convoId } = await runAsOwner(async (tx) => {
+    const { clientId, visitId, nudgeId, convoId, entryId } = await runAsOwner(async (tx) => {
       const client = await tx.client.create({
         data: {
           shopId,
@@ -232,6 +232,7 @@ describe("POST /api/rewards/:magicToken/delete", () => {
           magicToken: delToken,
           firstName: "Deletes",
           lastName: "Herself",
+          instagram: "deletes.herself",
           phone: "+13025550000",
           email: "del@test.local",
           optedOut: false,
@@ -273,11 +274,27 @@ describe("POST /api/rewards/:magicToken/delete", () => {
           messages: { create: { shopId, role: "user", content: "Hi, it's Deletes" } },
         },
       });
+      // A waitlist entry linked to this client: its own copy of the name,
+      // handle and contact, which the Client row's anonymization never reaches.
+      const entry = await tx.waitlistEntry.create({
+        data: {
+          shopId,
+          clientId: client.id,
+          firstName: "Deletes",
+          lastName: "Herself",
+          instagram: "deletes.herself",
+          phone: "+13025550000",
+          email: "del@test.local",
+          note: "Deletes prefers mornings",
+          smsConsentPhone: "+13025550000",
+        },
+      });
       return {
         clientId: client.id,
         visitId: visit.id,
         nudgeId: nudge.id,
         convoId: convo.id,
+        entryId: entry.id,
       };
     });
 
@@ -294,6 +311,7 @@ describe("POST /api/rewards/:magicToken/delete", () => {
     expect(after).not.toBeNull();
     expect(after!.firstName).toBeNull();
     expect(after!.lastName).toBeNull();
+    expect(after!.instagram).toBeNull();
     expect(after!.phone).toBeNull();
     expect(after!.email).toBeNull();
     expect(after!.smsConsentAt).toBeNull();
@@ -314,6 +332,18 @@ describe("POST /api/rewards/:magicToken/delete", () => {
     // The AI-receptionist thread (phone + transcript) is deleted outright.
     const convo = await prisma.receptionistConversation.findUnique({ where: { id: convoId } });
     expect(convo).toBeNull();
+    // The linked waitlist entry keeps its row (the shop's history) but none of
+    // the person: name, handle, contact and freeform note are gone.
+    const entry = await prisma.waitlistEntry.findUnique({ where: { id: entryId } });
+    expect(entry).toMatchObject({
+      firstName: "Deleted",
+      lastName: null,
+      instagram: null,
+      phone: null,
+      email: null,
+      note: null,
+      smsConsentPhone: null,
+    });
     const keptVisit = await prisma.visit.findUnique({ where: { id: visitId } });
     expect(keptVisit).not.toBeNull();
   });

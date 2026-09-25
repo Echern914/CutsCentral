@@ -63,7 +63,7 @@ async function savedBy(cookie = ownerCookie) {
   expect(res.status).toBe(200);
   return res.body as {
     people: { name: string }[];
-    requests: { id: string; name: string; phone: string | null; email: string | null }[];
+    requests: { id: string; name: string; phone: string | null; email: string | null; instagram?: string | null }[];
   };
 }
 
@@ -131,8 +131,8 @@ describe("Join shop - an open shop", () => {
   it("pressing Join twice is still one client", async () => {
     const phone = randomPhone();
     const me = await account({ phone });
-    expect((await join(me.token, { handle: open.slug, firstName: "Twice", lastName: "T" })).body.status).toBe("joined");
-    expect((await join(me.token, { handle: open.slug, firstName: "Twice", lastName: "T" })).body.status).toBe("joined");
+    expect((await join(me.token, { handle: open.slug, firstName: "Twice", lastName: "Tanner" })).body.status).toBe("joined");
+    expect((await join(me.token, { handle: open.slug, firstName: "Twice", lastName: "Tanner" })).body.status).toBe("joined");
     expect(await clientsAt(open.id, phone)).toHaveLength(1);
   });
 
@@ -194,7 +194,7 @@ describe("Join shop - an open shop", () => {
     const me = await account({ firstName: "Saver", phone: randomPhone() });
     await request(app).post("/api/me/shops/saved").set("Authorization", `Bearer ${me.token}`).send({ handle: open.slug });
     expect(await prisma.customerSavedShop.count({ where: { accountId: me.id } })).toBe(1);
-    expect((await join(me.token, { handle: open.slug, firstName: "Saver", lastName: "S" })).body.status).toBe("joined");
+    expect((await join(me.token, { handle: open.slug, firstName: "Saver", lastName: "Sato" })).body.status).toBe("joined");
     expect(await prisma.customerSavedShop.count({ where: { accountId: me.id } })).toBe(0);
   });
 });
@@ -260,7 +260,7 @@ describe("Join shop - a shop that approves new clients", () => {
     expect(await clientsAt(open.id, phone)).toHaveLength(0);
 
     const asker = await account({ phone: randomPhone() });
-    await join(asker.token, { handle: otherShop.slug, firstName: "Else", lastName: "E" });
+    await join(asker.token, { handle: otherShop.slug, firstName: "Else", lastName: "Ellis" });
     const theirs = await prisma.customerSavedShop.findFirstOrThrow({ where: { accountId: asker.id, shopId: otherShop.id } });
     for (const action of ["accept", "decline"]) {
       const res = await request(app).post(`/api/dashboard/saved-by/${theirs.id}/${action}`).set("Cookie", ownerCookie);
@@ -271,7 +271,7 @@ describe("Join shop - a shop that approves new clients", () => {
 
   it("the customer can take their request back", async () => {
     const me = await account({ phone: randomPhone() });
-    await join(me.token, { handle: otherShop.slug, firstName: "Undo", lastName: "U" });
+    await join(me.token, { handle: otherShop.slug, firstName: "Undo", lastName: "Upton" });
     const row = (await home(me.token)).saved.find((s) => s.handle === otherShop.slug)!;
     const res = await request(app).delete(`/api/me/shops/saved/${row.key}`).set("Authorization", `Bearer ${me.token}`);
     expect(res.status).toBe(200);
@@ -336,6 +336,8 @@ describe("🔴 Join shop - a last name or an Instagram handle, so the shop can t
     const tag = randomToken(4).toLowerCase();
     await join(me.token, { handle: otherShop.slug, firstName: `Ig${tag}`, instagram: `@ig_${tag}` });
     const req = (await savedBy(otherCookie)).requests.find((r) => r.name.startsWith(`Ig${tag}`));
+    // The barber deciding who this is sees the handle the customer was asked for.
+    expect(req?.instagram).toBe(`ig_${tag}`);
     const ok = await request(app).post(`/api/dashboard/saved-by/${req!.id}/accept`).set("Cookie", otherCookie);
     expect(ok.body.status).toBe("joined");
     expect((await clientsAt(otherShop.id, phone))[0]).toMatchObject({ instagram: `ig_${tag}` });

@@ -221,6 +221,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           lastName={client.lastName}
           phone={client.phone}
           email={client.email}
+          instagram={client.instagram ?? null}
           archived={client.archived}
         />
         {/* Merge folds a duplicate INTO this client; it makes no sense to merge

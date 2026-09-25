@@ -2378,6 +2378,11 @@ export function AppointmentBlock({
         </span>
         <span className={cn(NAME_WRAP_CLS, "flex-1 text-[17px]")}>
           {row.clientName || "Client"}
+          {/* Which Mike: the handle a first-name-only client gave instead of
+              a last name. Plain text - this whole line is the expand toggle. */}
+          {row.clientInstagram && (
+            <span className="ml-1.5 text-sm font-normal text-muted">@{row.clientInstagram}</span>
+          )}
         </span>
         <span
           aria-hidden

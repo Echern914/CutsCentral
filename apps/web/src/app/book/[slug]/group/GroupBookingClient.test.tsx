@@ -189,6 +189,24 @@ describe("🔴 the booker can be told apart (a last name or Instagram)", () => {
     expect(createAction).not.toHaveBeenCalled();
   });
 
+  it("🔴 the refusal shows where the customer is looking: after the details, right above Confirm", async () => {
+    // On a phone the review step is taller than the screen; a notice at the
+    // top of the page is out of view, and Confirm seems to do nothing.
+    await reachReview();
+    fillBooker({ last: "C" });
+    const confirmBtn = screen.getByRole("button", { name: /Confirm 2 appointments/ });
+    fireEvent.click(confirmBtn);
+    const msg = await screen.findByText("Add your last name or Instagram so the shop can tell you apart");
+    expect(msg.getAttribute("role")).toBe("alert");
+    const follows = (a: Node, b: Node) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(screen.getByPlaceholderText("Email"), msg)).toBe(true);
+    expect(follows(msg, confirmBtn)).toBe(true);
+    // Typing the fix clears it.
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Chern" } });
+    expect(screen.queryByText("Add your last name or Instagram so the shop can tell you apart")).toBeNull();
+  });
+
   it("an Instagram handle alone is enough, and goes as the bare handle", async () => {
     createAction.mockResolvedValue({ kind: "booked", groupId: "grp_1", manageToken: "tok_1" });
     await reachReview();
