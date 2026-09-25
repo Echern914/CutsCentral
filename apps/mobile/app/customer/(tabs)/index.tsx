@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import { useRegisterDevice, useResource } from "@/src/customer/CustomerProvider";
 import { Screen } from "@/src/customer/Screen";
 import { errorCopy } from "@/src/customer/api";
+import { ANNOUNCEMENTS_PATH, type Announcements } from "@/src/customer/announcements";
 import { greeting } from "@/src/customer/format";
 import { openAppointment, openDirections, openManage, openStorefront } from "@/src/customer/navigate";
 import { useSavedShopActions } from "@/src/customer/savedShops";
@@ -18,6 +19,7 @@ import {
 import { space } from "@/src/customer/theme";
 import type { Home } from "@/src/customer/types";
 import {
+  BellButton,
   Button,
   ErrorState,
   Placeholder,
@@ -39,6 +41,9 @@ import {
 export default function HomeScreen() {
   const router = useRouter();
   const home = useResource<Home>("/api/me/home");
+  // The bell's count. Its own request, so an API older than the bell (or a
+  // failed call) costs only the badge - never the home.
+  const announcements = useResource<Announcements>(ANNOUNCEMENTS_PATH);
   useRegisterDevice();
 
   const data = home.data;
@@ -47,11 +52,20 @@ export default function HomeScreen() {
   return (
     <Screen
       refreshing={home.refreshing}
-      onRefresh={home.refresh}
+      onRefresh={() => {
+        void announcements.refresh();
+        return home.refresh();
+      }}
       header={
         <View style={styles.header}>
           <Wordmark />
-          <ProfileButton name={firstName} onPress={() => router.navigate("/customer/profile")} />
+          <View style={styles.headerActions}>
+            <BellButton
+              unread={announcements.data?.unreadCount ?? 0}
+              onPress={() => router.push("/customer/announcements")}
+            />
+            <ProfileButton name={firstName} onPress={() => router.navigate("/customer/profile")} />
+          </View>
         </View>
       }
     >
@@ -199,6 +213,7 @@ function HomeBody({ data, onChanged }: { data: Home; onChanged: () => void }) {
 
 const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", minHeight: 44 },
+  headerActions: { flexDirection: "row", alignItems: "center" },
   greeting: { marginTop: space.s2, marginBottom: space.s3 - 4 },
   placeholders: { gap: space.s2 },
   moreUpcoming: { minHeight: 44, justifyContent: "center", alignSelf: "flex-start", marginTop: space.half },

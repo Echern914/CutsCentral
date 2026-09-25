@@ -29,6 +29,7 @@ import { joinShop } from "../services/joinShop.js";
 import { resolveIdentifier } from "./customerAuth.js";
 import { logger } from "../logger.js";
 import { claimTierOpening, openingsForAccount } from "../engines/tierOpenings.js";
+import { announcementsForAccount, markAnnouncementsSeen } from "../services/customerAnnouncements.js";
 import { notifyAppointmentConfirmation, notifyBarberBookingEvent } from "../services/appointmentNotify.js";
 
 /**
@@ -320,6 +321,35 @@ customerMeRouter.post("/openings/:id/book", async (req, res) => {
       res.status(500).json({ error: "internal" });
     }
   }
+});
+
+// --- Announcements ------------------------------------------------------------------------
+
+/**
+ * The bell: what this customer's shops broadcast to THEM, newest first, and how
+ * many are new since they last opened the list (services/customerAnnouncements.ts
+ * says exactly which sends count).
+ */
+customerMeRouter.get("/announcements", async (req, res) => {
+  res.json(await announcementsForAccount(accountId(req)));
+});
+
+/**
+ * Opening the list marks it read - up to `through`, the newest one it showed,
+ * so anything that arrived in between stays new. Omitted means "everything
+ * until now".
+ */
+const announcementsReadSchema = z.object({ through: z.string().datetime().optional() }).strict();
+
+customerMeRouter.post("/announcements/read", async (req, res) => {
+  const parsed = announcementsReadSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const now = new Date();
+  await markAnnouncementsSeen(accountId(req), parsed.data.through ? new Date(parsed.data.through) : now, now);
+  res.json({ ok: true });
 });
 
 // --- Profile ----------------------------------------------------------------------------
