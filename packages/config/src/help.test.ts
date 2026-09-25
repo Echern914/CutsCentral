@@ -249,6 +249,12 @@ describe("findHelp — questions asked cold", () => {
     // Clients
     expectAnswer("how do i add a client", "add-client-manually");
     expectAnswer("how do i text all my clients", "text-everyone");
+    expectAnswer("can i mass text everyone", "text-everyone");
+    // The free channel, which is what feeds the client's Announcements bell.
+    expectAnswer("how do i send an announcement to my clients", "message-all-clients");
+    expectAnswer("how do i send an app notification to all my clients", "message-all-clients");
+    expectAnswer("broadcast a message", "message-all-clients");
+    expectAnswer("can i email all my clients", "message-all-clients");
     expectAnswer("can i see who hasnt been in a while", "who-is-overdue");
     expectAnswer("how do i give someone a free cut", "comp-a-cut");
     expectAnswer("can i send a photo in a text", "picture-message");
@@ -412,7 +418,7 @@ describe("findHelp — messaging many clients", () => {
     "send a message to my gold members",
     "send a notification to all my clients",
     "broadcast",
-  ])("%s -> the Clients-page composer", (q) => expectAnswer(q, "message-clients"));
+  ])("%s -> the Clients-page composer", (q) => expectAnswer(q, "message-all-clients"));
 
   it("texting everyone still answers the text blast, and names the other way", () => {
     expectAnswer("how do I text all my clients at once", "text-everyone");
@@ -422,7 +428,7 @@ describe("findHelp — messaging many clients", () => {
   it("a promo aimed at Gold is offered both ways", () => {
     const res = findHelp("send a promo to only my gold members");
     const ids = [res.answer?.id, ...res.suggestions.map((s) => s.id)];
-    expect(ids).toContain("message-clients");
+    expect(ids).toContain("message-all-clients");
     expect(ids).toContain("promotions");
     expect(helpAnswerById("promotions")?.a).toMatch(/Email or notify/);
   });

@@ -99,6 +99,28 @@ describe("mergeAgendaWindow", () => {
     expect(out).not.toBe(prev);
     expect(out[0]!.paid).toBe(45);
   });
+
+  it("treats gaining or losing the Special / After hours chip as a change", () => {
+    // Held from an API that did not send the flags yet (a deploy in flight):
+    // the chip must appear on the next poll, not only after a reload.
+    const prev = [row("a", JAN)];
+    const gained = mergeAgendaWindow(
+      prev,
+      [row("a", JAN, { special: true, afterHours: true })],
+      WINDOW,
+    );
+    expect(gained).not.toBe(prev);
+    expect(gained[0]!.afterHours).toBe(true);
+    // "After hours" -> "Special" (he extended his hours) is a different chip.
+    const relabelled = mergeAgendaWindow(
+      gained,
+      [row("a", JAN, { special: true, afterHours: false })],
+      WINDOW,
+    );
+    expect(relabelled).not.toBe(gained);
+    // Absent and false are the same chip (none): no re-render for that.
+    expect(mergeAgendaWindow(prev, [row("a", JAN, { special: false, afterHours: false })], WINDOW)).toBe(prev);
+  });
 });
 
 describe("agendaWindowOf", () => {

@@ -15,7 +15,8 @@ import {
 } from "react-native";
 import { color, radius, space, statusColor, TOUCH, type, type TypeStyle, WORDMARK_FONT } from "./theme";
 import { initials } from "./format";
-import { ChevronRight, Offline, Person } from "./icons";
+import { Bell, ChevronRight, Offline, Person } from "./icons";
+import { badgeText, bellLabel } from "./announcements";
 import type { CustomerStatus } from "./types";
 
 /**
@@ -357,6 +358,31 @@ export function ProfileButton({ name, onPress }: { name: string | null; onPress:
   );
 }
 
+/**
+ * The announcements bell in the home header, with the unread count on it. The
+ * badge is gold with a number in it - the count is written, never just a dot.
+ */
+export function BellButton({ unread, onPress }: { unread: number; onPress: () => void }) {
+  const badge = badgeText(unread);
+  return (
+    <Tap
+      onPress={onPress}
+      accessibilityLabel={bellLabel(unread)}
+      accessibilityHint="Opens messages from your shops"
+      style={styles.profileHit}
+    >
+      <Bell size={24} color={color.text} />
+      {badge ? (
+        <View style={styles.bellBadge}>
+          <Text allowFontScaling={false} style={styles.bellBadgeText}>
+            {badge}
+          </Text>
+        </View>
+      ) : null}
+    </Tap>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Status and progress
 // ---------------------------------------------------------------------------
@@ -554,6 +580,21 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   profileText: { color: color.text, fontSize: 13, fontWeight: "600" },
+  bellBadge: {
+    position: "absolute",
+    top: 5,
+    right: 3,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: color.gold,
+    borderWidth: 2,
+    borderColor: color.bg,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bellBadgeText: { color: color.onGold, fontSize: 10, fontWeight: "700" },
 
   status: { flexDirection: "row", alignItems: "center", gap: 6 },
   statusDot: { width: 7, height: 7, borderRadius: 3.5 },

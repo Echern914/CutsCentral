@@ -13,6 +13,7 @@ import { Card } from "@/components/ui/Card";
 import { Avatar } from "@/components/ui/Avatar";
 import { BarberWalkIns } from "./BarberWalkIns";
 import { BarberClients } from "./BarberClients";
+import { SpecialChip } from "./SpecialChip";
 
 export interface BarberRow {
   id: string;
@@ -27,6 +28,10 @@ export interface BarberRow {
   etaMinutes: number | null;
   runningLate: boolean;
   price: string | null;
+  /** Booked into one of his specials - the same chip the owner's calendar shows. */
+  special?: boolean;
+  /** ...outside his regular hours: the chip says "After hours". */
+  afterHours?: boolean;
 }
 
 export interface BarberHomeData {
@@ -141,10 +146,15 @@ export function BarberHome({
                       style={{ backgroundColor: r.color ?? "#3F3F46" }}
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-offwhite">
-                        {timeFmt.format(new Date(r.startsAt))} ·{" "}
-                        {r.clientName || "Client"}
-                      </p>
+                      {/* The chip sits beside the name without stealing its
+                          truncation: the name line shrinks, the chip doesn't. */}
+                      <div className="flex min-w-0 items-center gap-2">
+                        <p className="min-w-0 truncate text-sm font-medium text-offwhite">
+                          {timeFmt.format(new Date(r.startsAt))} ·{" "}
+                          {r.clientName || "Client"}
+                        </p>
+                        {r.special && <SpecialChip afterHours={r.afterHours} />}
+                      </div>
                       <p className="mt-0.5 truncate text-xs text-muted">
                         {r.service}
                         {r.closed && ` · ${r.status.toLowerCase().replace("_", " ")}`}

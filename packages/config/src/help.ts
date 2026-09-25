@@ -1389,17 +1389,22 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open promotions", featureId: "promotions" },
   },
   {
-    // The composer Drick went looking for on Promotions ("send to only gold or
-    // whatever tier member"). It already did that - nothing here named it.
+    // The free channel, and the one Drick went looking for on Promotions
+    // ("send to only gold or whatever tier member"). Announcement / broadcast
+    // questions used to land on text-everyone and send the barber to spend SMS
+    // allowance on something an app notification does for nothing - and a text
+    // never reaches the client's Announcements.
     // Multi-word keywords only: a bare "email" would swallow every email question.
-    id: "message-clients",
-    q: "How do I send a message to all my clients, or just my Gold members?",
-    a: "Use Message your clients on the Clients page. Write it once and send it as an app notification (free) or an email (counts against your monthly email allowance) — to everyone, or only the loyalty tiers you pick, like just your Gold members.\n\nIt uses no texts and works on every plan. Running a promo? Tap Email or notify on it and the message starts already written.",
+    id: "message-all-clients",
+    q: "How do I send an announcement to all my clients, or just my Gold members?",
+    a: "Use Message your clients on the Clients page. Send it as an app notification — free, and it reaches everyone signed in to the ChairBack app — or as an email, which counts against your monthly email allowance. Send it to everyone, or only the loyalty tiers you pick, like just your Gold members.\n\nIt uses no texts and works on every plan. Every message that reaches a client also stays in their Announcements, the bell in the ChairBack app, so it's still there after they swipe the notification away.\n\nRunning a promo? Tap Email or notify on it and the message starts already written. Want to text everyone instead? That's a promotion, and it uses your text allowance.",
     keywords: [
-      "message all clients", "message my clients", "message my gold", "gold members", "silver members",
-      "bronze members", "tier members", "only gold", "only my gold", "email all my clients", "email my clients",
-      "email everyone", "email my gold", "notify my clients", "notification to all", "app notification",
-      "push notification", "announcement", "broadcast", "newsletter",
+      "announcement", "announcements", "broadcast", "newsletter", "send news",
+      "message all clients", "message my clients", "message everyone", "message my gold",
+      "gold members", "silver members", "bronze members", "tier members", "only gold", "only my gold",
+      "email all my clients", "email my clients", "email everyone", "email my gold",
+      "notify my clients", "notify all my clients", "notification to all", "app notification",
+      "app notification to everyone", "push notification",
     ],
     category: "clients",
     action: { label: "Open clients", featureId: "clients" },

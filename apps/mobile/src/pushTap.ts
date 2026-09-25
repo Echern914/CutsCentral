@@ -16,6 +16,9 @@ export function routeForNotification(data: unknown): string | null {
   if (!url) return null;
   // An opening is time-critical and lives on Profile, under "Held for you".
   if (/[?&]opening=[^&]+/.test(url)) return "/customer/profile";
+  // A shop's announcement (a broadcast) stays on the Announcements screen
+  // after the notification is swiped away - that is where the tap goes.
+  if (/[?&]announcement=[^&]+/.test(url)) return "/customer/announcements";
   // Everything else keeps today's behaviour: the app opens where it was.
   return null;
 }

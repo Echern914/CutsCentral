@@ -166,6 +166,8 @@ export interface Resource<T> {
   /** Showing cached data because the latest request failed offline. */
   stale: boolean;
   refresh: () => Promise<void>;
+  /** Refetch quietly - no pull-to-refresh spinner - as a focus does. */
+  reload: () => Promise<void>;
 }
 
 export function useResource<T>(path: string | null): Resource<T> {
@@ -214,5 +216,6 @@ export function useResource<T>(path: string | null): Resource<T> {
     refreshing,
     stale: data !== undefined && error instanceof ApiError && error.kind === "offline",
     refresh: () => load("refresh"),
+    reload: () => load("focus"),
   };
 }
