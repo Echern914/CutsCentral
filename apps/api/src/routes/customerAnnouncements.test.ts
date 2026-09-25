@@ -15,9 +15,11 @@ import { mergeClients } from "../services/client.js";
  * The contract, in the order a reviewer should check it:
  *   1. A customer sees the broadcasts sent to ONE OF THEIR OWN PROFILES - never
  *      another customer's, never a shop they are not a client of.
- *   2. "A send row exists" is not "it was sent to you": every broadcast freezes
- *      a row for the whole client book, so an unsubscribed or not-in-the-group
- *      client has a SKIPPED row, and it must show them nothing.
+ *   2. "A send row exists" is not "it was meant for you": every broadcast
+ *      freezes a row for the whole client book, so an unsubscribed or
+ *      not-in-the-group client has a SKIPPED row, and it must show them
+ *      nothing. But a row the shop DID mean for them shows whether or not the
+ *      email or push got through - notifications off, no email, a bounce.
  *   3. The unread count is everything newer than the account's marker, and
  *      marking read moves the marker only as far as what was shown.
  *
@@ -59,20 +61,28 @@ type SendStatus = "PENDING" | "SENT" | "FAILED" | "SKIPPED" | "ABANDONED";
 
 /**
  * A queued broadcast and its frozen rows, exactly as broadcast.ts and the
- * worker write them: every client in the book gets a row, and a SENT row
- * carries the moment it went.
+ * worker write them: every client in the book gets a row, stamped in the
+ * transaction that queued the blast, and a SENT row carries the moment it went.
  */
 async function broadcast(
   shopId: string,
   opts: {
     body: string;
     subject?: string;
+    channel?: "push" | "email";
     queuedAt: Date;
     sends: { clientId: string; status: SendStatus; reason?: string; sentAt?: Date }[];
   },
 ) {
   const b = await prisma.broadcast.create({
-    data: { shopId, channel: "push", subject: opts.subject ?? null, body: opts.body, status: "SENT", queuedAt: opts.queuedAt },
+    data: {
+      shopId,
+      channel: opts.channel ?? "push",
+      subject: opts.subject ?? null,
+      body: opts.body,
+      status: "SENT",
+      queuedAt: opts.queuedAt,
+    },
     select: { id: true },
   });
   await prisma.broadcastSend.createMany({
@@ -82,6 +92,7 @@ async function broadcast(
       clientId: s.clientId,
       status: s.status,
       reason: s.reason ?? null,
+      createdAt: opts.queuedAt,
       sentAt: s.status === "SENT" ? (s.sentAt ?? opts.queuedAt) : null,
     })),
   });
@@ -169,13 +180,38 @@ beforeAll(async () => {
   // Bravo: refused by the provider, and a send nobody knows landed.
   ids.xFailed = await broadcast(shopB, {
     body: "Never reached X",
-    queuedAt: ago(2 * HOUR),
+    queuedAt: ago(120 * 60_000),
     sends: [{ clientId: xb.id, status: "FAILED" }],
   });
   ids.xAbandoned = await broadcast(shopB, {
     body: "Maybe reached X",
-    queuedAt: ago(2 * HOUR),
+    queuedAt: ago(105 * 60_000),
     sends: [{ clientId: xb.id, status: "ABANDONED" }],
+  });
+  // Bravo, email: no address on file for X, and then X's mailbox bounced.
+  ids.xNoEmail = await broadcast(shopB, {
+    channel: "email",
+    body: "Emailed, but Bravo has no address for X",
+    queuedAt: ago(90 * 60_000),
+    sends: [{ clientId: xb.id, status: "SKIPPED", reason: "no_email" }],
+  });
+  ids.xBounced = await broadcast(shopB, {
+    channel: "email",
+    body: "Emailed, but X's mailbox bounced",
+    queuedAt: ago(75 * 60_000),
+    sends: [{ clientId: xb.id, status: "SKIPPED", reason: "undeliverable" }],
+  });
+  // Alpha, push: X had no device that wanted notifications.
+  ids.xNoApp = await broadcast(shopA, {
+    body: "Pushed, but X has notifications off",
+    queuedAt: ago(70 * 60_000),
+    sends: [{ clientId: xa.id, status: "SKIPPED", reason: "no_app" }],
+  });
+  // Alpha: X's record was archived when this one froze (restored since).
+  ids.xArchived = await broadcast(shopA, {
+    body: "Sent while X was archived",
+    queuedAt: ago(65 * 60_000),
+    sends: [{ clientId: xa.id, status: "SKIPPED", reason: "archived" }],
   });
   // Alpha, still in flight for X.
   ids.xPending = await broadcast(shopA, {
@@ -208,30 +244,51 @@ describe("GET /api/me/announcements", () => {
     expect(res.status).toBe(401);
   });
 
-  it("shows X what was delivered to X's own profiles, newest first", async () => {
+  it("shows X everything the shops sent X's own profiles, newest first by when it was sent", async () => {
     const res = await get(X.token);
     expect(res.status).toBe(200);
-    expect(res.body.announcements.map((a: { id: string }) => a.id)).toEqual([ids.xDelivered, ids.toBoth]);
-    expect(res.body.announcements[0]).toEqual({
+    expect(res.body.announcements.map((a: { id: string }) => a.id)).toEqual([
+      ids.xPending,
+      ids.xNoApp,
+      ids.xBounced,
+      ids.xNoEmail,
+      ids.xAbandoned,
+      ids.xFailed,
+      ids.xDelivered,
+      ids.toBoth,
+    ]);
+    const delivered = res.body.announcements.find((a: { id: string }) => a.id === ids.xDelivered);
+    expect(delivered).toEqual({
       id: ids.xDelivered,
       shop: { name: "Bravo Salon", logoUrl: null },
       title: null,
       body: "New stylist starting Monday",
       sentAt: expect.any(String),
     });
-    expect(res.body.announcements[1]).toMatchObject({ shop: { name: "Alpha Cuts" }, title: "Open Friday" });
-    expect(res.body.unreadCount).toBe(2);
+    expect(res.body.announcements.at(-1)).toMatchObject({ shop: { name: "Alpha Cuts" }, title: "Open Friday" });
+    expect(res.body.unreadCount).toBe(8);
   });
 
-  it("never shows a client a broadcast they were skipped for, or one that did not reach them", async () => {
+  it("shows what the shop sent them even when the email or push never got there", async () => {
     const shown = await idsOf(X.token);
-    // SKIPPED: unsubscribed, and not in the group the barber picked.
+    // Notifications off, no email on file, a bounced mailbox: the bell is the
+    // one place the news can still reach them.
+    expect(shown).toContain(ids.xNoApp);
+    expect(shown).toContain(ids.xNoEmail);
+    expect(shown).toContain(ids.xBounced);
+    // Refused, unknown, or not yet gone: sent to them all the same.
+    expect(shown).toContain(ids.xFailed);
+    expect(shown).toContain(ids.xAbandoned);
+    expect(shown).toContain(ids.xPending);
+  });
+
+  it("never shows a broadcast the shop did not send them", async () => {
+    const shown = await idsOf(X.token);
+    // The customer's own opt-out, the group the barber picked, and a record
+    // that was not a client when it froze.
     expect(shown).not.toContain(ids.xUnsubscribed);
     expect(shown).not.toContain(ids.xNotInGroup);
-    // Not delivered: refused, unknown, or not yet gone.
-    expect(shown).not.toContain(ids.xFailed);
-    expect(shown).not.toContain(ids.xAbandoned);
-    expect(shown).not.toContain(ids.xPending);
+    expect(shown).not.toContain(ids.xArchived);
   });
 
   it("one customer never sees another's shops, and neither sees a stranger's shop", async () => {
@@ -361,7 +418,7 @@ describe("only profiles that are really theirs", () => {
 });
 
 describe("POST /api/me/announcements/read", () => {
-  it("marks read up to what was shown; one that reaches them later is new", async () => {
+  it("marks read up to what was shown; one sent after the list loaded is new", async () => {
     const phone = randomPhone();
     const c = await client(shopB, phone);
     const me = await account(phone);
@@ -369,13 +426,8 @@ describe("POST /api/me/announcements/read", () => {
     const shown = (await get(me.token)).body;
     expect(shown.unreadCount).toBe(1);
 
-    // Queued BEFORE the first one, but it only reached them after the list
-    // was loaded: it is new to them, and marking what they saw leaves it so.
-    await broadcast(shopB, {
-      body: "Slow one",
-      queuedAt: ago(4 * HOUR),
-      sends: [{ clientId: c.id, status: "SENT", sentAt: ago(1 * HOUR) }],
-    });
+    // Sent after the list was loaded: marking what they saw leaves it new.
+    await broadcast(shopB, { body: "Just now", queuedAt: ago(1000), sends: [{ clientId: c.id, status: "PENDING" }] });
     await markRead(me.token, { through: shown.announcements[0].sentAt }).expect(200);
     expect((await get(me.token)).body.unreadCount).toBe(1);
 
@@ -484,7 +536,7 @@ describe("a real push broadcast, end to end", () => {
     expect((await get(me.token)).body).toMatchObject({ announcements: [{ id: b }], unreadCount: 1 });
   });
 
-  it("a customer who switched notifications off is still left out, as delivery would", async () => {
+  it("a customer who switched notifications off is not buzzed, and still finds it in Announcements", async () => {
     const me = await appCustomer({ pushEnabled: false });
     // Somebody reachable, so the blast itself is not refused as "no recipients".
     await appCustomer();
@@ -492,25 +544,39 @@ describe("a real push broadcast, end to end", () => {
     expect(await rowFor(b, me.clientId)).toMatchObject({ status: "SKIPPED", reason: "no_app" });
     await runBroadcastWorker({ shopId: shopD });
     expect(pushed).not.toContain(me.device);
-    expect(await idsOf(me.token)).not.toContain(b);
+    expect((await get(me.token)).body).toMatchObject({ announcements: [{ id: b }], unreadCount: 1 });
   });
 
-  it("a send that settles after the list was read is still new, even within one worker pass", async () => {
+  it("one who switches notifications off after it was queued still finds it too", async () => {
+    const me = await appCustomer();
+    const b = await sendPush("Price change from next month");
+    expect((await rowFor(b, me.clientId)).status).toBe("PENDING");
+    // Visible from the moment it is queued, before the worker has run.
+    expect(await idsOf(me.token)).toEqual([b]);
+
+    await prisma.customerAccount.update({ where: { id: me.id }, data: { pushEnabled: false } });
+    await runBroadcastWorker({ shopId: shopD });
+    expect(await rowFor(b, me.clientId)).toMatchObject({ status: "FAILED", lastError: "no_push_device" });
+    expect(pushed).not.toContain(me.device);
+    expect(await idsOf(me.token)).toEqual([b]);
+  });
+
+  it("a blast queued after the one they read is still new, even when one pass settles both", async () => {
     const me = await appCustomer();
     const first = await sendPush("Open late Friday");
     const second = await sendPush("Correction: open late THURSDAY");
 
-    // One pass settles both, one after the other. Each row carries the moment
-    // IT settled - so marking read through the first (what the customer saw
-    // when its push brought them in) leaves the second one new.
+    // Each shows as of the moment it was queued - so marking read through the
+    // first (what the customer saw when its push brought them in) leaves the
+    // second one new, however the worker's pass orders the two sends.
     await runBroadcastWorker({ shopId: shopD });
     const a = await rowFor(first, me.clientId);
     const z = await rowFor(second, me.clientId);
     expect(a.status).toBe("SENT");
     expect(z.status).toBe("SENT");
-    expect(z.sentAt!.getTime()).toBeGreaterThan(a.sentAt!.getTime());
+    expect(z.createdAt.getTime()).toBeGreaterThan(a.createdAt.getTime());
 
-    await markRead(me.token, { through: a.sentAt!.toISOString() }).expect(200);
+    await markRead(me.token, { through: a.createdAt.toISOString() }).expect(200);
     const after = (await get(me.token)).body;
     expect(after.announcements.map((x: { id: string }) => x.id)).toEqual([second, first]);
     expect(after.unreadCount).toBe(1);
@@ -518,7 +584,7 @@ describe("a real push broadcast, end to end", () => {
 });
 
 describe("a shop merging duplicate records", () => {
-  it("keeps what reached either record in the customer's list, once each", async () => {
+  it("keeps what was sent to either record in the customer's list, once each", async () => {
     const phone = randomPhone();
     const winner = await client(shopC, phone);
     // The duplicate carries a different number, so it never linked on its own.

@@ -2021,8 +2021,10 @@ model BroadcastSend {
   @@unique([broadcastId, clientId])
   @@index([shopId, createdAt])
   @@index([broadcastId, status])
-  // My ChairBack's announcements bell: one customer's delivered rows, newest
-  // first. Without it every home load scans every blast's whole audience.
+  // My ChairBack's announcements bell: one customer's rows. Without it every
+  // home load scans every blast's whole audience. (The bell now orders by
+  // createdAt; a customer has a handful of rows, so the clientId prefix is
+  // what matters and the index stays as it shipped.)
   @@index([clientId, sentAt])
   // The worker's claim scan: due, unclaimed (or stale), oldest first.
   @@index([status, nextAttemptAt])
