@@ -1058,6 +1058,12 @@ publicPageRouter.get("/:slug", async (req, res) => {
   res.json({
     name: shop.name,
     slug: shop.slug,
+    // The shop's own domain, ONLY once proven (the TXT ownership record) - null
+    // before that and for every shop without one. A visit redirected from a
+    // custom domain carries that domain, and the page refuses to render unless
+    // the shop at this slug is the one that owns it: a slug can change hands,
+    // a verified domain cannot (see web lib/customDomainGuard.ts).
+    customDomain: shop.customDomainVerifiedAt ? shop.customDomain : null,
     bio: shop.bio,
     // For vertical-correct copy on the page + OG description ("book your next
     // cut" is wrong for a nail studio). serviceNoun is the shop's custom word

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { APP_NAME } from "@chairback/config/constants";
 import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import { apiPublicGet } from "@/lib/api";
+import { expectedDomain, servesDomain } from "@/lib/customDomainGuard";
 import { BookingClient } from "./BookingClient";
 import { GetTheApp } from "@/components/GetTheApp";
 import { RewardsDoor } from "@/components/RewardsDoor";
@@ -13,6 +14,8 @@ export interface BookShopData {
   shop: {
     name: string;
     slug: string;
+    /** Verified custom domain or null; absent from an older API. See lib/customDomainGuard.ts. */
+    customDomain?: string | null;
     timezone: string;
     /**
      * What this business calls its people and visits, resolved by the API.
@@ -170,21 +173,40 @@ export interface BookShopData {
 // the booking-write overlap guard backstops anyway.
 const BOOK_SHELL_REVALIDATE_S = 30;
 
-async function getData(slug: string): Promise<BookShopData | null> {
+async function getData(slug: string, fresh = false): Promise<BookShopData | null> {
   const res = await apiPublicGet<BookShopData>(
     `/api/book/${encodeURIComponent(slug)}`,
-    BOOK_SHELL_REVALIDATE_S,
+    fresh ? undefined : BOOK_SHELL_REVALIDATE_S,
   );
   return res.ok ? res.data : null;
 }
 
+type SearchParams = Record<string, string | string[] | undefined>;
+
+/**
+ * The booking shell for THIS visit, or null when it must not render. Same
+ * rule as the shop page: a visit from a custom domain books only with the shop
+ * that owns that domain, never with whoever holds the slug now. (The booking
+ * WRITE backstops this too - it takes service and staff ids that belong to
+ * one shop - but a form for the wrong shop must never be shown at all.)
+ */
+async function getDataFor(slug: string, searchParams?: SearchParams): Promise<BookShopData | null> {
+  const expected = expectedDomain(searchParams);
+  const data = await getData(slug);
+  if (expected === null || servesDomain(data?.shop ?? null, expected)) return data;
+  const fresh = await getData(slug, true);
+  return servesDomain(fresh?.shop ?? null, expected) ? fresh : null;
+}
+
 export async function generateMetadata({
   params,
+  searchParams,
 }: {
   params: { slug: string };
+  searchParams?: SearchParams;
 }): Promise<Metadata> {
-  const data = await getData(params.slug);
-  if (!data) return { title: APP_NAME };
+  const data = await getDataFor(params.slug, searchParams);
+  if (!data) return { title: APP_NAME, robots: { index: false } };
   return {
     title: `Book at ${data.shop.name}`,
     description: `Book your appointment at ${data.shop.name}.`,
@@ -199,9 +221,9 @@ export default async function BookPage({
   searchParams,
 }: {
   params: { slug: string };
-  searchParams?: { service?: string; staff?: string };
+  searchParams?: { service?: string; staff?: string; cb_domain?: string };
 }) {
-  const data = await getData(params.slug);
+  const data = await getDataFor(params.slug, searchParams);
   if (!data) notFound();
   // 🔴 A PREFILL, NOT A PERMISSION. `?service=` and `?staff=` only pre-pick
   // what the client could have tapped themselves two screens in - these ids

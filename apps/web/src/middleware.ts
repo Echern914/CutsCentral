@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
+import { PATH_PARAM } from "@/lib/customDomainGuard";
 
 /**
  * Edge middleware, two jobs:
@@ -66,9 +67,13 @@ export function middleware(req: NextRequest) {
   if (host && !isPlatformHost(host)) {
     const url = req.nextUrl.clone();
     url.pathname = `/from-domain/${host.toLowerCase().replace(/:\d+$/, "")}`;
-    url.search = "";
-    // Carry the original path so /book on their domain can land on booking.
-    url.searchParams.set("p", pathname.slice(0, 200));
+    // 🔴 THE VISITOR'S QUERY RIDES ALONG. An Instagram bio link arrives with
+    // utm_source/utm_medium/utm_content and fbclid - the only record of where
+    // the visit came from. This used to clear the query, so every custom-domain
+    // visit reached the shop page looking like it came from nowhere. The
+    // original path goes in a namespaced parameter the resolver strips again,
+    // so /book on their domain can still land on booking.
+    url.searchParams.set(PATH_PARAM, pathname.slice(0, 200));
     return NextResponse.rewrite(url);
   }
 

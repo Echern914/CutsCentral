@@ -474,6 +474,9 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
     shop: {
       name: shop.name,
       slug: shop.slug,
+      // Verified custom domain or null - the booking page's same-shop check
+      // for a visit redirected from a custom domain (see routes/shops.ts).
+      customDomain: shop.customDomainVerifiedAt ? shop.customDomain : null,
       timezone: shop.timezone,
       // The words this business uses, resolved server-side so the booking page
       // never re-derives them. NEUTRAL for a shop that has not chosen a type -
