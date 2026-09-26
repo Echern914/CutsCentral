@@ -48,6 +48,7 @@ vi.mock("@/components/RewardsDoor", () => ({ RewardsDoor: () => null }));
 
 const { middleware } = await import("@/middleware");
 const { GET } = await import("./route");
+const { PATH_HEADER } = await import("@/lib/customDomainGuard");
 const shopPage = await import("@/app/s/[slug]/page");
 const bookPage = await import("@/app/book/[slug]/page");
 
@@ -162,7 +163,10 @@ async function tap(url: string): Promise<Response> {
   expect(rewrite).toBeTruthy();
   const r = new URL(rewrite!);
   const host = decodeURIComponent(r.pathname.replace("/from-domain/", ""));
-  return GET(new NextRequest(r), { params: { host } });
+  // Exactly what Next does with the middleware's request-header override:
+  // the header it set arrives on the route's request.
+  const carried = mw.headers.get(`x-middleware-request-${PATH_HEADER}`);
+  return GET(new NextRequest(r, { headers: carried ? { [PATH_HEADER]: carried } : {} }), { params: { host } });
 }
 
 /** The browser follows a redirect to the platform: which page, with what query. */
@@ -214,7 +218,10 @@ describe("the resolver on a shop's domain", () => {
     for (const [k, v] of new URLSearchParams(IG)) expect(to.searchParams.get(k)).toBe(v);
     expect(to.searchParams.get("cb_domain")).toBe("drickcuttinup.com");
     // The internal path carrier never leaks out.
-    expect(to.searchParams.has("__cb_path")).toBe(false);
+    // Nothing internal rides along: exactly the visitor's query plus the domain.
+    expect([...to.searchParams.keys()].sort()).toEqual(
+      [...new URLSearchParams(IG).keys(), "cb_domain"].sort(),
+    );
     expect(res.headers.get("cache-control")).toBe("private, no-store");
   });
 
@@ -280,8 +287,10 @@ describe("the resolver on a shop's domain", () => {
       lookupFailure = { ok: false, status: 0, data: null, error: "network_error" };
       const log = vi.spyOn(console, "error").mockImplementation(() => {});
       // A crafted internal path and a query value that tries to break the tag.
-      const r = new URL(`https://drickcuttinup.com/from-domain/drickcuttinup.com?q=%22%3E%3Cscript%3E&__cb_path=%2F%2Fevil.example`);
-      const res = await GET(new NextRequest(r), { params: { host: "drickcuttinup.com" } });
+      const r = new URL(`https://drickcuttinup.com/from-domain/drickcuttinup.com?q=%22%3E%3Cscript%3E`);
+      const res = await GET(new NextRequest(r, { headers: { [PATH_HEADER]: "//evil.example" } }), {
+        params: { host: "drickcuttinup.com" },
+      });
       const html = await res.text();
       expect(html).not.toContain("<script>");
       const href = html.match(/<a href="([^"]+)">Try again<\/a>/)![1]!;

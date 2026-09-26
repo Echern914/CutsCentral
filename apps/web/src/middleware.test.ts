@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { ATTRIBUTION_COOKIE, middleware } from "./middleware";
+import { PATH_HEADER } from "./lib/customDomainGuard";
 
 /**
  * The middleware's one change for custom domains: the visitor's own query now
@@ -21,20 +22,23 @@ const rewriteOf = (res: Response): URL | null => {
 };
 
 describe("a shop's own domain", () => {
-  it("🔴 rewrites to the resolver with the visitor's query intact and the path carried", () => {
-    const r = rewriteOf(
-      middleware(request("https://drickcuttinup.com/book?utm_source=ig&utm_medium=social&fbclid=PAZ")),
-    )!;
+  it("🔴 rewrites to the resolver with the visitor's query intact and the path carried in a header", () => {
+    const res = middleware(request("https://drickcuttinup.com/book?utm_source=ig&utm_medium=social&fbclid=PAZ"));
+    const r = rewriteOf(res)!;
     expect(r.pathname).toBe("/from-domain/drickcuttinup.com");
     expect(r.searchParams.get("utm_source")).toBe("ig");
     expect(r.searchParams.get("utm_medium")).toBe("social");
     expect(r.searchParams.get("fbclid")).toBe("PAZ");
-    expect(r.searchParams.get("__cb_path")).toBe("/book");
+    // The path is a REQUEST HEADER override, not a query parameter: a query
+    // parameter added here never reached the route under `next start`.
+    expect([...r.searchParams.keys()].sort()).toEqual(["fbclid", "utm_medium", "utm_source"]);
+    expect(res.headers.get(`x-middleware-request-${PATH_HEADER}`)).toBe("/book");
+    expect(res.headers.get("x-middleware-override-headers")).toContain(PATH_HEADER);
   });
 
   it("a visitor cannot choose the carried path - the real one always wins", () => {
-    const r = rewriteOf(middleware(request("https://drickcuttinup.com/?__cb_path=%2F%2Fevil.example")))!;
-    expect(r.searchParams.getAll("__cb_path")).toEqual(["/"]);
+    const res = middleware(request("https://drickcuttinup.com/", { [PATH_HEADER]: "//evil.example" }));
+    expect(res.headers.get(`x-middleware-request-${PATH_HEADER}`)).toBe("/");
   });
 
   it("a port in the Host header is not part of the name", () => {

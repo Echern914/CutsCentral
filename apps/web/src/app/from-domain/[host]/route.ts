@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { apiPublicGet } from "@/lib/api";
-import { DOMAIN_PARAM, PATH_PARAM, normalizeDomain } from "@/lib/customDomainGuard";
+import { DOMAIN_PARAM, PATH_HEADER, normalizeDomain } from "@/lib/customDomainGuard";
 
 /**
  * Custom-domain resolver. The middleware rewrites every request on a foreign
@@ -40,11 +40,9 @@ const CANONICAL_ORIGIN = "https://getchairback.com";
 /** Our own redirects are never cached: the answer is live, and so is the slug. */
 const NO_STORE = "private, no-store";
 
-/** The visitor's own query, minus our internal path carrier. */
+/** The visitor's own query - utm_*, fbclid, anything their link carried. */
 function visitorQuery(params: URLSearchParams): URLSearchParams {
-  const q = new URLSearchParams(params);
-  q.delete(PATH_PARAM);
-  return q;
+  return new URLSearchParams(params);
 }
 
 function withQuery(base: string, q: URLSearchParams): string {
@@ -59,13 +57,13 @@ function redirect(to: string, status: 302 | 308): NextResponse {
 }
 
 /**
- * The original path on the custom domain, as the middleware carried it. Only
- * ever a local path: anything else (a protocol-relative `//elsewhere`, a
- * backslash trick, a scheme) becomes "/", so the retry link can only ever
- * point back at this same domain.
+ * The original path on the custom domain, as the middleware carried it (the
+ * PATH_HEADER request header). Only ever a local path: anything else (a
+ * protocol-relative `//elsewhere`, a backslash trick, a scheme) becomes "/",
+ * so the retry link can only ever point back at this same domain.
  */
-function originalPath(params: URLSearchParams): string {
-  const p = params.get(PATH_PARAM) ?? "/";
+function originalPath(req: NextRequest): string {
+  const p = req.headers.get(PATH_HEADER) ?? "/";
   if (!p.startsWith("/") || p.startsWith("//") || p.includes("\\") || /[\u0000-\u001f]/.test(p)) {
     return "/";
   }
@@ -135,7 +133,7 @@ export async function GET(
   if (res.ok && res.data?.slug) {
     const slug = encodeURIComponent(res.data.slug);
     // Their /book goes to booking; everything else lands on the shop page.
-    const target = originalPath(incoming).startsWith("/book")
+    const target = originalPath(req).startsWith("/book")
       ? `${CANONICAL_ORIGIN}/book/${slug}`
       : `${CANONICAL_ORIGIN}/s/${slug}`;
     query.set(DOMAIN_PARAM, host);
@@ -156,5 +154,5 @@ export async function GET(
       error: res.error ?? (res.ok ? "no_slug_in_answer" : null),
     }),
   );
-  return retryPage(host, withQuery(originalPath(incoming), query));
+  return retryPage(host, withQuery(originalPath(req), query));
 }

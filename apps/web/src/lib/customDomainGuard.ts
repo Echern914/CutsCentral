@@ -17,11 +17,20 @@
 export const DOMAIN_PARAM = "cb_domain";
 
 /**
- * Where the middleware carries the visitor's ORIGINAL path to the resolver
- * route. Internal, never forwarded - and namespaced so it cannot collide with
- * a parameter the visitor's own link carries (Instagram's `utm_*`, `fbclid`).
+ * How the middleware carries the visitor's ORIGINAL path to the resolver
+ * route: a REQUEST HEADER (Next's middleware header override), never a query
+ * parameter.
+ *
+ * 🔴 A QUERY PARAMETER ADDED BY THE REWRITE DOES NOT RELIABLY ARRIVE. On
+ * Vercel the function is invoked with the rewritten URL, so it does; under
+ * `next start` the route handler's request keeps the ORIGINAL URL, so it does
+ * not - drickcuttinup.com/book landed on the shop page in the production-build
+ * end-to-end check while every unit test passed (they hand the rewritten URL
+ * to the route themselves). A request header set by the middleware reaches
+ * the route on both. The visitor's own query stays in the URL, where both
+ * runtimes deliver it.
  */
-export const PATH_PARAM = "__cb_path";
+export const PATH_HEADER = "x-cb-domain-path";
 
 /** One DNS label; a host is two or more, ending in an alphabetic TLD. */
 const HOST_SHAPE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
