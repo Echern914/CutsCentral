@@ -148,6 +148,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        client with no last name or handle, which build 47 can only report as
   //        "Something there didn't look right" - this build asks for the handle
   //        and says what is missing.
+  //   49 = the same 1.1.4 plus "Update ChairBack" (src/updateGate.ts): the
+  //        first build that asks the API whether it is too old to run. Builds
+  //        48 and earlier never ask, so IOS_MINIMUM_BUILD can only ever stop
+  //        49 and later. 48 was uploaded but never submitted, so the version
+  //        string stays.
   version: "1.1.4",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
@@ -164,7 +169,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "48",
+    buildNumber: "49",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
