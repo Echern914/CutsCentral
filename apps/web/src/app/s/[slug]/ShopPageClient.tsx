@@ -45,9 +45,16 @@ export function ShopPageClient({
   preview = false,
   rewardsHref,
   rewardsLabel = "Your rewards",
+  bookQuery,
 }: {
   data: ShopPageData;
   preview?: boolean;
+  /**
+   * Appended to the native Book link. Set only for a visit that came through
+   * the shop's custom domain (`?cb_domain=`), so the booking page applies the
+   * same same-shop check the landing page just passed.
+   */
+  bookQuery?: string;
   /**
    * Set only when a KNOWN client is viewing (i.e. rendered from
    * /r/<magicToken>, where the token identifies them). Adds an entry back into
@@ -70,7 +77,7 @@ export function ShopPageClient({
   // Native booking: the CTA points at the in-app slot picker instead of the
   // external bookingUrl, and the lead-request form is replaced by real booking.
   const bookIsNative = data.bookingMode === "native";
-  const bookHref = bookIsNative ? `/book/${data.slug}` : data.bookingUrl;
+  const bookHref = bookIsNative ? `/book/${data.slug}${bookQuery ?? ""}` : data.bookingUrl;
   // A shop may have NO booking destination (no native, no external link). Then
   // we hide the "Book" CTAs and lean on the request form instead.
   const hasBooking = bookIsNative || Boolean(data.bookingUrl);

@@ -6,6 +6,7 @@ import {
   type BookingModeKey,
 } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
+import { DOMAIN_PARAM, expectedDomain, servesDomain } from "@/lib/customDomainGuard";
 import { GetTheApp } from "@/components/GetTheApp";
 import { appleItunesApp } from "@/lib/appBanner";
 import { ShopPageClient } from "./ShopPageClient";
@@ -14,6 +15,12 @@ import { shopJsonLd } from "./shopJsonLd";
 export interface ShopPageData {
   name: string;
   slug: string;
+  /**
+   * The shop's own domain, once VERIFIED; null otherwise. Absent only from an
+   * API that predates it. Decides whether a custom-domain visit may render
+   * this shop - see lib/customDomainGuard.ts.
+   */
+  customDomain?: string | null;
   bio: string | null;
   // Vertical key ("barber" | "salon" | "nails" | ...) for noun-correct copy;
   // serviceNoun is the shop's own word for a visit when they set one ("twist").
@@ -87,21 +94,44 @@ export interface ShopPageData {
 // 60s. (The live booking-slots feed on /book is deliberately NOT cached.)
 const SHOP_PAGE_REVALIDATE_S = 60;
 
-async function getData(slug: string): Promise<ShopPageData | null> {
+async function getData(slug: string, fresh = false): Promise<ShopPageData | null> {
   const res = await apiPublicGet<ShopPageData>(
     `/api/page/${encodeURIComponent(slug)}`,
-    SHOP_PAGE_REVALIDATE_S,
+    fresh ? undefined : SHOP_PAGE_REVALIDATE_S,
   );
   return res.ok ? res.data : null;
 }
 
+type SearchParams = Record<string, string | string[] | undefined>;
+
+/**
+ * The page for THIS visit, or null when it must not render.
+ *
+ * 🔴 A visit redirected from a custom domain renders only the shop that owns
+ * that domain. The redirect looked the slug up a moment ago; by the time the
+ * browser arrives the slug may belong to someone else. Then this fails closed
+ * - a plain not-found, never the other shop. A mismatch is re-read once,
+ * uncached, before refusing: the cached copy can predate the domain being
+ * verified, and that must not turn away the shop's own visitors.
+ */
+async function getDataFor(slug: string, searchParams?: SearchParams): Promise<ShopPageData | null> {
+  const expected = expectedDomain(searchParams);
+  const data = await getData(slug);
+  if (expected === null || servesDomain(data, expected)) return data;
+  const fresh = await getData(slug, true);
+  return servesDomain(fresh, expected) ? fresh : null;
+}
+
 export async function generateMetadata({
   params,
+  searchParams,
 }: {
   params: { slug: string };
+  searchParams?: SearchParams;
 }): Promise<Metadata> {
-  const data = await getData(params.slug);
-  if (!data) return { title: APP_NAME };
+  const data = await getDataFor(params.slug, searchParams);
+  // Refused or missing: nothing of any shop's - not even its name in a tab.
+  if (!data) return { title: APP_NAME, robots: { index: false } };
   const description =
     data.bio ??
     `Book your next ${serviceNounForShop(data)} at ${data.name} and earn rewards every visit.`;
@@ -120,11 +150,17 @@ export async function generateMetadata({
 
 export default async function PublicShopPage({
   params,
+  searchParams,
 }: {
   params: { slug: string };
+  searchParams?: SearchParams;
 }) {
-  const data = await getData(params.slug);
+  const data = await getDataFor(params.slug, searchParams);
   if (!data) notFound();
+  // The visitor's next tap is Book - same check there, so pass the marker on.
+  const expected = expectedDomain(searchParams);
+  const bookQuery =
+    expected && expected !== "invalid" ? `?${DOMAIN_PARAM}=${encodeURIComponent(expected)}` : undefined;
   return (
     <>
       {/* JSON.stringify output is safe inside a script tag except for a
@@ -136,7 +172,7 @@ export default async function PublicShopPage({
           __html: JSON.stringify(shopJsonLd(data)).replace(/</g, "\\u003c"),
         }}
       />
-      <ShopPageClient data={data} />
+      <ShopPageClient data={data} bookQuery={bookQuery} />
       <div className="mx-auto w-full max-w-2xl px-4 pb-8">
         <GetTheApp surface="shop" />
       </div>
