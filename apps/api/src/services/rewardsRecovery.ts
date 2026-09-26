@@ -421,13 +421,50 @@ export async function verifyRecoveryChallenge(opts: {
 
 export interface ChooserShop {
   /** Opaque, proof-bound. NOT a shop id, NOT a client id - recomputable by the
-   * server, meaningless to everyone else. */
-  selectionId: string;
+   * server, meaningless to everyone else. NULL for an ambiguous shop: there
+   * is no one record this phone may open there, so nothing to select. */
+  selectionId: string | null;
+  /**
+   * 🔴 More than one person at this shop has this number (a family phone, a
+   * recycled number, duplicate profiles). Verifying the phone proves the
+   * visitor holds the phone - not which of those people they are - so the
+   * shop is shown, and the way in is the shop sending them their own link.
+   */
+  ambiguous: boolean;
   name: string;
   logoUrl: string | null;
   industry: string;
   city: string | null;
   region: string | null;
+}
+
+/**
+ * How many ELIGIBLE (non-archived) records carry this phone, per shop - with
+ * no row limit, because "exactly one" is the privacy line. Optionally for one
+ * shop only.
+ */
+async function recordsPerShop(
+  tx: Prisma.TransactionClient,
+  phone: string,
+  shopId?: string,
+): Promise<Map<string, number>> {
+  const rows = await tx.client.groupBy({
+    by: ["shopId"],
+    where: { phone, archivedAt: null, ...(shopId ? { shopId } : {}) },
+    _count: { _all: true },
+  });
+  return new Map(rows.map((r) => [r.shopId, r._count._all]));
+}
+
+/** A phone's records, one bucket per shop, in the id order they were read. */
+function groupByShop<T extends { shopId: string }>(rows: T[]): Map<string, T[]> {
+  const byShop = new Map<string, T[]>();
+  for (const r of rows) {
+    const bucket = byShop.get(r.shopId);
+    if (bucket) bucket.push(r);
+    else byShop.set(r.shopId, [r]);
+  }
+  return byShop;
 }
 
 /** The selection id: bound to THIS proof, derived rather than stored, and
@@ -505,26 +542,37 @@ export async function listRecoveryShops(opts: {
       take: MAX_CHOOSER_SHOPS * 4,
     });
 
-    // One entry per shop. Duplicate client rows for one phone at one shop
-    // collapse onto the FIRST by id order - deterministic, and deliberately
-    // not "most recently active", which is the exact selection rule this flow
-    // exists to remove.
-    const byShop = new Map<string, (typeof clients)[number]>();
-    for (const c of clients) {
-      if (!byShop.has(c.shopId)) byShop.set(c.shopId, c);
-    }
+    // One entry per shop.
+    //
+    // 🔴 A SHOP WITH MORE THAN ONE RECORD FOR THIS PHONE GETS NO SELECTION.
+    // This used to collapse the rows onto the FIRST by id and hand out THAT
+    // record's link - so on a shared phone, whoever verified the number was
+    // sent the other person's rewards (and the app would then let them claim
+    // it, because the phone IS on that record). Nothing about the phone can
+    // say which of them is asking, so no record is chosen: the shop is listed
+    // as ambiguous and the page tells them to ask it for their own link.
+    const byShop = groupByShop(clients);
+    // Counted exactly, not from the bounded read above: a shop's second
+    // record must never fall outside a window and make the shop look single.
+    const perShop = await recordsPerShop(tx, phone);
 
     return [...byShop.values()]
-      .map((c) => ({
-        selectionId: selectionIdFor(proofHash, c.id),
-        name: c.shop.name,
-        logoUrl: c.shop.logoUrl,
-        industry: c.shop.industry,
-        city: c.shop.addressCity,
-        region: c.shop.addressRegion,
-      }))
+      .map((rows) => {
+        const c = rows[0]!;
+        const ambiguous = (perShop.get(c.shopId) ?? rows.length) > 1;
+        return {
+          selectionId: ambiguous ? null : selectionIdFor(proofHash, c.id),
+          ambiguous,
+          name: c.shop.name,
+          logoUrl: c.shop.logoUrl,
+          industry: c.shop.industry,
+          city: c.shop.addressCity,
+          region: c.shop.addressRegion,
+        };
+      })
       .sort(
-        (a, b) => a.name.localeCompare(b.name) || a.selectionId.localeCompare(b.selectionId),
+        (a, b) =>
+          a.name.localeCompare(b.name) || (a.selectionId ?? "").localeCompare(b.selectionId ?? ""),
       )
       .slice(0, MAX_CHOOSER_SHOPS);
   });
@@ -570,14 +618,20 @@ export async function selectRecoveryShop(opts: {
       orderBy: { id: "asc" },
       take: MAX_CHOOSER_SHOPS * 4,
     });
-    const byShop = new Map<string, (typeof clients)[number]>();
-    for (const c of clients) {
-      if (!byShop.has(c.shopId)) byShop.set(c.shopId, c);
-    }
-    const chosen = [...byShop.values()].find(
-      (c) => selectionIdFor(proofHash, c.id) === selectionId,
-    );
+    // 🔴 Only a shop with exactly ONE record for this phone can be chosen -
+    // the chooser offers nothing else, and this refuses anything else even
+    // for a selection id computed some other way (an older page, a replay).
+    // Refusing does not spend the proof: their other shops still open.
+    const chosen = [...groupByShop(clients).values()]
+      .filter((rows) => rows.length === 1)
+      .map((rows) => rows[0]!)
+      .find((c) => selectionIdFor(proofHash, c.id) === selectionId);
     if (!chosen) return { ok: false };
+    // And counted exactly for THAT shop before a credential leaves: the
+    // bounded read above can not be the proof that the record is the only one.
+    if ((await recordsPerShop(tx, phone, chosen.shopId)).get(chosen.shopId) !== 1) {
+      return { ok: false };
+    }
 
     // Exactly one winner - the CAS is the arbiter, and it happens BEFORE the
     // credential leaves this function.

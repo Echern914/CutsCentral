@@ -1,6 +1,7 @@
+import { createHash, createHmac } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { prisma, runWithShop } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { apiEnv, randomToken } from "@chairback/config";
 import {
   IP_CHALLENGE_CAP,
   RECOVERY_MAX_SENDS_PER_DAY,
@@ -359,7 +360,10 @@ describe("the chooser and selection", () => {
     const phone = freshPhone();
     const stranger = freshPhone();
     await makeClient(shopA, phone);
-    await makeClient(shopA, phone); // duplicate row, same shop - must collapse
+    // 🔴 A second record for the same phone at the same shop. This used to
+    // "collapse" onto the first by id - and hand out THAT record's link. Now
+    // the shop is listed, ambiguous, with nothing to select.
+    await makeClient(shopA, phone);
     await makeClient(shopB, phone);
     await makeClient(shopB, stranger); // someone else entirely
     const proof = await verifiedProof(phone);
@@ -369,6 +373,7 @@ describe("the chooser and selection", () => {
     // The whole contract: nothing beyond the fixed public fields.
     for (const s of shops!) {
       expect(Object.keys(s).sort()).toEqual([
+        "ambiguous",
         "city",
         "industry",
         "logoUrl",
@@ -376,9 +381,13 @@ describe("the chooser and selection", () => {
         "region",
         "selectionId",
       ]);
-      // Opaque: neither a shop id nor a client id.
-      expect(s.selectionId).toMatch(/^[a-f0-9]{32}$/);
     }
+    const alpha = shops!.find((s) => s.name === "Alpha Cuts")!;
+    const bravo = shops!.find((s) => s.name === "Bravo Cuts")!;
+    expect(alpha).toMatchObject({ ambiguous: true, selectionId: null });
+    // Opaque: neither a shop id nor a client id.
+    expect(bravo.ambiguous).toBe(false);
+    expect(bravo.selectionId).toMatch(/^[a-f0-9]{32}$/);
     const flat = JSON.stringify(shops);
     expect(flat).not.toContain(shopA);
     expect(flat).not.toContain(shopB);
@@ -394,6 +403,64 @@ describe("the chooser and selection", () => {
     expect(shops!.map((s) => s.name)).toEqual(["Alpha Cuts"]);
   });
 
+  /** The server's own selection id for a record - what an attacker, a stale
+   * page or a replay would have to produce. */
+  const selectionIdFor = (proof: string, clientId: string) =>
+    createHmac("sha256", `${apiEnv().TOKEN_ENCRYPTION_KEY}:phone_recovery_hmac_v1`)
+      .update(`select:${createHash("sha256").update(proof, "utf8").digest("hex")}:${clientId}`, "utf8")
+      .digest("hex")
+      .slice(0, 32);
+
+  it("🔴 ONE PHONE, TWO PEOPLE AT A SHOP: neither record's link is ever handed out", async () => {
+    const phone = freshPhone();
+    // A parent and a child on the family phone, at Alpha. Bravo knows only one.
+    const parent = await makeClient(shopA, phone, { firstName: "Parent" });
+    const child = await makeClient(shopA, phone, { firstName: "Child" });
+    const own = await makeClient(shopB, phone);
+    const proof = await verifiedProof(phone);
+
+    for (const record of [parent, child]) {
+      const res = await selectRecoveryShop({ proof, selectionId: selectionIdFor(proof, record.id), now: new Date() });
+      expect(res.ok).toBe(false);
+      expect(JSON.stringify(res)).not.toContain(
+        (await prisma.client.findUniqueOrThrow({ where: { id: record.id } })).magicToken,
+      );
+    }
+
+    // Refusing burned nothing: the shop that knows ONE person still opens.
+    const bravo = (await listRecoveryShops({ proof, now: new Date() }))!.find((s) => s.name === "Bravo Cuts")!;
+    const res = await selectRecoveryShop({ proof, selectionId: bravo.selectionId!, now: new Date() });
+    expect(res.ok).toBe(true);
+    const ownToken = (await prisma.client.findUniqueOrThrow({ where: { id: own.id } })).magicToken;
+    expect((res as { rewardsUrl: string }).rewardsUrl).toContain(`/r/${ownToken}/rewards`);
+  });
+
+  it("an archived second record does not make a shop ambiguous - the one live record opens", async () => {
+    const phone = freshPhone();
+    const live = await makeClient(shopA, phone);
+    await makeClient(shopA, phone, { archivedAt: new Date() });
+    const proof = await verifiedProof(phone);
+    const alpha = (await listRecoveryShops({ proof, now: new Date() }))!.find((s) => s.name === "Alpha Cuts")!;
+    expect(alpha.ambiguous).toBe(false);
+    const res = await selectRecoveryShop({ proof, selectionId: alpha.selectionId!, now: new Date() });
+    const token = (await prisma.client.findUniqueOrThrow({ where: { id: live.id } })).magicToken;
+    expect((res as { rewardsUrl: string }).rewardsUrl).toContain(`/r/${token}/rewards`);
+  });
+
+  it("🔴 the second record counts even when it falls outside the bounded read", async () => {
+    const phone = freshPhone();
+    const first = await makeClient(shopA, phone);
+    // Enough rows elsewhere that Alpha's SECOND record is past the chooser's
+    // read window (MAX_CHOOSER_SHOPS * 4 rows, id order).
+    for (let i = 0; i < 48; i++) await makeClient(shopB, phone);
+    await makeClient(shopA, phone);
+    const proof = await verifiedProof(phone);
+    const alpha = (await listRecoveryShops({ proof, now: new Date() }))!.find((s) => s.name === "Alpha Cuts")!;
+    expect(alpha).toMatchObject({ ambiguous: true, selectionId: null });
+    const res = await selectRecoveryShop({ proof, selectionId: selectionIdFor(proof, first.id), now: new Date() });
+    expect(res.ok).toBe(false);
+  });
+
   it("🔴 selecting Shop A can never mint Shop B's credential", async () => {
     const phone = freshPhone();
     const a = await makeClient(shopA, phone);
@@ -403,7 +470,7 @@ describe("the chooser and selection", () => {
     const alpha = shops!.find((s) => s.name === "Alpha Cuts")!;
     const res = await selectRecoveryShop({
       proof,
-      selectionId: alpha.selectionId,
+      selectionId: alpha.selectionId!,
       now: new Date(),
     });
     expect(res.ok).toBe(true);
@@ -421,13 +488,13 @@ describe("the chooser and selection", () => {
     const shops = await listRecoveryShops({ proof, now: new Date() });
     const [x, y] = shops!;
     const results = await Promise.all([
-      selectRecoveryShop({ proof, selectionId: x!.selectionId, now: new Date() }),
-      selectRecoveryShop({ proof, selectionId: y!.selectionId, now: new Date() }),
+      selectRecoveryShop({ proof, selectionId: x!.selectionId!, now: new Date() }),
+      selectRecoveryShop({ proof, selectionId: y!.selectionId!, now: new Date() }),
     ]);
     expect(results.filter((r) => r.ok)).toHaveLength(1);
     // And a replay of the winner is the uniform refusal.
     expect(
-      (await selectRecoveryShop({ proof, selectionId: x!.selectionId, now: new Date() })).ok,
+      (await selectRecoveryShop({ proof, selectionId: x!.selectionId!, now: new Date() })).ok,
     ).toBe(false);
   });
 
@@ -443,7 +510,7 @@ describe("the chooser and selection", () => {
     const proof2 = await verifiedProof(phone, t2);
     const res = await selectRecoveryShop({
       proof: proof2,
-      selectionId: shops1![0]!.selectionId,
+      selectionId: shops1![0]!.selectionId!,
       now: t2,
     });
     expect(res.ok).toBe(false);
