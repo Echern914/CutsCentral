@@ -11,7 +11,14 @@ import { apiPublicSend } from "@/lib/api";
  */
 
 export interface RecoveryShop {
-  selectionId: string;
+  /** Null when the shop is ambiguous - there is nothing to select there. */
+  selectionId: string | null;
+  /**
+   * More than one person at this shop has this number, so the phone alone
+   * cannot say which record is the visitor's. Optional: an API that predates
+   * it never sends one, and then every shop carries a selectionId as before.
+   */
+  ambiguous?: boolean;
   name: string;
   logoUrl: string | null;
   industry: string;

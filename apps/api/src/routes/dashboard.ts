@@ -679,6 +679,16 @@ dashboardRouter.post("/saved-by/:id/accept", async (req, res) => {
   // The client first, then the request: a failure in between leaves a request
   // that accepting again finishes (becoming a client twice is still once).
   const status = await becomeClient(request.accountId, req.shop!.id);
+  // 🔴 NOT ADDED MEANS NOT ANSWERED. becomeClient refuses to pick a record the
+  // identity rules will not open (their contact is on more than one of this
+  // shop's records, or on one another account holds). This used to delete the
+  // request and answer ok anyway, so the owner saw it accepted, the customer
+  // was never added, and the request - the only trace - was gone. It stays on
+  // the list, and the owner is told why.
+  if (status !== "joined") {
+    res.status(409).json({ error: status });
+    return;
+  }
   await dropJoinRequest(request.id);
   res.json({ ok: true, status });
 });

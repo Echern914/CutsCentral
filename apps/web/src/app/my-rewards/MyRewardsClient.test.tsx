@@ -102,6 +102,29 @@ describe("MyRewardsClient", () => {
     await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app.test/r/tok123/rewards"));
   });
 
+  it("🔴 a shop where more than one person has this number is NOT a button - it says to ask the shop", async () => {
+    await toCodeStep();
+    verify.mockResolvedValue(ok({ verified: true, proof: "p".repeat(24) }) as never);
+    shopsFn.mockResolvedValue(
+      ok({
+        shops: [
+          { selectionId: null, ambiguous: true, name: "Family Cuts", logoUrl: null, industry: "barber", city: "Albany", region: "NY" },
+          { selectionId: "b".repeat(32), ambiguous: false, name: "Own Cuts", logoUrl: null, industry: "barber", city: "Buffalo", region: "NY" },
+        ],
+      }) as never,
+    );
+    fireEvent.change(screen.getByPlaceholderText("••••••"), { target: { value: "424242" } });
+    fireEvent.click(screen.getByText(/^verify$/i));
+
+    const note = await screen.findByText(/more than one person at family cuts uses this number/i);
+    expect(note.textContent).toMatch(/ask family cuts to send you your personal rewards link/i);
+    // Nothing to press for Family Cuts - and so nothing that could be selected.
+    const buttons = screen.getAllByRole("button");
+    expect(buttons.some((b) => /family cuts/i.test(b.textContent ?? ""))).toBe(false);
+    expect(buttons.some((b) => /own cuts/i.test(b.textContent ?? ""))).toBe(true);
+    expect(select).not.toHaveBeenCalled();
+  });
+
   it("a verified phone with NO shops gets the one honest empty state", async () => {
     await toCodeStep();
     verify.mockResolvedValue(ok({ verified: true, proof: "p".repeat(24) }) as never);

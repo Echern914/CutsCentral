@@ -1,6 +1,7 @@
 import { Prisma, runAsOwner } from "@chairback/db";
 import { checkTellApart, randomToken } from "@chairback/config";
 import { deriveAcuityClientKey } from "../acuity/clientKey.js";
+import { logger } from "../logger.js";
 import { syncCustomerView } from "./customerIdentity.js";
 
 /**
@@ -30,7 +31,18 @@ export type JoinResult = "joined" | "pending" | "needs_connecting" | "details_re
 const canBeToldApart = (a: { lastName: string | null; instagram: string | null }) =>
   checkTellApart({ lastName: a.lastName, instagram: a.instagram }).ok;
 
-/** Does the shop already hold a record carrying one of the account's proven contacts? */
+/**
+ * Does the shop already hold an ACTIVE record carrying one of the account's
+ * proven contacts?
+ *
+ * 🔴 ACTIVE ONLY - the same eligibility the identity rules use
+ * (customerIdentity.ts ELIGIBLE). This used to count archived, merged and
+ * erased rows too, which the identity rules never offer to anyone: a customer
+ * whose only match was an archived record was told the shop "already has your
+ * number" and then shown nothing to connect, and that record's link 404s. A
+ * dead end with no way out. An archived record is not reopened by joining
+ * either - see becomeClient.
+ */
 async function contactOnFile(
   shopId: string,
   account: { phoneE164: string | null; emailNormalized: string | null },
@@ -39,6 +51,8 @@ async function contactOnFile(
     tx.$queryRaw<{ n: number }[]>(Prisma.sql`
       SELECT count(*)::int AS n FROM "Client"
        WHERE "shopId" = ${shopId}
+         AND "archivedAt" IS NULL
+         AND "acuityClientKey" NOT LIKE 'deleted:%'
          AND (("phone" IS NOT NULL AND "phone" = ${account.phoneE164})
            OR ("email" IS NOT NULL AND lower("email") = ${account.emailNormalized}))`),
   );
@@ -72,8 +86,35 @@ export async function becomeClient(
     firstName: account.firstName,
     lastName: account.lastName,
   });
-  await runAsOwner((tx) =>
-    tx.client.upsert({
+  await runAsOwner(async (tx) => {
+    // 🔴 AN ARCHIVED RECORD IS NEVER REOPENED BY JOINING - but it can hold the
+    // very key this person derives to (same phone), and the upsert below would
+    // then change nothing and link nothing: the other half of the dead end
+    // above. Reviving it would hand this account the archived history on the
+    // strength of a phone number alone (numbers get recycled) and overrule the
+    // shop's decision to archive it. So the archived record gives the key up -
+    // re-keyed exactly as a merge re-keys its loser (client.ts: `merged:`) -
+    // and stays archived with its history untouched, while the customer gets a
+    // fresh record under the key, where their later bookings will land too.
+    const holder = await tx.client.findUnique({
+      where: { shopId_acuityClientKey: { shopId, acuityClientKey } },
+      select: { id: true, archivedAt: true },
+    });
+    if (holder?.archivedAt) {
+      // ONLY the key moves. Its visits, punches, appointments, notes and any
+      // merge events naming it (ClientMergeEvent, append-only) stay exactly
+      // where they are, and the new key says what happened to the old one.
+      await tx.client.update({
+        where: { id: holder.id },
+        data: { acuityClientKey: `archived:${holder.id}` },
+      });
+      // Ids only: the phone or email that caused it never reaches a log line.
+      logger.info(
+        { shopId, archivedClientId: holder.id, accountId },
+        "join: archived client released its key to a new record (history untouched)",
+      );
+    }
+    await tx.client.upsert({
       where: { shopId_acuityClientKey: { shopId, acuityClientKey } },
       create: {
         shopId,
@@ -88,8 +129,8 @@ export async function becomeClient(
       },
       // A raced second join lands here: it changes nothing.
       update: {},
-    }),
-  );
+    });
+  });
 
   const after = await syncCustomerView(accountId, now);
   return after.links.some((l) => l.shopId === shopId) ? "joined" : "needs_connecting";

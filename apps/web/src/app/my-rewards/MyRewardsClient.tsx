@@ -182,13 +182,15 @@ export function MyRewardsClient() {
           <>
             <p className="text-center text-muted">Choose your shop:</p>
             <ul className="flex flex-col gap-3">
-              {shops.map((s) => (
-                <li key={s.selectionId}>
-                  <button
-                    type="button"
-                    className="flex min-h-11 w-full items-center gap-3 rounded-2xl border border-subtle bg-charcoal-800/60 p-4 text-left"
-                    disabled={pending}
-                    onClick={() => void choose(s.selectionId)}
+              {shops.map((s, i) =>
+                // 🔴 A SHOP WHERE MORE THAN ONE PERSON HAS THIS NUMBER IS NOT A
+                // BUTTON. Verifying the phone proves they hold it, not which of
+                // those people they are - so nothing is opened, and the way in
+                // is the shop sending them their own link.
+                s.ambiguous || !s.selectionId ? (
+                  <li
+                    key={`ambiguous-${i}`}
+                    className="flex w-full items-start gap-3 rounded-2xl border border-subtle bg-charcoal-800/30 p-4"
                   >
                     {s.logoUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -196,13 +198,35 @@ export function MyRewardsClient() {
                     ) : null}
                     <span className="min-w-0">
                       <span className="block truncate font-semibold text-offwhite">{s.name}</span>
-                      <span className="block truncate text-sm text-muted">
-                        {[s.city, s.region].filter(Boolean).join(", ") || s.industry}
+                      <span className="block text-sm text-muted">
+                        More than one person at {s.name} uses this number, so we can&apos;t tell
+                        which profile is yours. Ask {s.name} to send you your personal rewards
+                        link.
                       </span>
                     </span>
-                  </button>
-                </li>
-              ))}
+                  </li>
+                ) : (
+                  <li key={s.selectionId}>
+                    <button
+                      type="button"
+                      className="flex min-h-11 w-full items-center gap-3 rounded-2xl border border-subtle bg-charcoal-800/60 p-4 text-left"
+                      disabled={pending}
+                      onClick={() => void choose(s.selectionId!)}
+                    >
+                      {s.logoUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={s.logoUrl} alt="" className="h-10 w-10 rounded-full object-cover" />
+                      ) : null}
+                      <span className="min-w-0">
+                        <span className="block truncate font-semibold text-offwhite">{s.name}</span>
+                        <span className="block truncate text-sm text-muted">
+                          {[s.city, s.region].filter(Boolean).join(", ") || s.industry}
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                ),
+              )}
             </ul>
           </>
         ))}
