@@ -121,11 +121,16 @@ about submission changed except who made the binary.
   `Pods/ReactNativeDependencies/Headers/fmt/`; restore the plugin from git
   history against that path.
 - **"Upload Symbols Failed — the archive did not include a dSYM for
-  React.framework / ReactNativeDependencies.framework / hermes.framework"** —
-  NOISE, and you will see exactly these three every time. RN 0.81 ships those
-  as prebuilt binaries with no debug symbols. The binary upload is unaffected;
-  only crash logs inside those three frameworks are less readable. Do not
+  React.framework / ReactNativeDependencies.framework / hermes.framework /
+  StripeTerminal.framework"** — NOISE, and you will see exactly these four
+  every time. RN 0.81 ships the first three, and Stripe ships the Tap to Pay
+  SDK, as prebuilt binaries with no debug symbols. The binary upload is
+  unaffected; only crash logs inside those frameworks are less readable. Do not
   chase it. The app's own dSYM (`ChairBackRewards.app.dSYM`) is in the archive.
+- **`pod install` dies in `String#unicode_normalize` (cocoapods `config.rb`)
+  during prebuild** — the shell has no UTF-8 locale, which a terminal session
+  without a login profile often lacks. Prefix the command with
+  `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8` (prebuild, archive and export alike).
 - **Archive finishes but `codesign` fails with `errSecInternalComponent`** (only
   when archiving from a terminal) — the login keychain will not hand the signing
   key to a process with no window to ask permission in. Archive once from Xcode

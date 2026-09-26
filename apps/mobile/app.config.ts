@@ -142,7 +142,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        doubled top gap, the sign-in name and code-button fixes. The
   //        version moves with the number, so it cannot hit the closed-version
   //        wall whatever became of 1.1.2 after it went up.
-  version: "1.1.3",
+  //
+  // 1.1.4 = build 48. The Announcements bell (#496) and the Instagram field on
+  //        Join shop (#495). 1.1.3 is released, and #495's API refuses a new
+  //        client with no last name or handle, which build 47 can only report as
+  //        "Something there didn't look right" - this build asks for the handle
+  //        and says what is missing.
+  version: "1.1.4",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
@@ -158,7 +164,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "47",
+    buildNumber: "48",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
