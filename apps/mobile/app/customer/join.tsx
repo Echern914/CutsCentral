@@ -4,7 +4,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useResource } from "@/src/customer/CustomerProvider";
 import { ApiError, errorCopy } from "@/src/customer/api";
 import { displayPhone } from "@/src/customer/format";
-import { joinDetailsMessage, TELL_APART_MESSAGE } from "@/src/customer/joinDetails";
+import { joinDetailsMessage } from "@/src/customer/joinDetails";
 import { useSavedShopActions } from "@/src/customer/savedShops";
 import { color, radius, space, type } from "@/src/customer/theme";
 import type { Profile } from "@/src/customer/types";
@@ -61,8 +61,10 @@ export default function JoinScreen() {
 
   async function join() {
     if (busy) return;
-    if (!first.trim()) {
-      setMessage(`Add your first name - it's how ${shopName} will know you.`);
+    // Both names, always: the shop sees who joined, and a first name alone
+    // ("Jaylon") told the barber nothing. Instagram stays optional.
+    if (!first.trim() || !last.trim()) {
+      setMessage(`Add your first and last name - it's how ${shopName} will know you.`);
       return;
     }
     setBusy(true);
@@ -184,7 +186,7 @@ export default function JoinScreen() {
               style={styles.input}
             />
             <Txt variant="footnote" tone="secondary" style={styles.gapSmall}>
-              {`${TELL_APART_MESSAGE}.`}
+              {`Your first and last name are how ${shopName} knows you. Instagram is optional.`}
             </Txt>
 
             <Txt variant="footnoteStrong" tone="secondary" style={styles.label}>

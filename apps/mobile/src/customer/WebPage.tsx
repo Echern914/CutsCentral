@@ -150,5 +150,8 @@ async function addToWallet(url: string): Promise<void> {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.bg },
   pad: { padding: space.s3 },
-  done: { minHeight: 44, minWidth: 44, justifyContent: "center" },
+  // Room inside the bar-button capsule iOS draws around a header item: with no
+  // horizontal padding the capsule hugged the word and "Done" looked jammed
+  // against its edges. Centered, so the word sits in the middle of it.
+  done: { minHeight: 44, minWidth: 44, paddingHorizontal: space.s1 + 4, justifyContent: "center", alignItems: "center" },
 });

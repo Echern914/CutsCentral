@@ -200,10 +200,12 @@ export function ShopList({ shops, onOpen, now }: { shops: Shop[]; onOpen: (shop:
 /**
  * Shops added by name, and shops asked to join that haven't answered yet.
  *
- * The row opens the shop's page. The trailing action - "Remove", or "Cancel"
- * for a waiting request - is its own 44pt target beside the row rather than
- * inside it (the history row's pattern), so it is never a mis-tap on the row
- * and VoiceOver reaches it as a button of its own.
+ * The row opens the shop's page. The trailing actions - "Book" and "Remove",
+ * or only "Cancel" for a waiting request - are their own 44pt targets beside
+ * the row rather than inside it (the history row's pattern), so neither is a
+ * mis-tap on the row and VoiceOver reaches each as a button of its own.
+ * "Book" says out loud what tapping the row already did: customers did not
+ * know the row itself books.
  */
 export function SavedShopList({
   shops,
@@ -241,6 +243,13 @@ export function SavedShopList({
                   </Txt>
                 </View>
               </Tap>
+              {shop.pending ? null : (
+                <Tap onPress={() => onOpen(shop)} accessibilityLabel={`Book at ${shop.name}`} style={styles.again}>
+                  <Txt variant="subhead" tone="gold">
+                    Book
+                  </Txt>
+                </Tap>
+              )}
               <Tap
                 onPress={() => onRemove(shop)}
                 accessibilityLabel={shop.pending ? `Cancel your request to join ${shop.name}` : `Remove ${shop.name} from your shops`}

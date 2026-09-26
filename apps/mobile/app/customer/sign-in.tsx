@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -31,6 +31,10 @@ export default function SignInScreen() {
   const [contact, setContact] = useState("");
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
+  // Shops see who added them and who joined: a first name alone ("Jaylon")
+  // told the barber nothing, so the last name is asked for up front too.
+  const [lastName, setLastName] = useState("");
+  const lastNameRef = useRef<TextInput>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
@@ -112,11 +116,15 @@ export default function SignInScreen() {
     setBusy(true);
     setMessage(null);
     try {
-      if (!skip && name.trim()) {
+      if (!skip && (!name.trim() || !lastName.trim())) {
+        setMessage("Add your first and last name, so shops know who you are.");
+        return;
+      }
+      if (!skip) {
         const res = await fetch(`${API_ORIGIN}/api/me`, {
           method: "PATCH",
           headers: { Authorization: `Bearer ${pendingToken}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ firstName: name.trim() }),
+          body: JSON.stringify({ firstName: name.trim(), lastName: lastName.trim() }),
         }).catch(() => null);
         // Signing in anyway would drop the name without a word - and shops
         // they join are shown this name.
@@ -267,7 +275,7 @@ export default function SignInScreen() {
               What should we call you?
             </Txt>
             <Txt variant="body" tone="secondary" style={styles.lede}>
-              Just your first name. It's how we greet you, and what shops see when you join them.
+              Your first and last name. It's how we greet you, and how shops know who you are.
             </Txt>
             <TextInput
               value={name}
@@ -276,13 +284,28 @@ export default function SignInScreen() {
               autoCapitalize="words"
               textContentType="givenName"
               autoComplete="given-name"
-              returnKeyType="done"
-              onSubmitEditing={() => void finishName(false)}
+              returnKeyType="next"
+              onSubmitEditing={() => lastNameRef.current?.focus()}
               placeholder="First name"
               placeholderTextColor={color.textTertiary}
               accessibilityLabel="First name"
               maxLength={40}
               style={styles.input}
+            />
+            <TextInput
+              ref={lastNameRef}
+              value={lastName}
+              onChangeText={setLastName}
+              autoCapitalize="words"
+              textContentType="familyName"
+              autoComplete="family-name"
+              returnKeyType="done"
+              onSubmitEditing={() => void finishName(false)}
+              placeholder="Last name"
+              placeholderTextColor={color.textTertiary}
+              accessibilityLabel="Last name"
+              maxLength={40}
+              style={[styles.input, styles.nextInput]}
             />
             {message ? (
               <Txt variant="footnote" tone="secondary" accessibilityLiveRegion="polite" style={styles.message}>
@@ -347,6 +370,7 @@ const styles = StyleSheet.create({
     minHeight: 56,
   },
   codeInput: { letterSpacing: 8, textAlign: "center", ...type.title1 },
+  nextInput: { marginTop: space.s1 + 4 },
   message: { marginTop: space.s1 + 2 },
   primary: { marginTop: space.s3 },
   small: { marginTop: space.s1, textAlign: "center" },
