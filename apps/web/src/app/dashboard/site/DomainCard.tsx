@@ -33,10 +33,10 @@ const field =
  * connecting REPLACES whatever website is on that domain today, because that
  * is the surprise that costs a support email.
  *
- * Copy is explicit that the domain REDIRECTS to their ChairBack page and that
- * Google will show the getchairback.com address — that's the product decision
- * (every shop strengthens one domain), and saying it here prevents the "why
- * does the URL change?" question.
+ * Copy is explicit that Google will show the getchairback.com address — that's
+ * the product decision (every shop strengthens one domain; the page's canonical
+ * link names it) — even though visitors stay on the shop's own domain, which
+ * serves the page itself (app/custom-domain).
  */
 export function DomainCard({ initial }: { initial: DomainStatus }) {
   const { toast } = useToast();

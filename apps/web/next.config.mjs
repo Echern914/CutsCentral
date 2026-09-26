@@ -98,6 +98,17 @@ const nextConfig = {
         source: "/sw.js",
         headers: [{ key: "Cache-Control", value: "no-cache, no-store, must-revalidate" }],
       },
+      // A shop's own domain (drickcuttinup.com) gets HSTS WITHOUT
+      // includeSubDomains. We serve that one name; the barber's other
+      // subdomains - a store, a payments page, a mail login - are not ours to
+      // force onto https for six months. LAST, so it wins over every entry
+      // above that carries the full security set. `missing` values are
+      // anchored regexes on the port-less host.
+      {
+        source: "/(.*)",
+        missing: [{ type: "host", value: "(?:.+\\.)?getchairback\\.com" }],
+        headers: [{ key: "Strict-Transport-Security", value: "max-age=15552000" }],
+      },
     ];
   },
   // On Vercel (monorepo, "include files outside root" on), `next build` can pull

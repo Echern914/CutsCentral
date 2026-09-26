@@ -6,6 +6,7 @@ import {
   type BookingModeKey,
 } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
+import { PLATFORM_ORIGIN } from "@/lib/customDomainRouting";
 import { GetTheApp } from "@/components/GetTheApp";
 import { appleItunesApp } from "@/lib/appBanner";
 import { ShopPageClient } from "./ShopPageClient";
@@ -108,6 +109,10 @@ export async function generateMetadata({
   return {
     title: data.name,
     description,
+    // The page's one address for search, wherever it is served from - it is
+    // also served on a shop's own domain (app/custom-domain), and that copy
+    // must not become a second URL competing with this one.
+    alternates: { canonical: `${PLATFORM_ORIGIN}/s/${encodeURIComponent(data.slug)}` },
     openGraph: {
       title: data.name,
       description,

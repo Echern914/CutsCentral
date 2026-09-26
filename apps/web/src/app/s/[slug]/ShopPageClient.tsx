@@ -18,6 +18,7 @@ import {
 } from "@chairback/config/constants";
 import { DEMO } from "@chairback/config/demo";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
+import { PLATFORM_ORIGIN } from "@/lib/customDomainRouting";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { BackToDashboard } from "@/components/BackToDashboard";
@@ -374,14 +375,16 @@ export function ShopPageClient({
               leads to business signup, which is forbidden in-app (3.1.1). The
               site-editor preview keeps the full (already inert) link so the
               barber sees exactly what browser visitors see, even when editing
-              from inside the app. */}
+              from inside the app.
+              ABSOLUTE, not "/": this page is also served on the shop's own
+              domain, where "/" is this very page, not the marketing site. */}
           {inApp && !preview ? (
             <span className="text-[11px]" style={{ color: theme.muted }}>
               Powered by {APP_NAME}
             </span>
           ) : (
             <a
-              href={preview ? undefined : `/?ref=${encodeURIComponent(data.slug)}`}
+              href={preview ? undefined : `${PLATFORM_ORIGIN}/?ref=${encodeURIComponent(data.slug)}`}
               onClick={preview ? (e) => e.preventDefault() : undefined}
               className="text-[11px] underline-offset-2 hover:underline"
               style={{ color: theme.muted }}

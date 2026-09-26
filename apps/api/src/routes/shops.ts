@@ -944,9 +944,10 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
 // requires an alphanumeric start), so no shop handle can ever shadow them.
 export const publicPageRouter: Router = Router();
 
-// Resolve a custom domain to its shop slug - the web middleware's redirect
-// lookup (cached there for 5 min). Only shops with a live public page resolve;
-// a disabled page 404s the domain rather than redirecting to a dead page.
+// Resolve a custom domain to its shop slug - how the web app learns which
+// shop's page to serve on that domain (cached there for 5 min). Only shops
+// with a live public page resolve; a disabled page 404s the domain rather
+// than serving a dead page.
 publicPageRouter.get("/-/by-domain/:host", async (req, res) => {
   const raw = String(req.params.host).toLowerCase().replace(/^www\./, "");
   // Same shape check the connect route enforces; garbage never hits the DB.
