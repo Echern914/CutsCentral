@@ -283,6 +283,8 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
   const { loyalty, balance, nextTarget, rewardsFor, cards } = buildLoyaltyView(client.shop, {
     completedCount,
     tierStats,
+    // A tier the shop raised them to by hand - they see the tier they HOLD.
+    tierFloor: client.loyaltyTierFloor,
     rewards,
     cardTypes,
     grants,

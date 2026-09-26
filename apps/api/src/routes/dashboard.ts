@@ -9,16 +9,14 @@ import {
   frequencySegment,
   cadenceToDays,
   LOYALTY_TIER_KEYS,
-  LOYALTY_TIERS,
   REFERRAL,
-  describeRequirementProgress,
-  describeTierGap,
   parseTierRules,
   tierRulesProgress,
   tellApartRefusal,
   type LoyaltyTierKey,
 } from "@chairback/config";
 import { loadClientTierStats } from "../engines/tierStats.js";
+import { clientTierView, setClientTierFloor } from "../services/clientTier.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import {
@@ -1380,6 +1378,61 @@ dashboardRouter.post("/clients/:clientId/unarchive", async (req, res) => {
   res.json({ ok: true, archived: result.archived });
 });
 
+const setClientTierSchema = z
+  .object({
+    // A tier to raise them to, or null for "Back to automatic".
+    tier: z.enum(LOYALTY_TIER_KEYS as [LoyaltyTierKey, ...LoyaltyTierKey[]]).nullable(),
+  })
+  .strict();
+
+/**
+ * Raise a client to a tier BY HAND, or hand them back to the rules (null).
+ *
+ * UP ONLY, AND IT STICKS (services/clientTier.ts): the tier must be strictly
+ * above what the shop's rules say they EARNED - at or below it a floor would
+ * hold nobody up, so it is refused as `not_higher` and nothing is written. The
+ * rules can still lift the client past a floor, never drop them below it.
+ *
+ * Owner or manager only. The whole router is already manager-gated; the gate
+ * is repeated here so this route stays shut to a seat without it even if the
+ * router-level gate is ever loosened for something else. Another shop's
+ * client is a plain 404, like every client route here.
+ *
+ * Answers with the same `tier` view GET /clients/:clientId sends, so the page
+ * can redraw in place.
+ */
+dashboardRouter.post("/clients/:clientId/tier", requireManager, async (req, res) => {
+  const shop = req.shop!;
+  const parsed = setClientTierSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const { tier } = parsed.data;
+  // With a per-route gate in front, Express types params loosely; the path
+  // guarantees it. An empty id simply finds no client (404).
+  const clientId = req.params.clientId ?? "";
+  const result = await setClientTierFloor(shop, clientId, tier);
+  if (!result.ok) {
+    if (result.reason === "not_found") {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.status(400).json({
+      error: "not_higher",
+      message: "They already hold that tier or a higher one. Pick a tier above the one they earned.",
+      tier: result.view,
+    });
+    return;
+  }
+  // Ids only - never a name or a phone number in a log line.
+  logger.info(
+    { shopId: shop.id, clientId, userId: req.userId, tier },
+    tier ? "client tier raised by hand" : "client tier back to automatic",
+  );
+  res.json({ ok: true, tier: result.view });
+});
+
 // The duplicates review (services/clientDuplicates.ts): active clients who share
 // a phone or email, grouped, suggested keeper first. Suggestions only - nothing
 // merges until the barber uses the merge route below. Registered before
@@ -2113,7 +2166,8 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
   }
   const { client, visits, nudges, upcoming, groups, shopCards, rewards, livePromos, tierStats } =
     data;
-  const tierProgress = tierRulesProgress(tierStats, tierRules);
+  // The tier they HOLD: earned, or a higher one set by hand (the floor).
+  const tierProgress = tierRulesProgress(tierStats, tierRules, client.loyaltyTierFloor);
   const balanceByCard = new Map(
     groups.map((g) => [
       g.cardTypeId,
@@ -2152,25 +2206,11 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       loyaltyTier: client.loyaltyTier,
       preferredCadence: client.preferredCadence,
     },
-    // The tier as the shop's rules put it RIGHT NOW, and what the next one
-    // takes. The stored loyaltyTier above can lag a rule with a time window by
-    // up to a day (the daily recompute); this is the one to show on the page.
-    tier: {
-      current: tierProgress.current,
-      label: tierProgress.current ? LOYALTY_TIERS[tierProgress.current].label : null,
-      color: tierProgress.current ? LOYALTY_TIERS[tierProgress.current].color : null,
-      fraction: tierProgress.fraction,
-      next: tierProgress.next
-        ? {
-            label: LOYALTY_TIERS[tierProgress.next].label,
-            summary: describeTierGap(tierProgress),
-            requirements: tierProgress.requirements.map((r) => ({
-              met: r.met,
-              text: describeRequirementProgress(r),
-            })),
-          }
-        : null,
-    },
+    // The tier as the shop's rules put it RIGHT NOW (or a higher one set by
+    // hand), and what the next one takes. The stored loyaltyTier above can lag
+    // a rule with a time window by up to a day (the daily recompute); this is
+    // the one to show on the page. Same shape POST /clients/:id/tier answers.
+    tier: clientTierView(tierProgress, client.loyaltyTierFloor),
     balance,
     cards: [
       {

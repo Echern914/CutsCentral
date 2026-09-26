@@ -10,9 +10,11 @@ import {
   describeTierAudience,
   describeTierGap,
   describeTierRule,
+  effectiveTier,
   parseTierRules,
   rulesFromThresholds,
   tierForStats,
+  tierRank,
   tierRulesNeedDailyRecompute,
   tierRulesProgress,
   tierStatWindows,
@@ -186,6 +188,72 @@ describe("custom rules", () => {
     expect(
       describeTierRule({ visits: null, spend: { minCents: 12_550, windowDays: 90 }, match: "all" }),
     ).toBe("$125.50 spent in the last 3 months");
+  });
+});
+
+describe("a tier set by hand - up only, and it sticks", () => {
+  const DEFAULTS = rulesFromThresholds(DEFAULT_TIER_THRESHOLDS); // 1 / 6 / 12 lifetime visits
+
+  it("effectiveTier is the higher of earned and the floor, never lower than either", () => {
+    expect(effectiveTier(null, null)).toBeNull();
+    expect(effectiveTier(null, undefined)).toBeNull();
+    expect(effectiveTier("BRONZE", null)).toBe("BRONZE");
+    expect(effectiveTier(null, "SILVER")).toBe("SILVER");
+    expect(effectiveTier("BRONZE", "GOLD")).toBe("GOLD");
+    // 🔴 The rules can lift a client past the floor; the floor never drags them down.
+    expect(effectiveTier("GOLD", "SILVER")).toBe("GOLD");
+    expect(effectiveTier("SILVER", "SILVER")).toBe("SILVER");
+    // A floor this build does not know lifts nobody.
+    expect(effectiveTier("BRONZE", "PLATINUM" as never)).toBe("BRONZE");
+    expect(tierRank(null)).toBe(-1);
+    expect(tierRank("BRONZE")).toBeLessThan(tierRank("SILVER"));
+    expect(tierRank("SILVER")).toBeLessThan(tierRank("GOLD"));
+  });
+
+  it("🔴 a floor above what they earned is the tier they hold, and the road ahead starts from it", () => {
+    const p = tierRulesProgress(lifetime(2), DEFAULTS, "SILVER");
+    expect(p).toMatchObject({ current: "SILVER", earned: "BRONZE", setByHand: true, next: "GOLD" });
+    // Gold's own requirement, against their real numbers - not Silver's.
+    expect(p.requirements.map((r) => [r.kind, r.have, r.need, r.met])).toEqual([["visits", 2, 12, false]]);
+    expect(p.visitsToNext).toBe(10);
+    // Measured from the held tier's band (Silver's 6 to Gold's 12): 2 visits is
+    // below the band, so the bar is empty rather than pretending.
+    expect(p.fraction).toBe(0);
+    expect(describeTierGap(p)).toBe("10 more visits to Gold");
+  });
+
+  it("a floor at or below what they earned changes nothing - the earned view, exactly", () => {
+    for (const floor of ["BRONZE", "SILVER"] as const) {
+      const p = tierRulesProgress(lifetime(7), DEFAULTS, floor);
+      expect(p).toEqual(tierRulesProgress(lifetime(7), DEFAULTS));
+      expect(p).toMatchObject({ current: "SILVER", earned: "SILVER", setByHand: false, next: "GOLD" });
+    }
+  });
+
+  it("no floor at all: setByHand is false and current is always what they earned", () => {
+    for (let v = 0; v <= 14; v++) {
+      const p = tierRulesProgress(lifetime(v), DEFAULTS, null);
+      expect(p.setByHand).toBe(false);
+      expect(p.current).toBe(p.earned);
+    }
+  });
+
+  it("raised to the top by hand: no next tier, a full bar", () => {
+    const p = tierRulesProgress(stats({}), MIXED, "GOLD");
+    expect(p).toMatchObject({
+      current: "GOLD",
+      earned: null,
+      setByHand: true,
+      next: null,
+      requirements: [],
+      fraction: 1,
+      visitsToNext: 0,
+    });
+    expect(describeTierGap(p)).toBeNull();
+  });
+
+  it("tierForStats stays the EARNED tier - it never sees the floor", () => {
+    expect(tierForStats(lifetime(2), DEFAULTS)).toBe("BRONZE");
   });
 });
 
