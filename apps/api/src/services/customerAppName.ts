@@ -54,3 +54,41 @@ export async function appNamesForClients(
   }
   return names;
 }
+
+/**
+ * The same fact read the other way round: for accounts that saved this shop,
+ * the shop record each one is PROVEN to be - so the barber can tap a name on
+ * "saved your shop" and land on that client.
+ *
+ * Nothing new crosses: the client page already shows the name from their app
+ * for exactly these links (appNamesForClients). Settled first and ACTIVE only,
+ * for the same reason - a stale link would open one person's record under
+ * another person's name. An account that is ambiguous here, or holds nothing
+ * here, is simply absent: a name and a date, as before.
+ */
+export async function clientsForAccounts(
+  shopId: string,
+  accountIds: readonly string[],
+  now = new Date(),
+): Promise<Map<string, string>> {
+  const clients = new Map<string, string>();
+  if (!apiEnv().CUSTOMER_ACCOUNTS_ENABLED || accountIds.length === 0) return clients;
+  const ids = [...new Set(accountIds)];
+
+  const links = await runAsOwner(async (tx) => {
+    const held = await tx.customerClientLink.findMany({
+      where: { shopId, accountId: { in: ids }, status: "active" },
+      select: { clientId: true },
+    });
+    await settleClientLinks(tx, held.map((l) => l.clientId), now);
+    return tx.customerClientLink.findMany({
+      where: { shopId, accountId: { in: ids }, status: "active", account: { isDemo: false } },
+      orderBy: { linkedAt: "asc" },
+      select: { accountId: true, clientId: true },
+    });
+  });
+
+  // One record per saver: the first they were linked to at this shop.
+  for (const link of links) if (!clients.has(link.accountId)) clients.set(link.accountId, link.clientId);
+  return clients;
+}

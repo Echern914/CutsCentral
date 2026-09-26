@@ -29,11 +29,14 @@ function randomPhone(): string {
   return `+1626${exch}${line}`;
 }
 
-async function account(opts: { firstName?: string | null; phone?: string; email?: string } = {}) {
+async function account(
+  opts: { firstName?: string | null; lastName?: string | null; phone?: string; email?: string } = {},
+) {
   const now = new Date();
   const a = await prisma.customerAccount.create({
     data: {
       firstName: opts.firstName === undefined ? null : opts.firstName,
+      lastName: opts.lastName ?? null,
       phoneE164: opts.phone ?? null,
       phoneVerifiedAt: opts.phone ? now : null,
       emailNormalized: opts.email ?? null,
@@ -191,7 +194,7 @@ describe("Join shop - an open shop", () => {
   });
 
   it("an earlier plain save of the shop gives way to the client relationship", async () => {
-    const me = await account({ firstName: "Saver", phone: randomPhone() });
+    const me = await account({ firstName: "Saver", lastName: "Sato", phone: randomPhone() });
     await request(app).post("/api/me/shops/saved").set("Authorization", `Bearer ${me.token}`).send({ handle: open.slug });
     expect(await prisma.customerSavedShop.count({ where: { accountId: me.id } })).toBe(1);
     expect((await join(me.token, { handle: open.slug, firstName: "Saver", lastName: "Sato" })).body.status).toBe("joined");
@@ -252,7 +255,7 @@ describe("Join shop - a shop that approves new clients", () => {
 
   it("🔴 only a join request at THIS shop can be answered - never a plain save, never another shop's", async () => {
     const phone = randomPhone();
-    const saver = await account({ firstName: "Plain", phone });
+    const saver = await account({ firstName: "Plain", lastName: "Saver", phone });
     await request(app).post("/api/me/shops/saved").set("Authorization", `Bearer ${saver.token}`).send({ handle: open.slug });
     const plain = await prisma.customerSavedShop.findFirstOrThrow({ where: { accountId: saver.id, shopId: open.id } });
     const accepted = await request(app).post(`/api/dashboard/saved-by/${plain.id}/accept`).set("Cookie", ownerCookie);

@@ -1,9 +1,12 @@
+import Link from "next/link";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { LocalDate } from "@/components/ui/LocalDate";
 
 export interface SavedByPerson {
   name: string;
   savedAt: string;
+  /** Their client record here, when the app has PROVEN which one it is. */
+  clientId?: string | null;
 }
 
 /** How many names show before the rest fold away. */
@@ -12,9 +15,10 @@ const VISIBLE = 5;
 /**
  * "Saved your shop" - people who added this shop in their own ChairBack app.
  *
- * Names and dates only, because that is all the API sends: a customer who
- * saved a shop agreed to be seen by name, not to be texted or emailed. If they
- * book, they become a client the ordinary way. Nothing at all renders until
+ * Names and dates, and never a phone or email: a customer who saved a shop
+ * agreed to be seen by name, not to be texted or emailed. A saver the app has
+ * already connected to one of this shop's client records opens that client on
+ * a tap; anyone else says "Not connected yet". Nothing at all renders until
  * somebody has saved the shop.
  */
 export function SavedByCard({ total, people }: { total: number; people: SavedByPerson[] }) {
@@ -26,7 +30,7 @@ export function SavedByCard({ total, people }: { total: number; people: SavedByP
     <Card className="p-5">
       <CardHeader
         title={total === 1 ? "1 person saved your shop" : `${total} people saved your shop`}
-        subtitle="They added you in their ChairBack app. You see their name, nothing else."
+        subtitle="They added you in their ChairBack app. Tap a name to open their client profile."
       />
       <PeopleList people={shown} />
       {rest.length > 0 && (
@@ -47,7 +51,19 @@ function PeopleList({ people }: { people: SavedByPerson[] }) {
     <ul className="mt-3 divide-y divide-subtle">
       {people.map((p, i) => (
         <li key={`${p.savedAt}:${i}`} className="flex items-center justify-between gap-3 py-2">
-          <span className="min-w-0 truncate text-sm text-offwhite">{p.name}</span>
+          {p.clientId ? (
+            <Link
+              href={`/dashboard/clients/${encodeURIComponent(p.clientId)}`}
+              className="min-w-0 truncate text-sm text-gold underline-offset-2 hover:underline"
+            >
+              {p.name}
+            </Link>
+          ) : (
+            <span className="flex min-w-0 items-baseline gap-2">
+              <span className="min-w-0 truncate text-sm text-offwhite">{p.name}</span>
+              <span className="shrink-0 text-xs text-muted">Not connected yet</span>
+            </span>
+          )}
           <LocalDate
             iso={p.savedAt}
             options={{ month: "short", day: "numeric" }}

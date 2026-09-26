@@ -24,6 +24,20 @@ describe("SavedByCard", () => {
     expect(screen.getByText("Lee Rowe")).toBeTruthy();
   });
 
+  it("a saver the app has connected opens their client profile", () => {
+    render(<SavedByCard total={1} people={[{ ...person("Jaylon Reyes", 0), clientId: "client_123" }]} />);
+    const link = screen.getByRole("link", { name: "Jaylon Reyes" });
+    expect(link.getAttribute("href")).toBe("/dashboard/clients/client_123");
+    expect(screen.queryByText("Not connected yet")).toBeNull();
+  });
+
+  it("anyone else is a plain name, marked 'Not connected yet'", () => {
+    render(<SavedByCard total={1} people={[{ ...person("Abdallah", 0), clientId: null }]} />);
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByText("Abdallah")).toBeTruthy();
+    expect(screen.getByText("Not connected yet")).toBeTruthy();
+  });
+
   it("folds everyone past the first five behind 'Show more'", () => {
     const people = Array.from({ length: 7 }, (_, i) => person(`Person ${i + 1}`, i));
     render(<SavedByCard total={7} people={people} />);

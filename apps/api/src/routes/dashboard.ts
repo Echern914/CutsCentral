@@ -56,7 +56,7 @@ import {
   unarchiveClient,
 } from "../services/client.js";
 import { dismissDuplicates, findDuplicateGroups } from "../services/clientDuplicates.js";
-import { appNamesForClients } from "../services/customerAppName.js";
+import { appNamesForClients, clientsForAccounts } from "../services/customerAppName.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { sweepShop, type EligibilityData } from "../engines/nudge.js";
 import { sweepShopWinback } from "../engines/winback.js";
@@ -594,9 +594,13 @@ function buildClientFilterSql(filter: string, tier: string): Prisma.Sql {
  * Who added this shop to their My ChairBack - "saved your shop" - and who is
  * asking to JOIN it (a shop that approves new clients).
  *
- * 🔴 A PLAIN SAVE IS NAMES AND DATES, NOTHING ELSE. No phone, no email, and
- * nothing that says whether a saver is also a client here: a customer who saved
- * a shop agreed to be seen by name, not to hand over a way to text them.
+ * 🔴 A PLAIN SAVE IS A NAME AND A DATE - NEVER A PHONE OR AN EMAIL: a customer
+ * who saved a shop agreed to be seen by name, not to hand over a way to text
+ * them. The one addition is `clientId`, and only for a saver the identity rules
+ * have already PROVEN to be one of this shop's own records (an active link,
+ * settled first): it lets the barber open that client. It carries nothing the
+ * shop does not hold already - the client page shows the name from their app
+ * for exactly these links (customerAppName.ts). Anyone else: null.
  *
  * A JOIN REQUEST also shows the verified phone and email, because pressing
  * Join shop was the customer's agreement to give this shop exactly those, and
@@ -614,7 +618,7 @@ dashboardRouter.get("/saved-by", async (req, res) => {
       where: saves,
       orderBy: { createdAt: "desc" },
       take: 100,
-      select: { createdAt: true, account: { select: { firstName: true, lastName: true } } },
+      select: { createdAt: true, accountId: true, account: { select: { firstName: true, lastName: true } } },
     });
     const requests = await tx.customerSavedShop.findMany({
       where: { shopId, joinRequestedAt: { not: null }, account: { isDemo: false } },
@@ -635,9 +639,17 @@ dashboardRouter.get("/saved-by", async (req, res) => {
       .map((part) => part?.trim())
       .filter(Boolean)
       .join(" ") || "A ChairBack customer";
+  const clientOf = await clientsForAccounts(
+    shopId,
+    data.rows.map((r) => r.accountId),
+  );
   res.json({
     total: data.total,
-    people: data.rows.map((r) => ({ name: nameOf(r.account), savedAt: r.createdAt.toISOString() })),
+    people: data.rows.map((r) => ({
+      name: nameOf(r.account),
+      savedAt: r.createdAt.toISOString(),
+      clientId: clientOf.get(r.accountId) ?? null,
+    })),
     requests: data.requests.map((r) => ({
       id: r.id,
       name: nameOf(r.account),
