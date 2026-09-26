@@ -130,6 +130,23 @@ describe("what a card says", () => {
   });
 });
 
+describe("🔴 telling two Mikes apart", () => {
+  it("a handle-only joiner shows their Instagram, linked to the profile", async () => {
+    mockGet.mockResolvedValue(page([entry({ firstName: "Mike", lastName: null, instagram: "mike.fades" })]));
+    render(<WaitlistBoard {...props} />);
+    const link = await screen.findByRole("link", { name: "@mike.fades" });
+    expect(link.getAttribute("href")).toBe("https://instagram.com/mike.fades");
+    expect(link.getAttribute("rel")).toContain("noopener");
+  });
+
+  it("no handle, no link", async () => {
+    mockGet.mockResolvedValue(page([entry()]));
+    render(<WaitlistBoard {...props} />);
+    await screen.findByText("Marcus Reed");
+    expect(screen.queryByRole("link", { name: /^@/ })).toBeNull();
+  });
+});
+
 describe("actions", () => {
   it("🔴 'Booked externally' asks first, then refreshes", async () => {
     mockGet.mockResolvedValue(page([entry()]));

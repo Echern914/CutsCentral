@@ -213,6 +213,63 @@ describe("POST /api/book/offer/:token/claim", () => {
     expect(appt).toEqual({ status: "BOOKED", bookedVia: "waitlist_offer" });
   });
 
+  it("🔴 an entry from before the last-name-or-Instagram rule still claims: a held slot is never refused over a name", async () => {
+    const o = await heldOffer();
+    const { entry } = await prisma.waitlistOffer.findUniqueOrThrow({
+      where: { id: o.offerId },
+      select: { entry: { select: { lastName: true, instagram: true } } },
+    });
+    expect(entry).toEqual({ lastName: null, instagram: null });
+    const res = await request(app).post(`/api/book/offer/${o.token}/claim`).send({});
+    expect(res.status).toBe(201);
+  });
+
+  it("the handle given at join rides onto the client the claim makes", async () => {
+    const o = await heldOffer();
+    const { entryId } = await prisma.waitlistOffer.findUniqueOrThrow({
+      where: { id: o.offerId },
+      select: { entryId: true },
+    });
+    const handle = `rt_${randomToken(6).toLowerCase()}`;
+    await prisma.waitlistEntry.update({ where: { id: entryId }, data: { instagram: handle } });
+    const res = await request(app).post(`/api/book/offer/${o.token}/claim`).send({});
+    expect(res.status).toBe(201);
+    const appt = await prisma.appointment.findFirstOrThrow({
+      where: { shopId, staffId, startsAt: o.slot.startsAt },
+      select: { client: { select: { instagram: true } } },
+    });
+    expect(appt.client?.instagram).toBe(handle);
+  });
+
+  it("🔴 the claim fills a missing handle but never replaces one already on file", async () => {
+    // The phone on a claim is typed, not proven; the barber corrects handles.
+    const phone = "+13025550199";
+    const regular = await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `tel:${phone}`,
+        magicToken: randomToken(),
+        firstName: "Marcus",
+        phone,
+        instagram: "own.handle",
+      },
+    });
+    const o = await heldOffer();
+    const { entryId } = await prisma.waitlistOffer.findUniqueOrThrow({
+      where: { id: o.offerId },
+      select: { entryId: true },
+    });
+    await prisma.waitlistEntry.update({ where: { id: entryId }, data: { instagram: "other.handle" } });
+    const res = await request(app).post(`/api/book/offer/${o.token}/claim`).send({ phone });
+    expect(res.status).toBe(201);
+    const appt = await prisma.appointment.findFirstOrThrow({
+      where: { shopId, staffId, startsAt: o.slot.startsAt },
+      select: { clientId: true },
+    });
+    expect(appt.clientId).toBe(regular.id);
+    expect((await prisma.client.findUniqueOrThrow({ where: { id: regular.id } })).instagram).toBe("own.handle");
+  });
+
   it("the token dies with the claim: a second POST is a generic 410", async () => {
     const o = await heldOffer();
     await request(app).post(`/api/book/offer/${o.token}/claim`).send({});

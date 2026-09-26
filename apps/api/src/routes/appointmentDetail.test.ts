@@ -261,6 +261,85 @@ describe("missing contact", () => {
     expect(res.body.contact.email).toBeNull();
   });
 
+  it("carries the client's Instagram handle, so two clients with one name can be told apart", async () => {
+    const handle = `mike_${randomToken(5).toLowerCase()}`;
+    const mike = await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `anon:${randomToken(6)}`,
+        magicToken: randomToken(),
+        firstName: "Mike",
+        instagram: handle,
+      },
+    });
+    const first = await makeAppt({ clientId: mike.id });
+    const withHandle = await getAppt(first.id);
+    expect(withHandle.body.clientInstagram).toBe(handle);
+    await prisma.appointment.delete({ where: { id: first.id } });
+    const without = await getAppt((await makeAppt()).id);
+    expect(without.body.clientInstagram).toBeNull();
+
+    // The client page says it too.
+    const page = await agent.get(`/api/dashboard/clients/${mike.id}`);
+    expect(page.body.client.instagram).toBe(handle);
+  });
+
+  it("🔴 a group member's sheet and calendar row never show the BOOKER's handle as the attendee's", async () => {
+    // Every member of a group points at the booker's Client, but carries the
+    // attendee's own name. "Jaylen" with "@mike.fades" under it names the
+    // wrong person in the chair.
+    const handle = `mike_${randomToken(5).toLowerCase()}`;
+    const mike = await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `anon:${randomToken(6)}`,
+        magicToken: randomToken(),
+        firstName: "Mike",
+        instagram: handle,
+      },
+    });
+    const group = await prisma.appointmentGroup.create({
+      data: { shopId, staffId, clientId: mike.id, firstName: "Mike", manageToken: randomToken() },
+    });
+    const member = (firstName: string, hour: number, groupId: string | null) =>
+      prisma.appointment.create({
+        data: {
+          shopId,
+          staffId,
+          serviceId,
+          clientId: mike.id,
+          firstName,
+          status: "BOOKED",
+          startsAt: slotAt(hour),
+          endsAt: new Date(slotAt(hour).getTime() + 45 * 60_000),
+          manageToken: randomToken(),
+          groupId,
+        },
+      });
+    const jaylen = await member("Jaylen", 17, group.id);
+    const solo = await member("Mike", 19, null);
+
+    const sheet = await getAppt(jaylen.id);
+    expect(sheet.body.clientName).toBe("Jaylen");
+    expect(sheet.body.clientInstagram).toBeNull();
+    // Still reachable, labelled as whose it is.
+    expect(sheet.body.bookedByInstagram).toBe(handle);
+    const own = await getAppt(solo.id);
+    expect(own.body.clientInstagram).toBe(handle);
+    expect(own.body.bookedByInstagram).toBeNull();
+
+    // The calendar shows the handle beside the name - on the solo row only.
+    const from = new Date(slotAt(0).getTime()).toISOString();
+    const to = new Date(slotAt(23).getTime()).toISOString();
+    const agenda = await agent.get(
+      `/api/booking/agenda?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    );
+    expect(agenda.status).toBe(200);
+    const rows = agenda.body.agenda as { id: string; clientInstagram?: string | null }[];
+    expect(rows.find((r) => r.id === solo.id)?.clientInstagram).toBe(handle);
+    expect(rows.find((r) => r.id === jaylen.id)?.clientInstagram).toBeNull();
+  });
+
   it("a clientless walk-in falls back to what the booker typed", async () => {
     const a = await makeAppt({
       clientId: null,

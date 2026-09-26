@@ -1237,6 +1237,10 @@ model Client {
   acuityClientKey  String // normalized phone || email || anon slug
   firstName        String?
   lastName         String?
+  // Instagram username, bare and lowercase (no @, no URL). How a customer who
+  // gave no last name can still be told apart - a self-signup must carry one or
+  // the other (packages/config clientIdentity.ts). Null for most clients.
+  instagram        String?
   phone            String? // E.164
   email            String?
   optedOut         Boolean   @default(false)
@@ -1383,6 +1387,9 @@ model WaitlistEntry {
   shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
   firstName     String
   lastName      String?
+  // Bare, lowercase handle. Carried onto the Client when the offer is claimed
+  // or the barber books the entry from the board (filled, never overwritten).
+  instagram     String?
   phone         String? // E.164 when parseable, else raw input
   email         String?
 
@@ -4353,6 +4360,10 @@ model CustomerAccount {
   // as their details FOR that shop.
   firstName String?
   lastName  String?
+  // Bare, lowercase Instagram handle. Given on "Join shop" (a last name or
+  // this), and kept here because a shop that approves new clients creates the
+  // Client later, from these fields.
+  instagram String?
 
   // The PROVEN contacts. Each is set only by a successful one-time code, and
   // each belongs to at most one account. Stored normalized (E.164; trimmed +

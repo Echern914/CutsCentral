@@ -43,7 +43,7 @@ import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager, requireOwner } from "../auth/roles.js";
 import { linkReferralOnShopCreate } from "../services/referral.js";
 import { recordPartnerReferralInTx, resolvePartnerCode } from "../services/partnerProgram.js";
-import { AFFILIATE_CLAIM_COOKIE } from "@chairback/config";
+import { AFFILIATE_CLAIM_COOKIE, checkTellApart, tellApartRefusal } from "@chairback/config";
 import {
   applyAttributionInTx,
   planAttribution,
@@ -1244,7 +1244,10 @@ const windowSchema = z
 const waitlistSchema = z
   .object({
     firstName: z.string().trim().min(1).max(80),
+    // A last name OR an Instagram handle - checkTellApart below, the rule every
+    // self-signup shares. Loose here so the refusal can name the reason.
     lastName: z.string().trim().max(80).optional().or(z.literal("")),
+    instagram: z.string().trim().max(200).optional().or(z.literal("")),
     phone: z.string().trim().max(40).optional().or(z.literal("")),
     email: z.string().trim().email().max(200).optional().or(z.literal("")),
     serviceId: z.string().trim().max(60).optional().or(z.literal("")),
@@ -1280,6 +1283,15 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
   }
   const d = parsed.data;
   const now = new Date();
+
+  // 🔴 Asked of EVERY joiner, a returning client included. The form is
+  // unauthenticated: exempting a phone already on file would let a stranger
+  // learn whose number the shop holds from which answer comes back.
+  const who = checkTellApart({ lastName: d.lastName, instagram: d.instagram });
+  if (!who.ok) {
+    res.status(400).json(tellApartRefusal(who.code));
+    return;
+  }
 
   // The customer's own zone decides what "Saturday morning" means. Anything
   // unparseable falls back to the shop's rather than 400-ing a join over a
@@ -1349,7 +1361,8 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
         data: {
           shopId: shop.id,
           firstName: d.firstName,
-          lastName: d.lastName || null,
+          lastName: who.lastName,
+          instagram: who.instagram,
           phone,
           email,
           clientId,
@@ -1432,7 +1445,11 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
 
   // Best-effort barber alert (identical to the lead form). Never fails the join.
   const contact = phone ?? email ?? "no contact info";
-  const body = `New waitlist join at ${shop.name} from ${d.firstName} (${contact})`;
+  // The whole name and the handle: the detail the join now requires is the
+  // detail that tells this Mike from the last one, straight from the alert.
+  const joiner =
+    [d.firstName, who.lastName].filter(Boolean).join(" ") + (who.instagram ? ` @${who.instagram}` : "");
+  const body = `New waitlist join at ${shop.name} from ${joiner} (${contact})`;
   if (shop.notifyPhone) {
     if (apiEnv().DRY_RUN || !smsEnabled()) {
       logger.info(

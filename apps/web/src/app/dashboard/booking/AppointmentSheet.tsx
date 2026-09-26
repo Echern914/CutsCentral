@@ -32,6 +32,7 @@ import {
   type DetailHistoryItem,
 } from "./actions";
 import type { AgendaRow } from "./page";
+import { InstagramHandle } from "@/components/InstagramHandle";
 import { SpecialChip } from "../_components/SpecialChip";
 
 /** Same local alias the sibling booking forms use - the provider's own
@@ -712,6 +713,18 @@ function Hero({
           >
             {name}
           </h3>
+        )}
+        {detail?.clientInstagram && (
+          <p className="mt-1 text-sm">
+            <InstagramHandle handle={detail.clientInstagram} />
+          </p>
+        )}
+        {/* A group member points at the booker's client: labelled, never
+            shown bare under the attendee's name as if it were theirs. */}
+        {detail?.bookedByInstagram && (
+          <p className="mt-1 text-sm text-muted">
+            Booked by <InstagramHandle handle={detail.bookedByInstagram} />
+          </p>
         )}
 
         <div className="mt-2.5 flex flex-wrap items-center justify-center gap-1.5">

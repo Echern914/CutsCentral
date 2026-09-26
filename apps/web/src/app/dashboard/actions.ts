@@ -356,7 +356,13 @@ export async function deleteVisitAction(
 
 export async function editClientAction(
   clientId: string,
-  fields: { firstName?: string; lastName?: string | null; phone?: string | null; email?: string | null },
+  fields: {
+    firstName?: string;
+    lastName?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    instagram?: string | null;
+  },
 ): Promise<{ ok: boolean; error?: string }> {
   const res = await apiSend("PATCH", `/api/dashboard/clients/${clientId}`, fields);
   revalidatePath(`/dashboard/clients/${clientId}`);

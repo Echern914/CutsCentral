@@ -67,6 +67,52 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
+describe("🔴 a barber's quick add is never held to the self-signup rule", () => {
+  it("a first name and nothing else still adds the client", async () => {
+    const res = await request(app)
+      .post("/api/dashboard/clients")
+      .set("Cookie", cookieA)
+      .send({ firstName: "JustMike" });
+    expect(res.status).toBe(201);
+    const row = await prisma.client.findUniqueOrThrow({ where: { id: res.body.id } });
+    expect(row).toMatchObject({ firstName: "JustMike", lastName: null, instagram: null });
+  });
+
+  it("the client search finds a handle, typed with or without the @", async () => {
+    const id = await addClient(cookieA, "Handle");
+    const handle = `srch_${randomToken(6).toLowerCase()}`;
+    await prisma.client.update({ where: { id }, data: { instagram: handle } });
+    for (const q of [handle, `@${handle}`]) {
+      const res = await request(app)
+        .get(`/api/dashboard/clients?q=${encodeURIComponent(q)}`)
+        .set("Cookie", cookieA);
+      const hit = (res.body.clients as { id: string; instagram: string | null }[]).find((c) => c.id === id);
+      expect(hit?.instagram, q).toBe(handle);
+    }
+  });
+});
+
+describe("🔑 the barber owns the handle: set, correct and clear it", () => {
+  // A public form fills a missing handle but never replaces one; the barber is
+  // the only one who can fix a wrong one, so the edit form must reach it.
+  it("stores it normalized, clears it with '', and refuses a non-handle", async () => {
+    const id = await addClient(cookieA, "EditHandle");
+    const patch = (body: Record<string, unknown>) =>
+      request(app).patch(`/api/dashboard/clients/${id}`).set("Cookie", cookieA).send(body);
+
+    expect((await patch({ instagram: " @New.Handle " })).status).toBe(200);
+    expect((await prisma.client.findUniqueOrThrow({ where: { id } })).instagram).toBe("new.handle");
+
+    const bad = await patch({ instagram: "not a handle" });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toBe("invalid_instagram");
+    expect((await prisma.client.findUniqueOrThrow({ where: { id } })).instagram).toBe("new.handle");
+
+    expect((await patch({ instagram: "" })).status).toBe(200);
+    expect((await prisma.client.findUniqueOrThrow({ where: { id } })).instagram).toBeNull();
+  });
+});
+
 describe("client edit routes", () => {
   it("requires auth", async () => {
     const res = await request(app).patch("/api/dashboard/clients/whatever");

@@ -13,6 +13,7 @@ import { DEMO } from "@chairback/config/demo";
 import { serviceColorHex } from "@chairback/config/constants";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import { zonedMinutesOfDay } from "@chairback/config/time";
+import { lastNameHasLetter } from "@chairback/config/clientIdentity";
 import {
   SERVICE_CHARGE_CONSENT,
   SERVICE_CHARGE_CONSENT_SERIES,
@@ -1379,7 +1380,9 @@ export function BookingClient({
     // walk-in form, where a first name is often all he has). Two "Mike"s in one
     // client list are indistinguishable in search, in the agenda, and in every
     // reminder — the barber ends up guessing which one is in his chair.
-    if (!lastName.trim()) {
+    // At least one letter - the API's own floor (lastNameHasLetter), so "." or
+    // "-" is caught here instead of bouncing off the server.
+    if (!lastNameHasLetter(lastName)) {
       setError("Please add your last name.");
       return;
     }

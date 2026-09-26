@@ -1,6 +1,7 @@
 import { asOwnerWithin, forShop, runWithShop } from "@chairback/db";
 import { recomputeCadence } from "../engines/cadence.js";
 import { toE164 } from "../acuity/clientKey.js";
+import { normalizeInstagramHandle } from "@chairback/config/clientIdentity";
 import { settleLinksForMerge } from "./customerIdentity.js";
 
 /**
@@ -28,12 +29,19 @@ export interface EditClientInput {
   phone?: string | null;
   /** "" clears; undefined leaves unchanged. */
   email?: string | null;
+  /**
+   * "" clears; otherwise normalized like every self-signup (@, pasted link,
+   * case) and refused when it cannot be a handle. The barber is the one who
+   * can correct a handle - public forms only fill a missing one.
+   */
+  instagram?: string | null;
 }
 
 export type EditClientResult =
   | { ok: true }
   | { ok: false; reason: "not_found" }
-  | { ok: false; reason: "invalid_phone" };
+  | { ok: false; reason: "invalid_phone" }
+  | { ok: false; reason: "invalid_instagram" };
 
 /**
  * Update a client's name / phone / email. A supplied-but-unparseable phone is
@@ -72,6 +80,12 @@ export async function editClient(
   if (input.email !== undefined) {
     const e = (input.email ?? "").trim().toLowerCase();
     data.email = e === "" ? null : e;
+  }
+
+  if (input.instagram !== undefined) {
+    const ig = normalizeInstagramHandle(input.instagram);
+    if (!ig.ok) return { ok: false, reason: "invalid_instagram" };
+    data.instagram = ig.handle;
   }
 
   // Nothing to change (all fields omitted) - treat as a no-op success.
@@ -304,6 +318,8 @@ export async function mergeClients(
     if (!winner.phone && loser.phone) update.phone = loser.phone;
     if (!winner.email && loser.email) update.email = loser.email;
     if (!winner.lastName && loser.lastName) update.lastName = loser.lastName;
+    // The handle is what tells two first-name-only records apart - keep it.
+    if (!winner.instagram && loser.instagram) update.instagram = loser.instagram;
     if (winner.notes && loser.notes) {
       update.notes = `${winner.notes}\n\n[merged] ${loser.notes}`;
     } else if (!winner.notes && loser.notes) {

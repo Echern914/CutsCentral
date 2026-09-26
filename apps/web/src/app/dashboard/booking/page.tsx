@@ -173,6 +173,8 @@ export interface AgendaRow {
   start: string; // ISO
   end: string | null; // ISO
   clientName: string; // for a block: the reason (or "Blocked")
+  /** Bare Instagram handle of the row's own client (never a group booker's). */
+  clientInstagram?: string | null;
   serviceName: string | null;
   // Ids the edit sheet prefills from. Absent on visit/block rows, which are
   // never editable here.

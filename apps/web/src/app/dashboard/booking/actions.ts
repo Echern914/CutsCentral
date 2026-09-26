@@ -1059,6 +1059,8 @@ export interface WaitlistEntry {
   id: string;
   firstName: string;
   lastName: string | null;
+  /** Bare Instagram handle, when they gave one instead of (or with) a last name. */
+  instagram?: string | null;
   phone: string | null;
   email: string | null;
   serviceId: string | null;
@@ -1542,6 +1544,10 @@ export interface AppointmentDetail {
   checkInStatus: "en_route" | "arrived" | null;
   clientId: string | null;
   clientName: string;
+  /** Bare Instagram handle, so two clients with one name can be told apart. */
+  clientInstagram?: string | null;
+  /** Group members only: the BOOKER's handle (the member is someone else). */
+  bookedByInstagram?: string | null;
   serviceName: string | null;
   staffName: string | null;
   startsAt: string;

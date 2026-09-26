@@ -4,6 +4,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useResource } from "@/src/customer/CustomerProvider";
 import { ApiError, errorCopy } from "@/src/customer/api";
 import { displayPhone } from "@/src/customer/format";
+import { joinDetailsMessage, TELL_APART_MESSAGE } from "@/src/customer/joinDetails";
 import { useSavedShopActions } from "@/src/customer/savedShops";
 import { color, radius, space, type } from "@/src/customer/theme";
 import type { Profile } from "@/src/customer/types";
@@ -13,7 +14,10 @@ import { Avatar, Button, ErrorState, Group, Placeholder, Row, Separator, Tap, Tx
  * JOIN A SHOP - the client form, reached from a shop found on Book.
  *
  * First and last name are theirs to type (and become the account's name too,
- * so the greeting and every shop agree). Phone and email are SHOWN, not typed:
+ * so the greeting and every shop agree). A new client needs a last name OR an
+ * Instagram handle so the shop can tell them apart - the API decides, because
+ * a customer the shop already knows is never asked (src/customer/joinDetails.ts).
+ * Phone and email are SHOWN, not typed:
  * they are the ones this account proved with a code, the only ones a shop is
  * ever given (the API's services/joinShop.ts says why). Changing one happens in
  * Profile, which proves the new one first.
@@ -36,6 +40,7 @@ export default function JoinScreen() {
 
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
+  const [instagram, setInstagram] = useState("");
   const [filled, setFilled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -45,6 +50,7 @@ export default function JoinScreen() {
     if (!profile || filled) return;
     setFirst(profile.firstName ?? "");
     setLast(profile.lastName ?? "");
+    setInstagram(profile.instagram ?? "");
     setFilled(true);
   }, [profile, filled]);
 
@@ -62,7 +68,7 @@ export default function JoinScreen() {
     setBusy(true);
     setMessage(null);
     try {
-      const status = await actions.join(handle, first.trim(), last.trim());
+      const status = await actions.join(handle, first.trim(), last.trim(), instagram.trim());
       if (status === "needs_connecting") {
         setMessage(
           `${shopName} already has your number or email on file. Open the link they texted or emailed you to connect it, or ask them to send it.`,
@@ -74,15 +80,21 @@ export default function JoinScreen() {
       setMessage(
         err instanceof ApiError && err.kind === "not_found"
           ? `We can't find ${shopName} any more. Check the name with them, or use the link they sent.`
-          : errorCopy(err).body,
+          : (err instanceof ApiError ? joinDetailsMessage(err.code) : null) ?? errorCopy(err).body,
       );
     } finally {
       setBusy(false);
     }
   }
 
-  const shared =
-    profile?.phone && profile?.email ? ", phone and email" : profile?.phone ? " and phone" : profile?.email ? " and email" : "";
+  // Everything the shop is handed, said before the tap.
+  const given = [
+    "name",
+    ...(instagram.trim() ? ["Instagram"] : []),
+    ...(profile?.phone ? ["phone"] : []),
+    ...(profile?.email ? ["email"] : []),
+  ];
+  const shared = given.length > 1 ? `${given.slice(0, -1).join(", ")} and ${given[given.length - 1]}` : "name";
 
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -150,11 +162,30 @@ export default function JoinScreen() {
               autoComplete="family-name"
               textContentType="familyName"
               maxLength={40}
-              returnKeyType="done"
-              onSubmitEditing={() => void join()}
+              returnKeyType="next"
               accessibilityLabel="Last name"
               style={styles.input}
             />
+            <Txt variant="footnoteStrong" tone="secondary" style={styles.label}>
+              Instagram
+            </Txt>
+            <TextInput
+              value={instagram}
+              onChangeText={setInstagram}
+              placeholder="@handle"
+              placeholderTextColor={color.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="off"
+              maxLength={200}
+              returnKeyType="done"
+              onSubmitEditing={() => void join()}
+              accessibilityLabel="Instagram"
+              style={styles.input}
+            />
+            <Txt variant="footnote" tone="secondary" style={styles.gapSmall}>
+              {`${TELL_APART_MESSAGE}.`}
+            </Txt>
 
             <Txt variant="footnoteStrong" tone="secondary" style={styles.label}>
               Your contact details
@@ -175,7 +206,7 @@ export default function JoinScreen() {
             ) : null}
             <Button label="Join shop" busy={busy} onPress={() => void join()} style={styles.primary} />
             <Txt variant="caption" tone="tertiary" style={styles.gapSmall}>
-              {`${shopName} gets your name${shared}. Joining doesn't sign you up for marketing texts.`}
+              {`${shopName} gets your ${shared}. Joining doesn't sign you up for marketing texts.`}
             </Txt>
           </>
         )}

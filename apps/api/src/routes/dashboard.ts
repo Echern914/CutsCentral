@@ -15,6 +15,7 @@ import {
   describeTierGap,
   parseTierRules,
   tierRulesProgress,
+  tellApartRefusal,
   type LoyaltyTierKey,
 } from "@chairback/config";
 import { loadClientTierStats } from "../engines/tierStats.js";
@@ -622,7 +623,9 @@ dashboardRouter.get("/saved-by", async (req, res) => {
       select: {
         id: true,
         joinRequestedAt: true,
-        account: { select: { firstName: true, lastName: true, phoneE164: true, emailNormalized: true } },
+        account: {
+          select: { firstName: true, lastName: true, instagram: true, phoneE164: true, emailNormalized: true },
+        },
       },
     });
     return { total, rows, requests };
@@ -638,6 +641,9 @@ dashboardRouter.get("/saved-by", async (req, res) => {
     requests: data.requests.map((r) => ({
       id: r.id,
       name: nameOf(r.account),
+      // The handle the app asked for so the shop can tell them apart - shown
+      // here, where the barber decides who this is.
+      instagram: r.account.instagram,
       phone: r.account.phoneE164,
       email: r.account.emailNormalized,
       requestedAt: r.joinRequestedAt!.toISOString(),
@@ -731,6 +737,8 @@ dashboardRouter.get("/clients", async (req, res) => {
   let searchIds: string[] | null = null;
   if (q) {
     const like = `%${q}%`;
+    // Handles are stored bare, so "@mike.fades" searches as "mike.fades".
+    const igLike = `%${q.replace(/^@+/, "")}%`;
     const filterSql = buildClientFilterSql(filter, tier);
     const ranked = await runWithShop(shop.id, (tx) =>
       tx.$queryRaw<{ id: string }[]>`
@@ -742,6 +750,7 @@ dashboardRouter.get("/clients", async (req, res) => {
             OR ${FULL_NAME_FOLDED} ILIKE ${foldedValue(like)}
             OR coalesce("phone", '') ILIKE ${like}
             OR lower(coalesce("email", '')) ILIKE lower(${like})
+            OR coalesce("instagram", '') ILIKE ${igLike}
           )
         ORDER BY
           -- exact substring first, then trigram similarity, then most-recent.
@@ -804,6 +813,7 @@ dashboardRouter.get("/clients", async (req, res) => {
       id: c.id,
       name: appNames.get(c.id) ?? name(c),
       nameFromApp: appNames.has(c.id),
+      instagram: c.instagram,
       phone: c.phone,
       email: c.email,
       optedOut: c.optedOut,
@@ -1210,6 +1220,8 @@ const editClientSchema = z
     phone: z.string().trim().max(40).nullable().optional(),
     // Allow "" (clears) or a valid email; reject malformed non-empty input.
     email: z.string().trim().max(160).email().nullable().optional().or(z.literal("")),
+    // "" / null clears; anything else must normalize to a handle (services/client.ts).
+    instagram: z.string().trim().max(200).nullable().optional(),
   })
   .strict()
   .refine(
@@ -1217,7 +1229,8 @@ const editClientSchema = z
       d.firstName !== undefined ||
       d.lastName !== undefined ||
       d.phone !== undefined ||
-      d.email !== undefined,
+      d.email !== undefined ||
+      d.instagram !== undefined,
     { message: "Provide at least one field to change." },
   );
 
@@ -1240,10 +1253,15 @@ dashboardRouter.patch("/clients/:clientId", async (req, res) => {
     lastName: parsed.data.lastName,
     phone: parsed.data.phone,
     email,
+    instagram: parsed.data.instagram,
   });
   if (!result.ok) {
     if (result.reason === "not_found") {
       res.status(404).json({ error: result.reason });
+      return;
+    }
+    if (result.reason === "invalid_instagram") {
+      res.status(400).json(tellApartRefusal("INVALID_INSTAGRAM"));
       return;
     }
     res.status(400).json({
@@ -2033,6 +2051,7 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       nameFromApp,
       firstName: client.firstName,
       lastName: client.lastName,
+      instagram: client.instagram,
       phone: client.phone,
       email: client.email,
       optedOut: client.optedOut,
@@ -2483,6 +2502,7 @@ dashboardRouter.get("/waitlist", async (req, res) => {
       id: e.id,
       firstName: e.firstName,
       lastName: e.lastName,
+      instagram: e.instagram,
       phone: e.phone,
       email: e.email,
       serviceId: e.serviceId,

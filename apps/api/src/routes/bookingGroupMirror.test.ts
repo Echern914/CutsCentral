@@ -48,7 +48,7 @@ let unmappedStaffId: string;
 let cutId: string;
 let kidsId: string;
 
-const booker = { firstName: "Eric", phone: "+12015550134", email: "eric@test.chairback" };
+const booker = { firstName: "Eric", lastName: "Chern", phone: "+12015550134", email: "eric@test.chairback" };
 
 async function offer(serviceId: string, staffId: string) {
   await prisma.serviceStaff.create({ data: { shopId, serviceId, staffId } });

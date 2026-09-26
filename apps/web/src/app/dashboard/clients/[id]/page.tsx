@@ -9,6 +9,7 @@ import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { Card } from "@/components/ui/Card";
 import { Avatar } from "@/components/ui/Avatar";
+import { InstagramHandle } from "@/components/InstagramHandle";
 import { UpcomingVisits, type UpcomingRow } from "./UpcomingVisits";
 import { ClientActions } from "./ClientActions";
 import { EditClient } from "./EditClient";
@@ -25,6 +26,8 @@ interface ClientDetail {
     name: string;
     firstName: string | null;
     lastName: string | null;
+    /** Bare Instagram handle, when the client gave one. */
+    instagram?: string | null;
     /** What the customer calls themselves in My ChairBack. Never the shop's own record. */
     appName?: string | null;
     /** The shop had no name for this client, so `name` above IS the app name. */
@@ -167,6 +170,12 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           <p className="mt-1 text-sm text-muted">
             {client.phone ?? "no phone"}
             {client.email ? ` · ${client.email}` : ""}
+            {client.instagram && (
+              <>
+                {" · "}
+                <InstagramHandle handle={client.instagram} />
+              </>
+            )}
             {client.optedOut && (
               <span className="ml-2 text-[10px] uppercase tracking-wide text-danger-soft">
                 opted out
@@ -212,6 +221,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           lastName={client.lastName}
           phone={client.phone}
           email={client.email}
+          instagram={client.instagram ?? null}
           archived={client.archived}
         />
         {/* Merge folds a duplicate INTO this client; it makes no sense to merge

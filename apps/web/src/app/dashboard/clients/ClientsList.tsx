@@ -19,6 +19,8 @@ export interface ClientRow {
   name: string;
   /** The shop had no name, so `name` is what the customer set in their own app. */
   nameFromApp?: boolean;
+  /** Bare Instagram handle - what tells two same-named clients apart. */
+  instagram?: string | null;
   phone: string | null;
   email: string | null;
   optedOut: boolean;
@@ -184,7 +186,11 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
                 className="flex min-w-0 flex-1 items-center justify-between gap-3 transition-opacity duration-150 ease-out hover:opacity-80"
               >
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-offwhite">{c.name}</p>
+                  <p className="truncate text-sm font-medium text-offwhite">
+                    {c.name}
+                    {/* Plain text: the whole row is already a link. */}
+                    {c.instagram && <span className="font-normal text-muted"> @{c.instagram}</span>}
+                  </p>
                   {/* Badges on their own wrapping line so a long name can't push
                       them off-screen (they carry the consent/opt-out signal). */}
                   {(c.nameFromApp ||

@@ -114,6 +114,15 @@ export interface AppointmentDetail {
   checkInStatus: string | null;
   clientId: string | null;
   clientName: string;
+  /**
+   * The client's Instagram handle (bare), so two Mikes can be told apart.
+   * Null on a group member's appointment: every member points at the BOOKER's
+   * client while carrying the attendee's own name, so the handle would name
+   * the wrong person. There it is `bookedByInstagram` instead.
+   */
+  clientInstagram: string | null;
+  /** Group members only: the booker's handle, shown as "Booked by @...". */
+  bookedByInstagram: string | null;
   serviceName: string | null;
   staffName: string | null;
   startsAt: string;
@@ -424,6 +433,7 @@ export function registerAppointmentDetail(router: Router): void {
         addOns: true,
         intake: true,
         checkInStatus: true,
+        groupId: true,
         visitId: true,
         // The Visit's source namespace is what decides ownership (see
         // engines/visitOrigin.ts) - `visitId` alone never can.
@@ -438,6 +448,7 @@ export function registerAppointmentDetail(router: Router): void {
           select: {
             phone: true,
             email: true,
+            instagram: true,
             optedOut: true,
             smsConsentAt: true,
           },
@@ -458,6 +469,7 @@ export function registerAppointmentDetail(router: Router): void {
       addOns: Prisma.JsonValue | null;
       intake: Prisma.JsonValue | null;
       checkInStatus: string | null;
+      groupId: string | null;
       visitId: string | null;
       visit: { acuityAppointmentId: string } | null;
       paidAmount: Prisma.Decimal | null;
@@ -469,6 +481,7 @@ export function registerAppointmentDetail(router: Router): void {
       client: {
         phone: string | null;
         email: string | null;
+        instagram: string | null;
         optedOut: boolean;
         smsConsentAt: Date | null;
       } | null;
@@ -522,6 +535,8 @@ export function registerAppointmentDetail(router: Router): void {
       checkInStatus: appt.checkInStatus,
       clientId: appt.clientId,
       clientName: fullName(appt.firstName, appt.lastName) || "Client",
+      clientInstagram: appt.groupId ? null : (appt.client?.instagram ?? null),
+      bookedByInstagram: appt.groupId ? (appt.client?.instagram ?? null) : null,
       serviceName: appt.service?.name ?? null,
       staffName: appt.staff?.name ?? null,
       startsAt: appt.startsAt.toISOString(),
@@ -584,6 +599,7 @@ export function registerAppointmentDetail(router: Router): void {
           select: {
             firstName: true,
             lastName: true,
+            instagram: true,
             phone: true,
             email: true,
             optedOut: true,
@@ -602,6 +618,7 @@ export function registerAppointmentDetail(router: Router): void {
       client: {
         firstName: string | null;
         lastName: string | null;
+        instagram: string | null;
         phone: string | null;
         email: string | null;
         optedOut: boolean;
@@ -633,6 +650,8 @@ export function registerAppointmentDetail(router: Router): void {
       clientName:
         fullName(visit.client?.firstName ?? null, visit.client?.lastName ?? null) ||
         "Booked elsewhere",
+      clientInstagram: visit.client?.instagram ?? null,
+      bookedByInstagram: null,
       serviceName: visit.serviceName,
       staffName: null, // a Visit carries no staff — the source doesn't send one
       startsAt: visit.scheduledAt.toISOString(),

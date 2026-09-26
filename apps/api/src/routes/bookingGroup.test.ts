@@ -119,7 +119,7 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-const booker = { firstName: "Eric", phone: "+12015550134", email: "eric@test.chairback" };
+const booker = { firstName: "Eric", lastName: "Chern", phone: "+12015550134", email: "eric@test.chairback" };
 
 const createGroup = (
   attendees: Array<{ firstName: string; serviceId: string }>,
@@ -154,6 +154,88 @@ const hhmm = (d: Date) =>
     hour: "numeric",
     minute: "2-digit",
   }).format(d);
+
+describe("🔴 the booker can be told apart: a last name or an Instagram handle", () => {
+  const party = () => [
+    { firstName: "Eric", serviceId: cutId },
+    { firstName: "Brother", serviceId: kidsId },
+  ];
+  const bookerClient = () =>
+    prisma.client.findFirst({
+      where: { shopId, phone: booker.phone },
+      select: { lastName: true, instagram: true },
+    });
+
+  it("a first name alone is refused before anything is written", async () => {
+    const res = await createGroup(party(), { lastName: undefined });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      error: "name_or_instagram_required",
+      message: "Add your last name or Instagram so the shop can tell you apart",
+    });
+    expect(await calendar()).toHaveLength(0);
+  });
+
+  it("an Instagram handle alone books, and the client carries it bare and lowercase", async () => {
+    const res = await createGroup(party(), { lastName: undefined, instagram: "  @Eric.CHERN " });
+    expect(res.status).toBe(201);
+    expect(await bookerClient()).toMatchObject({ instagram: "eric.chern" });
+  });
+
+  it("a last name alone books", async () => {
+    const res = await createGroup(party(), { lastName: "Chern", instagram: "" });
+    expect(res.status).toBe(201);
+    expect((await bookerClient())?.lastName).toBe("Chern");
+  });
+
+  it("🔴 a typed phone fills a missing handle but never replaces one on file", async () => {
+    // The form is unauthenticated: anyone who knows a regular's number could
+    // otherwise relabel him "@someone.else" on every screen.
+    const phone = "+12015550177";
+    const regular = await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `tel:${phone}`,
+        magicToken: randomToken(),
+        firstName: "Marcus",
+        lastName: "Reed",
+        phone,
+        instagram: "marcus.reed",
+      },
+    });
+    const res = await createGroup(party(), { phone, email: undefined, instagram: "someone.else" });
+    expect(res.status).toBe(201);
+    expect((await prisma.client.findUniqueOrThrow({ where: { id: regular.id } })).instagram).toBe("marcus.reed");
+
+    await prisma.client.update({ where: { id: regular.id }, data: { instagram: null } });
+    await prisma.appointment.deleteMany({ where: { shopId } });
+    const again = await createGroup(party(), { phone, email: undefined, instagram: "marcus.r" });
+    expect(again.status).toBe(201);
+    expect((await prisma.client.findUniqueOrThrow({ where: { id: regular.id } })).instagram).toBe("marcus.r");
+  });
+
+  it("🔴 two contactless Mikes told apart by handle stay two clients", async () => {
+    // No phone, no email: the key falls back to the name, and the handle is
+    // what the rule accepted as telling them apart - so it is in the key.
+    const noContact = { firstName: "Mike", lastName: undefined, phone: undefined, email: undefined };
+    const a = await createGroup(party(), { ...noContact, instagram: "mike.a" });
+    expect(a.status).toBe(201);
+    const b = await createGroup(party(), { ...noContact, instagram: "mike.b" }, at(16 * 60));
+    expect(b.status).toBe(201);
+    const mikes = await prisma.client.findMany({
+      where: { shopId, firstName: "Mike", instagram: { in: ["mike.a", "mike.b"] } },
+      select: { instagram: true },
+    });
+    expect(mikes.map((m) => m.instagram).sort()).toEqual(["mike.a", "mike.b"]);
+  });
+
+  it("a handle that cannot be one is refused, even with a last name", async () => {
+    const res = await createGroup(party(), { instagram: "eric chern!" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_instagram");
+    expect(await calendar()).toHaveLength(0);
+  });
+});
 
 describe("quantity 1 is still an ordinary booking", () => {
   it("🔴 writes exactly ONE appointment, unchanged in every visible way", async () => {

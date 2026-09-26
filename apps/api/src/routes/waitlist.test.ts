@@ -54,7 +54,7 @@ describe("waitlist", () => {
     const { slug } = await signupAndShop(email, "WL Off Cuts");
     const res = await request(app)
       .post(`/api/page/${slug}/waitlist`)
-      .send({ firstName: "Nope", phone: "3025550100" });
+      .send({ lastName: "Test", firstName: "Nope", phone: "3025550100" });
     expect(res.status).toBe(404);
   });
 
@@ -65,7 +65,7 @@ describe("waitlist", () => {
     await enableWaitlist(cookie);
     const res = await request(app)
       .post(`/api/page/${slug}/waitlist`)
-      .send({ firstName: "NoContact" });
+      .send({ lastName: "Test", firstName: "NoContact" });
     expect(res.status).toBe(400);
   });
 
@@ -105,7 +105,7 @@ describe("waitlist", () => {
     await enableWaitlist(cookie);
     await request(app)
       .post(`/api/page/${slug}/waitlist`)
-      .send({ firstName: "Mel", email: "mel@test.local" });
+      .send({ lastName: "Test", firstName: "Mel", email: "mel@test.local" });
 
     const list = await request(app).get("/api/dashboard/waitlist").set("Cookie", cookie);
     const id = list.body.waitlist[0].id as string;
@@ -126,7 +126,7 @@ describe("waitlist", () => {
     emails.push(email);
     const { cookie, slug } = await signupAndShop(email, "WL BadStatus Cuts");
     await enableWaitlist(cookie);
-    await request(app).post(`/api/page/${slug}/waitlist`).send({ firstName: "X", phone: "3025550111" });
+    await request(app).post(`/api/page/${slug}/waitlist`).send({ lastName: "Test", firstName: "X", phone: "3025550111" });
     const list = await request(app).get("/api/dashboard/waitlist").set("Cookie", cookie);
     const id = list.body.waitlist[0].id as string;
     const res = await request(app)
@@ -145,7 +145,7 @@ describe("waitlist", () => {
     await enableWaitlist(a.cookie);
     await request(app)
       .post(`/api/page/${a.slug}/waitlist`)
-      .send({ firstName: "OnlyA", phone: "3025550199" });
+      .send({ lastName: "Test", firstName: "OnlyA", phone: "3025550199" });
 
     // Shop B sees zero of shop A's entries.
     const listB = await request(app).get("/api/dashboard/waitlist").set("Cookie", b.cookie);
@@ -162,3 +162,70 @@ describe("waitlist", () => {
     expect(cross.status).toBe(404);
   });
 });
+
+describe("🔴 waitlist join: a last name or an Instagram handle, so the shop can tell them apart", () => {
+  let slug: string;
+  let shopId: string;
+  let cookie: string;
+  beforeAll(async () => {
+    const email = `wl-apart-${randomToken(6)}@test.local`.toLowerCase();
+    emails.push(email);
+    const shop = await signupAndShop(email, "WL Apart Cuts");
+    await enableWaitlist(shop.cookie);
+    slug = shop.slug;
+    shopId = shop.shopId;
+    cookie = shop.cookie;
+  });
+  const join = (body: Record<string, unknown>) => {
+    const email = `ap-${randomToken(6)}@test.local`.toLowerCase();
+    return request(app)
+      .post(`/api/page/${slug}/waitlist`)
+      .send({ firstName: "Mike", email, ...body })
+      .then((res) => Object.assign(res, { email }));
+  };
+  const entry = (email: string) =>
+    prisma.waitlistEntry.findFirst({ where: { shopId, email }, select: { lastName: true, instagram: true } });
+
+  it("a first name alone is refused with the shared sentence, and nothing is saved", async () => {
+    const res = await join({});
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: "name_or_instagram_required",
+      code: "NAME_OR_INSTAGRAM_REQUIRED",
+      field: "lastName",
+      message: "Add your last name or Instagram so the shop can tell you apart",
+    });
+    expect(await entry(res.email)).toBeNull();
+    // Whitespace is not a name.
+    expect((await join({ lastName: "   ", instagram: "  " })).status).toBe(400);
+  });
+
+  it("a last name alone joins", async () => {
+    const res = await join({ lastName: " Jones " });
+    expect(res.status).toBe(201);
+    expect(await entry(res.email)).toEqual({ lastName: "Jones", instagram: null });
+  });
+
+  it("an Instagram handle alone joins, normalized from a pasted link", async () => {
+    const res = await join({ instagram: "https://www.instagram.com/Mike.Fades/?igsh=x1" });
+    expect(res.status).toBe(201);
+    expect(await entry(res.email)).toEqual({ lastName: null, instagram: "mike.fades" });
+
+    // And the barber's board shows it beside the name.
+    const list = await request(app).get("/api/dashboard/waitlist").set("Cookie", cookie);
+    const row = (list.body.waitlist as { email: string; instagram: string | null }[]).find(
+      (r) => r.email === res.email,
+    );
+    expect(row?.instagram).toBe("mike.fades");
+  });
+
+  it("a handle that cannot be one is refused, even with a last name", async () => {
+    for (const instagram of ["mike fades", "mike-fades", "x".repeat(31), "https://evil.example/mike"]) {
+      const res = await join({ lastName: "Jones", instagram });
+      expect(res.status, instagram).toBe(400);
+      expect(res.body.error).toBe("invalid_instagram");
+      expect(await entry(res.email)).toBeNull();
+    }
+  });
+});
+

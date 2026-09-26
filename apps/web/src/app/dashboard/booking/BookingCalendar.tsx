@@ -2382,6 +2382,11 @@ export function AppointmentBlock({
         <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
           <span className={cn(NAME_WRAP_CLS, "text-[17px]")}>
             {row.clientName || "Client"}
+            {/* Which Mike: the handle a first-name-only client gave instead of
+                a last name. Plain text - this whole line is the expand toggle. */}
+            {row.clientInstagram && (
+              <span className="ml-1.5 text-sm font-normal text-muted">@{row.clientInstagram}</span>
+            )}
           </span>
           {row.special && <SpecialChip afterHours={row.afterHours} />}
         </span>

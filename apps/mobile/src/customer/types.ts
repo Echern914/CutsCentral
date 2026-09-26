@@ -198,6 +198,8 @@ export interface RewardProgram {
 export interface Profile {
   firstName: string | null;
   lastName: string | null;
+  /** Bare Instagram handle (no @). Absent from APIs older than the Join rule. */
+  instagram?: string | null;
   phone: string | null;
   email: string | null;
   pushEnabled: boolean;

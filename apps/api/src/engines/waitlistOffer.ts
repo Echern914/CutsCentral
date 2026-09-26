@@ -772,6 +772,7 @@ export async function claimOffer(params: {
               id: true,
               firstName: true,
               lastName: true,
+              instagram: true,
               phone: true,
               email: true,
               status: true,
@@ -873,6 +874,10 @@ export async function claimOffer(params: {
       const lastName = params.customer?.lastName?.trim() || offer.entry.lastName || null;
       const email = params.customer?.email?.trim() || offer.entry.email || null;
       const phone = params.customer?.phone?.trim() || offer.entry.phone || null;
+      // The handle the customer gave when they joined. The claim itself asks
+      // for nothing new: a held slot is never refused over a name, and entries
+      // from before the last-name-or-Instagram rule simply carry neither.
+      const instagram = offer.entry.instagram;
 
       // Same client upsert as the public create, so the booking lands in the
       // barber's client book. No consent stamping here: the waitlist consent
@@ -891,6 +896,7 @@ export async function claimOffer(params: {
           magicToken: randomToken(),
           firstName,
           lastName,
+          instagram,
           phone,
           email,
           source: "manual",
@@ -903,6 +909,14 @@ export async function claimOffer(params: {
         },
         select: { id: true },
       });
+      // FILL a missing handle, never replace one: the claim's phone is typed,
+      // not proven, and the barber is the one who corrects a handle.
+      if (instagram) {
+        await tx.client.updateMany({
+          where: { id: client.id, instagram: null },
+          data: { instagram },
+        });
+      }
 
       const priceAtBooking = service
         ? effectivePriceAt(service.price === null ? null : Number(service.price), {

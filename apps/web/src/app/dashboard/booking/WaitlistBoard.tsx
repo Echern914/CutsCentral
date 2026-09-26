@@ -20,6 +20,7 @@ import {
 import { WaitlistAddForm } from "./WaitlistAddForm";
 import type { StaffRow, ServiceRow } from "./page";
 import type { Toast } from "@/components/ui/Toaster";
+import { InstagramHandle } from "@/components/InstagramHandle";
 
 /**
  * The waitlist, as the barber works it.
@@ -395,7 +396,14 @@ function WaitlistCard({
         >
           {initialsOf(name)}
         </span>
-        <p className={cn(NAME_WRAP_CLS, "flex-1 text-[17px]")}>{name}</p>
+        <div className="min-w-0 flex-1">
+          <p className={cn(NAME_WRAP_CLS, "text-[17px]")}>{name}</p>
+          {entry.instagram && (
+            <p className="text-xs">
+              <InstagramHandle handle={entry.instagram} />
+            </p>
+          )}
+        </div>
       </div>
 
       {/* what they asked for */}

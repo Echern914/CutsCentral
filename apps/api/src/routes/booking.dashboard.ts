@@ -2090,6 +2090,11 @@ interface AgendaRow {
   start: string; // ISO
   end: string | null; // ISO
   clientName: string; // for a block: the reason (or "Blocked")
+  // The linked client's Instagram handle, bare, so two first-name-only Mikes
+  // read differently on the calendar. Null on a block, and on a group
+  // member's row: every member points at the BOOKER's client, so the handle
+  // would name the wrong person under the attendee's name.
+  clientInstagram?: string | null;
   serviceName: string | null;
   // Ids the barber-side edit sheet prefills from. Native appointment rows
   // only - a visit or block is never editable here.
@@ -2230,6 +2235,8 @@ type ApptAgendaRow = {
   firstName: string;
   lastName: string | null;
   clientId: string | null;
+  groupId: string | null;
+  client: { instagram: string | null } | null;
   priceAtBooking: Prisma.Decimal | null;
   seriesId: string | null;
   checkInStatus: string | null;
@@ -2287,7 +2294,7 @@ type VisitAgendaRow = {
   endAt: Date | null;
   price: Prisma.Decimal | null;
   serviceName: string | null;
-  client: { firstName: string | null; lastName: string | null } | null;
+  client: { firstName: string | null; lastName: string | null; instagram: string | null } | null;
 };
 
 /**
@@ -2476,6 +2483,8 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         firstName: true,
         lastName: true,
         clientId: true,
+        groupId: true,
+        client: { select: { instagram: true } },
         priceAtBooking: true,
         seriesId: true,
         checkInStatus: true,
@@ -2583,6 +2592,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       start: a.startsAt.toISOString(),
       end: a.endsAt.toISOString(),
       clientName: fullName(a.firstName, a.lastName),
+      clientInstagram: a.groupId ? null : (a.client?.instagram ?? null),
       serviceName: a.service?.name ?? null,
       serviceId: a.service?.id ?? null,
       staffId: a.staffId,
@@ -2700,7 +2710,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         endAt: true,
         price: true,
         serviceName: true,
-        client: { select: { firstName: true, lastName: true } },
+        client: { select: { firstName: true, lastName: true, instagram: true } },
       },
     })) as unknown as VisitAgendaRow[];
     if (externalVisits.length >= BOOKING_CAP) truncated = true;
@@ -2754,6 +2764,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         clientName:
           fullName(v.client?.firstName ?? null, v.client?.lastName ?? null) ||
           "Booked elsewhere",
+        clientInstagram: v.client?.instagram ?? null,
         serviceName: v.serviceName ?? null,
         // The mapped service's own colour when the name resolves to exactly
         // one; otherwise null, and the screen derives one from the name.
@@ -2802,7 +2813,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         endAt: true,
         price: true,
         serviceName: true,
-        client: { select: { firstName: true, lastName: true } },
+        client: { select: { firstName: true, lastName: true, instagram: true } },
       },
     })) as unknown as VisitAgendaRow[];
     if (rows.length >= BOOKING_CAP) truncated = true;
@@ -2812,6 +2823,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       start: v.scheduledAt.toISOString(),
       end: v.endAt ? v.endAt.toISOString() : null,
       clientName: fullName(v.client?.firstName ?? null, v.client?.lastName ?? null),
+      clientInstagram: v.client?.instagram ?? null,
       serviceName: v.serviceName ?? null,
       serviceColor: null, // Visits have no linked Service row (synced shops).
       price: v.price == null ? null : Number(v.price),
@@ -3337,6 +3349,26 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
           select: { id: true },
         });
         clientId = client.id;
+      }
+
+      // Booking straight off the waitlist: the joiner may have given an
+      // Instagram handle INSTEAD of a last name, and the board's Book button
+      // sends only name + contact. Read the handle from the entry itself
+      // (scoped to this shop, so another tenant's id lends nothing) and fill
+      // it onto the client - only where the client has none, so a handle the
+      // barber already has on file is never replaced by what a public form
+      // typed.
+      if (d.waitlistEntryId) {
+        const entry = await tx.waitlistEntry.findFirst({
+          where: { id: d.waitlistEntryId, shopId },
+          select: { instagram: true },
+        });
+        if (entry?.instagram) {
+          await tx.client.updateMany({
+            where: { id: clientId, shopId, instagram: null },
+            data: { instagram: entry.instagram },
+          });
+        }
       }
 
       const appt = await tx.appointment.create({

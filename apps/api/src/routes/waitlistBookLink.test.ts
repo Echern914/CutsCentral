@@ -196,3 +196,72 @@ describe("booking off the waitlist links atomically", () => {
     expect(entry.bookedAppointmentId).toBeNull();
   });
 });
+
+describe("booking off the waitlist carries the Instagram handle", () => {
+  // The rule lets a joiner give a handle INSTEAD of a last name. The barber's
+  // Book button sends only the name and contact, so the handle has to come
+  // from the entry itself, server-side - or the Client lands as a bare "Mike".
+  async function handleEntry(instagram: string, phone: string, shop = shopId) {
+    const e = await prisma.waitlistEntry.create({
+      data: { shopId: shop, firstName: "Mike", instagram, phone },
+      select: { id: true },
+    });
+    return e.id;
+  }
+
+  it("🔴 a new client made from a handle-only entry keeps the handle", async () => {
+    const phone = `+1302555${String(Math.floor(1000 + Math.random() * 8999))}`;
+    const entryId = await handleEntry("mike.fades", phone);
+    const res = await createAppt({
+      startsAt: tomorrowAt(10),
+      firstName: "Mike",
+      phone,
+      waitlistEntryId: entryId,
+    });
+    expect(res.status).toBe(201);
+    const appt = await prisma.appointment.findUniqueOrThrow({
+      where: { id: res.body.id },
+      select: { client: { select: { instagram: true } } },
+    });
+    expect(appt.client?.instagram).toBe("mike.fades");
+  });
+
+  it("🔑 never overwrites a handle already on the client", async () => {
+    const client = await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `own:${randomToken(6)}`,
+        magicToken: randomToken(),
+        firstName: "Mike",
+        instagram: "own.handle",
+      },
+      select: { id: true },
+    });
+    const entryId = await handleEntry("other.handle", "+13025550177");
+    const res = await createAppt({
+      startsAt: tomorrowAt(11),
+      clientId: client.id,
+      waitlistEntryId: entryId,
+    });
+    expect(res.status).toBe(201);
+    const after = await prisma.client.findUniqueOrThrow({ where: { id: client.id } });
+    expect(after.instagram).toBe("own.handle");
+  });
+
+  it("🔴 another shop's entry lends its handle to nobody", async () => {
+    const theirs = await handleEntry("their.handle", "+13025550166", otherShopId);
+    const phone = "+13025550155";
+    const res = await createAppt({
+      startsAt: tomorrowAt(12),
+      firstName: "Mike",
+      phone,
+      waitlistEntryId: theirs,
+    });
+    expect(res.status).toBe(201);
+    const appt = await prisma.appointment.findUniqueOrThrow({
+      where: { id: res.body.id },
+      select: { client: { select: { instagram: true } } },
+    });
+    expect(appt.client?.instagram).toBeNull();
+  });
+});

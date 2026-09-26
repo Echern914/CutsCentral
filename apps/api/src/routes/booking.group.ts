@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { Prisma, prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { checkTellApart, randomToken, tellApartRefusal } from "@chairback/config";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { hasActiveAccess, connectEnabled } from "../billing/stripe.js";
 import { collectsAtBooking } from "../services/appointmentPaymentHold.js";
@@ -60,7 +60,10 @@ const createSchema = z
     attendees: z.array(attendeeSchema).min(1).max(MAX_GROUP_ATTENDEES),
     /** The booker - the ONE person messaged for the whole group. */
     firstName: z.string().trim().min(1).max(60),
+    // A last name OR an Instagram handle - checkTellApart, the rule every
+    // self-signup shares. Loose here so the refusal can name the reason.
     lastName: z.string().trim().max(60).optional(),
+    instagram: z.string().trim().max(200).optional(),
     phone: z.string().trim().max(32).optional(),
     email: z.string().trim().max(200).optional(),
     smsConsent: z.boolean().optional(),
@@ -516,6 +519,13 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
     res.status(422).json({ error: "invalid_phone", code: "INVALID_PHONE", field: "phone" });
     return;
   }
+  // The booker is who the shop has to recognise. Asked of every booker - this
+  // form is unauthenticated, so "already on file" is only a typed phone.
+  const who = checkTellApart({ lastName: d.lastName, instagram: d.instagram });
+  if (!who.ok) {
+    res.status(400).json(tellApartRefusal(who.code));
+    return;
+  }
 
   // An idempotent retry: the winner already exists, so return it unchanged
   // rather than doing any of the work again. The unique index below is what
@@ -546,12 +556,17 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
     return;
   }
   const plan = result.plan;
-  const acuityClientKey = deriveAcuityClientKey({
+  const baseKey = deriveAcuityClientKey({
     phone,
     email: d.email || null,
     firstName: d.firstName,
-    lastName: d.lastName || null,
+    lastName: who.lastName,
   });
+  // No phone and no email: the key is only the name. The handle is what the
+  // rule accepted as telling this booker apart, so it has to be in the key -
+  // or two contactless "Mike"s become one client. (Handles are [a-z0-9._].)
+  const acuityClientKey =
+    baseKey.startsWith("anon:") && who.instagram ? `${baseKey}@ig:${who.instagram}` : baseKey;
   const consented = d.smsConsent === true;
 
   // Collected inside the transaction, acted on after it commits.
@@ -582,7 +597,8 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
           acuityClientKey,
           magicToken: randomToken(),
           firstName: d.firstName,
-          lastName: d.lastName || null,
+          lastName: who.lastName,
+          instagram: who.instagram,
           phone,
           email: d.email || null,
           source: "manual",
@@ -591,12 +607,20 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
         },
         update: {
           firstName: d.firstName,
-          lastName: d.lastName || undefined,
+          lastName: who.lastName ?? undefined,
           phone: phone ?? undefined,
           email: d.email || undefined,
         },
         select: { id: true },
       });
+      // A typed phone FILLS a missing handle and never replaces one: this form
+      // is unauthenticated, and the barber is the one who corrects a handle.
+      if (who.instagram) {
+        await tx.client.updateMany({
+          where: { id: client.id, instagram: null },
+          data: { instagram: who.instagram },
+        });
+      }
       if (consented) {
         await tx.client.updateMany({
           where: { id: client.id, smsConsentAt: null },
@@ -610,7 +634,7 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
           staffId: d.staffId,
           clientId: client.id,
           firstName: d.firstName,
-          lastName: d.lastName || null,
+          lastName: who.lastName,
           phone,
           email: d.email || null,
           manageToken: randomToken(),

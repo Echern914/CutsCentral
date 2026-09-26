@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { LocalDate } from "@/components/ui/LocalDate";
+import { InstagramHandle } from "@/components/InstagramHandle";
 import { answerJoinRequestAction } from "./joinRequestActions";
 
 export interface JoinRequest {
@@ -12,6 +13,8 @@ export interface JoinRequest {
   name: string;
   phone: string | null;
   email: string | null;
+  /** Bare handle the app asked for, so two first-name-only askers differ. */
+  instagram?: string | null;
   requestedAt: string;
 }
 
@@ -56,7 +59,15 @@ export function JoinRequestsCard({ requests }: { requests: JoinRequest[] }) {
         {open.map((r) => (
           <li key={r.id} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <p className="truncate text-sm text-offwhite">{r.name}</p>
+              <p className="truncate text-sm text-offwhite">
+                {r.name}
+                {r.instagram && (
+                  <>
+                    {" "}
+                    <InstagramHandle handle={r.instagram} className="text-xs text-gold" />
+                  </>
+                )}
+              </p>
               <p className="truncate text-xs text-muted">
                 {[r.phone, r.email].filter(Boolean).join(" · ")}
                 {" · asked "}

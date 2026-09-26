@@ -417,6 +417,9 @@ export interface WaitlistWindowInput {
 
 export interface WaitlistInput {
   firstName: string;
+  /** A last name or an Instagram handle - at least one (config clientIdentity). */
+  lastName?: string;
+  instagram?: string;
   phone?: string;
   email?: string;
   serviceId?: string;
@@ -438,13 +441,14 @@ export interface WaitlistInput {
 export async function joinWaitlistAction(
   slug: string,
   input: WaitlistInput,
-): Promise<{ ok: boolean; error?: string; duplicate?: boolean }> {
+): Promise<{ ok: boolean; error?: string; message?: string; duplicate?: boolean }> {
   const res = await apiPublicSend<{ ok: boolean; duplicate?: boolean }>(
     "POST",
     `/api/page/${encodeURIComponent(slug)}/waitlist`,
     input,
   );
-  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  // `message` is the server's own sentence for a refusal the customer can fix.
+  if (!res.ok) return { ok: false, error: res.error ?? "failed", message: res.message };
   // A duplicate is success from the customer's side - they ARE on the list.
   return { ok: true, duplicate: res.data?.duplicate === true };
 }

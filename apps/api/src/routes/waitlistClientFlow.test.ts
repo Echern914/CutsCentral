@@ -35,7 +35,8 @@ const today = () => shopLocalDate(new Date(), shopTz);
 const ANY = { startDate: null, endDate: null, startMin: null, endMin: null };
 
 async function join(body: Record<string, unknown>) {
-  return request(app).post(`/api/page/${slug}/waitlist`).send(body);
+  // A last name by default: every self-signup needs one or an Instagram handle.
+  return request(app).post(`/api/page/${slug}/waitlist`).send({ lastName: "Test", ...body });
 }
 
 /** A join with a unique contact, so dedupe never accidentally fires. */
