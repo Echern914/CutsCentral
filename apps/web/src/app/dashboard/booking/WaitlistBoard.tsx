@@ -527,9 +527,12 @@ function WaitlistCard({
           </button>
         </div>
       )}
-      {/* A closed entry can be put back on the list - nothing here is final. */}
+      {/* A closed entry can be put back on the list - nothing here is final.
+          An EXPIRED one can also be removed, so Expired stays a short list of
+          what still needs a decision instead of stacking up forever. Removed
+          keeps it, as it keeps everyone. */}
       {!active && status !== "BOOKED" && (
-        <div className="mt-3">
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
           <button
             type="button"
             onClick={() => setStatus("WAITING", "Back on the list")}
@@ -538,6 +541,19 @@ function WaitlistCard({
           >
             Put back on the list
           </button>
+          {status === "EXPIRED" && (
+            <button
+              type="button"
+              onClick={() => setStatus("REMOVED", "Removed")}
+              disabled={pending}
+              className={cn(
+                BTN_BASE,
+                "border border-danger-soft/40 text-danger-soft hover:bg-danger-soft/10 sm:w-auto sm:px-4",
+              )}
+            >
+              Remove
+            </button>
+          )}
         </div>
       )}
     </li>
