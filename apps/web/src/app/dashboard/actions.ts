@@ -2,8 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import type { LoyaltyTierKey } from "@chairback/config/constants";
 import { apiGet, apiSend } from "@/lib/api";
 import { setActiveShopCookie } from "@/lib/activeShopCookie";
+import type { ClientTier } from "./clients/[id]/TierStanding";
 
 /**
  * Switch which shop the dashboard acts on: another shop the person owns, or a
@@ -375,6 +377,33 @@ export async function editClientAction(
   revalidatePath(`/dashboard/clients/${clientId}`);
   revalidatePath("/dashboard/clients");
   return { ok: res.ok, error: res.error };
+}
+
+/**
+ * Raise a client to a tier by hand (up only - it sticks), or null for "Back to
+ * automatic". Answers with the client page's tier view so the pill redraws in
+ * place; `status` lets the page tell "not allowed" apart from "try again".
+ */
+export async function setClientTierAction(
+  clientId: string,
+  tier: LoyaltyTierKey | null,
+): Promise<{ ok: boolean; status: number; error?: string; message?: string; tier?: ClientTier }> {
+  const res = await apiSend<{ ok: boolean; tier: ClientTier }>(
+    "POST",
+    `/api/dashboard/clients/${clientId}/tier`,
+    { tier },
+  );
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  revalidatePath("/dashboard/clients");
+  // On a refusal there is no view here; the revalidate above redraws the page
+  // from the server's truth instead.
+  return {
+    ok: res.ok,
+    status: res.status,
+    error: res.error,
+    message: res.message,
+    tier: res.data?.tier ?? undefined,
+  };
 }
 
 export async function archiveClientAction(

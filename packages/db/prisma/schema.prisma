@@ -1316,7 +1316,20 @@ model Client {
   preferredCadence CadencePreference?
   // Loyalty status tier, stamped by the loyalty engine from lifetime completed
   // visits against LOYALTY_TIERS. null = not yet computed / below the first tier.
+  // Always the EFFECTIVE tier: the higher of what the shop's rules say they
+  // earned and loyaltyTierFloor below (config/tierRules.ts effectiveTier).
   loyaltyTier      LoyaltyTier?
+  // A tier the owner or a manager raised this client to BY HAND, above what
+  // they earned. UP ONLY, AND IT STICKS: every writer of loyaltyTier (a
+  // completed visit in engines/cadence.ts, the rules recompute and daily job in
+  // engines/loyaltyTierRecompute.ts, the setter itself) stamps the higher of
+  // the earned tier and this one, so the rules can lift the client further but
+  // never drop them below it. null = automatic (the rules alone decide). It is
+  // cleared only by "Back to automatic", never by a rule change. Set with
+  // POST /api/dashboard/clients/:id/tier (services/clientTier.ts).
+  loyaltyTierFloor      LoyaltyTier?
+  // When loyaltyTierFloor was last set or cleared. Audit only; decides nothing.
+  loyaltyTierFloorSetAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

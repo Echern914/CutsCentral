@@ -50,6 +50,13 @@ export interface LoyaltyInputs {
   completedCount: number;
   /** The numbers the shop's tier rules are decided on (engines/tierStats.ts). */
   tierStats: TierStats;
+  /**
+   * Client.loyaltyTierFloor - a tier the shop raised them to by hand. The
+   * customer is shown the tier they HOLD (the higher of earned and this), the
+   * same one the shop's page and every stored-badge reader see. Required, so
+   * no caller can forget it and show a customer less than the shop gave them.
+   */
+  tierFloor: LoyaltyTierKey | null;
   rewards: LoyaltyReward[];
   cardTypes: LoyaltyCardType[];
   grants: { cardTypeId: string }[];
@@ -67,7 +74,7 @@ export async function loadLoyaltyInputs(
   rules: TierRules,
   now: Date,
 ): Promise<LoyaltyInputs> {
-  const [rewards, completedCount, cardTypes, grants, ledgerGroups, tierStats] = await Promise.all([
+  const [rewards, completedCount, cardTypes, grants, ledgerGroups, tierStats, floorRow] = await Promise.all([
     tx.reward.findMany({
       where: { shopId, active: true },
       orderBy: [{ sortOrder: "asc" }, { punchCost: "asc" }],
@@ -86,8 +93,17 @@ export async function loadLoyaltyInputs(
       _sum: { punchesEarned: true, punchesRedeemed: true },
     }),
     loadClientTierStats(tx, shopId, clientId, rules, now),
+    tx.client.findFirst({ where: { id: clientId, shopId }, select: { loyaltyTierFloor: true } }),
   ]);
-  return { rewards, completedCount, tierStats, cardTypes, grants, ledgerGroups };
+  return {
+    rewards,
+    completedCount,
+    tierStats,
+    tierFloor: floorRow?.loyaltyTierFloor ?? null,
+    cardTypes,
+    grants,
+    ledgerGroups,
+  };
 }
 
 /** One requirement of the next tier, as a customer is shown it. */
@@ -170,7 +186,7 @@ export function buildLoyaltyView(
   },
   inputs: LoyaltyInputs,
 ): LoyaltyView {
-  const { rewards, completedCount, tierStats, cardTypes, grants, ledgerGroups } = inputs;
+  const { rewards, completedCount, tierStats, tierFloor, cardTypes, grants, ledgerGroups } = inputs;
 
   // Per-card balances; the null key is the default card. The top-level
   // punches/rewards fields are the DEFAULT card's view - byte-identical to the
@@ -191,9 +207,10 @@ export function buildLoyaltyView(
   //
   // 🔴 The tier arithmetic is tierRulesProgress() in @chairback/config, not
   // repeated here - it is the same evaluation that stamps the stored badge, so
-  // the bar and the badge cannot disagree.
+  // the bar and the badge cannot disagree. With the floor: a customer the shop
+  // moved up by hand sees that tier, and the road to the one after it.
   const rules = parseTierRules(shop.tierRules, shop.tierThresholds);
-  const progress = tierRulesProgress(tierStats, rules);
+  const progress = tierRulesProgress(tierStats, rules, tierFloor);
   const perks = parseTierPerks(shop.tierPerks);
   const loyalty = {
     tier: progress.current,

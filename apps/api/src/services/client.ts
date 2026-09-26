@@ -2,6 +2,7 @@ import { asOwnerWithin, forShop, runWithShop } from "@chairback/db";
 import { recomputeCadence } from "../engines/cadence.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { normalizeInstagramHandle } from "@chairback/config/clientIdentity";
+import { tierRank } from "@chairback/config/tierRules";
 import { settleLinksForMerge } from "./customerIdentity.js";
 
 /**
@@ -320,6 +321,12 @@ export async function mergeClients(
     if (!winner.lastName && loser.lastName) update.lastName = loser.lastName;
     // The handle is what tells two first-name-only records apart - keep it.
     if (!winner.instagram && loser.instagram) update.instagram = loser.instagram;
+    // A tier the shop raised either record to by hand sticks to the person:
+    // the higher floor survives. recomputeCadence below re-stamps the tier.
+    if (tierRank(loser.loyaltyTierFloor) > tierRank(winner.loyaltyTierFloor)) {
+      update.loyaltyTierFloor = loser.loyaltyTierFloor;
+      update.loyaltyTierFloorSetAt = loser.loyaltyTierFloorSetAt;
+    }
     if (winner.notes && loser.notes) {
       update.notes = `${winner.notes}\n\n[merged] ${loser.notes}`;
     } else if (!winner.notes && loser.notes) {

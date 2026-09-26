@@ -1,12 +1,15 @@
 import {
   addDays,
   dayGaps,
+  effectiveTier,
   median,
   parseTierRules,
   tierForStats,
   tierStatWindows,
+  type LoyaltyTierKey,
 } from "@chairback/config";
 import { forShop, prisma, runWithShop } from "@chairback/db";
+import { lockClientTierFloor } from "../services/clientTier.js";
 import { loadClientTierStats } from "./tierStats.js";
 
 /**
@@ -16,7 +19,8 @@ import { loadClientTierStats } from "./tierStats.js";
  *
  * Also stamps the loyalty status tier - this is the one function that runs on
  * every completed-visit change, so the tier stays fresh for free (the dashboard
- * reads the stored column for bulk display/filtering without N counts).
+ * reads the stored column for bulk display/filtering without N counts). The
+ * tier stamped is the one HELD - earned, or a higher one set by hand.
  *
  * Writes medianIntervalDays, lastVisitAt, nextExpectedAt, loyaltyTier onto the Client.
  */
@@ -52,13 +56,10 @@ export async function recomputeCadence(
   const stats = lifetimeVisitsOnly
     ? { visits: { 0: dates.length }, spendCents: {} }
     : await runWithShop(shopId, (tx) => loadClientTierStats(tx, shopId, clientId, rules, now));
-  const loyaltyTier = tierForStats(stats, rules);
+  const earned = tierForStats(stats, rules);
 
   if (dates.length < 2) {
-    await db.client.update({
-      where: { id: clientId },
-      data: { medianIntervalDays: null, lastVisitAt, nextExpectedAt: null, loyaltyTier },
-    });
+    await stamp(shopId, clientId, earned, { medianIntervalDays: null, lastVisitAt, nextExpectedAt: null });
     return;
   }
 
@@ -74,8 +75,29 @@ export async function recomputeCadence(
       ? addDays(lastVisitAt, medianIntervalDays)
       : null;
 
-  await db.client.update({
-    where: { id: clientId },
-    data: { medianIntervalDays, lastVisitAt, nextExpectedAt, loyaltyTier },
+  await stamp(shopId, clientId, earned, { medianIntervalDays, lastVisitAt, nextExpectedAt });
+}
+
+/**
+ * Write the cadence and the tier the client HOLDS.
+ *
+ * 🔴 THE TIER IS effectiveTier(earned, floor), NEVER THE EARNED ONE ALONE. A
+ * tier the shop raised them to by hand (Client.loyaltyTierFloor) sticks: a
+ * visit can lift them past it, never drop them below it. The floor is read
+ * under the row lock the setter also takes (services/clientTier.ts), so a
+ * floor committed while this visit was being counted is the one applied.
+ */
+async function stamp(
+  shopId: string,
+  clientId: string,
+  earned: LoyaltyTierKey | null,
+  cadence: { medianIntervalDays: number | null; lastVisitAt: Date | null; nextExpectedAt: Date | null },
+): Promise<void> {
+  await runWithShop(shopId, async (tx) => {
+    const locked = await lockClientTierFloor(tx, shopId, clientId);
+    await tx.client.update({
+      where: { id: clientId, shopId },
+      data: { ...cadence, loyaltyTier: effectiveTier(earned, locked?.floor) },
+    });
   });
 }

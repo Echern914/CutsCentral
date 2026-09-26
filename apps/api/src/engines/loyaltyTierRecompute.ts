@@ -1,4 +1,4 @@
-import { tierForStats, type LoyaltyTierKey, type TierRules } from "@chairback/config";
+import { effectiveTier, tierForStats, type LoyaltyTierKey, type TierRules } from "@chairback/config";
 import { Prisma, runWithShop } from "@chairback/db";
 import { loadTierStats, zeroTierStats } from "./tierStats.js";
 
@@ -18,8 +18,9 @@ import { loadTierStats, zeroTierStats } from "./tierStats.js";
  * or money in it also moves with nobody touching anything (a visit ages out of
  * "the last 30 days"), which is what the daily job (tierRecomputeJob.ts) is for.
  *
- * The tier is tierForStats() from @chairback/config and the numbers come from
- * tierStats.ts - the same two the customer's progress bar reads.
+ * The tier is effectiveTier(tierForStats(), floor) from @chairback/config -
+ * earned, or a higher one set by hand - and the numbers come from tierStats.ts:
+ * the same evaluation the customer's progress bar reads.
  */
 
 /** Clients per UPDATE. Postgres handles far larger IN lists; this keeps one
@@ -51,31 +52,39 @@ export async function recomputeLoyaltyTiers(
     // ones a visit-count query would not return.
     const clients = await db.client.findMany({
       where: { shopId },
-      select: { id: true, loyaltyTier: true },
+      select: { id: true, loyaltyTier: true, loyaltyTierFloor: true },
     });
 
-    // Bucket by the tier each client should now hold, so the write is a
-    // handful of updateMany calls rather than one per client.
+    // Bucket by the tier each client should now hold AND the floor it was
+    // decided with, so the write is a handful of updateMany calls rather than
+    // one per client.
+    //
+    // 🔴 THE TIER HELD, NOT THE TIER EARNED. A tier the shop raised a client to
+    // by hand (loyaltyTierFloor) sticks: harder rules, or visits ageing out of
+    // a window, can take them down TO it and never below it.
     const zero = zeroTierStats(rules);
-    const wanted = new Map<LoyaltyTierKey | "NONE", string[]>();
-    let changed = 0;
+    const wanted = new Map<string, { tier: LoyaltyTierKey | null; floor: LoyaltyTierKey | null; ids: string[] }>();
     for (const c of clients) {
-      const tier = tierForStats(stats.get(c.id) ?? zero, rules);
+      const tier = effectiveTier(tierForStats(stats.get(c.id) ?? zero, rules), c.loyaltyTierFloor);
       if (tier === c.loyaltyTier) continue;
-      changed += 1;
-      const key = tier ?? "NONE";
-      const list = wanted.get(key);
-      if (list) list.push(c.id);
-      else wanted.set(key, [c.id]);
+      const key = `${tier ?? "NONE"}|${c.loyaltyTierFloor ?? "NONE"}`;
+      const bucket = wanted.get(key);
+      if (bucket) bucket.ids.push(c.id);
+      else wanted.set(key, { tier, floor: c.loyaltyTierFloor, ids: [c.id] });
     }
 
-    for (const [key, ids] of wanted) {
-      const tier = key === "NONE" ? null : key;
+    let changed = 0;
+    for (const { tier, floor, ids } of wanted.values()) {
       for (let i = 0; i < ids.length; i += CHUNK) {
-        await db.client.updateMany({
-          where: { shopId, id: { in: ids.slice(i, i + CHUNK) } },
+        // The floor is part of the WHERE: a client whose floor was set or
+        // cleared since the read above (services/clientTier.ts, which stamps
+        // their tier itself) is skipped, never overwritten with a tier worked
+        // out from the floor they no longer have.
+        const r = await db.client.updateMany({
+          where: { shopId, id: { in: ids.slice(i, i + CHUNK) }, loyaltyTierFloor: floor },
           data: { loyaltyTier: tier },
         });
+        changed += r.count;
       }
     }
     return { clients: clients.length, changed };

@@ -32,8 +32,9 @@ import {
  * rules, the rules are derived from Shop.tierThresholds (lifetime visits only),
  * and tierThresholds.test / tierRules.test prove the two agree at every count.
  *
- * A client holds the HIGHEST tier whose rule they meet. Money is integer cents,
- * never dollars - see ChairEvent.earnedCents.
+ * A client EARNS the HIGHEST tier whose rule they meet, and HOLDS that or a
+ * higher tier the shop set by hand - effectiveTier(), up only. Money is integer
+ * cents, never dollars - see ChairEvent.earnedCents.
  */
 
 /** How far back a requirement looks, in days. 0 = all time. */
@@ -285,7 +286,11 @@ function ruleMet(rule: TierRule, stats: TierStats): boolean {
   return rule.match === "any" ? reqs.some((r) => r.met) : reqs.every((r) => r.met);
 }
 
-/** The tier these numbers earn under these rules: the highest one met, or null. */
+/**
+ * The tier these numbers EARN under these rules: the highest one met, or null.
+ * Pure - it knows nothing of a tier set by hand. What a client HOLDS is
+ * effectiveTier(earned, floor) below.
+ */
 export function tierForStats(stats: TierStats, rules: TierRules): LoyaltyTierKey | null {
   for (let i = LOYALTY_TIER_KEYS.length - 1; i >= 0; i--) {
     const key = LOYALTY_TIER_KEYS[i]!;
@@ -294,8 +299,47 @@ export function tierForStats(stats: TierStats, rules: TierRules): LoyaltyTierKey
   return null;
 }
 
+/** A tier's place on the ladder, low to high: -1 for none (or a key this build does not know). */
+export function tierRank(tier: LoyaltyTierKey | null | undefined): number {
+  return tier ? LOYALTY_TIER_KEYS.indexOf(tier) : -1;
+}
+
+/**
+ * THE TIER A CLIENT HOLDS: what they earned, or the tier the shop raised them
+ * to by hand (Client.loyaltyTierFloor), whichever is HIGHER.
+ *
+ * 🔴 UP ONLY, AND IT STICKS. The floor never replaces the earned tier - the
+ * rules can still lift the client past it - and nothing the rules do can drop
+ * them below it. Every writer of the stored Client.loyaltyTier (a completed
+ * visit, the rules recompute, the daily job, the setter) stamps THIS, so every
+ * reader of the column (list filters, broadcast audiences, tier openings, the
+ * waitlist) sees the shop's choice without knowing a floor exists.
+ *
+ * A floor this build does not recognise ranks as none, so it can never lift
+ * anyone by accident.
+ */
+export function effectiveTier(
+  earned: LoyaltyTierKey | null,
+  floor: LoyaltyTierKey | null | undefined,
+): LoyaltyTierKey | null {
+  return tierRank(floor) > tierRank(earned) ? floor! : earned;
+}
+
 export interface TierRulesProgress {
+  /**
+   * The tier HELD: effectiveTier(earned, floor). Everything below - next,
+   * requirements, fraction - is measured from here, so a client raised to
+   * Silver by hand is shown the road to Gold, not the road to Silver.
+   */
   current: LoyaltyTierKey | null;
+  /** What the rules alone give them (tierForStats), whatever the floor. */
+  earned: LoyaltyTierKey | null;
+  /**
+   * True only when the floor is what holds them up - it is ABOVE what they
+   * earned. A floor they have since earned their way past is dormant (it still
+   * catches them if they slip), and reads false.
+   */
+  setByHand: boolean;
   next: LoyaltyTierKey | null;
   /** How the next tier combines its requirements. */
   match: "all" | "any";
@@ -315,10 +359,22 @@ export interface TierRulesProgress {
   visitsToNext: number;
 }
 
-export function tierRulesProgress(stats: TierStats, rules: TierRules): TierRulesProgress {
-  const current = tierForStats(stats, rules);
-  const next = LOYALTY_TIER_KEYS[(current === null ? -1 : LOYALTY_TIER_KEYS.indexOf(current)) + 1] ?? null;
-  if (!next) return { current, next: null, match: "all", requirements: [], fraction: 1, visitsToNext: 0 };
+/**
+ * @param floor Client.loyaltyTierFloor - a tier set by hand. Omit (or null)
+ *              and this is exactly the earned view it always was.
+ */
+export function tierRulesProgress(
+  stats: TierStats,
+  rules: TierRules,
+  floor?: LoyaltyTierKey | null,
+): TierRulesProgress {
+  const earned = tierForStats(stats, rules);
+  const current = effectiveTier(earned, floor);
+  const setByHand = current !== earned;
+  const next = LOYALTY_TIER_KEYS[tierRank(current) + 1] ?? null;
+  if (!next) {
+    return { current, earned, setByHand, next: null, match: "all", requirements: [], fraction: 1, visitsToNext: 0 };
+  }
 
   const rule = rules[next];
   const requirements = requirementsOf(rule, stats);
@@ -347,6 +403,8 @@ export function tierRulesProgress(stats: TierStats, rules: TierRules): TierRules
   const visitReq = requirements.find((r) => r.kind === "visits");
   return {
     current,
+    earned,
+    setByHand,
     next,
     match: rule.match,
     requirements,

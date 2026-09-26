@@ -112,6 +112,10 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   // Gate for every punch/reward surface on this page (default true so a
   // transient /me failure never blanks a rewards shop's data).
   const rewardsOn = me.data?.rewardsEnabled ?? true;
+  // Raising a tier by hand is an owner's or manager's call. An unknown role
+  // (an API from before roles, or a failed /me) still offers it - the API
+  // refuses anyone else with a 403, which the pill shows inline.
+  const canChangeTier = (me.data?.shopRole ?? "OWNER") !== "BARBER";
   const appBase = process.env.APP_BASE_URL ?? "";
   const rewardsUrl = `${appBase}/r/${client.magicToken}`;
   const readyCount = rewards.filter((r) => r.affordable).length;
@@ -166,7 +170,12 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
                 )}
               </p>
             )}
-          <TierStanding tier={res.data.tier} storedTier={client.loyaltyTier} />
+          <TierStanding
+            tier={res.data.tier}
+            storedTier={client.loyaltyTier}
+            clientId={client.id}
+            canChange={canChangeTier}
+          />
           <p className="mt-1 text-sm text-muted">
             {client.phone ?? "no phone"}
             {client.email ? ` · ${client.email}` : ""}
