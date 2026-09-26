@@ -292,6 +292,48 @@ describe("what the provider answers", () => {
     expect(d.sealed).toBeNull();
   });
 
+  it("🔴 texting switched off: a queued sign-in code is still SENT", async () => {
+    // Email cannot stand in for a phone at sign-in (signInTextsEnabled), so a
+    // code is the one text that keeps going while every other path is off.
+    recordingSms();
+    process.env.SMS_ENABLED = "false";
+    __resetEnvCacheForTests();
+    try {
+      const phone = freshPhone();
+      const now = new Date();
+      const { deliveryId } = await challenge("sms", phone, now);
+      expect((await runCustomerSignInOutbox({ now })).sent).toBe(1);
+      expect((await row(deliveryId)).status).toBe("sent");
+      expect(sms.map((m) => m.to)).toEqual([phone]);
+    } finally {
+      process.env.SMS_ENABLED = "true";
+      __resetEnvCacheForTests();
+    }
+  });
+
+  it("sign-in texts switched off too: suppressed as sms_disabled, no attempt spent", async () => {
+    recordingSms();
+    process.env.SMS_ENABLED = "false";
+    process.env.SMS_SIGNIN_ENABLED = "false";
+    __resetEnvCacheForTests();
+    try {
+      const phone = freshPhone();
+      const now = new Date();
+      const { deliveryId } = await challenge("sms", phone, now);
+      expect((await runCustomerSignInOutbox({ now })).suppressed).toBe(1);
+      const d = await row(deliveryId);
+      expect(d.status).toBe("suppressed");
+      expect(d.lastError).toBe("sms_disabled");
+      expect(d.attempts).toBe(0);
+      expect(d.sealed).toBeNull();
+      expect(sms).toHaveLength(0);
+    } finally {
+      process.env.SMS_ENABLED = "true";
+      delete process.env.SMS_SIGNIN_ENABLED;
+      __resetEnvCacheForTests();
+    }
+  });
+
   it("🔴 a hostile provider error never reaches a log line", async () => {
     const phone = freshPhone();
     const now = new Date();
