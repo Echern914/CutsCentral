@@ -191,7 +191,10 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           daysSince={daysSince}
           serviceLabel={lastService}
           overdue={overdue}
-          canNudge={!client.optedOut && Boolean(client.phone)}
+          // A nudge goes to their ChairBack app first, which needs no phone
+          // number and no text consent - the API says where it went, or why
+          // it couldn't (no app, and texting off or not allowed).
+          canNudge
         />
       </header>
 

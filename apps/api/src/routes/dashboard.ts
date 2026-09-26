@@ -62,7 +62,10 @@ import { sweepShop, type EligibilityData } from "../engines/nudge.js";
 import { sweepShopWinback } from "../engines/winback.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
 import { inQuietHours } from "../engines/quietHours.js";
-import { buildNudgeBody } from "../messaging/templates.js";
+import { buildNudgeBody, buildNudgePush } from "../messaging/templates.js";
+import { sendPushToClient } from "../messaging/push.js";
+import { accountForClientPush } from "../services/customerIdentity.js";
+import { NO_PUSH_DEVICE } from "../services/customerAnnouncements.js";
 import { TEXTING_OFF_MESSAGE, getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { pokeWalletPass } from "../wallet/pass.js";
 import { toE164 } from "../acuity/clientKey.js";
@@ -396,7 +399,17 @@ dashboardRouter.get("/leaderboard", async (req, res) => {
   });
 });
 
-// Manual "nudge now" for one client. Tight per-user SMS limit (real money).
+// Manual "Nudge now" for one client.
+//
+// 🔑 THEIR CHAIRBACK APP FIRST, then a text. A push is free and works with
+// texting switched off; it reaches the shop's installed devices and the
+// customer's own My ChairBack phones (sendPushToClient), and its ledger row is
+// what puts the nudge in their app's bell. A customer whose phone has
+// notifications off still finds it in the bell (a WEB_PUSH row marked
+// no_push_device, which the bell shows). A text follows only when the app
+// could not deliver, texting is on and this client can be texted - the same
+// push-first order as the automatic sweep, so a barber's tap never pays for a
+// text the app already delivered. Tight per-user limit either way.
 dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async (req, res) => {
   const shop = req.shop!;
   const db = forShop(shop.id);
@@ -405,16 +418,62 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
     res.status(404).json({ error: "not_found" });
     return;
   }
+
+  const push = buildNudgePush({
+    firstName: client.firstName,
+    shopName: shop.name,
+    industry: shop.industry,
+    serviceNoun: shop.serviceNoun,
+  });
+  const pushed = await sendPushToClient({
+    shopId: shop.id,
+    clientId: client.id,
+    kind: "nudge",
+    payload: {
+      ...push,
+      url: shop.bookingUrl || `${apiEnv().APP_BASE_URL}/r/${client.magicToken}`,
+      tag: "rebook",
+    },
+  });
+  if (pushed.anyDelivered) {
+    res.json({ ok: true, channel: "app" });
+    return;
+  }
+  // No device took it. A customer connected in My ChairBack still gets it in
+  // the app's bell - recorded exactly as sendPushToClient records an
+  // undelivered pre-created push.
+  let inApp = false;
+  if (await accountForClientPush(client.id)) {
+    await db.nudge.create({
+      data: {
+        clientId: client.id,
+        channel: "WEB_PUSH",
+        status: "FAILED",
+        failedReason: NO_PUSH_DEVICE,
+        kind: "nudge",
+        body: redactForAudit(push.body),
+      },
+    });
+    inApp = true;
+  }
+  const inAppOk = () => res.json({ ok: true, channel: "app_inbox" });
+
   if (!smsEnabled()) {
-    res.status(503).json({ error: "texting_off", reason: TEXTING_OFF_MESSAGE });
+    if (inApp) return void inAppOk();
+    res.status(409).json({
+      error: "unreachable",
+      reason: "They don't have the ChairBack app, and texting is turned off.",
+    });
     return;
   }
   if (client.optedOut || !client.phone) {
+    if (inApp) return void inAppOk();
     res.status(400).json({ error: "cannot_nudge", reason: "opted out or no phone" });
     return;
   }
   // TCPA: even a manual one-off nudge requires recorded consent.
   if (client.smsConsentAt === null) {
+    if (inApp) return void inAppOk();
     res.status(400).json({ error: "cannot_nudge", reason: "no SMS consent on file" });
     return;
   }
@@ -422,6 +481,7 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
   // shop-local time. 422 (not 400) - the request is valid, just not right now.
   const now = new Date();
   if (inQuietHours(shop.timezone, now)) {
+    if (inApp) return void inAppOk();
     res.status(422).json({
       error: "quiet_hours",
       reason: "Texting is paused 9pm-8am (client local time). Try again in the morning.",
@@ -431,6 +491,7 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
   // Per-tier MONTHLY quota (hard stop + upgrade CTA; distinct from the 402
   // subscription_required gate above). Infinity while billing is off.
   if ((await remainingMonthlySms(shop.id, now)) <= 0) {
+    if (inApp) return void inAppOk();
     res.status(402).json({
       error: "sms_quota_exhausted",
       message:
@@ -461,12 +522,14 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
       where: { id: nudge.id },
       data: { status: "SENT", sentAt: now, messageSid: result.sid },
     });
-    res.json({ ok: true, sid: result.sid });
+    res.json({ ok: true, sid: result.sid, channel: inApp ? "sms_and_app_inbox" : "sms" });
   } catch (err) {
     await db.nudge.update({
       where: { id: nudge.id },
       data: { status: "FAILED", failedReason: (err as Error).message },
     });
+    // The text failed, but a connected customer still has it in the app.
+    if (inApp) return void inAppOk();
     res.status(502).json({ error: "send_failed" });
   }
 });

@@ -10,6 +10,7 @@ import { cn } from "@/lib/cn";
 import {
   listBroadcastsAction,
   previewBroadcastAction,
+  removeBroadcastAction,
   sendBroadcastAction,
   type BroadcastChannel,
   type BroadcastPreview,
@@ -96,6 +97,45 @@ export function BroadcastCard({
   const [open, setOpen] = useState(draft !== null);
   const [history, setHistory] = useState<BroadcastRow[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const subjectRef = useRef<HTMLInputElement | null>(null);
+  // "Edit & resend" opens the composer; this lands the cursor in it once open.
+  const [focusComposer, setFocusComposer] = useState(false);
+  useEffect(() => {
+    if (!open || !focusComposer) return;
+    subjectRef.current?.focus();
+    subjectRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    setFocusComposer(false);
+  }, [open, focusComposer]);
+
+  /** Load a sent message back into the composer, to change and send again. */
+  function editFrom(b: BroadcastRow) {
+    setChannel(b.channel);
+    setTiers(rewardsEnabled ? (b.audienceTiers ?? []) : []);
+    setSubject(b.subject ?? "");
+    setBody(b.body);
+    setOpen(true);
+    setFocusComposer(true);
+  }
+
+  function removeRow(b: BroadcastRow) {
+    // 🔴 SAY WHAT REMOVE CAN'T DO. It leaves the list and the in-app bell; a
+    // notification or email that already reached a phone stays there.
+    if (
+      !window.confirm(
+        `Remove "${b.subject || b.body}" from your list? It also leaves your ${vocab.clientNounPlural}' ChairBack app. A notification or email that already arrived can't be taken back.`,
+      )
+    )
+      return;
+    start(async () => {
+      const r = await removeBroadcastAction(b.id);
+      if (!r.ok) {
+        toast(r.message ?? "Couldn't remove that.", "error");
+        return;
+      }
+      setHistory((h) => h.filter((x) => x.id !== b.id));
+      toast("Removed from your list", "success");
+    });
+  }
 
   const limits = preview?.limits ?? FALLBACK_LIMITS[channel];
 
@@ -201,7 +241,13 @@ export function BroadcastCard({
         >
           Write a message
         </button>
-        <BroadcastHistory rows={history} vocab={vocab.clientNounPlural} />
+        <BroadcastHistory
+          rows={history}
+          vocab={vocab.clientNounPlural}
+          busy={pending}
+          onEdit={editFrom}
+          onRemove={removeRow}
+        />
       </Card>
     );
   }
@@ -286,6 +332,7 @@ export function BroadcastCard({
         </div>
 
         <input
+          ref={subjectRef}
           className={field}
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
@@ -373,7 +420,13 @@ export function BroadcastCard({
         )}
       </div>
 
-      <BroadcastHistory rows={history} vocab={vocab.clientNounPlural} />
+      <BroadcastHistory
+        rows={history}
+        vocab={vocab.clientNounPlural}
+        busy={pending}
+        onEdit={editFrom}
+        onRemove={removeRow}
+      />
     </Card>
   );
 }
@@ -388,27 +441,69 @@ export function BroadcastCard({
  * to "Sent" is how a shop never learns that some of its list did not hear from
  * it.
  */
-function BroadcastHistory({ rows, vocab }: { rows: BroadcastRow[]; vocab: string }) {
+function BroadcastHistory({
+  rows,
+  vocab,
+  busy = false,
+  onEdit,
+  onRemove,
+}: {
+  rows: BroadcastRow[];
+  vocab: string;
+  busy?: boolean;
+  /** Load it back into the composer to change and send again. */
+  onEdit?: (b: BroadcastRow) => void;
+  /** Take it off this list (and out of clients' in-app bell). */
+  onRemove?: (b: BroadcastRow) => void;
+}) {
   if (rows.length === 0) return null;
   return (
     <div className="mt-5 border-t border-subtle pt-4">
       <p className="text-xs text-muted">Recent messages</p>
-      <ul className="mt-2 flex flex-col gap-2">
+      <ul className="mt-2 flex flex-col gap-3">
         {rows.slice(0, 5).map((b) => (
-          <li key={b.id} className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="truncate text-sm text-offwhite">{b.subject || b.body}</p>
-              <p className="mt-0.5 text-xs text-muted">
-                {b.channel === "email" ? "Email" : "App notification"} ·{" "}
-                {/* Who it was aimed at, so "Gold members · 42 sent" still says
-                    a year later that the rest of the book never got it. */}
-                {(b.audienceTiers?.length ?? 0) > 0 && `${describeTierAudience(b.audienceTiers)} · `}
-                {describe(b, vocab)}
-              </p>
+          <li key={b.id} className="flex flex-col gap-1.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm text-offwhite">{b.subject || b.body}</p>
+                <p className="mt-0.5 text-xs text-muted">
+                  {b.channel === "email" ? "Email" : "App notification"} ·{" "}
+                  {/* Who it was aimed at, so "Gold members · 42 sent" still says
+                      a year later that the rest of the book never got it. */}
+                  {(b.audienceTiers?.length ?? 0) > 0 && `${describeTierAudience(b.audienceTiers)} · `}
+                  {describe(b, vocab)}
+                </p>
+              </div>
+              <span className={cn("shrink-0 text-xs font-medium", toneFor(b.status))}>
+                {LABEL[b.status] ?? b.status}
+              </span>
             </div>
-            <span className={cn("shrink-0 text-xs font-medium", toneFor(b.status))}>
-              {LABEL[b.status] ?? b.status}
-            </span>
+            {/* Only once it has finished: a message still going out is not
+                something to rework or pull from the list. */}
+            {!IN_FLIGHT.has(b.status) && (onEdit || onRemove) && (
+              <div className="flex gap-2">
+                {onEdit && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onEdit(b)}
+                    className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-medium text-gold transition-colors hover:bg-gold/10 disabled:opacity-50"
+                  >
+                    Edit &amp; resend
+                  </button>
+                )}
+                {onRemove && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onRemove(b)}
+                    className="rounded-lg border border-danger-soft/40 px-3 py-1.5 text-xs font-medium text-danger-soft transition-colors hover:bg-danger-soft/10 disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            )}
           </li>
         ))}
       </ul>

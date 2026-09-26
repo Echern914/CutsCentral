@@ -4,7 +4,9 @@ import { syncCustomerLinks } from "./customerIdentity.js";
 
 /**
  * My ChairBack's announcements bell: the broadcasts a customer's shops sent
- * THEM, newest first, and how many arrived since they last looked.
+ * THEM, and the shops' push nudges to them ("time for your next cut", a
+ * barber's Nudge), newest first, and how many arrived since they last looked.
+ * A broadcast the shop removed from its list is gone from here too.
  *
  * 🔴 WHAT THE SHOP MEANT FOR ONE OF THEIR OWN PROFILES - whether or not the
  * email or push got through. The bell is a channel of its own: a customer who
@@ -32,6 +34,11 @@ const LIMIT = 50;
 
 /** SKIPPED rows the shop still meant for the client - see above. */
 const SHOWN_SKIP_REASONS = ["no_app", "no_email", "undeliverable"] satisfies SkipReason[];
+
+/** Push-ledger kinds that are the shop nudging THIS customer to come back. */
+export const BELL_NUDGE_KINDS = ["nudge", "winback"] as const;
+/** A push the shop sent that found no device (sendPushToClient's audit). */
+export const NO_PUSH_DEVICE = "no_push_device";
 
 export interface CustomerAnnouncement {
   id: string;
@@ -68,12 +75,16 @@ export async function announcementsForAccount(
           { clientId: { in: links.map((l) => l.clientId) } },
           ...merged.map((m) => ({ clientId: m.clientId, createdAt: { lte: m.mergedAt } })),
         ],
-        AND: {
-          OR: [
-            { status: { in: ["SENT", "PENDING", "FAILED", "ABANDONED"] } },
-            { status: "SKIPPED", reason: { in: SHOWN_SKIP_REASONS } },
-          ],
-        },
+        AND: [
+          {
+            OR: [
+              { status: { in: ["SENT", "PENDING", "FAILED", "ABANDONED"] } },
+              { status: "SKIPPED", reason: { in: SHOWN_SKIP_REASONS } },
+            ],
+          },
+          // A message the shop took off its list leaves the bell with it.
+          { broadcast: { removedAt: null } },
+        ],
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       // Two profiles at one shop (a parent and a child) are two rows of one
@@ -100,6 +111,44 @@ export async function announcementsForAccount(
       sentAt: r.createdAt.toISOString(),
     });
   }
+
+  // The shop's NUDGES too ("time for your next cut", "we've missed you", a
+  // Nudge from the barber's button): the push ledger rows for these profiles.
+  // SENT, or a push the shop sent that found no device - the bell is exactly
+  // where a customer with notifications off should still find it. Texts are
+  // not here: an SMS already sits in their Messages app.
+  const nudges = await runAsOwner((tx) =>
+    tx.nudge.findMany({
+      where: {
+        clientId: { in: links.map((l) => l.clientId) },
+        channel: "WEB_PUSH",
+        kind: { in: [...BELL_NUDGE_KINDS] },
+        OR: [{ status: "SENT" }, { status: "FAILED", failedReason: NO_PUSH_DEVICE }],
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: LIMIT,
+      select: {
+        id: true,
+        body: true,
+        sentAt: true,
+        createdAt: true,
+        shop: { select: { name: true, logoUrl: true } },
+      },
+    }),
+  );
+  for (const n of nudges) {
+    if (!n.body) continue;
+    announcements.push({
+      // Namespaced so a nudge can never collide with a broadcast id.
+      id: `n_${n.id}`,
+      shop: { name: n.shop.name, logoUrl: n.shop.logoUrl },
+      title: null,
+      body: n.body,
+      sentAt: (n.sentAt ?? n.createdAt).toISOString(),
+    });
+  }
+  announcements.sort((a, b) => (a.sentAt < b.sentAt ? 1 : a.sentAt > b.sentAt ? -1 : 0));
+  announcements.splice(LIMIT);
   const account = await runAsOwner((tx) =>
     tx.customerAccount.findUniqueOrThrow({ where: { id: accountId }, select: { announcementsSeenAt: true } }),
   );

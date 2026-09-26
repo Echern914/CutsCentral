@@ -7,6 +7,7 @@ import { requireActiveAccess } from "../middleware/billing.js";
 import { previewBroadcast, queueBroadcast, type BroadcastBlocker } from "../engines/broadcast.js";
 import { broadcastProgress } from "../engines/broadcastWorker.js";
 import { SKIP_REASON_LABEL, type SkipReason } from "../engines/broadcastAudience.js";
+import { logger } from "../logger.js";
 
 /**
  * One message from a shop to many of its clients.
@@ -148,6 +149,8 @@ broadcastsRouter.post("/preview", async (req, res) => {
 broadcastsRouter.get("/", async (req, res) => {
   const shopId = req.shop!.id;
   const rows = (await forShop(shopId).broadcast.findMany({
+    // A message the shop removed is off its list (POST /:id/remove).
+    where: { removedAt: null },
     orderBy: { createdAt: "desc" },
     take: 25,
     select: {
@@ -266,4 +269,37 @@ broadcastsRouter.post("/:id/send", async (req, res) => {
     recipients: outcome.recipients,
     skipped: outcome.skipped,
   });
+});
+
+/**
+ * POST /api/broadcasts/:id/remove - take a message off "Recent messages", so
+ * the list doesn't fill up with old sends.
+ *
+ * 🔴 KEPT, NOT DELETED. The row, its sends and the month's allowance it used
+ * are history and stay exactly as written; removedAt only takes it off the
+ * shop's list and out of every customer's in-app bell. A push or email that
+ * already arrived cannot be recalled - the confirm on the button says so.
+ *
+ * A message still going out is refused: pulling it from the list mid-send
+ * would look exactly like a send that silently stopped.
+ */
+broadcastsRouter.post("/:id/remove", async (req, res) => {
+  const shopId = req.shop!.id;
+  const id = String(req.params.id);
+  const db = forShop(shopId);
+  const found = (await db.broadcast.findFirst({
+    where: { id, removedAt: null },
+    select: { id: true, status: true },
+  })) as { id: string; status: string } | null;
+  if (!found) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (found.status === "QUEUED" || found.status === "SENDING") {
+    res.status(409).json({ error: "in_flight", message: "It's still going out. Remove it once it's sent." });
+    return;
+  }
+  await db.broadcast.updateMany({ where: { id, removedAt: null }, data: { removedAt: new Date() } });
+  logger.info({ shopId, broadcastId: id, userId: req.userId }, "broadcast removed from the shop's list");
+  res.json({ ok: true });
 });
