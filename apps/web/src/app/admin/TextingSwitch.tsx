@@ -18,8 +18,10 @@ export interface TextingState {
  * TEXTING (SMS) FOR THE WHOLE PLATFORM.
  *
  * Every text costs money; email and app notifications do not. Off stops every
- * SMS - reminders, alerts, sign-in codes, the AI text receptionist - and sends
- * what has an email or app version that way instead. It takes effect without a
+ * SMS - reminders, alerts, the AI text receptionist - and sends what has an
+ * email or app version that way instead. The one exception is one-time sign-in
+ * codes, which follow the API's SMS_SIGNIN_ENABLED (on unless set to false):
+ * email cannot stand in for them (see signInTextsEnabled on the API). It takes effect without a
  * deploy: at once on the server that takes the click, within seconds on any
  * other.
  *
@@ -71,7 +73,7 @@ export function TextingSwitch({ initial }: { initial: TextingState }) {
             <p className="mt-1 text-sm text-muted">
               {state.enabled
                 ? "Reminders, alerts, sign-in codes and the AI text receptionist go out by text, and every text is billed."
-                : "No texts go out. Email and app notifications carry on, and alerts people asked to get by text arrive by email."}
+                : "No texts go out except one-time sign-in codes. Email and app notifications carry on, and alerts people asked to get by text arrive by email."}
             </p>
             <p className="mt-2 text-xs text-muted">
               {state.source === "default" || !state.updatedAt ? (
@@ -112,7 +114,7 @@ export function TextingSwitch({ initial }: { initial: TextingState }) {
             <p className="text-sm">
               {next
                 ? "Turn texting ON for every shop? Texts start going out, and being billed, within seconds."
-                : "Turn texting OFF for every shop? No texts go out, and the AI text receptionist stops answering."}
+                : "Turn texting OFF for every shop? No texts go out except one-time sign-in codes, and the AI text receptionist stops answering."}
             </p>
             <div className="flex gap-2">
               <button

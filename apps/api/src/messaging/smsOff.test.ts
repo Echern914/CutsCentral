@@ -5,6 +5,8 @@ import {
   SmsDisabledProvider,
   __setMessageProviderForTests,
   getMessageProvider,
+  getSignInMessageProvider,
+  signInTextsEnabled,
   smsConfigured,
   smsEnabled,
 } from "./twilio.js";
@@ -23,6 +25,8 @@ import { RESEND_REFUSAL_HTTP, resendRewardsLink } from "../services/rewardsLinkR
  *  - a send that slips past every gate is REFUSED, never faked as sent;
  *  - the doors that can only text answer "texting is off" (or the answer the
  *    shipped app already understands) instead of promising a text;
+ *  - EXCEPT one-time sign-in codes, which keep going unless
+ *    SMS_SIGNIN_ENABLED=false too - and only through their own provider;
  *  - an alert someone asked for by text arrives by email instead.
  *
  * The flows are covered where they live: booking alerts in
@@ -44,7 +48,14 @@ const fake = {
   },
 };
 
+function signInTexts(on: boolean | undefined): void {
+  if (on === undefined) delete process.env.SMS_SIGNIN_ENABLED;
+  else process.env.SMS_SIGNIN_ENABLED = on ? "true" : "false";
+  __resetEnvCacheForTests();
+}
+
 afterEach(() => {
+  signInTexts(undefined);
   texting(true); // the suites' default (vitest.setup.ts)
   __setMessageProviderForTests(undefined);
   sent.length = 0;
@@ -94,24 +105,56 @@ describe("the switch", () => {
   });
 });
 
-describe("customer sign-in", () => {
-  it("🔴 a phone gets the answer every shipped app already turns into 'use your email'", () => {
-    texting(false);
-    expect(resolveIdentifier({ channel: "sms", phone: "(201) 555-0123" })).toEqual({
-      error: "phone_not_supported",
-    });
-  });
+describe("customer sign-in codes: the one text that keeps going", () => {
+  // Email cannot stand in for a phone here: an imported book shares emails
+  // across records far more than phones, and a shared contact lands the
+  // customer on "Needs connecting". See signInTextsEnabled().
 
-  it("email sign-in is untouched, and phones work again once texting is back", () => {
+  it("🔴 texting off still lets a phone sign in", () => {
     texting(false);
-    expect(resolveIdentifier({ channel: "email", email: "Pat@Example.com" })).toEqual({
-      channel: "email",
-      identifier: "pat@example.com",
-    });
-    texting(true);
+    expect(signInTextsEnabled()).toBe(true);
     expect(resolveIdentifier({ channel: "sms", phone: "(201) 555-0123" })).toEqual({
       channel: "sms",
       identifier: "+12015550123",
+    });
+  });
+
+  it("🔴 the sign-in provider sends while every other path is still refused", async () => {
+    __setMessageProviderForTests(fake);
+    texting(false);
+    await getSignInMessageProvider().send({ to: "+12015550123", body: "123456" });
+    expect(sent).toHaveLength(1);
+    // Nothing else got a way through: reminders, nudges and the receptionist
+    // all use getMessageProvider().
+    expect(getMessageProvider()).toBeInstanceOf(SmsDisabledProvider);
+  });
+
+  it("SMS_SIGNIN_ENABLED=false as well: the answer every shipped app turns into 'use your email'", async () => {
+    __setMessageProviderForTests(fake);
+    texting(false);
+    signInTexts(false);
+    expect(signInTextsEnabled()).toBe(false);
+    expect(resolveIdentifier({ channel: "sms", phone: "(201) 555-0123" })).toEqual({
+      error: "phone_not_supported",
+    });
+    await expect(
+      getSignInMessageProvider().send({ to: "+12015550123", body: "123456" }),
+    ).rejects.toBeInstanceOf(SmsDisabledError);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("texting on sends them whatever SMS_SIGNIN_ENABLED says", () => {
+    texting(true);
+    signInTexts(false);
+    expect(signInTextsEnabled()).toBe(true);
+  });
+
+  it("email sign-in is untouched either way", () => {
+    texting(false);
+    signInTexts(false);
+    expect(resolveIdentifier({ channel: "email", email: "Pat@Example.com" })).toEqual({
+      channel: "email",
+      identifier: "pat@example.com",
     });
   });
 });

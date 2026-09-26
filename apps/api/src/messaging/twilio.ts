@@ -59,6 +59,26 @@ export function smsEnabled(): boolean {
   return platformSwitch("sms") ?? apiEnv().SMS_ENABLED;
 }
 
+/**
+ * May a one-time SIGN-IN code go out by text (My ChairBack sign-in, and
+ * "add a phone" on a signed-in account)? Always while texting is on; while it
+ * is off, unless `SMS_SIGNIN_ENABLED` says false. Every other text still asks
+ * smsEnabled().
+ *
+ * 🔴 EMAIL CANNOT STAND IN FOR THESE. Turning texting off also turned phone
+ * sign-in off, so every new customer signed in by email - and an imported
+ * book shares one email across several records far more often than a phone
+ * (one person booking from two numbers over the years, a family on one
+ * address). A shared contact is exactly what customerIdentity.ts refuses to
+ * guess from, so those customers landed on "Needs connecting" with no way
+ * through but a link from the shop. A phone names one record and connects
+ * them with no identity rule loosened. They are also the cheapest texts
+ * there are: one per code, under the sign-in budget.
+ */
+export function signInTextsEnabled(): boolean {
+  return smsEnabled() || apiEnv().SMS_SIGNIN_ENABLED;
+}
+
 /** What a button that can only text says while texting is off. */
 export const TEXTING_OFF_MESSAGE = "Texting is turned off right now, so nothing was sent.";
 
@@ -103,6 +123,21 @@ let testProvider: MessageProvider | undefined;
  */
 export function getMessageProvider(): MessageProvider {
   if (!smsEnabled()) return new SmsDisabledProvider();
+  return transport();
+}
+
+/**
+ * The provider for one-time SIGN-IN codes, and nothing else: it follows
+ * signInTextsEnabled(), so a code can go while texting is off. Every other
+ * path uses getMessageProvider() and is still refused.
+ */
+export function getSignInMessageProvider(): MessageProvider {
+  if (!signInTextsEnabled()) return new SmsDisabledProvider();
+  return transport();
+}
+
+/** Once a path may text: the injected test fake, the DRY_RUN no-op, or Twilio. */
+function transport(): MessageProvider {
   if (testProvider) return testProvider;
   if (env.DRY_RUN) return new NoopMessageProvider();
   if (!provider) provider = new TwilioMessageProvider();

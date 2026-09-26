@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import { Prisma, runAsOwner } from "@chairback/db";
 import { apiEnv, decrypt, encrypt, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
-import { NoopMessageProvider, getMessageProvider, smsEnabled } from "../messaging/twilio.js";
+import {
+  NoopMessageProvider,
+  getSignInMessageProvider,
+  signInTextsEnabled,
+} from "../messaging/twilio.js";
 import { ResendSendError, emailDispatchMode, sendEmail } from "../messaging/email.js";
 import { signInEmail, signInSmsBody } from "../services/customerSignInMessage.js";
 
@@ -293,10 +297,12 @@ export async function deliverSignInCode(params: {
   // Decided BEFORE an attempt is counted: a send that can never reach a
   // provider must not spend the attempt budget. Terminal, like the email
   // outbox's SUPPRESSED - a switched-off channel is not a transient fault.
-  const provider = channel === "sms" ? getMessageProvider() : null;
-  // Texting off is a switched-off channel too. The start route already refuses
-  // new SMS sign-ins; this settles any that were queued before the switch.
-  const textsOff = channel === "sms" && !smsEnabled();
+  // Sign-in codes follow their OWN switch (signInTextsEnabled), so a code
+  // still goes while every other text is off.
+  const provider = channel === "sms" ? getSignInMessageProvider() : null;
+  // Sign-in texts off is a switched-off channel too. The start route already
+  // refuses new SMS sign-ins then; this settles any queued before the switch.
+  const textsOff = channel === "sms" && !signInTextsEnabled();
   const suppressed =
     channel === "sms"
       ? textsOff || provider instanceof NoopMessageProvider
@@ -350,7 +356,7 @@ export async function deliverSignInCode(params: {
   // ---- THE BOUNDARY ------------------------------------------------------
   try {
     if (channel === "sms") {
-      const sent = await getMessageProvider().send({
+      const sent = await getSignInMessageProvider().send({
         to: payload.to,
         body: signInSmsBody(payload.code),
       });

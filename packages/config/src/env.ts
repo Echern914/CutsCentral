@@ -338,6 +338,12 @@ const apiSchema = z.object({
   // push must keep working. Turn texting back on with exactly `true`
   // (boolish refuses anything else, and a refused value stops boot).
   SMS_ENABLED: boolish.default("false"),
+  // One-time SIGN-IN codes by text (My ChairBack sign-in and "add a phone")
+  // keep going while SMS_ENABLED is off - see signInTextsEnabled() in the
+  // API's messaging/twilio.ts for why email cannot stand in for them. One
+  // text per code, under CUSTOMER_SIGNIN_SMS_HOURLY_CAP / _DAILY_CAP. Set
+  // exactly `false` to stop these too.
+  SMS_SIGNIN_ENABLED: boolish.default("true"),
   // Waitlist phase F2. OFF by default and shipped dark: the sweep is the first
   // thing here that changes a customer's standing with nobody deciding to, so
   // it goes out inert, gets watched through its dry-run counts, and is turned

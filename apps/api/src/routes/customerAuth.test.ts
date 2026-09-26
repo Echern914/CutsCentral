@@ -150,6 +150,39 @@ describe("sending a code", () => {
     expect(lastSmsCode(phone)).toMatch(/^\d{6}$/);
   });
 
+  it("🔴 texting switched off: a phone still gets its code and signs in", async () => {
+    // Every other text stays off (smsOff.test.ts); a sign-in code is the one
+    // that keeps going, because email cannot stand in for a phone at sign-in.
+    process.env.SMS_ENABLED = "false";
+    __resetEnvCacheForTests();
+    try {
+      const res = await signIn(freshPhone());
+      expect(res.status).toBe(200);
+      expect(typeof res.body.token).toBe("string");
+    } finally {
+      process.env.SMS_ENABLED = "true";
+      __resetEnvCacheForTests();
+    }
+  });
+
+  it("sign-in texts switched off too: the answer shipped apps turn into 'use your email'", async () => {
+    process.env.SMS_ENABLED = "false";
+    process.env.SMS_SIGNIN_ENABLED = "false";
+    __resetEnvCacheForTests();
+    try {
+      const phone = freshPhone();
+      const res = await post("/api/customer-auth/start", { channel: "sms", phone });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("phone_not_supported");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(sms.filter((s) => s.to === phone)).toHaveLength(0);
+    } finally {
+      process.env.SMS_ENABLED = "true";
+      delete process.env.SMS_SIGNIN_ENABLED;
+      __resetEnvCacheForTests();
+    }
+  });
+
   it("the text is ONE GSM-7 segment and names no shop, person or link", () => {
     const body = signInSmsBody("123456");
     expect(billableSegments(body)).toBe(1);
