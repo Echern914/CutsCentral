@@ -4,7 +4,16 @@ import { useState, useTransition } from "react";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
-import { nudgeClientAction } from "../../actions";
+import { nudgeClientAction, type NudgeChannel } from "../../actions";
+
+/** Say where it went - "sent" alone left the barber guessing whether a text
+ *  went out while texting is off. */
+const NUDGE_SENT: Record<NudgeChannel, string> = {
+  app: "Sent to their ChairBack app",
+  app_inbox: "In their ChairBack app - their notifications are off",
+  sms: "Nudge texted",
+  sms_and_app_inbox: "Texted, and in their ChairBack app",
+};
 
 /**
  * The right-side rebook panel on the client detail page: how many days since
@@ -60,8 +69,10 @@ export function RebookPanel({
             const r = await nudgeClientAction(clientId);
             if (r.ok) {
               setNudged(true);
-              toast("Nudge sent", "success");
-            } else if (r.error === "subscription_required")
+              toast(NUDGE_SENT[r.channel ?? "sms"] ?? "Nudge sent", "success");
+            } else if (r.error === "unreachable" || r.error === "cannot_nudge" || r.error === "quiet_hours")
+              toast(r.reason ?? "Could not send nudge", "error");
+            else if (r.error === "subscription_required")
               toast(
                 inApp
                   ? "Texting is a Premium feature"

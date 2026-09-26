@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { BroadcastCard } from "./BroadcastCard";
-import { listBroadcastsAction } from "./broadcastActions";
+import { listBroadcastsAction, removeBroadcastAction, sendBroadcastAction } from "./broadcastActions";
 
 vi.mock("./broadcastActions", () => ({
   listBroadcastsAction: vi.fn(async () => ({ ok: true, broadcasts: [] })),
@@ -17,6 +17,7 @@ vi.mock("./broadcastActions", () => ({
     },
   })),
   sendBroadcastAction: vi.fn(async () => ({ ok: true, recipients: 3 })),
+  removeBroadcastAction: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock("@/components/ui/Toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 // Every vocabulary word this card reads is a plain string; echo the key.
@@ -89,6 +90,73 @@ describe("BroadcastCard history", () => {
     expect(await screen.findByText(/Gold and Silver members · 42 sent/)).toBeTruthy();
     // An everyone-message names no group.
     expect(screen.getAllByText(/members/)).toHaveLength(1);
+  });
+});
+
+/**
+ * "Edit to resend, or remove so it's not stuck there": a finished message can
+ * be loaded back into the composer, or taken off the list. One still going out
+ * offers neither.
+ */
+describe("BroadcastCard: Edit & resend, and Remove", () => {
+  const sent = {
+    id: "b9",
+    channel: "push",
+    audienceTiers: ["BRONZE"],
+    subject: "Whats up!",
+    body: "Two chairs open Friday",
+    status: "SENT",
+    recipientCount: 1,
+    sentCount: 1,
+    failedCount: 0,
+    skippedCount: 0,
+    pendingCount: 0,
+    queuedAt: null,
+    sentAt: null,
+    createdAt: "2026-09-26T16:00:00Z",
+  };
+
+  it("Edit & resend opens the composer with that message, ready to change", async () => {
+    vi.mocked(listBroadcastsAction).mockResolvedValueOnce({ ok: true, broadcasts: [sent] as never });
+    render(<BroadcastCard rewardsEnabled />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit & resend" }));
+    expect(screen.getByDisplayValue("Whats up!")).toBeTruthy();
+    expect(screen.getByDisplayValue("Two chairs open Friday")).toBeTruthy();
+    // Still the barber's call: nothing is sent by editing.
+    expect(vi.mocked(sendBroadcastAction)).not.toHaveBeenCalled();
+  });
+
+  it("Remove asks first, then takes it off the list", async () => {
+    vi.mocked(listBroadcastsAction).mockResolvedValueOnce({ ok: true, broadcasts: [sent] as never });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<BroadcastCard rewardsEnabled />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    expect(confirm.mock.calls[0]![0]).toMatch(/can't be taken back/);
+    await waitFor(() => expect(vi.mocked(removeBroadcastAction)).toHaveBeenCalledWith("b9"));
+    await waitFor(() => expect(screen.queryByText("Whats up!")).toBeNull());
+    confirm.mockRestore();
+  });
+
+  it("a declined confirm removes nothing", async () => {
+    vi.mocked(listBroadcastsAction).mockResolvedValueOnce({ ok: true, broadcasts: [sent] as never });
+    vi.mocked(removeBroadcastAction).mockClear();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<BroadcastCard rewardsEnabled />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    expect(vi.mocked(removeBroadcastAction)).not.toHaveBeenCalled();
+    expect(screen.getByText("Whats up!")).toBeTruthy();
+    confirm.mockRestore();
+  });
+
+  it("a message still going out offers neither", async () => {
+    vi.mocked(listBroadcastsAction).mockResolvedValueOnce({
+      ok: true,
+      broadcasts: [{ ...sent, status: "SENDING", pendingCount: 1, sentCount: 0 }] as never,
+    });
+    render(<BroadcastCard rewardsEnabled />);
+    expect(await screen.findByText("Whats up!")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit & resend" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
   });
 });
 

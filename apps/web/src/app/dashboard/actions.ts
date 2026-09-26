@@ -57,12 +57,19 @@ export async function redeemAction(
   return { ok: res.ok, error: res.error };
 }
 
+/** Where a nudge went: their ChairBack app (push), only its bell (their
+ *  notifications are off), a text, or a text AND the bell. */
+export type NudgeChannel = "app" | "app_inbox" | "sms" | "sms_and_app_inbox";
+
 export async function nudgeClientAction(
   clientId: string,
-): Promise<{ ok: boolean; error?: string }> {
-  const res = await apiSend("POST", `/api/dashboard/nudge/${clientId}`);
+): Promise<{ ok: boolean; error?: string; reason?: string; channel?: NudgeChannel }> {
+  const res = await apiSend<{ ok: boolean; channel?: NudgeChannel }>(
+    "POST",
+    `/api/dashboard/nudge/${clientId}`,
+  );
   revalidatePath(`/dashboard/clients/${clientId}`);
-  return { ok: res.ok, error: res.error };
+  return { ok: res.ok, error: res.error, reason: res.reason, channel: res.data?.channel };
 }
 
 export interface SweepSummary {

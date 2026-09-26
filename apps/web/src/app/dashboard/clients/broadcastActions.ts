@@ -65,6 +65,16 @@ export async function listBroadcastsAction(): Promise<{
 }
 
 /**
+ * Take a finished message off "Recent messages" (and out of clients' in-app
+ * bell). The API keeps the row as history; it refuses one still going out.
+ */
+export async function removeBroadcastAction(id: string): Promise<{ ok: boolean; message?: string }> {
+  const res = await apiSend<{ ok: boolean }>("POST", `/api/broadcasts/${encodeURIComponent(id)}/remove`);
+  if (!res.ok) return { ok: false, message: res.message ?? "Couldn't remove that. Try again." };
+  return { ok: true };
+}
+
+/**
  * Write it and commit to it, in that order.
  *
  * 🔴 THE SECOND CALL DOES NOT DELIVER ANYTHING. It freezes the audience,

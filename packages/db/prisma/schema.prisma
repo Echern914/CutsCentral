@@ -1947,6 +1947,12 @@ model Broadcast {
   emailsReserved Int @default(0)
   queuedAt  DateTime?
   sentAt    DateTime?
+  // Set when the shop takes a finished message off its "Recent messages"
+  // ("Remove"). The row is KEPT - its sends, counts and the month's allowance
+  // it used stay exactly as written - but it leaves the shop's list and every
+  // customer's in-app bell. A push or email already delivered cannot be
+  // recalled; the confirm says so.
+  removedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
