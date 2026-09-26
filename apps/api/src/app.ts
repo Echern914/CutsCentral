@@ -33,6 +33,7 @@ import { rewardsRecoveryRouter } from "./routes/rewardsRecovery.js";
 import { customerAuthRouter } from "./routes/customerAuth.js";
 import { customerMeRouter } from "./routes/customerMe.js";
 import { findShopRouter } from "./routes/findShop.public.js";
+import { appVersionRouter } from "./routes/appVersion.js";
 import { unsubscribeRouter } from "./routes/unsubscribe.public.js";
 import { broadcastsRouter } from "./routes/broadcasts.js";
 import { tierOpeningsRouter } from "./routes/tierOpenings.js";
@@ -200,6 +201,9 @@ export function createApp(): Express {
   // "/:slug", so a sibling path there would make "find" a reserved slug that
   // silently shadows any shop legitimately called that.
   app.use("/api/find-shop", rewardsLimiter, findShopRouter);
+  // The app's "is this build too old?" check. Public and unlimited on purpose:
+  // one constant, no session, no database - see routes/appVersion.ts.
+  app.use("/api/app-version", appVersionRouter);
   // 🔴 Unauthenticated by necessity: somebody clicking unsubscribe in an email
   // has no session. The client's magicToken is the authority, exactly as it is
   // for the rewards page. Rate-limited like every other token-addressed public

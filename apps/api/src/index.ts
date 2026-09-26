@@ -14,10 +14,12 @@ import { walletEnabled } from "./wallet/pass.js";
 import { squareEnabled } from "./square/client.js";
 import { receptionistConfigured } from "./receptionist/config.js";
 import { captureError, initSentry } from "./sentry.js";
+import { reportAppVersionConfig } from "./routes/appVersion.js";
 
 const env = apiEnv();
 initSentry();
 reportMarketingEmailConfig();
+reportAppVersionConfig();
 warnOnUndersizedPool(env.DATABASE_URL);
 // Hosts (Railway, Render, etc.) inject PORT and route traffic to it. Prefer that;
 // fall back to the API_BASE_URL port, then 4000 for local dev.

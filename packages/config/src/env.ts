@@ -188,6 +188,13 @@ const apiSchema = z.object({
   APPLE_OAUTH_KEY_ID: z.string().optional(),
   APPLE_OAUTH_PRIVATE_KEY: z.string().optional(),
   APPLE_OAUTH_REDIRECT_URI: cleanUrl().optional(),
+  // The oldest iOS build (CFBundleVersion, e.g. "49") still allowed to run. An
+  // older app shows "Update ChairBack" over everything until it is updated.
+  // Unset or 0 = off. A STRING on purpose, parsed by minimumBuildFrom in
+  // routes/appVersion.ts: a typo here turns the check off and logs, it never
+  // stops the API booting (docs/mobile-release-xcode.md, "Making old builds
+  // update"). Raise it only once that build is LIVE in the App Store.
+  IOS_MINIMUM_BUILD: z.string().optional(),
 
   TWILIO_ACCOUNT_SID: z.string().min(1),
   TWILIO_AUTH_TOKEN: z.string().min(1),

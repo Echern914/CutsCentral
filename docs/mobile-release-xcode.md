@@ -98,6 +98,27 @@ before the build appears in **TestFlight** and can be added to a release.
 Release notes and the store listing are in App Store Connect as before; nothing
 about submission changed except who made the binary.
 
+## Making old builds update
+
+From build 49 the app asks the API, on every open, for the oldest build it
+still allows (`GET /api/app-version`). A build below it covers the whole app
+with **Update ChairBack** and a button to the App Store listing.
+
+- **The knob:** `IOS_MINIMUM_BUILD` on the Railway API service, a build number
+  such as `52`. Unset or `0` = nobody is asked. Changing it redeploys the API;
+  phones pick it up the next time the app opens or comes back to the front.
+- 🔴 **Raise it only after that build is LIVE in the App Store** (released, not
+  just approved or in TestFlight). Set it higher than the live build and every
+  customer is told to update with nothing to update to. If that happens, lower
+  it again: each phone is released on its next open.
+- A typo (`52a`, `1.1.4`) turns the check **off** and logs an error at boot. It
+  never stops the API from starting.
+- **Only builds 49 and later can be stopped.** Builds 48 and earlier never ask,
+  whatever the number says. They move on only through iOS automatic updates or
+  the customer updating by hand.
+- Everything that isn't a clear "too old" lets the app carry on: no network, the
+  API down or slow, an unreadable answer.
+
 ## 5. If it fails
 
 - **"Your team has no devices from which to generate a provisioning profile …

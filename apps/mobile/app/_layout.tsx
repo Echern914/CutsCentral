@@ -10,6 +10,7 @@ import {
 } from "@expo-google-fonts/bricolage-grotesque";
 import { LaunchScene } from "@/src/LaunchScene";
 import { routeForNotification } from "@/src/pushTap";
+import { UpdateRequired, useUpdateRequired } from "@/src/UpdateRequired";
 
 /**
  * Root layout.
@@ -43,6 +44,9 @@ export default function RootLayout() {
   // makes the handoff seamless. It unmounts itself when it is done, and it is
   // hard-capped at just over a second, so nothing here can hold the app.
   const [sceneDone, setSceneDone] = useState(false);
+  // True only when the API says this build is below the minimum it allows
+  // (src/updateGate.ts). Starts false, so a slow check never holds the app.
+  const updateRequired = useUpdateRequired();
 
   useEffect(() => {
     // Configure foreground notification behavior once, safely.
@@ -112,6 +116,10 @@ export default function RootLayout() {
         {/* The Stripe connection's custom-scheme return (see stripe/connected.tsx). */}
         <Stack.Screen name="stripe/connected" />
       </Stack>
+      {/* Over every screen, so an out-of-date build cannot be used until it is
+          updated. Below the launch scene, which plays first and gets out of the
+          way on its own. */}
+      {updateRequired && <UpdateRequired />}
       {/* Above the Stack, so it covers the first frames of whichever screen is
           loading underneath. Cold start only; see src/launchSceneRules.ts. */}
       {!sceneDone && <LaunchScene onDone={() => setSceneDone(true)} />}
