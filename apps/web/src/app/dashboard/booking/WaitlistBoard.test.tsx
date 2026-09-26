@@ -189,6 +189,22 @@ describe("actions", () => {
     fireEvent.click(screen.getByText("Put back on the list"));
     await waitFor(() => expect(mockSet).toHaveBeenCalledWith("e1", "WAITING"));
   });
+
+  it("🔑 an EXPIRED entry can be removed, so Expired doesn't stack up", async () => {
+    mockGet.mockResolvedValue(page([entry({ status: "EXPIRED" })]));
+    render(<WaitlistBoard {...props} />);
+    await screen.findByText("Marcus Reed");
+    expect(screen.getByText("Put back on the list")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(mockSet).toHaveBeenCalledWith("e1", "REMOVED"));
+  });
+
+  it("an entry already REMOVED offers only 'Put back on the list'", async () => {
+    mockGet.mockResolvedValue(page([entry({ status: "REMOVED" })]));
+    render(<WaitlistBoard {...props} />);
+    await screen.findByText("Marcus Reed");
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+  });
 });
 
 describe("sections, filters and empty states", () => {

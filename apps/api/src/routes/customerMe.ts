@@ -112,10 +112,12 @@ customerMeRouter.post("/shops/:key/not-me", async (req, res) => {
  * "Add to my shops": keep a shop the customer found by name, whether or not they
  * have ever booked there.
  *
- * 🔴 THE SHOP SEES WHO SAVED IT - by name, and nothing else. So a name is
- * required first (409 name_required), and the app says so before the tap. Never
- * a phone, never an email: a shop holding a stranger's number could text someone
- * who never opted in to its messages.
+ * 🔴 THE SHOP SEES WHO SAVED IT - by name, and nothing else. So a FULL name -
+ * first AND last - is required first (409 name_required): a first name alone
+ * ("Jaylon") told the barber nothing about who it was. Every shipped build
+ * answers name_required with "Add my name", which opens Profile, where the last
+ * name is. Never a phone, never an email: a shop holding a stranger's number
+ * could text someone who never opted in to its messages.
  *
  * The shop is found with the SAME exact-handle lookup as "Find a shop"
  * (services/shopByHandle.ts), with the same single refusal for every miss, so
@@ -135,9 +137,9 @@ customerMeRouter.post("/shops/saved", async (req, res) => {
 
   const id = accountId(req);
   const account = await runAsOwner((tx) =>
-    tx.customerAccount.findUnique({ where: { id }, select: { firstName: true } }),
+    tx.customerAccount.findUnique({ where: { id }, select: { firstName: true, lastName: true } }),
   );
-  if (!account?.firstName?.trim()) {
+  if (!account?.firstName?.trim() || !account.lastName?.trim()) {
     res.status(409).json({ error: "name_required" });
     return;
   }
