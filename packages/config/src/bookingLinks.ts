@@ -61,19 +61,35 @@ export function bookNowUrl(shop: BookingLinkShop, appBaseUrl: string): string | 
 }
 
 /**
- * The link a shop HANDS OUT - copied, shared, printed as a QR code.
+ * The Book link an automatic or barber-sent MESSAGE carries - nudge, win-back,
+ * promotion, text and push alike.
  *
- * On ChairBack booking that is the booking page itself. Otherwise it is the
- * shop's ChairBack page, whose Book button follows bookNowUrl: a code printed
- * today keeps working when the shop later changes how it takes bookings, which
- * a code pointing straight at Acuity would not. Null until the shop has a
- * handle.
+ * bookNowUrl, with one exception: a ChairBack-booking shop that never saved an
+ * outside link keeps the message it has always sent - the customer's rewards
+ * link alone. Nothing was wrong with those messages (only a saved link pointing
+ * at the wrong system was), and a second link would change every text that
+ * shop sends: the two-link body carries a "•", which is not GSM-7, so the whole
+ * text re-encodes at roughly twice the segments. Adding a Book line for those
+ * shops is its own decision, not a side effect of this rule.
  */
-export function shareUrl(
-  shop: Pick<BookingLinkShop, "bookingMode" | "slug">,
-  appBaseUrl: string,
-): string | null {
+export function messageBookingUrl(shop: BookingLinkShop, appBaseUrl: string): string | null {
+  if (shop.bookingMode === "native" && !isUsableBookingLink(shop.bookingUrl)) return null;
+  return bookNowUrl(shop, appBaseUrl);
+}
+
+/**
+ * The link a shop HANDS OUT - copied, shared, printed as a QR code - in every
+ * booking mode: /book/<slug>.
+ *
+ * That page decides at visit time: the booking form on ChairBack booking, and
+ * otherwise a redirect to the shop's page, whose Book button follows
+ * bookNowUrl. So a code printed today keeps working when the shop later
+ * changes how it takes bookings, which a code pointing straight at Acuity
+ * would not - and it stays a /book/ link, which the iOS app claims as a
+ * universal link (a /s/ link would open Safari instead). Null until the shop
+ * has a handle.
+ */
+export function shareUrl(shop: Pick<BookingLinkShop, "slug">, appBaseUrl: string): string | null {
   if (!shop.slug) return null;
-  const base = trimBase(appBaseUrl);
-  return shop.bookingMode === "native" ? `${base}/book/${shop.slug}` : `${base}/s/${shop.slug}`;
+  return `${trimBase(appBaseUrl)}/book/${shop.slug}`;
 }

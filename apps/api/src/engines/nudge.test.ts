@@ -148,6 +148,34 @@ describe("sweepShop", () => {
     }
   });
 
+  it("a ChairBack-booking shop that never saved a link keeps the one-link text it always sent", async () => {
+    // Nothing was wrong with these texts. A second link would lengthen every
+    // one this shop sends - the two-link body's "•" is not GSM-7 - so the
+    // link rule leaves them exactly as they were (bookingLinks.ts).
+    const plain = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Plain Cuts",
+        slug: `nudge-plain-${randomToken(5)}`,
+        bookingMode: "native",
+        bookingUrl: null,
+        webhookSecret: randomToken(),
+        dailySendCap: 5,
+        nudgeBufferDays: 7,
+      },
+    });
+    try {
+      await makeOverdueClient(plain.id, "tel:+13025553002", "+13025553002");
+      const summary = await sweepShop(plain, { now: NOW, dryRun: false });
+      expect(summary.sent).toBe(1);
+      expect(sent[0]!.body).toContain("/r/");
+      expect(sent[0]!.body).not.toContain("/book/");
+      expect(sent[0]!.body).not.toContain("•");
+    } finally {
+      await prisma.shop.delete({ where: { id: plain.id } });
+    }
+  });
+
   it("sends nudges FROM the shop's own number when it has one", async () => {
     const own = "+15550101010";
     const numShop = await prisma.shop.create({

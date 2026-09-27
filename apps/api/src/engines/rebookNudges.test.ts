@@ -315,4 +315,22 @@ describe("the rebook push lands where the shop takes bookings now", () => {
       await restore();
     }
   });
+
+  it("with nowhere to book online, lands on the customer's own rewards page - never ChairBack's home", async () => {
+    // A synced shop that never saved its Acuity link - common enough that the
+    // dashboard has a prompt for it.
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { bookingMode: "acuity", bookingUrl: null },
+    });
+    try {
+      const clientId = await makeClient();
+      await seedVisit({ endedMinAgo: 45, clientId });
+      expect(await runRebookNudges(NOW)).toBe(1);
+      const { magicToken } = await prisma.client.findUniqueOrThrow({ where: { id: clientId } });
+      expect(pushes[0]!.url).toMatch(new RegExp(`/r/${magicToken}$`));
+    } finally {
+      await restore();
+    }
+  });
 });

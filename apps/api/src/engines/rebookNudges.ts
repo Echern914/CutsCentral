@@ -171,9 +171,18 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
 
     // Deep-link to wherever this shop takes bookings now (bookingLinks.ts):
     // its ChairBack booking page, or its Acuity/own link - a /book/ link for a
-    // shop that books elsewhere was a dead end. Nowhere online (rare) -> home.
+    // shop that books elsewhere was a dead end. Nowhere online (a synced shop
+    // with no link saved, a page switched off) -> the customer's own rewards
+    // page, as the nudge and win-back do - never ChairBack's home page.
     const base = apiEnv().APP_BASE_URL;
-    const url = bookNowUrl(shop, base) ?? base;
+    let url = bookNowUrl(shop, base);
+    if (!url) {
+      const client = await prisma.client.findUnique({
+        where: { id: c.clientId },
+        select: { magicToken: true },
+      });
+      url = client ? `${base}/r/${client.magicToken}` : base;
+    }
     const res = await sendPushToClient({
       shopId: c.shopId,
       clientId: c.clientId,

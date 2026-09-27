@@ -1,5 +1,4 @@
 import { apiEnv, randomToken } from "@chairback/config";
-import { shareUrl } from "@chairback/config/bookingLinks";
 import { Prisma, runAsOwner, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import {
@@ -606,15 +605,10 @@ async function deliverRecipient(params: {
  * My ChairBack opens the Announcements screen, where the message stays after
  * the notification is swiped away. The booking page ignores it. It is the
  * broadcast's id, which names a shop's message and no person.
- *
- * A shop that books through Acuity or its own link has no /book/ page - that
- * was a 404 on web push - so it lands on the shop's ChairBack page, whose Book
- * button goes where the shop takes bookings (bookingLinks.ts shareUrl). Never
- * the outside link itself: the cue above is ours, not Acuity's.
  */
 export function pushLandingFor(shop: BroadcastShop, broadcastId: string): string {
   const base = apiEnv().APP_BASE_URL;
-  return `${shareUrl(shop, base) ?? base}?announcement=${encodeURIComponent(broadcastId)}`;
+  return `${shop.slug ? `${base}/book/${shop.slug}` : base}?announcement=${encodeURIComponent(broadcastId)}`;
 }
 
 /**

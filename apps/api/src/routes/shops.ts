@@ -44,7 +44,7 @@ import { requireManager, requireOwner } from "../auth/roles.js";
 import { linkReferralOnShopCreate } from "../services/referral.js";
 import { recordPartnerReferralInTx, resolvePartnerCode } from "../services/partnerProgram.js";
 import { AFFILIATE_CLAIM_COOKIE, checkTellApart, tellApartRefusal } from "@chairback/config";
-import { bookNowUrl } from "@chairback/config/bookingLinks";
+import { messageBookingUrl } from "@chairback/config/bookingLinks";
 import {
   applyAttributionInTx,
   planAttribution,
@@ -1649,7 +1649,7 @@ shopsRouter.post("/me/sms-preview", requireUser, requireShop, requireActiveAcces
       template,
       req.shop!.name,
       // The link the real message carries (bookingLinks.ts), not the raw column.
-      bookNowUrl(req.shop!, apiEnv().APP_BASE_URL),
+      messageBookingUrl(req.shop!, apiEnv().APP_BASE_URL),
       req.shop!.industry,
       req.shop!.serviceNoun,
     ),

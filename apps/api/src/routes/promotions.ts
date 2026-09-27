@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { redactForAudit } from "../messaging/auditBody.js";
 import { LOYALTY_TIER_KEYS, apiEnv, type LoyaltyTierKey } from "@chairback/config";
-import { bookNowUrl } from "@chairback/config/bookingLinks";
+import { messageBookingUrl } from "@chairback/config/bookingLinks";
 import { forShop, prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -425,9 +425,9 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
     const body = buildPromoBody({
       firstName: client.firstName,
       shopName: shop.name,
-      // Wherever this shop takes bookings now - including a ChairBack-booking
-      // shop with no outside link saved, which used to get no Book line at all.
-      bookingUrl: bookNowUrl(shop, apiEnv().APP_BASE_URL),
+      // Wherever this shop takes bookings now, never a link left over from
+      // before a switch (bookingLinks.ts messageBookingUrl).
+      bookingUrl: messageBookingUrl(shop, apiEnv().APP_BASE_URL),
       title: promo.title,
       description: promo.description,
       code: promo.code,

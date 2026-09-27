@@ -208,8 +208,6 @@ async function loadClientsInTx(
 export interface BroadcastShop {
   name: string;
   slug: string | null;
-  /** Where a tapped notification lands depends on it - see pushLandingFor. */
-  bookingMode: string;
   ownerEmail: string | null;
   postal: string | null;
   /** Tiers exist only while this is on - see the tiers_need_rewards blocker. */
@@ -226,7 +224,6 @@ export async function loadBroadcastShop(shopId: string): Promise<BroadcastShop |
       // book, so the booking page is the useful destination - and it needs no
       // credential in the payload to reach.
       slug: true,
-      bookingMode: true,
       // Where a reply should land: the shop has no contact-email column, so
       // this is the owner's login address - the person who wrote the message.
       owner: { select: { email: true } },
@@ -241,7 +238,6 @@ export async function loadBroadcastShop(shopId: string): Promise<BroadcastShop |
   return {
     name: shop.name,
     slug: shop.slug,
-    bookingMode: shop.bookingMode,
     ownerEmail: shop.owner?.email ?? null,
     postal: postalAddress(shop),
     rewardsEnabled: shop.rewardsEnabled,

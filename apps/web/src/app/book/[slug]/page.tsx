@@ -194,20 +194,38 @@ type SearchParams = Record<string, string | string[] | undefined>;
  * Null - a real 404 - for a shop that does not exist, whose page is off, that
  * does take ChairBack bookings, or that does not own the custom domain this
  * visit came through (the same check the shop page makes).
+ *
+ * 🔴 ALWAYS /s/<slug> ON THIS HOST, WITH THE WHOLE QUERY. A custom domain's
+ * /book never renders on that domain: middleware hands it to /from-domain,
+ * which 308s to THIS page on the platform host with `cb_domain` set. So "/"
+ * here is ChairBack's own home page, not the shop's - and `cb_domain` must ride
+ * along so the shop page repeats the ownership check, as must the visitor's
+ * utm/fbclid, the only record of where the visit came from.
  */
 async function pageInsteadOfBooking(
   slug: string,
   searchParams?: SearchParams,
 ): Promise<string | null> {
-  const res = await apiPublicGet<{ bookingMode: string; customDomain?: string | null }>(
-    `/api/page/${encodeURIComponent(slug)}`,
-    BOOK_SHELL_REVALIDATE_S,
-  );
-  if (!res.ok || !res.data || res.data.bookingMode === "native") return null;
   const expected = expectedDomain(searchParams);
+  const read = (fresh: boolean) =>
+    apiPublicGet<{ bookingMode: string; customDomain?: string | null }>(
+      `/api/page/${encodeURIComponent(slug)}`,
+      fresh ? undefined : BOOK_SHELL_REVALIDATE_S,
+    );
+  let res = await read(false);
+  // A domain verified in the last few seconds is not in the cached copy yet -
+  // re-read before calling it someone else's, as getDataFor does.
+  if (res.ok && res.data && !servesDomain(res.data, expected)) res = await read(true);
+  if (!res.ok || !res.data || res.data.bookingMode === "native") return null;
   if (!servesDomain(res.data, expected)) return null;
-  // On the shop's own domain its page is the root; everywhere else, /s/<slug>.
-  return expected === null ? `/s/${encodeURIComponent(slug)}` : "/";
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(searchParams ?? {})) {
+    for (const v of Array.isArray(value) ? value : value === undefined ? [] : [value]) {
+      query.append(key, v);
+    }
+  }
+  const qs = query.toString();
+  return `/s/${encodeURIComponent(slug)}${qs ? `?${qs}` : ""}`;
 }
 
 /**

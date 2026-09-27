@@ -3,7 +3,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { apiEnv, randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
-import { pushLandingFor } from "../engines/broadcastWorker.js";
 
 /**
  * WHERE "BOOK" SENDS A CUSTOMER, for a shop that booked through Acuity and then
@@ -84,12 +83,6 @@ describe("while the shop books through Acuity", () => {
     expect((await rewards()).shop.bookingUrl).toBe(ACUITY_LINK);
     expect(await smsPreview()).toContain(ACUITY_LINK);
   });
-
-  it("a broadcast push lands on the shop's page - it has no /book/ page", () => {
-    expect(pushLandingFor({ slug, bookingMode: "acuity" } as never, "b1")).toBe(
-      `${base()}/s/${slug}?announcement=b1`,
-    );
-  });
 });
 
 describe("after it starts taking bookings in ChairBack (the Acuity link still saved)", () => {
@@ -112,12 +105,6 @@ describe("after it starts taking bookings in ChairBack (the Acuity link still sa
     } finally {
       await setShop({ bookingMode: "acuity", publicPageEnabled: true });
     }
-  });
-
-  it("a broadcast push lands on its booking page", () => {
-    expect(pushLandingFor({ slug, bookingMode: "native" } as never, "b2")).toBe(
-      `${base()}/book/${slug}?announcement=b2`,
-    );
   });
 });
 

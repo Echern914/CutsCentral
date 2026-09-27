@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { bookNowUrl, isUsableBookingLink, shareUrl, type BookingLinkShop } from "./bookingLinks.js";
+import {
+  bookNowUrl,
+  isUsableBookingLink,
+  messageBookingUrl,
+  shareUrl,
+  type BookingLinkShop,
+} from "./bookingLinks.js";
 
 /**
  * Where "Book" goes, for every booking mode - the rule nudges, win-backs,
@@ -45,15 +51,28 @@ describe("bookNowUrl", () => {
   }
 });
 
-describe("shareUrl - the link a shop hands out", () => {
-  it("is the booking page on ChairBack booking", () => {
-    expect(shareUrl(shop(), BASE)).toBe("https://app.example/book/fresh-cuts");
+describe("messageBookingUrl - the Book link a text or push carries", () => {
+  it("follows bookNowUrl, so a switched shop's old Acuity link is never sent", () => {
+    expect(messageBookingUrl(shop({ bookingUrl: "https://old.as.me/schedule.php" }), BASE)).toBe(
+      "https://app.example/book/fresh-cuts",
+    );
+    expect(messageBookingUrl(shop({ bookingMode: "acuity", bookingUrl: "https://x.as.me" }), BASE)).toBe(
+      "https://x.as.me",
+    );
+    expect(messageBookingUrl(shop({ bookingMode: "acuity", bookingUrl: null }), BASE)).toBeNull();
   });
 
-  it("is the shop's page otherwise, so a printed code survives a later switch", () => {
-    for (const mode of ["acuity", "square", "link"]) {
+  it("leaves a ChairBack-booking shop that never saved a link on the message it always sent", () => {
+    expect(messageBookingUrl(shop({ bookingUrl: null }), BASE)).toBeNull();
+    expect(messageBookingUrl(shop({ bookingUrl: "not a link" }), BASE)).toBeNull();
+  });
+});
+
+describe("shareUrl - the link a shop hands out", () => {
+  it("is /book/<slug> in every mode: the page decides, and the app claims /book/", () => {
+    for (const mode of ["native", "acuity", "square", "link"]) {
       expect(shareUrl(shop({ bookingMode: mode, bookingUrl: "https://x.as.me" }), BASE)).toBe(
-        "https://app.example/s/fresh-cuts",
+        "https://app.example/book/fresh-cuts",
       );
     }
   });

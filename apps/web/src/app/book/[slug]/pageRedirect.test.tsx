@@ -35,17 +35,44 @@ function answer(bookingRes: unknown, pageRes: unknown) {
 const render = (searchParams: Record<string, string> = {}) =>
   BookPage({ params: { slug: "acuity-cuts" }, searchParams });
 
+/** The EXACT target - toThrow with an Error compares the whole message. */
+const redirectsTo = (target: string) => new Error(`REDIRECT:${target}`);
+
 afterEach(() => apiPublicGet.mockReset());
 
 describe("/book/<slug> for a shop that books somewhere else", () => {
   it("sends the visitor to the shop's page instead of a 404", async () => {
     answer(booking, page({ bookingMode: "acuity", customDomain: null }));
-    await expect(render()).rejects.toThrow("REDIRECT:/s/acuity-cuts");
+    await expect(render()).rejects.toThrow(redirectsTo("/s/acuity-cuts"));
   });
 
-  it("on the shop's own domain, sends them to that domain's root", async () => {
+  it("carries the visitor's query - where the visit came from - to the shop's page", async () => {
+    answer(booking, page({ bookingMode: "acuity", customDomain: null }));
+    await expect(render({ utm_source: "instagram", fbclid: "abc" })).rejects.toThrow(
+      redirectsTo("/s/acuity-cuts?utm_source=instagram&fbclid=abc"),
+    );
+  });
+
+  it("🔴 from a custom domain, lands on the shop's page - never ChairBack's home - with the domain check intact", async () => {
+    // How it arrives: drickcuts.com/book -> /from-domain -> 308 to THIS page on
+    // the platform host with cb_domain set. "/" here would be ChairBack's own
+    // marketing page, so the target must be the shop page, still carrying the
+    // domain it has to prove it owns.
     answer(booking, page({ bookingMode: "link", customDomain: "acuitycuts.com" }));
-    await expect(render({ cb_domain: "acuitycuts.com" })).rejects.toThrow("REDIRECT:/");
+    await expect(render({ cb_domain: "acuitycuts.com", utm_source: "ig" })).rejects.toThrow(
+      redirectsTo("/s/acuity-cuts?cb_domain=acuitycuts.com&utm_source=ig"),
+    );
+  });
+
+  it("re-reads uncached before refusing a domain verified moments ago", async () => {
+    apiPublicGet.mockImplementation(async (path: string, revalidate?: number) => {
+      if (path.startsWith("/api/book/")) return booking;
+      // The cached copy predates the verification; a fresh read has it.
+      return page({ bookingMode: "acuity", customDomain: revalidate === undefined ? "acuitycuts.com" : null });
+    });
+    await expect(render({ cb_domain: "acuitycuts.com" })).rejects.toThrow(
+      redirectsTo("/s/acuity-cuts?cb_domain=acuitycuts.com"),
+    );
   });
 
   it("never sends a custom-domain visitor to a shop that does not own the domain", async () => {

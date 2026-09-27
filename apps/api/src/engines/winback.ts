@@ -1,5 +1,5 @@
 import { WINBACK, apiEnv } from "@chairback/config";
-import { bookNowUrl } from "@chairback/config/bookingLinks";
+import { messageBookingUrl } from "@chairback/config/bookingLinks";
 import { forShop, prisma, runWithShop, type Shop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { redactForAudit } from "../messaging/auditBody.js";
@@ -280,7 +280,7 @@ async function doSweepShopWinback(
         payload: {
           ...push,
           // Wherever this shop takes bookings now (bookingLinks.ts).
-          url: bookNowUrl(shop, env.APP_BASE_URL) ?? `${env.APP_BASE_URL}/r/${client.magicToken}`,
+          url: messageBookingUrl(shop, env.APP_BASE_URL) ?? `${env.APP_BASE_URL}/r/${client.magicToken}`,
           tag: "winback",
         },
       });
@@ -301,7 +301,7 @@ async function doSweepShopWinback(
     const body = buildWinbackBody({
       firstName: client.firstName,
       shopName: shop.name,
-      bookingUrl: bookNowUrl(shop, env.APP_BASE_URL),
+      bookingUrl: messageBookingUrl(shop, env.APP_BASE_URL),
       magicToken: client.magicToken,
       template: shop.winbackTemplate,
       industry: shop.industry,
