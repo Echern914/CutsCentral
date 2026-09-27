@@ -23,7 +23,8 @@ import type { SquareBooking, SquareCustomer } from "./types.js";
  * CONSENT differs from Acuity: Square bookings have no intake-form SMS-consent
  * checkbox, so Square-sourced clients get smsConsentAt = null and rely on the
  * existing self-serve (rewards page) / barber-attestation consent paths. We never
- * fabricate consent.
+ * fabricate consent. The one consent fact Square does carry - a customer's
+ * marketing-email unsubscribe - is carried over, and only ever in that direction.
  */
 function parseDate(value: string | null | undefined): Date | null {
   if (!value) return null;
@@ -37,12 +38,14 @@ function contactFromCustomer(customer: SquareCustomer | null): {
   lastName: string | null;
   phone: string | null;
   email: string | null;
+  emailUnsubscribed: boolean;
 } {
   return {
     firstName: customer?.given_name ?? null,
     lastName: customer?.family_name ?? null,
     phone: toE164(customer?.phone_number),
     email: customer?.email_address ?? null,
+    emailUnsubscribed: customer?.preferences?.email_unsubscribed === true,
   };
 }
 
@@ -139,6 +142,21 @@ export async function ingestSquareBooking(
         email: contact.email ?? undefined,
       },
     });
+
+    // 🔴 AN UNSUBSCRIBE CARRIES OVER; IT IS NEVER UNDONE HERE. A customer who
+    // opted out of marketing email in Square is opted out here too (broadcasts
+    // only - appointment messages never read this). Square's `false` means
+    // nothing to ChairBack: it never clears an opt-out, whether it came from
+    // Square or from ChairBack's own unsubscribe link, and the guard keeps the
+    // date of the FIRST opt-out rather than re-stamping it on every sync.
+    // Square gives no date for its flag, so the first time ChairBack sees it
+    // is the date recorded.
+    if (contact.emailUnsubscribed) {
+      await tx.client.updateMany({
+        where: { id: dbClient.id, emailOptedOut: false },
+        data: { emailOptedOut: true, emailOptedOutAt: new Date() },
+      });
+    }
 
     // A re-delivered booking.updated resolves to SCHEDULED and must NOT downgrade
     // a visit the promotion job already COMPLETED. Terminal cancel/no-show still
