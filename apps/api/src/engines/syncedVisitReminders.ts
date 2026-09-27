@@ -1,6 +1,7 @@
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { notifySyncedVisitReminder } from "../services/appointmentNotify.js";
+import { visitsWithoutLiveSource } from "./syncedVisitTrust.js";
 
 /** How far ahead of a visit we send the reminder. Matches the native job. */
 const REMINDER_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -38,12 +39,20 @@ export async function runSyncedVisitReminders(now = new Date()): Promise<number>
       // NEVER a promoted native booking - see the invariant above.
       appointment: { is: null },
     },
-    select: { id: true, shopId: true },
+    select: { id: true, shopId: true, acuityAppointmentId: true },
   });
   if (due.length === 0) return 0;
 
+  // 🔴 NOT FOR A VISIT WHOSE STATUS CAN NO LONGER BE CHECKED. After a shop
+  // disconnects Acuity/Square, a cancellation made there never reaches us -
+  // reminding the customer would be ChairBack vouching for an appointment
+  // that may be gone (syncedVisitTrust.ts, rule 1). Left unstamped: if the
+  // shop reconnects in time, the next sync settles it and it is reminded.
+  const unverifiable = await visitsWithoutLiveSource(due);
+
   let sent = 0;
   for (const v of due) {
+    if (unverifiable.has(v.id)) continue;
     const ok = await notifySyncedVisitReminder({
       shopId: v.shopId,
       visitId: v.id,
@@ -52,6 +61,9 @@ export async function runSyncedVisitReminders(now = new Date()): Promise<number>
     if (ok) sent++;
   }
 
-  logger.info({ candidates: due.length, sent }, "synced visit reminders run");
+  logger.info(
+    { candidates: due.length, sent, skippedUnverified: unverifiable.size },
+    "synced visit reminders run",
+  );
   return sent;
 }
