@@ -41,6 +41,12 @@ export interface ReadinessItemWire {
 export interface MilestoneWire {
   id: string;
   title: string;
+  /**
+   * false = this group is not part of the shop's booking setup (an Acuity or
+   * link shop has no ChairBack services to add). Never shown, never counted.
+   * Optional because an API a deploy behind does not send it yet.
+   */
+  applicable?: boolean;
   done: boolean;
   blocking: ReadinessItemWire[];
   applicableCount: number;
@@ -110,7 +116,7 @@ export function nextStep(
       total: r.applicable,
     };
   }
-  const milestone = r.milestones.find((m) => !m.done);
+  const milestone = r.milestones.find((m) => m.applicable !== false && !m.done);
   const item = milestone?.blocking.find((i) => !i.done);
   if (!milestone || !item) return null;
   return {

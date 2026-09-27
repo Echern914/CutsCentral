@@ -127,6 +127,9 @@ readinessRouter.get("/", async (req, res) => {
     milestones: report.milestones.map((m) => ({
       id: m.id,
       title: m.title,
+      // false = not part of this shop's booking setup; render and count only
+      // the applicable ones (see Milestone.applicable).
+      applicable: m.applicable,
       done: m.done,
       blocking: m.blocking.map((i) => wireItem(i, role)),
       applicableCount: m.applicableCount,
@@ -134,6 +137,7 @@ readinessRouter.get("/", async (req, res) => {
     })),
     milestonesComplete: report.milestonesComplete,
     milestonesBlocking: report.milestonesBlocking,
+    milestonesApplicable: report.milestonesApplicable,
     blocking: report.blocking.map((i) => wireItem(i, role)),
     items: report.items.map((i) => wireItem(i, role)),
     improve: report.improve.map((i) => wireItem(i, role)),
@@ -182,11 +186,13 @@ readinessRouter.get("/summary", async (req, res) => {
     return;
   }
 
-  const next = report.milestones.find((m) => !m.done) ?? null;
+  const next = report.milestones.find((m) => m.applicable && !m.done) ?? null;
   res.json({
     scope: "shop",
     milestonesComplete: report.milestonesComplete,
-    milestonesTotal: report.milestones.length,
+    // The groups that apply to THIS shop - an Acuity shop has no services or
+    // chairs to set up here, so "3 of 4" must never be the most it can reach.
+    milestonesTotal: report.milestonesApplicable,
     milestonesBlocking: report.milestonesBlocking,
     canGoLive: report.canGoLive,
     liveNow: report.liveNow,

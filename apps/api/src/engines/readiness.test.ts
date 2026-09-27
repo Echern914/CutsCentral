@@ -489,6 +489,226 @@ describe("external booking modes", () => {
 });
 
 /**
+ * 🔴 GO LIVE ASKED AN ACUITY SHOP TO "ADD A SERVICE" (2026-09-27).
+ *
+ * The shop's Acuity services were already showing up (as the names on its
+ * synced visits), yet Go Live blocked on "At least one service", "At least one
+ * barber" and "You hear about a booking" - none of which a customer of that
+ * shop ever touches: ChairBack's booking API refuses non-native shops, the Book
+ * button opens the saved link, and no ChairBack alert fires for an Acuity
+ * booking. The test above said "instead of native setup" but never asked
+ * whether such a shop could actually go live, which is how it slipped through.
+ */
+describe("booking mode decides what Go Live asks for", () => {
+  /** Straight after connecting Acuity: no ChairBack menu, no chair, no alert
+   *  device - and a working Acuity scheduling link. */
+  const acuityShop = (over: Partial<ReadinessFacts> = {}) =>
+    ready({
+      bookingMode: "acuity",
+      bookingUrl: "https://studio.as.me/schedule.php",
+      integrationConnected: true,
+      acuityConnected: true,
+      acuityWebhookCount: 2,
+      staff: [],
+      services: [],
+      activeOfferingPairs: 0,
+      recipients: [
+        { ...ready().recipients[0]!, webDeviceCount: 0, expoDeviceCount: 0, hasPhone: false },
+      ],
+      shopNotifyPhone: false,
+      ...over,
+    });
+
+  /** Every check that exists only because ChairBack takes the booking. */
+  const NATIVE_ONLY = [
+    "shop.staff.active",
+    "shop.service.active",
+    "shop.service.duration",
+    "shop.offering.pair",
+    "shop.service.hours_open",
+    "shop.bookable_chair",
+    "shop.availability.rule",
+    "shop.booking.window",
+    "shop.alerts.reachable",
+    "platform.email",
+    "shop.test_booking",
+  ];
+
+  it("an Acuity shop with a working link goes live with no ChairBack services, chairs or alerts", () => {
+    const r = buildReadiness(acuityShop(), CAPS);
+    expect(blockingIds(r)).toEqual([]);
+    expect(r.canGoLive).toBe(true);
+    expect(r.liveNow).toBe(true);
+    for (const id of NATIVE_ONLY) expect(find(r, id)!.applicable, id).toBe(false);
+    // Nothing left for the Assistant to list either.
+    expect(r.items.filter((i) => i.applicable && !i.done && i.klass !== "info")).toEqual([]);
+  });
+
+  it("so does a shop on its own link - and it is never asked to connect or sync Acuity", () => {
+    const r = buildReadiness(
+      acuityShop({
+        bookingMode: "link",
+        bookingUrl: "https://booksy.com/chern",
+        integrationConnected: false,
+        // An Acuity account still connected, with sync dead: not this shop's concern.
+        acuityWebhookCount: 0,
+      }),
+      CAPS,
+    );
+    expect(r.canGoLive).toBe(true);
+    expect(find(r, "integration.connected")!.applicable).toBe(false);
+    expect(find(r, "integration.live_sync")!.applicable).toBe(false);
+  });
+
+  it("keeps the Acuity connection advisory on an Acuity shop: listed, never blocking", () => {
+    const r = buildReadiness(
+      acuityShop({ integrationConnected: false, acuityConnected: false, acuityWebhookCount: 0 }),
+      CAPS,
+    );
+    expect(r.canGoLive).toBe(true);
+    const conn = find(r, "integration.connected")!;
+    expect(conn.applicable).toBe(true);
+    expect(conn.done).toBe(false);
+    expect(conn.blocksLaunch).toBe(false);
+  });
+
+  for (const mode of ["acuity", "link", "square"] as const) {
+    it(`${mode}: a missing booking link blocks, and only that`, () => {
+      const r = buildReadiness(acuityShop({ bookingMode: mode, bookingUrl: null }), CAPS);
+      expect(blockingIds(r)).toEqual(["shop.booking_source", "shop.preflight"]);
+      expect(find(r, "shop.booking_source")!.evidence).toContain("no booking link is saved");
+      expect(r.liveNow).toBe(false);
+    });
+
+    for (const bad of ["not a link", "javascript:alert(1)", "ftp://files.example.com/book", "https://"]) {
+      it(`${mode}: a link no customer can open blocks too - ${JSON.stringify(bad)}`, () => {
+        const r = buildReadiness(acuityShop({ bookingMode: mode, bookingUrl: bad }), CAPS);
+        expect(blockingIds(r)).toEqual(["shop.booking_source", "shop.preflight"]);
+        expect(find(r, "shop.booking_source")!.evidence).toContain("not a web address");
+        expect(r.liveNow).toBe(false);
+      });
+    }
+  }
+
+  it("ChairBack booking still blocks an empty menu, even with the old Acuity link saved", () => {
+    const r = buildReadiness(acuityShop({ bookingMode: "native" }), CAPS);
+    expect(r.canGoLive).toBe(false);
+    for (const id of ["shop.staff.active", "shop.service.active", "shop.alerts.reachable"]) {
+      expect(blockingIds(r), id).toContain(id);
+    }
+  });
+
+  it("switching to ChairBack booking restores every native requirement at once", () => {
+    const before = buildReadiness(acuityShop(), CAPS);
+    const after = buildReadiness(acuityShop({ bookingMode: "native" }), CAPS);
+    expect(before.canGoLive).toBe(true);
+    expect(after.canGoLive).toBe(false);
+    // The rest of NATIVE_ONLY (pairing, hours, length, the one-ready-chair
+    // roll-up) stand down until a barber or service exists - by design, so one
+    // missing menu is reported once, not five times.
+    const restored = [
+      "shop.staff.active",
+      "shop.service.active",
+      "shop.booking.window",
+      "shop.alerts.reachable",
+      "platform.email",
+      "shop.test_booking",
+    ];
+    for (const id of restored) {
+      expect(find(before, id)!.applicable, `${id} before`).toBe(false);
+      expect(find(after, id)!.applicable, `${id} after`).toBe(true);
+    }
+    // The next step is the empty menu, not the link that no longer takes bookings.
+    expect(after.milestones.find((m) => m.applicable && !m.done)!.id).toBe("services_and_barber");
+    expect(after.milestonesApplicable).toBe(4);
+  });
+
+  it("changes only what APPLIES, never what is true - the kiosk reads `done` directly", () => {
+    const empty = buildReadiness(acuityShop(), CAPS);
+    expect(find(empty, "shop.service.active")!.done).toBe(false);
+    expect(find(empty, "shop.staff.active")!.done).toBe(false);
+    const withMenu = buildReadiness(
+      acuityShop({ staff: ready().staff, services: ready().services, activeOfferingPairs: 1 }),
+      CAPS,
+    );
+    expect(find(withMenu, "shop.service.active")!.done).toBe(true);
+    expect(find(withMenu, "shop.service.active")!.applicable).toBe(false);
+  });
+
+  it("leaves groups with nothing to set up out of the progress, rather than marking them done", () => {
+    const r = buildReadiness(acuityShop(), CAPS);
+    expect(r.milestones).toHaveLength(4); // the wire shape never changes
+    const services = r.milestones.find((m) => m.id === "services_and_barber")!;
+    expect(services.applicable).toBe(false);
+    expect(services.applicableCount).toBe(0);
+    expect(r.milestones.find((m) => m.id === "hours_and_alerts")!.applicable).toBe(false);
+    expect(r.milestonesApplicable).toBe(2);
+    expect(r.milestonesComplete).toBe(2);
+    expect(r.milestonesComplete + r.milestonesBlocking).toBe(r.milestonesApplicable);
+  });
+
+  it("keeps all four groups for a shop on ChairBack booking", () => {
+    const r = build();
+    expect(r.milestones.every((m) => m.applicable)).toBe(true);
+    expect(r.milestonesApplicable).toBe(4);
+  });
+
+  it("drops leftover ChairBack-booking advice from a shop that moved to Acuity", () => {
+    // Menu, a half-set-up second chair and approval mode, all from its native days.
+    const leftovers: Partial<ReadinessFacts> = {
+      staff: [
+        ready().staff[0]!,
+        { ...ready().staff[0]!, id: "staff_2", name: "Marcus", availabilityRuleCount: 0 },
+      ],
+      services: [{ ...ready().services[0]!, hasPrice: false }],
+      activeOfferingPairs: 1,
+      recipients: ready().recipients,
+      requireBookingApproval: true,
+    };
+    const advice = (r: ReadinessReport) => [
+      ...r.improve
+        .map((i) => i.id)
+        .filter((id) => id === "improve.other_chairs" || id === "improve.service_prices"),
+      ...(find(r, "approval.watched")!.applicable ? ["approval.watched"] : []),
+    ];
+    // Control: on ChairBack booking, the same shop IS given all three.
+    expect(advice(buildReadiness(acuityShop({ ...leftovers, bookingMode: "native" }), CAPS)).sort()).toEqual([
+      "approval.watched",
+      "improve.other_chairs",
+      "improve.service_prices",
+    ]);
+    const r = buildReadiness(acuityShop(leftovers), CAPS);
+    expect(advice(r)).toEqual([]);
+    expect(r.canGoLive).toBe(true);
+  });
+
+  it("gives a barber on an Acuity shop nothing booking-related to set up", () => {
+    const r = buildReadiness(
+      acuityShop({
+        staff: [
+          {
+            ...ready().staff[0]!,
+            seatLinked: true,
+            availabilityRuleCount: 0,
+            activeServiceLinkCount: 0,
+            bookableServiceLinkCount: 0,
+            hasPhoto: false,
+            hasBio: false,
+          },
+        ],
+      }),
+      CAPS,
+    );
+    const b = buildBarberReadiness(r, "staff_1");
+    expect(b.personal).toEqual([]);
+    const askManager = b.managerOwned.map((i) => i.id);
+    for (const id of ["staff.active", "staff.hours", "staff.services", "staff.photo_bio"]) {
+      expect(askManager, id).not.toContain(id);
+    }
+  });
+});
+
+/**
  * 🔴 ACUITY HEALTH — a connection that exists but is not doing its job.
  *
  * Neither of these could be seen from any screen before. The shop LOOKS

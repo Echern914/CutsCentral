@@ -140,7 +140,9 @@ async function report(inv: ToolInvocation): Promise<ToolResult> {
       blocking: full.blocking.map((i) => wireItem(i, inv.role)),
       outstanding: outstanding(full.items).map((i) => wireItem(i, inv.role)),
       improve: full.improve.map((i) => wireItem(i, inv.role)),
-      milestones: full.milestones.map((m) => ({
+      // Only the groups that apply to this shop's booking setup: a model told
+      // "Services and barbers: done" about an Acuity shop would repeat it.
+      milestones: full.milestones.filter((m) => m.applicable).map((m) => ({
         id: m.id,
         title: m.title,
         done: m.done,
