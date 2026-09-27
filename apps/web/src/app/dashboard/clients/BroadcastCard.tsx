@@ -390,6 +390,16 @@ export function BroadcastCard({
                   ))}
                 </ul>
               )}
+              {/* Marketing email needs each customer's own yes - an address on
+                  file is not one. Said plainly, so "0 will get this" reads as
+                  the rule working, not the feature broken. */}
+              {channel === "email" && preview?.skipped.some((s) => s.reason === "not_permitted") && (
+                <p className="mt-2 text-xs leading-relaxed text-gold">
+                  {reachable === 0
+                    ? "No one has said yes to your marketing emails yet, so this email can't go to anyone. An app notification still reaches everyone who has the app."
+                    : "Marketing email only goes to people who have said yes to it."}
+                </p>
+              )}
             </>
           )}
         </div>
