@@ -107,15 +107,64 @@ describe("what the barber is told", () => {
   });
 
   it("the counts add up to the whole book, so no one is unaccounted for", () => {
+    // Distinct addresses: an unsubscribe now reaches every record sharing its
+    // address, which would otherwise leave nobody reachable to count.
     const clients = [
-      client({ id: "1" }),
+      client({ id: "1", email: "one@example.com" }),
       client({ id: "2", email: null }),
-      client({ id: "3", emailOptedOut: true }),
-      client({ id: "4", archivedAt: new Date() }),
-      client({ id: "5", loyaltyTier: "BRONZE" }),
+      client({ id: "3", email: "three@example.com", emailOptedOut: true }),
+      client({ id: "4", email: "four@example.com", archivedAt: new Date() }),
+      client({ id: "5", email: "five@example.com", loyaltyTier: "BRONZE" }),
     ];
     const split = splitAudience(clients, "email", ["GOLD"]);
     const skipped = Object.values(split.reasonCounts).reduce((a, b) => a + b, 0);
+    expect(split.reachable.map((c) => c.id)).toEqual(["1"]);
     expect(split.reachable.length + skipped).toBe(clients.length);
+  });
+});
+
+describe("an unsubscribe belongs to the address, not to one record", () => {
+  // One person on several records: the merged-away duplicate (archived), the
+  // record a later sync re-created, and an import with the address re-typed.
+  const book = (over: Partial<AudienceClient> = {}) => [
+    client({ id: "merged", email: "pat@example.com", emailOptedOut: true, archivedAt: new Date(), ...over }),
+    client({ id: "resynced", email: "pat@example.com" }),
+    client({ id: "imported", email: "  PAT@Example.com " }),
+    client({ id: "someone-else", email: "sam@example.com" }),
+  ];
+
+  it("an address unsubscribed on ANY record - even an archived one - is out everywhere", () => {
+    const split = splitAudience(book(), "email", []);
+    expect(split.reachable.map((c) => c.id)).toEqual(["someone-else"]);
+    expect(split.reasonCounts.unsubscribed).toBe(2);
+    expect(split.reasonCounts.archived).toBe(1);
+  });
+
+  it("a provider refusal travels with the address too, and stays its own reason", () => {
+    const split = splitAudience(
+      book({ emailOptedOut: false, emailSuppressedAt: new Date() }),
+      "email",
+      [],
+    );
+    expect(split.reachable.map((c) => c.id)).toEqual(["someone-else"]);
+    expect(split.reasonCounts.undeliverable).toBe(2);
+    expect(split.reasonCounts.unsubscribed).toBe(0);
+  });
+
+  it("never reaches across to a different address", () => {
+    const split = splitAudience(
+      [
+        client({ id: "a", email: "pat@example.com", emailOptedOut: true }),
+        client({ id: "b", email: "pat+cuts@example.com" }),
+      ],
+      "email",
+      [],
+    );
+    expect(split.reachable.map((c) => c.id)).toEqual(["b"]);
+  });
+
+  it("does not touch push: an email choice is not an app choice", () => {
+    const split = splitAudience(book(), "push", []);
+    expect(split.reachable.map((c) => c.id).sort()).toEqual(["imported", "resynced", "someone-else"]);
   });
 });

@@ -3,6 +3,7 @@ import { logger } from "../logger.js";
 import { earnPunchForVisit } from "../services/punch.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { recomputeCadence } from "./cadence.js";
+import { mayAnnounceCompletedVisit, visitsWithoutLiveSource } from "./syncedVisitTrust.js";
 
 /**
  * Acuity never fires a "completed" event. A visit becomes COMPLETED once its end
@@ -20,9 +21,22 @@ export async function promoteCompletedVisits(now = new Date()): Promise<number> 
       canceledAt: null,
       noShow: false, // a no-show never completes or earns a punch
     },
-    select: { id: true, shopId: true, clientId: true, serviceName: true, endAt: true },
+    select: {
+      id: true,
+      shopId: true,
+      clientId: true,
+      serviceName: true,
+      endAt: true,
+      scheduledAt: true,
+      createdAt: true,
+      acuityAppointmentId: true,
+    },
   });
   if (due.length === 0) return 0;
+  // A synced visit whose platform the shop has disconnected cannot be checked
+  // any more - it may have been cancelled there. Leave it as last synced
+  // rather than completing and punching it (syncedVisitTrust.ts, rule 1).
+  const unverifiable = await visitsWithoutLiveSource(due);
 
   // One shop lookup for the whole batch - the earn rate is per shop.
   const shops = await prisma.shop.findMany({
@@ -31,7 +45,10 @@ export async function promoteCompletedVisits(now = new Date()): Promise<number> 
   });
   const shopById = new Map(shops.map((s) => [s.id, s]));
 
+  let promoted = 0;
   for (const v of due) {
+    if (unverifiable.has(v.id)) continue;
+    promoted++;
     await prisma.visit.update({
       where: { id: v.id },
       data: { status: "COMPLETED", completedAt: now },
@@ -49,7 +66,10 @@ export async function promoteCompletedVisits(now = new Date()): Promise<number> 
     // Tell the client they earned punches (gated by the shop toggle + consent +
     // quiet hours inside notify). Only on a genuine first earn - a re-run of this
     // job returns null and stays silent. Awaited but never throws.
-    if (earn) {
+    // 🔴 NEVER FOR IMPORTED HISTORY (syncedVisitTrust.ts, rule 2): a visit
+    // ChairBack learned about after it ended keeps its punch but announces
+    // nothing - one message per old cut was the connect-time flood.
+    if (earn && mayAnnounceCompletedVisit(v, now)) {
       await notifyPunchEarned({
         shopId: v.shopId,
         clientId: v.clientId,
@@ -62,6 +82,9 @@ export async function promoteCompletedVisits(now = new Date()): Promise<number> 
     }
   }
 
-  logger.info({ promoted: due.length }, "promoted completed visits");
-  return due.length;
+  logger.info(
+    { promoted, leftUnverified: due.length - promoted },
+    "promoted completed visits",
+  );
+  return promoted;
 }

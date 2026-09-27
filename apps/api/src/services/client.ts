@@ -1,5 +1,6 @@
 import { asOwnerWithin, forShop, runWithShop } from "@chairback/db";
 import { recomputeCadence } from "../engines/cadence.js";
+import { emailAddressKey } from "../engines/broadcastAudience.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { normalizeInstagramHandle } from "@chairback/config/clientIdentity";
 import { tierRank } from "@chairback/config/tierRules";
@@ -81,6 +82,15 @@ export async function editClient(
   if (input.email !== undefined) {
     const e = (input.email ?? "").trim().toLowerCase();
     data.email = e === "" ? null : e;
+    // A bounce is a fact about the OLD mailbox. Correcting a typo'd address is
+    // the usual fix for one, and the bounce must not follow the record onto
+    // the working address - the broadcast split applies a suppression to
+    // every record holding the address it sits on. An unsubscribe is the
+    // person's decision and stays.
+    if (emailAddressKey(e) !== emailAddressKey(client.email)) {
+      data.emailSuppressedAt = null;
+      data.emailSuppressionReason = null;
+    }
   }
 
   if (input.instagram !== undefined) {
@@ -181,6 +191,8 @@ export interface MergeAudit {
  *  - optedOut = winner.optedOut OR loser.optedOut  (a STOP on EITHER record wins)
  *  - smsConsentAt = the EARLIEST non-null of the two (and keep that record's
  *    source). We never fabricate consent or advance its date by merging.
+ *  - emailOptedOut = winner OR loser (an email unsubscribe on EITHER wins, with
+ *    the earliest date); a provider suppression moves only with its own address.
  *
  * EVERYTHING the customer did moves, not just the loyalty trail: their
  * appointments and standing appointments (or the survivor shows no upcoming
@@ -318,6 +330,48 @@ export async function mergeClients(
     const update: Record<string, unknown> = { optedOut, smsConsentAt, smsConsentSource };
     if (!winner.phone && loser.phone) update.phone = loser.phone;
     if (!winner.email && loser.email) update.email = loser.email;
+
+    // Email, by the same principle as texting. An UNSUBSCRIBE is a person's
+    // decision, so it survives on the record that survives: opted-out-wins,
+    // and the earliest date it was made. Dropping it here made an
+    // unsubscribed person marketable again the moment two of their records
+    // were merged.
+    if (loser.emailOptedOut && !winner.emailOptedOut) {
+      update.emailOptedOut = true;
+      update.emailOptedOutAt = loser.emailOptedOutAt;
+    } else if (
+      loser.emailOptedOut &&
+      loser.emailOptedOutAt &&
+      (!winner.emailOptedOutAt || loser.emailOptedOutAt < winner.emailOptedOutAt)
+    ) {
+      update.emailOptedOutAt = loser.emailOptedOutAt;
+    }
+    // A SUPPRESSION is a fact about a MAILBOX (a hard bounce, a spam
+    // complaint), so it travels with the address it belongs to: onto the
+    // survivor when the survivor ends up with that address, never onto a
+    // different one - a dead inbox says nothing about a working one.
+    const survivorAddress = emailAddressKey(
+      (update.email as string | undefined) ?? winner.email,
+    );
+    const winnerSameMailbox =
+      winner.emailSuppressedAt !== null && emailAddressKey(winner.email) === survivorAddress;
+    // And off it: a survivor with no address of its own, still carrying the
+    // bounce from one that was cleared, takes the other record's WORKING
+    // address here - its old bounce says nothing about that one.
+    if (winner.emailSuppressedAt !== null && !winnerSameMailbox) {
+      update.emailSuppressedAt = null;
+      update.emailSuppressionReason = null;
+    }
+    if (
+      loser.emailSuppressedAt &&
+      survivorAddress !== null &&
+      emailAddressKey(loser.email) === survivorAddress
+    ) {
+      if (!winnerSameMailbox || loser.emailSuppressedAt < winner.emailSuppressedAt!) {
+        update.emailSuppressedAt = loser.emailSuppressedAt;
+        update.emailSuppressionReason = loser.emailSuppressionReason;
+      }
+    }
     if (!winner.lastName && loser.lastName) update.lastName = loser.lastName;
     // The handle is what tells two first-name-only records apart - keep it.
     if (!winner.instagram && loser.instagram) update.instagram = loser.instagram;

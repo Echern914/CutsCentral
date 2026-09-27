@@ -7,7 +7,6 @@ import { resolveStatus } from "./acuity/mapping.js";
 import { recomputeCadence } from "./engines/cadence.js";
 import { noteAvailabilityChanged } from "./services/availabilityCache.js";
 import { clawBackVisitEarn, earnPunchForVisitInTx } from "./services/punch.js";
-import { notifyPunchEarned } from "./services/loyaltyNotify.js";
 import { logger } from "./logger.js";
 import type { AcuityAppointment } from "./acuity/types.js";
 
@@ -78,7 +77,7 @@ export async function ingestAppointment(
   // box must not revoke an earlier opt-in).
   const consented = appointmentHasSmsConsent(appt);
 
-  const { clientId, clawedBack, earn } = await runWithShop(shop.id, async (tx) => {
+  const { clientId, clawedBack } = await runWithShop(shop.id, async (tx) => {
     const client = await tx.client.upsert({
       where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey } },
       create: {
@@ -183,11 +182,9 @@ export async function ingestAppointment(
 
     // If a visit arrives already COMPLETED, earn punches here (normally the
     // status-promotion job does this). Idempotent via PunchLedger.visitId;
-    // amount follows the shop's earn rules. The result (null on a re-delivered
-    // webhook) drives the client "you earned a punch" text after commit.
-    let earn = null;
+    // amount follows the shop's earn rules. Never announced - see the end.
     if (visit.status === "COMPLETED") {
-      earn = await earnPunchForVisitInTx(
+      await earnPunchForVisitInTx(
         tx,
         shop,
         client.id,
@@ -197,7 +194,7 @@ export async function ingestAppointment(
       );
     }
 
-    return { clientId: client.id, clawedBack: revokeCompleted, earn };
+    return { clientId: client.id, clawedBack: revokeCompleted };
   });
 
   // 🔴 A SYNCED APPOINTMENT OCCUPIES THE CHAIR. The slot engine subtracts live
@@ -214,19 +211,13 @@ export async function ingestAppointment(
   // tx - recomputeCadence opens its own shop-scoped transaction.)
   if (clawedBack) await recomputeCadence(shop.id, clientId);
 
-  // A completed booking that genuinely earned punches: text the client (gated by
-  // the shop toggle + consent + quiet hours inside notify). After commit so the
-  // ledger row is durable, and never throws - a send issue can't fail ingest.
-  if (earn) {
-    await notifyPunchEarned({
-      shopId: shop.id,
-      clientId,
-      earned: earn.earned,
-      balance: earn.balance,
-      cardTypeId: earn.cardTypeId,
-      cardName: earn.cardName,
-    });
-  }
+  // 🔴 AN EARN HERE IS NEVER ANNOUNCED. Ingest only earns for a visit that is
+  // ALREADY completed - an old visit met again by a sync pass (for instance
+  // after the shop turned rewards on). The punch stands; telling the customer
+  // "you earned a punch" about a cut from the past is exactly the
+  // import-triggered message this path must never send (engines/
+  // syncedVisitTrust.ts, rule 2). Live visits are announced by the completion
+  // job, once, when they end.
 }
 
 /** Re-export prisma for callers that need a raw lookup near ingest. */

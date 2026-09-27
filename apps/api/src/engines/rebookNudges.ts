@@ -3,6 +3,7 @@ import { bookNowUrl } from "@chairback/config/bookingLinks";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { sendPushToClient } from "../messaging/push.js";
+import { importedAfterItEnded } from "./syncedVisitTrust.js";
 
 /**
  * The "book your next one?" push, fired ~30 minutes after the chair empties.
@@ -106,6 +107,9 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
         shopId: true,
         clientId: true,
         serviceName: true,
+        createdAt: true,
+        endAt: true,
+        scheduledAt: true,
         client: { select: { magicToken: true } },
       },
       take: 500,
@@ -121,7 +125,10 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
       serviceName: a.service?.name ?? null,
       magicToken: a.client?.magicToken ?? null,
     })),
-    ...visits.map((v) => ({
+    // 🔴 Never for imported history (syncedVisitTrust.ts, rule 2): a cut
+    // ChairBack first heard about after it ended - however recently - is not
+    // one it may thank anybody for.
+    ...visits.filter((v) => !importedAfterItEnded(v)).map((v) => ({
       kind: "visit" as const,
       id: v.id,
       shopId: v.shopId,
