@@ -621,7 +621,16 @@ describe("a shop merging duplicate records", () => {
 
 describe("a broadcast push", () => {
   it("carries the announcement cue the app routes on, and still lands on the booking page", () => {
-    const shop = { name: "Alpha Cuts", slug: "alpha", ownerEmail: null, postal: null, rewardsEnabled: false };
+    // A shop on ChairBack booking; one booking elsewhere lands on its page
+    // instead (bookingLinksFollowMode.test.ts).
+    const shop = {
+      name: "Alpha Cuts",
+      slug: "alpha",
+      bookingMode: "native",
+      ownerEmail: null,
+      postal: null,
+      rewardsEnabled: false,
+    };
     expect(pushLandingFor(shop, "bc_1")).toMatch(/\/book\/alpha\?announcement=bc_1$/);
     expect(pushLandingFor({ ...shop, slug: null }, "bc_1")).toMatch(/\?announcement=bc_1$/);
   });
