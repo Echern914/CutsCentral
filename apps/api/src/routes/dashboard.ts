@@ -964,34 +964,61 @@ dashboardRouter.post("/clients", async (req, res) => {
       ? `mail:${d.email.toLowerCase()}`
       : `manual:${randomToken(8)}`;
 
-  try {
-    const client = await forShop(shop.id).client.upsert({
-      where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey: key } },
-      create: {
-        acuityClientKey: key,
-        magicToken: randomToken(),
-        firstName: d.firstName,
-        lastName: d.lastName ?? null,
-        phone,
-        email: d.email || null,
-        notes: d.notes ?? null,
-        source: "manual",
-        // Only textable if the barber affirmed consent at add-time.
-        smsConsentAt: d.smsConsent ? new Date() : null,
-        smsConsentSource: d.smsConsent ? "manual" : null,
-      },
-      update: {
-        firstName: d.firstName,
-        lastName: d.lastName ?? undefined,
-        notes: d.notes ?? undefined,
-        // Deliberately NOT touching consent here: re-adding an existing client
-        // must not silently re-stamp or overwrite an earlier consent record.
-        // To grant consent for an existing client, use the bulk attestConsent
-        // action (which guards on smsConsentAt: null).
-      },
+  // 🔴 ADD NEVER OVERWRITES. This used to upsert on the key, so adding a
+  // person whose phone (or email) is already on another client REPLACED that
+  // client's name and notes - a family member typed in with the shared number
+  // silently became the person already on file. A phone or email that belongs
+  // to a client already is refused, with nothing written, and the owner is
+  // told whose it is and what to do instead.
+  const matchedBy = phone ? "phone number" : "email address";
+  const exists = (existing: { firstName: string | null; lastName: string | null }) => {
+    const who = [existing.firstName, existing.lastName].filter(Boolean).join(" ") || "A client";
+    res.status(409).json({
+      error: "client_exists",
+      message:
+        `${who} already has this ${matchedBy}, so nothing was added or changed. ` +
+        `To update ${who}, open their page. If this is someone else who shares ` +
+        `it, add them with their own phone or email, or with no contact details.`,
     });
-    res.status(201).json({ id: client.id });
-  } catch {
+  };
+
+  try {
+    const outcome = await runWithShop(shop.id, async (tx) => {
+      const existing = await tx.client.findUnique({
+        where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey: key } },
+        select: { firstName: true, lastName: true },
+      });
+      if (existing) return { existing };
+      const created = await tx.client.create({
+        data: {
+          shopId: shop.id,
+          acuityClientKey: key,
+          magicToken: randomToken(),
+          firstName: d.firstName,
+          lastName: d.lastName ?? null,
+          phone,
+          email: d.email || null,
+          notes: d.notes ?? null,
+          source: "manual",
+          // Only textable if the barber affirmed consent at add-time.
+          smsConsentAt: d.smsConsent ? new Date() : null,
+          smsConsentSource: d.smsConsent ? "manual" : null,
+        },
+        select: { id: true },
+      });
+      return { created };
+    });
+    if ("existing" in outcome && outcome.existing) {
+      exists(outcome.existing);
+      return;
+    }
+    res.status(201).json({ id: outcome.created!.id });
+  } catch (err) {
+    // Added by someone else between the check and the insert: the same answer.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      exists({ firstName: null, lastName: null });
+      return;
+    }
     res.status(500).json({ error: "create_failed" });
   }
 });
