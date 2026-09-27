@@ -77,12 +77,30 @@ export const SKIP_REASON_LABEL: Record<SkipReason, string> = {
  * stays its own field and its own skip reason: one is a fact about a mailbox,
  * the other is a decision by a person, and reporting the first as the second
  * puts words in a customer's mouth.
+ *
+ * 🔴 BOTH BELONG TO THE ADDRESS, NOT TO THE ONE RECORD THEY WERE MADE ON. One
+ * person can sit on several records at a shop: a duplicate, a CSV import, or
+ * the fresh record a later sync creates under a merged record's retired key.
+ * Read row by row, any of those would make an unsubscribed address marketable
+ * again without anyone deciding it. So an address unsubscribed or refused on
+ * ANY record of this shop - archived ones included - is excluded on every
+ * record that carries it. That only holds if `clients` is the WHOLE book,
+ * archived rows too, which is what both callers load (broadcast.ts).
  */
 export function splitAudience(
   clients: AudienceClient[],
   channel: BroadcastChannelId,
   tiers: readonly LoyaltyTier[],
 ): AudienceSplit {
+  const unsubscribedAddresses = new Set<string>();
+  const undeliverableAddresses = new Set<string>();
+  for (const c of clients) {
+    const address = emailAddressKey(c.email);
+    if (address === null) continue;
+    if (c.emailOptedOut) unsubscribedAddresses.add(address);
+    if (c.emailSuppressedAt !== null) undeliverableAddresses.add(address);
+  }
+
   const reachable: AudienceClient[] = [];
   const skipped: { client: AudienceClient; reason: SkipReason }[] = [];
   const reasonCounts: Record<SkipReason, number> = {
@@ -110,15 +128,16 @@ export function splitAudience(
       continue;
     }
     if (channel === "email") {
+      const address = emailAddressKey(c.email);
       // The customer's own choice outranks a missing address: the Announcements
       // bell shows a no_email row (the shop meant it for them) but never an
       // unsubscribed one, so an opt-out whose address was later cleared must
       // still be recorded as the opt-out.
-      if (c.emailOptedOut) {
+      if (c.emailOptedOut || (address !== null && unsubscribedAddresses.has(address))) {
         skip(c, "unsubscribed");
         continue;
       }
-      if (!c.email?.trim()) {
+      if (address === null) {
         skip(c, "no_email");
         continue;
       }
@@ -129,7 +148,7 @@ export function splitAudience(
       // it is counted and NAMED separately, because telling a barber "47
       // people unsubscribed" when 47 mailboxes bounced is a different claim
       // about his customers than the truth.
-      if (c.emailSuppressedAt !== null) {
+      if (c.emailSuppressedAt !== null || undeliverableAddresses.has(address)) {
         skip(c, "undeliverable");
         continue;
       }
@@ -144,4 +163,15 @@ export function splitAudience(
   }
 
   return { reachable, skipped, reasonCounts };
+}
+
+/**
+ * The comparable form of an address: trimmed and lower-cased, or null when
+ * there is none. Deliberately no provider-specific folding (Gmail dots, plus
+ * tags): two spellings that route to one inbox are a guess, and a guess that
+ * merges two people's choices is worse than one that keeps them apart.
+ */
+export function emailAddressKey(email: string | null | undefined): string | null {
+  const key = email?.trim().toLowerCase();
+  return key ? key : null;
 }

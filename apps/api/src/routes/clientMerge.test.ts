@@ -173,6 +173,75 @@ describe("client merge routes", () => {
     expect(merged?.smsConsentSource).toBe("join_page"); // source of the earliest
   });
 
+  it("keeps an email unsubscribe from either record, even across different addresses", async () => {
+    const winner = await addClient(cookieA, "WEmail");
+    const loser = await addClient(cookieA, "LEmail");
+    await forShop(shopIdA).client.update({
+      where: { id: winner },
+      data: { email: "work@example.com" },
+    });
+    await forShop(shopIdA).client.update({
+      where: { id: loser },
+      data: {
+        email: "home@example.com",
+        emailOptedOut: true,
+        emailOptedOutAt: new Date("2026-03-01T00:00:00Z"),
+      },
+    });
+    const res = await request(app)
+      .post(`/api/dashboard/clients/${winner}/merge`)
+      .set("Cookie", cookieA)
+      .send({ loserId: loser });
+    expect(res.status).toBe(200);
+    const merged = await forShop(shopIdA).client.findFirst({ where: { id: winner } });
+    // A person's decision, so it survives on the person's surviving record.
+    expect(merged?.emailOptedOut).toBe(true);
+    expect(merged?.emailOptedOutAt?.toISOString()).toBe("2026-03-01T00:00:00.000Z");
+    expect(merged?.email).toBe("work@example.com");
+  });
+
+  it("moves a bounce only with the mailbox it belongs to", async () => {
+    // Different addresses: the dead inbox says nothing about the working one.
+    const keepsOwn = await addClient(cookieA, "WBounceOwn");
+    const deadOther = await addClient(cookieA, "LBounceOther");
+    await forShop(shopIdA).client.update({ where: { id: keepsOwn }, data: { email: "live@example.com" } });
+    await forShop(shopIdA).client.update({
+      where: { id: deadOther },
+      data: { email: "dead@example.com", emailSuppressedAt: new Date(), emailSuppressionReason: "hard_bounce" },
+    });
+    expect(
+      (
+        await request(app)
+          .post(`/api/dashboard/clients/${keepsOwn}/merge`)
+          .set("Cookie", cookieA)
+          .send({ loserId: deadOther })
+      ).status,
+    ).toBe(200);
+    const own = await forShop(shopIdA).client.findFirst({ where: { id: keepsOwn } });
+    expect(own?.emailSuppressedAt).toBeNull();
+    expect(own?.emailOptedOut).toBe(false); // a bounce is never recorded as a choice
+
+    // No address of its own: it takes the loser's - and that address's bounce.
+    const blank = await addClient(cookieA, "WBounceBlank");
+    const dead = await addClient(cookieA, "LBounceDead");
+    await forShop(shopIdA).client.update({
+      where: { id: dead },
+      data: { email: "gone@example.com", emailSuppressedAt: new Date(), emailSuppressionReason: "complaint" },
+    });
+    expect(
+      (
+        await request(app)
+          .post(`/api/dashboard/clients/${blank}/merge`)
+          .set("Cookie", cookieA)
+          .send({ loserId: dead })
+      ).status,
+    ).toBe(200);
+    const took = await forShop(shopIdA).client.findFirst({ where: { id: blank } });
+    expect(took?.email).toBe("gone@example.com");
+    expect(took?.emailSuppressedAt).not.toBeNull();
+    expect(took?.emailSuppressionReason).toBe("complaint");
+  });
+
   it("carries the loser's Instagram handle onto a winner without one - and never replaces the winner's", async () => {
     // The handle is the one field that told two first-name-only records apart;
     // the duplicates review usually keeps the OLDER record (no handle), so a

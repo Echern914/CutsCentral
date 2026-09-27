@@ -119,3 +119,49 @@ describe("what the barber is told", () => {
     expect(split.reachable.length + skipped).toBe(clients.length);
   });
 });
+
+describe("an unsubscribe belongs to the address, not to one record", () => {
+  // One person on several records: the merged-away duplicate (archived), the
+  // record a later sync re-created, and an import with the address re-typed.
+  const book = (over: Partial<AudienceClient> = {}) => [
+    client({ id: "merged", email: "pat@example.com", emailOptedOut: true, archivedAt: new Date(), ...over }),
+    client({ id: "resynced", email: "pat@example.com" }),
+    client({ id: "imported", email: "  PAT@Example.com " }),
+    client({ id: "someone-else", email: "sam@example.com" }),
+  ];
+
+  it("an address unsubscribed on ANY record - even an archived one - is out everywhere", () => {
+    const split = splitAudience(book(), "email", []);
+    expect(split.reachable.map((c) => c.id)).toEqual(["someone-else"]);
+    expect(split.reasonCounts.unsubscribed).toBe(2);
+    expect(split.reasonCounts.archived).toBe(1);
+  });
+
+  it("a provider refusal travels with the address too, and stays its own reason", () => {
+    const split = splitAudience(
+      book({ emailOptedOut: false, emailSuppressedAt: new Date() }),
+      "email",
+      [],
+    );
+    expect(split.reachable.map((c) => c.id)).toEqual(["someone-else"]);
+    expect(split.reasonCounts.undeliverable).toBe(2);
+    expect(split.reasonCounts.unsubscribed).toBe(0);
+  });
+
+  it("never reaches across to a different address", () => {
+    const split = splitAudience(
+      [
+        client({ id: "a", email: "pat@example.com", emailOptedOut: true }),
+        client({ id: "b", email: "pat+cuts@example.com" }),
+      ],
+      "email",
+      [],
+    );
+    expect(split.reachable.map((c) => c.id)).toEqual(["b"]);
+  });
+
+  it("does not touch push: an email choice is not an app choice", () => {
+    const split = splitAudience(book(), "push", []);
+    expect(split.reachable.map((c) => c.id).sort()).toEqual(["imported", "resynced", "someone-else"]);
+  });
+});
