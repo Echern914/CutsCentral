@@ -18,8 +18,15 @@ const field =
  * cap; results are summed across batches.
  */
 const BATCH = 500;
-/** How many held-back rows to list by name; the count always shows. */
+/** How many matched rows to list by name; the count always shows. */
 const REVIEW_SHOWN = 50;
+
+/** "rows 3, 7 and 12" - capped, so one bad column cannot print a thousand numbers. */
+function rowList(rows: { row: number }[]): string {
+  const shown = rows.slice(0, 10).map((r) => r.row);
+  const more = rows.length - shown.length;
+  return `row${rows.length === 1 ? "" : "s"} ${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+}
 
 /** Minimal RFC-4180-ish CSV parser: handles quotes, escaped "", CRLF. */
 function parseCsv(text: string): string[][] {
@@ -144,7 +151,6 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
         ok: true,
         created: 0,
         unchanged: 0,
-        needsReview: [],
         total: 0,
         skipped: [],
       };
@@ -159,17 +165,21 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
         totals.total! += r.total ?? 0;
         // The server numbers rows within its batch; the owner reads the FILE.
         totals.skipped!.push(...(r.skipped ?? []).map((s) => ({ ...s, row: s.row + i })));
-        totals.needsReview!.push(...(r.needsReview ?? []).map((s) => ({ ...s, row: s.row + i })));
       }
       setResult(totals);
       toast(
         `Imported ${totals.created} new` +
-          (totals.needsReview!.length ? `, ${totals.needsReview!.length} to review` : "") +
           (totals.skipped!.length ? `, skipped ${totals.skipped!.length}` : ""),
         "success",
       );
     });
   }
+
+  // Each kind of skip has its own next step, so they are shown apart.
+  const skipped = result?.skipped ?? [];
+  const matched = skipped.filter((s) => s.reason === "matches_existing");
+  const badPhone = skipped.filter((s) => s.reason === "invalid_phone");
+  const failed = skipped.filter((s) => s.reason !== "matches_existing" && s.reason !== "invalid_phone");
 
   return (
     <Card className="p-5">
@@ -212,7 +222,9 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
                 shop. <span className="text-offwhite">Leave this unchecked</span> if
                 you&apos;re not sure — imported clients won&apos;t be texted until
                 they opt in, and you can always collect consent later. (Texting
-                people who didn&apos;t opt in violates the TCPA.)
+                people who didn&apos;t opt in violates the TCPA.) This only applies
+                to new clients the file adds; clients you already have keep the
+                consent they have.
               </span>
             </label>
 
@@ -247,29 +259,29 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
                   , <span className="font-semibold">{result.unchanged}</span> already up to date
                 </>
               )}
-              {result.needsReview && result.needsReview.length > 0 && (
+              {skipped.length > 0 && (
                 <>
-                  , <span className="font-semibold text-gold">{result.needsReview.length}</span> need review
-                </>
-              )}
-              {result.skipped && result.skipped.length > 0 && (
-                <>
-                  , <span className="text-danger-soft">{result.skipped.length}</span> skipped
+                  , <span className="text-danger-soft">{skipped.length}</span> skipped
                 </>
               )}
               .
             </p>
-            {result.needsReview && result.needsReview.length > 0 && (
+            {matched.length > 0 && (
               <div className="mt-2">
                 <p className="text-xs leading-relaxed text-muted">
-                  Needs review: these rows share a phone or email with a client you already
-                  have, but we can&apos;t tell whether they&apos;re the same person — families
-                  often share a phone. We left your client exactly as it was. If the row is
-                  someone new, add them by hand; if it&apos;s the same person, update their
-                  details on their page.
+                  {matched.length} skipped because {matched.length === 1 ? "it shares" : "they share"} a
+                  phone or email with a client you already have, and we can&apos;t tell whether
+                  it&apos;s the same person — families often share a phone. Your clients were not
+                  changed, even where the file only had details they were missing.
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-muted">
+                  <span className="text-offwhite">Next step:</span> if it&apos;s the same person,
+                  open that client and update their details there. If it&apos;s someone else, add
+                  them with Add client using their own phone or email — not the shared one, which
+                  already belongs to the client you have.
                 </p>
                 <ul className="mt-2 space-y-1 text-xs">
-                  {result.needsReview.slice(0, REVIEW_SHOWN).map((r) => (
+                  {matched.slice(0, REVIEW_SHOWN).map((r) => (
                     <li key={r.row} className="min-w-0 truncate text-offwhite">
                       Row {r.row} · {r.name}{" "}
                       <span className="text-muted">
@@ -278,17 +290,22 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
                     </li>
                   ))}
                 </ul>
-                {result.needsReview.length > REVIEW_SHOWN && (
-                  <p className="mt-1 text-xs text-muted">
-                    and {result.needsReview.length - REVIEW_SHOWN} more.
-                  </p>
+                {matched.length > REVIEW_SHOWN && (
+                  <p className="mt-1 text-xs text-muted">and {matched.length - REVIEW_SHOWN} more.</p>
                 )}
               </div>
             )}
-            {result.skipped && result.skipped.length > 0 && (
-              <p className="mt-1 text-xs text-muted">
-                Skipped rows had an invalid phone number — fix them in your file and
-                re-import (already-added clients won&apos;t duplicate).
+            {badPhone.length > 0 && (
+              <p className="mt-2 text-xs text-muted">
+                {badPhone.length} skipped for a phone number we couldn&apos;t read (
+                {rowList(badPhone)}) — fix {badPhone.length === 1 ? "that row" : "those rows"} in
+                your file and import it again.
+              </p>
+            )}
+            {failed.length > 0 && (
+              <p className="mt-2 text-xs text-muted">
+                {failed.length} couldn&apos;t be saved ({rowList(failed)}) — import the file
+                again to retry {failed.length === 1 ? "it" : "them"}.
               </p>
             )}
             <button onClick={onDone} className="mt-3 text-sm text-gold hover:underline">

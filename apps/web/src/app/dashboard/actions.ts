@@ -212,14 +212,16 @@ export interface ImportClientRow {
 }
 
 /**
- * A row that matched an existing client by a shared phone or email but would
- * have changed it. Nothing was written; the owner decides.
+ * A row the import did not write. "matches_existing" rows shared a phone or
+ * email with a client the shop already has but would have changed it - they
+ * also say who, so the owner can act on them.
  */
-export interface ImportReviewRow {
+export interface ImportSkippedRow {
   row: number;
-  name: string;
-  matchedBy: "phone" | "email";
-  existingName: string;
+  reason: string;
+  name?: string;
+  matchedBy?: "phone" | "email";
+  existingName?: string;
 }
 
 export interface ImportResult {
@@ -227,10 +229,8 @@ export interface ImportResult {
   created?: number;
   /** Existing clients that already had everything the row carried. */
   unchanged?: number;
-  /** Rows held back because a shared contact is not proof of the same person. */
-  needsReview?: ImportReviewRow[];
   total?: number;
-  skipped?: { row: number; reason: string }[];
+  skipped?: ImportSkippedRow[];
   error?: string;
 }
 
@@ -247,9 +247,8 @@ export async function importClientsAction(
   const res = await apiSend<{
     created: number;
     unchanged?: number;
-    needsReview?: ImportReviewRow[];
     total: number;
-    skipped: { row: number; reason: string }[];
+    skipped: ImportSkippedRow[];
   }>("POST", "/api/dashboard/clients/import", { rows, attestConsentForAll });
   revalidatePath("/dashboard/clients");
   revalidatePath("/dashboard");

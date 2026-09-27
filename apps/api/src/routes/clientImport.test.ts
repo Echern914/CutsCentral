@@ -7,12 +7,13 @@ import { createApp } from "../app.js";
 /**
  * Bulk client import (CSV migrate-off-Booksy). Covers the behavior that matters:
  * rows become clients; TCPA-CRITICAL consent defaults OFF and is granted ONLY
- * when the barber attests AND the row has a phone; re-import is idempotent
- * (matched by key, no duplicates) and never re-stamps consent; a row that
- * matches an existing client by a shared phone or email but would change or add
- * to it is NEVER written - the client is untouched and the row is listed as
- * needing review (a family on one phone is two people); an invalid phone is
- * skipped (not stored as a reachable-looking null); cross-tenant isolation.
+ * to NEW clients, when the barber attests AND the row has a phone - never to a
+ * client who already exists, whose consent is kept as it is; re-import is
+ * idempotent (matched by key, no duplicates); a row that matches an existing
+ * client by a shared phone or email but would change or add to it is NEVER
+ * written - the client is untouched and the row is skipped with what it
+ * matched (a family on one phone is two people); an invalid phone is skipped
+ * (not stored as a reachable-looking null); cross-tenant isolation.
  */
 const app = createApp();
 const email = `imp-${randomToken(6)}@test.local`.toLowerCase();
@@ -68,7 +69,7 @@ describe("POST /api/dashboard/clients/import", () => {
     expect(ada.phone).toBe("+13025550111"); // normalized to E.164
   });
 
-  it("a row that differs from the client on its phone is held for review - the client is untouched", async () => {
+  it("a row that differs from the client on its phone is skipped - the client is untouched", async () => {
     // This case used to assert that "Ada" BECAME "Ada Updated": the re-import
     // overwrote the shop's record. A shared phone is not proof it is Ada.
     const res = await imp({
@@ -77,8 +78,8 @@ describe("POST /api/dashboard/clients/import", () => {
     });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ created: 0, unchanged: 0 });
-    expect(res.body.needsReview).toEqual([
-      { row: 1, name: "Ada Updated", matchedBy: "phone", existingName: "Ada" },
+    expect(res.body.skipped).toEqual([
+      { row: 1, reason: "matches_existing", name: "Ada Updated", matchedBy: "phone", existingName: "Ada" },
     ]);
 
     const ada = await prisma.client.findFirst({ where: { shopId, phone: "+13025550111" } });
@@ -90,13 +91,13 @@ describe("POST /api/dashboard/clients/import", () => {
     expect(count).toBe(3); // still 3, no duplicate
   });
 
-  it("an exact re-import with consent attested grants it to a client that has none", async () => {
-    // Everything the row says, the client already has - the row IS this record.
+  it("🔴 an attestation over the file never grants consent to a client who already exists", async () => {
+    // Every field matches, and it is still no evidence THIS client agreed to texts.
     const res = await imp({ rows: [{ firstName: "Ada", phone: "(302) 555-0111" }], attestConsentForAll: true });
-    expect(res.body).toMatchObject({ created: 0, unchanged: 1, needsReview: [] });
+    expect(res.body).toMatchObject({ created: 0, unchanged: 1, skipped: [] });
     const ada = await prisma.client.findFirstOrThrow({ where: { shopId, phone: "+13025550111" } });
-    expect(ada.smsConsentAt).not.toBeNull();
-    expect(ada.smsConsentSource).toBe("import_attested");
+    expect(ada.smsConsentAt).toBeNull();
+    expect(ada.smsConsentSource).toBeNull();
   });
 
   it("attestConsentForAll grants consent ONLY to rows with a phone", async () => {
@@ -151,7 +152,7 @@ describe("POST /api/dashboard/clients/import", () => {
 
     const again = await imp({ rows });
     expect(again.status).toBe(200);
-    expect(again.body).toMatchObject({ created: 0, unchanged: 2, needsReview: [] });
+    expect(again.body).toMatchObject({ created: 0, unchanged: 2, skipped: [] });
     const after = await prisma.client.findMany({
       where: { shopId, firstName: { in: ["Hana", "Ivo"] } },
       orderBy: { firstName: "asc" },
@@ -201,8 +202,8 @@ describe("POST /api/dashboard/clients/import", () => {
       ],
     });
     expect(again.body).toMatchObject({ created: 0, unchanged: 0 });
-    expect(again.body.needsReview).toEqual([
-      { row: 1, name: "Gia Rossi", matchedBy: "phone", existingName: "Giovanna" },
+    expect(again.body.skipped).toEqual([
+      { row: 1, reason: "matches_existing", name: "Gia Rossi", matchedBy: "phone", existingName: "Giovanna" },
     ]);
     const after = await prisma.client.findUniqueOrThrow({ where: { id: gia.id } });
     expect(after.firstName).toBe("Giovanna");
@@ -211,13 +212,13 @@ describe("POST /api/dashboard/clients/import", () => {
     expect(after.lastName).toBeNull(); // a blank is not filled on a shared phone's say-so
   });
 
-  it("a row that would only fill blanks is held for review too", async () => {
+  it("a row that would only fill blanks is skipped too - fills are not automatic", async () => {
     await imp({ rows: [{ firstName: "Kai", phone: "(302) 555-0666" }] });
     const again = await imp({
       rows: [{ firstName: "Kai", lastName: "Lee", phone: "(302) 555-0666", notes: "Skin fade, #1 sides" }],
     });
     expect(again.body).toMatchObject({ created: 0, unchanged: 0 });
-    expect(again.body.needsReview).toHaveLength(1);
+    expect(again.body.skipped).toHaveLength(1);
     const kai = await prisma.client.findFirstOrThrow({ where: { shopId, phone: "+13025550666" } });
     expect(kai.lastName).toBeNull();
     expect(kai.notes).toBeNull();
@@ -233,8 +234,8 @@ describe("POST /api/dashboard/clients/import", () => {
       attestConsentForAll: true,
     });
     expect(res.body.created).toBe(1);
-    expect(res.body.needsReview).toEqual([
-      { row: 2, name: "Mason Park", matchedBy: "phone", existingName: "Jayden Park" },
+    expect(res.body.skipped).toEqual([
+      { row: 2, reason: "matches_existing", name: "Mason Park", matchedBy: "phone", existingName: "Jayden Park" },
     ]);
 
     // A later file: Mason again, and a note - still never onto Jayden.
@@ -242,19 +243,32 @@ describe("POST /api/dashboard/clients/import", () => {
       rows: [{ firstName: "Mason", phone: "302-555-0777", email: "mason.park@example.com", notes: "Buzz cut, #2" }],
     });
     expect(later.body).toMatchObject({ created: 0, unchanged: 0 });
-    expect(later.body.needsReview).toHaveLength(1);
+    expect(later.body.skipped).toHaveLength(1);
 
     const onPhone = await prisma.client.findMany({ where: { shopId, phone: "+13025550777" } });
     expect(onPhone).toHaveLength(1);
     const jayden = onPhone[0]!;
     expect([jayden.firstName, jayden.lastName, jayden.email, jayden.notes]).toEqual(["Jayden", "Park", null, null]);
+
+    // The screen's next step for "someone else": Add client with their OWN
+    // contact, not the shared phone. That makes Mason, and leaves Jayden be.
+    const added = await request(app)
+      .post("/api/dashboard/clients")
+      .set("Cookie", cookie)
+      .send({ firstName: "Mason", lastName: "Park", email: "mason.park@example.com" });
+    expect(added.status).toBe(201);
+    const mason = await prisma.client.findUniqueOrThrow({ where: { id: added.body.id } });
+    expect(mason.id).not.toBe(jayden.id);
+    expect(mason.firstName).toBe("Mason");
+    const jaydenAfter = await prisma.client.findUniqueOrThrow({ where: { id: jayden.id } });
+    expect([jaydenAfter.firstName, jaydenAfter.notes]).toEqual(["Jayden", null]);
   });
 
-  it("a shared email is held for review the same way", async () => {
+  it("a shared email is skipped the same way", async () => {
     await imp({ rows: [{ firstName: "Rae", email: "family@example.com" }] });
     const res = await imp({ rows: [{ firstName: "Sol", email: "Family@Example.com" }] });
-    expect(res.body.needsReview).toEqual([
-      { row: 1, name: "Sol", matchedBy: "email", existingName: "Rae" },
+    expect(res.body.skipped).toEqual([
+      { row: 1, reason: "matches_existing", name: "Sol", matchedBy: "email", existingName: "Rae" },
     ]);
     const rae = await prisma.client.findFirstOrThrow({ where: { shopId, acuityClientKey: "mail:family@example.com" } });
     expect(rae.firstName).toBe("Rae");
@@ -265,7 +279,7 @@ describe("POST /api/dashboard/clients/import", () => {
     const again = await imp({
       rows: [{ firstName: "JO", phone: "(302) 555-0555", email: "jo@example.com" }],
     });
-    expect(again.body).toMatchObject({ unchanged: 1, needsReview: [] });
+    expect(again.body).toMatchObject({ unchanged: 1, skipped: [] });
   });
 
   it("skips a supplied-but-invalid phone rather than storing a misleading null", async () => {
