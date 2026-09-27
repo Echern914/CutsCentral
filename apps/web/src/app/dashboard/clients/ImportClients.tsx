@@ -11,13 +11,22 @@ const field =
 /**
  * CSV client import — the "bring your book off Booksy/Fresha/Vagaro" flow. The
  * file is parsed ENTIRELY in the browser (no upload); we map columns by header,
- * preview, then POST JSON rows. Consent is OFF unless the barber attests, and the
- * UI says so loudly (importing a contact list is not proof of SMS consent).
+ * preview, then POST JSON rows. An import never makes anyone textable, and the
+ * UI says so (a contact list is not proof that anyone agreed to texts).
  *
  * The browser sends in batches of 500 so a big book doesn't hit the per-request
  * cap; results are summed across batches.
  */
 const BATCH = 500;
+/** How many matched rows to list by name; the count always shows. */
+const REVIEW_SHOWN = 50;
+
+/** "rows 3, 7 and 12" - capped, so one bad column cannot print a thousand numbers. */
+function rowList(rows: { row: number }[]): string {
+  const shown = rows.slice(0, 10).map((r) => r.row);
+  const more = rows.length - shown.length;
+  return `row${rows.length === 1 ? "" : "s"} ${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+}
 
 /** Minimal RFC-4180-ish CSV parser: handles quotes, escaped "", CRLF. */
 function parseCsv(text: string): string[][] {
@@ -109,7 +118,6 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
   const [pending, start] = useTransition();
   const [rows, setRows] = useState<ImportClientRow[]>([]);
   const [fileName, setFileName] = useState("");
-  const [attest, setAttest] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -138,26 +146,39 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
 
   function doImport() {
     start(async () => {
-      const totals: ImportResult = { ok: true, created: 0, updated: 0, total: 0, skipped: [] };
+      const totals: ImportResult = {
+        ok: true,
+        created: 0,
+        unchanged: 0,
+        total: 0,
+        skipped: [],
+      };
       for (let i = 0; i < rows.length; i += BATCH) {
-        const r = await importClientsAction(rows.slice(i, i + BATCH), attest);
+        const r = await importClientsAction(rows.slice(i, i + BATCH));
         if (!r.ok) {
           toast(r.error ?? "Import failed.", "error");
           return;
         }
         totals.created! += r.created ?? 0;
-        totals.updated! += r.updated ?? 0;
+        totals.unchanged! += r.unchanged ?? 0;
         totals.total! += r.total ?? 0;
-        totals.skipped!.push(...(r.skipped ?? []));
+        // The server numbers rows within its batch; the owner reads the FILE.
+        totals.skipped!.push(...(r.skipped ?? []).map((s) => ({ ...s, row: s.row + i })));
       }
       setResult(totals);
       toast(
-        `Imported ${totals.created} new, updated ${totals.updated}` +
+        `Imported ${totals.created} new` +
           (totals.skipped!.length ? `, skipped ${totals.skipped!.length}` : ""),
         "success",
       );
     });
   }
+
+  // Each kind of skip has its own next step, so they are shown apart.
+  const skipped = result?.skipped ?? [];
+  const matched = skipped.filter((s) => s.reason === "matches_existing");
+  const badPhone = skipped.filter((s) => s.reason === "invalid_phone");
+  const failed = skipped.filter((s) => s.reason !== "matches_existing" && s.reason !== "invalid_phone");
 
   return (
     <Card className="p-5">
@@ -188,21 +209,11 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
               <span className="text-muted">{fileName}</span>.
             </p>
 
-            <label className="flex items-start gap-2.5 rounded-xl border border-subtle bg-charcoal-700/50 p-3 text-xs leading-relaxed text-muted">
-              <input
-                type="checkbox"
-                checked={attest}
-                onChange={(e) => setAttest(e.target.checked)}
-                className="mt-0.5 h-4 w-4 shrink-0 rounded border-subtle bg-charcoal-700 accent-gold"
-              />
-              <span>
-                I confirm these clients agreed to receive text messages from my
-                shop. <span className="text-offwhite">Leave this unchecked</span> if
-                you&apos;re not sure — imported clients won&apos;t be texted until
-                they opt in, and you can always collect consent later. (Texting
-                people who didn&apos;t opt in violates the TCPA.)
-              </span>
-            </label>
+            <p className="rounded-xl border border-subtle bg-charcoal-700/50 p-3 text-xs leading-relaxed text-muted">
+              Imported clients won&apos;t be texted until they opt in themselves —
+              a contact list isn&apos;t proof that anyone agreed to texts. Clients
+              you already have keep the consent they have.
+            </p>
 
             <div className="flex items-center gap-3">
               <button
@@ -229,19 +240,59 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
         {result && (
           <div className="rounded-xl border border-subtle bg-charcoal-700/50 p-4 text-sm">
             <p className="text-offwhite">
-              Done — <span className="font-semibold text-gold">{result.created}</span> added,{" "}
-              <span className="font-semibold">{result.updated}</span> updated
-              {result.skipped && result.skipped.length > 0 && (
+              Done — <span className="font-semibold text-gold">{result.created}</span> added
+              {(result.unchanged ?? 0) > 0 && (
                 <>
-                  , <span className="text-danger-soft">{result.skipped.length}</span> skipped
+                  , <span className="font-semibold">{result.unchanged}</span> already up to date
+                </>
+              )}
+              {skipped.length > 0 && (
+                <>
+                  , <span className="text-danger-soft">{skipped.length}</span> skipped
                 </>
               )}
               .
             </p>
-            {result.skipped && result.skipped.length > 0 && (
-              <p className="mt-1 text-xs text-muted">
-                Skipped rows had an invalid phone number — fix them in your file and
-                re-import (already-added clients won&apos;t duplicate).
+            {matched.length > 0 && (
+              <div className="mt-2">
+                <p className="text-xs leading-relaxed text-muted">
+                  {matched.length} skipped because {matched.length === 1 ? "it shares" : "they share"} a
+                  phone or email with a client you already have, and we can&apos;t tell whether
+                  it&apos;s the same person — families often share a phone. Your clients were not
+                  changed, even where the file only had details they were missing.
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-muted">
+                  <span className="text-offwhite">Next step:</span> if it&apos;s the same person,
+                  open that client and update their details there. If it&apos;s someone else, add
+                  them with Add client using their own phone or email — not the shared one, which
+                  already belongs to the client you have.
+                </p>
+                <ul className="mt-2 space-y-1 text-xs">
+                  {matched.slice(0, REVIEW_SHOWN).map((r) => (
+                    <li key={r.row} className="min-w-0 truncate text-offwhite">
+                      Row {r.row} · {r.name}{" "}
+                      <span className="text-muted">
+                        — same {r.matchedBy} as {r.existingName || "an existing client"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {matched.length > REVIEW_SHOWN && (
+                  <p className="mt-1 text-xs text-muted">and {matched.length - REVIEW_SHOWN} more.</p>
+                )}
+              </div>
+            )}
+            {badPhone.length > 0 && (
+              <p className="mt-2 text-xs text-muted">
+                {badPhone.length} skipped for a phone number we couldn&apos;t read (
+                {rowList(badPhone)}) — fix {badPhone.length === 1 ? "that row" : "those rows"} in
+                your file and import it again.
+              </p>
+            )}
+            {failed.length > 0 && (
+              <p className="mt-2 text-xs text-muted">
+                {failed.length} couldn&apos;t be saved ({rowList(failed)}) — import the file
+                again to retry {failed.length === 1 ? "it" : "them"}.
               </p>
             )}
             <button onClick={onDone} className="mt-3 text-sm text-gold hover:underline">

@@ -1029,12 +1029,12 @@ dashboardRouter.post("/clients", async (req, res) => {
 // book WITH them — the whole "you own your clients" wedge — without needing the
 // old platform's API.
 //
-// TCPA-CRITICAL: imported clients are NOT textable by default. A spreadsheet of
-// contacts is NOT proof of SMS consent. smsConsent applies per-row ONLY when the
-// barber explicitly attests they have consent for these clients (one checkbox in
-// the UI), and even then we stamp it only on rows with a phone and NEVER
-// overwrite an existing consent record (first-consent-wins, like the manual-add
-// + Acuity paths). Default = null, source = "import".
+// 🔴 TCPA-CRITICAL: AN IMPORT NEVER GRANTS SMS CONSENT. A spreadsheet of
+// contacts is not proof that anyone agreed to texts, and neither is a checkbox
+// over the whole file - it is evidence about no individual row. A new client
+// from a file starts with no consent; a client who already exists keeps
+// exactly the consent they have. Consent comes only through a path tied to the
+// person (their own opt-in, or the owner recording it for that one client).
 const importRowSchema = z.object({
   firstName: z.string().trim().min(1).max(80),
   lastName: z.string().trim().max(80).optional().or(z.literal("")),
@@ -1047,9 +1047,10 @@ const importClientsSchema = z
     // Cap per request so one upload can't hold a tenant transaction open forever
     // or OOM the parse. The web layer chunks larger files into multiple calls.
     rows: z.array(importRowSchema).min(1).max(1000),
-    // The barber affirms they have SMS consent for EVERY row in this batch.
-    // Default false: imported clients are not textable unless this is true.
-    attestConsentForAll: z.boolean().optional().default(false),
+    // Accepted and IGNORED: the file-wide consent checkbox this used to carry
+    // granted consent with no evidence per row. Still accepted so a web build
+    // from before the change does not get a 400 during a deploy.
+    attestConsentForAll: z.boolean().optional(),
   })
   .strict();
 
@@ -1060,17 +1061,27 @@ dashboardRouter.post("/clients/import", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const { rows, attestConsentForAll } = parsed.data;
-  const now = new Date();
+  const { rows } = parsed.data;
 
   let created = 0;
-  let updated = 0;
-  const skipped: { row: number; reason: string }[] = [];
+  // Matched an existing client that already had everything this row carries.
+  let unchanged = 0;
+  // A "matches_existing" row also says who it is and which client it matched,
+  // so the owner can act on it - the import screen cannot resolve it itself.
+  const skipped: {
+    row: number;
+    reason: string;
+    name?: string;
+    matchedBy?: "phone" | "email";
+    existingName?: string;
+  }[] = [];
 
-  // One tenant transaction for the whole batch: RLS context set once, all upserts
+  // One tenant transaction for the whole batch: RLS context set once, all writes
   // atomic + a single connection (the connection-amplification lesson). Each row
-  // is upserted by the same stable key scheme as manual-add so a re-import (or a
-  // client who already exists from Acuity/booking) merges instead of duplicating.
+  // is matched by the same key scheme as manual-add (phone, else email), so a
+  // re-import - or a client who already exists from Acuity/booking - never
+  // duplicates. A match is only a shared contact, though, so a matched row that
+  // would change the client is skipped instead (below).
   await runWithShop(shop.id, async (tx) => {
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i]!;
@@ -1090,47 +1101,68 @@ dashboardRouter.post("/clients/import", async (req, res) => {
         : email
           ? `mail:${email.toLowerCase()}`
           : `import:${randomToken(8)}`;
-      const consent = attestConsentForAll && phone ? now : null;
       try {
         const existing = await tx.client.findUnique({
           where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey: key } },
-          select: { id: true },
+          select: { id: true, firstName: true, lastName: true, email: true, notes: true },
         });
-        await tx.client.upsert({
-          where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey: key } },
-          create: {
-            shopId: shop.id,
-            acuityClientKey: key,
-            magicToken: randomToken(),
-            firstName: r.firstName,
-            lastName: r.lastName?.trim() || null,
-            phone,
-            email: email || null,
-            notes: r.notes?.trim() || null,
-            source: "import",
-            smsConsentAt: consent,
-            smsConsentSource: consent ? "import_attested" : null,
-          },
-          update: {
-            // Fill in contact details but NEVER clobber an existing record's
-            // identity; and deliberately do NOT touch consent on update (re-import
-            // must not re-stamp). Only fill blanks.
-            firstName: r.firstName,
-            lastName: r.lastName?.trim() || undefined,
-            email: email || undefined,
-            notes: r.notes?.trim() || undefined,
-          },
-        });
-        if (existing) updated++;
-        else created++;
-        // If attesting consent for an EXISTING client that has none yet, grant it
-        // with the same first-consent-wins guard the bulk-attest path uses.
-        if (consent && existing) {
-          await tx.client.updateMany({
-            where: { id: existing.id, smsConsentAt: null },
-            data: { smsConsentAt: consent, smsConsentSource: "import_attested" },
+        if (!existing) {
+          await tx.client.create({
+            data: {
+              shopId: shop.id,
+              acuityClientKey: key,
+              magicToken: randomToken(),
+              firstName: r.firstName,
+              lastName: r.lastName?.trim() || null,
+              phone,
+              email: email || null,
+              notes: r.notes?.trim() || null,
+              source: "import",
+              smsConsentAt: null, // an import is never consent - see above
+              smsConsentSource: null,
+            },
           });
+          created++;
+          continue;
         }
+
+        // 🔴 A SHARED PHONE OR EMAIL IS NOT PROOF OF THE SAME PERSON. Families
+        // share a phone; imported books share emails. The match key is only
+        // the contact, and a file carries no stable id for the person, so a
+        // row that would CHANGE or ADD TO the matched client could be a
+        // different person entirely - Mason's row filling in Jayden's last
+        // name and notes. Such a row is never written: the client is left
+        // exactly as it is and the row is skipped, with what it matched. That
+        // includes a row that would only fill a blank - ordinary fills are
+        // not completed automatically, by design.
+        // (No name rule decides this either - nicknames and name changes are
+        // real, so "same first name" proves no more than a shared phone.)
+        const incoming = {
+          firstName: r.firstName.trim(),
+          lastName: r.lastName?.trim() || "",
+          email,
+          notes: r.notes?.trim() || "",
+        };
+        const wouldChange = (["firstName", "lastName", "email", "notes"] as const).some((field) => {
+          const got = incoming[field];
+          if (!got) return false; // the file says nothing about this field
+          const have = existing[field]?.trim() ?? "";
+          return field === "notes" ? have !== got : have.toLowerCase() !== got.toLowerCase();
+        });
+        if (wouldChange) {
+          skipped.push({
+            row: i + 1,
+            reason: "matches_existing",
+            name: [incoming.firstName, incoming.lastName].filter(Boolean).join(" "),
+            matchedBy: phone ? "phone" : "email",
+            existingName: [existing.firstName, existing.lastName].filter(Boolean).join(" "),
+          });
+          continue;
+        }
+
+        // Everything the row says, the client already has: nothing is written,
+        // their consent included - whatever they have is kept as it is.
+        unchanged++;
       } catch {
         skipped.push({ row: i + 1, reason: "write_failed" });
       }
@@ -1142,7 +1174,7 @@ dashboardRouter.post("/clients/import", async (req, res) => {
     timeout: 60_000,
   });
 
-  res.status(200).json({ created, updated, skipped, total: rows.length });
+  res.status(200).json({ created, unchanged, skipped, total: rows.length });
 });
 
 // Log a visit by hand (walk-ins / shops not on Acuity). Creates a real
