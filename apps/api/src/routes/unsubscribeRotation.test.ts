@@ -103,6 +103,7 @@ async function makeClient(): Promise<{ id: string }> {
       magicToken: randomToken(),
       firstName: "Client",
       email: `c${randomToken(6)}@example.com`,
+      emailMarketingConsentAt: new Date("2026-01-01T00:00:00Z"), // said yes to marketing email
       loyaltyTier: "GOLD",
     },
     select: { id: true },

@@ -14,6 +14,9 @@ function client(over: Partial<AudienceClient> = {}): AudienceClient {
     email: "a@example.com",
     emailOptedOut: false,
     emailSuppressedAt: null,
+    // Permitted by default, so each case below tests one other rule; the
+    // permission rule has its own describe.
+    emailMarketingConsentAt: new Date("2026-01-01T00:00:00Z"),
     loyaltyTier: "GOLD",
     archivedAt: null,
     pushDevices: 1,
@@ -166,5 +169,36 @@ describe("an unsubscribe belongs to the address, not to one record", () => {
   it("does not touch push: an email choice is not an app choice", () => {
     const split = splitAudience(book(), "push", []);
     expect(split.reachable.map((c) => c.id).sort()).toEqual(["imported", "resynced", "someone-else"]);
+  });
+});
+
+describe("marketing email needs a recorded yes", () => {
+  it("an address alone - from a booking, a visit, a sync or an import - is not permission", () => {
+    const split = splitAudience(
+      [
+        client({ id: "said-yes" }),
+        client({ id: "address-only", email: "b@example.com", emailMarketingConsentAt: null }),
+      ],
+      "email",
+      [],
+    );
+    expect(split.reachable.map((c) => c.id)).toEqual(["said-yes"]);
+    expect(split.skipped.map((s) => [s.client.id, s.reason])).toEqual([["address-only", "not_permitted"]]);
+    // The compose screen shows both numbers: who agreed, and who has not yet.
+    expect(split.reasonCounts.not_permitted).toBe(1);
+  });
+
+  it("an unsubscribe still wins over an earlier yes", () => {
+    const split = splitAudience([client({ id: "left", emailOptedOut: true })], "email", []);
+    expect(split.skipped.map((s) => s.reason)).toEqual(["unsubscribed"]);
+  });
+
+  it("does not touch push", () => {
+    const split = splitAudience([client({ id: "app", emailMarketingConsentAt: null })], "push", []);
+    expect(split.reachable.map((c) => c.id)).toEqual(["app"]);
+  });
+
+  it("the barber is told it plainly", () => {
+    expect(SKIP_REASON_LABEL.not_permitted).toBe("Hasn't agreed to your marketing emails yet");
   });
 });

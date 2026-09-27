@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { BroadcastCard } from "./BroadcastCard";
-import { listBroadcastsAction, removeBroadcastAction, sendBroadcastAction } from "./broadcastActions";
+import {
+  listBroadcastsAction,
+  previewBroadcastAction,
+  removeBroadcastAction,
+  sendBroadcastAction,
+} from "./broadcastActions";
 
 vi.mock("./broadcastActions", () => ({
   listBroadcastsAction: vi.fn(async () => ({ ok: true, broadcasts: [] })),
@@ -178,5 +183,31 @@ describe("BroadcastCard from a promo", () => {
   it("drops the tiers when rewards are off", () => {
     render(<BroadcastCard rewardsEnabled={false} draft={draft} />);
     expect(screen.getByRole("button", { name: "Everyone" }).getAttribute("aria-pressed")).toBe("true");
+  });
+});
+
+describe("BroadcastCard email permission", () => {
+  it("says plainly when nobody has said yes to marketing email yet", async () => {
+    const original = vi.mocked(previewBroadcastAction).getMockImplementation();
+    vi.mocked(previewBroadcastAction).mockImplementation((async () => ({
+      ok: true,
+      preview: {
+        reachable: 0,
+        considered: 12,
+        emailsRemaining: 500,
+        limits: { subject: 60, body: 300 },
+        skipped: [{ reason: "not_permitted", count: 12, label: "Hasn't agreed to your marketing emails yet" }],
+        blocker: null,
+      },
+    })) as never);
+    try {
+      render(<BroadcastCard rewardsEnabled />);
+      openComposer();
+      fireEvent.click(screen.getByRole("button", { name: /^Email/ }));
+      expect(await screen.findByText(/No one has said yes to your marketing emails yet/)).toBeTruthy();
+      expect(screen.getByText(/12 · Hasn't agreed to your marketing emails yet/)).toBeTruthy();
+    } finally {
+      vi.mocked(previewBroadcastAction).mockImplementation(original!);
+    }
   });
 });

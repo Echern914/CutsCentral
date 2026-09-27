@@ -109,6 +109,13 @@ describe("an unsubscribed person, followed through merge, re-sync, import and a 
     await ingest(appt(8103, "+13025550183", "d.keep@example.invalid", 9));
     const onA = await byKey(`tel:${PHONE_A}`);
     const onB = await byKey(`tel:${PHONE_B}`);
+    // All three had said yes to marketing email - so what keeps the person
+    // out below is their unsubscribe, which outranks an earlier yes.
+    const control = await byKey("tel:+13025550183");
+    await prisma.client.updateMany({
+      where: { id: { in: [onA.id, onB.id, control.id] } },
+      data: { emailMarketingConsentAt: new Date("2026-01-01T00:00:00Z"), emailMarketingConsentSource: "test" },
+    });
 
     // Unsubscribe through the real link, exactly as the footer of a sent
     // broadcast offers it (a send stores the digest before mailing).

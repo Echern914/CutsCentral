@@ -1261,6 +1261,14 @@ model Client {
   // "hard_bounce" | "complaint" | "provider_error".
   emailSuppressedAt      DateTime?
   emailSuppressionReason String?
+  // 🔴 MARKETING EMAIL NEEDS A YES, recorded here with when and how - never
+  // inferred from an address, a booking, a visit or a linked account. Only a
+  // customer's own (unticked-by-default) choice, or permission documented for
+  // this one client, may set it; a checkbox over a whole import may not.
+  // Broadcast email reaches a client only while this is set and they have not
+  // unsubscribed. Appointment messages never read it.
+  emailMarketingConsentAt     DateTime?
+  emailMarketingConsentSource String?
   // 🔴 A DEDICATED, SINGLE-PURPOSE UNSUBSCRIBE CREDENTIAL - and only its hash.
   //
   // The first cut put `magicToken` in the footer of every marketing email.
