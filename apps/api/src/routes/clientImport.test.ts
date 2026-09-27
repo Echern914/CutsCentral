@@ -8,8 +8,10 @@ import { createApp } from "../app.js";
  * Bulk client import (CSV migrate-off-Booksy). Covers the behavior that matters:
  * rows become clients; TCPA-CRITICAL consent defaults OFF and is granted ONLY
  * when the barber attests AND the row has a phone; re-import is idempotent
- * (upsert by key, no duplicates), fills only blank fields - never replacing a
- * name, email or note the shop already has - and never re-stamps consent; an invalid phone is
+ * (matched by key, no duplicates) and never re-stamps consent; a row that
+ * matches an existing client by a shared phone or email but would change or add
+ * to it is NEVER written - the client is untouched and the row is listed as
+ * needing review (a family on one phone is two people); an invalid phone is
  * skipped (not stored as a reachable-looking null); cross-tenant isolation.
  */
 const app = createApp();
@@ -66,29 +68,35 @@ describe("POST /api/dashboard/clients/import", () => {
     expect(ada.phone).toBe("+13025550111"); // normalized to E.164
   });
 
-  it("re-importing a row keeps the client's own name - fill blanks, never replace", async () => {
-    // This case used to assert the OPPOSITE ("Ada" became "Ada Updated"): the
-    // re-import overwrote the shop's record while the code comment promised it
-    // only filled blanks. The promise is now what happens.
+  it("a row that differs from the client on its phone is held for review - the client is untouched", async () => {
+    // This case used to assert that "Ada" BECAME "Ada Updated": the re-import
+    // overwrote the shop's record. A shared phone is not proof it is Ada.
     const res = await imp({
       rows: [{ firstName: "Ada Updated", phone: "(302) 555-0111" }],
-      attestConsentForAll: true, // even attesting now must NOT retro-stamp on re-import...
+      attestConsentForAll: true,
     });
     expect(res.status).toBe(200);
-    expect(res.body.created).toBe(0);
-    expect(res.body.updated).toBe(0);
-    expect(res.body.unchanged).toBe(1);
-    expect(res.body.keptExisting).toBe(1); // the barber is told the names differed
+    expect(res.body).toMatchObject({ created: 0, unchanged: 0 });
+    expect(res.body.needsReview).toEqual([
+      { row: 1, name: "Ada Updated", matchedBy: "phone", existingName: "Ada" },
+    ]);
 
     const ada = await prisma.client.findFirst({ where: { shopId, phone: "+13025550111" } });
     expect(ada?.firstName).toBe("Ada");
-    // ...EXCEPT the guarded grant: existing client with null consent + attest =>
-    // consent IS granted (first-consent-wins, never overwrites a prior source).
-    expect(ada?.smsConsentAt).not.toBeNull();
-    expect(ada?.smsConsentSource).toBe("import_attested");
+    // Untouched means untouched: not even the attested consent lands on it.
+    expect(ada?.smsConsentAt).toBeNull();
 
     const count = await prisma.client.count({ where: { shopId } });
     expect(count).toBe(3); // still 3, no duplicate
+  });
+
+  it("an exact re-import with consent attested grants it to a client that has none", async () => {
+    // Everything the row says, the client already has - the row IS this record.
+    const res = await imp({ rows: [{ firstName: "Ada", phone: "(302) 555-0111" }], attestConsentForAll: true });
+    expect(res.body).toMatchObject({ created: 0, unchanged: 1, needsReview: [] });
+    const ada = await prisma.client.findFirstOrThrow({ where: { shopId, phone: "+13025550111" } });
+    expect(ada.smsConsentAt).not.toBeNull();
+    expect(ada.smsConsentSource).toBe("import_attested");
   });
 
   it("attestConsentForAll grants consent ONLY to rows with a phone", async () => {
@@ -143,7 +151,7 @@ describe("POST /api/dashboard/clients/import", () => {
 
     const again = await imp({ rows });
     expect(again.status).toBe(200);
-    expect(again.body).toMatchObject({ created: 0, updated: 0, unchanged: 2, keptExisting: 0 });
+    expect(again.body).toMatchObject({ created: 0, unchanged: 2, needsReview: [] });
     const after = await prisma.client.findMany({
       where: { shopId, firstName: { in: ["Hana", "Ivo"] } },
       orderBy: { firstName: "asc" },
@@ -161,7 +169,7 @@ describe("POST /api/dashboard/clients/import", () => {
     }
   });
 
-  it("keeps the owner's edits and fills only what is still blank", async () => {
+  it("keeps the owner's edits, and fills nothing - not even a blank", async () => {
     const first = await imp({
       rows: [{ firstName: "Gia", phone: "(302) 555-0444", email: "gia@old.example" }],
     });
@@ -192,31 +200,72 @@ describe("POST /api/dashboard/clients/import", () => {
         },
       ],
     });
-    expect(again.body).toMatchObject({ created: 0, updated: 1, unchanged: 0, keptExisting: 1 });
+    expect(again.body).toMatchObject({ created: 0, unchanged: 0 });
+    expect(again.body.needsReview).toEqual([
+      { row: 1, name: "Gia Rossi", matchedBy: "phone", existingName: "Giovanna" },
+    ]);
     const after = await prisma.client.findUniqueOrThrow({ where: { id: gia.id } });
     expect(after.firstName).toBe("Giovanna");
     expect(after.email).toBe("gia@new.example");
     expect(after.notes).toBe("VIP - books Fridays");
-    expect(after.lastName).toBe("Rossi"); // the one blank, filled
+    expect(after.lastName).toBeNull(); // a blank is not filled on a shared phone's say-so
   });
 
-  it("fills a blank note and last name from a later export, and counts it", async () => {
+  it("a row that would only fill blanks is held for review too", async () => {
     await imp({ rows: [{ firstName: "Kai", phone: "(302) 555-0666" }] });
     const again = await imp({
       rows: [{ firstName: "Kai", lastName: "Lee", phone: "(302) 555-0666", notes: "Skin fade, #1 sides" }],
     });
-    expect(again.body).toMatchObject({ created: 0, updated: 1, unchanged: 0, keptExisting: 0 });
+    expect(again.body).toMatchObject({ created: 0, unchanged: 0 });
+    expect(again.body.needsReview).toHaveLength(1);
     const kai = await prisma.client.findFirstOrThrow({ where: { shopId, phone: "+13025550666" } });
-    expect(kai.lastName).toBe("Lee");
-    expect(kai.notes).toBe("Skin fade, #1 sides");
+    expect(kai.lastName).toBeNull();
+    expect(kai.notes).toBeNull();
   });
 
-  it("does not call a differently-cased email a difference", async () => {
+  it("🔴 two family members on one phone: the second is never written onto the first", async () => {
+    // Same file: Jayden is added; Mason, on the same phone, is held.
+    const res = await imp({
+      rows: [
+        { firstName: "Jayden", lastName: "Park", phone: "(302) 555-0777" },
+        { firstName: "Mason", lastName: "Park", phone: "(302) 555-0777", notes: "Buzz cut, #2" },
+      ],
+      attestConsentForAll: true,
+    });
+    expect(res.body.created).toBe(1);
+    expect(res.body.needsReview).toEqual([
+      { row: 2, name: "Mason Park", matchedBy: "phone", existingName: "Jayden Park" },
+    ]);
+
+    // A later file: Mason again, and a note - still never onto Jayden.
+    const later = await imp({
+      rows: [{ firstName: "Mason", phone: "302-555-0777", email: "mason.park@example.com", notes: "Buzz cut, #2" }],
+    });
+    expect(later.body).toMatchObject({ created: 0, unchanged: 0 });
+    expect(later.body.needsReview).toHaveLength(1);
+
+    const onPhone = await prisma.client.findMany({ where: { shopId, phone: "+13025550777" } });
+    expect(onPhone).toHaveLength(1);
+    const jayden = onPhone[0]!;
+    expect([jayden.firstName, jayden.lastName, jayden.email, jayden.notes]).toEqual(["Jayden", "Park", null, null]);
+  });
+
+  it("a shared email is held for review the same way", async () => {
+    await imp({ rows: [{ firstName: "Rae", email: "family@example.com" }] });
+    const res = await imp({ rows: [{ firstName: "Sol", email: "Family@Example.com" }] });
+    expect(res.body.needsReview).toEqual([
+      { row: 1, name: "Sol", matchedBy: "email", existingName: "Rae" },
+    ]);
+    const rae = await prisma.client.findFirstOrThrow({ where: { shopId, acuityClientKey: "mail:family@example.com" } });
+    expect(rae.firstName).toBe("Rae");
+  });
+
+  it("does not call a differently-cased email or name a difference", async () => {
     await imp({ rows: [{ firstName: "Jo", phone: "(302) 555-0555", email: "Jo@Example.com" }] });
     const again = await imp({
-      rows: [{ firstName: "Jo", phone: "(302) 555-0555", email: "jo@example.com" }],
+      rows: [{ firstName: "JO", phone: "(302) 555-0555", email: "jo@example.com" }],
     });
-    expect(again.body).toMatchObject({ unchanged: 1, keptExisting: 0 });
+    expect(again.body).toMatchObject({ unchanged: 1, needsReview: [] });
   });
 
   it("skips a supplied-but-invalid phone rather than storing a misleading null", async () => {

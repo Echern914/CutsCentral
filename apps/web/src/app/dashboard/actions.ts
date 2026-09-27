@@ -211,15 +211,24 @@ export interface ImportClientRow {
   notes?: string;
 }
 
+/**
+ * A row that matched an existing client by a shared phone or email but would
+ * have changed it. Nothing was written; the owner decides.
+ */
+export interface ImportReviewRow {
+  row: number;
+  name: string;
+  matchedBy: "phone" | "email";
+  existingName: string;
+}
+
 export interface ImportResult {
   ok: boolean;
   created?: number;
-  /** Existing clients that had blanks this import filled. */
-  updated?: number;
   /** Existing clients that already had everything the row carried. */
   unchanged?: number;
-  /** Existing clients whose details differed from the row - theirs were kept. */
-  keptExisting?: number;
+  /** Rows held back because a shared contact is not proof of the same person. */
+  needsReview?: ImportReviewRow[];
   total?: number;
   skipped?: { row: number; reason: string }[];
   error?: string;
@@ -237,9 +246,8 @@ export async function importClientsAction(
   if (rows.length === 0) return { ok: false, error: "No rows to import." };
   const res = await apiSend<{
     created: number;
-    updated: number;
     unchanged?: number;
-    keptExisting?: number;
+    needsReview?: ImportReviewRow[];
     total: number;
     skipped: { row: number; reason: string }[];
   }>("POST", "/api/dashboard/clients/import", { rows, attestConsentForAll });

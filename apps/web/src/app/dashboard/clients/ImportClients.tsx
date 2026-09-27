@@ -18,6 +18,8 @@ const field =
  * cap; results are summed across batches.
  */
 const BATCH = 500;
+/** How many held-back rows to list by name; the count always shows. */
+const REVIEW_SHOWN = 50;
 
 /** Minimal RFC-4180-ish CSV parser: handles quotes, escaped "", CRLF. */
 function parseCsv(text: string): string[][] {
@@ -141,9 +143,8 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
       const totals: ImportResult = {
         ok: true,
         created: 0,
-        updated: 0,
         unchanged: 0,
-        keptExisting: 0,
+        needsReview: [],
         total: 0,
         skipped: [],
       };
@@ -154,15 +155,16 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
           return;
         }
         totals.created! += r.created ?? 0;
-        totals.updated! += r.updated ?? 0;
         totals.unchanged! += r.unchanged ?? 0;
-        totals.keptExisting! += r.keptExisting ?? 0;
         totals.total! += r.total ?? 0;
-        totals.skipped!.push(...(r.skipped ?? []));
+        // The server numbers rows within its batch; the owner reads the FILE.
+        totals.skipped!.push(...(r.skipped ?? []).map((s) => ({ ...s, row: s.row + i })));
+        totals.needsReview!.push(...(r.needsReview ?? []).map((s) => ({ ...s, row: s.row + i })));
       }
       setResult(totals);
       toast(
-        `Imported ${totals.created} new, filled in ${totals.updated}` +
+        `Imported ${totals.created} new` +
+          (totals.needsReview!.length ? `, ${totals.needsReview!.length} to review` : "") +
           (totals.skipped!.length ? `, skipped ${totals.skipped!.length}` : ""),
         "success",
       );
@@ -239,11 +241,15 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
         {result && (
           <div className="rounded-xl border border-subtle bg-charcoal-700/50 p-4 text-sm">
             <p className="text-offwhite">
-              Done — <span className="font-semibold text-gold">{result.created}</span> added,{" "}
-              <span className="font-semibold">{result.updated}</span> filled in
+              Done — <span className="font-semibold text-gold">{result.created}</span> added
               {(result.unchanged ?? 0) > 0 && (
                 <>
                   , <span className="font-semibold">{result.unchanged}</span> already up to date
+                </>
+              )}
+              {result.needsReview && result.needsReview.length > 0 && (
+                <>
+                  , <span className="font-semibold text-gold">{result.needsReview.length}</span> need review
                 </>
               )}
               {result.skipped && result.skipped.length > 0 && (
@@ -253,11 +259,31 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
               )}
               .
             </p>
-            {(result.keptExisting ?? 0) > 0 && (
-              <p className="mt-1 text-xs text-muted">
-                {result.keptExisting} {result.keptExisting === 1 ? "client already had" : "clients already had"}{" "}
-                a different name, email or note on file. We kept yours and only filled in what was blank.
-              </p>
+            {result.needsReview && result.needsReview.length > 0 && (
+              <div className="mt-2">
+                <p className="text-xs leading-relaxed text-muted">
+                  Needs review: these rows share a phone or email with a client you already
+                  have, but we can&apos;t tell whether they&apos;re the same person — families
+                  often share a phone. We left your client exactly as it was. If the row is
+                  someone new, add them by hand; if it&apos;s the same person, update their
+                  details on their page.
+                </p>
+                <ul className="mt-2 space-y-1 text-xs">
+                  {result.needsReview.slice(0, REVIEW_SHOWN).map((r) => (
+                    <li key={r.row} className="min-w-0 truncate text-offwhite">
+                      Row {r.row} · {r.name}{" "}
+                      <span className="text-muted">
+                        — same {r.matchedBy} as {r.existingName || "an existing client"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {result.needsReview.length > REVIEW_SHOWN && (
+                  <p className="mt-1 text-xs text-muted">
+                    and {result.needsReview.length - REVIEW_SHOWN} more.
+                  </p>
+                )}
+              </div>
             )}
             {result.skipped && result.skipped.length > 0 && (
               <p className="mt-1 text-xs text-muted">
