@@ -122,6 +122,60 @@ describe("sweepShop", () => {
     expect(sent[0]!.from).toBeUndefined();
   });
 
+  it("a shop that switched to ChairBack booking sends its booking page, not the old link", async () => {
+    // Switching never clears the saved outside link; the rebook text must not
+    // send the customer back to the system the shop left.
+    const switched = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Switched Cuts",
+        slug: `nudge-switched-${randomToken(5)}`,
+        bookingMode: "native",
+        bookingUrl: "https://old-acuity.test/schedule.php",
+        webhookSecret: randomToken(),
+        dailySendCap: 5,
+        nudgeBufferDays: 7,
+      },
+    });
+    try {
+      await makeOverdueClient(switched.id, "tel:+13025553001", "+13025553001");
+      const summary = await sweepShop(switched, { now: NOW, dryRun: false });
+      expect(summary.sent).toBe(1);
+      expect(sent[0]!.body).toContain(`/book/${switched.slug}`);
+      expect(sent[0]!.body).not.toContain("old-acuity.test");
+    } finally {
+      await prisma.shop.delete({ where: { id: switched.id } });
+    }
+  });
+
+  it("a ChairBack-booking shop that never saved a link keeps the one-link text it always sent", async () => {
+    // Nothing was wrong with these texts. A second link would lengthen every
+    // one this shop sends - the two-link body's "•" is not GSM-7 - so the
+    // link rule leaves them exactly as they were (bookingLinks.ts).
+    const plain = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Plain Cuts",
+        slug: `nudge-plain-${randomToken(5)}`,
+        bookingMode: "native",
+        bookingUrl: null,
+        webhookSecret: randomToken(),
+        dailySendCap: 5,
+        nudgeBufferDays: 7,
+      },
+    });
+    try {
+      await makeOverdueClient(plain.id, "tel:+13025553002", "+13025553002");
+      const summary = await sweepShop(plain, { now: NOW, dryRun: false });
+      expect(summary.sent).toBe(1);
+      expect(sent[0]!.body).toContain("/r/");
+      expect(sent[0]!.body).not.toContain("/book/");
+      expect(sent[0]!.body).not.toContain("•");
+    } finally {
+      await prisma.shop.delete({ where: { id: plain.id } });
+    }
+  });
+
   it("sends nudges FROM the shop's own number when it has one", async () => {
     const own = "+15550101010";
     const numShop = await prisma.shop.create({

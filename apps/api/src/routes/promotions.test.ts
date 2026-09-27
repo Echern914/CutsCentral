@@ -211,6 +211,8 @@ describe("promotions", () => {
       expect(m.body).toContain("Spring Special");
       expect(m.body).toContain("SPRING20");
       expect(m.body).toMatch(/reply stop/i);
+      // A shop on its own booking link sends customers to that link.
+      expect(m.body).toContain("Book: https://promo.test");
     }
 
     const list = await request(app).get("/api/promos").set("Cookie", cookieA);
@@ -364,5 +366,48 @@ describe("promotions", () => {
     const list = await request(app).get("/api/promos").set("Cookie", cookieA);
     const promo = list.body.promotions.find((p: { id: string }) => p.id === promoId);
     expect(promo.status).toBe("off");
+  });
+});
+
+/**
+ * WHERE A PROMO'S "Book:" LINE GOES. A shop that switched to ChairBack booking
+ * keeps its old outside link saved - switching never clears it - and the promo
+ * used to print that link, sending customers back to the system the shop left.
+ */
+describe("a promo's Book line follows the booking mode", () => {
+  it("a shop on ChairBack booking prints its booking page, not the old saved link", async () => {
+    await prisma.shop.update({ where: { id: shopIdA }, data: { bookingMode: "native" } });
+    try {
+      const phone = "+13025550155";
+      await forShop(shopIdA).client.upsert({
+        where: { shopId_acuityClientKey: { shopId: shopIdA, acuityClientKey: `tel:${phone}` } },
+        create: {
+          acuityClientKey: `tel:${phone}`,
+          magicToken: randomToken(),
+          firstName: "Switched",
+          phone,
+          smsConsentAt: new Date("2026-01-01T00:00:00Z"),
+          smsConsentSource: "barber_attest",
+        },
+        update: {},
+      });
+      const promo = await request(app)
+        .post("/api/promos")
+        .set("Cookie", cookieA)
+        .send({ kind: "PERCENT_OFF", title: "Switch Special", code: "SWITCH10", percentOff: 10 });
+      expect(promo.status).toBe(201);
+      const blast = await request(app)
+        .post(`/api/promos/${promo.body.id as string}/blast`)
+        .set("Cookie", cookieA)
+        .send({ audience: "all", dryRun: false });
+      expect(blast.status).toBe(200);
+      const mine = sentBodies.filter((m) => m.to === phone);
+      expect(mine).toHaveLength(1);
+      const slug = (await prisma.shop.findUniqueOrThrow({ where: { id: shopIdA } })).slug;
+      expect(mine[0]!.body).toContain(`/book/${slug}`);
+      expect(mine[0]!.body).not.toContain("promo.test");
+    } finally {
+      await prisma.shop.update({ where: { id: shopIdA }, data: { bookingMode: "link" } });
+    }
   });
 });

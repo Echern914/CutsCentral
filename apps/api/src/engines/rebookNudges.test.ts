@@ -275,3 +275,62 @@ describe("runRebookNudges", () => {
     expect((await apptStamp(id))!.rebookPromptSentAt).not.toBeNull();
   });
 });
+
+/**
+ * WHERE THE TAP GOES. The push used to deep-link to /book/<slug> for every shop,
+ * which is a dead end for a shop that books through Acuity; and a shop that
+ * switched to ChairBack booking keeps its old Acuity link saved, which must not
+ * win. Both follow the shared rule (config/bookingLinks.ts).
+ */
+describe("the rebook push lands where the shop takes bookings now", () => {
+  const ACUITY_LINK = "https://rebook-studio.as.me/schedule.php";
+  const restore = () =>
+    prisma.shop.update({
+      where: { id: shopId },
+      data: { bookingMode: "native", bookingUrl: null, publicPageEnabled: true },
+    });
+
+  it("a shop on ChairBack booking lands on its booking page, not the old Acuity link", async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { bookingUrl: ACUITY_LINK } });
+    try {
+      await seedAppt({ endedMinAgo: 45, clientId: await makeClient() });
+      expect(await runRebookNudges(NOW)).toBe(1);
+      const slug = (await prisma.shop.findUniqueOrThrow({ where: { id: shopId } })).slug;
+      expect(pushes[0]!.url).toMatch(new RegExp(`/book/${slug}$`));
+    } finally {
+      await restore();
+    }
+  });
+
+  it("a shop booking through Acuity lands on its Acuity link, not a /book/ 404", async () => {
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { bookingMode: "acuity", bookingUrl: ACUITY_LINK },
+    });
+    try {
+      await seedVisit({ endedMinAgo: 45, clientId: await makeClient() });
+      expect(await runRebookNudges(NOW)).toBe(1);
+      expect(pushes[0]!.url).toBe(ACUITY_LINK);
+    } finally {
+      await restore();
+    }
+  });
+
+  it("with nowhere to book online, lands on the customer's own rewards page - never ChairBack's home", async () => {
+    // A synced shop that never saved its Acuity link - common enough that the
+    // dashboard has a prompt for it.
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { bookingMode: "acuity", bookingUrl: null },
+    });
+    try {
+      const clientId = await makeClient();
+      await seedVisit({ endedMinAgo: 45, clientId });
+      expect(await runRebookNudges(NOW)).toBe(1);
+      const { magicToken } = await prisma.client.findUniqueOrThrow({ where: { id: clientId } });
+      expect(pushes[0]!.url).toMatch(new RegExp(`/r/${magicToken}$`));
+    } finally {
+      await restore();
+    }
+  });
+});

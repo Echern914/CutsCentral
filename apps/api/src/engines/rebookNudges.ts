@@ -1,4 +1,5 @@
 import { apiEnv } from "@chairback/config";
+import { bookNowUrl } from "@chairback/config/bookingLinks";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { sendPushToClient } from "../messaging/push.js";
@@ -53,6 +54,8 @@ interface Candidate {
   shopId: string;
   clientId: string;
   serviceName: string | null;
+  /** For the fallback link - read with the candidate, never between claim and send. */
+  magicToken: string | null;
 }
 
 /** Shop slice the nudge needs (owner read - Shop is default-deny in tenant tx). */
@@ -60,6 +63,9 @@ interface NudgeShop {
   name: string;
   slug: string | null;
   rebookPushEnabled: boolean;
+  bookingMode: string;
+  bookingUrl: string | null;
+  publicPageEnabled: boolean;
 }
 
 export async function runRebookNudges(now = new Date()): Promise<number> {
@@ -83,6 +89,7 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
         shopId: true,
         clientId: true,
         service: { select: { name: true } },
+        client: { select: { magicToken: true } },
       },
       take: 500,
     }),
@@ -103,6 +110,7 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
         createdAt: true,
         endAt: true,
         scheduledAt: true,
+        client: { select: { magicToken: true } },
       },
       take: 500,
     }),
@@ -115,6 +123,7 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
       shopId: a.shopId,
       clientId: a.clientId!,
       serviceName: a.service?.name ?? null,
+      magicToken: a.client?.magicToken ?? null,
     })),
     // 🔴 Never for imported history (syncedVisitTrust.ts, rule 2): a cut
     // ChairBack first heard about after it ended - however recently - is not
@@ -125,6 +134,7 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
       shopId: v.shopId,
       clientId: v.clientId,
       serviceName: v.serviceName,
+      magicToken: v.client.magicToken,
     })),
   ];
   if (candidates.length === 0) return 0;
@@ -137,7 +147,14 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
     if (shop === undefined) {
       shop = await prisma.shop.findUnique({
         where: { id: c.shopId },
-        select: { name: true, slug: true, rebookPushEnabled: true },
+        select: {
+          name: true,
+          slug: true,
+          rebookPushEnabled: true,
+          bookingMode: true,
+          bookingUrl: true,
+          publicPageEnabled: true,
+        },
       });
       shopCache.set(c.shopId, shop);
     }
@@ -170,10 +187,13 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
           });
     if (claimed.count === 0) continue;
 
-    // Deep-link to the shop's own booking page when it has a slug; the app
-    // handles the rest. No slug (rare, legacy) -> the client's home.
+    // Deep-link to wherever this shop takes bookings now (bookingLinks.ts):
+    // its ChairBack booking page, or its Acuity/own link - a /book/ link for a
+    // shop that books elsewhere was a dead end. Nowhere online (a synced shop
+    // with no link saved, a page switched off) -> the customer's own rewards
+    // page, as the nudge and win-back do - never ChairBack's home page.
     const base = apiEnv().APP_BASE_URL;
-    const url = shop.slug ? `${base}/book/${shop.slug}` : base;
+    const url = bookNowUrl(shop, base) ?? (c.magicToken ? `${base}/r/${c.magicToken}` : base);
     const res = await sendPushToClient({
       shopId: c.shopId,
       clientId: c.clientId,

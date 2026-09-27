@@ -44,6 +44,9 @@
  * move - only the prose does.
  */
 import type { BusinessVocabulary } from "@chairback/config";
+// Whether a saved link is one a customer can open - the same check every "Book"
+// surface uses, so Go Live and the buttons cannot disagree.
+import { isUsableBookingLink } from "@chairback/config/bookingLinks";
 
 /** How hard an item is. */
 export type ReadinessClass = "required" | "conditional" | "recommended" | "info";
@@ -472,26 +475,6 @@ function isNative(f: ReadinessFacts): boolean {
   return f.bookingMode === "native";
 }
 
-/**
- * Could a customer actually open this saved booking link?
- *
- * The rule the write path enforces (`httpUrl` in routes/shops.ts: a real URL
- * with an http(s) scheme), checked again here because readiness reads the
- * stored row, and a value that reached the row any other way never met it. A
- * link that fails is a Book button that goes nowhere - no destination at all.
- */
-function isUsableBookingLink(url: string | null): boolean {
-  const value = url?.trim();
-  if (!value) return false;
-  try {
-    const parsed = new URL(value);
-    return (
-      (parsed.protocol === "https:" || parsed.protocol === "http:") && parsed.hostname !== ""
-    );
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Can this ONE chair take a booking by itself? Active, works some day, offers a

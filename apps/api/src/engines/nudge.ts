@@ -1,4 +1,5 @@
 import { NUDGE, apiEnv } from "@chairback/config";
+import { messageBookingUrl } from "@chairback/config/bookingLinks";
 import { forShop, prisma, runWithShop, type Shop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { buildNudgeBody, buildNudgePush } from "../messaging/templates.js";
@@ -275,9 +276,10 @@ async function doSweepShop(
         kind: "nudge",
         payload: {
           ...push,
-          // The rebooking CTA: send them to book. Fall back to the rewards page
-          // when the shop has no booking URL configured.
-          url: shop.bookingUrl || `${env.APP_BASE_URL}/r/${client.magicToken}`,
+          // The rebooking CTA: send them to book - wherever this shop takes
+          // bookings NOW (bookingLinks.ts), not a link left over from before a
+          // switch. Fall back to the rewards page when there is nowhere online.
+          url: messageBookingUrl(shop, env.APP_BASE_URL) ?? `${env.APP_BASE_URL}/r/${client.magicToken}`,
           tag: "rebook",
         },
       });
@@ -302,7 +304,7 @@ async function doSweepShop(
     const body = buildNudgeBody({
       firstName: client.firstName,
       shopName: shop.name,
-      bookingUrl: shop.bookingUrl,
+      bookingUrl: messageBookingUrl(shop, env.APP_BASE_URL),
       magicToken: client.magicToken,
       template: shop.smsTemplate,
       industry: shop.industry,

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { redactForAudit } from "../messaging/auditBody.js";
+import { messageBookingUrl } from "@chairback/config/bookingLinks";
 import { forShop, prisma, runAsOwner, runWithShop, Prisma } from "@chairback/db"; // runWithShop: batch a page's tenant reads into one connection
 import {
   NUDGE,
@@ -429,7 +430,10 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
     kind: "nudge",
     payload: {
       ...push,
-      url: shop.bookingUrl || `${apiEnv().APP_BASE_URL}/r/${client.magicToken}`,
+      // Wherever this shop takes bookings now (bookingLinks.ts).
+      url:
+        messageBookingUrl(shop, apiEnv().APP_BASE_URL) ??
+        `${apiEnv().APP_BASE_URL}/r/${client.magicToken}`,
       tag: "rebook",
     },
   });
@@ -501,7 +505,7 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
   const body = buildNudgeBody({
     firstName: client.firstName,
     shopName: shop.name,
-    bookingUrl: shop.bookingUrl,
+    bookingUrl: messageBookingUrl(shop, apiEnv().APP_BASE_URL),
     magicToken: client.magicToken,
     template: shop.smsTemplate,
     industry: shop.industry,
@@ -1746,7 +1750,7 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
     const body = buildNudgeBody({
       firstName: client.firstName,
       shopName: shop.name,
-      bookingUrl: shop.bookingUrl,
+      bookingUrl: messageBookingUrl(shop, apiEnv().APP_BASE_URL),
       magicToken: client.magicToken,
       template: shop.smsTemplate,
       industry: shop.industry,
