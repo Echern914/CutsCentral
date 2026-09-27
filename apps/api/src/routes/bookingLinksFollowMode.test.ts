@@ -120,3 +120,37 @@ describe("after it starts taking bookings in ChairBack (the Acuity link still sa
     );
   });
 });
+
+describe('"Book the usual" on the rewards page', () => {
+  it("is offered on ChairBack booking, and withdrawn while the page is off", async () => {
+    const staff = await prisma.staff.create({ data: { shopId, name: "Dre" } });
+    const service = await prisma.service.create({ data: { shopId, name: "Fade", durationMin: 30 } });
+    const clientRow = await prisma.client.findFirstOrThrow({ where: { shopId, magicToken } });
+    const startsAt = new Date(Date.now() - 20 * 86_400_000);
+    await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId: staff.id,
+        serviceId: service.id,
+        clientId: clientRow.id,
+        firstName: "Casey",
+        status: "COMPLETED",
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+        manageToken: randomToken(),
+      },
+    });
+    const usual = async () =>
+      (await request(app).get(`/api/rewards/${magicToken}`)).body.usual as { url: string } | null;
+
+    await setShop({ bookingMode: "native", publicPageEnabled: true });
+    try {
+      expect((await usual())?.url).toContain(`/book/${slug}?service=`);
+      // The booking page refuses a shop whose page is off - so no button to it.
+      await setShop({ publicPageEnabled: false });
+      expect(await usual()).toBeNull();
+    } finally {
+      await setShop({ bookingMode: "acuity", publicPageEnabled: true });
+    }
+  });
+});
