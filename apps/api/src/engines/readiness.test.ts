@@ -653,6 +653,35 @@ describe("booking mode decides what Go Live asks for", () => {
     expect(r.milestonesApplicable).toBe(4);
   });
 
+  it("drops leftover ChairBack-booking advice from a shop that moved to Acuity", () => {
+    // Menu, a half-set-up second chair and approval mode, all from its native days.
+    const leftovers: Partial<ReadinessFacts> = {
+      staff: [
+        ready().staff[0]!,
+        { ...ready().staff[0]!, id: "staff_2", name: "Marcus", availabilityRuleCount: 0 },
+      ],
+      services: [{ ...ready().services[0]!, hasPrice: false }],
+      activeOfferingPairs: 1,
+      recipients: ready().recipients,
+      requireBookingApproval: true,
+    };
+    const advice = (r: ReadinessReport) => [
+      ...r.improve
+        .map((i) => i.id)
+        .filter((id) => id === "improve.other_chairs" || id === "improve.service_prices"),
+      ...(find(r, "approval.watched")!.applicable ? ["approval.watched"] : []),
+    ];
+    // Control: on ChairBack booking, the same shop IS given all three.
+    expect(advice(buildReadiness(acuityShop({ ...leftovers, bookingMode: "native" }), CAPS)).sort()).toEqual([
+      "approval.watched",
+      "improve.other_chairs",
+      "improve.service_prices",
+    ]);
+    const r = buildReadiness(acuityShop(leftovers), CAPS);
+    expect(advice(r)).toEqual([]);
+    expect(r.canGoLive).toBe(true);
+  });
+
   it("gives a barber on an Acuity shop nothing booking-related to set up", () => {
     const r = buildReadiness(
       acuityShop({
