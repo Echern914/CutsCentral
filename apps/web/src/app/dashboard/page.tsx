@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { shareUrl } from "@chairback/config/bookingLinks";
 import { apiGet, apiSend } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { homeWithoutShop } from "@/lib/partnerHome";
@@ -30,6 +31,8 @@ interface ShopMe extends ShopSettings {
   connected: boolean;
   /** URL handle for the public booking page; null until one is picked. */
   slug: string | null;
+  /** Decides which link the shop hands out - see shareUrl. */
+  bookingMode: string;
 }
 
 /** Counters behind the home-screen referral row (full list lives on its page). */
@@ -134,6 +137,11 @@ export default async function DashboardPage({
   // the login page - let error.tsx render its "Try again" instead.
   if (!shopRes.ok || !shopRes.data) throw new Error("Failed to load your shop");
   const shop = shopRes.data;
+  // The link this shop hands out - copied, shared, printed as a QR code. The
+  // booking page on ChairBack booking; otherwise the shop's page, whose Book
+  // button goes to Acuity or its own link. It used to be /book/<slug> for
+  // everyone, which is a 404 for a shop that books anywhere else.
+  const handOutUrl = shareUrl(shop, appBase);
 
   // Narrow the ±36h agenda window to the shop's OWN calendar day. Comparing
   // en-CA ("YYYY-MM-DD") renderings in the shop tz keeps this off the server's
@@ -182,13 +190,13 @@ export default async function DashboardPage({
         <ShopIdentity
           shopName={shop.name}
           avatarUrl={me.data?.avatarUrl}
-          publicUrl={shop.slug ? `${appBase}/book/${shop.slug}` : null}
+          publicUrl={handOutUrl}
           connected={shop.connected}
         />
         <QuickActions
           rewardsEnabled={shop.rewardsEnabled}
         affiliateProgramEnabled={affiliateProgramEnabled}
-          bookUrl={shop.slug ? `${appBase}/book/${shop.slug}` : null}
+          bookUrl={handOutUrl}
           shopName={shop.name}
         />
       </div>
@@ -212,10 +220,10 @@ export default async function DashboardPage({
       {/* "How do I book you?" gets asked at the chair, so the answer belongs on
           the page the barber already has open - not three taps into Booking →
           Settings. Same card that tab renders; needs a slug to point at. */}
-      {shop.slug && (
+      {handOutUrl && (
         // `id` is the registry's deep link (FEATURE_INDEX "qr-code").
         <div id="qr">
-          <HomeQrCard bookUrl={`${appBase}/book/${shop.slug}`} shopName={shop.name} />
+          <HomeQrCard bookUrl={handOutUrl} shopName={shop.name} />
         </div>
       )}
 

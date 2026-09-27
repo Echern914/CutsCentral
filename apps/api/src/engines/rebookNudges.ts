@@ -1,4 +1,5 @@
 import { apiEnv } from "@chairback/config";
+import { bookNowUrl } from "@chairback/config/bookingLinks";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { sendPushToClient } from "../messaging/push.js";
@@ -59,6 +60,9 @@ interface NudgeShop {
   name: string;
   slug: string | null;
   rebookPushEnabled: boolean;
+  bookingMode: string;
+  bookingUrl: string | null;
+  publicPageEnabled: boolean;
 }
 
 export async function runRebookNudges(now = new Date()): Promise<number> {
@@ -125,7 +129,14 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
     if (shop === undefined) {
       shop = await prisma.shop.findUnique({
         where: { id: c.shopId },
-        select: { name: true, slug: true, rebookPushEnabled: true },
+        select: {
+          name: true,
+          slug: true,
+          rebookPushEnabled: true,
+          bookingMode: true,
+          bookingUrl: true,
+          publicPageEnabled: true,
+        },
       });
       shopCache.set(c.shopId, shop);
     }
@@ -158,10 +169,11 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
           });
     if (claimed.count === 0) continue;
 
-    // Deep-link to the shop's own booking page when it has a slug; the app
-    // handles the rest. No slug (rare, legacy) -> the client's home.
+    // Deep-link to wherever this shop takes bookings now (bookingLinks.ts):
+    // its ChairBack booking page, or its Acuity/own link - a /book/ link for a
+    // shop that books elsewhere was a dead end. Nowhere online (rare) -> home.
     const base = apiEnv().APP_BASE_URL;
-    const url = shop.slug ? `${base}/book/${shop.slug}` : base;
+    const url = bookNowUrl(shop, base) ?? base;
     const res = await sendPushToClient({
       shopId: c.shopId,
       clientId: c.clientId,

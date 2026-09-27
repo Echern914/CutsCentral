@@ -13,6 +13,7 @@ import {
   formatShopAddress,
   mapsUrlFor,
 } from "@chairback/config";
+import { bookNowUrl } from "@chairback/config/bookingLinks";
 import { buildLoyaltyView } from "../services/loyaltyView.js";
 import { loadClientTierStats } from "../engines/tierStats.js";
 import { consentView, optInClientInTx, optOutClientInTx } from "../services/clientConsent.js";
@@ -301,7 +302,12 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
   // rendered for anybody. The native booking page is /book/<slug>, and this is
   // the one place that knows both the slug and APP_BASE_URL.
   const usual =
-    lastAppointment && client.shop.slug && client.shop.bookingMode === "native"
+    lastAppointment &&
+    client.shop.slug &&
+    client.shop.bookingMode === "native" &&
+    // The booking page refuses a shop whose page is off - as the note above
+    // says, and as the code did not check.
+    client.shop.publicPageEnabled
       ? {
           serviceId: lastAppointment.serviceId,
           staffId: lastAppointment.staffId,
@@ -386,7 +392,9 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     shop: {
       name: client.shop.name,
       rewardsEnabled: rewardsOn,
-      bookingUrl: client.shop.bookingUrl,
+      // Where "Book" goes NOW (bookingLinks.ts) - not the raw column, which on
+      // a shop that switched to ChairBack booking still holds the old Acuity link.
+      bookingUrl: bookNowUrl(client.shop, env.APP_BASE_URL),
       logoUrl: client.shop.logoUrl,
       accentColor: client.shop.accentColor,
       // The barber's full page identity, so the client rewards page renders in

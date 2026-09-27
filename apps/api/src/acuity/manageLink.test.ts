@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { ingestAppointment } from "../ingest.js";
+import { runSyncedVisitReminders } from "../engines/syncedVisitReminders.js";
+import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 import type { AcuityAppointment } from "./types.js";
 
 /**
@@ -154,5 +156,46 @@ describe("🔴 the refresh IS the backfill", () => {
       canClientReschedule: false,
     });
     expect((await visitFor(a.id)).customerCanReschedule).toBe(false);
+  });
+});
+
+/**
+ * 🔴 A BOOKING THAT STAYS IN ACUITY IS MANAGED IN ACUITY - EVEN AFTER THE SWITCH.
+ *
+ * When a shop starts taking NEW bookings in ChairBack, its existing Acuity
+ * appointments stay in Acuity. ChairBack holds no manage token for them, so
+ * their reminder must keep pointing at Acuity's own page for that appointment -
+ * never at "where Book goes", which would make a second booking instead.
+ */
+describe("after the shop starts taking bookings in ChairBack", () => {
+  it("a visit still in Acuity keeps Acuity's manage link in its reminder", async () => {
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { bookingMode: "native", slug: `mlc-${randomToken(5)}`, compAccess: true, timezone: "UTC" },
+    });
+    const sent: SendEmailInput[] = [];
+    __setSendEmailForTests(async (input) => {
+      sent.push(input);
+      return { id: `t-${sent.length}`, status: "sent" as const };
+    });
+    try {
+      const now = new Date();
+      const a = appt({
+        datetime: new Date(now.getTime() + 3 * 3600_000).toISOString(),
+        confirmationPage: CONFIRMATION,
+        canClientReschedule: true,
+        canClientCancel: true,
+      });
+      await ingestAppointment(await shopRow(), "scheduled", a.id, a);
+      await runSyncedVisitReminders(now);
+      const mine = sent.filter((m) => m.to === a.email);
+      expect(mine).toHaveLength(1);
+      const content = `${mine[0]!.text ?? ""}\n${mine[0]!.html ?? ""}`;
+      expect(content).toContain("app.acuityscheduling.com/schedule.php");
+      expect(content).not.toContain("/book/");
+    } finally {
+      __setSendEmailForTests(undefined);
+      await prisma.shop.update({ where: { id: shopId }, data: { bookingMode: "link", compAccess: false } });
+    }
   });
 });

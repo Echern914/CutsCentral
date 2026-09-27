@@ -116,6 +116,20 @@ describe("sweepShopWinback", () => {
     expect(nudge?.body).toContain("missed you");
   });
 
+  it("a shop that switched to ChairBack booking sends its booking page, not the old link", async () => {
+    // Switching never clears the saved outside link; the text must not use it.
+    const shop = await makeShop({
+      bookingMode: "native",
+      slug: `wb-switched-${randomToken(5)}`,
+      bookingUrl: "https://old-acuity.test/schedule.php",
+    });
+    await makeLapsedClient(shop.id, "tel:+13025552091", "+13025552091", 120);
+    const summary = await sweepShopWinback(shop, { now: NOW, dryRun: false });
+    expect(summary.sent).toBe(1);
+    expect(sent[0]!.body).toContain(`/book/${shop.slug}`);
+    expect(sent[0]!.body).not.toContain("old-acuity.test");
+  });
+
   it("a merely-overdue client (past median+buffer but not the multiple) is NOT swept", async () => {
     const shop = await makeShop();
     // 60 days lapsed: a regular-nudge candidate, but 60 <= 30*3=90, so no win-back.

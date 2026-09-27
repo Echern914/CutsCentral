@@ -1,4 +1,5 @@
 import { apiEnv, normalizeShopHandle, shopHandleKey } from "@chairback/config";
+import { bookNowUrl } from "@chairback/config/bookingLinks";
 import { Prisma, prisma } from "@chairback/db";
 
 /**
@@ -66,8 +67,9 @@ export function toPublicShop(shop: PublicShopRow): PublicShop | null {
         ? `${shop.addressCity}, ${shop.addressRegion}`
         : (shop.addressCity ?? null),
     pageUrl,
-    bookUrl:
-      shop.bookingMode === "native" ? `${base}/book/${shop.slug}` : (shop.bookingUrl ?? pageUrl),
+    // The shared rule (bookingLinks.ts); the page itself when there is nowhere
+    // better - including a saved link no customer could open.
+    bookUrl: bookNowUrl(shop, base) ?? pageUrl,
   };
 }
 

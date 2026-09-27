@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { APP_NAME } from "@chairback/config/constants";
 import type { BusinessVocabulary } from "@chairback/config/businessTypes";
@@ -184,6 +184,33 @@ async function getData(slug: string, fresh = false): Promise<BookShopData | null
 type SearchParams = Record<string, string | string[] | undefined>;
 
 /**
+ * Where to send a visitor whose /book/<slug> has no ChairBack booking behind
+ * it: a shop that books through Acuity or its own link. Printed QR codes, old
+ * texts and a custom domain's /book path all land here, and a 404 left every
+ * one of them dead. The shop's page instead - its Book button goes wherever the
+ * shop takes bookings now. A redirect, not a copy, so it follows the shop if it
+ * switches later.
+ *
+ * Null - a real 404 - for a shop that does not exist, whose page is off, that
+ * does take ChairBack bookings, or that does not own the custom domain this
+ * visit came through (the same check the shop page makes).
+ */
+async function pageInsteadOfBooking(
+  slug: string,
+  searchParams?: SearchParams,
+): Promise<string | null> {
+  const res = await apiPublicGet<{ bookingMode: string; customDomain?: string | null }>(
+    `/api/page/${encodeURIComponent(slug)}`,
+    BOOK_SHELL_REVALIDATE_S,
+  );
+  if (!res.ok || !res.data || res.data.bookingMode === "native") return null;
+  const expected = expectedDomain(searchParams);
+  if (!servesDomain(res.data, expected)) return null;
+  // On the shop's own domain its page is the root; everywhere else, /s/<slug>.
+  return expected === null ? `/s/${encodeURIComponent(slug)}` : "/";
+}
+
+/**
  * The booking shell for THIS visit, or null when it must not render. Same
  * rule as the shop page: a visit from a custom domain books only with the shop
  * that owns that domain, never with whoever holds the slug now. (The booking
@@ -224,7 +251,11 @@ export default async function BookPage({
   searchParams?: { service?: string; staff?: string; cb_domain?: string };
 }) {
   const data = await getDataFor(params.slug, searchParams);
-  if (!data) notFound();
+  if (!data) {
+    const page = await pageInsteadOfBooking(params.slug, searchParams);
+    if (page) redirect(page);
+    notFound();
+  }
   // 🔴 A PREFILL, NOT A PERMISSION. `?service=` and `?staff=` only pre-pick
   // what the client could have tapped themselves two screens in - these ids
   // are already public on this page. BookingClient validates them against what

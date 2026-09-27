@@ -30,6 +30,8 @@ let otherShop: { id: string; slug: string };
 
 let sms: SendMessageInput[] = [];
 let pushed: string[] = [];
+/** Where each app notification would take the customer when tapped. */
+let pushedUrls: string[] = [];
 
 function randomPhone(): string {
   const exch = 200 + Math.floor(Math.random() * 700);
@@ -112,7 +114,12 @@ beforeAll(async () => {
   await prisma.shop.update({ where: { id: shop.id }, data: { timezone: daytimeZone() } });
   otherCookie = await signup();
   otherShop = await makeShop(otherCookie, `Elsewhere ${randomToken(4)}`);
-  __setExpoSenderForTests({ send: async (t) => void pushed.push(t) });
+  __setExpoSenderForTests({
+    send: async (t, payload) => {
+      pushed.push(t);
+      pushedUrls.push(payload.url ?? "");
+    },
+  });
   __setMessageProviderForTests({
     channel: "SMS",
     send: async (input) => {
@@ -126,6 +133,7 @@ afterEach(() => {
   texting(true); // the suites' default (vitest.setup.ts)
   sms = [];
   pushed = [];
+  pushedUrls = [];
 });
 
 afterAll(async () => {
@@ -135,6 +143,37 @@ afterAll(async () => {
   __resetEnvCacheForTests();
   if (accountIds.size) await prisma.customerAccount.deleteMany({ where: { id: { in: [...accountIds] } } });
   await prisma.$disconnect();
+});
+
+describe("where the barber's Nudge sends the customer", () => {
+  it("a shop that switched to ChairBack booking links its booking page - in the app and by text", async () => {
+    // Switching never clears the saved outside link (this shop's is nudge.test).
+    await prisma.shop.update({ where: { id: shop.id }, data: { bookingMode: "native" } });
+    try {
+      const phone = randomPhone();
+      const c = await client(shop.id, { phone, consent: true });
+      await appCustomer(phone, { device: true });
+      expect((await nudge(c.id)).body).toMatchObject({ ok: true, channel: "app" });
+      expect(pushedUrls.at(-1)).toMatch(new RegExp(`/book/${shop.slug}$`));
+
+      const noApp = await client(shop.id, { phone: randomPhone(), consent: true });
+      expect((await nudge(noApp.id)).body).toMatchObject({ ok: true, channel: "sms" });
+      expect(sms.at(-1)!.body).toContain(`/book/${shop.slug}`);
+      expect(sms.at(-1)!.body).not.toContain("nudge.test");
+
+      // The bulk "Nudge" on the clients list carries the same destination.
+      const bulkOne = await client(shop.id, { phone: randomPhone(), consent: true });
+      const bulk = await request(app)
+        .post("/api/dashboard/clients/bulk")
+        .set("Cookie", cookie)
+        .send({ action: "nudge", clientIds: [bulkOne.id] });
+      expect(bulk.status).toBe(200);
+      expect(sms.at(-1)!.body).toContain(`/book/${shop.slug}`);
+      expect(sms.at(-1)!.body).not.toContain("nudge.test");
+    } finally {
+      await prisma.shop.update({ where: { id: shop.id }, data: { bookingMode: "link" } });
+    }
+  });
 });
 
 describe("the barber's Nudge goes to the customer's app", () => {

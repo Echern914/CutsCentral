@@ -122,6 +122,32 @@ describe("sweepShop", () => {
     expect(sent[0]!.from).toBeUndefined();
   });
 
+  it("a shop that switched to ChairBack booking sends its booking page, not the old link", async () => {
+    // Switching never clears the saved outside link; the rebook text must not
+    // send the customer back to the system the shop left.
+    const switched = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Switched Cuts",
+        slug: `nudge-switched-${randomToken(5)}`,
+        bookingMode: "native",
+        bookingUrl: "https://old-acuity.test/schedule.php",
+        webhookSecret: randomToken(),
+        dailySendCap: 5,
+        nudgeBufferDays: 7,
+      },
+    });
+    try {
+      await makeOverdueClient(switched.id, "tel:+13025553001", "+13025553001");
+      const summary = await sweepShop(switched, { now: NOW, dryRun: false });
+      expect(summary.sent).toBe(1);
+      expect(sent[0]!.body).toContain(`/book/${switched.slug}`);
+      expect(sent[0]!.body).not.toContain("old-acuity.test");
+    } finally {
+      await prisma.shop.delete({ where: { id: switched.id } });
+    }
+  });
+
   it("sends nudges FROM the shop's own number when it has one", async () => {
     const own = "+15550101010";
     const numShop = await prisma.shop.create({

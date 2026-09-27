@@ -17,6 +17,7 @@ import {
   type PageThemeKey,
 } from "@chairback/config/constants";
 import { DEMO } from "@chairback/config/demo";
+import { isUsableBookingLink } from "@chairback/config/bookingLinks";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
@@ -77,10 +78,13 @@ export function ShopPageClient({
   // Native booking: the CTA points at the in-app slot picker instead of the
   // external bookingUrl, and the lead-request form is replaced by real booking.
   const bookIsNative = data.bookingMode === "native";
-  const bookHref = bookIsNative ? `/book/${data.slug}${bookQuery ?? ""}` : data.bookingUrl;
+  // The shared rule (bookingLinks.ts): an outside link only when a customer
+  // could actually open it - a malformed one is no destination, not a dead button.
+  const outsideLink = isUsableBookingLink(data.bookingUrl) ? data.bookingUrl : null;
+  const bookHref = bookIsNative ? `/book/${data.slug}${bookQuery ?? ""}` : outsideLink;
   // A shop may have NO booking destination (no native, no external link). Then
   // we hide the "Book" CTAs and lean on the request form instead.
-  const hasBooking = bookIsNative || Boolean(data.bookingUrl);
+  const hasBooking = bookIsNative || outsideLink !== null;
   // Show the request form when the barber enabled it OR when there's no booking
   // path at all - so a no-link shop with requests off still gives clients a way
   // to reach out, instead of a dead page with no CTA. (Native booking replaces
