@@ -77,19 +77,9 @@ export function messageBookingUrl(shop: BookingLinkShop, appBaseUrl: string): st
   return bookNowUrl(shop, appBaseUrl);
 }
 
-/**
- * The link a shop HANDS OUT - copied, shared, printed as a QR code - in every
- * booking mode: /book/<slug>.
- *
- * That page decides at visit time: the booking form on ChairBack booking, and
- * otherwise a redirect to the shop's page, whose Book button follows
- * bookNowUrl. So a code printed today keeps working when the shop later
- * changes how it takes bookings, which a code pointing straight at Acuity
- * would not - and it stays a /book/ link, which the iOS app claims as a
- * universal link (a /s/ link would open Safari instead). Null until the shop
- * has a handle.
- */
-export function shareUrl(shop: Pick<BookingLinkShop, "slug">, appBaseUrl: string): string | null {
-  if (!shop.slug) return null;
-  return `${trimBase(appBaseUrl)}/book/${shop.slug}`;
-}
+// The link a shop HANDS OUT (dashboard link, share tile, QR code, broadcast
+// push landing) stays /book/<slug> in every mode, built where it is used. That
+// page decides at visit time - the booking form on ChairBack booking, else a
+// redirect to the shop's page, whose Book button follows bookNowUrl - so a
+// printed code survives a later switch, and it stays a /book/ link, which the
+// iOS app claims as a universal link (a /s/ link would open Safari).

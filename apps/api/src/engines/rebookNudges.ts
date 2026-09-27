@@ -53,6 +53,8 @@ interface Candidate {
   shopId: string;
   clientId: string;
   serviceName: string | null;
+  /** For the fallback link - read with the candidate, never between claim and send. */
+  magicToken: string | null;
 }
 
 /** Shop slice the nudge needs (owner read - Shop is default-deny in tenant tx). */
@@ -86,6 +88,7 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
         shopId: true,
         clientId: true,
         service: { select: { name: true } },
+        client: { select: { magicToken: true } },
       },
       take: 500,
     }),
@@ -98,7 +101,13 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
         // NEVER a promoted native booking - see the invariant in the header.
         appointment: { is: null },
       },
-      select: { id: true, shopId: true, clientId: true, serviceName: true },
+      select: {
+        id: true,
+        shopId: true,
+        clientId: true,
+        serviceName: true,
+        client: { select: { magicToken: true } },
+      },
       take: 500,
     }),
   ]);
@@ -110,6 +119,7 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
       shopId: a.shopId,
       clientId: a.clientId!,
       serviceName: a.service?.name ?? null,
+      magicToken: a.client?.magicToken ?? null,
     })),
     ...visits.map((v) => ({
       kind: "visit" as const,
@@ -117,6 +127,7 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
       shopId: v.shopId,
       clientId: v.clientId,
       serviceName: v.serviceName,
+      magicToken: v.client.magicToken,
     })),
   ];
   if (candidates.length === 0) return 0;
@@ -175,14 +186,7 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
     // with no link saved, a page switched off) -> the customer's own rewards
     // page, as the nudge and win-back do - never ChairBack's home page.
     const base = apiEnv().APP_BASE_URL;
-    let url = bookNowUrl(shop, base);
-    if (!url) {
-      const client = await prisma.client.findUnique({
-        where: { id: c.clientId },
-        select: { magicToken: true },
-      });
-      url = client ? `${base}/r/${client.magicToken}` : base;
-    }
+    const url = bookNowUrl(shop, base) ?? (c.magicToken ? `${base}/r/${c.magicToken}` : base);
     const res = await sendPushToClient({
       shopId: c.shopId,
       clientId: c.clientId,

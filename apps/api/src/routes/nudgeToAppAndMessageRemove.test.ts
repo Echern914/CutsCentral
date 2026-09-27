@@ -162,12 +162,16 @@ describe("where the barber's Nudge sends the customer", () => {
       expect(sms.at(-1)!.body).not.toContain("nudge.test");
 
       // The bulk "Nudge" on the clients list carries the same destination.
-      const bulkOne = await client(shop.id, { phone: randomPhone(), consent: true });
+      const bulkPhone = randomPhone();
+      const bulkOne = await client(shop.id, { phone: bulkPhone, consent: true });
       const bulk = await request(app)
         .post("/api/dashboard/clients/bulk")
         .set("Cookie", cookie)
         .send({ action: "nudge", clientIds: [bulkOne.id] });
       expect(bulk.status).toBe(200);
+      // It really sent - otherwise sms.at(-1) is still the text above.
+      expect(bulk.body.sent).toBe(1);
+      expect(sms.at(-1)!.to).toBe(bulkPhone);
       expect(sms.at(-1)!.body).toContain(`/book/${shop.slug}`);
       expect(sms.at(-1)!.body).not.toContain("nudge.test");
     } finally {

@@ -3,14 +3,12 @@ import {
   bookNowUrl,
   isUsableBookingLink,
   messageBookingUrl,
-  shareUrl,
   type BookingLinkShop,
 } from "./bookingLinks.js";
 
 /**
  * Where "Book" goes, for every booking mode - the rule nudges, win-backs,
- * promotions, the rewards page, the saved-shops list, broadcasts and the
- * dashboard's own link and QR code now share.
+ * promotions, the rebook push, the rewards page and the saved-shops list share.
  */
 const BASE = "https://app.example/";
 const shop = (over: Partial<BookingLinkShop> = {}): BookingLinkShop => ({
@@ -65,20 +63,6 @@ describe("messageBookingUrl - the Book link a text or push carries", () => {
   it("leaves a ChairBack-booking shop that never saved a link on the message it always sent", () => {
     expect(messageBookingUrl(shop({ bookingUrl: null }), BASE)).toBeNull();
     expect(messageBookingUrl(shop({ bookingUrl: "not a link" }), BASE)).toBeNull();
-  });
-});
-
-describe("shareUrl - the link a shop hands out", () => {
-  it("is /book/<slug> in every mode: the page decides, and the app claims /book/", () => {
-    for (const mode of ["native", "acuity", "square", "link"]) {
-      expect(shareUrl(shop({ bookingMode: mode, bookingUrl: "https://x.as.me" }), BASE)).toBe(
-        "https://app.example/book/fresh-cuts",
-      );
-    }
-  });
-
-  it("does not exist until the shop has a handle", () => {
-    expect(shareUrl(shop({ slug: null }), BASE)).toBeNull();
   });
 });
 

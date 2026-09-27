@@ -800,9 +800,7 @@ function shopItems(
       klass: "required",
       done: Boolean(facts.slug),
       silentWhenDone: true,
-      evidence: facts.slug
-        ? `getchairback.com/${native ? "book" : "s"}/${facts.slug}`
-        : "No link yet",
+      evidence: facts.slug ? `getchairback.com/book/${facts.slug}` : "No link yet",
       cta: { label: "Open your page", featureId: "mini-site" },
     }),
     item({
