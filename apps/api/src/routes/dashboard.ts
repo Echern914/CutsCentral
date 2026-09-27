@@ -998,13 +998,12 @@ dashboardRouter.post("/clients", async (req, res) => {
 // book WITH them — the whole "you own your clients" wedge — without needing the
 // old platform's API.
 //
-// TCPA-CRITICAL: imported clients are NOT textable by default. A spreadsheet of
-// contacts is NOT proof of SMS consent. smsConsent applies per-row ONLY when the
-// barber explicitly attests they have consent for these clients (one checkbox in
-// the UI), and even then only to NEW clients the file adds, with a phone. A
-// client who already exists never gets consent from an import - a file-wide
-// checkbox is not evidence about them - and keeps whatever consent they have.
-// Default = null, source = "import".
+// 🔴 TCPA-CRITICAL: AN IMPORT NEVER GRANTS SMS CONSENT. A spreadsheet of
+// contacts is not proof that anyone agreed to texts, and neither is a checkbox
+// over the whole file - it is evidence about no individual row. A new client
+// from a file starts with no consent; a client who already exists keeps
+// exactly the consent they have. Consent comes only through a path tied to the
+// person (their own opt-in, or the owner recording it for that one client).
 const importRowSchema = z.object({
   firstName: z.string().trim().min(1).max(80),
   lastName: z.string().trim().max(80).optional().or(z.literal("")),
@@ -1017,9 +1016,10 @@ const importClientsSchema = z
     // Cap per request so one upload can't hold a tenant transaction open forever
     // or OOM the parse. The web layer chunks larger files into multiple calls.
     rows: z.array(importRowSchema).min(1).max(1000),
-    // The barber affirms they have SMS consent for EVERY row in this batch.
-    // Default false: imported clients are not textable unless this is true.
-    attestConsentForAll: z.boolean().optional().default(false),
+    // Accepted and IGNORED: the file-wide consent checkbox this used to carry
+    // granted consent with no evidence per row. Still accepted so a web build
+    // from before the change does not get a 400 during a deploy.
+    attestConsentForAll: z.boolean().optional(),
   })
   .strict();
 
@@ -1030,8 +1030,7 @@ dashboardRouter.post("/clients/import", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const { rows, attestConsentForAll } = parsed.data;
-  const now = new Date();
+  const { rows } = parsed.data;
 
   let created = 0;
   // Matched an existing client that already had everything this row carries.
@@ -1071,7 +1070,6 @@ dashboardRouter.post("/clients/import", async (req, res) => {
         : email
           ? `mail:${email.toLowerCase()}`
           : `import:${randomToken(8)}`;
-      const consent = attestConsentForAll && phone ? now : null;
       try {
         const existing = await tx.client.findUnique({
           where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey: key } },
@@ -1089,8 +1087,8 @@ dashboardRouter.post("/clients/import", async (req, res) => {
               email: email || null,
               notes: r.notes?.trim() || null,
               source: "import",
-              smsConsentAt: consent,
-              smsConsentSource: consent ? "import_attested" : null,
+              smsConsentAt: null, // an import is never consent - see above
+              smsConsentSource: null,
             },
           });
           created++;
@@ -1131,12 +1129,8 @@ dashboardRouter.post("/clients/import", async (req, res) => {
           continue;
         }
 
-        // Everything the row says, the client already has: nothing is written.
-        // 🔴 NOT EVEN THE BATCH'S CONSENT ATTESTATION. A checkbox over a whole
-        // file is not evidence that THIS existing client agreed to texts -
-        // matching fields prove nothing about consent. An existing client's
-        // consent comes only through a path tied to them, and whatever they
-        // already have is kept as it is.
+        // Everything the row says, the client already has: nothing is written,
+        // their consent included - whatever they have is kept as it is.
         unchanged++;
       } catch {
         skipped.push({ row: i + 1, reason: "write_failed" });

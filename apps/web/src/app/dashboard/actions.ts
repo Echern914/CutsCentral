@@ -236,20 +236,16 @@ export interface ImportResult {
 
 /**
  * Bulk-import a parsed client list (the file is parsed in the browser; we send
- * JSON rows). Consent defaults OFF on the server; attestConsentForAll only when
- * the barber explicitly affirms they have SMS consent for the whole batch.
+ * JSON rows). An import never grants SMS consent.
  */
-export async function importClientsAction(
-  rows: ImportClientRow[],
-  attestConsentForAll: boolean,
-): Promise<ImportResult> {
+export async function importClientsAction(rows: ImportClientRow[]): Promise<ImportResult> {
   if (rows.length === 0) return { ok: false, error: "No rows to import." };
   const res = await apiSend<{
     created: number;
     unchanged?: number;
     total: number;
     skipped: ImportSkippedRow[];
-  }>("POST", "/api/dashboard/clients/import", { rows, attestConsentForAll });
+  }>("POST", "/api/dashboard/clients/import", { rows });
   revalidatePath("/dashboard/clients");
   revalidatePath("/dashboard");
   if (res.ok && res.data) {

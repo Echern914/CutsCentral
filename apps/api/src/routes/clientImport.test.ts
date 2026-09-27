@@ -6,8 +6,8 @@ import { createApp } from "../app.js";
 
 /**
  * Bulk client import (CSV migrate-off-Booksy). Covers the behavior that matters:
- * rows become clients; TCPA-CRITICAL consent defaults OFF and is granted ONLY
- * to NEW clients, when the barber attests AND the row has a phone - never to a
+ * rows become clients; TCPA-CRITICAL: an import grants NO SMS consent - not
+ * to a new client (a file-wide checkbox is evidence about no one), and never to a
  * client who already exists, whose consent is kept as it is; re-import is
  * idempotent (matched by key, no duplicates); a row that matches an existing
  * client by a shared phone or email but would change or add to it is NEVER
@@ -100,20 +100,22 @@ describe("POST /api/dashboard/clients/import", () => {
     expect(ada.smsConsentSource).toBeNull();
   });
 
-  it("attestConsentForAll grants consent ONLY to rows with a phone", async () => {
+  it("🔴 an import grants no SMS consent to a new client - not even with the old file-wide flag", async () => {
+    // A checkbox over a whole file is evidence about no individual row. The
+    // flag is still accepted (an older web build sends it) and ignored.
     const res = await imp({
       rows: [
-        { firstName: "Dale", phone: "(302) 555-0222" }, // phone -> consent granted
-        { firstName: "Eve", email: "eve@example.com" }, // no phone -> NO consent
+        { firstName: "Dale", phone: "(302) 555-0222" },
+        { firstName: "Eve", email: "eve@example.com" },
       ],
       attestConsentForAll: true,
     });
     expect(res.status).toBe(200);
-    const dale = await prisma.client.findFirst({ where: { shopId, firstName: "Dale" } });
-    const eve = await prisma.client.findFirst({ where: { shopId, firstName: "Eve" } });
-    expect(dale?.smsConsentAt).not.toBeNull();
-    expect(dale?.smsConsentSource).toBe("import_attested");
-    expect(eve?.smsConsentAt).toBeNull(); // no phone = can't be a textable consent
+    expect(res.body.created).toBe(2);
+    const dale = await prisma.client.findFirstOrThrow({ where: { shopId, firstName: "Dale" } });
+    const eve = await prisma.client.findFirstOrThrow({ where: { shopId, firstName: "Eve" } });
+    expect([dale.smsConsentAt, dale.smsConsentSource]).toEqual([null, null]);
+    expect([eve.smsConsentAt, eve.smsConsentSource]).toEqual([null, null]);
   });
 
   it("an attesting re-import never re-stamps consent a client already has", async () => {

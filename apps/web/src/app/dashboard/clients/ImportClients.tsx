@@ -11,8 +11,8 @@ const field =
 /**
  * CSV client import — the "bring your book off Booksy/Fresha/Vagaro" flow. The
  * file is parsed ENTIRELY in the browser (no upload); we map columns by header,
- * preview, then POST JSON rows. Consent is OFF unless the barber attests, and the
- * UI says so loudly (importing a contact list is not proof of SMS consent).
+ * preview, then POST JSON rows. An import never makes anyone textable, and the
+ * UI says so (a contact list is not proof that anyone agreed to texts).
  *
  * The browser sends in batches of 500 so a big book doesn't hit the per-request
  * cap; results are summed across batches.
@@ -118,7 +118,6 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
   const [pending, start] = useTransition();
   const [rows, setRows] = useState<ImportClientRow[]>([]);
   const [fileName, setFileName] = useState("");
-  const [attest, setAttest] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -155,7 +154,7 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
         skipped: [],
       };
       for (let i = 0; i < rows.length; i += BATCH) {
-        const r = await importClientsAction(rows.slice(i, i + BATCH), attest);
+        const r = await importClientsAction(rows.slice(i, i + BATCH));
         if (!r.ok) {
           toast(r.error ?? "Import failed.", "error");
           return;
@@ -210,23 +209,11 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
               <span className="text-muted">{fileName}</span>.
             </p>
 
-            <label className="flex items-start gap-2.5 rounded-xl border border-subtle bg-charcoal-700/50 p-3 text-xs leading-relaxed text-muted">
-              <input
-                type="checkbox"
-                checked={attest}
-                onChange={(e) => setAttest(e.target.checked)}
-                className="mt-0.5 h-4 w-4 shrink-0 rounded border-subtle bg-charcoal-700 accent-gold"
-              />
-              <span>
-                I confirm these clients agreed to receive text messages from my
-                shop. <span className="text-offwhite">Leave this unchecked</span> if
-                you&apos;re not sure — imported clients won&apos;t be texted until
-                they opt in, and you can always collect consent later. (Texting
-                people who didn&apos;t opt in violates the TCPA.) This only applies
-                to new clients the file adds; clients you already have keep the
-                consent they have.
-              </span>
-            </label>
+            <p className="rounded-xl border border-subtle bg-charcoal-700/50 p-3 text-xs leading-relaxed text-muted">
+              Imported clients won&apos;t be texted until they opt in themselves —
+              a contact list isn&apos;t proof that anyone agreed to texts. Clients
+              you already have keep the consent they have.
+            </p>
 
             <div className="flex items-center gap-3">
               <button
