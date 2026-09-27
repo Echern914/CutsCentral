@@ -64,6 +64,12 @@ export const squareCustomerSchema = z
     family_name: z.string().nullish(),
     email_address: z.string().nullish(),
     phone_number: z.string().nullish(),
+    // Read-only in Square. `email_unsubscribed: true` = the customer opted out
+    // of marketing email from this seller or from all Square sellers.
+    preferences: z
+      .object({ email_unsubscribed: z.boolean().nullish() })
+      .passthrough()
+      .nullish(),
   })
   .passthrough();
 
