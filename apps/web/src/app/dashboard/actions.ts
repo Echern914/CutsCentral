@@ -195,6 +195,11 @@ export async function addClientAction(
   });
   revalidatePath("/dashboard/clients");
   if (res.ok) return { ok: true };
+  // The phone or email is already a client's: the API says whose, and the safe
+  // way to add someone who shares it. Nothing was written.
+  if (res.error === "client_exists") {
+    return { error: res.message ?? "A client already has that phone or email, so nothing was added." };
+  }
   return {
     error:
       res.error === "invalid_phone"
