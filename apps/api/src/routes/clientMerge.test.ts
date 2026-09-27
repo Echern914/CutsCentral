@@ -242,6 +242,102 @@ describe("client merge routes", () => {
     expect(took?.emailSuppressionReason).toBe("complaint");
   });
 
+  const merge = async (winner: string, loser: string) =>
+    expect(
+      (
+        await request(app)
+          .post(`/api/dashboard/clients/${winner}/merge`)
+          .set("Cookie", cookieA)
+          .send({ loserId: loser })
+      ).status,
+    ).toBe(200);
+  const read = (id: string) => prisma.client.findUniqueOrThrow({ where: { id } });
+
+  it("keeps the EARLIEST unsubscribe date when both records had unsubscribed", async () => {
+    const winner = await addClient(cookieA, "WBothOut");
+    const loser = await addClient(cookieA, "LBothOut");
+    await forShop(shopIdA).client.update({
+      where: { id: winner },
+      data: { email: "both@example.com", emailOptedOut: true, emailOptedOutAt: new Date("2026-05-01T00:00:00Z") },
+    });
+    await forShop(shopIdA).client.update({
+      where: { id: loser },
+      data: { email: "both2@example.com", emailOptedOut: true, emailOptedOutAt: new Date("2026-02-01T00:00:00Z") },
+    });
+    await merge(winner, loser);
+    const merged = await read(winner);
+    expect(merged.emailOptedOut).toBe(true);
+    expect(merged.emailOptedOutAt?.toISOString()).toBe("2026-02-01T00:00:00.000Z");
+  });
+
+  it("keeps the EARLIEST bounce on one mailbox - matched however the address was typed", async () => {
+    const winner = await addClient(cookieA, "WSameBox");
+    const loser = await addClient(cookieA, "LSameBox");
+    await forShop(shopIdA).client.update({
+      where: { id: winner },
+      data: {
+        email: "same.box@example.com",
+        emailSuppressedAt: new Date("2026-06-01T00:00:00Z"),
+        emailSuppressionReason: "complaint",
+      },
+    });
+    await forShop(shopIdA).client.update({
+      where: { id: loser },
+      data: {
+        email: "  Same.Box@Example.com ",
+        emailSuppressedAt: new Date("2026-04-01T00:00:00Z"),
+        emailSuppressionReason: "hard_bounce",
+      },
+    });
+    await merge(winner, loser);
+    const merged = await read(winner);
+    expect(merged.emailSuppressedAt?.toISOString()).toBe("2026-04-01T00:00:00.000Z");
+    expect(merged.emailSuppressionReason).toBe("hard_bounce"); // the first thing that happened
+  });
+
+  it("drops a bounce the survivor no longer has an address for when it takes a working one", async () => {
+    // Its bounced address was cleared by hand, but the bounce stayed on the row.
+    const winner = await addClient(cookieA, "WClearedBox");
+    const loser = await addClient(cookieA, "LWorkingBox");
+    await forShop(shopIdA).client.update({
+      where: { id: winner },
+      data: { email: null, emailSuppressedAt: new Date(), emailSuppressionReason: "hard_bounce" },
+    });
+    await forShop(shopIdA).client.update({ where: { id: loser }, data: { email: "working@example.com" } });
+    await merge(winner, loser);
+    const merged = await read(winner);
+    expect(merged.email).toBe("working@example.com");
+    expect(merged.emailSuppressedAt).toBeNull();
+    expect(merged.emailSuppressionReason).toBeNull();
+  });
+
+  it("correcting a bounced address by hand drops the bounce - never the unsubscribe", async () => {
+    const id = await addClient(cookieA, "TypoFix");
+    await forShop(shopIdA).client.update({
+      where: { id },
+      data: {
+        email: "typo@exmaple.com",
+        emailSuppressedAt: new Date(),
+        emailSuppressionReason: "hard_bounce",
+        emailOptedOut: true,
+        emailOptedOutAt: new Date("2026-01-01T00:00:00Z"),
+      },
+    });
+    const edit = (email: string) =>
+      request(app).patch(`/api/dashboard/clients/${id}`).set("Cookie", cookieA).send({ email });
+
+    // The same mailbox, retyped: still the one that bounced.
+    expect((await edit(" Typo@Exmaple.com ")).status).toBe(200);
+    expect((await read(id)).emailSuppressedAt).not.toBeNull();
+
+    // A different mailbox: the bounce was about the old one.
+    expect((await edit("typo@example.com")).status).toBe(200);
+    const fixed = await read(id);
+    expect(fixed.emailSuppressedAt).toBeNull();
+    expect(fixed.emailSuppressionReason).toBeNull();
+    expect(fixed.emailOptedOut).toBe(true);
+  });
+
   it("carries the loser's Instagram handle onto a winner without one - and never replaces the winner's", async () => {
     // The handle is the one field that told two first-name-only records apart;
     // the duplicates review usually keeps the OLDER record (no handle), so a

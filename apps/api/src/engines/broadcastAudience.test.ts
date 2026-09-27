@@ -107,15 +107,18 @@ describe("what the barber is told", () => {
   });
 
   it("the counts add up to the whole book, so no one is unaccounted for", () => {
+    // Distinct addresses: an unsubscribe now reaches every record sharing its
+    // address, which would otherwise leave nobody reachable to count.
     const clients = [
-      client({ id: "1" }),
+      client({ id: "1", email: "one@example.com" }),
       client({ id: "2", email: null }),
-      client({ id: "3", emailOptedOut: true }),
-      client({ id: "4", archivedAt: new Date() }),
-      client({ id: "5", loyaltyTier: "BRONZE" }),
+      client({ id: "3", email: "three@example.com", emailOptedOut: true }),
+      client({ id: "4", email: "four@example.com", archivedAt: new Date() }),
+      client({ id: "5", email: "five@example.com", loyaltyTier: "BRONZE" }),
     ];
     const split = splitAudience(clients, "email", ["GOLD"]);
     const skipped = Object.values(split.reasonCounts).reduce((a, b) => a + b, 0);
+    expect(split.reachable.map((c) => c.id)).toEqual(["1"]);
     expect(split.reachable.length + skipped).toBe(clients.length);
   });
 });
