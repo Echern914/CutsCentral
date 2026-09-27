@@ -571,6 +571,27 @@ describe("every tool answers for the seat that may call it", () => {
     expect((barber.data!.chair as { staffId: string }).staffId).toBe(chairA);
   });
 
+  it("readiness_report leaves out the setup an Acuity shop does not have", async () => {
+    const was = await prisma.shop.findUniqueOrThrow({
+      where: { id: shopId },
+      select: { bookingMode: true, bookingUrl: true },
+    });
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { bookingMode: "acuity", bookingUrl: "https://fixture.as.me/schedule.php" },
+    });
+    try {
+      const r = await call(ownerToken, "readiness_report");
+      expect(r.isError).toBe(false);
+      // A model told "Services and barbers: done" about this shop would repeat it.
+      const groups = (r.data!.milestones as { id: string }[]).map((m) => m.id);
+      expect(groups).not.toContain("services_and_barber");
+      expect(groups).toContain("shop");
+    } finally {
+      await prisma.shop.update({ where: { id: shopId }, data: was });
+    }
+  });
+
   it("calendar_agenda returns the day, native and synced together", async () => {
     const r = await call(ownerToken, "calendar_agenda", { from: today });
     expect(r.isError).toBe(false);

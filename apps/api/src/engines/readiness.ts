@@ -140,6 +140,14 @@ export interface ReadinessItem {
 export interface Milestone {
   id: MilestoneId;
   title: string;
+  /**
+   * false = nothing in this group applies to this shop's booking setup - an
+   * Acuity or link shop has no ChairBack services or chairs to set up. Such a
+   * group is neither finished nor pending: every count and every list leaves it
+   * out. `done` stays true for it (nothing in it can block), so an older client
+   * that reads only `done` still steps past it rather than stalling there.
+   */
+  applicable: boolean;
   /** Every APPLICABLE REQUIRED item in this group is done. */
   done: boolean;
   /** The applicable required items in this group that are not done. */
@@ -177,12 +185,14 @@ export interface ReadinessReport {
    * lands, and so no caller invents its own rule in the meantime.
    */
   goLiveGateApplies: boolean;
-  /** Exactly four, always, in MILESTONE_IDS order. */
+  /** Exactly four, always, in MILESTONE_IDS order - including any that do not apply. */
   milestones: Milestone[];
-  /** 0..4 - the ONLY progress number a new shop is shown. */
+  /** 0..milestonesApplicable - the ONLY progress number a new shop is shown. */
   milestonesComplete: number;
-  /** How many of the four have at least one blocking item. */
+  /** How many applicable milestones have at least one blocking item. */
   milestonesBlocking: number;
+  /** The denominator: milestones that apply to this shop (4 on ChairBack booking). */
+  milestonesApplicable: number;
   /** Every applicable required item that is outstanding, across all groups. */
   blocking: ReadinessItem[];
   /** The granular checks, for the detailed Settings view. */
@@ -441,9 +451,46 @@ const plural = (n: number, one: string, many = one + "s") =>
  */
 const cap = (word: string): string => word.charAt(0).toUpperCase() + word.slice(1);
 
-/** Native booking means ChairBack itself serves the slots and takes the booking. */
+/**
+ * Native booking means ChairBack itself serves the slots and takes the booking.
+ *
+ * 🔴 ONLY THEN do ChairBack's own services, chairs, hours and new-booking alerts
+ * decide whether a customer can book. A shop on Acuity, Square or its own link
+ * sends customers to that system instead: the public booking API refuses every
+ * non-native shop (routes/booking.public.ts), the page's Book button opens the
+ * saved link, and no ChairBack alert fires for a booking ChairBack never took.
+ * Requiring native setup there told an Acuity shop - whose services were already
+ * showing up from its synced visits - to "Add a service" that no customer could
+ * ever book. So every item about ChairBack taking the booking is applicable
+ * only here; for everyone else the booking link is the requirement.
+ *
+ * Applicability only. `done` stays truthful in every mode: the walk-in kiosk
+ * reads `shop.staff.active` / `shop.service.active` by `done` alone, because a
+ * walk-in is a ChairBack booking whatever the shop's online booking uses.
+ */
 function isNative(f: ReadinessFacts): boolean {
   return f.bookingMode === "native";
+}
+
+/**
+ * Could a customer actually open this saved booking link?
+ *
+ * The rule the write path enforces (`httpUrl` in routes/shops.ts: a real URL
+ * with an http(s) scheme), checked again here because readiness reads the
+ * stored row, and a value that reached the row any other way never met it. A
+ * link that fails is a Book button that goes nowhere - no destination at all.
+ */
+function isUsableBookingLink(url: string | null): boolean {
+  const value = url?.trim();
+  if (!value) return false;
+  try {
+    const parsed = new URL(value);
+    return (
+      (parsed.protocol === "https:" || parsed.protocol === "http:") && parsed.hostname !== ""
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -560,12 +607,16 @@ function staffItems(
   const r = recipientOf(facts, s);
   const channels = deliverableChannels(r, caps);
   const shopHasSeats = facts.staff.some((x) => x.seatLinked);
+  // A chair's hours, services, alerts and profile only matter where ChairBack
+  // takes the booking (see isNative). Linking a seat still matters everywhere.
+  const native = isNative(facts);
   return [
     item({
       id: "staff.active",
       scope: "staff",
       staffId: s.id,
       milestone: "services_and_barber",
+      applicable: native,
       title: `${cap(v.stationNoun)} is active`,
       why: `An inactive ${v.stationNoun} is hidden from customers entirely.`,
       klass: "required",
@@ -581,6 +632,7 @@ function staffItems(
       scope: "staff",
       staffId: s.id,
       milestone: "hours_and_alerts",
+      applicable: native,
       title: "Weekly hours are set",
       why: `Without hours this ${v.stationNoun} offers no times at all.`,
       klass: "required",
@@ -597,6 +649,7 @@ function staffItems(
       scope: "staff",
       staffId: s.id,
       milestone: "services_and_barber",
+      applicable: native,
       title: "Offers at least one service",
       why: `A ${v.stationNoun} with no services assigned cannot be booked for anything.`,
       klass: "required",
@@ -613,6 +666,7 @@ function staffItems(
       scope: "staff",
       staffId: s.id,
       milestone: "hours_and_alerts",
+      applicable: native,
       title: `Bookings reach whoever works this ${v.stationNoun}`,
       why: "A booking nobody is told about is a missed appointment.",
       klass: "required",
@@ -647,6 +701,7 @@ function staffItems(
       scope: "staff",
       staffId: s.id,
       milestone: null,
+      applicable: native,
       title: "Photo and short bio",
       why: `Customers pick a ${v.providerNoun} they can see. Nothing breaks without it.`,
       klass: "recommended",
@@ -680,6 +735,7 @@ function shopItems(
   );
   const closedAllWeek = activeServices.filter((s) => s.closedEveryWeekday);
   const externalMode = !native && facts.bookingMode !== "link";
+  const linkUsable = isUsableBookingLink(facts.bookingUrl);
   const leadDays = facts.bookingLeadHours / 24;
   const windowOk = leadDays < facts.bookingMaxDays;
   const pricedServices = activeServices.filter((s) => s.hasPrice);
@@ -786,20 +842,28 @@ function shopItems(
       title: "Booking source",
       why: "Customers need one working way to book - ChairBack's own booking, or a link to the system you already use.",
       klass: "required",
-      done: native || Boolean(facts.bookingUrl?.trim()),
+      // Off ChairBack booking this is THE requirement - the link is where every
+      // customer goes - so it must be one a customer can actually open.
+      done: native || linkUsable,
       silentWhenDone: true,
       evidence: native
         ? "ChairBack booking is on"
-        : facts.bookingUrl?.trim()
+        : linkUsable
           ? `Sending customers to your ${facts.bookingMode} link`
-          : `Set to ${facts.bookingMode}, but no booking link is saved - your page has no way to book`,
+          : facts.bookingUrl?.trim()
+            ? `Set to ${facts.bookingMode}, but the saved booking link is not a web address a customer can open`
+            : `Set to ${facts.bookingMode}, but no booking link is saved - your page has no way to book`,
       cta: { label: "Booking settings", featureId: "integrations" },
     }),
 
     // ----- Milestone 2: services and barber -----
+    // ChairBack booking only (see isNative). Everything in this group is about
+    // the menu and chairs ChairBack books against, so off native the whole
+    // group does not apply.
     item({
       id: "shop.staff.active",
       milestone: "services_and_barber",
+      applicable: native,
       title: `At least one ${v.providerNoun}`,
       why: `Customers pick a ${v.providerNoun} before they pick a time.`,
       klass: "required",
@@ -813,6 +877,7 @@ function shopItems(
     item({
       id: "shop.service.active",
       milestone: "services_and_barber",
+      applicable: native,
       title: "At least one service",
       why: "The service is what a customer actually books.",
       klass: "required",
@@ -828,7 +893,7 @@ function shopItems(
       milestone: "services_and_barber",
       // Only meaningful once a service exists; otherwise it duplicates the item
       // above and reports the same gap twice.
-      applicable: activeServices.length > 0,
+      applicable: native && activeServices.length > 0,
       title: "Services have a real length",
       why: "The length decides how much of the day a booking takes and where the next slot starts.",
       klass: "required",
@@ -955,6 +1020,9 @@ function shopItems(
     item({
       id: "shop.alerts.reachable",
       milestone: "hours_and_alerts",
+      // The new-booking alert is sent only for a booking ChairBack takes; a
+      // booking made in Acuity or behind a link never produces one.
+      applicable: native,
       title: "You hear about a booking",
       why: "A new shop's default is push on with no device registered and texts on with no number saved - which reaches nobody at all.",
       klass: "required",
@@ -997,6 +1065,9 @@ function shopItems(
     item({
       id: "shop.test_booking",
       milestone: "preview_and_go_live",
+      // A test booking goes through ChairBack's own booking page, which a shop
+      // on another booking system does not have.
+      applicable: native,
       title: "See a booking come through",
       why: "The fastest way to know it all works end to end. Offered, never required - a real customer booking counts too.",
       klass: "recommended",
@@ -1088,7 +1159,8 @@ function shopItems(
     item({
       id: "approval.watched",
       milestone: "hours_and_alerts",
-      applicable: facts.requireBookingApproval,
+      // Approval holds a ChairBack booking; nothing else is ever held for it.
+      applicable: native && facts.requireBookingApproval,
       title: "Someone is watching for booking requests",
       why: "Requests hold the slot and send no confirmation until you approve them, so an unwatched request is a customer left waiting.",
       klass: "conditional",
@@ -1293,7 +1365,7 @@ function shopItems(
       // A shop launches on ONE working chair. Every other unfinished chair is a
       // recommendation, never a blocker - otherwise hiring a second barber
       // would take a live shop offline.
-      applicable: bookableChairs.length > 0 && otherIncompleteChairs.length > 0,
+      applicable: native && bookableChairs.length > 0 && otherIncompleteChairs.length > 0,
       title: `Finish setting up your other ${v.stationNounPlural}`,
       why: `Customers can pick these ${v.providerNounPlural} and find nothing available.`,
       klass: "recommended",
@@ -1304,7 +1376,8 @@ function shopItems(
     item({
       id: "improve.service_prices",
       milestone: null,
-      applicable: !paymentsOn && activeServices.length > 0,
+      // The price shows on ChairBack's booking menu - off native there is none.
+      applicable: native && !paymentsOn && activeServices.length > 0,
       title: "Show your prices",
       why: `Customers decide faster when the price is on the card. Not required - some shops quote at the ${v.stationNoun}.`,
       klass: "recommended",
@@ -1375,12 +1448,16 @@ export function buildReadiness(
     return {
       id,
       title: MILESTONE_TITLES[id](facts.vocabulary),
+      // Nothing to count = not part of this shop's setup. Reported as such,
+      // never as finished work (see Milestone.applicable).
+      applicable: counted.length > 0,
       done: blocking.length === 0,
       blocking,
       applicableCount: counted.length,
       completeCount: counted.filter((i) => i.done).length,
     };
   });
+  const milestonesInPlay = milestones.filter((m) => m.applicable);
 
   const staff: StaffReadiness[] = perChair.map(({ s, items: its }) => {
     const applicable = its.filter((i) => i.applicable);
@@ -1409,14 +1486,15 @@ export function buildReadiness(
     liveNow:
       facts.publicPageEnabled &&
       facts.hasActiveAccess &&
-      (isNative(facts) ? Boolean(facts.slug) : Boolean(facts.bookingUrl?.trim())),
+      (isNative(facts) ? Boolean(facts.slug) : isUsableBookingLink(facts.bookingUrl)),
     canGoLive: blocking.length === 0,
     // B1 ships no gate. See the field's note on ReadinessReport - an existing
     // published shop must never be blocked retroactively.
     goLiveGateApplies: false,
     milestones,
-    milestonesComplete: milestones.filter((m) => m.done).length,
-    milestonesBlocking: milestones.filter((m) => !m.done).length,
+    milestonesComplete: milestonesInPlay.filter((m) => m.done).length,
+    milestonesBlocking: milestonesInPlay.filter((m) => !m.done).length,
+    milestonesApplicable: milestonesInPlay.length,
     blocking,
     items: allShopItems,
     improve,
