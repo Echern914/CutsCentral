@@ -214,7 +214,12 @@ export interface ImportClientRow {
 export interface ImportResult {
   ok: boolean;
   created?: number;
+  /** Existing clients that had blanks this import filled. */
   updated?: number;
+  /** Existing clients that already had everything the row carried. */
+  unchanged?: number;
+  /** Existing clients whose details differed from the row - theirs were kept. */
+  keptExisting?: number;
   total?: number;
   skipped?: { row: number; reason: string }[];
   error?: string;
@@ -233,6 +238,8 @@ export async function importClientsAction(
   const res = await apiSend<{
     created: number;
     updated: number;
+    unchanged?: number;
+    keptExisting?: number;
     total: number;
     skipped: { row: number; reason: string }[];
   }>("POST", "/api/dashboard/clients/import", { rows, attestConsentForAll });

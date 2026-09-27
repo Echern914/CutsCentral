@@ -138,7 +138,15 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
 
   function doImport() {
     start(async () => {
-      const totals: ImportResult = { ok: true, created: 0, updated: 0, total: 0, skipped: [] };
+      const totals: ImportResult = {
+        ok: true,
+        created: 0,
+        updated: 0,
+        unchanged: 0,
+        keptExisting: 0,
+        total: 0,
+        skipped: [],
+      };
       for (let i = 0; i < rows.length; i += BATCH) {
         const r = await importClientsAction(rows.slice(i, i + BATCH), attest);
         if (!r.ok) {
@@ -147,12 +155,14 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
         }
         totals.created! += r.created ?? 0;
         totals.updated! += r.updated ?? 0;
+        totals.unchanged! += r.unchanged ?? 0;
+        totals.keptExisting! += r.keptExisting ?? 0;
         totals.total! += r.total ?? 0;
         totals.skipped!.push(...(r.skipped ?? []));
       }
       setResult(totals);
       toast(
-        `Imported ${totals.created} new, updated ${totals.updated}` +
+        `Imported ${totals.created} new, filled in ${totals.updated}` +
           (totals.skipped!.length ? `, skipped ${totals.skipped!.length}` : ""),
         "success",
       );
@@ -230,7 +240,12 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
           <div className="rounded-xl border border-subtle bg-charcoal-700/50 p-4 text-sm">
             <p className="text-offwhite">
               Done — <span className="font-semibold text-gold">{result.created}</span> added,{" "}
-              <span className="font-semibold">{result.updated}</span> updated
+              <span className="font-semibold">{result.updated}</span> filled in
+              {(result.unchanged ?? 0) > 0 && (
+                <>
+                  , <span className="font-semibold">{result.unchanged}</span> already up to date
+                </>
+              )}
               {result.skipped && result.skipped.length > 0 && (
                 <>
                   , <span className="text-danger-soft">{result.skipped.length}</span> skipped
@@ -238,6 +253,12 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
               )}
               .
             </p>
+            {(result.keptExisting ?? 0) > 0 && (
+              <p className="mt-1 text-xs text-muted">
+                {result.keptExisting} {result.keptExisting === 1 ? "client already had" : "clients already had"}{" "}
+                a different name, email or note on file. We kept yours and only filled in what was blank.
+              </p>
+            )}
             {result.skipped && result.skipped.length > 0 && (
               <p className="mt-1 text-xs text-muted">
                 Skipped rows had an invalid phone number — fix them in your file and

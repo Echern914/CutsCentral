@@ -1033,7 +1033,13 @@ dashboardRouter.post("/clients/import", async (req, res) => {
   const now = new Date();
 
   let created = 0;
+  // Matched an existing client and filled at least one blank field.
   let updated = 0;
+  // Matched an existing client that already had everything this row carries.
+  let unchanged = 0;
+  // Matched an existing client whose details DIFFER from the row - the client's
+  // own details were kept. Counted so the barber is told, not left guessing.
+  let keptExisting = 0;
   const skipped: { row: number; reason: string }[] = [];
 
   // One tenant transaction for the whole batch: RLS context set once, all upserts
@@ -1063,8 +1069,33 @@ dashboardRouter.post("/clients/import", async (req, res) => {
       try {
         const existing = await tx.client.findUnique({
           where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey: key } },
-          select: { id: true },
+          select: { id: true, firstName: true, lastName: true, email: true, notes: true },
         });
+        // 🔴 FILL BLANKS, NEVER REPLACE. An existing client is the shop's own
+        // record: the barber may have corrected a name, fixed an email or
+        // written notes, and an old export re-imported must not undo any of
+        // it. Each field is written only where the client has nothing yet.
+        // No field is replaced - identity is the match key itself (phone, or
+        // email when there is no phone), so it never changes here either.
+        const incoming = {
+          firstName: r.firstName.trim(),
+          lastName: r.lastName?.trim() || "",
+          email,
+          notes: r.notes?.trim() || "",
+        };
+        const fill: Record<string, string> = {};
+        let differs = false;
+        if (existing) {
+          for (const field of ["firstName", "lastName", "email", "notes"] as const) {
+            const have = existing[field]?.trim() ?? "";
+            const got = incoming[field];
+            if (!got) continue;
+            if (!have) fill[field] = got;
+            else if (field === "email" ? have.toLowerCase() !== got.toLowerCase() : have !== got) {
+              differs = true;
+            }
+          }
+        }
         await tx.client.upsert({
           where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey: key } },
           create: {
@@ -1080,18 +1111,14 @@ dashboardRouter.post("/clients/import", async (req, res) => {
             smsConsentAt: consent,
             smsConsentSource: consent ? "import_attested" : null,
           },
-          update: {
-            // Fill in contact details but NEVER clobber an existing record's
-            // identity; and deliberately do NOT touch consent on update (re-import
-            // must not re-stamp). Only fill blanks.
-            firstName: r.firstName,
-            lastName: r.lastName?.trim() || undefined,
-            email: email || undefined,
-            notes: r.notes?.trim() || undefined,
-          },
+          // Only the blanks computed above; consent is deliberately untouched on
+          // update (a re-import must not re-stamp it).
+          update: fill,
         });
-        if (existing) updated++;
-        else created++;
+        if (!existing) created++;
+        else if (Object.keys(fill).length > 0) updated++;
+        else unchanged++;
+        if (differs) keptExisting++;
         // If attesting consent for an EXISTING client that has none yet, grant it
         // with the same first-consent-wins guard the bulk-attest path uses.
         if (consent && existing) {
@@ -1111,7 +1138,7 @@ dashboardRouter.post("/clients/import", async (req, res) => {
     timeout: 60_000,
   });
 
-  res.status(200).json({ created, updated, skipped, total: rows.length });
+  res.status(200).json({ created, updated, unchanged, keptExisting, skipped, total: rows.length });
 });
 
 // Log a visit by hand (walk-ins / shops not on Acuity). Creates a real
