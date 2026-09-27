@@ -3,7 +3,6 @@ import { randomToken } from "@chairback/config";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { clawBackVisitEarn, earnPunchForVisitInTx } from "../services/punch.js";
-import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { logger } from "../logger.js";
 import { getSquareClientForShop, type SquareClient } from "./client.js";
 import { resolveSquareStatus } from "./mapping.js";
@@ -13,7 +12,7 @@ import type { SquareBooking, SquareCustomer } from "./types.js";
  * Square analog of acuity/../ingest.ts:ingestAppointment. A Square Booking
  * becomes a Visit through the SAME idempotent path: client upsert -> visit upsert
  * (keyed by the namespaced source id) -> earn-on-completed -> claw-back-on-cancel
- * -> cadence -> loyalty SMS. The whole loyalty pipeline downstream of Visit is
+ * -> cadence (the punch message is the completion job's). The whole loyalty pipeline downstream of Visit is
  * REUSED VERBATIM — Square is just another source that writes Visit rows.
  *
  * Visit idempotency reuses Visit's @@unique([shopId, acuityAppointmentId]) with a
@@ -118,7 +117,7 @@ export async function ingestSquareBooking(
   const endAt = new Date(scheduledAt.getTime() + (durationMin ?? 30) * 60_000);
   const sourceId = `square:${booking.id}`;
 
-  const { clientId, clawedBack, earn } = await runWithShop(shop.id, async (tx) => {
+  const { clientId, clawedBack } = await runWithShop(shop.id, async (tx) => {
     const dbClient = await tx.client.upsert({
       where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey: clientKey } },
       create: {
@@ -184,9 +183,8 @@ export async function ingestSquareBooking(
     // include "completed"), so earn happens via the status-promotion job once
     // start/end passes. Kept here for symmetry with Acuity in case a future
     // status maps to COMPLETED.
-    let earn = null;
     if (visit.status === "COMPLETED") {
-      earn = await earnPunchForVisitInTx(
+      await earnPunchForVisitInTx(
         tx,
         shop,
         dbClient.id,
@@ -196,19 +194,11 @@ export async function ingestSquareBooking(
       );
     }
 
-    return { clientId: dbClient.id, clawedBack: revokeCompleted, earn };
+    return { clientId: dbClient.id, clawedBack: revokeCompleted };
   });
 
   if (clawedBack) await recomputeCadence(shop.id, clientId);
 
-  if (earn) {
-    await notifyPunchEarned({
-      shopId: shop.id,
-      clientId,
-      earned: earn.earned,
-      balance: earn.balance,
-      cardTypeId: earn.cardTypeId,
-      cardName: earn.cardName,
-    });
-  }
+  // An earn here is never announced: it can only be for a visit that was
+  // already completed - history (engines/syncedVisitTrust.ts, rule 2).
 }

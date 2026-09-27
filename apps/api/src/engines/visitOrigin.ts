@@ -29,7 +29,14 @@
 
 /** True when this Visit id belongs to an external booking platform. */
 export function visitOwnedByPlatform(acuityAppointmentId: string): boolean {
-  return /^\d+$/.test(acuityAppointmentId) || acuityAppointmentId.startsWith("square:");
+  return visitPlatform(acuityAppointmentId) !== null;
+}
+
+/** Which platform owns this Visit id - null when ChairBack does (same rule). */
+export function visitPlatform(acuityAppointmentId: string): "acuity" | "square" | null {
+  if (/^\d+$/.test(acuityAppointmentId)) return "acuity";
+  if (acuityAppointmentId.startsWith("square:")) return "square";
+  return null;
 }
 
 /**
