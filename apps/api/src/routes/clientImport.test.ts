@@ -107,6 +107,28 @@ describe("POST /api/dashboard/clients/import", () => {
     expect(eve?.smsConsentAt).toBeNull(); // no phone = can't be a textable consent
   });
 
+  it("an attesting re-import never re-stamps consent a client already has", async () => {
+    const phone = "+13025550233";
+    const consentedAt = new Date("2026-02-02T00:00:00Z");
+    await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `tel:${phone}`,
+        magicToken: randomToken(),
+        firstName: "Joined",
+        phone,
+        smsConsentAt: consentedAt,
+        smsConsentSource: "join_page",
+      },
+    });
+    const res = await imp({ rows: [{ firstName: "Joined", phone }], attestConsentForAll: true });
+    expect(res.status).toBe(200);
+    const after = await prisma.client.findFirstOrThrow({ where: { shopId, phone } });
+    // The customer's own opt-in, when they gave it - not the import's attestation.
+    expect(after.smsConsentAt?.toISOString()).toBe(consentedAt.toISOString());
+    expect(after.smsConsentSource).toBe("join_page");
+  });
+
   it("a repeated import changes nothing and duplicates nothing", async () => {
     const rows = [
       { firstName: "Hana", lastName: "Ito", phone: "(302) 555-0333", email: "hana@example.com", notes: "Low fade" },

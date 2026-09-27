@@ -1073,8 +1073,10 @@ dashboardRouter.post("/clients/import", async (req, res) => {
         });
         // 🔴 FILL BLANKS, NEVER REPLACE. An existing client is the shop's own
         // record: the barber may have corrected a name, fixed an email or
-        // written notes, and an old export re-imported must not undo any of
-        // it. Each field is written only where the client has nothing yet.
+        // written notes, and an old export re-imported must not overwrite
+        // any of it. Each field is written only where the client has nothing
+        // yet - which also means a field the barber deliberately CLEARED is
+        // blank, and a file that has it fills it back in.
         // No field is replaced - identity is the match key itself (phone, or
         // email when there is no phone), so it never changes here either.
         const incoming = {
@@ -1083,7 +1085,8 @@ dashboardRouter.post("/clients/import", async (req, res) => {
           email,
           notes: r.notes?.trim() || "",
         };
-        const fill: Record<string, string> = {};
+        // Named fields, not Record<string, string>: Prisma type-checks the update.
+        const fill: Partial<Record<keyof typeof incoming, string>> = {};
         let differs = false;
         if (existing) {
           for (const field of ["firstName", "lastName", "email", "notes"] as const) {
