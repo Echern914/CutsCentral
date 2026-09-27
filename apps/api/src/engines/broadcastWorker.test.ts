@@ -133,6 +133,7 @@ async function makeClient(over: { email?: string | null; push?: boolean } = {}) 
       magicToken: randomToken(),
       firstName: "Client",
       email: over.email === undefined ? `c${randomToken(6)}@example.com` : over.email,
+      emailMarketingConsentAt: new Date("2026-01-01T00:00:00Z"), // said yes to marketing email
       loyaltyTier: "GOLD",
     },
     select: { id: true },
@@ -488,6 +489,7 @@ describe("🔴 a pass claims only what it asked for", () => {
         magicToken: randomToken(),
         firstName: "Other",
         email: `o${randomToken(6)}@example.com`,
+        emailMarketingConsentAt: new Date("2026-01-01T00:00:00Z"), // said yes to marketing email
       },
     });
     const theirDraft = await prisma.broadcast.create({

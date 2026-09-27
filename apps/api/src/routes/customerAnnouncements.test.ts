@@ -195,6 +195,13 @@ beforeAll(async () => {
     queuedAt: ago(90 * 60_000),
     sends: [{ clientId: xb.id, status: "SKIPPED", reason: "no_email" }],
   });
+  // Bravo, email: Bravo has X's address, but X never said yes to marketing email.
+  ids.xNotPermitted = await broadcast(shopB, {
+    channel: "email",
+    body: "Emailed, but X has not agreed to Bravo's emails",
+    queuedAt: ago(80 * 60_000),
+    sends: [{ clientId: xb.id, status: "SKIPPED", reason: "not_permitted" }],
+  });
   ids.xBounced = await broadcast(shopB, {
     channel: "email",
     body: "Emailed, but X's mailbox bounced",
@@ -251,6 +258,7 @@ describe("GET /api/me/announcements", () => {
       ids.xPending,
       ids.xNoApp,
       ids.xBounced,
+      ids.xNotPermitted,
       ids.xNoEmail,
       ids.xAbandoned,
       ids.xFailed,
@@ -266,7 +274,7 @@ describe("GET /api/me/announcements", () => {
       sentAt: expect.any(String),
     });
     expect(res.body.announcements.at(-1)).toMatchObject({ shop: { name: "Alpha Cuts" }, title: "Open Friday" });
-    expect(res.body.unreadCount).toBe(8);
+    expect(res.body.unreadCount).toBe(9);
   });
 
   it("shows what the shop sent them even when the email or push never got there", async () => {
@@ -276,6 +284,8 @@ describe("GET /api/me/announcements", () => {
     expect(shown).toContain(ids.xNoApp);
     expect(shown).toContain(ids.xNoEmail);
     expect(shown).toContain(ids.xBounced);
+    // No yes to marketing email is not "not meant for them": the bell is not email.
+    expect(shown).toContain(ids.xNotPermitted);
     // Refused, unknown, or not yet gone: sent to them all the same.
     expect(shown).toContain(ids.xFailed);
     expect(shown).toContain(ids.xAbandoned);

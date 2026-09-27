@@ -25,6 +25,11 @@ export interface AudienceClient {
    * complaint. Not the same fact as `emailOptedOut` and never merged with it.
    */
   emailSuppressedAt: Date | null;
+  /**
+   * When the customer said yes to marketing email (Client.emailMarketingConsentAt).
+   * null = never asked or never agreed - an address alone is not permission.
+   */
+  emailMarketingConsentAt: Date | null;
   /** How many devices this client has registered for push. */
   pushDevices: number;
 }
@@ -36,6 +41,7 @@ export type SkipReason =
   | "no_email"
   | "unsubscribed"
   | "undeliverable"
+  | "not_permitted"
   | "no_app";
 
 export interface AudienceSplit {
@@ -52,6 +58,7 @@ export const SKIP_REASON_LABEL: Record<SkipReason, string> = {
   no_email: "No email address on file",
   unsubscribed: "Unsubscribed from your emails",
   undeliverable: "Email bounced or was marked as spam",
+  not_permitted: "Hasn't agreed to your marketing emails yet",
   no_app: "Hasn't installed the app",
 };
 
@@ -109,6 +116,7 @@ export function splitAudience(
     no_email: 0,
     unsubscribed: 0,
     undeliverable: 0,
+    not_permitted: 0,
     no_app: 0,
   };
   const skip = (client: AudienceClient, reason: SkipReason) => {
@@ -150,6 +158,15 @@ export function splitAudience(
       // about his customers than the truth.
       if (c.emailSuppressedAt !== null || undeliverableAddresses.has(address)) {
         skip(c, "undeliverable");
+        continue;
+      }
+      // 🔴 AN ADDRESS IS NOT PERMISSION. Having an email on file - from a
+      // booking, a visit, a sync, an import or a linked account - does not
+      // mean the customer agreed to marketing email. Only a recorded yes does.
+      // Falsy, not === null: a query that forgot to select the field must
+      // close the gate, never open it.
+      if (!c.emailMarketingConsentAt) {
+        skip(c, "not_permitted");
         continue;
       }
     } else if (c.pushDevices <= 0) {

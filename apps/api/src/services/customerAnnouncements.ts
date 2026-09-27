@@ -17,8 +17,11 @@ import { syncCustomerLinks } from "./customerIdentity.js";
  *   SENT, PENDING, FAILED, ABANDONED - yes. The shop sent it to this client;
  *               whether the email or push landed is the delivery's business,
  *               not the bell's.
- *   SKIPPED no_app, no_email, undeliverable - yes. Meant for them, only no
- *               way to deliver it outside the app.
+ *   SKIPPED no_app, no_email, undeliverable, not_permitted - yes. Meant for
+ *               them, only no way to deliver it outside the app. (A client
+ *               who has not said yes to marketing EMAIL still sees the news
+ *               in the app they signed in to - exactly as one with no email
+ *               address does. The bell is not email.)
  *   SKIPPED not_in_audience, archived - never: the barber did not send it to
  *               them ("only my Gold members", or no longer a client).
  *   SKIPPED unsubscribed - never. A client who opted out must not find in the
@@ -33,7 +36,7 @@ import { syncCustomerLinks } from "./customerIdentity.js";
 const LIMIT = 50;
 
 /** SKIPPED rows the shop still meant for the client - see above. */
-const SHOWN_SKIP_REASONS = ["no_app", "no_email", "undeliverable"] satisfies SkipReason[];
+const SHOWN_SKIP_REASONS = ["no_app", "no_email", "undeliverable", "not_permitted"] satisfies SkipReason[];
 
 /** Push-ledger kinds that are the shop nudging THIS customer to come back. */
 export const BELL_NUDGE_KINDS = ["nudge", "winback"] as const;

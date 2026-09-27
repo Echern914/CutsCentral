@@ -92,6 +92,7 @@ const CLIENT_SELECT = {
   email: true,
   emailOptedOut: true,
   emailSuppressedAt: true,
+  emailMarketingConsentAt: true,
   loyaltyTier: true,
   archivedAt: true,
   firstName: true,
@@ -106,6 +107,7 @@ type ClientRow = {
   email: string | null;
   emailOptedOut: boolean;
   emailSuppressedAt: Date | null;
+  emailMarketingConsentAt: Date | null;
   loyaltyTier: LoyaltyTier | null;
   archivedAt: Date | null;
   firstName: string | null;

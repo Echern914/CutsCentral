@@ -44,6 +44,8 @@ async function makeClient(over: {
   archived?: boolean;
   optedOut?: boolean;
   suppressed?: boolean;
+  /** false = an address on file but no recorded yes to marketing email. */
+  permitted?: boolean;
   shop?: string;
 }) {
   return prisma.client.create({
@@ -54,6 +56,7 @@ async function makeClient(over: {
       firstName: "Client",
       email: over.email === undefined ? `c${randomToken(6)}@example.com` : over.email,
       emailOptedOut: over.emailOptedOut ?? false,
+      emailMarketingConsentAt: over.permitted === false ? null : new Date("2026-01-01T00:00:00Z"),
       optedOut: over.optedOut ?? false,
       loyaltyTier: over.tier === undefined ? "GOLD" : over.tier,
       ...(over.suppressed ? { emailSuppressedAt: new Date(), emailSuppressionReason: "hard_bounce" } : {}),
@@ -144,11 +147,13 @@ describe("the preview, before anything is sent", () => {
     await makeClient({ tier: "GOLD", emailOptedOut: true });
     await makeClient({ tier: "GOLD", archived: true });
     await makeClient({ tier: "GOLD", suppressed: true });
+    // An address, and no recorded yes: the preview says so, separately.
+    await makeClient({ tier: "GOLD", permitted: false });
 
     const res = await preview({ channel: "email", tiers: ["GOLD"] });
     expect(res.status).toBe(200);
     expect(res.body.reachable).toBe(2);
-    expect(res.body.considered).toBe(7);
+    expect(res.body.considered).toBe(8);
     const reasons = Object.fromEntries(
       (res.body.skipped as { reason: string; count: number }[]).map((s) => [s.reason, s.count]),
     );
@@ -160,6 +165,7 @@ describe("the preview, before anything is sent", () => {
       // 🔴 A BOUNCE IS ITS OWN REASON. Folding it into "unsubscribed" would
       // tell the barber a customer made a choice they never made.
       undeliverable: 1,
+      not_permitted: 1,
     });
     // Every exclusion carries a sentence, not a code.
     for (const s of res.body.skipped as { label: string }[]) {
