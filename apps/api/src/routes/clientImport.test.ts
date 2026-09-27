@@ -178,6 +178,17 @@ describe("POST /api/dashboard/clients/import", () => {
     expect(after.lastName).toBe("Rossi"); // the one blank, filled
   });
 
+  it("fills a blank note and last name from a later export, and counts it", async () => {
+    await imp({ rows: [{ firstName: "Kai", phone: "(302) 555-0666" }] });
+    const again = await imp({
+      rows: [{ firstName: "Kai", lastName: "Lee", phone: "(302) 555-0666", notes: "Skin fade, #1 sides" }],
+    });
+    expect(again.body).toMatchObject({ created: 0, updated: 1, unchanged: 0, keptExisting: 0 });
+    const kai = await prisma.client.findFirstOrThrow({ where: { shopId, phone: "+13025550666" } });
+    expect(kai.lastName).toBe("Lee");
+    expect(kai.notes).toBe("Skin fade, #1 sides");
+  });
+
   it("does not call a differently-cased email a difference", async () => {
     await imp({ rows: [{ firstName: "Jo", phone: "(302) 555-0555", email: "Jo@Example.com" }] });
     const again = await imp({
