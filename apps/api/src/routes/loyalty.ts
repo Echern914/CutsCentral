@@ -4,6 +4,12 @@ import { parseTierPerks, parseTierRules, parseTierThresholds } from "@chairback/
 import { forShop, prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
+import {
+  creditPastVisits,
+  PAST_VISIT_MONTHS,
+  type PastVisitCredit,
+  type PastVisitMonths,
+} from "../services/pastVisitCredit.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
 /**
@@ -571,4 +577,50 @@ loyaltyRouter.delete("/cards/:id/grants/:clientId", async (req, res) => {
     return;
   }
   res.json({ ok: true });
+});
+
+//  Past visits: a visit that ended before rewards started doesn't earn by
+//  itself. The owner can credit them here - the GET previews, and nothing is
+//  written until the POST confirms. Silent: no customer is messaged.
+
+const pastVisitsSchema = z
+  .object({ months: z.coerce.number().refine((m) => (PAST_VISIT_MONTHS as readonly number[]).includes(m)) })
+  .strict();
+
+function pastVisitsBody(r: Extract<PastVisitCredit, { ok: true }>) {
+  return {
+    startedAt: r.startedAt.toISOString(),
+    from: r.from.toISOString(),
+    visits: r.visits,
+    punches: r.punches,
+    customers: r.customers,
+  };
+}
+
+loyaltyRouter.get("/past-visits", async (req, res) => {
+  const parsed = pastVisitsSchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const r = await creditPastVisits(req.shop!.id, parsed.data.months as PastVisitMonths, "preview");
+  if (!r.ok) {
+    res.status(409).json({ error: r.reason });
+    return;
+  }
+  res.json(pastVisitsBody(r));
+});
+
+loyaltyRouter.post("/past-visits/credit", async (req, res) => {
+  const parsed = pastVisitsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const r = await creditPastVisits(req.shop!.id, parsed.data.months as PastVisitMonths, "credit");
+  if (!r.ok) {
+    res.status(409).json({ error: r.reason });
+    return;
+  }
+  res.json(pastVisitsBody(r));
 });

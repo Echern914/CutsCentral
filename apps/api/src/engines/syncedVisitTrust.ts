@@ -17,7 +17,8 @@ import { visitPlatform } from "./visitOrigin.js";
  * 2. IMPORTED HISTORY IS NEVER ANNOUNCED.
  *    A visit ChairBack first learned about after it had already ended - the
  *    connect-time backfill, a later catch-up - is history, whatever its age.
- *    It keeps every effect on the books (completion, punches, cadence); it
+ *    It keeps every effect on the books (completion, cadence, and its punch
+ *    if it ended after the shop's rewards started - services/punch.ts); it
  *    sends the customer nothing: no punch message, no Wallet pass update (the
  *    pass announces "You now have N punches"), no "book your next one". And a
  *    visit completed long after it ended (a reconnect, a stalled job) is not

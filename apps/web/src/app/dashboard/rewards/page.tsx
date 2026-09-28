@@ -3,6 +3,7 @@ import type { TierRules } from "@chairback/config/tierRules";
 import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { DemoTour } from "@/components/tour/DemoTour";
+import { PastVisits } from "./PastVisits";
 import { RewardsBuilder } from "./RewardsBuilder";
 import { RewardsSwitch } from "./RewardsSwitch";
 import { TierPerks } from "./TierPerks";
@@ -94,6 +95,8 @@ export default async function RewardsPage() {
         </p>
       </header>
       <RewardsSwitch on />
+      {/* Visits from before rewards were on earn only if the owner credits them. */}
+      <PastVisits />
       <div data-tour="menu">
         <RewardsBuilder config={res.data} />
       </div>

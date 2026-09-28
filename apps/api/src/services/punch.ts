@@ -206,23 +206,40 @@ export async function earnPunchForVisitInTx(
   visitId: string,
   serviceName: string | null,
   visitedAt: Date,
-  opts?: { cardTypeId?: string | null }, // undefined = auto-route; null = force default card
+  opts?: {
+    cardTypeId?: string | null; // undefined = auto-route; null = force default card
+    /** A person chose to punch this visit, whenever it ended (see below). */
+    evenBeforeStart?: boolean;
+  },
 ): Promise<EarnResult> {
-  // Master rewards gate, checked HERE so all seven earn call sites (Acuity/
-  // Square ingest, both promotions, manual log-visit, visit edit, mark-done)
-  // are covered by one line. Plain prisma on purpose: Shop is default-deny
-  // inside the tenant transaction, and this is a read on a separate
-  // connection, not part of the tx. Visits still record normally - only the
-  // LEDGER write is skipped, so toggling rewards on later starts earning
-  // from the next visit with all old balances intact.
+  // Master rewards gate, checked HERE so every earn call site (Acuity/Square
+  // ingest, both promotions, manual log-visit, visit edit, mark-done, past-
+  // visit credit) is covered by one line. Plain prisma on purpose: Shop is
+  // default-deny inside the tenant transaction, and this is a read on a
+  // separate connection, not part of the tx. Visits still record normally -
+  // only the LEDGER write is skipped, and old balances stay intact.
   const gate = await prisma.shop.findUnique({
     where: { id: shop.id },
-    select: { rewardsEnabled: true },
+    select: { rewardsEnabled: true, rewardsStartedAt: true },
   });
   if (!gate?.rewardsEnabled) return null;
 
   const existing = await tx.punchLedger.findUnique({ where: { visitId } });
   if (existing) return null; // already earned
+
+  // 🔴 A VISIT THAT ENDED BEFORE REWARDS STARTED DOES NOT EARN BY ITSELF. The
+  // half-hourly resync re-reads a year of visits, and every completed one used
+  // to earn the moment rewards came on. So turning rewards on starts earning
+  // from visits that end after it; older ones earn only when a person chooses:
+  // the owner crediting past visits (pastVisitCredit.ts), or staff logging a
+  // visit by hand. No start on record (seeded demo shops) = earn as before.
+  if (gate.rewardsStartedAt && !opts?.evenBeforeStart) {
+    const visit = await tx.visit.findUnique({
+      where: { id: visitId },
+      select: { endAt: true, scheduledAt: true },
+    });
+    if (visit && (visit.endAt ?? visit.scheduledAt) < gate.rewardsStartedAt) return null;
+  }
 
   const route = await routeVisitEarn(
     tx,

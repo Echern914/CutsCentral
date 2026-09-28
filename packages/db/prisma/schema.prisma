@@ -243,6 +243,12 @@ model Shop {
   // barbers just want a booking app); the migration backfilled every existing
   // shop to TRUE so nothing changed for them.
   rewardsEnabled      Boolean @default(false)
+  // When rewards were last switched ON (PATCH /api/shops/me stamps every
+  // off->on). A visit that ended before it does not earn by itself - only the
+  // owner can credit it, from the Rewards page (services/pastVisitCredit.ts).
+  // NULL = never switched on since this column existed; a shop with rewards
+  // on and no start (seeded demo shops only) earns as it always did.
+  rewardsStartedAt    DateTime?
   // What this shop gives at each loyalty tier, in its own words:
   // {"BRONZE": "...", "SILVER": "...", "GOLD": "..."}, every key optional.
   // NULL = the owner has written none, which is every shop until they do.

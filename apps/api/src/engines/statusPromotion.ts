@@ -8,8 +8,9 @@ import { mayAnnounceCompletedVisit, visitsWithoutLiveSource } from "./syncedVisi
 /**
  * Acuity never fires a "completed" event. A visit becomes COMPLETED once its end
  * time has passed and it wasn't canceled. This job promotes such visits, earns
- * punches per the shop's earn rules (idempotent), and recomputes the client's
- * cadence.
+ * punches per the shop's earn rules (idempotent; a visit that ended before the
+ * shop's rewards started completes but earns nothing - services/punch.ts), and
+ * recomputes the client's cadence.
  *
  * Runs across all shops; idempotent (promoted rows no longer match the filter).
  */

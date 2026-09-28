@@ -24,6 +24,39 @@ export async function setRewardsEnabledAction(on: boolean): Promise<{ ok: boolea
   return { ok: true };
 }
 
+/** What crediting past visits would give (the check) or gave (the confirm). */
+export interface PastVisitsCount {
+  /** When rewards started; the credit covers visits that ended from `from` to it. */
+  startedAt: string;
+  from: string;
+  visits: number;
+  punches: number;
+  customers: number;
+}
+
+export type PastVisitsMonths = 3 | 6 | 12;
+
+/** Past visits, the check: counts only - nothing is written. */
+export async function previewPastVisitsAction(
+  months: PastVisitsMonths,
+): Promise<{ ok: true; data: PastVisitsCount } | { ok: false }> {
+  const res = await apiGet<PastVisitsCount>(`/api/loyalty/past-visits?months=${months}`);
+  return res.ok && res.data ? { ok: true, data: res.data } : { ok: false };
+}
+
+/**
+ * Past visits, the owner's confirm. Silent - no customer is sent anything.
+ * Revalidates the whole dashboard: any client's balance may have moved.
+ */
+export async function creditPastVisitsAction(
+  months: PastVisitsMonths,
+): Promise<{ ok: true; data: PastVisitsCount } | { ok: false }> {
+  const res = await apiSend<PastVisitsCount>("POST", "/api/loyalty/past-visits/credit", { months });
+  if (!res.ok || !res.data) return { ok: false };
+  revalidatePath("/dashboard", "layout");
+  return { ok: true, data: res.data };
+}
+
 export interface RewardInput {
   name: string;
   description?: string;

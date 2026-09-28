@@ -212,12 +212,12 @@ export async function ingestAppointment(
   if (clawedBack) await recomputeCadence(shop.id, clientId);
 
   // 🔴 AN EARN HERE IS NEVER ANNOUNCED. Ingest only earns for a visit that is
-  // ALREADY completed - an old visit met again by a sync pass (for instance
-  // after the shop turned rewards on). The punch stands; telling the customer
-  // "you earned a punch" about a cut from the past is exactly the
-  // import-triggered message this path must never send (engines/
-  // syncedVisitTrust.ts, rule 2). Live visits are announced by the completion
-  // job, once, when they end.
+  // ALREADY completed - an old visit met again by a sync pass. (One that ended
+  // before the shop turned rewards on doesn't earn here at all - see
+  // services/punch.ts.) Telling the customer "you earned a punch" about a cut
+  // from the past is exactly the import-triggered message this path must
+  // never send (engines/syncedVisitTrust.ts, rule 2). Live visits are
+  // announced by the completion job, once, when they end.
 }
 
 /** Re-export prisma for callers that need a raw lookup near ingest. */

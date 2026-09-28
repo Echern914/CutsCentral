@@ -874,6 +874,12 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
     res.status(400).json({ error: "receptionist_terms_required" });
     return;
   }
+  // Rewards switched ON from off: rewards start now, and a visit that ended
+  // before this doesn't earn by itself (services/punch.ts). Saving "on" while
+  // already on leaves the start where it is.
+  if (data.rewardsEnabled === true && !req.shop!.rewardsEnabled) {
+    data.rewardsStartedAt = new Date();
+  }
   try {
     // 🔴 THE THRESHOLDS AND THE BADGES MOVE TOGETHER. Client.loyaltyTier is a
     // stored column, so writing new numbers without re-stamping every client
