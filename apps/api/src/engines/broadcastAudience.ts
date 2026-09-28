@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { LoyaltyTier } from "@chairback/db";
 
 /**
@@ -21,17 +22,24 @@ export interface AudienceClient {
   loyaltyTier: LoyaltyTier | null;
   archivedAt: Date | null;
   /**
-   * Set when the PROVIDER refused this address - a hard bounce or a spam
-   * complaint. Not the same fact as `emailOptedOut` and never merged with it.
-   */
-  emailSuppressedAt: Date | null;
-  /**
    * When the customer said yes to marketing email (Client.emailMarketingConsentAt).
    * null = never asked or never agreed - an address alone is not permission.
    */
   emailMarketingConsentAt: Date | null;
   /** How many devices this client has registered for push. */
   pushDevices: number;
+}
+
+/**
+ * The shop's address-bound suppressions (EmailAddressSuppression), as the
+ * hashes suppressionAddressHash produces - loaded ONCE per split, see
+ * services/emailSuppression.ts.
+ */
+export interface AddressSuppressions {
+  shopId: string;
+  unsubscribed: ReadonlySet<string>;
+  /** Hard bounces and spam complaints. */
+  undeliverable: ReadonlySet<string>;
 }
 
 /** Why somebody on the list is not going to get it. */
@@ -80,32 +88,40 @@ export const SKIP_REASON_LABEL: Record<SkipReason, string> = {
  * this person is not a client any more.
  *
  * 🔴 A PROVIDER SUPPRESSION IS NOT AN OPT-OUT EITHER. A hard bounce or a spam
- * complaint stops email exactly as an unsubscribe does, but `emailSuppressedAt`
- * stays its own field and its own skip reason: one is a fact about a mailbox,
- * the other is a decision by a person, and reporting the first as the second
- * puts words in a customer's mouth.
+ * complaint stops email exactly as an unsubscribe does, but it stays its own
+ * kind and its own skip reason: one is a fact about a mailbox, the other is a
+ * decision by a person, and reporting the first as the second puts words in a
+ * customer's mouth.
  *
  * 🔴 BOTH BELONG TO THE ADDRESS, NOT TO THE ONE RECORD THEY WERE MADE ON. One
  * person can sit on several records at a shop: a duplicate, a CSV import, or
  * the fresh record a later sync creates under a merged record's retired key.
  * Read row by row, any of those would make an unsubscribed address marketable
- * again without anyone deciding it. So an address unsubscribed or refused on
- * ANY record of this shop - archived ones included - is excluded on every
- * record that carries it. That only holds if `clients` is the WHOLE book,
- * archived rows too, which is what both callers load (broadcast.ts).
+ * again without anyone deciding it. So:
+ *   - an address in `suppressed` (EmailAddressSuppression - the address the
+ *     unsubscribe or the bounce was actually about, matched by
+ *     suppressionAddressKey) is excluded on every record that carries it, now
+ *     or after any later change of address;
+ *   - an unsubscribe also stays on the person's own record whatever its
+ *     address becomes, and - as before - is applied to every record of this
+ *     shop sharing that record's current address, archived ones included.
+ *     That part only holds if `clients` is the WHOLE book, archived rows too,
+ *     which is what the callers load (broadcast.ts).
+ * A bounce is read ONLY from `suppressed`, never from the record's own
+ * `emailSuppressedAt`: that flag cannot say which address bounced, so reading
+ * it carried an old bounce onto the record's new, working address. It stays
+ * on the record for the owner's screens.
  */
 export function splitAudience(
   clients: AudienceClient[],
   channel: BroadcastChannelId,
   tiers: readonly LoyaltyTier[],
+  suppressed: AddressSuppressions,
 ): AudienceSplit {
   const unsubscribedAddresses = new Set<string>();
-  const undeliverableAddresses = new Set<string>();
   for (const c of clients) {
     const address = emailAddressKey(c.email);
-    if (address === null) continue;
-    if (c.emailOptedOut) unsubscribedAddresses.add(address);
-    if (c.emailSuppressedAt !== null) undeliverableAddresses.add(address);
+    if (address !== null && c.emailOptedOut) unsubscribedAddresses.add(address);
   }
 
   const reachable: AudienceClient[] = [];
@@ -137,11 +153,16 @@ export function splitAudience(
     }
     if (channel === "email") {
       const address = emailAddressKey(c.email);
+      const hash = suppressionAddressHash(suppressed.shopId, c.email);
       // The customer's own choice outranks a missing address: the Announcements
       // bell shows a no_email row (the shop meant it for them) but never an
       // unsubscribed one, so an opt-out whose address was later cleared must
       // still be recorded as the opt-out.
-      if (c.emailOptedOut || (address !== null && unsubscribedAddresses.has(address))) {
+      if (
+        c.emailOptedOut ||
+        (address !== null && unsubscribedAddresses.has(address)) ||
+        (hash !== null && suppressed.unsubscribed.has(hash))
+      ) {
         skip(c, "unsubscribed");
         continue;
       }
@@ -156,7 +177,7 @@ export function splitAudience(
       // it is counted and NAMED separately, because telling a barber "47
       // people unsubscribed" when 47 mailboxes bounced is a different claim
       // about his customers than the truth.
-      if (c.emailSuppressedAt !== null || undeliverableAddresses.has(address)) {
+      if (hash !== null && suppressed.undeliverable.has(hash)) {
         skip(c, "undeliverable");
         continue;
       }
@@ -191,4 +212,53 @@ export function splitAudience(
 export function emailAddressKey(email: string | null | undefined): string | null {
   const key = email?.trim().toLowerCase();
   return key ? key : null;
+}
+
+/**
+ * The 25 code points String.prototype.trim() removes (ECMAScript WhiteSpace +
+ * LineTerminator) - as numbers, the same list the SQL side passes to chr().
+ */
+const TRIMMED = String.fromCharCode(
+  9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201,
+  8202, 8232, 8233, 8239, 8287, 12288, 65279,
+);
+const TRIM_EDGES = new RegExp(`^[${TRIMMED}]+|[${TRIMMED}]+$`, "g");
+
+/**
+ * 🔴 THE KEY EmailAddressSuppression IS HASHED FROM - deliberately NOT
+ * emailAddressKey.
+ *
+ * The table was backfilled in SQL, so the key has to be computed identically in
+ * SQL, for every input. emailAddressKey's toLowerCase() cannot be: it applies
+ * full Unicode case rules, which Postgres's lower() does not reproduce (it
+ * follows the database locale - the dotted capital I, the Greek final sigma
+ * and others come out differently). So this lower-cases A-Z ONLY, and trims
+ * exactly trim()'s set. For an ASCII address - nearly every address - it
+ * equals emailAddressKey. For a non-ASCII one it may keep a capital that
+ * emailAddressKey would fold; two such spellings then hash apart, and the
+ * per-record flags and emailAddressKey's address-wide rule in splitAudience
+ * still stand behind them.
+ *
+ * The same function in SQL (migration 20261026000000, email_address_hash):
+ *   translate(btrim(email, <the 25 code points above>),
+ *             'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
+ *   and NULL when that is ''.
+ * suppressionAddressHash.test.ts runs both and holds them together.
+ */
+export function suppressionAddressKey(email: string | null | undefined): string | null {
+  const key = email?.replace(TRIM_EDGES, "").replace(/[A-Z]/g, (c) => c.toLowerCase());
+  return key ? key : null;
+}
+
+/**
+ * What EmailAddressSuppression stores instead of an address: the sha256 hex of
+ * `${shopId}:${suppressionAddressKey(email)}`, or null when there is no address.
+ *
+ * Plain and shop-scoped, not keyed, so the migration could compute the same
+ * value in SQL with no secret:
+ *   encode(sha256(convert_to(shop_id || ':' || key, 'UTF8')), 'hex')
+ */
+export function suppressionAddressHash(shopId: string, email: string | null | undefined): string | null {
+  const key = suppressionAddressKey(email);
+  return key === null ? null : createHash("sha256").update(`${shopId}:${key}`).digest("hex");
 }

@@ -18,7 +18,13 @@ import {
 } from "./broadcast.js";
 import { recordDispatchInTx } from "../services/emailDelivery.js";
 import { unsubscribeDigestFor } from "./unsubscribeToken.js";
-import { emailAddressKey, splitAudience, type SkipReason } from "./broadcastAudience.js";
+import {
+  emailAddressKey,
+  splitAudience,
+  suppressionAddressHash,
+  type SkipReason,
+} from "./broadcastAudience.js";
+import { loadAddressSuppressions } from "../services/emailSuppression.js";
 
 /**
  * THE BROADCAST WORKER: it keeps a promise somebody else made.
@@ -566,7 +572,7 @@ async function deliverRecipient(params: {
         claimToken: params.claimToken,
         now: params.clock(),
         messageId: result.id,
-        delivery: { kind: "broadcast", shopId: ctx.shopId, clientId: client.id },
+        delivery: { kind: "broadcast", shopId: ctx.shopId, clientId: client.id, recipient: sendTo! },
       });
       if (!settled) return "stale_claim";
       return "sent";
@@ -653,20 +659,29 @@ async function recheckEmailRecipient(
   shopId: string,
   clientId: string,
 ): Promise<{ ok: true; email: string } | { ok: false; reason: SkipReason }> {
-  const records = await runAsOwner(async (tx) => {
+  const { records, suppressed } = await runAsOwner(async (tx) => {
     const self = await tx.client.findFirst({
       where: { id: clientId, shopId },
       select: CLIENT_SELECT,
     });
+    // The address-bound suppressions (#514), for this one address.
+    const suppressed = await loadAddressSuppressions(
+      tx,
+      shopId,
+      suppressionAddressHash(shopId, self?.email),
+    );
     const address = emailAddressKey(self?.email);
-    if (!self || address === null) return self ? [self] : [];
+    if (!self || address === null) return { records: self ? [self] : [], suppressed };
     // Wide on purpose (any case, any padding); the comparison that decides is
     // emailAddressKey's, below.
     const others = await tx.client.findMany({
       where: { shopId, id: { not: clientId }, email: { contains: address, mode: "insensitive" } },
       select: CLIENT_SELECT,
     });
-    return [self, ...others.filter((c) => emailAddressKey(c.email) === address)];
+    return {
+      records: [self, ...others.filter((c) => emailAddressKey(c.email) === address)],
+      suppressed,
+    };
   });
   // Deleted since the freeze - the same skip the missing-client path records.
   if (records.length === 0) return { ok: false, reason: "archived" };
@@ -674,6 +689,7 @@ async function recheckEmailRecipient(
     records.map((c) => ({ ...c, pushDevices: 0 })),
     "email",
     [],
+    suppressed,
   );
   const skip = split.skipped.find((s) => s.client.id === clientId);
   if (skip) return { ok: false, reason: skip.reason };
@@ -985,7 +1001,7 @@ async function settleSent(params: {
    */
   now: Date;
   messageId?: string;
-  delivery?: { kind: string; shopId: string; clientId: string };
+  delivery?: { kind: string; shopId: string; clientId: string; recipient: string };
 }): Promise<boolean> {
   return runAsOwner(async (tx) => {
     const moved = await tx.broadcastSend.updateMany({
@@ -1015,6 +1031,7 @@ async function settleSent(params: {
           kind: params.delivery.kind,
           shopId: params.delivery.shopId,
           clientId: params.delivery.clientId,
+          recipient: params.delivery.recipient,
         },
         params.now,
       );
