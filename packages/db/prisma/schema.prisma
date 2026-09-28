@@ -1281,6 +1281,9 @@ model Client {
   // this one client, may set it; a checkbox over a whole import may not.
   // Broadcast email reaches a client only while this is set and they have not
   // unsubscribed. Appointment messages never read it.
+  // A yes is for ONE address: a database trigger clears it (both fields) when
+  // the record's email changes to a different address - see migration
+  // 20261029000000_email_yes_follows_address.
   emailMarketingConsentAt     DateTime?
   emailMarketingConsentSource String?
   // 🔴 A DEDICATED, SINGLE-PURPOSE UNSUBSCRIBE CREDENTIAL - and only its hash.

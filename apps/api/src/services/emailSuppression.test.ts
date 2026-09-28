@@ -209,6 +209,11 @@ describe("🔴 a bounce stays with the mailbox that bounced", () => {
     // it bounced (the owner's screens), and that must not follow it.
     await sync(2, phone, "pat@example.com");
     expect((await byPhone(phone)).emailSuppressedAt).not.toBeNull();
+    // Pat's yes was for the old address, so the move alone leaves Pat out
+    // (the Client_email_yes_follows_address trigger) - and the old bounce
+    // does not follow either. Pat says yes again, for the new address.
+    expect(await audience()).toEqual({ reachable: 0, skipped: { not_permitted: 1 } });
+    await permit(pat.id);
     await otherRecord("  PAT.TYPO@Example.com ");
     expect(await audience()).toEqual({ reachable: 1, skipped: { undeliverable: 1 } });
 
@@ -320,6 +325,8 @@ describe("🔴 the send-time check reads it too", () => {
     // The first record moves on; a second record now carries the address and
     // is frozen into the next blast.
     await sync(11, phone, "moved@example.com");
+    // A yes is for one address: the first record says yes again for its new one.
+    await permit(first.id);
     const second = await otherRecord("shared@example.com");
     outbox = [];
     const next = await queue();
