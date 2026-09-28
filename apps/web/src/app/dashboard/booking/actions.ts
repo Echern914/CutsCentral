@@ -319,6 +319,50 @@ export async function setStaffAcuityExtraCalendarsAction(
   return done(res);
 }
 
+//  Import services from Acuity
+
+export interface AcuityImportRow {
+  acuityId: string;
+  name: string;
+  durationMin: number | null;
+  price: number | null;
+  category: string | null;
+  /** "new" is added; every other status is left out, for the reason it names. */
+  status: "new" | "exists" | "duplicate" | "inactive" | "private" | "class" | "bad_length";
+}
+export interface AcuityImportPreview {
+  rows: AcuityImportRow[];
+  /** Acuity categories that would become new service groups. */
+  newGroups: string[];
+}
+
+/** What an import would add. Reads Acuity; changes nothing. */
+export async function previewAcuityServiceImportAction(): Promise<{
+  ok: boolean;
+  data?: AcuityImportPreview;
+  error?: string;
+}> {
+  const res = await apiGet<AcuityImportPreview>("/api/booking/acuity/service-import");
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
+}
+
+/** Add the previewed services (by Acuity id) that are still missing. */
+export async function importAcuityServicesAction(acuityIds: string[]): Promise<{
+  ok: boolean;
+  created?: number;
+  error?: string;
+}> {
+  const res = await apiSend<{ created: number; groupsCreated: number }>(
+    "POST",
+    "/api/booking/acuity/service-import",
+    { acuityIds },
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  revalidatePath("/dashboard/booking");
+  return { ok: true, created: res.data.created };
+}
+
 //  New Appointment (barber-side) + Block Off Time (native booking)
 
 export interface DashSlot {

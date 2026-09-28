@@ -121,6 +121,8 @@ import {
   setStaffExtraCalendars,
 } from "../engines/acuityCalendarMap.js";
 import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
+import type { AcuityAppointmentType } from "../acuity/types.js";
+import { applyServiceImport, previewServiceImport } from "../engines/acuityServiceImport.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
 /**
@@ -1915,6 +1917,62 @@ bookingDashboardRouter.put("/acuity/outbound-mode", async (req, res) => {
 /** The rehearsal: exactly what ENFORCE would do, with zero outbound writes. */
 bookingDashboardRouter.get("/acuity/outbound-report", async (req, res) => {
   res.json(await buildObserveReport(req.shop!.id));
+});
+
+//  Import services from Acuity (see engines/acuityServiceImport.ts)
+
+/**
+ * Read the shop's Acuity service menu, or answer the request with why not.
+ * Same codes as the calendar list: not connected is its own 409, anything
+ * else from Acuity (expired login, outage) is a 502.
+ */
+async function readAcuityTypes(
+  shopId: string,
+  res: import("express").Response,
+): Promise<AcuityAppointmentType[] | null> {
+  try {
+    const acuity = await getAcuityClientForShop(shopId);
+    return await acuity.listAppointmentTypes();
+  } catch (err) {
+    if (err instanceof NotConnectedError) {
+      res.status(409).json({ error: "acuity_not_connected" });
+      return null;
+    }
+    logger.error({ err, shopId }, "acuity appointment types read failed");
+    res.status(502).json({ error: "acuity_unavailable" });
+    return null;
+  }
+}
+
+/** The preview: every Acuity service, marked new / already here / left out. Writes nothing. */
+bookingDashboardRouter.get("/acuity/service-import", async (req, res) => {
+  const shopId = req.shop!.id;
+  const types = await readAcuityTypes(shopId, res);
+  if (!types) return;
+  res.json(await previewServiceImport(shopId, types));
+});
+
+const serviceImportSchema = z
+  .object({
+    // The ids the owner saw marked "new" in the preview. Only those are created,
+    // so the import never adds something the owner did not see first.
+    acuityIds: z.array(z.string().min(1)).max(1000),
+  })
+  .strict();
+
+/** The import itself: creates the confirmed services that are still missing, in one transaction. */
+bookingDashboardRouter.post("/acuity/service-import", async (req, res) => {
+  const shopId = req.shop!.id;
+  const parsed = serviceImportSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const types = await readAcuityTypes(shopId, res);
+  if (!types) return;
+  const result = await applyServiceImport(shopId, types, parsed.data.acuityIds);
+  logger.info({ shopId, ...result }, "acuity services imported");
+  res.json(result);
 });
 
 /**

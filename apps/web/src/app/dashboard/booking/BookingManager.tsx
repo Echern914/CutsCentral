@@ -37,6 +37,7 @@ import { ShopQrCard } from "./ShopQrCard";
 import { HolidayPricing } from "./HolidayPricing";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import { AcuityCalendarMap } from "./AcuityCalendarMap";
+import { AcuityServiceImport } from "./AcuityServiceImport";
 import { Sheet } from "./AppointmentForm";
 import { TimeSelect } from "@/components/ui/TimeSelect";
 import { ImageField } from "../site/ImageField";
@@ -360,6 +361,7 @@ export function BookingManager({
             timezone={initialAgenda.timezone}
             toast={toast}
             groupUnsavedRef={groupUnsavedRef}
+            acuityConnected={connect.acuityConnected}
           />
         </div>
       )}
@@ -910,6 +912,7 @@ function ServicesTab({
   timezone,
   toast,
   groupUnsavedRef,
+  acuityConnected,
 }: {
   initial: ServiceRow[];
   staff: StaffRow[];
@@ -919,6 +922,8 @@ function ServicesTab({
   toast: Toast;
   // Registered by the open group editor; BookingManager's tab guard reads it.
   groupUnsavedRef: MutableRefObject<(() => EditorGuardState) | null>;
+  /** An Acuity account is connected: offer to import its services. */
+  acuityConnected: boolean;
 }) {
   const vocab = useVocab();
   const [name, setName] = useState("");
@@ -1054,6 +1059,7 @@ function ServicesTab({
 
   return (
     <div className="flex flex-col gap-5">
+      {acuityConnected && <AcuityServiceImport toast={toast} />}
       <Card className="p-5">
       <CardHeader title="Services" subtitle="What customers can book, with a length." />
       {/* All three carry a real label above the box. The unit lives INSIDE the

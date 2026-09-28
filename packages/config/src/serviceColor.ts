@@ -16,7 +16,8 @@ import { SERVICE_COLORS, SERVICE_COLOR_KEYS, type ServiceColorKey } from "./cons
  * a random pick, not an index into whatever order the query returned.
  *
  * 🔴 THE FALLBACK IS NOT ACUITY'S COLOUR. Acuity's API does expose an
- * appointment-type colour, but ChairBack does not ingest it and this module
+ * appointment-type colour, but only "Import services from Acuity" reads it -
+ * once, snapped to this palette and saved as the explicit key - and this module
  * does not pretend to: a derived colour is ChairBack's own, chosen so the
  * barber can tell two services apart at a glance. Nothing here should ever be
  * described to a barber as "your Acuity colour".

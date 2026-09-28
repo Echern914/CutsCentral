@@ -3,11 +3,13 @@ import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import {
   acuityAppointmentSchema,
+  acuityAppointmentTypeSchema,
   acuityBlockSchema,
   acuityCalendarSchema,
   acuityMeSchema,
   acuityTokenSchema,
   type AcuityAppointment,
+  type AcuityAppointmentType,
   type AcuityBlock,
   type AcuityCalendar,
   type AcuityMe,
@@ -37,6 +39,8 @@ export interface AcuityClient {
   listBlocks(params: ListParams): Promise<AcuityBlock[]>;
   /** The account's bookable calendars - the Staff.acuityCalendarId source. */
   listCalendars(): Promise<AcuityCalendar[]>;
+  /** The account's service menu - read by the service import only. */
+  listAppointmentTypes(): Promise<AcuityAppointmentType[]>;
   /**
    * THE ONLY WRITE METHODS ON THIS CLIENT. Both exist for one job: mirroring
    * ChairBack occupancy onto the barber's Acuity calendar so Acuity's own
@@ -170,6 +174,21 @@ export async function getAcuityClientForShop(
       const data = await call("/calendars");
       if (!Array.isArray(data)) return [];
       return acuityCalendarSchema.array().parse(data);
+    },
+    /**
+     * The account's appointment types. Read-only. Acuity leaves deleted types
+     * out of this list by default; one row we cannot read is skipped rather
+     * than failing the whole list, like listBlocks.
+     */
+    async listAppointmentTypes() {
+      const data = await call("/appointment-types");
+      if (!Array.isArray(data)) return [];
+      const out: AcuityAppointmentType[] = [];
+      for (const raw of data) {
+        const parsed = acuityAppointmentTypeSchema.safeParse(raw);
+        if (parsed.success) out.push(parsed.data);
+      }
+      return out;
     },
     async listAppointments(params: ListParams) {
       const q = new URLSearchParams();
