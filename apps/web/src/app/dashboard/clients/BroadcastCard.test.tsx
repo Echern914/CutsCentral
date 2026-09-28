@@ -19,6 +19,11 @@ vi.mock("./broadcastActions", () => ({
       limits: { subject: 60, body: 300 },
       skipped: [],
       blocker: null,
+      channels: {
+        push: { reachable: 3, skipped: [], unavailable: false },
+        email: { reachable: 1, skipped: [], unavailable: false },
+      },
+      tierCounts: { GOLD: 2, SILVER: 0, BRONZE: 1 },
     },
   })),
   sendBroadcastAction: vi.fn(async () => ({ ok: true, recipients: 3 })),
@@ -43,14 +48,30 @@ function openComposer() {
 describe("BroadcastCard audience", () => {
   it("offers Gold, Silver and Bronze while rewards are on", () => {
     render(<BroadcastCard rewardsEnabled />);
-    expect(screen.getByText(/or just one loyalty group/i)).toBeTruthy();
+    expect(screen.getByText(/or just one rewards tier/i)).toBeTruthy();
     openComposer();
 
     expect(screen.getByRole("button", { name: "Everyone" })).toBeTruthy();
+    expect(screen.getByText("Or by rewards tier:")).toBeTruthy();
     for (const tier of ["Gold", "Silver", "Bronze"]) {
-      expect(screen.getByRole("button", { name: tier })).toBeTruthy();
+      expect(screen.getByRole("button", { name: new RegExp(`^${tier}`) })).toBeTruthy();
     }
     expect(screen.queryByText(/needs rewards turned on/i)).toBeNull();
+  });
+
+  it("says how many clients are in each tier, so an empty one is obvious", async () => {
+    render(<BroadcastCard rewardsEnabled />);
+    openComposer();
+    expect(await screen.findByRole("button", { name: "Gold · 2" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Silver · 0" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Bronze · 1" })).toBeTruthy();
+  });
+
+  it("counts the group on both channels", async () => {
+    render(<BroadcastCard rewardsEnabled />);
+    openComposer();
+    expect(await screen.findByText(/will get this notification/)).toBeTruthy();
+    expect(screen.getByText("As an email: 1 of 3.")).toBeTruthy();
   });
 
   it("offers only Everyone while rewards are off, and says why", () => {
@@ -61,7 +82,7 @@ describe("BroadcastCard audience", () => {
 
     expect(screen.getByRole("button", { name: "Everyone" })).toBeTruthy();
     for (const tier of ["Gold", "Silver", "Bronze"]) {
-      expect(screen.queryByRole("button", { name: tier })).toBeNull();
+      expect(screen.queryByRole("button", { name: new RegExp(`^${tier}`) })).toBeNull();
     }
     expect(screen.getByText(/needs rewards turned on/i)).toBeTruthy();
   });
@@ -176,7 +197,7 @@ describe("BroadcastCard from a promo", () => {
     render(<BroadcastCard rewardsEnabled draft={draft} />);
     expect((screen.getByLabelText("Notification title") as HTMLInputElement).value).toBe("Gold week");
     expect((screen.getByLabelText("Message") as HTMLTextAreaElement).value).toBe("20% off. Show code GOLD20.");
-    expect(screen.getByRole("button", { name: "Gold" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: /^Gold/ }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "Everyone" }).getAttribute("aria-pressed")).toBe("false");
   });
 
@@ -187,27 +208,73 @@ describe("BroadcastCard from a promo", () => {
 });
 
 describe("BroadcastCard email permission", () => {
-  it("says plainly when nobody has said yes to marketing email yet", async () => {
-    const original = vi.mocked(previewBroadcastAction).getMockImplementation();
-    vi.mocked(previewBroadcastAction).mockImplementation((async () => ({
-      ok: true,
-      preview: {
-        reachable: 0,
-        considered: 12,
-        emailsRemaining: 500,
-        limits: { subject: 60, body: 300 },
-        skipped: [{ reason: "not_permitted", count: 12, label: "Hasn't agreed to your marketing emails yet" }],
-        blocker: null,
+  /** What the API really answers when nobody has a recorded yes (#515). */
+  const nobodySaidYes = {
+    reachable: 0,
+    considered: 12,
+    emailsRemaining: 500,
+    limits: { subject: 120, body: 4000 },
+    skipped: [{ reason: "not_permitted", count: 12, label: "Hasn't agreed to your marketing emails yet" }],
+    blocker: { kind: "no_recipients", message: "Nobody in this group can be reached on that channel yet." },
+    channels: {
+      push: {
+        reachable: 5,
+        skipped: [{ reason: "no_app", count: 7, label: "Hasn't installed the app" }],
+        unavailable: false,
       },
-    })) as never);
+      email: {
+        reachable: 0,
+        skipped: [{ reason: "not_permitted", count: 12, label: "Hasn't agreed to your marketing emails yet" }],
+        unavailable: false,
+      },
+    },
+    tierCounts: { GOLD: 0, SILVER: 0, BRONZE: 0 },
+  };
+
+  async function withPreview(preview: unknown, run: () => Promise<void>) {
+    const original = vi.mocked(previewBroadcastAction).getMockImplementation();
+    vi.mocked(previewBroadcastAction).mockImplementation((async () => ({ ok: true, preview })) as never);
     try {
-      render(<BroadcastCard rewardsEnabled />);
-      openComposer();
-      fireEvent.click(screen.getByRole("button", { name: /^Email/ }));
-      expect(await screen.findByText(/No one has said yes to your marketing emails yet/)).toBeTruthy();
-      expect(screen.getByText(/12 · Hasn't agreed to your marketing emails yet/)).toBeTruthy();
+      await run();
     } finally {
       vi.mocked(previewBroadcastAction).mockImplementation(original!);
     }
+  }
+
+  it("🔴 at zero it still shows the count, the reason, and the channel that does reach them", async () => {
+    await withPreview(nobodySaidYes, async () => {
+      render(<BroadcastCard rewardsEnabled />);
+      openComposer();
+      fireEvent.click(screen.getByRole("button", { name: /^Email/ }));
+      expect(await screen.findByText(/has said yes to your marketing emails yet/)).toBeTruthy();
+      expect(screen.getByText(/that reaches 5 of them/)).toBeTruthy();
+      // The breakdown and both numbers are on screen, not hidden by the refusal.
+      expect(screen.getByText(/12 · Hasn't agreed to your marketing emails yet/)).toBeTruthy();
+      expect(screen.getByText(/will get this email/).textContent).toMatch(/^0 of 12/);
+      expect(screen.getByText("As an app notification: 5 of 12.")).toBeTruthy();
+      // Nothing to send to, so nothing to press.
+      expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+    });
+  });
+
+  it("never gives a count for email the shop can't send yet", async () => {
+    const noAddress = {
+      ...nobodySaidYes,
+      reachable: 4,
+      skipped: [],
+      blocker: { kind: "no_postal_address", message: "Add your shop's street address first." },
+      channels: {
+        push: nobodySaidYes.channels.push,
+        email: { reachable: 4, skipped: [], unavailable: true },
+      },
+    };
+    await withPreview(noAddress, async () => {
+      render(<BroadcastCard rewardsEnabled />);
+      openComposer();
+      fireEvent.click(screen.getByRole("button", { name: /^Email/ }));
+      expect(await screen.findByText("This email can't be sent from your shop yet.")).toBeTruthy();
+      expect(screen.getByText("Add your shop's street address first.")).toBeTruthy();
+      expect(screen.queryByText(/will get this email/)).toBeNull();
+    });
   });
 });
