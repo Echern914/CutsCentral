@@ -505,9 +505,10 @@ export interface CreateApptInput {
    */
   externalBlockConfirmation?: string;
   /**
-   * Custom time only: book over the bookings / visits / own specials a previous
-   * `slot_taken` (code OVERLAP) named - its `confirmation`, replayed. Bound to
-   * exactly those rows; anything new in the way is asked about again.
+   * "Book anyway": book over the bookings / visits / own specials a previous
+   * `slot_taken` (code OVERLAP) named - its `confirmation`, replayed after the
+   * barber answered yes to its question. Bound to exactly those rows; anything
+   * new in the way is asked about again. Never covers a customer's live hold.
    */
   overlapConfirmation?: string;
   /**
@@ -543,16 +544,28 @@ export type CreateApptResult = Result & {
   reason?: string;
   /** For `external_block` / OVERLAP: what to send back to confirm THAT conflict. */
   confirmation?: string;
-  /** The API's classification - `OVERLAP` marks a confirmable slot_taken. */
+  /**
+   * The API's classification - `OVERLAP` marks a confirmable slot_taken,
+   * `HELD` a customer's live hold (never confirmable).
+   */
   code?: string;
   /** For OVERLAP: what the time sits on, one line each, in the shop's zone. */
   conflicts?: string[];
+  /**
+   * For OVERLAP: the one-line question "Book anyway" asks before it books
+   * ("This overlaps Marcus R. at 10:00 AM. Book it anyway?"), server-worded.
+   */
+  message?: string;
+  /** True when this booking was made over a conflict ("Book anyway"). */
+  forced?: boolean;
+  /** For a forced booking: the Acuity block outcome (active | unknown | failed | skipped). */
+  mirror?: string;
 };
 
 export async function createAppointmentAction(
   input: CreateApptInput,
 ): Promise<CreateApptResult> {
-  const res = await apiSend<{ series?: SeriesSummary }>(
+  const res = await apiSend<{ series?: SeriesSummary; forced?: boolean; mirror?: string }>(
     "POST",
     "/api/booking/appointments",
     input,
@@ -566,9 +579,14 @@ export async function createAppointmentAction(
       ...(res.confirmation ? { confirmation: res.confirmation } : {}),
       ...(res.code ? { code: res.code } : {}),
       ...(res.conflicts ? { conflicts: res.conflicts } : {}),
+      ...(res.message ? { message: res.message } : {}),
     };
   }
-  return { ok: true, series: res.data?.series };
+  return {
+    ok: true,
+    series: res.data?.series,
+    ...(res.data?.forced ? { forced: true, mirror: res.data.mirror } : {}),
+  };
 }
 
 /** Approve a PENDING request → BOOKED (fires the customer confirmation). */
@@ -1710,8 +1728,14 @@ export interface EditResult {
    * from parts, and never renders it as markup.
    */
   reason?: string;
-  /** For `external_block`: what to send back to confirm THAT block. */
+  /** For `external_block` / OVERLAP: what to send back to confirm THAT conflict. */
   confirmation?: string;
+  /** `OVERLAP` = a confirmable slot_taken; `HELD` = a customer's live hold. */
+  code?: string;
+  /** For OVERLAP: what the new time sits on, one line each, in the shop's zone. */
+  conflicts?: string[];
+  /** For OVERLAP: the question "Book anyway" asks before it moves the booking. */
+  message?: string;
 }
 
 /**
@@ -1736,6 +1760,9 @@ export async function editAppointmentAction(
     mirror: res.data?.mirror,
     ...(res.reason ? { reason: res.reason } : {}),
     ...(res.confirmation ? { confirmation: res.confirmation } : {}),
+    ...(res.code ? { code: res.code } : {}),
+    ...(res.conflicts ? { conflicts: res.conflicts } : {}),
+    ...(res.message ? { message: res.message } : {}),
   };
 }
 

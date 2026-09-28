@@ -103,7 +103,7 @@ export interface AppointmentEditState {
    * The footer hands this its click event, so it reads its argument
    * defensively - only a real confirmation string counts.
    */
-  save: (opts?: { confirmation?: string }) => void;
+  save: (opts?: { confirmation?: string; overlap?: string }) => void;
   /**
    * The one refusal a barber can answer: this edit would land on time he
    * blocked in the calendar he manages. Null unless the server said so, and
@@ -113,6 +113,15 @@ export interface AppointmentEditState {
   blockConflict: BlockConflict | null;
   confirmBlock: () => void;
   dismissBlock: () => void;
+  /**
+   * The move lands on another booking, a synced visit or one of his specials:
+   * named, with "Book anyway" and its second-tap question. Or a customer's
+   * live hold - named, with nothing to confirm. Forgotten the moment the form
+   * changes: it was a question about THAT time.
+   */
+  overlapConflict: BlockConflict | null;
+  confirmOverlap: () => void;
+  dismissOverlap: () => void;
   row: AgendaRow;
   detail: AppointmentDetail | null;
   fields: {
@@ -180,6 +189,10 @@ export function useAppointmentEdit({
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [blockConflict, setBlockConflict] = useState<BlockConflict | null>(null);
+  const [overlapConflict, setOverlapConflict] = useState<BlockConflict | null>(null);
+  // The overlap he already said yes to, carried on the retry that follows - so
+  // answering an overlap and THEN an Acuity block sends both answers.
+  const acceptedOverlap = useRef<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   // 🔴 NOT useTransition's `isPending` on its own. React 18 ends a transition
   // when the callback RETURNS, and an async callback returns its promise
@@ -274,9 +287,13 @@ export function useAppointmentEdit({
   const draftKey = draft ? JSON.stringify(draft) : "";
   useEffect(() => {
     setSaveError(null);
+    // A "Book anyway" answered ONE question - this time, this chair, this
+    // length. Any edit asks a different one.
+    setOverlapConflict(null);
+    acceptedOverlap.current = null;
   }, [draftKey]);
 
-  function save(opts?: { confirmation?: string }) {
+  function save(opts?: { confirmation?: string; overlap?: string }) {
     // The footer passes its click event straight through, so only an actual
     // string is treated as a confirmation.
     const externalBlockConfirmation =
@@ -284,6 +301,9 @@ export function useAppointmentEdit({
         ? opts.confirmation
         : undefined;
     if (inFlight.current) return;
+    if (typeof opts?.overlap === "string" && opts.overlap.length > 0) {
+      acceptedOverlap.current = opts.overlap;
+    }
     const next = draftEdit();
     if (!next) return;
     if (next.problem) {
@@ -299,6 +319,9 @@ export function useAppointmentEdit({
     // server checks this digest against the blocks it finds under the lock, so
     // a banner that has gone stale authorises nothing.
     if (externalBlockConfirmation) patch.externalBlockConfirmation = externalBlockConfirmation;
+    // Same for "Book anyway": the digest names the exact bookings he was
+    // shown, so anything new in the way is asked about again.
+    if (acceptedOverlap.current) patch.overlapConfirmation = acceptedOverlap.current;
 
     inFlight.current = true;
     setSaving(true);
@@ -323,14 +346,36 @@ export function useAppointmentEdit({
           });
           return;
         }
-        // Any other refusal is the authoritative answer now - the block banner
-        // is out of date, so it goes and the real error is what he sees. Not
-        // a toast: see `saveError`.
+        // The move lands on someone: name them, and offer "Book anyway" behind
+        // one more tap on the server's question. A customer's live hold is
+        // named with nothing to confirm. Either way the block banner is stale.
+        if (res.error === "slot_taken" && (res.code === "OVERLAP" || res.code === "HELD")) {
+          setBlockConflict(null);
+          setOverlapConflict(
+            res.code === "OVERLAP" && res.confirmation
+              ? {
+                  reason: res.reason ?? "That time overlaps what's already on your calendar:",
+                  confirmation: res.confirmation,
+                  details: res.conflicts,
+                  ask: res.message ?? "This overlaps another booking. Book it anyway?",
+                }
+              : {
+                  reason: res.reason ?? "A customer is booking this time right now. Pick another time.",
+                  confirmation: "",
+                },
+          );
+          return;
+        }
+        // Any other refusal is the authoritative answer now - the banners are
+        // out of date, so they go and the real error is what he sees. Not a
+        // toast: see `saveError`.
         setBlockConflict(null);
+        setOverlapConflict(null);
         setSaveError(errorCopy(vocab)[res.error ?? ""] ?? "Couldn't save those changes. Try again.");
         return;
       }
       setBlockConflict(null);
+      setOverlapConflict(null);
       setSaveError(null);
       // Honest about the Acuity half. A move whose block did not confirm is
       // NOT a clean success, and saying so is the whole point of reporting it.
@@ -360,6 +405,9 @@ export function useAppointmentEdit({
     blockConflict,
     confirmBlock: () => save({ confirmation: blockConflict?.confirmation }),
     dismissBlock: () => setBlockConflict(null),
+    overlapConflict,
+    confirmOverlap: () => save({ overlap: overlapConflict?.confirmation }),
+    dismissOverlap: () => setOverlapConflict(null),
     row,
     detail,
     fields: {
@@ -434,6 +482,21 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
           consequence="Moving it here puts this booking on time you blocked off there. It will be recorded as an override."
           onConfirm={state.confirmBlock}
           onDismiss={state.dismissBlock}
+        />
+      )}
+      {state.overlapConflict && (
+        <ExternalBlockBanner
+          conflict={state.overlapConflict}
+          pending={state.pending}
+          confirmLabel="Book anyway"
+          pendingLabel="Saving…"
+          consequence={
+            state.overlapConflict.confirmation
+              ? "Both stay on your calendar, and this one is marked Double-booked."
+              : "Nothing was changed."
+          }
+          onConfirm={state.confirmOverlap}
+          onDismiss={state.dismissOverlap}
         />
       )}
       {row.status === "pending" && (
@@ -669,6 +732,9 @@ const errorCopy = (vocab: BusinessVocabulary): Record<string, string> => ({
   // booking stretched into the next one is refused exactly like a booking
   // moved onto it - so neither may talk only about "that time".
   slot_taken: `That runs into another booking on this ${vocab.stationNoun}. Try a shorter length or another time.`,
+  // "Book anyway" cleared every overlap, and this is the one rule with no
+  // override: two bookings cannot START at the same minute on one chair.
+  same_start: "Another appointment starts at exactly that minute. Start this one a few minutes later (e.g. :05).",
   // Hours are the staff member's AND the service's own: a service offered only
   // 1-2:30 and 4:30-8 is refused at 3:00 even inside the working day.
   invalid_slot: "That time isn't open for this service — it's outside your hours or the hours this service is offered.",

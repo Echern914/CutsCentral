@@ -106,6 +106,32 @@ export class OverlapError extends SlotTakenError {
 }
 
 /**
+ * The write overlaps a customer's LIVE HOLD - a receptionist hold or a payment
+ * hold (PENDING with holdExpiresAt still ahead). Somebody is mid-conversation
+ * or mid-checkout for that exact time, and the hold is theirs until it lapses.
+ *
+ * 🔴 NEVER CONFIRMABLE, not even by the barber's "Book anyway". Booking over a
+ * payment hold would let a customer finish paying for a chair that is no
+ * longer theirs alone - the hold promotes to BOOKED when Stripe says the money
+ * landed, whatever else is on the calendar by then. So the guard refuses before
+ * a confirmation is even looked at, and the dashboard says when the hold ends.
+ *
+ * A SUBCLASS of SlotTakenError, like OverlapError: every customer-driven
+ * caller keeps answering a plain "slot taken", exactly as before.
+ */
+export class HeldSlotError extends SlotTakenError {
+  readonly holdIds: string[];
+  /** When the LAST of those holds lapses - the earliest the time can free up. */
+  readonly heldUntil: Date;
+  constructor(holds: { id: string; holdExpiresAt: Date }[]) {
+    super();
+    this.name = "HeldSlotError";
+    this.holdIds = holds.map((h) => h.id);
+    this.heldUntil = new Date(Math.max(...holds.map((h) => h.holdExpiresAt.getTime())));
+  }
+}
+
+/**
  * Digest of the exact rows an OverlapError named. Same reasoning as
  * externalBlockConfirmation below: a BINDING, reproducible on every replica, so
  * confirming authorises those rows and nothing that appeared since.
@@ -179,6 +205,13 @@ export interface SlotGuardResult {
    * under "ignore" blocks are not looked for at all. The caller records these.
    */
   externalBlocksCrossed: ExternalBlockSpan[];
+  /**
+   * The bookings, synced visits and specials this write was CONFIRMED over
+   * (`overlapConfirmation` matched them). Absent when nothing was in the way.
+   * Present means the caller is writing a deliberate double and must record
+   * it as one.
+   */
+  overlapsCrossed?: OverlapRows;
 }
 
 export async function lockStaffAndAssertSlotFree(
@@ -357,8 +390,10 @@ export async function lockStaffAndAssertSlotFree(
      *     nothing may be sold on top of a booking he just made,
      *   - the (staffId, startsAt) unique index still refuses an IDENTICAL start
      *     (P2002 at the insert), which is the caller's to explain.
-     * Walk-ins, holds and external blocks keep their own rules. Only the
-     * dashboard's New appointment passes this, and only for a Custom time.
+     * A customer's LIVE HOLD in the way refuses outright (HeldSlotError) - no
+     * confirmation covers it. Walk-ins and external blocks keep their own
+     * rules. Only the dashboard (New appointment, and the edit sheet) passes
+     * this, behind requireManager; every customer-driven write passes nothing.
      */
     overlapConfirmation?: string | null;
     /**
@@ -433,8 +468,11 @@ export async function lockStaffAndAssertSlotFree(
       ? Prisma.sql`AND "id" <> ALL(${excludedIds}::text[])`
       : Prisma.empty;
 
-  const overlap = await tx.$queryRaw<{ id: string }[]>(
-    Prisma.sql`SELECT id FROM "Appointment"
+  // holdExpiresAt comes back so a LIVE hold can be told apart from a booking:
+  // occupyingSql has already dropped expired ones, so any non-null value here
+  // is a customer still holding the time (see HeldSlotError).
+  const overlap = await tx.$queryRaw<{ id: string; holdExpiresAt: Date | null }[]>(
+    Prisma.sql`SELECT id, "holdExpiresAt" FROM "Appointment"
                WHERE "staffId" = ${opts.staffId}
                  ${statusFragment}
                  ${excludeFragment}
@@ -602,11 +640,19 @@ export async function lockStaffAndAssertSlotFree(
     overlapping.appointmentIds.length +
     overlapping.visitIds.length +
     overlapping.targetedIds.length;
+  let overlapsCrossed: OverlapRows | undefined;
   if (overlapCount > 0) {
+    // A customer mid-checkout or mid-conversation first, before any
+    // confirmation is read: nothing the barber confirms can cover a hold.
+    const holds = overlap.flatMap((o) =>
+      o.holdExpiresAt ? [{ id: o.id, holdExpiresAt: o.holdExpiresAt }] : [],
+    );
+    if (holds.length > 0) throw new HeldSlotError(holds);
     const given = opts.overlapConfirmation?.trim() || null;
     if (given === null || given !== overlapConfirmation(overlapping)) {
       throw new OverlapError(overlapping);
     }
+    overlapsCrossed = overlapping;
     if (overlapping.targetedIds.length > 0) {
       await tx.targetedSlot.updateMany({
         where: {
@@ -667,5 +713,5 @@ export async function lockStaffAndAssertSlotFree(
     data: { status: "CANCELED", canceledAt: now },
   });
 
-  return { externalBlocksCrossed };
+  return { externalBlocksCrossed, overlapsCrossed };
 }

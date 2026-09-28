@@ -2389,6 +2389,18 @@ export function AppointmentBlock({
             )}
           </span>
           {row.special && <SpecialChip afterHours={row.afterHours} />}
+          {/* Booked over another appointment on purpose ("Book anyway"). By
+              the name, like the special chip, so it is seen before anything
+              else about the card. Theme token, not a raw palette class. */}
+          {row.doubleBooked && (
+            <span
+              data-testid="double-booked-chip"
+              title="You booked this over another appointment on purpose"
+              className="shrink-0 rounded-full bg-danger-soft/15 px-1.5 py-0.5 text-[10px] font-medium text-danger-soft"
+            >
+              Double-booked
+            </span>
+          )}
         </span>
         <span
           aria-hidden

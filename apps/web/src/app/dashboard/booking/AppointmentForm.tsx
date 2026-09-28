@@ -27,10 +27,13 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  * footer), formkit's cards for the body. Service → provider → time → client →
  * note → repeat, then one solid-brass Schedule in the footer that can never
  * scroll below the fold. Times come from the real slot engine; "Custom time"
- * forces a time outside computed availability. If that time overlaps another
- * booking, a synced visit or one of his own specials, the API names them and
- * he can "Book anyway" (see OverlapError). Prefills the date + hour tapped in
- * the calendar, and the Custom time picker opens on that same day.
+ * forces a time outside computed availability. If a time - custom, or a slot
+ * someone took while he looked - overlaps another booking, a synced visit or
+ * one of his own specials, the API names them IN THIS DIALOG and he can "Book
+ * anyway": one more tap answers "This overlaps Marcus R. at 10:00 AM. Book it
+ * anyway?", and only that yes books it (see OverlapError). A customer's live
+ * hold is named but never offered. Prefills the date + hour tapped in the
+ * calendar, and the Custom time picker opens on that same day.
  *
  * 🔴 SPECIALS are listed above the regular times. The grid subtracts every open
  * special on purpose (each is sold at its own price), and Custom time only
@@ -122,10 +125,12 @@ export function AppointmentForm({
    */
   const [blockConflict, setBlockConflict] = useState<BlockConflict | null>(null);
   /**
-   * Custom time only: the API refused because the time overlaps another
-   * booking, a synced visit or one of the barber's own specials, and named
-   * them. Same shape and banner as a block - he sees the list, then "Book
-   * anyway" replays the confirmation bound to exactly those rows.
+   * The API refused because the time overlaps another booking, a synced visit
+   * or one of the barber's own specials, and named them. Same banner as a
+   * block - he sees the list, "Book anyway" asks the server's question, and
+   * only "Yes" replays the confirmation bound to exactly those rows. Also
+   * holds a customer's LIVE HOLD refusal, with no confirmation (nothing to
+   * answer - only another time).
    */
   const [overlapConflict, setOverlapConflict] = useState<BlockConflict | null>(null);
   // The overlap he already said yes to, carried on the retry that follows - so
@@ -275,7 +280,7 @@ export function AppointmentForm({
     if (typeof opts?.overlap === "string" && opts.overlap.length > 0) {
       acceptedOverlap.current = opts.overlap;
     }
-    const overlapConfirmation = customTime ? (acceptedOverlap.current ?? undefined) : undefined;
+    const overlapConfirmation = acceptedOverlap.current ?? undefined;
     setBlockConflict(null);
     setOverlapConflict(null);
     setError(null);
@@ -331,28 +336,42 @@ export function AppointmentForm({
           });
           return;
         }
-        // Custom time over something already there: say WHAT, and let him
-        // book anyway (Drick: "it should bypass if I am force booking").
+        // Over something already there: say WHAT, and let him book anyway
+        // (Drick: "it should bypass if I am force booking") - after one more
+        // tap on the server's own question.
         if (res.error === "slot_taken" && res.code === "OVERLAP" && res.confirmation) {
           setOverlapConflict({
             reason: res.reason ?? "That time overlaps what's already on your calendar:",
             confirmation: res.confirmation,
             details: res.conflicts,
+            ask: res.message ?? "This overlaps another booking. Book it anyway?",
+          });
+          return;
+        }
+        // A customer is paying for or confirming that exact time: shown here,
+        // with when it ends, and nothing to confirm.
+        if (res.error === "slot_taken" && res.code === "HELD") {
+          setOverlapConflict({
+            reason: res.reason ?? "A customer is booking this time right now. Pick another time.",
+            confirmation: "",
           });
           return;
         }
         setError(
           res.error === "same_start"
             ? "Another appointment starts at exactly that minute. Start this one a few minutes later (e.g. :05)."
-            : res.error === "slot_taken"
-              ? special
-                ? "That special was just booked or taken off. Pick another time."
-                : customTime
-                  ? "That time is already booked."
-                  : "That time was just taken. Pick another, or use Custom time to force it."
-              : res.error === "invalid_slot"
-                ? "That time isn't available. Use Custom time to force it."
-                : "Couldn't schedule. Please try again.",
+            : res.error === "acuity_refused"
+              ? (res.reason ??
+                "Acuity wouldn't block this time, so it wasn't booked. Check your Acuity calendar, then try again.")
+              : res.error === "slot_taken"
+                ? special
+                  ? "That special was just booked or taken off. Pick another time."
+                  : customTime
+                    ? "That time is already booked."
+                    : "That time was just taken. Pick another, or use Custom time to force it."
+                : res.error === "invalid_slot"
+                  ? "That time isn't available. Use Custom time to force it."
+                  : "Couldn't schedule. Please try again.",
         );
         return;
       }
@@ -369,8 +388,14 @@ export function AppointmentForm({
             : `Booked ${booked} appointments`,
           "success",
         );
+      } else if (res.forced && res.mirror === "failed") {
+        // Booked, and Acuity turned the block down and the undo could not run:
+        // the one outcome that needs him to act, so it says what to do.
+        toast("Booked - but Acuity didn't block that time. Block it in Acuity so it can't be sold.", "error");
+      } else if (res.forced && res.mirror === "unknown") {
+        toast("Booked over the other appointment - still confirming the time on Acuity.", "success");
       } else {
-        toast("Appointment scheduled", "success");
+        toast(res.forced ? "Booked over the other appointment" : "Appointment scheduled", "success");
       }
       onCreated();
     });
@@ -411,7 +436,11 @@ export function AppointmentForm({
             pending={pending}
             confirmLabel="Book anyway"
             pendingLabel="Booking…"
-            consequence="Both stay on your calendar. A special listed here comes off sale so nobody can book on top of this."
+            consequence={
+              overlapConflict.confirmation
+                ? "Both stay on your calendar, and this one is marked Double-booked. A special listed here comes off sale so nobody can book on top of this."
+                : "Nothing was booked."
+            }
             onConfirm={() => submit({ overlap: overlapConflict.confirmation })}
             onDismiss={() => setOverlapConflict(null)}
           />
@@ -487,29 +516,37 @@ export function AppointmentForm({
           }
         >
           {customTime ? (
-            <input
-              type="datetime-local"
-              aria-label="Custom date and time"
-              className={INPUT}
-              // CONTROLLED, and seeded from the day he tapped. Uncontrolled and
-              // empty, iOS opens the picker on TODAY: tap Fri Sep 25, choose
-              // 8:00 PM, and the value was Thu Sep 24 8:00 PM - the wrong night,
-              // refused as "already booked" (Drick, 2026-09-24).
-              value={startsAt ? shopLocalInputValue(startsAt, timezone) : ""}
-              onChange={(e) => {
-                // datetime-local is naive wall clock; interpret in the SHOP's
-                // zone (the schedule shown) - new Date(v) would use the device's
-                // zone and shift the instant when the barber isn't in the shop tz.
-                const v = e.target.value;
-                if (!v) return;
-                const [day, time] = v.split("T");
-                const [y, m, d] = day!.split("-").map(Number);
-                const [hh, mm] = time!.split(":").map(Number);
-                setStartsAt(
-                  zonedWallTimeToUtc(y!, m! - 1, d!, hh! * 60 + mm!, timezone).toISOString(),
-                );
-              }}
-            />
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <input
+                type="datetime-local"
+                aria-label="Custom date and time"
+                className={INPUT}
+                // CONTROLLED, and seeded from the day he tapped. Uncontrolled and
+                // empty, iOS opens the picker on TODAY: tap Fri Sep 25, choose
+                // 8:00 PM, and the value was Thu Sep 24 8:00 PM - the wrong night,
+                // refused as "already booked" (Drick, 2026-09-24).
+                value={startsAt ? shopLocalInputValue(startsAt, timezone) : ""}
+                onChange={(e) => {
+                  // datetime-local is naive wall clock; interpret in the SHOP's
+                  // zone (the schedule shown) - new Date(v) would use the device's
+                  // zone and shift the instant when the barber isn't in the shop tz.
+                  const v = e.target.value;
+                  if (!v) return;
+                  const [day, time] = v.split("T");
+                  const [y, m, d] = day!.split("-").map(Number);
+                  const [hh, mm] = time!.split(":").map(Number);
+                  setStartsAt(
+                    zonedWallTimeToUtc(y!, m! - 1, d!, hh! * 60 + mm!, timezone).toISOString(),
+                  );
+                }}
+              />
+              {/* Where "force it" lives, said once: any time, even over another
+                  booking - he is shown what is there and asked first. */}
+              <p className="text-[11px] leading-snug text-muted">
+                Any time works, even over another booking - you&apos;ll see who&apos;s there
+                and be asked before it&apos;s booked.
+              </p>
+            </div>
           ) : (
             <div className="flex min-w-0 flex-col gap-3">
               {/* 🔴 THE DAY'S SPECIALS COME FIRST, whatever service is picked -

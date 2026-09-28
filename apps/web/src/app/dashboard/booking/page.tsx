@@ -172,6 +172,12 @@ export interface AgendaRow {
    */
   afterHours?: boolean;
   /**
+   * Booked OVER another booking on purpose ("Book anyway"). The card says
+   * "Double-booked" so a deliberate double is never read as an ordinary slot.
+   * Native appointment rows only.
+   */
+  doubleBooked?: boolean;
+  /**
    * Block rows only: how many IDENTICAL external blocks this row stands for.
    * 1 (or absent) is the normal case. Higher means the external calendar holds
    * several byte-identical blocks for the same span — shown as a "×N" chip
