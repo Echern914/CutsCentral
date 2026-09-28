@@ -217,6 +217,68 @@ describe("the preview, before anything is sent", () => {
     expect(res.body.blocker.kind).toBe("no_recipients");
   });
 
+  it("counts the same group on BOTH channels, whichever one is picked", async () => {
+    // Two with the app, neither said yes to email; one said yes, no app.
+    const a = await makeClient({ tier: "GOLD", permitted: false });
+    const b = await makeClient({ tier: "GOLD", permitted: false });
+    await makeClient({ tier: "GOLD" });
+    await makeClient({ tier: "SILVER" });
+    for (const c of [a, b]) {
+      await prisma.pushSubscription.create({
+        data: { shopId, clientId: c.id, endpoint: `https://push.test/${randomToken(8)}`, kind: "web" },
+      });
+    }
+
+    for (const channel of ["email", "push"] as const) {
+      const res = await preview({ channel, tiers: ["GOLD"] });
+      expect(res.status).toBe(200);
+      const counts = (ch: { skipped: { reason: string; count: number }[] }) =>
+        Object.fromEntries(ch.skipped.map((s) => [s.reason, s.count]));
+      expect(res.body.channels.email.reachable).toBe(1);
+      expect(counts(res.body.channels.email)).toEqual({ not_in_audience: 1, not_permitted: 2 });
+      expect(res.body.channels.push.reachable).toBe(2);
+      expect(counts(res.body.channels.push)).toEqual({ not_in_audience: 1, no_app: 1 });
+      // The picked channel's own numbers are those same ones.
+      expect(res.body.reachable).toBe(res.body.channels[channel].reachable);
+      expect(res.body.skipped).toEqual(res.body.channels[channel].skipped);
+      expect(res.body.channels.email.unavailable).toBe(false);
+    }
+  });
+
+  it("🔴 when email reaches nobody it still says why, with the real reason, and push's number", async () => {
+    const c = await makeClient({ tier: "GOLD", permitted: false });
+    await makeClient({ tier: "GOLD", permitted: false });
+    await prisma.pushSubscription.create({
+      data: { shopId, clientId: c.id, endpoint: `https://push.test/${randomToken(8)}`, kind: "web" },
+    });
+    const res = await preview({ channel: "email", tiers: [] });
+    expect(res.body.reachable).toBe(0);
+    expect(res.body.blocker.kind).toBe("no_recipients");
+    expect(res.body.skipped).toEqual([
+      { reason: "not_permitted", count: 2, label: "Hasn't agreed to your marketing emails yet" },
+    ]);
+    expect(res.body.channels.push.reachable).toBe(1);
+  });
+
+  it("marks email unavailable, not merely empty, for a shop with no street address", async () => {
+    await prisma.shop.updateMany({ where: { id: shopId }, data: { addressStreet: null } });
+    await makeClient({ tier: "GOLD" });
+    const res = await preview({ channel: "push", tiers: [] });
+    expect(res.body.channels.email.unavailable).toBe(true);
+    expect(res.body.channels.push.unavailable).toBe(false);
+  });
+
+  it("counts each tier's current clients, so an almost-empty tier shows", async () => {
+    await makeClient({ tier: "GOLD" });
+    await makeClient({ tier: "SILVER", email: null });
+    await makeClient({ tier: "SILVER" });
+    await makeClient({ tier: null });
+    // Archived is not a current client of any tier.
+    await makeClient({ tier: "BRONZE", archived: true });
+    const res = await preview({ channel: "push", tiers: [] });
+    expect(res.body.tierCounts).toEqual({ GOLD: 1, SILVER: 2, BRONZE: 0 });
+  });
+
   it("tells the compose box what fits on this channel", async () => {
     const p = await preview({ channel: "push", tiers: [] });
     expect(p.body.limits).toEqual({ subject: 60, body: 300 });
