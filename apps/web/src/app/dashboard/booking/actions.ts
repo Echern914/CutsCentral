@@ -430,12 +430,17 @@ export async function getDaySpecialsAction(
  * Open slots for a (staff, service) over a range - powers the Time picker -
  * plus the barber's specials under that service. Older API responses carry no
  * `targetedSlots`, which reads as none.
+ *
+ * `addOnIds`: the add-ons ticked in the form. Only times long enough for the
+ * service PLUS them come back - the API works out their minutes itself, by the
+ * same rule the booking is checked against, so no length is ever sent.
  */
 export async function getDashSlotsAction(
   staffId: string,
   serviceId: string,
   from: string,
   to: string,
+  addOnIds: string[] = [],
 ): Promise<{
   ok: boolean;
   slots?: DashSlot[];
@@ -443,7 +448,13 @@ export async function getDashSlotsAction(
   timezone?: string;
   error?: string;
 }> {
-  const qs = new URLSearchParams({ staffId, serviceId, from, to }).toString();
+  const qs = new URLSearchParams({
+    staffId,
+    serviceId,
+    from,
+    to,
+    ...(addOnIds.length > 0 ? { addOnIds: addOnIds.join(",") } : {}),
+  }).toString();
   const res = await apiGet<{
     timezone: string;
     slots: DashSlot[];
@@ -517,6 +528,13 @@ export interface CreateApptInput {
    * appointment, so a half-linked state cannot exist.
    */
   waitlistEntryId?: string;
+  /**
+   * The add-ons ticked for this visit. The API adds their minutes and price
+   * and snapshots them onto the booking - and refuses (`invalid_add_on`) any
+   * it will not carry, rather than booking without it. Never sent with a
+   * special or a repeating series.
+   */
+  addOnIds?: string[];
   /**
    * Booking INTO one of the barber's specials. The server claims the slot in
    * the same transaction (as the website does) and books it at the special's

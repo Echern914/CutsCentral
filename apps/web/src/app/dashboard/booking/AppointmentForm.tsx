@@ -6,7 +6,8 @@ import { cn } from "@/lib/cn";
 import { Dialog } from "@/components/ui/Dialog";
 import { chip, Field, FormFooter, Group, INPUT } from "./formkit";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
-import type { ServiceRow, StaffRow } from "./page";
+import { addOnOffersService } from "@chairback/config/addOns";
+import type { AddOnRow, ServiceRow, StaffRow } from "./page";
 import {
   createAppointmentAction,
   getDashSlotsAction,
@@ -24,8 +25,8 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
 /**
  * "New appointment" (native booking), in the SAME chrome as the appointment
  * sheet: ui/Dialog for the shell (focus trap, keyboard-aware viewport, sticky
- * footer), formkit's cards for the body. Service → provider → time → client →
- * note → repeat, then one solid-brass Schedule in the footer that can never
+ * footer), formkit's cards for the body. Service → add-ons → provider → time →
+ * client → note → repeat, then one solid-brass Schedule in the footer that can never
  * scroll below the fold. Times come from the real slot engine; "Custom time"
  * forces a time outside computed availability. If a time - custom, or a slot
  * someone took while he looked - overlaps another booking, a synced visit or
@@ -41,10 +42,19 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  * list the only way to fill a special AT ITS PRICE was
  * a customer on the website. Picking one sends its id, and the server claims it
  * exactly as the website does, at the special's own length and price.
+ *
+ * ADD-ONS: once a service is picked, the add-ons offered with it are listed,
+ * unticked (the rule is `addOnOffersService`, the one the API charges by).
+ * Ticking one shows the new total and length, and re-asks for open times with
+ * it - so a time long enough for a haircut but not haircut + beard is not
+ * offered, exactly as the booking itself would refuse it. A special has its
+ * own length and price, and a repeating series takes none, so neither carries
+ * add-ons.
  */
 export function AppointmentForm({
   staff,
   services,
+  addOns = [],
   timezone,
   prefillISO,
   waitlist,
@@ -54,6 +64,8 @@ export function AppointmentForm({
 }: {
   staff: StaffRow[];
   services: ServiceRow[];
+  /** The shop's add-ons, as the booking page loads them (inactive ones too). */
+  addOns?: AddOnRow[];
   timezone: string;
   /** ISO instant of the tapped hour, prefills date + time. */
   prefillISO: string;
@@ -100,6 +112,9 @@ export function AppointmentForm({
   // barber having picked that special.
   const [targetedSlotId, setTargetedSlotId] = useState<string | null>(null);
   const [loadingSlots, setLoadingSlots] = useState(false);
+  // Ticked add-ons, in the order ticked. Cleared whenever the service changes
+  // (add-ons belong to a service) and when a special is picked.
+  const [addOnIds, setAddOnIds] = useState<string[]>([]);
 
   const [clientId, setClientId] = useState<string | null>(null);
   const [clientLabel, setClientLabel] = useState<string>("");
@@ -140,12 +155,16 @@ export function AppointmentForm({
   const [pending, start] = useTransition();
 
   const selectedService = activeServices.find((s) => s.id === serviceId) ?? null;
+  // The ticked add-ons as one value, so an effect can depend on the CHOICE
+  // rather than on an array's identity.
+  const addOnKey = addOnIds.join(",");
 
-  // A "Book anyway" answered ONE question: this time, this service, this chair.
+  // A "Book anyway" answered ONE question: this time, this service, this chair,
+  // this length.
   useEffect(() => {
     acceptedOverlap.current = null;
     setOverlapConflict(null);
-  }, [startsAt, serviceId, staffId, customTime]);
+  }, [startsAt, serviceId, staffId, customTime, addOnKey]);
 
   const dayFmt = useMemo(
     () =>
@@ -187,15 +206,30 @@ export function AppointmentForm({
   const windowFrom = new Date(new Date(prefillISO).getTime() - 12 * 3600_000).toISOString();
   const windowTo = new Date(new Date(prefillISO).getTime() + 36 * 3600_000).toISOString();
 
-  // Load open slots for the chosen (staff, service) on the prefill day.
+  // Load open slots for the chosen (staff, service, add-ons) on the prefill day.
+  // The add-ons go as ids: the API resolves their minutes itself, and only
+  // lists a time the service PLUS them fits in.
   useEffect(() => {
     if (!serviceId || !staffId || customTime) return;
+    let live = true;
     setLoadingSlots(true);
-    getDashSlotsAction(staffId, serviceId, windowFrom, windowTo).then((res) => {
+    getDashSlotsAction(
+      staffId,
+      serviceId,
+      windowFrom,
+      windowTo,
+      addOnKey ? addOnKey.split(",") : [],
+    ).then((res) => {
+      // A newer pick (service, provider, add-ons) raced this answer - ticking
+      // two add-ons quickly must never leave the one-add-on list on screen.
+      if (!live) return;
       setLoadingSlots(false);
       setSlots(res.ok && res.slots ? res.slots.filter((s) => onDay(s.startsAt)) : []);
     });
-  }, [serviceId, staffId, customTime, windowFrom, windowTo, onDay]);
+    return () => {
+      live = false;
+    };
+  }, [serviceId, staffId, customTime, windowFrom, windowTo, onDay, addOnKey]);
 
   // Load the DAY's specials: this provider's, or every provider's while none is
   // picked. Independent of the service - that is the whole point.
@@ -227,6 +261,34 @@ export function AppointmentForm({
         ) ?? null)
       : null;
 
+  /**
+   * The add-ons offered with the picked service - active, and listed by the
+   * API's own rule - and the ones ticked. A special books at its own length
+   * and price, so while one is picked nothing is ticked or sent.
+   */
+  const serviceAddOns = selectedService
+    ? addOns.filter((a) => a.active && addOnOffersService(a, selectedService.id))
+    : [];
+  const chosenAddOns = special ? [] : serviceAddOns.filter((a) => addOnIds.includes(a.id));
+  // The same sums the API books: minutes onto the service's length, and a price
+  // only when there is one to add (a priceless service with free add-ons stays
+  // priceless). The service's base figures, as its row above shows them.
+  const addOnPrice = chosenAddOns.reduce((sum, a) => sum + (a.price ?? 0), 0);
+  const totalMin =
+    (selectedService?.durationMin ?? 0) + chosenAddOns.reduce((sum, a) => sum + a.durationMin, 0);
+  const totalPrice =
+    selectedService?.price == null && addOnPrice === 0
+      ? null
+      : (selectedService?.price ?? 0) + addOnPrice;
+
+  function toggleAddOn(id: string) {
+    const on = addOnIds.includes(id);
+    setAddOnIds(on ? addOnIds.filter((x) => x !== id) : [...addOnIds, id]);
+    // A repeating series takes no add-ons (the API refuses the pair), so
+    // ticking one makes this a single visit - the Repeat card says so.
+    if (!on) setRepeat(false);
+  }
+
   /** Tap a special: it picks its own provider and service. */
   function pickSpecial(t: DaySpecial) {
     setStaffId(t.staffId);
@@ -236,10 +298,14 @@ export function AppointmentForm({
     setStartsAt(t.startsAt);
     setTargetedSlotId(t.id);
     setRepeat(false);
+    // Its own length and price: nothing to add to.
+    setAddOnIds([]);
   }
 
   /** Switching service or provider forgets a special not offered under the new one. */
   function chooseService(id: string) {
+    // Add-ons belong to a service: a new service starts with none ticked.
+    if (id !== serviceId) setAddOnIds([]);
     setServiceId(id);
     const t = specials.find((x) => x.id === targetedSlotId);
     if (t && !t.serviceIds.includes(id)) setTargetedSlotId(null);
@@ -299,8 +365,8 @@ export function AppointmentForm({
       return zonedWallTimeToUtc(y!, m! - 1, d!, 23 * 60 + 59, timezone).toISOString();
     };
     // A special is one physical time: it never repeats (the server refuses the
-    // combination too).
-    const recurrence = repeat && !special
+    // combination too). Nor does a visit with add-ons.
+    const recurrence = repeat && !special && chosenAddOns.length === 0
       ? {
           interval: everyWeeks,
           ...(endMode === "count" ? { count } : { until: untilISO() }),
@@ -324,6 +390,9 @@ export function AppointmentForm({
         waitlistEntryId: waitlist?.entryId,
         // Claimed server-side in the same transaction, at its own price.
         targetedSlotId: special?.id,
+        // What is ticked ON SCREEN - derived, so an add-on the form is no
+        // longer showing can never ride along.
+        addOnIds: chosenAddOns.length > 0 ? chosenAddOns.map((a) => a.id) : undefined,
       });
       if (!res.ok) {
         if (res.error === "external_block") {
@@ -370,8 +439,12 @@ export function AppointmentForm({
                     ? "That time is already booked."
                     : "That time was just taken. Pick another, or use Custom time to force it."
                 : res.error === "invalid_slot"
-                  ? "That time isn't available. Use Custom time to force it."
-                  : "Couldn't schedule. Please try again.",
+                  ? chosenAddOns.length > 0
+                    ? "That time is too short with the add-ons. Pick another, or use Custom time to force it."
+                    : "That time isn't available. Use Custom time to force it."
+                  : res.error === "invalid_add_on"
+                    ? "An add-on you ticked isn't offered with this service any more. Close this and open it again to see the current list."
+                    : "Couldn't schedule. Please try again.",
         );
         return;
       }
@@ -479,6 +552,80 @@ export function AppointmentForm({
             )}
           </div>
         </Group>
+
+        {/* The picked service's add-ons, unticked until he ticks them. Only
+            when it has any - a service without add-ons shows no card at all. */}
+        {selectedService && serviceAddOns.length > 0 && (
+          <Group title="Add-ons">
+            {special ? (
+              <p className="text-xs text-muted">
+                A special has its own length and price, so add-ons don&apos;t apply.
+              </p>
+            ) : (
+              <>
+                <div role="group" aria-label="Add-ons" className="flex min-w-0 flex-col gap-1.5">
+                  {serviceAddOns.map((a) => {
+                    const on = addOnIds.includes(a.id);
+                    const extra = [
+                      a.price != null && a.price > 0 ? `+${formatSpecialPrice(a.price)}` : null,
+                      a.durationMin > 0 ? `+${a.durationMin} min` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ");
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => toggleAddOn(a.id)}
+                        className={cn(
+                          "flex min-h-[2.75rem] w-full min-w-0 items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-left text-sm transition-colors duration-150 ease-out",
+                          on ? "border-gold/50 bg-gold/10" : "border-subtle hover:bg-charcoal-700/40",
+                        )}
+                      >
+                        <span className="flex min-w-0 items-center gap-2.5">
+                          <span
+                            aria-hidden
+                            className={cn(
+                              "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]",
+                              on ? "border-gold text-gold" : "border-subtle-strong",
+                            )}
+                          >
+                            {on ? "✓" : ""}
+                          </span>
+                          <span className="min-w-0 [overflow-wrap:anywhere] font-medium text-offwhite">
+                            {a.name}
+                          </span>
+                        </span>
+                        {extra && (
+                          <span className="shrink-0 text-xs tabular-nums text-muted">{extra}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                {chosenAddOns.length > 0 && (
+                  <div
+                    data-qa="add-on-total"
+                    className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-gold/30 bg-gold/5 px-4 py-2.5 text-sm"
+                  >
+                    <span className="min-w-0">
+                      <span className="block text-[11px] font-medium uppercase tracking-wide text-muted">
+                        Total
+                      </span>
+                      <span className="block [overflow-wrap:anywhere] text-offwhite">
+                        {[selectedService.name, ...chosenAddOns.map((a) => a.name)].join(" + ")}
+                      </span>
+                    </span>
+                    <span className="shrink-0 font-semibold tabular-nums text-gold">
+                      {totalMin} min{totalPrice !== null ? ` · ${formatSpecialPrice(totalPrice)}` : ""}
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
+          </Group>
+        )}
 
         {activeStaff.length > 1 && (
           <Group title="Provider">
@@ -625,7 +772,8 @@ export function AppointmentForm({
                 </div>
               ) : (
                 <p className="text-xs text-muted">
-                  {specials.length > 0 ? "No other open times this day." : "No open times this day."}{" "}
+                  {specials.length > 0 ? "No other open times this day" : "No open times this day"}
+                  {chosenAddOns.length > 0 ? " long enough with the add-ons." : "."}{" "}
                   Use Custom time to force one.
                 </p>
               )}
@@ -732,6 +880,10 @@ export function AppointmentForm({
           {special ? (
             <p className="text-xs text-muted">
               A special is a one-off time, so it doesn&apos;t repeat.
+            </p>
+          ) : chosenAddOns.length > 0 ? (
+            <p className="text-xs text-muted">
+              Add-ons are for a single visit, so this one doesn&apos;t repeat.
             </p>
           ) : (
             <div className="flex gap-1.5">

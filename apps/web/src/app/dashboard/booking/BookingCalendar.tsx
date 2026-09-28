@@ -34,6 +34,7 @@ import {
   walkInBackdateRefusal,
 } from "@chairback/config/walkInBackdate";
 import type {
+  AddOnRow,
   AgendaCategory,
   AgendaResponse,
   AgendaRow,
@@ -174,6 +175,7 @@ export function BookingCalendar({
   isNative,
   staff,
   services,
+  addOns = [],
   toast,
   openAppointmentId,
   tierOpenings = false,
@@ -188,6 +190,8 @@ export function BookingCalendar({
   isNative: boolean;
   staff: StaffRow[];
   services: ServiceRow[];
+  /** The shop's add-ons, offered in New appointment once a service is picked. */
+  addOns?: AddOnRow[];
   toast: Toast;
   /**
    * A booking to open on arrival (?appointment=<id>) - where every barber
@@ -789,6 +793,7 @@ export function BookingCalendar({
         <AppointmentForm
           staff={staff}
           services={services}
+          addOns={addOns}
           timezone={tz}
           prefillISO={addAt}
           onClose={() => setAddAt(null)}
@@ -809,6 +814,7 @@ export function BookingCalendar({
         <AppointmentForm
           staff={staff}
           services={services}
+          addOns={addOns}
           timezone={tz}
           prefillISO={new Date().toISOString()}
           waitlist={{
