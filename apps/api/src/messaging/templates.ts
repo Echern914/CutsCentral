@@ -735,7 +735,8 @@ export function buildAppointmentConfirmationEmail(params: {
  * cancel", which is worse than useless once the appointment is gone: the link
  * still resolves, shows a canceled booking, and offers nothing. This template
  * therefore builds its own footer with a BOOK AGAIN call to action - the only
- * thing the customer can actually do next - and passes no manageUrl.
+ * thing the customer can actually do next, when the shop has somewhere that
+ * will book them - and passes no manageUrl.
  *
  * Carries no ids, no tokens and no internal notes: the customer needs to know
  * WHICH appointment is gone and how to get another one, and nothing else.
@@ -743,7 +744,12 @@ export function buildAppointmentConfirmationEmail(params: {
 export function buildAppointmentCanceledEmail(params: {
   firstName: string | null;
   shopName: string;
-  shopSlug: string | null;
+  /**
+   * Where "Book another appointment" goes: bookNowUrl (config/bookingLinks.ts).
+   * Null - a booking page switched off, no usable link - leaves the button out
+   * rather than sending the customer to a page that will not book them.
+   */
+  bookUrl: string | null;
   serviceName: string;
   startsAt: Date;
   timezone: string;
@@ -754,11 +760,7 @@ export function buildAppointmentCanceledEmail(params: {
   const when = formatApptTime(params.startsAt, params.timezone);
   const who = params.firstName ?? "there";
   const withWhom = params.staffName ? ` with ${params.staffName}` : "";
-  // Book-again points at the shop's own booking page when it has a slug; a
-  // shop without one gets no invented URL.
-  const bookUrl = params.shopSlug
-    ? `${env.APP_BASE_URL}/book/${params.shopSlug}`
-    : null;
+  const bookUrl = params.bookUrl;
   const contact = params.contactLine?.trim() || null;
 
   const textLines = [

@@ -276,7 +276,7 @@ describe("calendar, wallet and the app CTA", () => {
     const canceled = buildAppointmentCanceledEmail({
       firstName: "Casey",
       shopName: "Drick's Barbershop",
-      shopSlug: "dricks",
+      bookUrl: "https://app.example.test/book/example-shop",
       serviceName: "Skin Fade",
       startsAt: base.startsAt,
       timezone: base.timezone,
