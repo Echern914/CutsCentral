@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import Link from "next/link";
 import { cn } from "@/lib/cn";
 import { copyText, mailtoUri, smsUri, telUri } from "@/lib/contactUri";
+import { parsePrice } from "@/lib/serviceFields";
 import { Dialog } from "@/components/ui/Dialog";
 import { INPUT } from "./formkit";
 import {
@@ -218,27 +219,47 @@ export function AppointmentSheet({
   //  ── the ORIGINAL chair checkout, used while the flag is off ──
   const [amount, setAmount] = useState<string | null>(null);
   const [method, setMethod] = useState<(typeof METHODS)[number]["key"] | null>(null);
-  const parsedAmount = Number.parseFloat(amount ?? "");
-  const amountValid = Number.isFinite(parsedAmount) && parsedAmount >= 0;
-  const amountValue = amount ?? ((owedCents ?? 0) / 100).toFixed(2);
+  // 🔴 CHECK THE AMOUNT THE FIELD SHOWS. `amount` stays null until the barber
+  // edits it, and until then the field shows the balance due. Parsing the raw
+  // state instead read that untouched "50.00" as blank: "Enter an amount"
+  // under a $50.00, and Mark paid disabled until the barber retyped it.
+  // No known balance (an unpriced service) shows blank, never a $0.00 that
+  // one tap would record.
+  const amountValue = amount ?? (owedCents === null ? "" : (owedCents / 100).toFixed(2));
+  const typed = parsePrice(amountValue);
+  // Blank is "not set" to a price field but no amount at checkout; the API
+  // caps at 100,000.
+  const parsedAmount =
+    typed.ok && typed.value !== null && typed.value <= 100_000 ? typed.value : null;
+  const amountValid = parsedAmount !== null;
 
   function submitCheckout() {
-    if (!method || !amountValid) return;
+    if (!method || parsedAmount === null) return;
+    const amountToSave = parsedAmount;
     start(async () => {
-      const res = await checkoutAppointmentAction(row.id, {
-        amount: Number(parsedAmount.toFixed(2)),
-        method,
-      });
-      if (!res.ok) {
-        toast(
-          res.error === "paid_already"
-            ? `This ${vocab.serviceNoun} was already checked out`
-            : "Couldn't save the checkout",
-          "error",
-        );
+      let res: Awaited<ReturnType<typeof checkoutAppointmentAction>>;
+      try {
+        res = await checkoutAppointmentAction(row.id, { amount: amountToSave, method });
+      } catch {
+        // No answer (no signal, the app backgrounded). The API records the
+        // payment and the completion together or not at all, so nothing is
+        // half-saved: the screen stays as it was, and Mark paid tries again.
+        toast("Couldn't save the checkout. Check your connection and try again.", "error");
         return;
       }
-      toast(`Paid $${parsedAmount.toFixed(2)} · ${row.clientName}`, "success");
+      if (!res.ok) {
+        if (res.error === "paid_already") {
+          // Already recorded - by another device, or by an attempt whose
+          // answer never arrived. Show the calendar what is true, not a retry.
+          toast(`This ${vocab.serviceNoun} was already checked out`, "error");
+          onChanged();
+          onClose();
+          return;
+        }
+        toast("Couldn't save the checkout", "error");
+        return;
+      }
+      toast(`Paid $${amountToSave.toFixed(2)} · ${row.clientName}`, "success");
       onChanged();
       onClose();
     });
@@ -327,7 +348,7 @@ export function AppointmentSheet({
             label: pending
               ? "Saving…"
               : method
-                ? `Mark paid · $${amountValid ? parsedAmount.toFixed(2) : "—"}`
+                ? `Mark paid · $${parsedAmount !== null ? parsedAmount.toFixed(2) : "—"}`
                 : "Pick a payment method",
             onClick: submitCheckout,
             disabled: pending || !method || !amountValid,
