@@ -12,8 +12,10 @@ import { createApp } from "../app.js";
  * idempotent (matched by key, no duplicates); a row that matches an existing
  * client by a shared phone or email but would change or add to it is NEVER
  * written - the client is untouched and the row is skipped with what it
- * matched (a family on one phone is two people); an invalid phone is skipped
- * (not stored as a reachable-looking null); cross-tenant isolation.
+ * matched (a family on one phone is two people); a row with only a name is
+ * skipped when that full name is already in the book, so a re-import never
+ * adds it twice; an invalid phone is skipped (not stored as a
+ * reachable-looking null); cross-tenant isolation.
  */
 const app = createApp();
 const email = `imp-${randomToken(6)}@test.local`.toLowerCase();
@@ -282,6 +284,65 @@ describe("POST /api/dashboard/clients/import", () => {
       rows: [{ firstName: "JO", phone: "(302) 555-0555", email: "jo@example.com" }],
     });
     expect(again.body).toMatchObject({ unchanged: 1, skipped: [] });
+  });
+
+  it("🔴 a name-only row is not added again when the same file is imported twice", async () => {
+    // No phone, no email: the key is random, so this used to add both people
+    // a second time on every re-import.
+    const rows = [{ firstName: "Rowan", lastName: "Pike" }, { firstName: "Theo" }];
+    const first = await imp({ rows });
+    expect(first.body).toMatchObject({ created: 2, skipped: [] });
+
+    const again = await imp({ rows });
+    expect(again.status).toBe(200);
+    expect(again.body.created).toBe(0);
+    expect(again.body.skipped).toEqual([
+      { row: 1, reason: "same_name", name: "Rowan Pike" },
+      { row: 2, reason: "same_name", name: "Theo" },
+    ]);
+    expect(await prisma.client.count({ where: { shopId, firstName: { in: ["Rowan", "Theo"] } } })).toBe(2);
+  });
+
+  it("compares the full name with spacing and case ignored, and only the full name", async () => {
+    await imp({ rows: [{ firstName: "Wren", lastName: "Hollis" }] });
+    const res = await imp({
+      rows: [
+        { firstName: "WREN   hollis" }, // the same name, split and spaced differently
+        { firstName: "Wren" }, // not the same full name
+      ],
+    });
+    expect(res.body.created).toBe(1);
+    expect(res.body.skipped).toEqual([{ row: 1, reason: "same_name", name: "WREN   hollis" }]);
+  });
+
+  it("the same name twice in one file adds one person", async () => {
+    const res = await imp({
+      rows: [
+        { firstName: "Sage", lastName: "Moss" },
+        { firstName: "sage", lastName: "moss" },
+      ],
+    });
+    expect(res.body.created).toBe(1);
+    expect(res.body.skipped).toEqual([{ row: 2, reason: "same_name", name: "sage moss" }]);
+    expect(await prisma.client.count({ where: { shopId, lastName: { in: ["Moss", "moss"] } } })).toBe(1);
+  });
+
+  it("a name matching a client who has a phone is skipped too", async () => {
+    // Hana Ito came in with a phone and email above; a bare "Hana Ito" row is
+    // no more reason to add a second one.
+    const res = await imp({ rows: [{ firstName: "Hana", lastName: "Ito" }] });
+    expect(res.body).toMatchObject({ created: 0, skipped: [{ row: 1, reason: "same_name", name: "Hana Ito" }] });
+  });
+
+  it("a row WITH a phone or email is not held back by a name match", async () => {
+    // Unchanged behavior: its contact decides, never its name.
+    const res = await imp({
+      rows: [
+        { firstName: "Rowan", lastName: "Pike", phone: "(302) 555-0888" },
+        { firstName: "Rowan", lastName: "Pike", email: "rowan.pike@example.com" },
+      ],
+    });
+    expect(res.body).toMatchObject({ created: 2, skipped: [] });
   });
 
   it("skips a supplied-but-invalid phone rather than storing a misleading null", async () => {

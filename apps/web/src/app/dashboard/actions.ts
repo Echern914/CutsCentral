@@ -219,7 +219,8 @@ export interface ImportClientRow {
 /**
  * A row the import did not write. "matches_existing" rows shared a phone or
  * email with a client the shop already has but would have changed it - they
- * also say who, so the owner can act on them.
+ * also say who, so the owner can act on them. "same_name" rows had no phone or
+ * email, and their full name is already in the shop's book.
  */
 export interface ImportSkippedRow {
   row: number;
