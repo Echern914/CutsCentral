@@ -285,6 +285,37 @@ describe("POST /api/booking/acuity/service-import (the import)", () => {
     expect(await serviceCount(shopId)).toBe(before);
   });
 
+  it("all or nothing: a failure part-way through leaves no services and no groups behind", async () => {
+    // Refuse the LAST new service (Acuity order: Classic Trim, Wash and Style
+    // - which creates the "Styling" group - then Scalp Treatment), so two
+    // services and a group are already written when it fails. Scoped to this
+    // shop and name, and dropped in `finally`.
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS svcimport_test_fail ON "Service"`);
+    await prisma.$executeRawUnsafe(
+      `CREATE OR REPLACE FUNCTION svcimport_test_fail() RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN
+         IF NEW."shopId" = '${shopId}' AND NEW.name = 'Scalp Treatment' THEN
+           RAISE EXCEPTION 'injected failure';
+         END IF;
+         RETURN NEW;
+       END $$`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE TRIGGER svcimport_test_fail BEFORE INSERT ON "Service" FOR EACH ROW EXECUTE FUNCTION svcimport_test_fail()`,
+    );
+    try {
+      const services = await serviceCount(shopId);
+      const groups = await prisma.serviceGroup.count({ where: { shopId } });
+      const res = await importIds(NEW_IDS);
+      expect(res.status).toBe(500);
+      expect(await serviceCount(shopId)).toBe(services);
+      expect(await prisma.serviceGroup.count({ where: { shopId } })).toBe(groups);
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS svcimport_test_fail ON "Service"`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS svcimport_test_fail()`);
+    }
+  });
+
   it("two imports at once create each service once", async () => {
     const types = acuityAppointmentTypeSchema.array().parse(TYPES);
     const { results, settledEarly } = await raceBehindAdvisoryLock(`svcimport:${shopId}`, [
