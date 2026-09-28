@@ -333,7 +333,7 @@ describe("BroadcastCard by service", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Last 90 days" }));
     await waitFor(() => expect(vi.mocked(broadcastServiceOptionsAction)).toHaveBeenLastCalledWith(90));
-    fireEvent.click(await screen.findByRole("button", { name: "Gold" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Gold/ }));
     await waitFor(() =>
       expect(vi.mocked(previewBroadcastAction)).toHaveBeenLastCalledWith({
         channel: "push",
