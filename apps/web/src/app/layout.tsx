@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Bricolage_Grotesque } from "next/font/google";
+import localFont from "next/font/local";
 import { Analytics } from "@vercel/analytics/next";
 import { APP_NAME } from "@chairback/config/constants";
 import { MotionConfigProvider } from "@/components/motion/MotionConfigProvider";
@@ -9,16 +9,20 @@ import { HelpBubble } from "@/components/help/HelpBubble";
 import { ThemeScope } from "@/components/ThemeScope";
 import "./globals.css";
 
-const inter = Inter({
-  subsets: ["latin"],
+// Self-hosted (src/fonts): a build never fetches from Google Fonts. See the
+// README there for why.
+const inter = localFont({
+  src: "../fonts/inter-latin.woff2",
   variable: "--font-inter",
   display: "swap",
+  weight: "100 900",
 });
 
-const display = Bricolage_Grotesque({
-  subsets: ["latin"],
+const display = localFont({
+  src: "../fonts/bricolage-latin.woff2",
   variable: "--font-display",
   display: "swap",
+  weight: "200 800",
 });
 
 export const metadata: Metadata = {
