@@ -2,7 +2,10 @@ import { Router } from "express";
 import { runAsOwner } from "@chairback/db";
 import { logger } from "../logger.js";
 import { unsubscribeTokenDigest } from "../engines/unsubscribeToken.js";
-import { recordEmailSuppression } from "../services/emailSuppression.js";
+import {
+  recordEmailMarketingYes,
+  unsubscribeFromMarketingEmail,
+} from "../services/emailMarketingConsent.js";
 
 /**
  * ONE CLICK, AND THEY ARE OUT.
@@ -35,7 +38,9 @@ import { recordEmailSuppression } from "../services/emailSuppression.js";
  * PUBLIC AND UNAUTHENTICATED, by necessity: somebody clicking a link in an
  * email has no session and is not going to make one.
  *
- * NEVER 404s ON A BAD TOKEN. Every request answers the same calm page whether
+ * THE UNSUBSCRIBE NEVER 404s ON A BAD TOKEN (the Resubscribe button further
+ * down does refuse one, because claiming success there would be a lie). Every
+ * unsubscribe answers the same calm page whether
  * the token is real, spent, or invented. The alternative tells whoever is
  * probing which tokens belong to real people.
  *
@@ -89,22 +94,10 @@ async function optOut(token: string): Promise<OptOutResult> {
         select: { id: true, shopId: true, email: true },
       });
       if (!client) return 0;
-      const { count } = await tx.client.updateMany({
-        where: { id: client.id, emailOptedOut: false },
-        data: { emailOptedOut: true, emailOptedOutAt: new Date() },
-      });
-      // 🔴 AND THE ADDRESS, in the same transaction (#514), so it stays
-      // unsubscribed whichever record carries it later. The token names the
-      // RECORD, not the address the email went to, so this is the record's
-      // current address - the one the worker mails, and re-checks, at send.
-      // Written even when the flag was already set: the address may be new.
-      await recordEmailSuppression(tx, {
-        shopId: client.shopId,
-        address: client.email,
-        kind: "unsubscribe",
-        source: "unsubscribe_link",
-      });
-      return count;
+      // The flag AND the address (#514), in this transaction - the same write
+      // as the customer's own switch on their rewards page
+      // (services/emailMarketingConsent.ts).
+      return unsubscribeFromMarketingEmail(tx, client, "unsubscribe_link");
     });
     // Correlation only: never the token, never the address.
     if (count > 0) logger.info({ kind: "broadcast" }, "client unsubscribed from emails");
@@ -120,17 +113,105 @@ async function optOut(token: string): Promise<OptOutResult> {
   }
 }
 
-const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+/** The calm page every answer here uses. */
+function shell(title: string, body: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Unsubscribed</title></head>
+<title>${title}</title></head>
 <body style="margin:0;background:#0A0A0B;color:#F5F5F0;font-family:system-ui,-apple-system,Segoe UI,sans-serif">
 <div style="max-width:28rem;margin:0 auto;padding:4rem 1.5rem;text-align:center">
-<h1 style="font-size:1.35rem;margin:0 0 .75rem">You're unsubscribed</h1>
+${body}
+</div></body></html>`;
+}
+
+/**
+ * "You're unsubscribed", with a way back.
+ *
+ * 🔴 RESUBSCRIBE IS A BUTTON THAT POSTS - never something this GET does, and
+ * never a link. Mailbox scanners and previewers open every URL in a message;
+ * that is harmless for an unsubscribe (it errs toward sending less) but a
+ * scanner must never be able to switch marketing email back ON. Only a person
+ * pressing the button sends the POST. The token is URL-encoded, which also
+ * makes it safe inside the attribute. Identical for every token, like the
+ * unsubscribe itself.
+ */
+function page(token: string): string {
+  return shell(
+    "Unsubscribed",
+    `<h1 style="font-size:1.35rem;margin:0 0 .75rem">You're unsubscribed</h1>
 <p style="margin:0 0 .5rem;line-height:1.6;color:#b6b6bb">
 You won't get marketing emails from this shop again.</p>
 <p style="margin:0;line-height:1.6;color:#8a8a90;font-size:.9rem">
 You'll still get confirmations and reminders for appointments you book.</p>
-</div></body></html>`;
+<form method="post" action="/api/unsubscribe/${encodeURIComponent(token)}/resubscribe" style="margin:2rem 0 0">
+<p style="margin:0 0 .5rem;line-height:1.6;color:#8a8a90;font-size:.9rem">Changed your mind?</p>
+<button type="submit" style="font:inherit;font-size:.9rem;padding:.55rem 1.25rem;border-radius:999px;border:1px solid #3a3a40;background:transparent;color:#F5F5F0;cursor:pointer">Resubscribe</button>
+</form>`,
+  );
+}
+
+const RESUBSCRIBED_PAGE = shell(
+  "Subscribed again",
+  `<h1 style="font-size:1.35rem;margin:0 0 .75rem">You're subscribed again</h1>
+<p style="margin:0;line-height:1.6;color:#b6b6bb">
+You'll get news and offers from this shop by email again. You can unsubscribe anytime.</p>`,
+);
+
+/**
+ * A resubscribe that could not happen: an unknown token, or a record with no
+ * address left to send to. Said plainly rather than dressed as success - a
+ * page claiming "subscribed again" when nothing changed is a lie. The two
+ * causes answer identically, and a real token cannot be guessed.
+ */
+const RESUBSCRIBE_REFUSED_PAGE = shell(
+  "Link not recognised",
+  `<h1 style="font-size:1.35rem;margin:0 0 .75rem">We couldn't turn emails back on</h1>
+<p style="margin:0;line-height:1.6;color:#b6b6bb">
+This link can't be used to subscribe again. Nothing was changed.</p>`,
+);
+
+const RESUBSCRIBE_UNAVAILABLE_PAGE = shell(
+  "Try that again",
+  `<h1 style="font-size:1.35rem;margin:0 0 .75rem">We couldn't do that just now</h1>
+<p style="margin:0;line-height:1.6;color:#b6b6bb">
+Something went wrong on our end, so you have <strong>not</strong> been subscribed again yet. Please try again in a few minutes.</p>`,
+);
+
+/**
+ * The person pressing Resubscribe: lift their unsubscribe and record their yes
+ * ("unsubscribe_page") - the one door allowed to undo an unsubscribe, because
+ * only the mailbox the link was sent to has this token. As the connection
+ * owner, like the unsubscribe: the address's unsubscribe row is deleted, and
+ * the app role has no DELETE there.
+ */
+async function resubscribe(token: string): Promise<"resubscribed" | "refused" | "unavailable"> {
+  if (!token || token.length > 200) return "refused";
+  try {
+    const outcome = await runAsOwner(async (tx) => {
+      const client = await tx.client.findUnique({
+        where: { unsubscribeTokenHash: unsubscribeTokenDigest(token) },
+        select: { id: true, email: true },
+      });
+      if (!client) return "refused" as const;
+      const result = await recordEmailMarketingYes(tx, {
+        clientId: client.id,
+        address: client.email,
+        source: "unsubscribe_page",
+        liftUnsubscribe: true,
+      });
+      return result === "recorded" || result === "already" ? ("resubscribed" as const) : ("refused" as const);
+    });
+    // Correlation only: never the token, never the address.
+    if (outcome === "resubscribed") logger.info({ kind: "broadcast" }, "client resubscribed to emails");
+    return outcome;
+  } catch (err) {
+    logger.error(
+      { errName: err instanceof Error ? err.name : "unknown", reason: "resubscribe_write_failed" },
+      "resubscribe could not be recorded",
+    );
+    return "unavailable";
+  }
+}
 
 /**
  * 🔴 THE HONEST FAILURE PAGE.
@@ -145,17 +226,14 @@ You'll still get confirmations and reminders for appointments you book.</p>
  * invented, exactly like the success page, so a failing database does not
  * become an enumeration oracle.
  */
-const UNAVAILABLE_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Try that again</title></head>
-<body style="margin:0;background:#0A0A0B;color:#F5F5F0;font-family:system-ui,-apple-system,Segoe UI,sans-serif">
-<div style="max-width:28rem;margin:0 auto;padding:4rem 1.5rem;text-align:center">
-<h1 style="font-size:1.35rem;margin:0 0 .75rem">We couldn't do that just now</h1>
+const UNAVAILABLE_PAGE = shell(
+  "Try that again",
+  `<h1 style="font-size:1.35rem;margin:0 0 .75rem">We couldn't do that just now</h1>
 <p style="margin:0 0 .5rem;line-height:1.6;color:#b6b6bb">
 Something went wrong on our end, so you have <strong>not</strong> been unsubscribed yet.</p>
 <p style="margin:0;line-height:1.6;color:#8a8a90;font-size:.9rem">
-Please use the same link again in a few minutes.</p>
-</div></body></html>`;
+Please use the same link again in a few minutes.</p>`,
+);
 
 // The one-click POST mailbox providers send. No body, no redirect.
 unsubscribeRouter.post("/:token", async (req, res) => {
@@ -172,9 +250,25 @@ unsubscribeRouter.post("/:token", async (req, res) => {
 
 // A person clicking the link in the footer.
 unsubscribeRouter.get("/:token", async (req, res) => {
-  if ((await optOut(String(req.params.token ?? ""))) === "unavailable") {
+  const token = String(req.params.token ?? "");
+  if ((await optOut(token)) === "unavailable") {
     res.status(503).type("html").send(UNAVAILABLE_PAGE);
     return;
   }
-  res.status(200).type("html").send(PAGE);
+  res.status(200).type("html").send(page(token));
+});
+
+// The Resubscribe button on that page. POST ONLY: no GET is registered for
+// this path, so a scanner following URLs cannot reach it.
+unsubscribeRouter.post("/:token/resubscribe", async (req, res) => {
+  const outcome = await resubscribe(String(req.params.token ?? ""));
+  if (outcome === "unavailable") {
+    res.status(503).type("html").send(RESUBSCRIBE_UNAVAILABLE_PAGE);
+    return;
+  }
+  if (outcome === "refused") {
+    res.status(404).type("html").send(RESUBSCRIBE_REFUSED_PAGE);
+    return;
+  }
+  res.status(200).type("html").send(RESUBSCRIBED_PAGE);
 });

@@ -26,9 +26,8 @@ export type EmailSuppressionKind = "unsubscribe" | "bounce" | "complaint";
  * a create that throws, because a caught unique violation still aborts the
  * caller's transaction.
  *
- * Nothing lifts one yet. An unsubscribe is undone only by the person
- * re-subscribing, which does not exist today; when it does, the delete belongs
- * here, beside this insert, and nowhere else. An email change, a sync, an
+ * An unsubscribe is undone only by the person re-subscribing - see
+ * liftEmailUnsubscribe below, the one delete. An email change, a sync, an
  * import or a merge never touches this table.
  */
 export async function recordEmailSuppression(
@@ -46,6 +45,29 @@ export async function recordEmailSuppression(
   await tx.emailAddressSuppression.createMany({
     data: [{ shopId: p.shopId, addressHash, kind: p.kind, source: p.source }],
     skipDuplicates: true,
+  });
+}
+
+/**
+ * 🔴 THE ONE PLACE A SUPPRESSION IS LIFTED: the person re-subscribing, from
+ * the page their own emailed unsubscribe link opens (routes/unsubscribe.public.ts,
+ * through recordEmailMarketingYes). Removes that address's UNSUBSCRIBE only.
+ *
+ * A bounce or a complaint is never deleted here: those are the mailbox
+ * provider's refusal, not the person's choice, and saying "yes" again does
+ * not make an address deliverable.
+ *
+ * Runs as the connection OWNER (runAsOwner): the app role has no DELETE on
+ * this table, on purpose.
+ */
+export async function liftEmailUnsubscribe(
+  ownerTx: Prisma.TransactionClient,
+  p: { shopId: string; address: string | null | undefined },
+): Promise<void> {
+  const addressHash = suppressionAddressHash(p.shopId, p.address);
+  if (addressHash === null) return;
+  await ownerTx.emailAddressSuppression.deleteMany({
+    where: { shopId: p.shopId, addressHash, kind: "unsubscribe" },
   });
 }
 

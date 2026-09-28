@@ -39,6 +39,21 @@ export async function optOutAction(magicToken: string): Promise<ConsentResult> {
 }
 
 /**
+ * The customer's own switch for the shop's marketing email. On records their
+ * yes; Off is the same unsubscribe as the link in every marketing email.
+ */
+export async function emailMarketingAction(
+  magicToken: string,
+  on: boolean,
+): Promise<{ ok: boolean; state?: "opted_in" | "opted_out"; error?: string }> {
+  const res = await apiPublicSend<{
+    emailMarketing: { state: "opted_in" | "opted_out"; hasEmail: boolean };
+  }>("POST", `/api/rewards/${magicToken}/${on ? "email-opt-in" : "email-opt-out"}`, {});
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, state: res.data.emailMarketing.state };
+}
+
+/**
  * Client self-reports their haircut cadence (the one-tap prompt). The API
  * validates the key against the allowed set; we just relay ok/error. The page
  * then re-fetches so the personalized rebook countdown reflects the new cadence.

@@ -79,6 +79,11 @@ export interface RewardsData {
     state: "opted_in" | "needs_consent" | "opted_out";
     hasPhone: boolean;
   };
+  /** Their own switch for the shop's marketing email. Optional: an older API sends none. */
+  emailMarketing?: {
+    state: "opted_in" | "needs_consent" | "opted_out";
+    hasEmail: boolean;
+  };
   punches: {
     balance: number;
     nextTarget: { name: string; punchCost: number; remaining: number } | null;

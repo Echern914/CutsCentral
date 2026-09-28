@@ -13,6 +13,7 @@ import { RewardCelebration } from "@/components/rewards/RewardCelebration";
 import { RewardsClaimed } from "@/components/rewards/RewardsClaimed";
 import { VisitHistory } from "@/components/rewards/VisitHistory";
 import { ConsentCard } from "./ConsentCard";
+import { EmailChoice } from "./EmailChoice";
 import { CadenceCard } from "./CadenceCard";
 import { NextVisitCard } from "./NextVisitCard";
 import { PushOptIn } from "./PushOptIn";
@@ -388,6 +389,18 @@ export function RewardsClient({
               initialHasPhone={consent.hasPhone}
             />
           </motion.div>
+
+          {/* Marketing email on/off - only with an address to send to. */}
+          {data.emailMarketing?.hasEmail && (
+            <motion.div variants={fadeUp}>
+              <EmailChoice
+                magicToken={magicToken}
+                shopName={shop.name}
+                theme={t}
+                initialState={data.emailMarketing.state}
+              />
+            </motion.div>
+          )}
 
           {/* Push opt-in - the free, no-SMS alternative. Only when push is
               configured; the component itself further hides on unsupported

@@ -575,10 +575,17 @@ describe("🔴 unsubscribe", () => {
   it("🔴 an unknown token answers exactly like a real one", async () => {
     // Anything else tells whoever is probing which tokens belong to people.
     const { url } = await mailOneAndGetUnsubscribeUrl();
+    const real = decodeURIComponent(new URL(url).pathname.split("/").pop()!);
+    const invented = randomToken();
     const a = await request(app).get(new URL(url).pathname);
-    const b = await request(app).get(`/api/unsubscribe/${randomToken()}`);
+    const b = await request(app).get(`/api/unsubscribe/${invented}`);
     expect(b.status).toBe(a.status);
-    expect(b.text).toBe(a.text);
+    // The page's Resubscribe form posts back to the caller's OWN token - which
+    // tells them nothing they did not send. With that taken out, byte for byte
+    // the same.
+    const mask = (text: string, token: string) => text.split(encodeURIComponent(token)).join("<token>");
+    expect(mask(b.text, invented)).toBe(mask(a.text, real));
+    expect(a.text).toContain(encodeURIComponent(real));
   });
 
   it("is idempotent - clicking twice is not an error", async () => {

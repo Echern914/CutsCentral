@@ -214,6 +214,8 @@ export interface BookInput {
   phone?: string;
   email?: string;
   smsConsent: boolean;
+  /** The customer's own tick on "Email me news and offers". Absent = no answer. */
+  emailMarketing?: true;
   addOnIds?: string[];
   // Booking a barber-published targeted slot (fixed time/length/price).
   targetedSlotId?: string;

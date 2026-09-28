@@ -50,6 +50,7 @@ import {
 } from "./actions";
 import { PaymentStep } from "./PaymentStep";
 import { WaitlistForm } from "./WaitlistForm";
+import { EmailMarketingChoice, emailMarketingYes } from "./EmailMarketingChoice";
 import { groupsToAutoExpand } from "./autoExpand";
 import { revealElement } from "./reveal";
 
@@ -283,6 +284,9 @@ export function BookingClient({
   // TCPA and is explicitly rejected by 10DLC campaign vetting (the box must be
   // actively selected by the user). See the booking consent label below.
   const [consent, setConsent] = useState(false);
+  // "Email me news and offers". MUST default to false for the same reason: a
+  // pre-ticked box is not a yes to marketing email.
+  const [emailMarketing, setEmailMarketing] = useState(false);
   /**
    * Whether the customer agreed that a card kept on file may be charged for the
    * SERVICE after their appointment. Defaults to FALSE and is never preselected:
@@ -1441,6 +1445,8 @@ export function BookingClient({
         phone: phone.trim() || undefined,
         email: email.trim() || undefined,
         smsConsent: consent && Boolean(phone.trim()),
+        // Only ever true from their own tick, with an address to go with it.
+        emailMarketing: emailMarketingYes(emailMarketing, email),
         // A targeted slot has a fixed length/price - no add-ons.
         addOnIds:
           !slotTargeted && addOnIds.length > 0 ? addOnIds : undefined,
@@ -3268,6 +3274,13 @@ export function BookingClient({
                 .
               </span>
             </label>
+
+            <EmailMarketingChoice
+              email={email}
+              shopName={data.shop.name}
+              checked={emailMarketing}
+              onChange={setEmailMarketing}
+            />
 
             {/* 🔴 A SEPARATE PROMISE FROM THE ONE ABOVE, AND FROM THE CARD
                 ITSELF. Keeping a card on file covers no-shows and late

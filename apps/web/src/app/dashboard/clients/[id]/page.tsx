@@ -13,6 +13,7 @@ import { InstagramHandle } from "@/components/InstagramHandle";
 import { UpcomingVisits, type UpcomingRow } from "./UpcomingVisits";
 import { ClientActions } from "./ClientActions";
 import { EditClient } from "./EditClient";
+import { EmailMarketing, type ClientEmailMarketing } from "./EmailMarketing";
 import { MergeClient } from "./MergeClient";
 import { NotesEditor } from "./NotesEditor";
 import { PunchHistory } from "./PunchHistory";
@@ -35,6 +36,8 @@ interface ClientDetail {
     phone: string | null;
     email: string | null;
     optedOut: boolean;
+    /** Their yes to the shop's marketing email. Optional: an older API sends none. */
+    emailMarketing?: ClientEmailMarketing;
     archived: boolean;
     notes: string;
     source: string;
@@ -241,6 +244,12 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         {!client.archived && (
           <MergeClient clientId={client.id} clientName={client.name} />
         )}
+        <EmailMarketing
+          clientId={client.id}
+          hasEmail={Boolean(client.email)}
+          initial={client.emailMarketing}
+          timezone={timezone}
+        />
       </div>
 
       {/* Snapshot (punch/reward stats only exist for rewards shops) */}
