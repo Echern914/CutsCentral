@@ -1,3 +1,5 @@
+import { apiEnv } from "@chairback/config";
+import { bookNowUrl } from "@chairback/config/bookingLinks";
 import { Prisma, runAsOwner } from "@chairback/db";
 import { buildAppointmentCanceledEmail } from "../messaging/templates.js";
 import {
@@ -179,7 +181,16 @@ export async function deliverCancellationIntent(params: {
         client: { select: { email: true, firstName: true } },
         service: { select: { name: true } },
         staff: { select: { name: true } },
-        shop: { select: { name: true, slug: true, timezone: true } },
+        shop: {
+          select: {
+            name: true,
+            slug: true,
+            timezone: true,
+            bookingMode: true,
+            bookingUrl: true,
+            publicPageEnabled: true,
+          },
+        },
       },
     }),
   );
@@ -252,7 +263,9 @@ export async function deliverCancellationIntent(params: {
   const email = buildAppointmentCanceledEmail({
     firstName: appt.firstName ?? appt.client?.firstName ?? null,
     shopName: appt.shop.name,
-    shopSlug: appt.shop.slug,
+    // Wherever the shop takes bookings now - or no button, when a switched-off
+    // booking page would leave the customer on a dead end.
+    bookUrl: bookNowUrl(appt.shop, apiEnv().APP_BASE_URL),
     serviceName: appt.service?.name ?? "your appointment",
     startsAt: appt.startsAt,
     timezone: appt.shop.timezone,

@@ -174,6 +174,65 @@ describe("the cancellation email itself", () => {
   });
 });
 
+/**
+ * WHERE "BOOK ANOTHER APPOINTMENT" GOES - the shared rule (config/bookingLinks.ts).
+ * It used to be /book/<slug> for every shop, which is a 404 once the shop has
+ * switched its booking page off.
+ */
+describe("the book-again button follows where the shop takes bookings", () => {
+  const restore = () =>
+    prisma.shop.update({
+      where: { id: shopId },
+      data: { bookingMode: "native", bookingUrl: null, publicPageEnabled: true },
+    });
+  const cancelAndSend = async () => {
+    const id = await makeAppointment({ status: "BOOKED" });
+    await cancelAppointment(shopId, id, "CANCELED", NOON);
+    await drain();
+    expect(emails).toHaveLength(1);
+    return emails[0]!;
+  };
+
+  it("goes to the shop's own booking page", async () => {
+    const { slug } = await prisma.shop.findUniqueOrThrow({ where: { id: shopId } });
+    const e = await cancelAndSend();
+    expect(e.html).toContain(`/book/${slug}"`);
+    expect(e.text).toMatch(new RegExp(`Book another appointment: \\S+/book/${slug}$`, "m"));
+  });
+
+  it("🔴 is left out when the shop's booking page is off - never a dead link", async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { publicPageEnabled: false } });
+    try {
+      const e = await cancelAndSend();
+      // The customer is still told...
+      expect(e.html).toContain("Your appointment was canceled");
+      // ...with no button onto a page that would not book them.
+      for (const body of [e.html ?? "", e.text]) {
+        expect(body).not.toContain("Book another appointment");
+        expect(body).not.toContain("/book/");
+      }
+    } finally {
+      await restore();
+    }
+  });
+
+  it("goes to the shop's own link when it takes bookings somewhere else", async () => {
+    const OWN_LINK = "https://cancel-studio.as.me/schedule.php";
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { bookingMode: "acuity", bookingUrl: OWN_LINK },
+    });
+    try {
+      const e = await cancelAndSend();
+      expect(e.text).toContain(`Book another appointment: ${OWN_LINK}`);
+      expect(e.html).toContain(`href="${OWN_LINK}"`);
+      expect(e.html).not.toContain("/book/");
+    } finally {
+      await restore();
+    }
+  });
+});
+
 describe("durability: the promise survives a crash", () => {
   it("leaves a PENDING intent committed with the cancellation, before any send", async () => {
     const id = await makeAppointment({ status: "BOOKED" });
