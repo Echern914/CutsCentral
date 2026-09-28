@@ -177,8 +177,11 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
   // Each kind of skip has its own next step, so they are shown apart.
   const skipped = result?.skipped ?? [];
   const matched = skipped.filter((s) => s.reason === "matches_existing");
+  const sameName = skipped.filter((s) => s.reason === "same_name");
   const badPhone = skipped.filter((s) => s.reason === "invalid_phone");
-  const failed = skipped.filter((s) => s.reason !== "matches_existing" && s.reason !== "invalid_phone");
+  const failed = skipped.filter(
+    (s) => s.reason !== "matches_existing" && s.reason !== "same_name" && s.reason !== "invalid_phone",
+  );
 
   return (
     <Card className="p-5">
@@ -279,6 +282,30 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
                 </ul>
                 {matched.length > REVIEW_SHOWN && (
                   <p className="mt-1 text-xs text-muted">and {matched.length - REVIEW_SHOWN} more.</p>
+                )}
+              </div>
+            )}
+            {sameName.length > 0 && (
+              <div className="mt-2">
+                <p className="text-xs leading-relaxed text-muted">
+                  {sameName.length} skipped because {sameName.length === 1 ? "it has" : "they have"} only
+                  a name, no phone or email, and you already have someone by that name. We can&apos;t
+                  tell whether it&apos;s the same person, so we didn&apos;t add a second one.
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-muted">
+                  <span className="text-offwhite">Next step:</span> if it&apos;s a different person, add
+                  them by hand with Add client.
+                </p>
+                <ul className="mt-2 space-y-1 text-xs">
+                  {sameName.slice(0, REVIEW_SHOWN).map((r) => (
+                    <li key={r.row} className="min-w-0 truncate text-offwhite">
+                      Row {r.row} · <span className="text-muted">You already have someone named</span>{" "}
+                      {r.name}
+                    </li>
+                  ))}
+                </ul>
+                {sameName.length > REVIEW_SHOWN && (
+                  <p className="mt-1 text-xs text-muted">and {sameName.length - REVIEW_SHOWN} more.</p>
                 )}
               </div>
             )}

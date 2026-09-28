@@ -1054,6 +1054,14 @@ const importClientsSchema = z
   })
   .strict();
 
+/**
+ * A full name for comparing, never for showing: trimmed, runs of spaces
+ * collapsed and case ignored, so "marcus  REED" and "Marcus Reed" are one name.
+ */
+function nameKey(firstName: string | null | undefined, lastName: string | null | undefined): string {
+  return `${firstName ?? ""} ${lastName ?? ""}`.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 dashboardRouter.post("/clients/import", async (req, res) => {
   const shop = req.shop!;
   const parsed = importClientsSchema.safeParse(req.body);
@@ -1075,6 +1083,10 @@ dashboardRouter.post("/clients/import", async (req, res) => {
     matchedBy?: "phone" | "email";
     existingName?: string;
   }[] = [];
+  // Every full name in the shop's book, for rows with only a name (below).
+  // Read once, on the first such row, and kept current as this import adds
+  // people - so a name from earlier in the same file counts too.
+  let namesInBook: Set<string> | null = null;
 
   // One tenant transaction for the whole batch: RLS context set once, all writes
   // atomic + a single connection (the connection-amplification lesson). Each row
@@ -1091,7 +1103,8 @@ dashboardRouter.post("/clients/import", async (req, res) => {
       // A supplied-but-unparseable phone is skipped (not silently stored null —
       // the barber would think the client is reachable). A row with neither a
       // valid phone nor an email still imports under a random manual key (it's a
-      // real client in the book, just not yet textable).
+      // real client in the book, just not yet textable) - unless that name is
+      // already in the book (below).
       if (rawPhone && !phone) {
         skipped.push({ row: i + 1, reason: "invalid_phone" });
         continue;
@@ -1102,6 +1115,30 @@ dashboardRouter.post("/clients/import", async (req, res) => {
           ? `mail:${email.toLowerCase()}`
           : `import:${randomToken(8)}`;
       try {
+        // 🔴 A ROW WITH ONLY A NAME has nothing to match on - its key is
+        // random - so importing the same file twice added the same people
+        // twice. The name is all it has, so a name-only row whose full name is
+        // already in the book is skipped, never added again. Two people can
+        // share a name, so the owner adds a different one by hand.
+        if (!phone && !email) {
+          namesInBook ??= new Set(
+            (
+              await tx.client.findMany({
+                where: { shopId: shop.id },
+                select: { firstName: true, lastName: true },
+              })
+            ).map((c) => nameKey(c.firstName, c.lastName)),
+          );
+          if (namesInBook.has(nameKey(r.firstName, r.lastName))) {
+            skipped.push({
+              row: i + 1,
+              reason: "same_name",
+              name: [r.firstName.trim(), r.lastName?.trim()].filter(Boolean).join(" "),
+            });
+            continue;
+          }
+        }
+
         const existing = await tx.client.findUnique({
           where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey: key } },
           select: { id: true, firstName: true, lastName: true, email: true, notes: true },
@@ -1122,6 +1159,7 @@ dashboardRouter.post("/clients/import", async (req, res) => {
               smsConsentSource: null,
             },
           });
+          namesInBook?.add(nameKey(r.firstName, r.lastName));
           created++;
           continue;
         }
