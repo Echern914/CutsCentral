@@ -650,6 +650,7 @@ function Hero({
   const sourceLabel = detail?.originLabel ?? (row.syncedExternal ? "Acuity" : "ChairBack");
   const barber = detail?.staffName ?? null;
   const service = detail?.serviceName ?? row.serviceName;
+  const addOns = detail?.addOns ?? row.addOns ?? [];
   const price = detail?.price ?? row.price;
   const name = row.clientName || "Client";
 
@@ -757,7 +758,10 @@ function Hero({
           the price down, it never squeezes it. */}
       <dl className="relative border-t border-subtle px-4 py-2.5 text-sm sm:px-6">
         <Fact icon={<TagIcon />} label="Service">
-          <span className="[overflow-wrap:anywhere]">{service ?? "Appointment"}</span>
+          <span className="[overflow-wrap:anywhere]">
+            {service ?? "Appointment"}
+            {addOns.map((a) => ` + ${a.name}`).join("")}
+          </span>
         </Fact>
         {barber && (
           <Fact icon={<ScissorsIcon />} label={cap(vocab.providerNoun)}>

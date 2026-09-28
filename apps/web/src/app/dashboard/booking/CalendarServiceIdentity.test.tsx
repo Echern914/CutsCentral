@@ -113,6 +113,31 @@ describe("the collapsed card", () => {
   });
 });
 
+describe("add-ons on the card", () => {
+  it("🔴 a ChairBack booking shows the add-ons the customer picked, without a tap", () => {
+    // A barber: "we should be able to see the add ons that the client
+    // selected through our calendar". An Acuity booking already read
+    // "Mens Shape-Up + HOT TOWEL"; a ChairBack one read only "Mens Haircut",
+    // while its length and price quietly included the add-on.
+    const c = renderCard({
+      addOns: [
+        { id: "x1", name: "Hot towel" },
+        { id: "x2", name: "Beard trim" },
+      ],
+    } as Partial<AgendaRow>);
+    const line = c.querySelector('[data-testid="service-line"]') as HTMLElement;
+    expect(line.textContent).toContain("Haircut + Hot towel + Beard trim");
+  });
+
+  it("no add-ons, no stray '+'", () => {
+    for (const addOns of [[], undefined]) {
+      const c = renderCard({ addOns } as Partial<AgendaRow>);
+      const line = c.querySelector('[data-testid="service-line"]') as HTMLElement;
+      expect(line.textContent).not.toContain("+");
+    }
+  });
+});
+
 describe("which colour a card gets", () => {
   it("a native service's explicit choice wins", () => {
     expect(stripeHex(renderCard({ serviceColor: "teal" }))).toBe(
