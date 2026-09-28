@@ -28,7 +28,8 @@ import { importedAfterItEnded } from "./syncedVisitTrust.js";
  *
  * Never nudges a cancellation or a no-show ("hope you loved it" to someone who
  * never sat down), and never nudges a client who already has their next
- * appointment on the books - they did the thing we are asking for.
+ * appointment on the books, wherever they booked it - ChairBack, Acuity or
+ * Square. They did the thing we are asking for.
  *
  * Idempotency mirrors pushReminders.ts: the stamp is CLAIMED atomically
  * (updateMany WHERE null) before the send, so a concurrent run sends nothing
@@ -173,6 +174,18 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
       },
     });
     if (upcoming > 0) continue;
+    // ...and one booked in Acuity or Square, which reaches ChairBack only as a
+    // synced Visit. RESCHEDULED is live: a reschedule moves the same row to
+    // its new time. A cancellation is CANCELED, so it no longer counts.
+    const upcomingSynced = await prisma.visit.count({
+      where: {
+        shopId: c.shopId,
+        clientId: c.clientId,
+        status: { in: ["SCHEDULED", "RESCHEDULED"] },
+        scheduledAt: { gt: now },
+      },
+    });
+    if (upcomingSynced > 0) continue;
 
     // Atomic claim: only the run that flips null -> now sends.
     const claimed =
