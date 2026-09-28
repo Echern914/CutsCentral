@@ -421,10 +421,18 @@ describe("never from a customer-driven path", () => {
     taken = { id: res.body.id };
     answer = overlapConfirmation({ appointmentIds: [taken.id], visitIds: [], targetedIds: [] });
   });
-  const nothingNewAt = async (startsAt: Date) =>
+  // Scoped to the rows THIS path would write (by name or client), so a path
+  // that really double-books fails its own test and not the ones after it.
+  const nothingNewAt = async (startsAt: Date, who: { firstName?: string[]; clientId?: string }) =>
     expect(
       await prisma.appointment.count({
-        where: { shopId, startsAt, status: { in: ["BOOKED", "PENDING"] } },
+        where: {
+          shopId,
+          startsAt,
+          status: { in: ["BOOKED", "PENDING"] },
+          ...(who.firstName ? { firstName: { in: who.firstName } } : {}),
+          ...(who.clientId ? { clientId: who.clientId } : {}),
+        },
       }),
     ).toBe(0);
 
@@ -442,7 +450,7 @@ describe("never from a customer-driven path", () => {
       });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("VALIDATION_ERROR");
-    await nothingNewAt(OVER());
+    await nothingNewAt(OVER(), { firstName: ["Web"] });
     // And without the field, the page is refused by the guard as always.
     const plain = await request(app)
       .post(`/api/book/${slug}`)
@@ -455,7 +463,7 @@ describe("never from a customer-driven path", () => {
         email: `web-${randomToken(6)}@test.local`,
       });
     expect(plain.status).toBe(409);
-    await nothingNewAt(OVER());
+    await nothingNewAt(OVER(), { firstName: ["Web"] });
   });
 
   it("the customer's manage-link reschedule refuses it", async () => {
@@ -493,7 +501,7 @@ describe("never from a customer-driven path", () => {
       });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_input");
-    await nothingNewAt(OVER());
+    await nothingNewAt(OVER(), { firstName: ["Kid", "Parent"] });
   });
 
   it("a waitlist offer claim refuses it", async () => {
@@ -534,7 +542,7 @@ describe("never from a customer-driven path", () => {
       // that would let this pass without the guard ever being asked.
       expect(res.result).toContain("that slot just got taken");
     }
-    await nothingNewAt(OVER());
+    await nothingNewAt(OVER(), { clientId: client.id });
   });
 });
 
