@@ -99,9 +99,14 @@ describe("a refused login is recorded", () => {
 
   it("the first refusal keeps its time", async () => {
     answer = () => new Response("{}", { status: 401 });
-    await expect((await client()).listCalendars()).rejects.toThrow();
+    // Two clients opened before anything was refused - two jobs running at
+    // once - each see a clean row, and each tries to stamp it.
+    const [a, b] = [await client(), await client()];
+    await expect(a.listCalendars()).rejects.toThrow();
     const first = await failedAt();
-    await expect((await client()).listCalendars()).rejects.toThrow();
+    expect(first).toBeInstanceOf(Date);
+    await new Promise((r) => setTimeout(r, 20));
+    await expect(b.listCalendars()).rejects.toThrow();
     expect(await failedAt()).toEqual(first);
   });
 
