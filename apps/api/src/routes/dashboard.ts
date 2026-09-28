@@ -1243,6 +1243,8 @@ dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
         serviceName,
       },
     });
+    // Logged by hand = a person chose to punch it, so it earns even when
+    // backdated to before rewards started (punch.ts).
     const earned = await earnPunchForVisitInTx(
       tx,
       shop,
@@ -1250,7 +1252,7 @@ dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
       created.id,
       serviceName,
       when,
-      cardOverride === undefined ? undefined : { cardTypeId: cardOverride },
+      { ...(cardOverride === undefined ? {} : { cardTypeId: cardOverride }), evenBeforeStart: true },
     );
     return { visit: created, earn: earned };
   });

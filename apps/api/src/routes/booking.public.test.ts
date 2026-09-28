@@ -373,6 +373,13 @@ describe("appointment promotion + loyalty", () => {
       where: { id: appt!.id },
       data: { startsAt: past, endsAt: new Date(past.getTime() + 30 * 60 * 1000) },
     });
+    // Rewards were already on when this visit happened: one that ended before
+    // they started earns nothing by itself (#516). Without this the test
+    // depended on the hour it ran - `past` is a fixed time of day.
+    await prisma.shop.update({
+      where: { slug: slugA },
+      data: { rewardsStartedAt: new Date(past.getTime() - 24 * 60 * 60 * 1000) },
+    });
 
     sent = [];
     const count = await promoteFulfilledAppointments(now);

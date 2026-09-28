@@ -11,6 +11,7 @@ import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.
 import { __setPushSenderForTests, type PushPayload } from "../messaging/push.js";
 import type { AcuityAppointment } from "../acuity/types.js";
 import { ingestSquareBooking } from "../square/ingest.js";
+import { creditPastVisits } from "../services/pastVisitCredit.js";
 import type { SquareClient } from "../square/client.js";
 import type { SquareBooking, SquareCustomer } from "../square/types.js";
 
@@ -333,7 +334,7 @@ async function syncedShop(name: string, rewardsEnabled: boolean) {
 }
 
 describe("turning rewards on after the history is in", () => {
-  it("the next resync awards past visits their punches - and announces none of them", async () => {
+  it("the next resync awards past visits nothing; the owner's credit does - and announces none of them", async () => {
     // Connected with rewards OFF: the history is completed but earns nothing.
     const shop = await syncedShop("Rewards Later Cuts", false);
     await prisma.acuityConnection.create({
@@ -378,13 +379,22 @@ describe("turning rewards on after the history is in", () => {
     expect(await prisma.visit.count({ where: { shopId: shop.id, status: "COMPLETED" } })).toBe(2);
     expect(await earned()).toBe(0);
 
-    // The owner turns rewards on; the half-hourly resync meets both again.
-    await prisma.shop.update({ where: { id: shop.id }, data: { rewardsEnabled: true } });
+    // The owner turns rewards on - the switch records when they start - and
+    // the half-hourly resync meets both again.
+    await prisma.shop.update({
+      where: { id: shop.id },
+      data: { rewardsEnabled: true, rewardsStartedAt: new Date() },
+    });
     reset();
     await resync();
 
-    // Both punches land (nothing is withheld), and nobody hears about a cut
-    // from ten days ago (main announced each one by push).
+    // #516: both ended before rewards started, so neither earns by itself
+    // (before, the resync punched every past visit it met).
+    expect(await earned()).toBe(0);
+
+    // Crediting them is the owner's choice. Both punches land, and nobody
+    // hears about a cut from ten days ago (main announced each one by push).
+    await creditPastVisits(shop.id, 3, "credit");
     expect(await earned()).toBe(2);
     expect({
       sms: mineSms(acuityPhone) + mineSms(squarePhone),

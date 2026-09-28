@@ -226,9 +226,15 @@ export async function editVisit(
     }
     // Claw back the old earn footprint (frees the visitId @unique slot), update
     // the visit, then re-earn at the new amount via ingest's exact path.
+    // An edit re-earns a punch the visit already had, even if it ended before
+    // rewards started - an edit never takes one away. But it never gives a
+    // FIRST punch to such a visit; only the owner's past-visit credit does.
     await clawBackVisitEarn(tx, shop.id, visitId);
     await tx.visit.update({ where: { id: visit.id }, data: fieldUpdate });
-    await earnPunchForVisitInTx(tx, shop, clientId, visit.id, newService, newWhen, override);
+    await earnPunchForVisitInTx(tx, shop, clientId, visit.id, newService, newWhen, {
+      ...override,
+      evenBeforeStart: currentLiveAmount > 0,
+    });
     const finalBalance = await balanceOf(tx, shop.id, clientId, route.cardTypeId);
     return { ok: true as const, balance: finalBalance, dateChanged: Boolean(input.when) };
   });
