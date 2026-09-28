@@ -18,9 +18,13 @@ process.env.WALLET_APPT_PASS_KEY_BASE64 = Buffer.from("k").toString("base64");
 process.env.WALLET_WWDR_CERT_BASE64 = Buffer.from("w").toString("base64");
 process.env.APP_BASE_URL = "https://getchairback.com";
 
-const { buildAppointmentPassJson, confirmationReference } = await import(
-  "./appointmentPass.js"
-);
+const {
+  appointmentPassExpiration,
+  BOOKED_PASS_GRACE_MS,
+  buildAppointmentPassJson,
+  confirmationReference,
+  finishedPassLabel,
+} = await import("./appointmentPass.js");
 type Source = Parameters<typeof buildAppointmentPassJson>[0];
 
 /**
@@ -41,6 +45,9 @@ function source(over: Partial<Source> = {}, shopOver: Partial<Source["shop"]> = 
     status: "BOOKED",
     startsAt: STARTS_AT,
     endsAt: ENDS_AT,
+    completedAt: null,
+    canceledAt: null,
+    updatedAt: new Date("2026-03-10T12:00:00.000Z"),
     firstName: "Casey",
     manageToken: "mt_abc123",
     service: { name: "Skin Fade" },
@@ -204,13 +211,13 @@ describe("the cancellation policy on the back", () => {
 });
 
 describe("relevance and expiry", () => {
-  it("surfaces on the lock screen around the start, and expires after the end", () => {
+  it("surfaces on the lock screen around the start, and expires a short grace after the end", () => {
     const pass = buildAppointmentPassJson(source());
     expect(pass.relevantDate).toBe(STARTS_AT.toISOString());
-    // A day past the end the pass is meaningless; this is Wallet's cleanup hint.
-    expect(pass.expirationDate).toBe(
-      new Date(ENDS_AT.getTime() + 24 * 60 * 60 * 1000).toISOString(),
-    );
+    // 🔴 Two hours, not a day: the promotion job completes the booking soon
+    // after it ends, and this grace only covers a completion that never lands.
+    expect(BOOKED_PASS_GRACE_MS).toBe(2 * 60 * 60 * 1000);
+    expect(pass.expirationDate).toBe("2026-03-14T20:30:00.000Z");
   });
 
   it("🔴 omits `locations` when the shop has no coordinates", () => {
@@ -250,6 +257,80 @@ describe("a dead appointment", () => {
 
   it("a live appointment is not voided", () => {
     expect(buildAppointmentPassJson(source()).voided).toBeUndefined();
+  });
+});
+
+describe("a finished appointment says what happened", () => {
+  const FINISHED = new Date("2026-03-14T18:25:00.000Z");
+  const label = (pass: Record<string, unknown>) =>
+    (pass.eventTicket as { primaryFields: Array<{ label: string }> }).primaryFields[0]!
+      .label;
+
+  it("🔴 COMPLETED reads COMPLETED, voided, expiring when it was completed", () => {
+    // A customer whose cut is done used to read "CANCELED" on their phone.
+    const pass = buildAppointmentPassJson(
+      source({ status: "COMPLETED", completedAt: FINISHED }),
+    );
+    expect(label(pass)).toBe("COMPLETED");
+    expect(pass.voided).toBe(true);
+    expect(pass.expirationDate).toBe(FINISHED.toISOString());
+    // The time stays on the face: it is still the record of the visit.
+    expect(fields(pass).when).toBe("2:00 - 2:30 PM");
+  });
+
+  it("🔴 NO_SHOW reads MISSED, voided, expiring at the no-show write", () => {
+    const pass = buildAppointmentPassJson(
+      source({ status: "NO_SHOW", updatedAt: FINISHED }),
+    );
+    expect(label(pass)).toBe("MISSED");
+    expect(pass.voided).toBe(true);
+    expect(pass.expirationDate).toBe(FINISHED.toISOString());
+  });
+
+  it("CANCELED still reads CANCELED, voided, expiring when it was canceled", () => {
+    const canceledAt = new Date("2026-03-12T09:00:00.000Z");
+    const pass = buildAppointmentPassJson(source({ status: "CANCELED", canceledAt }));
+    expect(label(pass)).toBe("CANCELED");
+    expect(pass.voided).toBe(true);
+    expect(pass.expirationDate).toBe(canceledAt.toISOString());
+  });
+
+  it("relevantDate stays the start for every status", () => {
+    for (const status of ["COMPLETED", "NO_SHOW", "CANCELED"]) {
+      const pass = buildAppointmentPassJson(
+        source({ status, completedAt: FINISHED, canceledAt: FINISHED }),
+      );
+      expect(pass.relevantDate).toBe(STARTS_AT.toISOString());
+    }
+  });
+
+  it("labels: anything that is not a known ending keeps CANCELED", () => {
+    expect(finishedPassLabel("COMPLETED")).toBe("COMPLETED");
+    expect(finishedPassLabel("NO_SHOW")).toBe("MISSED");
+    expect(finishedPassLabel("CANCELED")).toBe("CANCELED");
+    expect(finishedPassLabel("PENDING")).toBe("CANCELED");
+  });
+
+  it("a finished row with no stamp (older data) falls back to the end-plus-grace rule", () => {
+    const fallback = new Date(ENDS_AT.getTime() + BOOKED_PASS_GRACE_MS);
+    const base = { endsAt: ENDS_AT, completedAt: null, canceledAt: null, updatedAt: FINISHED };
+    expect(appointmentPassExpiration({ ...base, status: "COMPLETED" })).toEqual(fallback);
+    expect(appointmentPassExpiration({ ...base, status: "CANCELED" })).toEqual(fallback);
+    expect(appointmentPassExpiration({ ...base, status: "PENDING" })).toEqual(fallback);
+    // A BOOKED row ignores any stamp it carries: it has not finished.
+    expect(
+      appointmentPassExpiration({ ...base, status: "BOOKED", completedAt: FINISHED }),
+    ).toEqual(fallback);
+  });
+
+  it("🔴 the back of the pass never promises to remove itself", () => {
+    // Wallet decides how an expired or voided pass is shown; ChairBack cannot
+    // take a pass off a phone and must not say it will.
+    const back = JSON.stringify(
+      (buildAppointmentPassJson(source({ status: "COMPLETED", completedAt: FINISHED }))
+        .eventTicket as { backFields: unknown }).backFields,
+    );
+    expect(back).not.toMatch(/\b(delete|remove|disappear)/i);
   });
 });
 

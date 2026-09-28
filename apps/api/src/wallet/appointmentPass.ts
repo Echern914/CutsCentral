@@ -31,10 +31,9 @@ const env = apiEnv();
  * Same machinery otherwise, imported from wallet/pass.ts rather than copied:
  * cert decode, brand art, and the APNs re-fetch poke.
  *
- * DARK until the WALLET_APPT_* env vars are set (plus the shared team id +
- * WWDR): the email hides its Add-to-Wallet button and every route 404s -
- * nothing about this pass type exists in production until the certificate
- * ceremony in WALLET-SETUP.md is done and the vars are deployed.
+ * Gated on the WALLET_APPT_* env vars (plus the shared team id + WWDR): with
+ * any one missing, the email hides its Add-to-Wallet button and every route
+ * 404s. WALLET-SETUP.md has the certificate steps and the production audit.
  */
 
 export function appointmentWalletEnabled(): boolean {
@@ -86,6 +85,57 @@ function loadApptCerts(): WalletCerts {
 
 /** Statuses that render a LIVE pass; anything else is served voided. */
 const LIVE_STATUSES = new Set(["BOOKED"]);
+
+/**
+ * How long a BOOKED pass stays valid past its end time. Short on purpose: the
+ * 15-minute promotion job completes a booking soon after it ends and pokes the
+ * pass, so this grace only matters when that update never reaches the phone.
+ * Two hours covers a cut that runs long without yesterday's appointment still
+ * looking current the next morning.
+ */
+export const BOOKED_PASS_GRACE_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * The word printed where a live pass shows the date, once the pass is no longer
+ * live. Each ending says what actually happened: a customer whose cut is done
+ * must not read "CANCELED" on their phone. Anything that is not one of the
+ * three endings (a PENDING request, say) keeps "CANCELED", as it always has.
+ */
+export function finishedPassLabel(status: string): string {
+  if (status === "COMPLETED") return "COMPLETED";
+  if (status === "NO_SHOW") return "MISSED";
+  return "CANCELED";
+}
+
+/**
+ * The pass's `expirationDate`. PURE: every instant arrives on the source.
+ *
+ * - BOOKED: the end time plus BOOKED_PASS_GRACE_MS.
+ * - COMPLETED / CANCELED: the moment it finished (completedAt / canceledAt).
+ * - NO_SHOW: there is no no-show timestamp column, so the row's updatedAt,
+ *   which the no-show write stamps (a later edit to the row moves it forward).
+ * - A finished row missing its stamp (older data) falls back to the BOOKED rule.
+ *
+ * What Wallet then does with an expired or voided pass - greying it out,
+ * grouping it with expired passes, hiding it - is Wallet's decision and the
+ * customer's settings. Nothing here removes a pass from anyone's phone.
+ */
+export function appointmentPassExpiration(
+  appt: Pick<
+    AppointmentPassSource,
+    "status" | "endsAt" | "completedAt" | "canceledAt" | "updatedAt"
+  >,
+): Date {
+  const finishedAt =
+    appt.status === "COMPLETED"
+      ? appt.completedAt
+      : appt.status === "CANCELED"
+        ? appt.canceledAt
+        : appt.status === "NO_SHOW"
+          ? appt.updatedAt
+          : null;
+  return finishedAt ?? new Date(appt.endsAt.getTime() + BOOKED_PASS_GRACE_MS);
+}
 
 /**
  * Short date/time labels in the SHOP's timezone - what's printed on the pass
@@ -178,6 +228,12 @@ export interface AppointmentPassSource {
   status: string;
   startsAt: Date;
   endsAt: Date;
+  /** When the visit was marked done; a COMPLETED pass expires here. */
+  completedAt: Date | null;
+  /** When it was canceled; a CANCELED pass expires here. */
+  canceledAt: Date | null;
+  /** The row's last write; stands in for a NO_SHOW's finish instant. */
+  updatedAt: Date;
   firstName: string | null;
   manageToken: string;
   service: { name: string } | null;
@@ -209,9 +265,10 @@ export interface AppointmentPassSource {
  * clock beyond the appointment's own instants - so every field a customer
  * reads is testable on its own.
  *
- * A canceled/completed appointment yields a VOIDED pass (Wallet greys it out)
- * because the devices that already added it re-fetch through here after a
- * poke, and "this is no longer valid" must be sayable. Whether a FRESH
+ * A canceled, completed or no-show appointment yields a VOIDED pass labelled
+ * with what happened, because the devices that already added it re-fetch
+ * through here after a poke, and "this is no longer valid" must be sayable.
+ * How Wallet then displays a voided or expired pass is Wallet's decision. Whether a FRESH
  * download is allowed at all is the route's decision, not this builder's.
  */
 export function buildAppointmentPassJson(
@@ -255,8 +312,9 @@ export function buildAppointmentPassJson(
     sharingProhibited: true,
     // iOS surfaces the pass on the lock screen around this instant.
     relevantDate: appt.startsAt.toISOString(),
-    // Wallet's own expiry/cleanup hint; the pass is meaningless a day after.
-    expirationDate: new Date(appt.endsAt.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+    // Wallet's expiry hint: a short grace after the end while booked, the
+    // finish instant once it is over. See appointmentPassExpiration().
+    expirationDate: appointmentPassExpiration(appt).toISOString(),
     // Lock-screen relevance AT THE SHOP, not just near the time. Emitted only
     // when the shop has real coordinates: Apple takes lat/lng and nothing else,
     // and a guessed point would buzz a customer at the wrong building, which is
@@ -282,7 +340,7 @@ export function buildAppointmentPassJson(
       primaryFields: [
         {
           key: "when",
-          label: live ? date.toUpperCase() : "CANCELED",
+          label: live ? date.toUpperCase() : finishedPassLabel(appt.status),
           value: when,
           // The lock-screen line Wallet shows when an update lands (reschedule).
           changeMessage: "Your appointment changed: now %@",
@@ -313,7 +371,7 @@ export function buildAppointmentPassJson(
           key: "auto",
           label: "This pass updates itself",
           value:
-            "If the time changes or the appointment is canceled, the pass refreshes on its own.",
+            "If the time changes, or the appointment is canceled or finished, the pass refreshes on its own.",
         },
       ],
     },
@@ -338,6 +396,9 @@ export async function buildPassForAppointment(
         status: true,
         startsAt: true,
         endsAt: true,
+        completedAt: true,
+        canceledAt: true,
+        updatedAt: true,
         firstName: true,
         manageToken: true,
         service: { select: { name: true } },
@@ -396,7 +457,8 @@ export async function buildPassForAppointment(
 
 /**
  * Tell every registered device holding this APPOINTMENT's pass to re-fetch it
- * - after a reschedule (new time) or a cancellation (voided). Best-effort and
+ * - after a reschedule (new time), an undo-cancel (live again), or an ending:
+ * cancel, no-show or completion (voided, labelled). Best-effort and
  * NEVER throws: a wallet problem must not break a booking mutation. Callers
  * on the booking paths ignore the result; it exists for tests and admin
  * surfaces, with the same vocabulary as the punch-card poke.

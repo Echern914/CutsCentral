@@ -78,8 +78,9 @@ Redeploy the API. That's it — no web env needed (the page reads
 # Appointment pass (second pass type) — go-live steps
 
 "Add to Apple Wallet" for the BOOKING itself: an eventTicket showing the date,
-time, service and barber, which updates itself on reschedule and greys out
-(voids) on cancellation. It is offered in THREE places, all gated on the same
+time, service and barber, which updates itself on reschedule and is voided
+once the appointment ends in any way (see "What the pass shows after the
+visit" below). It is offered in THREE places, all gated on the same
 three vars below:
 
 - the **confirmation email**;
@@ -94,7 +95,7 @@ from the punch card — Apple binds each certificate to exactly one type id — 
 it needs its own identifier + certificate, but reuses the same Team ID and WWDR
 intermediate you already exported above.
 
-Ships DARK: until the three `WALLET_APPT_*` vars are set, all three surfaces
+Gated: until the three `WALLET_APPT_*` vars are set, all three surfaces
 hide the button and every appointment-pass route 404s (never 500 — see
 `appointmentWalletDisabled.test.ts`, which pins the fail-closed state).
 Switching it on touches nothing about the punch card. "Add to Calendar" (.ics) does NOT
@@ -224,17 +225,41 @@ hides, and no poke is dispatched.
 
 | Variable | Shared? | Set? | What breaks without it |
 | --- | --- | --- | --- |
-| `WALLET_APPT_PASS_TYPE_ID` | appointment only | ❌ **UNSET** | Everything. Also the APNs topic. |
-| `WALLET_APPT_PASS_CERT_BASE64` | appointment only | ❌ **UNSET** | Signing. Apple binds one cert to one type id. |
-| `WALLET_APPT_PASS_KEY_BASE64` | appointment only | ❌ **UNSET** | Signing. Must be an **unencrypted** PEM (`-nodes`). |
-| `WALLET_TEAM_ID` | with the punch card | ✅ set (punch card is live) | Signing, for both pass types. |
-| `WALLET_WWDR_CERT_BASE64` | with the punch card | ✅ set (punch card is live) | The chain, for both pass types. |
+| `WALLET_APPT_PASS_TYPE_ID` | appointment only | ✅ set | Everything. Also the APNs topic. |
+| `WALLET_APPT_PASS_CERT_BASE64` | appointment only | ✅ set | Signing. Apple binds one cert to one type id. |
+| `WALLET_APPT_PASS_KEY_BASE64` | appointment only | ✅ set | Signing. Must be an **unencrypted** PEM (`-nodes`). |
+| `WALLET_TEAM_ID` | with the punch card | ✅ set | Signing, for both pass types. |
+| `WALLET_WWDR_CERT_BASE64` | with the punch card | ✅ set | The chain, for both pass types. |
+
+Last checked 2026-09-28 (variable names only, never values), with `DRY_RUN=false`
+on the API: **appointment passes are LIVE in production.** `DRY_RUN=true` would
+keep every route working but suppress the APNs poke, so installed passes would
+stop updating on their own.
 
 `WALLET_APPT_PASS_KEY_PASSPHRASE` is **deliberately unset** and must stay that
 way while the key is unencrypted — see §3 above.
 
-So the remaining work is exactly the three `WALLET_APPT_*` variables. The two
-shared ones are already in production, proven by the punch-card pass being live.
+## What the pass shows after the visit
+
+The serial number is the appointment id, so every booking has its own pass.
+Every change to the appointment pushes an update (APNs poke, fire-and-forget,
+after the change commits) to each device that added that pass, and the device
+re-fetches it:
+
+| What happened | Paths that poke | Pass face | Voided | `expirationDate` |
+| --- | --- | --- | --- | --- |
+| Booked / rescheduled / cancel undone | booking, dashboard + customer + receptionist reschedule, undo-cancel | the date | no | end time + 2 h (`BOOKED_PASS_GRACE_MS`) |
+| Completed | 15-min promotion job, Done, chair checkout, walk-in completion | `COMPLETED` | yes | `completedAt` |
+| No-show | dashboard no-show | `MISSED` | yes | the no-show write (`updatedAt`; there is no no-show timestamp) |
+| Canceled | every cancel path | `CANCELED` | yes | `canceledAt` |
+
+`relevantDate` (lock-screen surfacing) stays the start time throughout.
+
+🔴 **ChairBack cannot delete a pass from a customer's Wallet.** Voiding and
+expiring are hints; how an expired or voided pass is then displayed — greyed
+out, grouped with expired passes, hidden — is Wallet's decision and the
+customer's own settings. Never promise a customer, or copy, that the pass
+"goes away".
 
 🔴 **Never print a value.** Use the `keys[]`-only commands in §5; both `grep` on
 `railway variables` and `--kv` print raw values, which for these variables means
@@ -256,7 +281,7 @@ time relevance. 🔴 Do not guess coordinates from the address — a pass that b
 at the wrong building is worse than one that never buzzes. No geocoder runs
 anywhere in this codebase; these are set deliberately or not at all.
 
-## Where the badge appears once the three variables land
+## Where the badge appears (the three variables are set)
 
 | Surface | How it adds |
 | --- | --- |

@@ -4030,6 +4030,8 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
     appointmentId: appt.id,
     via: "dashboard_restore",
   });
+  // The Wallet pass re-fetches as BOOKED again. Fire-and-forget, never throws.
+  void pokeAppointmentPass(appt.id);
   await noteAvailabilityChanged(shopId);
   res.json({ ok: true });
 });
@@ -5754,6 +5756,8 @@ bookingDashboardRouter.post("/appointments/:id/complete", async (req, res) => {
   await recomputeCadence(shopId, result.clientId);
   // The visit happened: a kept card has nothing left to protect. Let it go.
   void releaseCardOnFile({ shopId, appointmentId: req.params.id!, reason: "completed" });
+  // The Wallet pass re-fetches as COMPLETED. Fire-and-forget, never throws.
+  void pokeAppointmentPass(req.params.id!);
   if (result.earn) {
     void notifyPunchEarned({
       shopId,
@@ -5964,6 +5968,9 @@ bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
   }
   // Checked out at the chair: the kept card (if any) is released either way.
   void releaseCardOnFile({ shopId, appointmentId: req.params.id!, reason: "checked_out" });
+  // The Wallet pass re-fetches as COMPLETED (an unchanged re-fetch when the cut
+  // was marked done earlier). Fire-and-forget, never throws.
+  void pokeAppointmentPass(req.params.id!);
   if (result.clientId) {
     await recomputeCadence(shopId, result.clientId);
     if (result.earn) {
