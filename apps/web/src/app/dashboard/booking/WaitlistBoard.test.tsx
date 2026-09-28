@@ -182,6 +182,25 @@ describe("actions", () => {
     await waitFor(() => expect(mockSet).toHaveBeenCalledWith("e1", "CONTACTED"));
   });
 
+  it("a Text button opens Messages to them - and changes nothing on its own", async () => {
+    mockGet.mockResolvedValue(page([entry()]));
+    render(<WaitlistBoard {...props} />);
+    await screen.findByText("Marcus Reed");
+    const text = screen.getByRole("link", { name: "Text" });
+    expect(text.getAttribute("href")).toBe("sms:+12025550171");
+    // jsdom cannot follow an sms: link; stop the navigation, keep the click.
+    text.addEventListener("click", (e) => e.preventDefault());
+    fireEvent.click(text);
+    expect(mockSet).not.toHaveBeenCalled();
+  });
+
+  it("no textable number, no Text button", async () => {
+    mockGet.mockResolvedValue(page([entry({ phone: null, email: "marcus@example.com" })]));
+    render(<WaitlistBoard {...props} />);
+    await screen.findByText("Marcus Reed");
+    expect(screen.queryByRole("link", { name: "Text" })).toBeNull();
+  });
+
   it("a closed entry can be put back on the list", async () => {
     mockGet.mockResolvedValue(page([entry({ status: "REMOVED" })]));
     render(<WaitlistBoard {...props} />);

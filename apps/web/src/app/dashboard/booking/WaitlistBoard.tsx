@@ -493,6 +493,18 @@ function WaitlistCard({
           >
             Book appointment
           </button>
+          {/* The number above is already a link, but it reads as text: this is
+              the button a barber looks for to go text them. It opens their own
+              Messages - ChairBack sends nothing - and changes no status; they
+              mark Contacted once they have. No textable number, no button. */}
+          {smsHref && (
+            <a
+              href={smsHref}
+              className={cn(BTN_BASE, "border border-gold/50 font-semibold text-gold hover:bg-gold/10")}
+            >
+              Text
+            </a>
+          )}
           {status !== "CONTACTED" && (
             <button
               type="button"
