@@ -19,6 +19,7 @@ import {
 } from "../engines/mirrorNotConfigured.js";
 import { ServiceDayFullError } from "../engines/serviceDailyLimit.js";
 import { cancelAppointment } from "../engines/appointmentPromotion.js";
+import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { effectiveDurationAt, effectivePriceAt } from "../engines/pricing.js";
 import { formatApptTime } from "../messaging/templates.js";
 import { sendPushToUser } from "../messaging/push.js";
@@ -1255,6 +1256,8 @@ async function rescheduleTool(
 
   // New block first, then release the old - never the reverse.
   await completeReschedule(ctx.shopId, appt.id, reschedOutboxIds);
+  // The Wallet pass re-fetches the NEW time. Fire-and-forget, never throws.
+  void pokeAppointmentPass(appt.id);
 
   return ok({
     rescheduled: true,

@@ -6,7 +6,7 @@ import { requireManager } from "../auth/roles.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import { previewBroadcast, queueBroadcast, type BroadcastBlocker } from "../engines/broadcast.js";
 import { broadcastProgress } from "../engines/broadcastWorker.js";
-import { SKIP_REASON_LABEL, type SkipReason } from "../engines/broadcastAudience.js";
+import { SKIP_REASON_LABEL } from "../engines/broadcastAudience.js";
 import { logger } from "../logger.js";
 
 /**
@@ -126,14 +126,18 @@ broadcastsRouter.post("/preview", async (req, res) => {
     considered: preview.considered,
     emailsRemaining: preview.emailsRemaining,
     limits: { subject: SUBJECT_LIMITS[parsed.data.channel], body: BODY_LIMITS[parsed.data.channel] },
-    skipped: preview.skipped.map((s) => ({
-      reason: s.reason,
-      count: s.count,
-      label: SKIP_REASON_LABEL[s.reason as SkipReason],
-    })),
+    skipped: preview.skipped.map((s) => ({ ...s, label: SKIP_REASON_LABEL[s.reason] })),
     blocker: preview.blocker
       ? { kind: preview.blocker.kind, message: blockerMessage(preview.blocker) }
       : null,
+    // The same group on the OTHER channel too, and each tier's size.
+    channels: Object.fromEntries(
+      Object.entries(preview.channels).map(([channel, c]) => [
+        channel,
+        { ...c, skipped: c.skipped.map((s) => ({ ...s, label: SKIP_REASON_LABEL[s.reason] })) },
+      ]),
+    ),
+    tierCounts: preview.tierCounts,
   });
 });
 

@@ -187,6 +187,13 @@ export function BroadcastCard({
 
   const reachable = preview?.reachable ?? 0;
   const blocked = preview?.blocker ?? null;
+  const otherChannel: BroadcastChannel = channel === "email" ? "push" : "email";
+  const otherCount = preview?.channels?.[otherChannel];
+  const pushReach = preview?.channels?.push.reachable ?? 0;
+  const noEmailYes =
+    channel === "email" &&
+    !preview?.channels?.email.unavailable &&
+    (preview?.skipped.some((s) => s.reason === "not_permitted") ?? false);
   const tooLong = subject.length > limits.subject || body.length > limits.body;
   const canSend =
     !pending &&
@@ -230,7 +237,7 @@ export function BroadcastCard({
           title={`Message your ${vocab.clientNounPlural}`}
           subtitle={
             rewardsEnabled
-              ? "One message to everyone, or just one loyalty group."
+              ? "One message to everyone, or just one rewards tier."
               : "One message to everyone."
           }
         />
@@ -256,7 +263,9 @@ export function BroadcastCard({
     <Card className="p-5">
       <CardHeader
         title={`Message your ${vocab.clientNounPlural}`}
-        subtitle="One message to everyone, or just one loyalty group."
+        subtitle={
+          rewardsEnabled ? "One message to everyone, or just one rewards tier." : "One message to everyone."
+        }
       />
 
       <div className="mt-4 flex flex-col gap-4">
@@ -304,29 +313,39 @@ export function BroadcastCard({
             >
               Everyone
             </button>
-            {/* Tiers are part of rewards. With rewards off there are no gold
-                members to aim at - and the API refuses a tier audience anyway. */}
-            {rewardsEnabled &&
-              TIERS.map((t) => (
-                <button
-                  key={t.value}
-                  type="button"
-                  onClick={() => toggleTier(t.value)}
-                  aria-pressed={tiers.includes(t.value)}
-                  className={cn(
-                    "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                    tiers.includes(t.value)
-                      ? "bg-gold/20 text-gold"
-                      : "border border-subtle text-muted hover:text-offwhite",
-                  )}
-                >
-                  {t.label}
-                </button>
-              ))}
           </div>
+          {/* Tiers are part of rewards. With rewards off there are no gold
+              members to aim at - and the API refuses a tier audience anyway.
+              🔴 EACH TIER SAYS HOW MANY ARE IN IT. Most of a book may have no
+              tier yet, and "Gold" with no number reads like a big group. */}
+          {rewardsEnabled && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-muted">Or by rewards tier:</span>
+              {TIERS.map((t) => {
+                const count = preview?.tierCounts?.[t.value];
+                return (
+                  <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => toggleTier(t.value)}
+                    aria-pressed={tiers.includes(t.value)}
+                    className={cn(
+                      "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                      tiers.includes(t.value)
+                        ? "bg-gold/20 text-gold"
+                        : "border border-subtle text-muted hover:text-offwhite",
+                    )}
+                  >
+                    {t.label}
+                    {count !== undefined && ` · ${count}`}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {!rewardsEnabled && (
             <p className="mt-1.5 text-xs text-muted">
-              Sending to Gold, Silver or Bronze needs rewards turned on.
+              Sending by rewards tier (Gold, Silver or Bronze) needs rewards turned on.
             </p>
           )}
         </div>
@@ -366,23 +385,36 @@ export function BroadcastCard({
 
         {/* 🔴 THE REAL NUMBER, AND WHO IS MISSING FROM IT. */}
         <div className="rounded-xl border border-subtle bg-charcoal-700/50 px-3.5 py-3">
+          {/* 🔴 ALWAYS THE NUMBERS AND THE REASONS, even at zero - a zero with
+              no reason is exactly the screen that reads as "broken". A blocker
+              is said on top of them, never instead of them. */}
           {loading ? (
             <p className="text-sm text-muted">Counting…</p>
-          ) : blocked ? (
-            <p className="text-sm text-gold">{blocked.message}</p>
           ) : (
             <>
-              <p className="text-sm text-offwhite">
-                <span className="font-semibold">{reachable}</span> of{" "}
-                {preview?.considered ?? 0} {vocab.clientNounPlural} will get this.
-              </p>
+              {preview?.channels?.[channel]?.unavailable ? (
+                <p className="text-sm text-offwhite">This email can&apos;t be sent from your shop yet.</p>
+              ) : (
+                <p className="text-sm text-offwhite">
+                  <span className="font-semibold">{reachable}</span> of{" "}
+                  {preview?.considered ?? 0} {vocab.clientNounPlural} will get this{" "}
+                  {channel === "email" ? "email" : "notification"}.
+                </p>
+              )}
+              {otherCount && (
+                <p className="mt-0.5 text-xs text-muted">
+                  {otherCount.unavailable
+                    ? "Email can't be sent from your shop yet."
+                    : `As ${otherChannel === "email" ? "an email" : "an app notification"}: ${otherCount.reachable} of ${preview?.considered ?? 0}.`}
+                </p>
+              )}
               {preview?.emailsRemaining !== null && preview?.emailsRemaining !== undefined && (
                 <p className="mt-0.5 text-xs text-muted">
                   {preview.emailsRemaining} emails left in your allowance this month.
                 </p>
               )}
               {(preview?.skipped.length ?? 0) > 0 && (
-                <ul className="mt-2 flex flex-col gap-0.5">
+                <ul className="mt-2 flex flex-col gap-0.5" aria-label="Who won't get it">
                   {preview!.skipped.map((s) => (
                     <li key={s.reason} className="text-xs text-muted">
                       {s.count} · {s.label}
@@ -392,13 +424,21 @@ export function BroadcastCard({
               )}
               {/* Marketing email needs each customer's own yes - an address on
                   file is not one. Said plainly, so "0 will get this" reads as
-                  the rule working, not the feature broken. */}
-              {channel === "email" && preview?.skipped.some((s) => s.reason === "not_permitted") && (
+                  the rule working, not the feature broken - and with the
+                  channel that does reach them, counted. */}
+              {noEmailYes && (
                 <p className="mt-2 text-xs leading-relaxed text-gold">
                   {reachable === 0
-                    ? "No one has said yes to your marketing emails yet, so this email can't go to anyone. An app notification still reaches everyone who has the app."
+                    ? `Nobody who can get email here has said yes to your marketing emails yet, so this email can't go to anyone.${
+                        pushReach > 0
+                          ? ` Send it as an app notification instead — that reaches ${pushReach} of them.`
+                          : ""
+                      }`
                     : "Marketing email only goes to people who have said yes to it."}
                 </p>
+              )}
+              {blocked && !(blocked.kind === "no_recipients" && noEmailYes) && (
+                <p className="mt-2 text-sm text-gold">{blocked.message}</p>
               )}
             </>
           )}
