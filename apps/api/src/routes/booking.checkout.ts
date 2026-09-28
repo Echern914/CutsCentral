@@ -31,6 +31,7 @@ import {
   settleServiceCheckout,
   settleServiceCheckoutFromReconciler,
 } from "../services/serviceCheckoutSettlement.js";
+import { agreedPriceCents, decimalToCents } from "../services/appointmentPriceLedger.js";
 
 /**
  * POST-SERVICE CHECKOUT — the barber finishes the cut and collects the balance.
@@ -209,7 +210,7 @@ async function loadCheckout(
   })) as CheckoutAppt | null;
   if (!appt) return null;
 
-  const [payments, card, live] = await Promise.all([
+  const [payments, card, live, agreedCents] = await Promise.all([
     runWithShop(shopId, (tx) =>
       tx.payment.findMany({
         where: { appointmentId: appt.id },
@@ -239,6 +240,9 @@ async function loadCheckout(
       }),
     ),
     liveAttemptFor(shopId, appt.id),
+    // What the customer approved: the ticket as it stood before any by-hand
+    // price edit. The saved card is never charged past it.
+    agreedPriceCents(shopId, appt.id, decimalToCents(appt.priceAtBooking)),
   ]);
 
   const [service, client] = await Promise.all([
@@ -266,6 +270,8 @@ async function loadCheckout(
     card,
     external: appointmentOwnedByPlatform(appt),
     endsAt: appt.endsAt,
+    status: appt.status,
+    agreedPriceCents: agreedCents,
     now,
   });
 
@@ -437,6 +443,9 @@ checkoutRouter.get("/appointments/:id", async (req, res) => {
         // must not show "Charge card ending ••••4242" it cannot honour.
         available: state.savedCardEligible && connectEnabled(),
         blocker: state.savedCardBlocker,
+        // With `over_agreed_price`: the most the customer approved this card
+        // for, so the screen can say "approved only up to $X".
+        approvedUpToCents: state.savedCardApprovedUpToCents,
         dueCents: state.chargeableCents,
         card: state.card,
       },
@@ -513,7 +522,12 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
     return;
   }
   if (!state.savedCardEligible) {
-    res.status(409).json({ error: state.savedCardBlocker ?? "card_unavailable" });
+    res.status(409).json({
+      error: state.savedCardBlocker ?? "card_unavailable",
+      ...(state.savedCardApprovedUpToCents !== null
+        ? { approvedUpToCents: state.savedCardApprovedUpToCents }
+        : {}),
+    });
     return;
   }
   if (!checkoutAmountAllowed(state, parsed.data.amountCents)) {
@@ -557,6 +571,11 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
     consentAt: card?.serviceChargeConsentAt ?? null,
   });
 
+  if (opened.kind === "paid") {
+    // Recorded by another path after this request read the appointment.
+    res.status(409).json({ error: "paid_already" });
+    return;
+  }
   if (opened.kind === "busy") {
     // Somebody is already collecting - possibly this barber, on another
     // device, possibly a charge whose answer never came back.
@@ -780,6 +799,11 @@ checkoutRouter.post("/appointments/:id/cash", async (req, res) => {
     method: "cash_other",
     amountCents: parsed.data.amountCents,
   });
+  if (opened.kind === "paid") {
+    // Recorded by another path after this request read the appointment.
+    res.status(409).json({ error: "paid_already" });
+    return;
+  }
   if (opened.kind === "busy") {
     res
       .status(409)
@@ -941,6 +965,11 @@ checkoutRouter.post("/appointments/:id/tap-to-pay-intent", async (req, res) => {
     consentAt: null,
   });
 
+  if (opened.kind === "paid") {
+    // Recorded by another path after this request read the appointment.
+    res.status(409).json({ error: "paid_already" });
+    return;
+  }
   if (opened.kind === "busy") {
     res.status(409).json({ error: "collection_in_progress", liveAttempt: publicAttempt(opened.attempt) });
     return;

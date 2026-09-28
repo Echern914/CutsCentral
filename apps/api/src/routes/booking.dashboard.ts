@@ -125,6 +125,8 @@ import type { AcuityAppointmentType } from "../acuity/types.js";
 import { applyServiceImport, previewServiceImport } from "../engines/acuityServiceImport.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
+import { liveAttemptFor } from "../services/serviceCheckoutAttempt.js";
+
 /**
  * Authenticated dashboard config for the native booking engine: the barber's
  * CRUD over staff, services, weekly availability, and the upcoming appointment
@@ -5884,6 +5886,9 @@ const checkoutSchema = z
   })
   .strict();
 
+/** Rolls back a chair checkout's paidAt claim; caught right below. */
+class CollectionInProgress extends Error {}
+
 bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
   const parsed = checkoutSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
@@ -5936,6 +5941,15 @@ bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
     });
     if (claimed.count === 0) return { kind: "paid_already" as const };
 
+    // 🔴 NOT WHILE THE NEWER CHECKOUT IS STILL COLLECTING. A card charge that is
+    // processing, waiting on the customer, or whose answer never came back may
+    // be taking this very money right now; recording cash on top of it is how
+    // one cut gets paid for twice. Read AFTER the claim, so the row lock the
+    // claim took is held: `openCheckoutAttempt` locks the same row before it
+    // looks at `paidAt`, so whichever gets there first, the other sees it.
+    const live = await liveAttemptFor(shopId, appt.id, tx);
+    if (live) throw new CollectionInProgress();
+
     // Complete through the one promotion path (idempotent via booking:{id}).
     // A walk-in style row without a client still gets its payment recorded —
     // there is just no loyalty to earn.
@@ -5956,8 +5970,17 @@ bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
       );
     }
     return { kind: "ok" as const, clientId: appt.clientId, earn };
+  }).catch((err: unknown) => {
+    if (err instanceof CollectionInProgress) return { kind: "collection_in_progress" as const };
+    throw err;
   });
 
+  if (result.kind === "collection_in_progress") {
+    // The screen's own words for it; the barber waits for that collection to
+    // resolve (or cancels it) before recording money here.
+    res.status(409).json({ error: "collection_in_progress" });
+    return;
+  }
   if (result.kind === "not_found") {
     res.status(404).json({ error: "not_found" });
     return;

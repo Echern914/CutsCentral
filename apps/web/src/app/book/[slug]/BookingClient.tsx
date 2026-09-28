@@ -1850,7 +1850,19 @@ export function BookingClient({
                 Your time is held. {data.shop.name} keeps a card on file — you
                 are <strong className="text-offwhite">not charged today</strong>
                 , and you pay at your visit.
-                {data.shop.payment?.sentence.includes("charged only") ? (
+                {/* 🔴 NEVER CONTRADICT THE BOX THEY JUST TICKED. A customer who
+                    agreed to a service charge must not then be told the card
+                    is "charged only" for a no-show - that is the one sentence
+                    on this page that would make the consent look like a trick. */}
+                {serviceChargeConsent ? (
+                  <>
+                    {" "}As you agreed, the shop can also charge it for your service once
+                    your appointment is finished
+                    {data.shop.payment?.sentence.includes("charged only")
+                      ? <>, and for a no-show or a cancellation inside the shop&rsquo;s cancellation window.</>
+                      : "."}
+                  </>
+                ) : data.shop.payment?.sentence.includes("charged only") ? (
                   <> It is charged only for a no-show or a cancellation inside the shop&rsquo;s cancellation window.</>
                 ) : (
                   <> It is not charged unless the shop turns on no-show fees.</>

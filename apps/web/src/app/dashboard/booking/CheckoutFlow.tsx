@@ -68,9 +68,25 @@ const BLOCKER_COPY: Record<string, string> = {
   consent_not_for_this_appointment: "This card was approved for a different appointment",
   // The 72-hour post-service window has closed.
   retention_expired: "Too long since this appointment to charge the saved card",
+  // The customer agreed to a charge only once the appointment is finished.
+  not_finished: "The saved card can be charged once the appointment is done",
   native_not_ready: "Not set up on this device yet",
   disabled: "Not enabled for this shop",
 };
+
+/**
+ * The saved-card line when it cannot be used. `over_agreed_price` carries a
+ * figure: the customer approved the card up to what they booked, and the
+ * barber needs that number to explain why the card stops short of the ticket.
+ */
+function savedCardBlockerCopy(blocker: string, approvedUpToCents?: number | null): string {
+  if (blocker === "over_agreed_price") {
+    return approvedUpToCents
+      ? `The saved card was approved only up to ${money(approvedUpToCents)}. Take the balance another way.`
+      : "The saved card was not approved for this price. Take the balance another way.";
+  }
+  return BLOCKER_COPY[blocker] ?? "Saved card unavailable";
+}
 
 const CASH_METHODS = [
   { key: "cash" as const, label: "Cash", hint: "You keep 100%" },
@@ -540,7 +556,7 @@ export function CheckoutFlow({
             savedCard.blocker &&
             savedCard.blocker !== "no_card" && (
               <p className="rounded-lg border border-subtle/60 px-3.5 py-2.5 text-xs text-muted">
-                {BLOCKER_COPY[savedCard.blocker] ?? "Saved card unavailable"}
+                {savedCardBlockerCopy(savedCard.blocker, savedCard.approvedUpToCents)}
               </p>
             )
           )}
@@ -692,6 +708,10 @@ function errorCopy(
       return `This ${serviceNoun} has already been checked out.`;
     case "no_service_consent":
       return "This card was only approved for no-show fees.";
+    case "not_finished":
+      return "The saved card can be charged once the appointment is done.";
+    case "over_agreed_price":
+      return "The balance is more than the customer approved this card for. Take it another way.";
     case "tap_to_pay_unavailable":
       return "This phone can't take contactless payments. Try another way.";
     case "tap_to_pay_education_failed":

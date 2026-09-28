@@ -35,6 +35,16 @@ refuses a charge without it. They read the same file so they cannot drift.
 - Changing the wording means minting a new version. The old entry stays in that
   file forever, so a charge taken last month can still be explained.
 
+**What v1 promises, and where the code keeps each promise.** Customers have
+ticked these words, so the code is held to them rather than the words changed:
+
+| v1 says | enforced by |
+|---|---|
+| "only once your appointment is finished" | `not_finished` in `engines/serviceCheckout.ts`: the saved card is refused until the appointment is COMPLETED or its booked end time has passed |
+| "up to the price of what you booked, less anything you have already paid" | `over_agreed_price`: the card is refused when the balance is above `agreedPriceCents` (the first price-ledger row) less what was collected. The screen says "approved only up to $X"; cash and Tap to Pay stay open. The edit sheet now ledgers a price change too, or it could raise the ticket unrecorded |
+| "a receipt by email every time" | not yet - see the follow-up PR |
+| "remove this card at any time from your appointment link" | not yet - see the follow-up PR |
+
 **2. The client never names the price, and v1 collects the WHOLE balance or
 nothing.** What may be collected is computed in
 `apps/api/src/engines/serviceCheckout.ts` from the ticket and the payments
@@ -107,6 +117,12 @@ CREATE UNIQUE INDEX "CheckoutAttempt_appointmentId_live_key"
 A card charge that timed out **blocks Tap to Pay and blocks Cash**. "I don't
 know if that went through" is exactly the state in which collecting again
 charges the customer twice.
+
+The **original chair checkout** (`POST /booking/appointments/:id/checkout`) is
+held to the same rule: it answers 409 `collection_in_progress` while an attempt
+is live. It checks after its own `paidAt` claim, and `openCheckoutAttempt` locks
+the appointment row before reading `paidAt`, so the two cannot both record
+money for one cut whichever arrives first.
 
 **7. `ambiguous` is not dismissible.** Only the reconciler, which reads Stripe's
 own answer, may resolve one. `requires_action` **is** cancellable, because it is

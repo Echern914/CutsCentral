@@ -2,7 +2,12 @@ import request from "supertest";
 import type { Express } from "express";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Prisma, prisma } from "@chairback/db";
-import { randomToken, SERVICE_CHARGE_CONSENT_VERSION, __resetEnvCacheForTests } from "@chairback/config";
+import {
+  randomToken,
+  SERVICE_CHARGE_CONSENT,
+  SERVICE_CHARGE_CONSENT_VERSION,
+  __resetEnvCacheForTests,
+} from "@chairback/config";
 import { raceBehindRowLock, winners } from "../testing/raceBarrier.js";
 
 /**
@@ -213,8 +218,10 @@ async function seedAppointment(opts: {
   priceDollars: number | null;
   card?: { consent: "none" | "single" | "series"; status?: string };
   depositCents?: number;
+  /** Default: an hour ago, so the 30-minute cut is already over. */
+  startsAt?: Date;
 }): Promise<string> {
-  const startsAt = new Date(Date.now() - 60 * 60 * 1000);
+  const startsAt = opts.startsAt ?? new Date(Date.now() - 60 * 60 * 1000);
   const client = await prisma.client.create({
     data: {
       shopId: opts.shopId,
@@ -1306,5 +1313,319 @@ describe("the webhook is what settles", () => {
     // Terminal is terminal: otherwise a stale event would re-lock the
     // appointment against every other method.
     expect(after!.state).toBe("succeeded");
+  });
+});
+
+/**
+ * THE v1 CONSENT'S PROMISES, held to the code.
+ *
+ * Customers have already ticked `2026-10-03.v1`. Its words are not changed
+ * here; the code is made to keep them. Each describe names the sentence.
+ */
+describe("the service-charge consent keeps its promises", () => {
+  const MIN = 60 * 1000;
+
+  it("the promises below are still the words customers were shown", () => {
+    // If this fails, the wording moved: mint a new version, and re-read which
+    // of these tests the new words still ask for.
+    expect(SERVICE_CHARGE_CONSENT_VERSION).toBe("2026-10-03.v1");
+    expect(SERVICE_CHARGE_CONSENT.body).toContain("only do this once your appointment is finished");
+    expect(SERVICE_CHARGE_CONSENT.body).toContain(
+      "up to the price of what you booked, less anything you have already paid",
+    );
+  });
+
+  describe('"They will only do this once your appointment is finished."', () => {
+    it("refuses the saved card before the appointment has started, and says why", async () => {
+      fake.reset();
+      const id = await seedAppointment({
+        shopId,
+        priceDollars: 40,
+        card: { consent: "single" },
+        startsAt: new Date(Date.now() + 60 * MIN),
+      });
+      const screen = await getCheckout(id);
+      expect(screen.status).toBe(200);
+      expect(screen.body.methods.savedCard.available).toBe(false);
+      expect(screen.body.methods.savedCard.blocker).toBe("not_finished");
+      // Every other way to pay is untouched: the customer is standing there.
+      expect(screen.body.methods.cashOther.available).toBe(true);
+
+      const res = await chargeCard(id, { amountCents: 4000, requestId: press() });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("not_finished");
+      expect(fake.calls.paymentIntents).toHaveLength(0);
+      expect(await prisma.checkoutAttempt.count({ where: { appointmentId: id } })).toBe(0);
+    });
+
+    it("refuses it DURING the appointment, and allows it once Done is pressed", async () => {
+      fake.reset();
+      const id = await seedAppointment({
+        shopId,
+        priceDollars: 40,
+        card: { consent: "single" },
+        // Started ten minutes ago; ends twenty minutes from now.
+        startsAt: new Date(Date.now() - 10 * MIN),
+      });
+      const early = await chargeCard(id, { amountCents: 4000, requestId: press() });
+      expect(early.status).toBe(409);
+      expect(early.body.error).toBe("not_finished");
+      expect(fake.calls.paymentIntents).toHaveLength(0);
+
+      // Done = finished, even before the booked end time.
+      expect((await complete(id)).status).toBe(200);
+      const after = await chargeCard(id, { amountCents: 4000, requestId: press() });
+      expect(after.status).toBe(200);
+      expect(after.body.result).toBe("paid");
+      expect(fake.calls.paymentIntents).toHaveLength(1);
+    });
+
+    it("allows it once the booked time is over, without Done", async () => {
+      fake.reset();
+      const id = await seedAppointment({
+        shopId,
+        priceDollars: 40,
+        card: { consent: "single" },
+        // Ended one minute ago.
+        startsAt: new Date(Date.now() - 31 * MIN),
+      });
+      const res = await chargeCard(id, { amountCents: 4000, requestId: press() });
+      expect(res.status).toBe(200);
+      expect(res.body.result).toBe("paid");
+    });
+  });
+
+  describe('"up to the price of what you booked, less anything you have already paid"', () => {
+    const setPrice = (id: string, amount: number) =>
+      request(app).post(`/api/booking/appointments/${id}/price`).set("Cookie", cookie).send({ amount });
+
+    it("a ticket raised after booking blocks the saved card, names the approved figure, and leaves cash open", async () => {
+      fake.reset();
+      const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+      expect((await setPrice(id, 60)).status).toBe(200);
+
+      const screen = await getCheckout(id);
+      expect(screen.body.remainingCents).toBe(6000);
+      expect(screen.body.methods.savedCard.available).toBe(false);
+      expect(screen.body.methods.savedCard.blocker).toBe("over_agreed_price");
+      expect(screen.body.methods.savedCard.approvedUpToCents).toBe(4000);
+      expect(screen.body.methods.cashOther.available).toBe(true);
+
+      const res = await chargeCard(id, { amountCents: 6000, requestId: press() });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("over_agreed_price");
+      expect(res.body.approvedUpToCents).toBe(4000);
+      expect(fake.calls.paymentIntents).toHaveLength(0);
+
+      // The customer can still pay the new price another way.
+      const cash = await payCash(id, {
+        amountCents: 6000,
+        method: "cash",
+        requestId: press(),
+        confirmed: true,
+      });
+      expect(cash.status).toBe(200);
+    });
+
+    it("counts a deposit already paid against the approved figure", async () => {
+      fake.reset();
+      const id = await seedAppointment({
+        shopId,
+        priceDollars: 40,
+        depositCents: 1000,
+        card: { consent: "single" },
+      });
+      expect((await setPrice(id, 50)).status).toBe(200);
+      const screen = await getCheckout(id);
+      expect(screen.body.remainingCents).toBe(4000);
+      expect(screen.body.methods.savedCard.blocker).toBe("over_agreed_price");
+      // $40 booked, $10 already paid: the card was approved for $30.
+      expect(screen.body.methods.savedCard.approvedUpToCents).toBe(3000);
+    });
+
+    it("a ticket LOWERED after booking is still chargeable - at the lower figure", async () => {
+      fake.reset();
+      const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+      expect((await setPrice(id, 30)).status).toBe(200);
+      const res = await chargeCard(id, { amountCents: 3000, requestId: press() });
+      expect(res.status).toBe(200);
+      expect(fake.calls.paymentIntents[0]!.params.amount).toBe(3000);
+    });
+
+    it("a price raised through the appointment EDIT sheet is capped the same way", async () => {
+      // The edit sheet used to overwrite the ticket without a ledger row, so the
+      // agreed price read back as the NEW one and the cap never applied.
+      fake.reset();
+      const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+      const edit = await request(app)
+        .patch(`/api/booking/appointments/${id}`)
+        .set("Cookie", cookie)
+        .send({ price: 55 });
+      expect(edit.status).toBe(200);
+      expect(await prisma.appointmentPriceChange.count({ where: { appointmentId: id } })).toBe(1);
+
+      const res = await chargeCard(id, { amountCents: 5500, requestId: press() });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("over_agreed_price");
+      expect(res.body.approvedUpToCents).toBe(4000);
+      expect(fake.calls.paymentIntents).toHaveLength(0);
+    });
+  });
+});
+
+/**
+ * THE ORIGINAL CHAIR CHECKOUT AND THE NEWER ONE MUST NOT BOTH TAKE THE MONEY.
+ *
+ * `POST /booking/appointments/:id/checkout` records money taken at the chair.
+ * It used to do so even while a card charge from the newer checkout was still
+ * live or ambiguous - exactly the moment the customer may be paying twice.
+ */
+describe("the original chair checkout respects a live collection", () => {
+  const chairCheckout = (id: string) =>
+    request(app)
+      .post(`/api/booking/appointments/${id}/checkout`)
+      .set("Cookie", cookie)
+      .send({ amount: 40, method: "cash" });
+
+  const attemptRow = (appointmentId: string, state: string) =>
+    prisma.checkoutAttempt.create({
+      data: {
+        id: `cka_${randomToken(12)}`,
+        shopId,
+        appointmentId,
+        requestId: press(),
+        method: "saved_card",
+        amountCents: 4000,
+        idempotencyKey: `svc-checkout:${randomToken(16)}`,
+        state,
+        updatedAt: new Date(),
+      },
+    });
+
+  for (const state of ["pending", "processing", "requires_action", "ambiguous"]) {
+    it(`refuses with 409 while a card charge is ${state}, and records nothing`, async () => {
+      const id = await seedAppointment({ shopId, priceDollars: 40 });
+      await attemptRow(id, state);
+      const res = await chairCheckout(id);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("collection_in_progress");
+      const appt = await prisma.appointment.findUnique({ where: { id } });
+      expect(appt!.paidAt).toBeNull();
+      expect(appt!.paidAmount).toBeNull();
+      expect(await visitCount(id)).toBe(0);
+    });
+  }
+
+  it("records the payment as before once the attempt has concluded", async () => {
+    const id = await seedAppointment({ shopId, priceDollars: 40 });
+    await attemptRow(id, "failed");
+    const res = await chairCheckout(id);
+    expect(res.status).toBe(200);
+    expect((await prisma.appointment.findUnique({ where: { id } }))!.paidAt).not.toBeNull();
+  });
+
+  // SHAPE 2 - a barrier on the Appointment row. Both racers go through it: the
+  // chair checkout's paidAt claim is an UPDATE of that row, and opening an
+  // attempt locks it (FOR NO KEY UPDATE) before reading paidAt. Row-lock
+  // waiters queue in arrival order, so a short head start fixes which one goes
+  // first - and each order is its own test, because each is caught by a
+  // different half of the guard.
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function openAttempt(appointmentId: string) {
+    const { openCheckoutAttempt } = await import("../services/serviceCheckoutAttempt.js");
+    return openCheckoutAttempt({
+      shopId,
+      appointmentId,
+      clientId: null,
+      actorUserId: null,
+      requestId: press(),
+      method: "cash_other",
+      amountCents: 4000,
+    });
+  }
+
+  it("RACE, attempt first: a concurrent chair checkout sees the attempt and records nothing", async () => {
+    const id = await seedAppointment({ shopId, priceDollars: 40 });
+    const outcome = await raceBehindRowLock<string>("Appointment", id, [
+      async () => (await openAttempt(id)).kind,
+      async () => {
+        await sleep(150);
+        return String((await chairCheckout(id)).status);
+      },
+    ]);
+    expect(outcome.settledEarly).toBe(0);
+    const [opened, chair] = winners(outcome.results);
+    expect(opened).toBe("opened");
+    expect(chair).toBe("409");
+    expect((await prisma.appointment.findUnique({ where: { id } }))!.paidAt).toBeNull();
+  });
+
+  it("RACE, chair first: a concurrent attempt sees the chair payment and opens nothing", async () => {
+    const id = await seedAppointment({ shopId, priceDollars: 40 });
+    const outcome = await raceBehindRowLock<string>("Appointment", id, [
+      async () => String((await chairCheckout(id)).status),
+      async () => {
+        await sleep(150);
+        return (await openAttempt(id)).kind;
+      },
+    ]);
+    expect(outcome.settledEarly).toBe(0);
+    const [chair, opened] = winners(outcome.results);
+    expect(chair).toBe("200");
+    expect(opened).toBe("paid");
+    expect(await prisma.checkoutAttempt.count({ where: { appointmentId: id } })).toBe(0);
+  });
+});
+
+describe("releasing a card never lets go of one mid-charge", () => {
+  it("leaves a `charging` card charging, and attached", async () => {
+    fake.reset();
+    fake.client.paymentMethods.detach.mockClear();
+    const id = await seedAppointment({
+      shopId,
+      priceDollars: 40,
+      card: { consent: "single", status: "charging" },
+    });
+    const { releaseCardOnFile } = await import("../billing/cardOnFile.js");
+    for (const reason of ["checked_out", "canceled", "hold_lapsed", "completed"]) {
+      await releaseCardOnFile({ shopId, appointmentId: id, reason });
+    }
+    const card = await prisma.cardOnFile.findUnique({ where: { appointmentId: id } });
+    expect(card!.status).toBe("charging");
+    expect(card!.releasedAt).toBeNull();
+    expect(fake.client.paymentMethods.detach).not.toHaveBeenCalled();
+  });
+
+  it("RACE: a release that read `saved` just before a charge claimed the card stands down", async () => {
+    // SHAPE 2 - both racers write the CardOnFile row. The charge goes first
+    // (saved -> charging); the release, which already read `saved`, must not
+    // then overwrite it with `released` and detach the card mid-charge.
+    fake.reset();
+    fake.client.paymentMethods.detach.mockClear();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "none" } });
+    const card = await prisma.cardOnFile.findUnique({ where: { appointmentId: id } });
+    const { chargeCardOnFile, releaseCardOnFile } = await import("../billing/cardOnFile.js");
+    const outcome = await raceBehindRowLock<string>("CardOnFile", card!.id, [
+      () =>
+        chargeCardOnFile({
+          shopId,
+          appointmentId: id,
+          cents: 1000,
+          reason: "no_show",
+          description: "fee",
+        }).then((r) => r.outcome),
+      async () => {
+        await new Promise((r) => setTimeout(r, 150));
+        await releaseCardOnFile({ shopId, appointmentId: id, reason: "canceled" });
+        return "released";
+      },
+    ]);
+    expect(outcome.settledEarly).toBe(0);
+    expect(winners(outcome.results)[0]).toBe("charged");
+    const after = await prisma.cardOnFile.findUnique({ where: { appointmentId: id } });
+    expect(after!.status).toBe("charged");
+    expect(after!.releasedAt).toBeNull();
+    expect(fake.client.paymentMethods.detach).not.toHaveBeenCalled();
   });
 });

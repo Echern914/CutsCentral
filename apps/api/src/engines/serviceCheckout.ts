@@ -60,6 +60,14 @@ export interface ServiceCheckoutInput {
   external: boolean;
   /** When the appointment ended - the start of the post-service window. */
   endsAt: Date;
+  /** `Appointment.status`. COMPLETED means the barber pressed Done. */
+  status: string;
+  /**
+   * The price the customer AGREED to when they booked, in cents
+   * (`agreedPriceCents` in services/appointmentPriceLedger.ts). Null = they
+   * agreed to no price at all.
+   */
+  agreedPriceCents: number | null;
   /** Passed in, never read from the clock, so every branch stays testable. */
   now: Date;
 }
@@ -71,7 +79,11 @@ export type SavedCardBlocker =
   | "no_service_consent"
   | "consent_not_for_this_appointment"
   /** The 72-hour post-service window has closed. */
-  | "retention_expired";
+  | "retention_expired"
+  /** Not marked done and not yet past its end time. */
+  | "not_finished"
+  /** The balance is more than the customer approved when they booked. */
+  | "over_agreed_price";
 
 export interface ServiceCheckoutState {
   /** Ticket total in cents; null when the booking carries no price. */
@@ -102,6 +114,12 @@ export interface ServiceCheckoutState {
   savedCardBlocker: SavedCardBlocker | null;
   /** Display-safe card identity, for the "Charge card ending ••••4242" row. */
   card: { brand: string | null; last4: string | null } | null;
+  /**
+   * The most the saved card may be charged: the agreed price less everything
+   * already collected. Set only with `over_agreed_price`, so the barber can be
+   * told the figure the customer actually approved.
+   */
+  savedCardApprovedUpToCents: number | null;
 }
 
 function dollarsToCents(dollars: number | null): number {
@@ -155,10 +173,32 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
   ) {
     blocker = "consent_not_for_this_appointment";
   } else if (serviceChargeWindowClosed(input.endsAt, input.now)) {
-    // Checked LAST, so a card that was never authorised still reports the more
-    // useful reason. An open-ended right to charge for a haircut somebody had
+    // Checked AFTER consent, so a card that was never authorised still reports
+    // the more useful reason. An open-ended right to charge for a haircut somebody had
     // last month is not what they agreed to.
     blocker = "retention_expired";
+  } else if (input.status !== "COMPLETED" && input.now.getTime() < input.endsAt.getTime()) {
+    // 🔴 THE CONSENT SAYS "only once your appointment is finished". Finished
+    // means the barber pressed Done, or the booked time is over - never a cut
+    // that has not happened yet. Cash and Tap to Pay are unaffected: the
+    // customer is standing there and can see what they are paying for.
+    blocker = "not_finished";
+  }
+
+  const chargeableCents = Math.max(0, remainingCents ?? 0);
+
+  // 🔴 THE CONSENT SAYS "up to the price of what you booked, less anything you
+  // have already paid". A ticket raised after booking (a beard trim added, a
+  // service swapped) is real money the customer can pay at the chair - but it
+  // is not what they approved this card for, so the card is refused rather than
+  // quietly charged for less. Collecting part of a balance is out of scope.
+  let approvedUpToCents: number | null = null;
+  if (blocker === null && chargeableCents > 0) {
+    const approved = Math.max(0, (input.agreedPriceCents ?? 0) - collectedCents);
+    if (chargeableCents > approved) {
+      blocker = "over_agreed_price";
+      approvedUpToCents = approved;
+    }
   }
 
   // An externally-owned booking has no ChairBack balance to speak of, so there
@@ -167,7 +207,6 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
     blocker = blocker ?? "no_card";
   }
 
-  const chargeableCents = Math.max(0, remainingCents ?? 0);
   return {
     totalCents,
     collectedCents,
@@ -178,6 +217,7 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
     savedCardEligible: blocker === null && chargeableCents > 0,
     savedCardBlocker: blocker,
     card: card ? { brand: card.brand, last4: card.last4 } : null,
+    savedCardApprovedUpToCents: approvedUpToCents,
   };
 }
 
