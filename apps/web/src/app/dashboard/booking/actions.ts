@@ -791,6 +791,8 @@ export interface CheckoutMethodState {
   /** The ONE amount this method may collect: the whole remaining balance. */
   dueCents?: number;
   card?: { brand: string | null; last4: string | null } | null;
+  /** With `over_agreed_price`: the most the customer approved this card for. */
+  approvedUpToCents?: number | null;
 }
 
 export interface CheckoutAttemptView {

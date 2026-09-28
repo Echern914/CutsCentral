@@ -515,6 +515,54 @@ describe("what the screen offers", () => {
     expect(screen.queryByText(/Charge card ending/)).toBeNull();
   });
 
+  it("says the card waits until the appointment is done", async () => {
+    getCheckoutAction.mockResolvedValue({
+      ok: true,
+      data: stateFor({
+        methods: {
+          ...stateFor().methods,
+          savedCard: {
+            available: false,
+            blocker: "not_finished",
+            dueCents: 5500,
+            card: { brand: "visa", last4: "4242" },
+          },
+        },
+      }),
+    });
+    renderFlow();
+    await waitFor(() =>
+      expect(screen.getByText(/can be charged once the appointment is done/i)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/Charge card ending/)).toBeNull();
+    // Cash is still offered.
+    expect(screen.getByText("Cash")).toBeTruthy();
+  });
+
+  it("🔴 a ticket above what the customer approved names the approved figure", async () => {
+    getCheckoutAction.mockResolvedValue({
+      ok: true,
+      data: stateFor({
+        methods: {
+          ...stateFor().methods,
+          savedCard: {
+            available: false,
+            blocker: "over_agreed_price",
+            approvedUpToCents: 4000,
+            dueCents: 5500,
+            card: { brand: "visa", last4: "4242" },
+          },
+        },
+      }),
+    });
+    renderFlow();
+    await waitFor(() =>
+      expect(screen.getByText(/approved only up to \$40\.00/)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/Charge card ending/)).toBeNull();
+    expect(screen.getByText("Cash")).toBeTruthy();
+  });
+
   it("🔴 does not offer Tap to Pay as an actionable button until the device is ready", async () => {
     renderFlow();
     await waitFor(() => expect(screen.getByText("Cash")).toBeTruthy());

@@ -256,6 +256,12 @@ export function AppointmentSheet({
           onClose();
           return;
         }
+        if (res.error === "collection_in_progress") {
+          // A card charge from the newer checkout is still unresolved; money
+          // recorded here now could be the customer paying twice.
+          toast("A card payment is still being confirmed. Nothing was recorded.", "error");
+          return;
+        }
         toast("Couldn't save the checkout", "error");
         return;
       }
