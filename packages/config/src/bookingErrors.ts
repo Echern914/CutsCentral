@@ -48,6 +48,17 @@ export const BOOKING_ERROR_CODES = [
    * per-shop, so they cannot be named in `BookingErrorField`.
    */
   "INTAKE_INVALID",
+  /**
+   * The shop has a checklist ("I'll arrive 5 minutes early") and this booking
+   * did not say the customer ticked it. Nothing was written.
+   */
+  "POLICY_NOT_ACCEPTED",
+  /**
+   * The customer ticked a checklist the shop has since changed. Answered with
+   * the CURRENT policy, so the page can show it and ask again - recording
+   * agreement to words the customer never saw would be worse than no record.
+   */
+  "POLICY_CHANGED",
   /** Anything unexpected. The customer sees a safe generic message. */
   "BOOKING_FAILED",
 ] as const;

@@ -26,6 +26,7 @@ import {
   sendGroupConfirmationOnce,
 } from "../engines/appointmentGroupSettle.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
+import { checkPolicyAcceptance } from "../engines/bookingPolicy.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { bookingReadLimiter, bookingWriteLimiter, rewardsLimiter } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
@@ -74,6 +75,12 @@ const createSchema = z
      * chairs. See the unique index on AppointmentGroup.idempotencyKey.
      */
     idempotencyKey: z.string().trim().min(8).max(100).optional(),
+    /**
+     * The version of the shop's booking checklist the booker ticked
+     * (engines/bookingPolicy.ts). Required whenever the shop has one; the
+     * booker ticks once for the whole party.
+     */
+    policyVersion: z.string().trim().min(1).max(64).optional(),
   })
   .strict();
 
@@ -547,6 +554,14 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
   }
 
   const now = new Date();
+  // The shop's checklist, ticked by the booker. AFTER the idempotent replay
+  // above on purpose: a retry of a party that already exists returns it, even
+  // if the owner has edited the policy since. Before anything is written.
+  const policy = checkPolicyAcceptance(shop, d.policyVersion, now);
+  if (!policy.ok) {
+    res.status(policy.status).json(policy.body);
+    return;
+  }
   const result = await preflight(shop, d, { now, requirePayable: true });
   if (!result.ok) {
     res.status(result.failure.status).json({
@@ -669,6 +684,13 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
             manageToken: randomToken(),
             groupId: group.id,
             groupPosition: m.position,
+            // The booker's tick, frozen onto every member's booking.
+            ...(policy.record
+              ? {
+                  policyAcceptedAt: policy.record.policyAcceptedAt,
+                  policySnapshot: policy.record.policySnapshot as unknown as Prisma.InputJsonValue,
+                }
+              : {}),
           },
           select: { id: true },
         });

@@ -16,6 +16,7 @@ import {
   isLikelyEmail,
   type BookingErrorCode,
   type BookingErrorField,
+  describeCancellationPolicy,
   describeDepositPolicy,
   type ShopPaymentsMode,
   formatShopAddress,
@@ -61,6 +62,7 @@ import {
   questionsForService,
   resolveIntake,
 } from "../engines/bookingIntake.js";
+import { checkPolicyAcceptance, publicBookingPolicy } from "../engines/bookingPolicy.js";
 import {
   durationRangeForService,
   effectiveDurationAt,
@@ -158,6 +160,13 @@ function publicPaymentSummary(shop: {
   mode: string;
   depositAmountCents: number | null;
   sentence: string;
+  /**
+   * The cancellation rule in the same shared words, or null. Only said when
+   * this page takes a PAYMENT at booking: that is the one case where the fee
+   * sentence is about money actually in hand. Otherwise it would read "free
+   * cancellation" beside a shop's own written policy that may say otherwise.
+   */
+  cancellation: string | null;
 } {
   const collects = collectsAtBooking({
     connectEnabled: connectEnabled(),
@@ -169,19 +178,27 @@ function publicPaymentSummary(shop: {
     // "nothing to charge" gate out of a question about the shop's INTENT.
     chargeCents: 1,
   });
-  const sentence = describeDepositPolicy(
-    {
-      paymentsMode: shop.paymentsMode as ShopPaymentsMode,
-      cancelWindowHours: shop.cancelWindowHours,
-      cancelFeeBps: shop.cancelFeeBps,
-      depositAmountCents: shop.depositAmountCents,
-      chargeCardOnFileFees: shop.chargeCardOnFileFees,
-      paymentsLive: collects !== null,
-      requiresApproval: shop.requireBookingApproval,
-    },
-    { collectsAtBooking: true },
-  );
-  return { collects, mode: shop.paymentsMode, depositAmountCents: shop.depositAmountCents, sentence };
+  const policyInput = {
+    paymentsMode: shop.paymentsMode as ShopPaymentsMode,
+    cancelWindowHours: shop.cancelWindowHours,
+    cancelFeeBps: shop.cancelFeeBps,
+    depositAmountCents: shop.depositAmountCents,
+    chargeCardOnFileFees: shop.chargeCardOnFileFees,
+    paymentsLive: collects !== null,
+    requiresApproval: shop.requireBookingApproval,
+  };
+  const sentence = describeDepositPolicy(policyInput, { collectsAtBooking: true });
+  const cancellation =
+    collects === "payment"
+      ? describeCancellationPolicy(policyInput, { collectsAtBooking: true })
+      : null;
+  return {
+    collects,
+    mode: shop.paymentsMode,
+    depositAmountCents: shop.depositAmountCents,
+    sentence,
+    cancellation,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -531,6 +548,10 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       // Until this existed the first mention of a deposit was the card screen
       // that appeared after the booking had already been written.
       payment: publicPaymentSummary(shop),
+      // The shop's own policies and the checklist the customer must tick
+      // before Confirm works. Null = the shop wrote nothing, and the page
+      // shows nothing. `version` is echoed back as `policyVersion` on create.
+      bookingPolicy: publicBookingPolicy(shop),
     },
     // Whether "Add to Apple Wallet" is a real action on the confirmation
     // screen. DARK until the WALLET_APPT_* env is set, and the page must know
@@ -1477,6 +1498,10 @@ const createSchema = z
       )
       .max(40)
       .optional(),
+    // The version of the shop's checklist the customer ticked, as the GET
+    // gave it (engines/bookingPolicy.ts). Sent only once every box is ticked;
+    // REQUIRED by the handler whenever the shop has a checklist.
+    policyVersion: z.string().trim().min(1).max(64).optional(),
     // Booking a barber-published TARGETED slot: its id fixes the time, length,
     // and price (validated server-side against the slot row; capacity 1).
     targetedSlotId: z.string().min(1).optional(),
@@ -1795,6 +1820,17 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     return;
   }
 
+  // The shop's checklist ("I'll arrive 5 minutes early"). Checked here, before
+  // anything is written, so one check covers a single visit AND a standing
+  // series (the branch below). A stale version is a 409 carrying the current
+  // policy, so the page can show it rather than record agreement to words the
+  // customer never saw.
+  const policy = checkPolicyAcceptance(shop, d.policyVersion, now);
+  if (!policy.ok) {
+    res.status(policy.status).json(policy.body);
+    return;
+  }
+
   // Chosen add-ons extend the appointment + total. Invalid/foreign ids drop.
   // A targeted slot has a fixed length/price, so add-ons don't apply (v1).
   const addOns = targeted
@@ -2007,6 +2043,9 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       // Every occurrence is a PENDING payment hold until the one card is
       // saved. Null for a pay-at-the-chair shop, which books outright.
       hold: seriesHoldExpiresAt ? { expiresAt: seriesHoldExpiresAt } : null,
+      // One tick covers the series the customer asked for: every occurrence
+      // carries the same frozen agreement.
+      policy: policy.record,
     });
 
     const first = series.booked[0];
@@ -2278,6 +2317,14 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           // Frozen at booking time: renaming or deleting a question later never
           // rewrites what this customer answered.
           intake: intake.snapshot as unknown as Prisma.InputJsonValue,
+          // What the customer ticked, frozen the same way. Absent when the
+          // shop has no checklist.
+          ...(policy.record
+            ? {
+                policyAcceptedAt: policy.record.policyAcceptedAt,
+                policySnapshot: policy.record.policySnapshot as unknown as Prisma.InputJsonValue,
+              }
+            : {}),
           manageToken: token,
           bookedVia: targeted ? "targeted_slot" : undefined,
         },

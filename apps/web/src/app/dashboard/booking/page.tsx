@@ -30,6 +30,12 @@ export interface BookingShop {
   walkInAcceptingNow: boolean;
   /** Rewards on = the shop has tiers, so "Offer to a tier" is offered. */
   rewardsEnabled: boolean;
+  /**
+   * The shop's own policies + the checklist customers tick before booking.
+   * Optional so a web deploy ahead of the API renders an empty editor.
+   */
+  bookingPolicyText?: string | null;
+  bookingPolicyChecklist?: string[];
 }
 
 /** Live connect status for the branded platform cards. */

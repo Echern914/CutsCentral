@@ -619,6 +619,16 @@ model Shop {
   // barber picks. "included" | "not_included" - CHECK-pinned in SQL, additive.
   tipPolicy          String?
 
+  // The shop's OWN policies, in its own words, shown on the booking page's
+  // last step ("Before you book"). Limits live in config/bookingPolicy.ts.
+  // NULL / [] = off: nothing shown, nothing enforced - every shop before this.
+  bookingPolicyText      String?
+  // Short lines the customer must tick before Confirm works ("I'll arrive 5
+  // minutes early"). A non-empty list is ENFORCED by the public booking
+  // routes; the barber's own dashboard bookings and the SMS receptionist
+  // never ask. What was agreed is frozen onto Appointment.policySnapshot.
+  bookingPolicyChecklist String[] @default([])
+
   payDirectEnabled Boolean @default(false)
   payDirectZelle   String? // Zelle email or phone number
   payDirectVenmo   String? // Venmo @handle (without the leading @)
@@ -3205,6 +3215,13 @@ model Appointment {
   // [] = the shop asks nothing (every row before this feature, and every shop
   // that never adds a question).
   intake             Json              @default("[]")
+  // When the customer ticked the shop's booking checklist, and a frozen copy
+  // of exactly what they agreed to: {version, text, checklist}. Same contract
+  // as intake above - editing the policy later never rewrites this. NULL = no
+  // checklist was asked (no policy, a dashboard booking, the receptionist,
+  // and every booking before this feature).
+  policyAcceptedAt   DateTime?
+  policySnapshot     Json?
   manageToken        String            @unique // cancel/reschedule auth (no login)
   // Barber's note about THIS booking. Deliberately separate from Client.notes:
   // that one is who the person is and follows them forever, this one is about

@@ -82,6 +82,20 @@ export async function saveBookingSettingsAction(input: {
   return done(await apiSend("PATCH", "/api/shops/me", input));
 }
 
+//  The shop's booking policies + checklist ("Before you book")
+
+/**
+ * Save the policy text and the checklist customers must tick. Blank text and
+ * no lines turns it off. Limits: config/bookingPolicy.ts - the API refuses
+ * anything longer rather than cutting a sentence in half.
+ */
+export async function saveBookingPolicyAction(input: {
+  bookingPolicyText: string | null;
+  bookingPolicyChecklist: string[];
+}): Promise<Result> {
+  return done(await apiSend("PATCH", "/api/shops/me", input));
+}
+
 //  Staff
 
 export async function createStaffAction(input: {
@@ -1610,6 +1624,12 @@ export interface AppointmentDetail {
    * then even if the question has since been renamed or deleted.
    */
   intake: { label: string; value: string; kind: string }[];
+  /**
+   * The shop's checklist as the customer ticked it when booking - frozen then,
+   * so a later edit to the policy never rewrites it. Null (or absent from an
+   * older API) when nothing was asked.
+   */
+  policyAgreement?: { acceptedAt: string; text: string | null; checklist: string[] } | null;
   contact: DetailContact;
   /** Whether Text is a real action here, and why not when it isn't. */
   sms: DetailSms;

@@ -51,6 +51,14 @@ import {
 import { PaymentStep } from "./PaymentStep";
 import { WaitlistForm } from "./WaitlistForm";
 import { EmailMarketingChoice, emailMarketingYes } from "./EmailMarketingChoice";
+import {
+  BookingPolicyPanel,
+  POLICY_CHANGED_MESSAGE,
+  POLICY_HINT,
+  moneyTermsLines,
+  readBookingPolicy,
+  useBookingPolicy,
+} from "./BookingPolicy";
 import { groupsToAutoExpand } from "./autoExpand";
 import { revealElement } from "./reveal";
 
@@ -293,6 +301,9 @@ export function BookingClient({
    * an authorisation to take money is not something to have by default.
    */
   const [serviceChargeConsent, setServiceChargeConsent] = useState(false);
+  // The shop's own policies and the lines the customer must tick ("Before you
+  // book"). Every box starts unticked; Confirm waits until all are ticked.
+  const bookingPolicy = useBookingPolicy(data.shop.bookingPolicy);
   /**
    * The shop's own booking questions, keyed by question id.
    *
@@ -1424,6 +1435,11 @@ export function BookingClient({
       showQuestionError(missing.id, `${missing.label} is required.`);
       return;
     }
+    // Confirm is disabled until every line is ticked; this is the backstop.
+    if (!bookingPolicy.complete) {
+      setError(POLICY_HINT);
+      return;
+    }
     // The barber to write against: the one bound to the chosen slot (may differ
     // from `staffId` when the provider step was skipped and several were free).
     const writeStaffId = pickedStaffId ?? staffId;
@@ -1468,6 +1484,10 @@ export function BookingClient({
         // has nothing for this to authorise.
         serviceChargeConsent:
           data.shop.payment?.collects === "card" && serviceChargeConsent ? true : undefined,
+        // The checklist version the customer ticked. Only sent when there was
+        // one - the API refuses a stale version rather than record agreement
+        // to words the customer never saw.
+        policyVersion: bookingPolicy.acceptedVersion,
       });
       /**
        * Refresh the available times, then say what happened.
@@ -1525,6 +1545,15 @@ export function BookingClient({
           // The server names the shop's own field and writes the sentence,
           // because only it knows which rule failed.
           showQuestionError(res.questionId, res.message ?? "Check this answer.");
+          return;
+        }
+        if (res.code === "POLICY_CHANGED" || res.code === "POLICY_NOT_ACCEPTED") {
+          // The shop changed (or added) its checklist while this page was
+          // open. Show the CURRENT words, clear every tick, and ask again -
+          // nothing was booked and the rest of the form is untouched.
+          const current = readBookingPolicy(res.policy);
+          if (current) bookingPolicy.replace(current);
+          setError(current ? POLICY_CHANGED_MESSAGE : POLICY_HINT);
           return;
         }
         if (res.code === "RATE_LIMITED") {
@@ -3327,6 +3356,19 @@ export function BookingClient({
               </label>
             )}
 
+            {/* BEFORE YOU BOOK: the shop's own policies, its money terms, and
+                the lines to tick. Right above Confirm, because this is the
+                moment it matters. Nothing renders for a shop that wrote none. */}
+            {bookingPolicy.policy && (
+              <BookingPolicyPanel
+                policy={bookingPolicy.policy}
+                ticked={bookingPolicy.ticked}
+                onToggle={bookingPolicy.toggle}
+                moneyLines={moneyTermsLines(data.shop.payment)}
+                accent={accent}
+              />
+            )}
+
             {error && (
               <p role="alert" className="text-xs text-red-400">
                 {error}
@@ -3335,8 +3377,9 @@ export function BookingClient({
             <button
               type="button"
               onClick={submit}
-              disabled={pending}
+              disabled={pending || !bookingPolicy.complete}
               aria-busy={pending}
+              aria-describedby={!bookingPolicy.complete ? "booking-policy-hint" : undefined}
               className={primaryBtn}
               style={{ backgroundColor: accent, color: onAccent }}
             >
@@ -3346,6 +3389,13 @@ export function BookingClient({
                   ? `Confirm ${repeat.count} visits`
                   : "Confirm booking"}
             </button>
+            {/* Why Confirm is grey - a disabled button with no reason reads
+                as a broken page. */}
+            {!bookingPolicy.complete && (
+              <p id="booking-policy-hint" className="text-center text-xs text-muted">
+                {POLICY_HINT}
+              </p>
+            )}
           </div>
         </Section>
       )}

@@ -10,6 +10,17 @@ import { GetTheApp } from "@/components/GetTheApp";
 import { RewardsDoor } from "@/components/RewardsDoor";
 import { appleItunesApp } from "@/lib/appBanner";
 
+/**
+ * The shop's own policies and the checklist a customer must tick before
+ * Confirm works. `version` is echoed back on create; the API refuses a stale
+ * one (409) so nobody is recorded agreeing to words they never saw.
+ */
+export interface BookingPolicyData {
+  text: string | null;
+  checklist: string[];
+  version: string;
+}
+
 export interface BookShopData {
   shop: {
     name: string;
@@ -60,7 +71,14 @@ export interface BookShopData {
       mode: string;
       depositAmountCents: number | null;
       sentence: string;
+      /** The cancellation rule, only when a payment is taken at booking. */
+      cancellation?: string | null;
     } | null;
+    /**
+     * The shop's own policies + checklist ("Before you book"). Null = nothing
+     * written; optional = an older API. Both show nothing and enforce nothing.
+     */
+    bookingPolicy?: BookingPolicyData | null;
     // Fee-free direct-payment handles (display-only); null when the barber hasn't
     // turned it on. Shown on the confirmation so the customer can pay directly.
     payDirect: {

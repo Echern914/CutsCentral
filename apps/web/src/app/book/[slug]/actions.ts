@@ -233,6 +233,11 @@ export interface BookInput {
    * the card and simply means paying at the chair.
    */
   serviceChargeConsent?: boolean;
+  /**
+   * The version of the shop's checklist the customer ticked ("Before you
+   * book"). Required by the API whenever the shop has one.
+   */
+  policyVersion?: string;
 }
 
 /**
@@ -295,6 +300,8 @@ export async function bookAction(
   questionId?: string;
   /** With INTAKE_INVALID: the sentence to show under that question. */
   message?: string;
+  /** With POLICY_CHANGED: the shop's current policy, to show and ask again. */
+  policy?: unknown;
 }> {
   const res = await apiPublicSend<{
     ok: boolean;
@@ -327,6 +334,7 @@ export async function bookAction(
       ...(res.field ? { field: res.field as BookingErrorField } : {}),
       ...(res.questionId ? { questionId: res.questionId } : {}),
       ...(res.message ? { message: res.message } : {}),
+      ...(res.policy ? { policy: res.policy } : {}),
     };
   }
   return {

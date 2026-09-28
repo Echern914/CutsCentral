@@ -14,6 +14,13 @@ import {
   type GroupPlanResult,
 } from "./actions";
 import { GroupSequence, groupDateLabel } from "./GroupSequence";
+import {
+  BookingPolicyPanel,
+  POLICY_CHANGED_MESSAGE,
+  POLICY_HINT,
+  readBookingPolicy,
+  useBookingPolicy,
+} from "../BookingPolicy";
 
 /**
  * Booking a party of 2-3, back to back with one barber.
@@ -105,6 +112,8 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
   const [instagram, setInstagram] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  // The shop's policies + checklist. The booker ticks once for the party.
+  const bookingPolicy = useBookingPolicy(data.shop.bookingPolicy);
 
   /**
    * 🔴 A PARTY THAT WAS ALREADY SUBMITTED SURVIVES A RELOAD. Without this, a
@@ -197,6 +206,10 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
       setNotice(who.message);
       return;
     }
+    if (!bookingPolicy.complete) {
+      setNotice(POLICY_HINT);
+      return;
+    }
     const key = idempotencyKey ?? newIdempotencyKey();
     setIdempotencyKey(key);
     setSubmitting(true);
@@ -212,6 +225,7 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
       phone: phone.trim() || undefined,
       email: email.trim() || undefined,
       idempotencyKey: key,
+      policyVersion: bookingPolicy.acceptedVersion,
     });
     setSubmitting(false);
 
@@ -222,6 +236,13 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
       return;
     }
     if (res.kind === "payments") return setBlocked(true);
+    if (res.kind === "policy") {
+      // New words: show them, clear the ticks, ask again. Nothing was booked.
+      const current = readBookingPolicy(res.policy);
+      if (current) bookingPolicy.replace(current);
+      setNotice(current ? POLICY_CHANGED_MESSAGE : POLICY_HINT);
+      return;
+    }
     if (res.kind === "slot_taken") {
       setNotice("That time was just taken. Nothing was booked - please pick another.");
       setStep("when");
@@ -497,6 +518,16 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
             </p>
           </Field>
 
+          {bookingPolicy.policy && (
+            <div className="mb-4">
+              <BookingPolicyPanel
+                policy={bookingPolicy.policy}
+                ticked={bookingPolicy.ticked}
+                onToggle={bookingPolicy.toggle}
+              />
+            </div>
+          )}
+
           <Secondary onClick={() => setStep("when")} label="Pick another time" />
           {notice && (
             <p
@@ -510,7 +541,7 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
               written. Disabled while submitting so a double tap cannot fire
               twice; the idempotency key makes a retry safe even if it did. */}
           <Primary
-            disabled={submitting || firstName.trim().length === 0}
+            disabled={submitting || firstName.trim().length === 0 || !bookingPolicy.complete}
             onClick={() => void confirm()}
             label={
               submitting
@@ -518,6 +549,9 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
                 : `Confirm ${plan.members.length} appointments`
             }
           />
+          {!bookingPolicy.complete && (
+            <p className="mt-2 text-center text-sm text-muted">{POLICY_HINT}</p>
+          )}
         </>
       )}
     </Shell>

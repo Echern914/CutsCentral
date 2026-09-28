@@ -69,6 +69,12 @@ export interface ApiResult<T> {
    * ("Service address is required."). Only the server knows which rule failed.
    */
   message?: string;
+  /**
+   * With POLICY_CHANGED: the shop's CURRENT booking policy, so the page can
+   * show the new words and ask again without a reload. Untyped here - the
+   * caller checks its shape (book/[slug]/BookingPolicy.tsx readBookingPolicy).
+   */
+  policy?: unknown;
 }
 
 function authHeader(): Record<string, string> {
@@ -220,6 +226,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let message: string | undefined;
   let confirmation: string | undefined;
   let conflicts: string[] | undefined;
+  let policy: unknown;
   try {
     const json = (await res.json()) as T & { error?: string; issues?: unknown };
     if (res.ok) data = json;
@@ -237,6 +244,8 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
       if (typeof sentence === "string") message = sentence;
       const answer = (json as { confirmation?: unknown }).confirmation;
       if (typeof answer === "string") confirmation = answer;
+      const current = (json as { policy?: unknown }).policy;
+      if (current && typeof current === "object") policy = current;
       const listed = (json as { conflicts?: unknown }).conflicts;
       if (Array.isArray(listed)) {
         const lines = listed.filter((l): l is string => typeof l === "string");
@@ -270,6 +279,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
     ...(message ? { message } : {}),
     ...(confirmation ? { confirmation } : {}),
     ...(conflicts ? { conflicts } : {}),
+    ...(policy ? { policy } : {}),
   };
 }
 

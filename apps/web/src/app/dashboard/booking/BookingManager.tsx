@@ -16,6 +16,7 @@ import { FormError } from "@/components/ui/FormError";
 import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { BookingQuestionsCard } from "./BookingQuestionsCard";
+import { BookingPolicyCard } from "./BookingPolicyCard";
 import { useDemoTour } from "@/components/tour/state";
 import Link from "next/link";
 import { cn } from "@/lib/cn";
@@ -345,6 +346,13 @@ export function BookingManager({
           <BookingQuestionsCard
             initial={initialQuestions}
             services={initialServices}
+            toast={toast}
+          />
+          {/* The shop's own policies and the checklist customers tick on the
+              booking page's last step. Blank = nothing shown. */}
+          <BookingPolicyCard
+            initialText={shop.bookingPolicyText ?? null}
+            initialChecklist={shop.bookingPolicyChecklist ?? []}
             toast={toast}
           />
         </div>
