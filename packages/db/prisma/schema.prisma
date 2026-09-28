@@ -1955,6 +1955,17 @@ model Broadcast {
   // resolved-and-frozen so a preview and the send agree, and re-reading an old
   // broadcast still says who it was aimed at.
   audienceTiers LoyaltyTier[] @default([])
+  // AND, when non-empty, only clients who had one of these services: `id:<serviceId>`
+  // for the shop's menu, `name:<lower-cased name>` for a synced name that matches
+  // no menu item. Resolved to client ids inside the locked freeze, never taken
+  // from the preview. Empty = no service filter. See engines/broadcastServices.ts.
+  audienceServiceKeys   String[] @default([])
+  // The names the barber saw when he picked them, same order as the keys, so
+  // the history still says who it was for after a service is renamed.
+  audienceServiceLabels String[] @default([])
+  // Only visits in the last N days count (null = any time). Upcoming booked
+  // ones always count. Meaningless while audienceServiceKeys is empty.
+  audienceSinceDays     Int?
   // Email only. Push notifications carry a title instead, and the same column
   // holds it - a push with no title is not worth sending either.
   subject String?

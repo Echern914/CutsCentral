@@ -10,6 +10,7 @@ import {
 } from "../billing/quota.js";
 import { unsubscribeTokenFor } from "./unsubscribeToken.js";
 import { loadAddressSuppressions } from "../services/emailSuppression.js";
+import { serviceAudienceMembers, type SinceDays } from "./broadcastServices.js";
 import {
   splitAudience,
   type AudienceClient,
@@ -302,19 +303,27 @@ export async function previewBroadcast(params: {
   shopId: string;
   channel: BroadcastChannelId;
   tiers: readonly LoyaltyTier[];
+  /** Only clients who had one of these services (already checked against the shop). */
+  services?: { keys: readonly string[]; sinceDays: SinceDays };
   now?: Date;
 }): Promise<BroadcastPreview> {
   const now = params.now ?? new Date();
-  const [clients, shop, suppressed] = await Promise.all([
+  const services = params.services?.keys.length ? params.services : null;
+  const [clients, shop, suppressed, inGroup] = await Promise.all([
     loadClients(params.shopId),
     loadBroadcastShop(params.shopId),
     runWithShop(params.shopId, (tx) => loadAddressSuppressions(tx, params.shopId)),
+    services
+      ? runWithShop(params.shopId, (tx) =>
+          serviceAudienceMembers(tx, params.shopId, services.keys, services.sinceDays, now),
+        )
+      : null,
   ]);
   // 🔴 ONE LOAD, BOTH CHANNELS. The same clients and the same rule, split twice,
   // so the two numbers on screen can never come from two different moments.
   const byChannel = {
-    push: splitAudience(clients, "push", params.tiers, suppressed),
-    email: splitAudience(clients, "email", params.tiers, suppressed),
+    push: splitAudience(clients, "push", params.tiers, suppressed, inGroup),
+    email: splitAudience(clients, "email", params.tiers, suppressed, inGroup),
   };
   const split = byChannel[params.channel];
   const channels = {} as BroadcastPreview["channels"];
@@ -447,9 +456,17 @@ export async function queueBroadcast(params: {
         // 1. THE MUTEX. FOR UPDATE, so a second press blocks here and then
         // reads the status this one wrote rather than the one it started with.
         const locked = await tx.$queryRaw<
-          { id: string; status: string; channel: BroadcastChannelId; audienceTiers: LoyaltyTier[] }[]
+          {
+            id: string;
+            status: string;
+            channel: BroadcastChannelId;
+            audienceTiers: LoyaltyTier[];
+            audienceServiceKeys: string[];
+            audienceSinceDays: number | null;
+          }[]
         >(Prisma.sql`
-          SELECT "id", "status"::text AS "status", "channel"::text AS "channel", "audienceTiers"
+          SELECT "id", "status"::text AS "status", "channel"::text AS "channel", "audienceTiers",
+                 "audienceServiceKeys", "audienceSinceDays"
             FROM "Broadcast"
            WHERE "id" = ${params.broadcastId} AND "shopId" = ${params.shopId}
            FOR UPDATE`);
@@ -466,7 +483,24 @@ export async function queueBroadcast(params: {
         // 2. THE REAL AUDIENCE, now, under the lock.
         const clients = await loadClientsInTx(tx, params.shopId);
         const suppressed = await loadAddressSuppressions(tx, params.shopId);
-        const split = splitAudience(clients, broadcast.channel, broadcast.audienceTiers, suppressed);
+        // 🔴 WHO HAD THE SERVICE, ASKED AGAIN NOW. Not the preview's answer: a
+        // booking made or cancelled since then changes who is in the group.
+        const inGroup = broadcast.audienceServiceKeys.length
+          ? await serviceAudienceMembers(
+              tx,
+              params.shopId,
+              broadcast.audienceServiceKeys,
+              broadcast.audienceSinceDays as SinceDays,
+              now,
+            )
+          : null;
+        const split = splitAudience(
+          clients,
+          broadcast.channel,
+          broadcast.audienceTiers,
+          suppressed,
+          inGroup,
+        );
 
         const unavailable = channelUnavailable(broadcast.channel, shop);
         if (unavailable) throw new Refused(unavailable);

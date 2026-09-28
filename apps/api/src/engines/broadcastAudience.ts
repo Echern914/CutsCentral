@@ -117,6 +117,12 @@ export function splitAudience(
   channel: BroadcastChannelId,
   tiers: readonly LoyaltyTier[],
   suppressed: AddressSuppressions,
+  /**
+   * Only these client ids are in the group - e.g. everyone who had a picked
+   * service (engines/broadcastServices.ts). Omitted or null = no such filter.
+   * Resolved by the caller against the database; this stays pure.
+   */
+  inGroup?: ReadonlySet<string> | null,
 ): AudienceSplit {
   const unsubscribedAddresses = new Set<string>();
   for (const c of clients) {
@@ -148,6 +154,12 @@ export function splitAudience(
     // Empty = everyone. Otherwise only the tiers picked ("all the gold
     // members"). A client with no tier yet is not on any of them.
     if (tiers.length > 0 && (c.loyaltyTier === null || !tiers.includes(c.loyaltyTier))) {
+      skip(c, "not_in_audience");
+      continue;
+    }
+    // AND the service pick, when there is one. Same reason, same bell rule: the
+    // barber did not send it to them.
+    if (inGroup && !inGroup.has(c.id)) {
       skip(c, "not_in_audience");
       continue;
     }

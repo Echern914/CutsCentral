@@ -1,12 +1,18 @@
 import { Router } from "express";
 import { z } from "zod";
-import { forShop, type LoyaltyTier } from "@chairback/db";
+import { forShop, runWithShop, type LoyaltyTier } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import { previewBroadcast, queueBroadcast, type BroadcastBlocker } from "../engines/broadcast.js";
 import { broadcastProgress } from "../engines/broadcastWorker.js";
 import { SKIP_REASON_LABEL } from "../engines/broadcastAudience.js";
+import {
+  SINCE_DAYS,
+  labelServiceKeys,
+  serviceAudienceOptions,
+  type SinceDays,
+} from "../engines/broadcastServices.js";
 import { logger } from "../logger.js";
 
 /**
@@ -39,7 +45,37 @@ const audienceSchema = z.object({
   channel: z.enum(["email", "push"]),
   // [] = every reachable client. Otherwise only these tiers ("the gold members").
   tiers: z.array(z.enum(LOYALTY_TIERS)).max(LOYALTY_TIERS.length).optional(),
+  // AND only clients who had one of these services. Absent = no service filter.
+  // 🔴 PRESENT BUT EMPTY IS REFUSED, never read as "everyone": a barber who
+  // opened "only these services" and picked none did not mean the whole book.
+  services: z
+    .object({
+      keys: z
+        .array(z.string().max(200).regex(/^(id:[A-Za-z0-9_-]+|name:.+)$/))
+        .min(1, "Pick at least one service.")
+        .max(100),
+      sinceDays: z.union([z.literal(SINCE_DAYS[0]), z.literal(SINCE_DAYS[1]), z.null()]),
+    })
+    .optional(),
 });
+
+/**
+ * Check a service pick against THIS shop. Null = refused (an id that is not
+ * one of the shop's services); otherwise the names to store with the draft.
+ */
+async function checkServices(
+  shopId: string,
+  services: { keys: string[]; sinceDays: SinceDays } | undefined,
+): Promise<{ labels: string[] } | null> {
+  if (!services) return { labels: [] };
+  const checked = await runWithShop(shopId, (tx) => labelServiceKeys(tx, shopId, services.keys));
+  return checked.ok ? { labels: checked.labels } : null;
+}
+
+const UNKNOWN_SERVICE = {
+  error: "unknown_service",
+  message: "One of those services isn't on your menu any more. Pick again.",
+} as const;
 
 /**
  * 🔴 WHAT FITS IS A PROPERTY OF THE CHANNEL, NOT OF THE FORM.
@@ -116,10 +152,15 @@ broadcastsRouter.post("/preview", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
+  if (!(await checkServices(req.shop!.id, parsed.data.services))) {
+    res.status(400).json(UNKNOWN_SERVICE);
+    return;
+  }
   const preview = await previewBroadcast({
     shopId: req.shop!.id,
     channel: parsed.data.channel,
     tiers: parsed.data.tiers ?? [],
+    services: parsed.data.services,
   });
   res.json({
     reachable: preview.reachable,
@@ -142,6 +183,23 @@ broadcastsRouter.post("/preview", async (req, res) => {
 });
 
 /**
+ * GET /api/broadcasts/services?sinceDays=90 - the "By service" list: the menu,
+ * plus synced names that match none of it, each with how many current clients
+ * had it in that window. Counts only; who they are is never sent to the page.
+ */
+broadcastsRouter.get("/services", async (req, res) => {
+  const raw = req.query.sinceDays;
+  const sinceDays = SINCE_DAYS.find((d) => String(d) === raw) ?? null;
+  if (raw !== undefined && raw !== "" && sinceDays === null) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const options = await runWithShop(shopId, (tx) => serviceAudienceOptions(tx, shopId, sinceDays, new Date()));
+  res.json({ options });
+});
+
+/**
  * GET /api/broadcasts - what this shop has sent, newest first, with LIVE
  * progress.
  *
@@ -161,6 +219,9 @@ broadcastsRouter.get("/", async (req, res) => {
       id: true,
       channel: true,
       audienceTiers: true,
+      audienceServiceKeys: true,
+      audienceServiceLabels: true,
+      audienceSinceDays: true,
       subject: true,
       body: true,
       status: true,
@@ -214,11 +275,19 @@ broadcastsRouter.post("/", async (req, res) => {
     return;
   }
   const d = parsed.data;
+  const services = await checkServices(req.shop!.id, d.services);
+  if (!services) {
+    res.status(400).json(UNKNOWN_SERVICE);
+    return;
+  }
   const broadcast = await forShop(req.shop!.id).broadcast.create({
     data: {
       createdByUserId: req.userId!,
       channel: d.channel,
       audienceTiers: d.tiers ?? [],
+      audienceServiceKeys: d.services?.keys ?? [],
+      audienceServiceLabels: services.labels,
+      audienceSinceDays: d.services ? d.services.sinceDays : null,
       subject: d.subject,
       body: d.body,
       status: "DRAFT",
