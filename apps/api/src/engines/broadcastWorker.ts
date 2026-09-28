@@ -10,6 +10,7 @@ import { pushDispatchMode, sendPushToClient } from "../messaging/push.js";
 import { releaseBroadcastEmails } from "../billing/quota.js";
 import {
   broadcastHtml,
+  CLIENT_SELECT,
   loadBroadcastShop,
   reservationPeriodFor,
   unsubscribeUrlFor,
@@ -17,6 +18,7 @@ import {
 } from "./broadcast.js";
 import { recordDispatchInTx } from "../services/emailDelivery.js";
 import { unsubscribeDigestFor } from "./unsubscribeToken.js";
+import { emailAddressKey, splitAudience, type SkipReason } from "./broadcastAudience.js";
 
 /**
  * THE BROADCAST WORKER: it keeps a promise somebody else made.
@@ -427,6 +429,7 @@ async function deliverRecipient(params: {
     return outcomeOf(await settle(row.id, params.claimToken, "FAILED", "dry_run"), "failed");
   }
 
+  let sendTo = client.email;
   if (ctx.channel === "email") {
     if (!client.email?.trim()) {
       return outcomeOf(await settle(row.id, params.claimToken, "SKIPPED", "no_email"), "skipped");
@@ -453,6 +456,13 @@ async function deliverRecipient(params: {
     if (!(await ensureUnsubscribeDigest(client.id, client.unsubscribeTokenHash))) {
       return unsubscribeDigestUnavailable(row.id, params.claimToken, now);
     }
+    // 🔴 ASKED AGAIN, RIGHT BEFORE IT LEAVES - the last thing before the
+    // attempt is reserved. See recheckEmailRecipient.
+    const recheck = await recheckEmailRecipient(ctx.shopId, client.id);
+    if (!recheck.ok) {
+      return outcomeOf(await settle(row.id, params.claimToken, "SKIPPED", recheck.reason), "skipped");
+    }
+    sendTo = recheck.email;
   }
 
   await crashHook?.("before_dispatch", { broadcastId: ctx.id, clientId: client.id });
@@ -503,7 +513,7 @@ async function deliverRecipient(params: {
     const unsubscribeUrl = unsubscribeUrlFor(client.id);
     const greeting = client.firstName?.trim() ? `${client.firstName.trim()}, ` : "";
     const result = await sendEmail({
-      to: client.email!,
+      to: sendTo!,
       subject: ctx.subject?.trim() || `A message from ${ctx.shop.name}`,
       fromName: ctx.shop.name,
       ...(ctx.shop.ownerEmail ? { replyTo: ctx.shop.ownerEmail } : {}),
@@ -609,6 +619,65 @@ async function deliverRecipient(params: {
 export function pushLandingFor(shop: BroadcastShop, broadcastId: string): string {
   const base = apiEnv().APP_BASE_URL;
   return `${shop.slug ? `${base}/book/${shop.slug}` : base}?announcement=${encodeURIComponent(broadcastId)}`;
+}
+
+/**
+ * 🔴 THE FREEZE IS NOT THE LAST WORD: each recipient is asked again right
+ * before their email leaves.
+ *
+ * The audience was decided when the barber pressed send, and a blast can take
+ * hours to drain - fifty recipients a pass, and a backoff that runs to an hour
+ * a step. Whatever happens in between is invisible to the frozen row: the
+ * customer who unsubscribes from the shop's last email while this one is
+ * queued, the mailbox that bounces meanwhile, the permission that is
+ * withdrawn. Sending anyway is mailing somebody who has told us to stop.
+ *
+ * So the recipient is read again and put through THE SAME RULE the freeze used
+ * - splitAudience itself, not a copy of it - over their own record and every
+ * other record of this shop carrying the address they would be sent to,
+ * because that rule is address-wide. The audience pick is not re-applied
+ * (tiers = everyone): who it was for was the barber's choice when he sent it,
+ * and a tier moving mid-blast is not the customer asking to stop.
+ *
+ * 🔴 IT GOES TO THE ADDRESS THEY HAVE NOW. The frozen row names a person, not
+ * a mailbox (no address is copied into the send ledger), so an email changed
+ * since the freeze is mailed at the new address - after the rule above has
+ * been applied to that new address, exactly as a blast queued this moment
+ * would be. The provider key is per person, so a retry after an ambiguous
+ * attempt still cannot become a second email.
+ *
+ * The skip reason is the freeze's own vocabulary, so the report and the
+ * customer's Announcements read it exactly as they read a skip at the freeze.
+ */
+async function recheckEmailRecipient(
+  shopId: string,
+  clientId: string,
+): Promise<{ ok: true; email: string } | { ok: false; reason: SkipReason }> {
+  const records = await runAsOwner(async (tx) => {
+    const self = await tx.client.findFirst({
+      where: { id: clientId, shopId },
+      select: CLIENT_SELECT,
+    });
+    const address = emailAddressKey(self?.email);
+    if (!self || address === null) return self ? [self] : [];
+    // Wide on purpose (any case, any padding); the comparison that decides is
+    // emailAddressKey's, below.
+    const others = await tx.client.findMany({
+      where: { shopId, id: { not: clientId }, email: { contains: address, mode: "insensitive" } },
+      select: CLIENT_SELECT,
+    });
+    return [self, ...others.filter((c) => emailAddressKey(c.email) === address)];
+  });
+  // Deleted since the freeze - the same skip the missing-client path records.
+  if (records.length === 0) return { ok: false, reason: "archived" };
+  const split = splitAudience(
+    records.map((c) => ({ ...c, pushDevices: 0 })),
+    "email",
+    [],
+  );
+  const skip = split.skipped.find((s) => s.client.id === clientId);
+  if (skip) return { ok: false, reason: skip.reason };
+  return { ok: true, email: records[0]!.email! };
 }
 
 /**
