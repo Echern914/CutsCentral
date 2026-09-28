@@ -295,6 +295,15 @@ describe("🔴 an unsubscribed address stays out", () => {
     expect(fresh.id).not.toBe(lee.id);
     await permit(fresh.id);
     expect(await audience()).toEqual({ reachable: 0, skipped: { unsubscribed: 1, archived: 1 } });
+    // And the freeze agrees: there is nobody to send it to.
+    const b = await prisma.broadcast.create({
+      data: { shopId, createdByUserId: ownerId, channel: "email", audienceTiers: [], body: "Hi", status: "DRAFT" },
+      select: { id: true },
+    });
+    expect(await queueBroadcast({ shopId, broadcastId: b.id })).toEqual({
+      ok: false,
+      blocker: { kind: "no_recipients" },
+    });
   });
 });
 
