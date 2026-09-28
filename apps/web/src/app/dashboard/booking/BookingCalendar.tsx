@@ -2421,6 +2421,10 @@ export function AppointmentBlock({
         )}
         <span className="[overflow-wrap:anywhere]">
           {row.serviceName ?? "Appointment"}
+          {/* The add-ons the customer picked, written the way an Acuity
+              booking already reads ("Haircut + Hot towel"). The duration and
+              price below already include them. */}
+          {(row.addOns ?? []).map((a) => ` + ${a.name}`).join("")}
           {/* Duration and price stay behind the tap - they are reference, not
               the at-a-glance fact, and they are what crowded the line. */}
           {expanded && durMin !== null && ` · ${fmtDuration(durMin)}`}

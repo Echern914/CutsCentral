@@ -130,6 +130,17 @@ beforeEach(() => {
   getDetail.mockReset();
 });
 
+describe("the sheet's Service line", () => {
+  it("names every add-on the customer picked", async () => {
+    getDetail.mockResolvedValue({
+      ok: true,
+      data: detailFor({ addOns: [{ id: "x1", name: "Hot towel" }] }),
+    });
+    render(<AppointmentSheet row={row} toast={toast} onClose={vi.fn()} onChanged={vi.fn()} />);
+    expect(await screen.findByText("Fade + Hot towel")).toBeTruthy();
+  });
+});
+
 describe("the Contact menu offers only handoffs that work", () => {
   it("TEXTS A CLIENT WHO NEVER OPTED IN — consent is not this gate", async () => {
     // 🔴 The whole bug. `sms:` opens the BARBER's Messages app; ChairBack
