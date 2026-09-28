@@ -220,7 +220,29 @@ describe("🔴 an address changed after the freeze", () => {
     const b = await makeClient();
     await queued();
     // Both are loaded in one pass. While the first one's email is leaving,
-    // the other's address is corrected.
+    // the other's address is corrected - and, with it, a yes for the new
+    // address (a yes is for one address: see the next test).
+    let corrected: string | null = null;
+    onSend = async (input) => {
+      corrected = input.meta?.clientId === a.id ? b.id : a.id;
+      await prisma.client.update({
+        where: { id: corrected },
+        data: { email: "new.address@example.com", emailMarketingConsentAt: new Date() },
+      });
+      onSend = null;
+    };
+
+    await runBroadcastWorker({ shopId });
+
+    expect(outbox).toHaveLength(2);
+    expect(outbox[1]!.meta?.clientId).toBe(corrected);
+    expect(outbox[1]!.to).toBe("new.address@example.com");
+  });
+
+  it("🔴 a correction alone is not mailed: the yes was for the old address", async () => {
+    const a = await makeClient();
+    const b = await makeClient();
+    const id = await queued();
     let corrected: string | null = null;
     onSend = async (input) => {
       corrected = input.meta?.clientId === a.id ? b.id : a.id;
@@ -230,9 +252,8 @@ describe("🔴 an address changed after the freeze", () => {
 
     await runBroadcastWorker({ shopId });
 
-    expect(outbox).toHaveLength(2);
-    expect(outbox[1]!.meta?.clientId).toBe(corrected);
-    expect(outbox[1]!.to).toBe("new.address@example.com");
+    expect(outbox).toHaveLength(1);
+    expect(await sendRow(id, corrected!)).toEqual({ status: "SKIPPED", reason: "not_permitted" });
   });
 
   it("🔴 and the NEW address is checked: one unsubscribed on another record is not mailed", async () => {
