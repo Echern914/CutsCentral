@@ -211,6 +211,16 @@ describe("Book anyway on the dashboard", () => {
     expect(await prisma.appointment.count({ where: { shopId, firstName: "NoAnswer" } })).toBe(0);
   });
 
+  it("the database refuses a 'who forced it' with no 'when'", async () => {
+    const res = await book(ownerCookie, { startsAt: at(2, 20).toISOString(), firstName: "NoWhen" });
+    await expect(
+      prisma.appointment.update({
+        where: { id: res.body.id },
+        data: { overlapForcedByUserId: ownerUserId, overlapForcedAt: null },
+      }),
+    ).rejects.toThrow(/Appointment_overlap_forced_by_needs_at_check/);
+  });
+
   it("a normal booking is never stamped as forced", async () => {
     const res = await book(ownerCookie, { startsAt: at(2, 18).toISOString(), firstName: "Plain" });
     expect(res.status).toBe(201);
