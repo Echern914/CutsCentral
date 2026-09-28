@@ -148,16 +148,18 @@ export function describeBlocks(blocks: ExternalBlockSpan[]): {
 }
 
 /**
- * What a barber's Custom time would sit on, one line each, in the shop's zone -
- * the list under "Book anyway". Read by id from the OverlapError's own rows, so
- * it describes exactly what the confirmation is bound to. Other customers'
- * names are fine here: this is the shop's own calendar, shown to the shop.
+ * What a barber's booking would sit on, one line each, in the shop's zone -
+ * the list under "Book anyway" - plus the one-line question the second tap
+ * answers ("This overlaps Marcus R. at 8:00 PM. Book it anyway?"). Read by id
+ * from the OverlapError's own rows, so it describes exactly what the
+ * confirmation is bound to. Other customers' names are fine here: this is the
+ * shop's own calendar, shown to the shop.
  */
 export async function describeOverlap(
   shopId: string,
   rows: OverlapRows,
   timezone: string,
-): Promise<{ reason: string; lines: string[] }> {
+): Promise<{ reason: string; lines: string[]; question: string }> {
   const time = new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
     minute: "2-digit",
@@ -214,5 +216,35 @@ export async function describeOverlap(
         `Your special "${t.label?.trim() || "Special"}" at ${time.format(t.startsAt)} ($${Number(t.price)}) - comes off sale`,
     ),
   ];
-  return { reason: "That time overlaps what's already on your calendar:", lines };
+  // The question names the EARLIEST thing in the way, and counts the rest - a
+  // barber confirming over three bookings reads all three in the list above it.
+  const named = [
+    ...appts.map((a) => ({ at: a.startsAt, what: who(a.firstName, a.lastName) })),
+    ...visits.map((v) => ({ at: v.scheduledAt, what: who(v.client.firstName, v.client.lastName) })),
+    ...specials.map((t) => ({
+      at: t.startsAt,
+      what: `your special "${t.label?.trim() || "Special"}"`,
+    })),
+  ].sort((a, b) => a.at.getTime() - b.at.getTime());
+  const first = named[0];
+  const more = named.length - 1;
+  const question = first
+    ? `This overlaps ${first.what} at ${time.format(first.at)}${more > 0 ? ` and ${more} more` : ""}. Book it anyway?`
+    : "This overlaps another booking. Book it anyway?";
+  return { reason: "That time overlaps what's already on your calendar:", lines, question };
+}
+
+/**
+ * Why a customer's LIVE HOLD cannot be booked over, in the shop's zone: the
+ * refusal the dashboard shows instead of "Book anyway" (see HeldSlotError).
+ * Deliberately names no one - a hold is somebody part-way through booking, not
+ * yet a client on the calendar - and says when the time can free up.
+ */
+export function holdSentence(heldUntil: Date, timezone: string): string {
+  const time = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: timezone,
+  }).format(heldUntil);
+  return `A customer is paying for or confirming this time right now, and it's held for them until ${time}. It can't be booked over while they finish - pick another time, or try again after ${time}.`;
 }

@@ -19,6 +19,7 @@ import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import {
   ExternalBlockError,
+  HeldSlotError,
   lockStaffAndAssertSlotFree,
   lockStaffCalendar,
   OverlapError,
@@ -32,6 +33,7 @@ import {
   blockSentence,
   describeBlocks,
   describeOverlap,
+  holdSentence,
   recordExternalBlockOverrides,
 } from "../services/appointmentOverride.js";
 import {
@@ -2203,6 +2205,10 @@ interface AgendaRow {
   // name accordingly - specials can be daytime ones. See engines/specialBooking.
   special?: boolean;
   afterHours?: boolean;
+  // Native rows only: booked OVER another booking on purpose ("Book anyway"),
+  // read from Appointment.overlapForcedAt. The card says "Double-booked" so a
+  // deliberate double is never mistaken for an ordinary slot.
+  doubleBooked?: boolean;
 }
 
 /**
@@ -2305,6 +2311,7 @@ type ApptAgendaRow = {
   staffId: string;
   notes: string | null;
   bookedVia: string | null;
+  overlapForcedAt: Date | null;
   service: { id: string; name: string; color: string | null } | null;
   // Frozen AddOnSnapshotItem[] (see engines/addOns.ts) - JSON on the row.
   addOns: Prisma.JsonValue | null;
@@ -2553,6 +2560,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         staffId: true,
         notes: true,
         bookedVia: true,
+        overlapForcedAt: true,
         service: { select: { id: true, name: true, color: true } },
         addOns: true,
         // Chair-side checkout state + any Stripe pre-payment, so the row can
@@ -2690,6 +2698,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       // `afterHours` is the time half: a special can be a daytime one, and
       // only one outside his regular hours is called "After hours".
       ...specialKindOf(specialByAppt, a.id),
+      ...(a.overlapForcedAt ? { doubleBooked: true } : {}),
     }));
 
     // Blocked time (barber "Block Off Time") shows on the calendar too, as
@@ -2938,8 +2947,12 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
  * Mirrors the public create tx (slot lock + overlap check + client upsert), but:
  *  - it's authenticated (the shop comes from the session, not a slug),
  *  - `customTime` lets the barber force a time outside computed availability
- *    (their own calendar - Acuity's "Custom Time"), while still preventing a
- *    real double-booking via the overlap check,
+ *    (their own calendar - Acuity's "Custom Time"). Overlap is still checked:
+ *    a double-booking happens only through "Book anyway" - the 409 names what
+ *    is in the way, and `overlapConfirmation` replays exactly that answer. The
+ *    row is then stamped as forced. A customer's live hold is never covered,
+ *    and on an Acuity-enforcing shop a forced booking Acuity refuses to block
+ *    is undone rather than left for sale there,
  *  - the client can be an existing one (clientId) or created inline from a name.
  */
 const createApptSchema = z
@@ -2966,10 +2979,12 @@ const createApptSchema = z
      */
     externalBlockConfirmation: z.string().trim().min(1).max(200).optional(),
     /**
-     * Custom time only: book OVER the exact bookings, synced visits and own
+     * "Book anyway": book OVER the exact bookings, synced visits and own
      * specials a previous 409 `slot_taken` (code OVERLAP) named - its
-     * `confirmation` digest, replayed. The barber forcing his own calendar;
-     * anything new in the way since he looked is asked about again.
+     * `confirmation` digest, replayed. The barber forcing his own calendar,
+     * from Custom time or from a picked slot someone took while he looked;
+     * anything new in the way since then is asked about again. The booking is
+     * stamped as forced (overlapForcedAt / overlapForcedByUserId).
      */
     overlapConfirmation: z.string().trim().min(1).max(200).optional(),
     // Chosen service add-ons (ids). Extend the appointment length + total; the
@@ -3067,6 +3082,83 @@ async function resolveSeriesClient(input: {
     firstName: input.firstName || "Client",
     lastName: input.lastName,
   };
+}
+
+/**
+ * Take back a FORCED booking whose Acuity block was definitively refused (see
+ * the create route): the appointment goes to CANCELED and off the barber's day
+ * (dismissed - he was told it was not booked, so it must not sit on his
+ * calendar as a cancelled card), and whatever the booking itself took is
+ * handed back: a special it was booked into, the specials that came off sale
+ * for it, and a waitlist entry it was linked to. Then every live block goes.
+ *
+ * Deliberately NOT cancelAppointment: that is a real cancellation, with a
+ * customer email and a slot-opened blast. Nobody was ever told about this
+ * booking - the dashboard create sends no confirmation - so there is nobody to
+ * tell it is gone. Same shape as the public page's compensateUnmirroredBooking.
+ *
+ * Returns whether the booking is gone. False means it SURVIVES, unmirrored,
+ * and the caller must say so rather than "not booked".
+ */
+async function undoUnmirroredForcedBooking(input: {
+  shopId: string;
+  appointmentId: string;
+  targetedSlotId: string | null;
+  specialsTakenOffSale: string[];
+  waitlistEntryId: string | null;
+}): Promise<boolean> {
+  const { shopId, appointmentId } = input;
+  try {
+    const at = new Date();
+    await prisma.$transaction(async (tx) => {
+      await tx.appointment.updateMany({
+        where: { id: appointmentId, shopId, status: "BOOKED" },
+        data: { status: "CANCELED", canceledAt: at, dismissedAt: at },
+      });
+      if (input.targetedSlotId) {
+        await tx.targetedSlot.updateMany({
+          where: { id: input.targetedSlotId, shopId, bookedAppointmentId: appointmentId },
+          data: { bookedAppointmentId: null },
+        });
+      }
+      if (input.specialsTakenOffSale.length > 0) {
+        await tx.targetedSlot.updateMany({
+          where: {
+            id: { in: input.specialsTakenOffSale },
+            shopId,
+            bookedAppointmentId: null,
+            active: false,
+          },
+          data: { active: true },
+        });
+      }
+    });
+  } catch (err) {
+    logger.error(
+      { err, shopId, appointmentId },
+      "acuity mirror: undo of a refused forced booking FAILED - it survives unmirrored",
+    );
+    return false;
+  }
+  // Best-effort, and outside the undo: a waitlist entry's own uniqueness rules
+  // must never be the reason a refused booking stays on the books.
+  if (input.waitlistEntryId) {
+    await prisma.waitlistEntry
+      .updateMany({
+        where: { id: input.waitlistEntryId, shopId, bookedAppointmentId: appointmentId },
+        data: { status: "WAITING", bookedAppointmentId: null },
+      })
+      .catch((err: unknown) =>
+        logger.warn({ err, shopId, appointmentId }, "waitlist entry not re-opened after undo"),
+      );
+  }
+  await releaseForAppointment(shopId, appointmentId);
+  await noteAvailabilityChanged(shopId);
+  logger.warn(
+    { shopId, appointmentId },
+    "acuity mirror: forced dashboard booking REFUSED by Acuity - undone, barber told",
+  );
+  return true;
 }
 
 bookingDashboardRouter.post("/appointments", async (req, res) => {
@@ -3363,10 +3455,12 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         // customer just took on the website - still refuses, under this same
         // lock. That, not the claim below, is what serialises the two.
         targetedSlotIdToIgnore: targeted?.id,
-        // Custom time is the barber forcing his own calendar: he may book over
-        // what a first refusal named (OverlapError), once he has seen it. Not
-        // from the open-slots list - a slot_taken there is a race, not a choice.
-        overlapConfirmation: d.customTime ? (d.overlapConfirmation ?? null) : null,
+        // "Book anyway": the barber may book over what a first refusal named
+        // (OverlapError), once he has seen it and confirmed - from Custom time
+        // or from a picked slot that someone took while he looked. Bound to
+        // exactly those rows; a customer's live hold is never covered
+        // (HeldSlotError), and requireManager on this router is the seat rule.
+        overlapConfirmation: d.overlapConfirmation ?? null,
       });
 
       // Resolve the client: an existing one, or create inline from the name.
@@ -3448,6 +3542,10 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
           addOns: addOns.snapshot as unknown as Prisma.InputJsonValue,
           manageToken: randomToken(),
           bookedVia: targeted ? "targeted_slot" : undefined,
+          // A deliberate double is recorded as one: who confirmed it, and when.
+          ...(guard.overlapsCrossed
+            ? { overlapForcedAt: now, overlapForcedByUserId: req.userId ?? null }
+            : {}),
         },
         select: { id: true },
       });
@@ -3535,16 +3633,59 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         source: "dashboard_create",
         blocks: guard.externalBlocksCrossed,
       });
-      return appt;
+      // Booked over a conflict: the specials that came off sale for it, kept
+      // so an undo (below) can put them back. Null on every normal booking.
+      const forced = guard.overlapsCrossed
+        ? { specialsTakenOffSale: guard.overlapsCrossed.targetedIds }
+        : null;
+      return { id: appt.id, forced };
     });
+    const forced = result.forced;
     // After commit: place the block. Best-effort by design - the barber is
     // looking at their own calendar, and the reconciler owns any row that
     // does not land now.
-    await dispatchAfterCommit(mirrorOutboxIds, {
+    const mirror = await dispatchAfterCommit(mirrorOutboxIds, {
       shopId,
       appointmentId: result.id,
-      via: "dashboard_create",
+      via: forced ? "dashboard_create_forced" : "dashboard_create",
     });
+    if (forced) {
+      // 🔴 A FORCED BOOKING ACUITY DEFINITIVELY REFUSED IS UNDONE, not kept.
+      //
+      // An ordinary dashboard booking survives a failed block (logged, the
+      // time checked by the coverage audit). A forced one is different in
+      // kind: it sits, on purpose, on time something else already holds - the
+      // likeliest booking there is for Acuity to turn down - and a FAILED row
+      // is terminal (the reconciler never retries it). Keeping it would leave
+      // a ChairBack booking Acuity keeps selling, and the barber told "done".
+      // So it fails CLOSED, the same answer the public page gives, and the
+      // barber is told why in the form. Ambiguity is not refusal: an
+      // "unknown" block may exist, so that booking stands and the reconciler
+      // settles it (never compensate on ambiguity - see acuityMirror.ts).
+      if (
+        mirror === "failed" &&
+        (await undoUnmirroredForcedBooking({
+          shopId,
+          appointmentId: result.id,
+          targetedSlotId: targeted?.id ?? null,
+          specialsTakenOffSale: forced.specialsTakenOffSale,
+          waitlistEntryId: d.waitlistEntryId ?? null,
+        }))
+      ) {
+        res.status(409).json({
+          error: "acuity_refused",
+          reason:
+            "Acuity wouldn't block this time on your calendar, so it wasn't booked - booking it here would leave it for sale on your Acuity page. Check what's on Acuity at that time, then try again or pick another time.",
+        });
+        return;
+      }
+      logger.info(
+        { shopId, appointmentId: result.id, actorUserId: req.userId ?? null, mirror },
+        "dashboard booking made OVER a conflict (Book anyway)",
+      );
+      res.status(201).json({ ok: true, id: result.id, forced: true, mirror });
+      return;
+    }
     res.status(201).json({ ok: true, id: result.id });
   } catch (err) {
     // The one refusal that must be SHOWN, not just returned: which block, when,
@@ -3560,10 +3701,23 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       });
       return;
     }
-    // Custom time over other bookings / visits / his own specials: not a dead
-    // end. Name each one and hand back the confirmation that lets him book
-    // over exactly these - the "Book anyway" under the list.
-    if (err instanceof OverlapError && d.customTime) {
+    // A customer's live hold is in the way: somebody is paying for or
+    // confirming this exact time. Said plainly, with when it ends - and never
+    // confirmable, so there is no "Book anyway" to offer.
+    if (err instanceof HeldSlotError) {
+      res.status(409).json({
+        error: "slot_taken",
+        code: "HELD",
+        confirmable: false,
+        reason: holdSentence(err.heldUntil, shop.timezone),
+      });
+      return;
+    }
+    // Over other bookings / visits / his own specials: not a dead end. Name
+    // each one and hand back the confirmation that lets him book over exactly
+    // these - the "Book anyway" under the list, and the question its second
+    // tap answers (`message`).
+    if (err instanceof OverlapError) {
       const described = await describeOverlap(shopId, err.rows, shop.timezone);
       res.status(409).json({
         error: "slot_taken",
@@ -3571,6 +3725,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         confirmable: true,
         reason: described.reason,
         conflicts: described.lines,
+        message: described.question,
         confirmation: err.confirmation,
       });
       return;
@@ -3591,9 +3746,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       // A forced booking cleared every overlap check and still hit the one
       // rule that has no override: two live bookings cannot START at the same
       // minute on one chair. Say that, not "already booked".
-      res
-        .status(409)
-        .json({ error: d.customTime && d.overlapConfirmation ? "same_start" : "slot_taken" });
+      res.status(409).json({ error: d.overlapConfirmation ? "same_start" : "slot_taken" });
       return;
     }
     // ENFORCING with a chair the mirror cannot protect. Same refusal the

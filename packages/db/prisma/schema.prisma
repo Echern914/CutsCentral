@@ -3390,6 +3390,17 @@ model Appointment {
   /// before this existed, and every path that is not a receipt, carries NULL -
   /// which the partial unique index below deliberately does not constrain.
   operationId        String?
+  /// BOOKED OVER A CONFLICT, ON PURPOSE. Set when an owner or manager answered
+  /// the dashboard's "Book anyway" - the guard named the bookings, synced
+  /// visits or specials this time overlaps, and he confirmed booking over
+  /// exactly those. The calendar card shows "Double-booked" from this, so a
+  /// deliberate double is never mistaken for an ordinary slot. Null on every
+  /// normal booking. Cleared when the barber later moves the booking to a time
+  /// that needs no override. Never set by a customer-driven path.
+  overlapForcedAt       DateTime?
+  /// The signed-in User.id who confirmed it. Not a FK: the record outlives the
+  /// seat, like AppointmentOverride.actorUserId.
+  overlapForcedByUserId String?
 
   @@index([shopId, staffId, startsAt]) // overlap checks + barber day view
   @@index([status, startsAt]) // reminder + promotion scans

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * THE REFUSAL A BARBER CAN ANSWER.
@@ -30,6 +30,13 @@ import { useEffect, useRef } from "react";
  *     refusal arrives. A banner he cannot see is a banner that did not happen:
  *     it scrolls itself into view and takes focus, which is also what makes a
  *     screen reader read it.
+ *
+ *  4. A DOUBLE-BOOKING IS TWO TAPS. When the refusal carries `ask` (the
+ *     server's one-line question - "This overlaps Marcus R. at 10:00 AM. Book
+ *     it anyway?"), the confirm button only ASKS; nothing is sent until the
+ *     second tap answers yes. Cancel goes back to the list and sends nothing.
+ *     An Acuity block keeps its single tap: it is already the barber's own
+ *     time, not another customer's.
  */
 export interface BlockConflict {
   /** The server's sentence, in the shop's zone. Shown verbatim, as text. */
@@ -42,6 +49,11 @@ export interface BlockConflict {
    * as text, never rebuilt here.
    */
   details?: string[];
+  /**
+   * The question the SECOND tap answers, from the server, verbatim. When set,
+   * the confirm button asks it first and only "Yes" confirms (rule 4).
+   */
+  ask?: string;
 }
 
 export function ExternalBlockBanner({
@@ -66,16 +78,28 @@ export function ExternalBlockBanner({
   onDismiss: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const askRef = useRef<HTMLParagraphElement>(null);
+  // Rule 4: showing the question, waiting for the second tap.
+  const [asking, setAsking] = useState(false);
 
   // Re-runs when the CONFLICT changes, not only when one first appears: a
   // confirmed retry that meets a different block is a new decision, and the
   // barber has to be taken back to it rather than left looking at the footer.
+  // A new conflict is also a new question - he is never left mid-way through
+  // answering the old one.
   useEffect(() => {
+    setAsking(false);
     const el = ref.current;
     if (!el) return;
     el.scrollIntoView({ block: "nearest" });
     el.focus();
   }, [conflict.reason, conflict.confirmation]);
+
+  // The question takes focus when it appears, so a screen reader reads it and
+  // the keyboard lands on the answer.
+  useEffect(() => {
+    if (asking) askRef.current?.focus();
+  }, [asking]);
 
   // 🔴 TOKENS, NOT A RAW PALETTE. The first cut of this was amber-200 on
   // amber-400/10 - legible on charcoal and almost invisible on the light
@@ -118,30 +142,73 @@ export function ExternalBlockBanner({
       <p id="block-conflict-consequence" className="mt-1 text-xs leading-relaxed text-muted">
         {consequence}
       </p>
-      {/* flex-wrap + min-h-[2.75rem]: two full-size touch targets that drop to
-          their own lines rather than clipping when the labels are long. */}
-      <div className="mt-3 flex flex-wrap gap-2">
-        {conflict.confirmation ? (
+      {asking && conflict.ask ? (
+        <>
+          {/* The second tap's question, verbatim from the server. It sits
+              ABOVE the answer, which pushes "Yes" below where the first tap
+              landed - a double tap cannot confirm by accident. */}
+          <p
+            ref={askRef}
+            tabIndex={-1}
+            role="alert"
+            data-qa="overlap-ask"
+            className="mt-3 min-w-0 font-semibold text-offwhite outline-none [overflow-wrap:anywhere]"
+          >
+            {conflict.ask}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={pending}
+              data-qa="overlap-ask-yes"
+              onClick={onConfirm}
+              className={PRIMARY_BTN}
+            >
+              {pending ? pendingLabel : "Yes, book it"}
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              data-qa="overlap-ask-cancel"
+              onClick={() => setAsking(false)}
+              className={SECONDARY_BTN}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        /* flex-wrap + min-h-[2.75rem]: two full-size touch targets that drop
+           to their own lines rather than clipping when the labels are long. */
+        <div className="mt-3 flex flex-wrap gap-2">
+          {conflict.confirmation ? (
+            <button
+              type="button"
+              disabled={pending}
+              data-qa="external-block-confirm"
+              // With a question to ask, this tap only asks it (rule 4).
+              onClick={conflict.ask ? () => setAsking(true) : onConfirm}
+              className={PRIMARY_BTN}
+            >
+              {pending ? pendingLabel : confirmLabel}
+            </button>
+          ) : null}
           <button
             type="button"
             disabled={pending}
-            data-qa="external-block-confirm"
-            onClick={onConfirm}
-            className="min-h-[2.75rem] flex-none rounded-lg bg-gold px-3 py-2 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
+            data-qa="external-block-dismiss"
+            onClick={onDismiss}
+            className={SECONDARY_BTN}
           >
-            {pending ? pendingLabel : confirmLabel}
+            {dismissLabel}
           </button>
-        ) : null}
-        <button
-          type="button"
-          disabled={pending}
-          data-qa="external-block-dismiss"
-          onClick={onDismiss}
-          className="min-h-[2.75rem] flex-none rounded-lg border border-subtle-strong px-3 py-2 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
-        >
-          {dismissLabel}
-        </button>
-      </div>
+        </div>
+      )}
     </div>
   );
 }
+
+const PRIMARY_BTN =
+  "min-h-[2.75rem] flex-none rounded-lg bg-gold px-3 py-2 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50";
+const SECONDARY_BTN =
+  "min-h-[2.75rem] flex-none rounded-lg border border-subtle-strong px-3 py-2 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50";

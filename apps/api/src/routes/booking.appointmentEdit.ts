@@ -3,11 +3,19 @@ import { z } from "zod";
 import { Prisma, forShop, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { isSlotBookable } from "../engines/slots.js";
-import { ExternalBlockError, lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import {
+  ExternalBlockError,
+  HeldSlotError,
+  lockStaffAndAssertSlotFree,
+  OverlapError,
+  SlotTakenError,
+} from "../engines/bookingWrite.js";
 import {
   blockedTimeIsTheOnlyObstacle,
   blockSentence,
   describeBlocks,
+  describeOverlap,
+  holdSentence,
   recordExternalBlockOverrides,
 } from "../services/appointmentOverride.js";
 import { completeReschedule, swapForReschedule } from "../engines/acuityMirror.js";
@@ -80,6 +88,13 @@ const editApptSchema = z
      * engines/bookingWrite.ts.
      */
     externalBlockConfirmation: z.string().trim().min(1).max(200).optional(),
+    /**
+     * "Book anyway" on a move: lands this booking OVER the exact bookings,
+     * synced visits and specials a previous 409 `slot_taken` (code OVERLAP)
+     * named - its `confirmation`, replayed. Same binding as create; the row is
+     * stamped as forced. A customer's live hold is never covered.
+     */
+    overlapConfirmation: z.string().trim().min(1).max(200).optional(),
   })
   .strict();
 
@@ -321,6 +336,8 @@ export function registerAppointmentEdit(
     }
 
     let mirrorOutboxIds: string[] = [];
+    // Only meaningful when the time moved: did THIS move need "Book anyway"?
+    let forcedOverlap = false;
     try {
       await runWithShop(shopId, async (tx) => {
         if (timeMoved) {
@@ -344,7 +361,10 @@ export function registerAppointmentEdit(
             // A barber editing their own calendar overrides their own cap.
             serviceDayLimit: null,
             overrideWaitlistHolds: true,
+            // "Book anyway" - bound to the rows the last refusal named.
+            overlapConfirmation: d.overlapConfirmation ?? null,
           });
+          forcedOverlap = guard.overlapsCrossed !== undefined;
           await recordExternalBlockOverrides(tx, {
             shopId,
             appointmentId: appt.id,
@@ -386,6 +406,11 @@ export function registerAppointmentEdit(
                   checkedInAt: null,
                   etaMinutes: null,
                   runningLate: false,
+                  // The "Double-booked" marker describes where the booking
+                  // sits NOW: set by a move that needed "Book anyway", cleared
+                  // by one that did not.
+                  overlapForcedAt: forcedOverlap ? now : null,
+                  overlapForcedByUserId: forcedOverlap ? (req.userId ?? null) : null,
                 }
               : {}),
           },
@@ -444,10 +469,39 @@ export function registerAppointmentEdit(
         });
         return;
       }
-      if (
-        err instanceof SlotTakenError ||
-        (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")
-      ) {
+      // A customer is paying for or confirming that exact time: said plainly,
+      // never confirmable.
+      if (err instanceof HeldSlotError) {
+        res.status(409).json({
+          error: "slot_taken",
+          code: "HELD",
+          confirmable: false,
+          reason: holdSentence(err.heldUntil, shop.timezone),
+        });
+        return;
+      }
+      // Over another booking, a synced visit or his own special: named, with
+      // the confirmation that lets him move it there anyway.
+      if (err instanceof OverlapError) {
+        const described = await describeOverlap(shopId, err.rows, shop.timezone);
+        res.status(409).json({
+          error: "slot_taken",
+          code: "OVERLAP",
+          confirmable: true,
+          reason: described.reason,
+          conflicts: described.lines,
+          message: described.question,
+          confirmation: err.confirmation,
+        });
+        return;
+      }
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        // Past every overlap check, and still the one rule with no override:
+        // two live bookings cannot START at the same minute on one chair.
+        res.status(409).json({ error: d.overlapConfirmation ? "same_start" : "slot_taken" });
+        return;
+      }
+      if (err instanceof SlotTakenError) {
         res.status(409).json({ error: "slot_taken" });
         return;
       }
@@ -509,6 +563,7 @@ export function registerAppointmentEdit(
         actorStaffId: req.shopStaffId ?? null,
         changed: Object.keys(d).filter((k) => k !== "customTime"),
         timeMoved,
+        forcedOverlap,
         staffChanged: staffId !== appt.staffId,
         contactSynced,
         from: timeMoved ? appt.startsAt.toISOString() : undefined,

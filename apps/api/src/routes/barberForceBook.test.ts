@@ -13,7 +13,7 @@ import { createApp } from "../app.js";
  * his OWN unbooked special - all refused as "That time is already booked" with
  * nothing to do next. Now the refusal names what is in the way and hands back
  * a confirmation bound to exactly those rows; replaying it books over them.
- * Everyone else (the public page, the open-slots list) is refused exactly as
+ * Everyone else (the public page, the receptionist) is refused exactly as
  * before.
  */
 const app = createApp();
@@ -179,24 +179,38 @@ describe("Custom time over his own special", () => {
   });
 });
 
-describe("everyone else is refused exactly as before", () => {
-  it("the open-slots list (no Custom time) gets a plain slot_taken, confirmation or not", async () => {
-    await book({ startsAt: tomorrowAt(10), firstName: "Taken", customTime: true });
-    // Refused before the overlap guard even runs (the time is not bookable),
-    // and never as something he can override from here.
+describe("a slot he picked from the open list, taken while he looked", () => {
+  // Was "refused, never overridable" (#485: "a slot_taken there is a race, not
+  // a choice"). The second tap makes it a choice - he is shown who is there
+  // and asked - so it is offered Book anyway like Custom time (Eric,
+  // 2026-09-28: force an appointment "even if there's a time conflict").
+  it("is named and offered Book anyway; a made-up answer still books nothing", async () => {
+    await book({ startsAt: tomorrowAt(10, 5), firstName: "Taken", customTime: true });
+    // 10:00 is on the grid and runs into Taken's 10:05.
     const refused = await book({ startsAt: tomorrowAt(10), firstName: "Racer" });
-    expect([400, 409]).toContain(refused.status);
-    expect(["invalid_slot", "slot_taken"]).toContain(refused.body.error);
-    expect(refused.body.code).toBeUndefined();
-    const ignored = await book({
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe("OVERLAP");
+    expect(refused.body.conflicts.join(" ")).toContain("Taken");
+    const madeUp = await book({
       startsAt: tomorrowAt(10),
       firstName: "Racer",
       overlapConfirmation: "anything",
     });
-    expect([400, 409]).toContain(ignored.status);
-    expect(ignored.body.code).toBeUndefined();
+    expect(madeUp.status).toBe(409);
+    expect(madeUp.body.code).toBe("OVERLAP");
     expect(await prisma.appointment.count({ where: { shopId, firstName: "Racer" } })).toBe(0);
+
+    const forced = await book({
+      startsAt: tomorrowAt(10),
+      firstName: "Racer",
+      overlapConfirmation: refused.body.confirmation,
+    });
+    expect(forced.status).toBe(201);
+    expect(forced.body.forced).toBe(true);
   });
+});
+
+describe("everyone else is refused exactly as before", () => {
 
   it("the public booking page cannot book over a booking", async () => {
     await book({ startsAt: tomorrowAt(11), firstName: "Chair", customTime: true });
