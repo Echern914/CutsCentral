@@ -18,6 +18,12 @@ import {
 } from "@chairback/config";
 import { loadClientTierStats } from "../engines/tierStats.js";
 import { clientTierView, setClientTierFloor } from "../services/clientTier.js";
+import {
+  STAFF_YES_METHODS,
+  emailMarketingView,
+  recordEmailMarketingYes,
+  removeStaffEmailMarketingYes,
+} from "../services/emailMarketingConsent.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import {
@@ -1536,6 +1542,114 @@ dashboardRouter.post("/clients/:clientId/tier", requireManager, async (req, res)
   res.json({ ok: true, tier: result.view });
 });
 
+const emailYesSchema = z.object({ method: z.enum(STAFF_YES_METHODS) }).strict();
+
+/** One client's marketing-email fields, re-read after a change for the page to redraw. */
+async function readEmailMarketing(tx: Prisma.TransactionClient, clientId: string) {
+  return emailMarketingView(
+    await tx.client.findUniqueOrThrow({
+      where: { id: clientId },
+      select: {
+        emailOptedOut: true,
+        emailMarketingConsentAt: true,
+        emailMarketingConsentSource: true,
+      },
+    }),
+  );
+}
+
+/**
+ * The shop records ONE client's yes to its marketing email, and how they said
+ * it (in person, by text, by email, on a paper form). Permission the shop can
+ * point to for this one person - never a whole list at once.
+ *
+ * Refused with no address on file: there is nothing to say yes for. Refused
+ * when they unsubscribed: that was their own decision, and only they can undo
+ * it, from the link at the bottom of one of the shop's emails. An earlier
+ * yes stands (first wins).
+ */
+dashboardRouter.post("/clients/:clientId/email-marketing", async (req, res) => {
+  const shop = req.shop!;
+  const parsed = emailYesSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const { method } = parsed.data;
+  const out = await runWithShop(shop.id, async (tx) => {
+    const client = await tx.client.findFirst({
+      where: { shopId: shop.id, id: req.params.clientId },
+      select: { id: true, email: true },
+    });
+    if (!client) return null;
+    const result = await recordEmailMarketingYes(tx, {
+      clientId: client.id,
+      address: client.email,
+      source: `staff:${method}`,
+    });
+    return { result, view: await readEmailMarketing(tx, client.id) };
+  });
+  if (!out) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (out.result === "no_email") {
+    res.status(409).json({
+      error: "no_email",
+      message: "Add their email address first.",
+      emailMarketing: out.view,
+    });
+    return;
+  }
+  if (out.result === "unsubscribed") {
+    res.status(409).json({
+      error: "unsubscribed",
+      message:
+        "They unsubscribed from your emails. Only they can turn them back on, from the Unsubscribe link at the bottom of one of your emails.",
+      emailMarketing: out.view,
+    });
+    return;
+  }
+  // Ids only - never an address in a log line.
+  logger.info(
+    { shopId: shop.id, clientId: req.params.clientId, userId: req.userId, method, result: out.result },
+    "marketing email yes recorded by the shop",
+  );
+  res.json({ ok: true, emailMarketing: out.view });
+});
+
+/**
+ * The shop takes back a yes IT recorded - a mistake, or the client changed
+ * their mind in person. A yes the customer gave themselves is theirs: the
+ * shop cannot erase it (they can unsubscribe with one click).
+ */
+dashboardRouter.delete("/clients/:clientId/email-marketing", async (req, res) => {
+  const shop = req.shop!;
+  const out = await runWithShop(shop.id, async (tx) => {
+    const client = await tx.client.findFirst({
+      where: { shopId: shop.id, id: req.params.clientId },
+      select: { id: true },
+    });
+    if (!client) return null;
+    const removed = await removeStaffEmailMarketingYes(tx, client.id);
+    return { removed, view: await readEmailMarketing(tx, client.id) };
+  });
+  if (!out) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // Nothing removed but a yes still stands: it is the customer's own.
+  if (!out.removed && out.view.at) {
+    res.status(409).json({
+      error: "customer_yes",
+      message: "They said yes themselves, so only they can change it.",
+      emailMarketing: out.view,
+    });
+    return;
+  }
+  res.json({ ok: true, emailMarketing: out.view });
+});
+
 // The duplicates review (services/clientDuplicates.ts): active clients who share
 // a phone or email, grouped, suggested keeper first. Suggestions only - nothing
 // merges until the barber uses the merge route below. Registered before
@@ -2300,6 +2414,7 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       archived: client.archivedAt !== null,
       smsConsent: client.smsConsentAt !== null,
       smsConsentSource: client.smsConsentSource,
+      emailMarketing: emailMarketingView(client),
       notes: client.notes ?? "",
       source: client.source,
       magicToken: client.magicToken,

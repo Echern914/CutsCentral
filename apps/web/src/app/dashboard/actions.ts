@@ -6,6 +6,7 @@ import type { LoyaltyTierKey } from "@chairback/config/constants";
 import { apiGet, apiSend } from "@/lib/api";
 import { setActiveShopCookie } from "@/lib/activeShopCookie";
 import type { ClientTier } from "./clients/[id]/TierStanding";
+import type { ClientEmailMarketing, YesMethod } from "./clients/[id]/EmailMarketing";
 
 /**
  * Switch which shop the dashboard acts on: another shop the person owns, or a
@@ -419,6 +420,44 @@ export async function setClientTierAction(
     error: res.error,
     message: res.message,
     tier: res.data?.tier ?? undefined,
+  };
+}
+
+/** Record one client's yes to the shop's marketing email, and how they gave it. */
+export async function recordEmailYesAction(
+  clientId: string,
+  method: YesMethod,
+): Promise<{ ok: boolean; status: number; error?: string; message?: string; emailMarketing?: ClientEmailMarketing }> {
+  const res = await apiSend<{ ok: boolean; emailMarketing: ClientEmailMarketing }>(
+    "POST",
+    `/api/dashboard/clients/${clientId}/email-marketing`,
+    { method },
+  );
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  return {
+    ok: res.ok,
+    status: res.status,
+    error: res.error,
+    message: res.message,
+    emailMarketing: res.data?.emailMarketing ?? undefined,
+  };
+}
+
+/** Take back a yes the shop recorded. A customer's own yes is refused by the API. */
+export async function removeEmailYesAction(
+  clientId: string,
+): Promise<{ ok: boolean; status: number; error?: string; message?: string; emailMarketing?: ClientEmailMarketing }> {
+  const res = await apiSend<{ ok: boolean; emailMarketing: ClientEmailMarketing }>(
+    "DELETE",
+    `/api/dashboard/clients/${clientId}/email-marketing`,
+  );
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  return {
+    ok: res.ok,
+    status: res.status,
+    error: res.error,
+    message: res.message,
+    emailMarketing: res.data?.emailMarketing ?? undefined,
   };
 }
 

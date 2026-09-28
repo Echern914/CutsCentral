@@ -17,6 +17,11 @@ import { bookNowUrl } from "@chairback/config/bookingLinks";
 import { buildLoyaltyView } from "../services/loyaltyView.js";
 import { loadClientTierStats } from "../engines/tierStats.js";
 import { consentView, optInClientInTx, optOutClientInTx } from "../services/clientConsent.js";
+import {
+  emailMarketingState,
+  recordEmailMarketingYes,
+  unsubscribeFromMarketingEmail,
+} from "../services/emailMarketingConsent.js";
 import { prisma, runAsOwner } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
 import { requestRecoveryChallenge } from "../services/rewardsRecovery.js";
@@ -441,6 +446,12 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       ? loyalty
       : { ...loyalty, tier: null, label: null, color: null, fraction: 0, perk: null, nextTier: null },
     consent: consentView(client),
+    // Their own switch for the shop's marketing email. Separate from texts,
+    // and from appointment emails, which keep coming either way.
+    emailMarketing: {
+      state: emailMarketingState(client),
+      hasEmail: Boolean(client.email),
+    },
     // Whether the API can mint Apple Wallet passes (WALLET_* env configured) -
     // drives the rewards page's Add-to-Wallet button. Hidden while rewards are
     // off (already-installed passes keep working via the wallet routes).
@@ -642,6 +653,71 @@ rewardsRouter.post("/:magicToken/opt-out", async (req, res) => {
     return;
   }
   res.json({ consent: { state: "opted_out", hasPhone: result.hasPhone } });
+});
+
+/**
+ * The customer says yes to the shop's marketing email, from their own rewards
+ * page. Recorded as "customer_settings" for the address on their record. No
+ * address on file: nothing to say yes for.
+ *
+ * 🔴 IT NEVER UNDOES AN UNSUBSCRIBE. The shop can open this page from the
+ * client's page, so a yes from here cannot be told apart from the shop's.
+ * Once they have unsubscribed, only the Resubscribe button on the page their
+ * emailed unsubscribe link opens can turn these emails back on - and the
+ * refusal says so.
+ */
+export const EMAIL_RESUBSCRIBE_HOW =
+  "You unsubscribed from these emails. To get them again, open the Unsubscribe link at the bottom of one of this shop's emails and press Resubscribe.";
+
+rewardsRouter.post("/:magicToken/email-opt-in", async (req, res) => {
+  const result = await runAsOwner(async (tx) => {
+    const client = await tx.client.findUnique({
+      where: { magicToken: req.params.magicToken },
+      select: { id: true, email: true },
+    });
+    if (!client) return "not_found" as const;
+    return recordEmailMarketingYes(tx, {
+      clientId: client.id,
+      address: client.email,
+      source: "customer_settings",
+    });
+  });
+  if (result === "not_found") {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (result === "unsubscribed") {
+    res.status(409).json({ error: "unsubscribed", message: EMAIL_RESUBSCRIBE_HOW });
+    return;
+  }
+  if (result !== "recorded" && result !== "already") {
+    res.status(400).json({ error: "needs_email" });
+    return;
+  }
+  res.json({ emailMarketing: { state: "opted_in", hasEmail: true } });
+});
+
+/**
+ * The customer turns the shop's marketing email off, from their own rewards
+ * page. EXACTLY the unsubscribe link's write (the same function): the record's
+ * flag and its address on the shop's unsubscribed list, in one transaction, so
+ * the two can never mean different things. Appointment emails keep coming.
+ */
+rewardsRouter.post("/:magicToken/email-opt-out", async (req, res) => {
+  const result = await runAsOwner(async (tx) => {
+    const client = await tx.client.findUnique({
+      where: { magicToken: req.params.magicToken },
+      select: { id: true, shopId: true, email: true },
+    });
+    if (!client) return null;
+    await unsubscribeFromMarketingEmail(tx, client, "customer_settings");
+    return { hasEmail: Boolean(client.email) };
+  });
+  if (!result) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ emailMarketing: { state: "opted_out", hasEmail: result.hasEmail } });
 });
 
 /**

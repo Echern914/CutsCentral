@@ -31,6 +31,8 @@ import {
 import { materializeSeries, type RecurrencePattern } from "../engines/recurringSeries.js";
 import { prisma, Prisma } from "@chairback/db";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
+import { emailAddressKey } from "../engines/broadcastAudience.js";
+import { recordEmailMarketingYes } from "../services/emailMarketingConsent.js";
 import { lastNameHasLetter } from "@chairback/config/clientIdentity";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { staffSpanBlocked } from "../engines/blockedTime.js";
@@ -1447,6 +1449,12 @@ const createSchema = z
       .or(z.literal("")),
     smsConsent: z.boolean().optional(),
     /**
+     * The customer ticked "Email me news and offers" - an unticked-by-default
+     * box, so only their own tick sends it. Absent or false changes nothing,
+     * and never clears an earlier yes. See emailYesMayLand for where it lands.
+     */
+    emailMarketing: z.boolean().optional(),
+    /**
      * 🔴 The customer's own agreement that a card kept on file may be charged
      * for the SERVICE once their appointment is done. Separate from the
      * no-show-fee consent the card-on-file mode already carries, and optional:
@@ -1507,6 +1515,32 @@ const createSchema = z
     message: "We send your confirmation by email, so we need an address.",
     path: ["email"],
   });
+
+/**
+ * May the customer's tick on "Email me news and offers" land on the record
+ * this booking is about to write?
+ *
+ * 🔴 ASKED BEFORE THE UPSERT, because the upsert then writes the typed email
+ * over whatever the record held. Afterwards every record "has" the typed
+ * address, and the question can no longer be answered.
+ *
+ * Yes for a brand-new record, and for one that already held this address.
+ * Not for a record found by a shared phone that held a different address, or
+ * none: that may be a family member's, and a shared phone is not the same
+ * person. Their yes stays unrecorded rather than landing on someone else.
+ */
+async function emailYesMayLand(
+  db: Prisma.TransactionClient | typeof prisma,
+  shopId: string,
+  acuityClientKey: string,
+  typedEmail: string,
+): Promise<boolean> {
+  const prior = await db.client.findUnique({
+    where: { shopId_acuityClientKey: { shopId, acuityClientKey } },
+    select: { email: true },
+  });
+  return !prior || emailAddressKey(prior.email) === emailAddressKey(typedEmail);
+}
 
 /**
  * Undo a booking Acuity DEFINITIVELY refused to hold.
@@ -1876,6 +1910,10 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     // Same tenant-scoped client upsert as the single booking below. Done once,
     // up front, because the engine runs each occurrence in its own transaction
     // and all twelve must land on one Client row.
+    const seriesEmailYes =
+      d.emailMarketing === true &&
+      Boolean(d.email) &&
+      (await emailYesMayLand(prisma, shop.id, acuityClientKey, d.email!));
     const client = await prisma.client.upsert({
       where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey } },
       create: {
@@ -1902,6 +1940,14 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       await prisma.client.updateMany({
         where: { id: client.id, smsConsentAt: null },
         data: { smsConsentAt: now, smsConsentSource: "booking" },
+      });
+    }
+    if (seriesEmailYes) {
+      await recordEmailMarketingYes(prisma, {
+        clientId: client.id,
+        address: d.email,
+        source: "booking_page",
+        now,
       });
     }
 
@@ -2163,6 +2209,10 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
 
       // Upsert the client (tenant-scoped key). Stamp consent only when none is
       // recorded yet (first consent wins - never overwrite an earlier source).
+      const emailYes =
+        d.emailMarketing === true &&
+        Boolean(d.email) &&
+        (await emailYesMayLand(tx, shop.id, acuityClientKey, d.email!));
       const client = await tx.client.upsert({
         where: {
           shopId_acuityClientKey: { shopId: shop.id, acuityClientKey },
@@ -2191,6 +2241,14 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         await tx.client.updateMany({
           where: { id: client.id, smsConsentAt: null },
           data: { smsConsentAt: now, smsConsentSource: "booking" },
+        });
+      }
+      if (emailYes) {
+        await recordEmailMarketingYes(tx, {
+          clientId: client.id,
+          address: d.email,
+          source: "booking_page",
+          now,
         });
       }
 
