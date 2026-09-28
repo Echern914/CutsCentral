@@ -90,6 +90,25 @@ export async function getAcuityClientForShop(
     ? decrypt(conn.refreshToken, env.TOKEN_ENCRYPTION_KEY)
     : null;
 
+  // Whether the row is marked refused right now. Tracked here so a healthy
+  // shop pays no extra write per call: the column is written only on a flip.
+  let authFailed = conn.authFailedAt !== null;
+
+  /**
+   * After every answer: a 401/403 (once any refresh has been tried) means
+   * Acuity refused our login, so stamp it; an accepted call clears it. Any
+   * other error says nothing about the login and changes nothing.
+   */
+  async function noteAuth(res: Response): Promise<void> {
+    if (res.ok && authFailed) {
+      authFailed = false;
+      await setAuthFailed(shopId, false);
+    } else if ((res.status === 401 || res.status === 403) && !authFailed) {
+      authFailed = true;
+      await setAuthFailed(shopId, true);
+    }
+  }
+
   async function call(path: string): Promise<unknown> {
     const doFetch = (token: string) =>
       fetch(`${ACUITY.apiBase}${path}`, {
@@ -104,6 +123,7 @@ export async function getAcuityClientForShop(
       res = await doFetch(accessToken);
     }
 
+    await noteAuth(res);
     if (!res.ok) {
       throw new AcuityError(res.status, `Acuity ${res.status} on ${path}`);
     }
@@ -142,6 +162,7 @@ export async function getAcuityClientForShop(
       accessToken = await refreshAccessToken(shopId, refreshToken);
       res = await doFetch(accessToken);
     }
+    await noteAuth(res);
     if (!res.ok) {
       throw new AcuityError(res.status, `Acuity ${res.status} on ${method} ${path}`);
     }
@@ -246,6 +267,29 @@ export async function getAcuityClientForShop(
 }
 
 /**
+ * Stamp or clear AcuityConnection.authFailedAt - what settings and readiness
+ * read to say "Reconnect Acuity". The first refusal keeps its time across
+ * retries (the where clause). Never throws: this is bookkeeping and must not
+ * change what the caller sees. Plain prisma: the table has no RLS policy.
+ */
+async function setAuthFailed(shopId: string, failed: boolean): Promise<void> {
+  try {
+    const { count } = await prisma.acuityConnection.updateMany({
+      where: failed ? { shopId, authFailedAt: null } : { shopId, authFailedAt: { not: null } },
+      data: { authFailedAt: failed ? new Date() : null },
+    });
+    if (count > 0) {
+      logger.warn(
+        { shopId },
+        failed ? "acuity refused ChairBack's login - reconnect needed" : "acuity login accepted again",
+      );
+    }
+  } catch (err) {
+    logger.error({ err, shopId }, "acuity login state write failed");
+  }
+}
+
+/**
  * Exchange a refresh token for a new access token, persist (encrypted), return
  * the new access token. [VERIFY LIVE] the refresh grant shape.
  */
@@ -265,6 +309,11 @@ async function refreshAccessToken(
     body,
   });
   if (!res.ok) {
+    // Acuity said no to the refresh itself (invalid_grant is a 400): the login
+    // is gone. A 5xx is an outage, not a refusal, and is not recorded.
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
+      await setAuthFailed(shopId, true);
+    }
     throw new AcuityError(res.status, "Acuity token refresh failed - reconnect required");
   }
   const token = acuityTokenSchema.parse(await res.json());

@@ -1186,6 +1186,13 @@ model AcuityConnection {
   tokenExpiresAt  DateTime? // may be null if no expiry
   connectedAt     DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+  // When Acuity first refused ChairBack's login (a 401/403, or a refused token
+  // refresh). null = the login works. The row itself stays - bookings, visits
+  // and the booking mode are untouched - but settings and readiness say
+  // "Reconnect Acuity" instead of "Connected". Cleared by the next call Acuity
+  // accepts, or by reconnecting. Written only by acuity/client.ts and the
+  // OAuth callback.
+  authFailedAt    DateTime?
 
   @@index([acuityAccountId])
 }

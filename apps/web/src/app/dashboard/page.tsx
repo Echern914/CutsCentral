@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { apiGet, apiSend } from "@/lib/api";
+import { API_BASE, apiGet, apiSend } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { homeWithoutShop } from "@/lib/partnerHome";
 import { StatCards, type Stats } from "./_components/StatCards";
@@ -43,6 +43,8 @@ interface SyncStatus {
   connected: boolean;
   liveSyncHealthy: boolean;
   needsRepair: boolean;
+  /** Connected, but Acuity refuses the sign-in. */
+  needsReconnect?: boolean;
   clientCount: number;
   clientsNeedingConsent: number;
 }
@@ -193,7 +195,11 @@ export default async function DashboardPage({
         />
       </div>
 
-      <SyncHealthBanner needsRepair={Boolean(sync.data?.needsRepair)} />
+      <SyncHealthBanner
+        needsRepair={Boolean(sync.data?.needsRepair)}
+        needsReconnect={Boolean(sync.data?.needsReconnect)}
+        reconnectHref={`${API_BASE}/api/acuity/oauth/start`}
+      />
 
       <GettingStarted
         connected={shop.connected}

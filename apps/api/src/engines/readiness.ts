@@ -351,7 +351,10 @@ export interface ReadinessFacts {
   receptionistEnabled: boolean;
   receptionistTermsAccepted: boolean;
   receptionistEntitled: boolean;
-  /** The OAuth row for the shop's chosen external booking source exists. */
+  /**
+   * The OAuth row for the shop's chosen external booking source exists - and,
+   * for Acuity, Acuity still accepts its login (see `acuityAuthFailed`).
+   */
   integrationConnected: boolean;
   /**
    * An AcuityConnection row exists.
@@ -363,6 +366,12 @@ export interface ReadinessFacts {
    * calendars cannot sell the same chair twice.
    */
   acuityConnected: boolean;
+  /**
+   * The AcuityConnection row exists but Acuity has refused its login (an
+   * expired or revoked sign-in). Nothing syncs, and no time can be held in
+   * Acuity, until the owner reconnects - the row alone is not a live connection.
+   */
+  acuityAuthFailed: boolean;
   /**
    * How many live Acuity webhook subscriptions the shop holds.
    *
@@ -1229,9 +1238,17 @@ function shopItems(
       done: facts.integrationConnected,
       evidence: facts.integrationConnected
         ? `${facts.bookingMode} is connected and syncing`
-        : `Booking is set to ${facts.bookingMode} but no connection is active`,
+        : facts.bookingMode === "acuity" && facts.acuityAuthFailed
+          ? "Acuity stopped accepting ChairBack's sign-in, so nothing is syncing"
+          : `Booking is set to ${facts.bookingMode} but no connection is active`,
       role: "owner",
-      cta: { label: "Connect booking", featureId: "integrations" },
+      cta: {
+        label:
+          facts.bookingMode === "acuity" && facts.acuityAuthFailed
+            ? "Reconnect Acuity"
+            : "Connect booking",
+        featureId: "integrations",
+      },
     }),
 
     /* ── Acuity health ───────────────────────────────────────────────────────
@@ -1250,8 +1267,11 @@ function shopItems(
       milestone: "shop",
       // Only meaningful for a shop whose bookings LIVE in Acuity. A native shop
       // with Acuity connected for outbound mirroring does not depend on inbound
-      // webhooks to know its own calendar.
-      applicable: facts.bookingMode === "acuity" && facts.acuityConnected,
+      // webhooks to know its own calendar. Silent while Acuity refuses the
+      // login: `integration.connected` already says so, and subscribed webhooks
+      // mean nothing when every lookup they trigger is refused.
+      applicable:
+        facts.bookingMode === "acuity" && facts.acuityConnected && !facts.acuityAuthFailed,
       title: "Acuity changes reach ChairBack",
       why: "Without live updates, a booking made in Acuity never arrives here - so ChairBack keeps offering a time that is already taken.",
       klass: "conditional",
@@ -1262,6 +1282,26 @@ function shopItems(
           : "Connected, but no live updates are subscribed - new Acuity bookings are not arriving",
       role: "owner",
       cta: { label: "Repair sync", featureId: "integrations" },
+    }),
+
+    item({
+      id: "integration.acuity_login",
+      milestone: "shop",
+      // A shop taking its bookings in Acuity hears this from
+      // `integration.connected` - one broken thing, one item. This is for the
+      // shop that keeps Acuity attached while ChairBack takes the bookings,
+      // where a refused login means Acuity visits stop updating and no time
+      // can be held in Acuity.
+      applicable: facts.acuityConnected && facts.bookingMode !== "acuity",
+      title: "Acuity still accepts ChairBack's sign-in",
+      why: "While Acuity is connected, ChairBack keeps its appointments up to date here and can hold your ChairBack bookings there. If Acuity stops accepting the sign-in, none of that happens until you reconnect.",
+      klass: "conditional",
+      done: !facts.acuityAuthFailed,
+      evidence: facts.acuityAuthFailed
+        ? "Acuity stopped accepting ChairBack's sign-in - reconnect Acuity"
+        : "Signed in to Acuity",
+      role: "owner",
+      cta: { label: "Reconnect Acuity", featureId: "integrations" },
     }),
 
     item({

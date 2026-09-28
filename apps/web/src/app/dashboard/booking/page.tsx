@@ -35,6 +35,8 @@ export interface BookingShop {
 /** Live connect status for the branded platform cards. */
 export interface ConnectStatus {
   acuityConnected: boolean;
+  /** Connected, but Acuity refuses the sign-in: show "Reconnect Acuity", not "Connected". */
+  acuityNeedsReconnect: boolean;
   acuityAvailable: boolean;
   squareConnected: boolean;
   squareAvailable: boolean;
@@ -308,7 +310,7 @@ export default async function BookingPage({
       apiGet<{ waitlist: WaitlistRow[]; waitingCount: number }>("/api/dashboard/waitlist"),
       // Connect status for the branded cards. These can 404/503 when a platform
       // isn't configured; treat any non-ok as "not connected / unavailable".
-      apiGet<{ connected: boolean }>("/api/acuity/oauth/status"),
+      apiGet<{ connected: boolean; needsReconnect?: boolean }>("/api/acuity/oauth/status"),
       apiGet<{ connected: boolean; available: boolean }>("/api/square/oauth/status"),
     ]);
 
@@ -318,6 +320,7 @@ export default async function BookingPage({
 
   const connect: ConnectStatus = {
     acuityConnected: Boolean(acuityRes.data?.connected),
+    acuityNeedsReconnect: Boolean(acuityRes.data?.needsReconnect),
     // Acuity has no "available" flag (it's always configured); treat reachable as available.
     acuityAvailable: acuityRes.ok,
     squareConnected: Boolean(squareRes.data?.connected),
