@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SERVICE_CHARGE_CONSENT_VERSION, serviceChargeAuthorized } from "./checkoutConsent";
+import { SERVICE_CHARGE_CONSENT_VERSION, serviceChargeAuthorized } from "./checkoutConsent.js";
 
 const card = (over: Partial<Parameters<typeof serviceChargeAuthorized>[0]> = {}) => ({
   serviceChargeConsentVersion: SERVICE_CHARGE_CONSENT_VERSION,
