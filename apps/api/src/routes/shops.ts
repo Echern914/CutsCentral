@@ -46,6 +46,12 @@ import { recordPartnerReferralInTx, resolvePartnerCode } from "../services/partn
 import { AFFILIATE_CLAIM_COOKIE, checkTellApart, tellApartRefusal } from "@chairback/config";
 import { messageBookingUrl } from "@chairback/config/bookingLinks";
 import {
+  BOOKING_CHECKLIST_LINE_MAX,
+  BOOKING_CHECKLIST_MAX_LINES,
+  BOOKING_POLICY_TEXT_MAX,
+  normalizeBookingPolicy,
+} from "@chairback/config/bookingPolicy";
+import {
   applyAttributionInTx,
   planAttribution,
 } from "../services/affiliateAttribution.js";
@@ -374,6 +380,13 @@ const updateShopSchema = createShopSchema
     bookingBufferMin: z.number().int().min(0).max(240),
     // Public booking menu: group cards first (only meaningful with groups).
     bookingGroupsFirst: z.boolean(),
+    // The shop's own policies + the checklist a customer ticks before booking
+    // (config/bookingPolicy.ts). Over-long input is REFUSED, never cut: half a
+    // sentence is a different policy. Blank lines are dropped in the handler.
+    bookingPolicyText: z.string().max(BOOKING_POLICY_TEXT_MAX).nullish(),
+    bookingPolicyChecklist: z
+      .array(z.string().max(BOOKING_CHECKLIST_LINE_MAX))
+      .max(BOOKING_CHECKLIST_MAX_LINES),
     // Client rewards page content. rewardsWelcome: optional short greeting
     // ("" clears it). rewardsSections: visible REWARDS_SECTIONS keys (de-duped,
     // known keys only); [] = show all.
@@ -826,6 +839,18 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
   if (data.rewardsWelcome === "") data.rewardsWelcome = null;
   // Custom visit-noun: blank clears back to the industry default.
   if (data.serviceNoun === "") data.serviceNoun = null;
+  // Booking policy: trimmed, blank text -> null, blank lines dropped. Blank
+  // everything is OFF (nothing shown, nothing enforced).
+  if (data.bookingPolicyText !== undefined) {
+    data.bookingPolicyText = normalizeBookingPolicy({
+      text: data.bookingPolicyText as string | null,
+    }).text;
+  }
+  if (data.bookingPolicyChecklist !== undefined) {
+    data.bookingPolicyChecklist = normalizeBookingPolicy({
+      checklist: data.bookingPolicyChecklist as string[],
+    }).checklist;
+  }
   // When the new `gallery` payload is present, it's the source of truth: write
   // galleryItems (captions stripped to undefined when blank) and keep the legacy
   // galleryUrls column mirrored so a rollback still renders photos.
@@ -1714,6 +1739,8 @@ function serializeShop(shop: {
   bookingMaxDays: number;
   bookingBufferMin: number;
   bookingGroupsFirst: boolean;
+  bookingPolicyText: string | null;
+  bookingPolicyChecklist: string[];
   receptionistEnabled: boolean;
   receptionistTone: string | null;
   receptionistTermsAcceptedAt: Date | null;
@@ -1787,6 +1814,8 @@ function serializeShop(shop: {
     bookingMaxDays: shop.bookingMaxDays,
     bookingBufferMin: shop.bookingBufferMin,
     bookingGroupsFirst: shop.bookingGroupsFirst,
+    bookingPolicyText: shop.bookingPolicyText,
+    bookingPolicyChecklist: shop.bookingPolicyChecklist,
     receptionistEnabled: shop.receptionistEnabled,
     receptionistTone: shop.receptionistTone,
     receptionistTermsAcceptedAt: shop.receptionistTermsAcceptedAt?.toISOString() ?? null,

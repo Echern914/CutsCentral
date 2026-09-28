@@ -160,6 +160,12 @@ export interface MaterializeInput {
    * than a booking someone has to remember to clean up.
    */
   hold?: { expiresAt: Date } | null;
+  /**
+   * The customer's tick on the shop's booking checklist, frozen onto every
+   * occurrence (engines/bookingPolicy.ts). Only the public route passes it:
+   * a series the barber sets up himself records no agreement.
+   */
+  policy?: { policyAcceptedAt: Date; policySnapshot: unknown } | null;
 }
 
 /**
@@ -291,6 +297,12 @@ export async function materializeSeries(
             manageToken: randomToken(),
             seriesId: series.id,
             seriesOccurrenceIndex: occ.index,
+            ...(input.policy
+              ? {
+                  policyAcceptedAt: input.policy.policyAcceptedAt,
+                  policySnapshot: input.policy.policySnapshot as Prisma.InputJsonValue,
+                }
+              : {}),
           },
           select: { id: true },
         });

@@ -7,6 +7,7 @@ import {
 } from "../engines/appointmentPayment.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import { readIntakeSnapshot, type IntakeAnswer } from "../engines/bookingIntake.js";
+import { readPolicySnapshot } from "../engines/bookingPolicy.js";
 import { serviceCheckoutEnabled } from "./booking.checkout.js";
 
 /**
@@ -142,6 +143,12 @@ export interface AppointmentDetail {
    * asks nothing, and for every booking made before it started asking.
    */
   intake: { label: string; value: string; kind: string }[];
+  /**
+   * The shop's checklist as the customer ticked it when booking, frozen then.
+   * Null when nothing was asked: no checklist, a booking the barber made, the
+   * SMS receptionist, a synced booking, or anything before this feature.
+   */
+  policyAgreement: { acceptedAt: string; text: string | null; checklist: string[] } | null;
   contact: DetailContact;
   /** Whether Text is a real action here, and why not when it isn't. */
   sms: DetailSms;
@@ -258,6 +265,15 @@ function detailAddOns(raw: Prisma.JsonValue | null): { id: string; name: string 
 /** Strip the question id: the sheet renders labels and values, nothing else. */
 function publicIntake(answers: IntakeAnswer[]): { label: string; value: string; kind: string }[] {
   return answers.map((a) => ({ label: a.label, value: a.value, kind: a.kind }));
+}
+
+/** The frozen agreement, or null when this booking was never asked for one. */
+function policyAgreement(
+  acceptedAt: Date | null,
+  snapshot: Prisma.JsonValue | null,
+): AppointmentDetail["policyAgreement"] {
+  const read = acceptedAt ? readPolicySnapshot(snapshot) : null;
+  return acceptedAt && read ? { acceptedAt: acceptedAt.toISOString(), ...read } : null;
 }
 
 function durationMin(startsAt: Date, endsAt: Date | null): number | null {
@@ -432,6 +448,8 @@ export function registerAppointmentDetail(router: Router): void {
         notes: true,
         addOns: true,
         intake: true,
+        policyAcceptedAt: true,
+        policySnapshot: true,
         checkInStatus: true,
         groupId: true,
         visitId: true,
@@ -468,6 +486,8 @@ export function registerAppointmentDetail(router: Router): void {
       notes: string | null;
       addOns: Prisma.JsonValue | null;
       intake: Prisma.JsonValue | null;
+      policyAcceptedAt: Date | null;
+      policySnapshot: Prisma.JsonValue | null;
       checkInStatus: string | null;
       groupId: string | null;
       visitId: string | null;
@@ -547,6 +567,7 @@ export function registerAppointmentDetail(router: Router): void {
       notes: appt.notes,
       addOns: detailAddOns(appt.addOns),
       intake: publicIntake(readIntakeSnapshot(appt.intake)),
+      policyAgreement: policyAgreement(appt.policyAcceptedAt, appt.policySnapshot),
       contact: resolveContact({
         apptPhone: appt.phone,
         apptEmail: appt.email,
@@ -663,6 +684,7 @@ export function registerAppointmentDetail(router: Router): void {
       addOns: [],
       // A synced booking never went through our form, so there is nothing to show.
       intake: [],
+      policyAgreement: null,
       // The whole point of the synced sheet: the contact the ingest matched to
       // this shop's own client row, already normalized to E.164 by `toE164`.
       contact: resolveContact({

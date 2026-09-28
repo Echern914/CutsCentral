@@ -106,8 +106,8 @@ afterEach(() => {
 });
 
 /** Walk the flow to the review step with `n` attendees. */
-async function reachReview(n: 2 | 3 = 2) {
-  render(<GroupBookingClient data={data} />);
+async function reachReview(n: 2 | 3 = 2, withData: BookShopData = data) {
+  render(<GroupBookingClient data={withData} />);
   fireEvent.click(screen.getByRole("button", { name: "Sam" }));
   fireEvent.click(screen.getByRole("button", { name: `${n} people` }));
   fireEvent.click(screen.getByRole("button", { name: "Next" }));
@@ -367,5 +367,67 @@ describe("mobile", () => {
     await reachReview();
     // Nothing sets an explicit width that could exceed a small screen.
     expect(document.querySelector('[class*="w-["]')).toBeNull();
+  });
+});
+
+describe("🔴 the shop's checklist (Before you book)", () => {
+  const policy = {
+    text: "Deposits are non-refundable.",
+    checklist: ["I'll arrive 5 minutes early", "Late counts as a no-show"],
+    version: "grpv1grpv1grpv1g",
+  };
+  const withPolicy = { ...data, shop: { ...shop, bookingPolicy: policy } } as BookShopData;
+
+  it("shows the lines UNTICKED and holds Confirm until every one is ticked", async () => {
+    await reachReview(2, withPolicy);
+    fillBooker();
+    expect(screen.getByText("Before you book")).toBeTruthy();
+    const confirmBtn = () =>
+      screen.getByRole("button", { name: /Confirm 2 appointments/ }) as HTMLButtonElement;
+    for (const line of policy.checklist) {
+      const box = screen.getByText(line).closest("label")!.querySelector("input")!;
+      expect(box.checked).toBe(false);
+    }
+    expect(confirmBtn().disabled).toBe(true);
+    expect(screen.getByText(/Tick each line/)).toBeTruthy();
+    fireEvent.click(screen.getByText(policy.checklist[0]!));
+    expect(confirmBtn().disabled).toBe(true);
+    fireEvent.click(screen.getByText(policy.checklist[1]!));
+    expect(confirmBtn().disabled).toBe(false);
+  });
+
+  it("sends the version the booker ticked", async () => {
+    createAction.mockResolvedValue({ kind: "booked", groupId: "g1", manageToken: "t1" });
+    await reachReview(2, withPolicy);
+    fillBooker();
+    for (const line of policy.checklist) fireEvent.click(screen.getByText(line));
+    fireEvent.click(screen.getByRole("button", { name: /Confirm 2 appointments/ }));
+    await waitFor(() => expect(createAction).toHaveBeenCalledTimes(1));
+    expect(createAction.mock.calls[0]![1].policyVersion).toBe(policy.version);
+  });
+
+  it("a newer policy from the server replaces the old one and clears the ticks", async () => {
+    createAction.mockResolvedValue({
+      kind: "policy",
+      policy: { text: null, checklist: ["Cash only"], version: "grpv2grpv2grpv2g" },
+    });
+    await reachReview(2, withPolicy);
+    fillBooker();
+    for (const line of policy.checklist) fireEvent.click(screen.getByText(line));
+    fireEvent.click(screen.getByRole("button", { name: /Confirm 2 appointments/ }));
+    expect(await screen.findByText(/just updated its policies/)).toBeTruthy();
+    expect(screen.getByText("Cash only")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: /Confirm 2 appointments/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("a shop that wrote nothing shows nothing and holds nothing back", async () => {
+    await reachReview();
+    fillBooker();
+    expect(screen.queryByText("Before you book")).toBeNull();
+    expect(
+      (screen.getByRole("button", { name: /Confirm 2 appointments/ }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 });

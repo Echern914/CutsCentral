@@ -601,6 +601,41 @@ function DetailView({
               </dl>
             </Panel>
           )}
+          {/* What the customer agreed to on the booking page - the owner's
+              own checklist, as it read THEN. Frozen, like the answers above. */}
+          {detail?.policyAgreement && (
+            <Panel title="Your policies">
+              <p className="text-sm text-offwhite/85">
+                Agreed to your policies when booking,{" "}
+                {fmtDay(detail.policyAgreement.acceptedAt, detail.timezone)}.
+              </p>
+              {detail.policyAgreement.checklist.length > 0 && (
+                <ul className="mt-2 flex flex-col gap-1.5">
+                  {detail.policyAgreement.checklist.map((line, i) => (
+                    <li
+                      key={`${i}-${line}`}
+                      className="flex min-w-0 items-start gap-2 text-sm text-offwhite/85"
+                    >
+                      <span aria-hidden="true" className="shrink-0 text-emerald-soft">
+                        ✓
+                      </span>
+                      <span className="min-w-0 [overflow-wrap:anywhere]">{line}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {detail.policyAgreement.text && (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-xs font-medium text-muted">
+                    The policy they read
+                  </summary>
+                  <p className="mt-1.5 whitespace-pre-line text-xs leading-relaxed text-muted [overflow-wrap:anywhere]">
+                    {detail.policyAgreement.text}
+                  </p>
+                </details>
+              )}
+            </Panel>
+          )}
           {detail?.notes && (
             <Panel title="Note">
               <p className="[overflow-wrap:anywhere] whitespace-pre-wrap text-sm leading-relaxed text-offwhite/85">

@@ -114,6 +114,12 @@ export type GroupCreateOutcome =
   | { kind: "payments" }
   /** `message`: the server's own sentence, when it named something to fix. */
   | { kind: "invalid"; message?: string }
+  /**
+   * The shop's checklist changed (or appeared) while the page was open.
+   * `policy` is the CURRENT one, untyped until the page checks its shape.
+   * Nothing was booked.
+   */
+  | { kind: "policy"; policy?: unknown }
   /** The request never completed. SAFE TO RETRY with the same key. */
   | { kind: "network" }
   | { kind: "error" };
@@ -136,6 +142,8 @@ export interface GroupCreateInput {
    * chairs. The API keys a unique index on this.
    */
   idempotencyKey: string;
+  /** The version of the shop's checklist the booker ticked, when it has one. */
+  policyVersion?: string;
 }
 
 /**
@@ -175,6 +183,9 @@ export async function groupCreateAction(
     return { kind: "booked", groupId: res.data.groupId, manageToken: res.data.manageToken };
   }
   if (res.error === "group_payments_unsupported") return { kind: "payments" };
+  if (res.code === "POLICY_CHANGED" || res.code === "POLICY_NOT_ACCEPTED") {
+    return { kind: "policy", ...(res.policy ? { policy: res.policy } : {}) };
+  }
   if (res.error === "slot_taken" || res.error === "slot_unavailable_external") {
     return { kind: "slot_taken" };
   }
