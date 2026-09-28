@@ -155,10 +155,43 @@ const chargeCard = (id: string) =>
 const receiptIntents = (appointmentId: string) =>
   prisma.emailIntent.findMany({ where: { appointmentId, kind: "service_charge_receipt" } });
 
-const drain = async () => {
-  const { runEmailOutbox } = await import("../engines/emailOutbox.js");
-  return runEmailOutbox();
-};
+/**
+ * Deliver THIS test's receipt, and nothing else.
+ *
+ * 🔴 NEVER `runEmailOutbox()` HERE. It claims every shop's PENDING intents, and
+ * CI runs test files in parallel against one database: our drain would send
+ * other files' emails through our recorder, and theirs would send ours through
+ * theirs - leaving `emails` empty for a receipt that was queued correctly.
+ *
+ * So the test takes its own row over by id - the same takeover the outbox
+ * gives a stale claim - resetting anything a foreign drain did to it first,
+ * then runs the deliverer under test with its own claim token. A drain in
+ * another file skips the row from then on (it is freshly claimed), and a
+ * foreign worker already mid-flight fails its claim-token check.
+ */
+async function deliverOwn(appointmentId: string) {
+  const [intent, ...more] = await receiptIntents(appointmentId);
+  expect(more).toHaveLength(0);
+  const claimToken = `test_${randomToken(12)}`;
+  await prisma.emailIntent.update({
+    where: { id: intent!.id },
+    data: {
+      status: "PENDING",
+      claimToken,
+      claimedAt: new Date(),
+      attempts: 0,
+      firstProviderAttemptAt: null,
+      lastAttemptAmbiguous: false,
+      lastError: null,
+      sentAt: null,
+      messageId: null,
+      nextAttemptAt: null,
+    },
+  });
+  const { deliverServiceChargeReceiptIntent } = await import("../services/serviceChargeReceipt.js");
+  const outcome = await deliverServiceChargeReceiptIntent({ intentId: intent!.id, claimToken });
+  return { intentId: intent!.id, claimToken, outcome };
+}
 
 const manage = (token: string) => request(app).get(`/api/book/manage/${token}`);
 const stop = (token: string) =>
@@ -247,7 +280,7 @@ describe('"You will get a receipt by email every time."', () => {
     const attempt = await prisma.checkoutAttempt.findFirst({ where: { appointmentId: id } });
     expect(intents[0]!.idempotencyKey).toBe(`service_charge_receipt:${attempt!.id}`);
 
-    await drain();
+    expect((await deliverOwn(id)).outcome).toBe("sent");
     const mine = emails.filter((e) => e.meta?.appointmentId === id);
     expect(mine).toHaveLength(1);
     expect(mine[0]!.to).toBe(CUSTOMER_EMAIL);
@@ -279,8 +312,13 @@ describe('"You will get a receipt by email every time."', () => {
       });
     }
     expect(await receiptIntents(id)).toHaveLength(1);
-    await drain();
-    await drain();
+    const first = await deliverOwn(id);
+    expect(first.outcome).toBe("sent");
+    // A second pass over the same intent finds it already SENT and sends nothing.
+    const { deliverServiceChargeReceiptIntent } = await import("../services/serviceChargeReceipt.js");
+    expect(
+      await deliverServiceChargeReceiptIntent({ intentId: first.intentId, claimToken: first.claimToken }),
+    ).toBe("stale_claim");
     expect(emails.filter((e) => e.meta?.appointmentId === id)).toHaveLength(1);
   });
 
@@ -310,7 +348,7 @@ describe('"You will get a receipt by email every time."', () => {
     await prisma.appointment.update({ where: { id }, data: { email: null } });
     await prisma.client.update({ where: { id: appt!.clientId! }, data: { email: null } });
     expect((await chargeCard(id)).status).toBe(200);
-    await drain();
+    expect((await deliverOwn(id)).outcome).toBe("skipped");
     const [intent] = await receiptIntents(id);
     expect(intent!.status).toBe("FAILED");
     expect(intent!.lastError).toBe("no_address");
