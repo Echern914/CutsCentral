@@ -214,15 +214,24 @@ describe("🔴 what changed after the freeze stops the email", () => {
 });
 
 describe("🔴 an address changed after the freeze", () => {
-  it("is mailed at the address the record has NOW", async () => {
-    const c = await makeClient({ email: "old.address@example.com" });
-    const id = await queued();
-    await prisma.client.update({ where: { id: c.id }, data: { email: "new.address@example.com" } });
+  it("is mailed at the address the record has NOW, even one corrected mid-pass", async () => {
+    const a = await makeClient();
+    const b = await makeClient();
+    await queued();
+    // Both are loaded in one pass. While the first one's email is leaving,
+    // the other's address is corrected.
+    let corrected: string | null = null;
+    onSend = async (input) => {
+      corrected = input.meta?.clientId === a.id ? b.id : a.id;
+      await prisma.client.update({ where: { id: corrected }, data: { email: "new.address@example.com" } });
+      onSend = null;
+    };
 
     await runBroadcastWorker({ shopId });
 
-    expect(outbox.map((m) => m.to)).toEqual(["new.address@example.com"]);
-    expect((await sendRow(id, c.id))!.status).toBe("SENT");
+    expect(outbox).toHaveLength(2);
+    expect(outbox[1]!.meta?.clientId).toBe(corrected);
+    expect(outbox[1]!.to).toBe("new.address@example.com");
   });
 
   it("🔴 and the NEW address is checked: one unsubscribed on another record is not mailed", async () => {
