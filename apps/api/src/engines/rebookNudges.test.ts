@@ -111,6 +111,26 @@ async function seedVisit(opts: {
   return visit.id;
 }
 
+/** A SYNCED booking two weeks after NOW, in the status the sync left it. */
+async function seedUpcomingVisit(
+  clientId: string,
+  status: "SCHEDULED" | "RESCHEDULED" | "CANCELED",
+): Promise<void> {
+  const scheduledAt = new Date(NOW.getTime() + 14 * 24 * 3600_000);
+  await prisma.visit.create({
+    data: {
+      shopId,
+      clientId,
+      acuityAppointmentId: `acuity-${randomToken(8)}`,
+      status,
+      canceledAt: status === "CANCELED" ? NOW : null,
+      scheduledAt,
+      endAt: new Date(scheduledAt.getTime() + 30 * MIN),
+      serviceName: "Fade",
+    },
+  });
+}
+
 const apptStamp = (id: string) =>
   prisma.appointment.findUnique({ where: { id }, select: { rebookPromptSentAt: true } });
 const visitStamp = (id: string) =>
@@ -235,6 +255,33 @@ describe("runRebookNudges", () => {
     // Not stamped either: if they later cancel that booking they become
     // eligible again while still inside the window.
     expect((await apptStamp(done))!.rebookPromptSentAt).toBeNull();
+  });
+
+  it("skips a client whose next one was booked in Acuity or Square", async () => {
+    // A synced shop's next booking arrives as a Visit, never an Appointment,
+    // so checking Appointment alone asked them to book what they already had.
+    const booked = await makeClient();
+    const moved = await makeClient();
+    const doneBooked = await seedVisit({ endedMinAgo: 45, clientId: booked });
+    const doneMoved = await seedVisit({ endedMinAgo: 45, clientId: moved });
+    await seedUpcomingVisit(booked, "SCHEDULED");
+    // A reschedule moves the same row to its new time: still booked.
+    await seedUpcomingVisit(moved, "RESCHEDULED");
+
+    expect(await runRebookNudges(NOW)).toBe(0);
+    expect(pushes).toHaveLength(0);
+    // Unstamped, like the native case above.
+    expect((await visitStamp(doneBooked))!.rebookPromptSentAt).toBeNull();
+    expect((await visitStamp(doneMoved))!.rebookPromptSentAt).toBeNull();
+  });
+
+  it("still nudges a client whose synced next booking was canceled", async () => {
+    const clientId = await makeClient();
+    const done = await seedVisit({ endedMinAgo: 45, clientId });
+    await seedUpcomingVisit(clientId, "CANCELED");
+
+    expect(await runRebookNudges(NOW)).toBe(1);
+    expect((await visitStamp(done))!.rebookPromptSentAt).not.toBeNull();
   });
 
   it("nudges SYNCED visits, which have no Appointment row at all", async () => {
