@@ -22,6 +22,7 @@ import {
   type WalkInEntryView,
 } from "./walkInQueue.js";
 import { recordWalkInEvent } from "./walkInAudit.js";
+import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import type { WalkInStatus } from "./walkInLifecycle.js";
 
 /**
@@ -334,7 +335,9 @@ export async function completeEntry(opts: {
 
     // Already settled: answer the settled state (repeated completion is
     // idempotent by contract - and by the promotion pipeline's own keys).
-    if (entry.status === "COMPLETED") return { earn: null, clientId: null };
+    if (entry.status === "COMPLETED") {
+      return { earn: null, clientId: null, appointmentId: null };
+    }
     if (entry.status !== "IN_SERVICE" || !entry.appointmentId) {
       throw new WalkInIllegalTransitionError(entry.status, "COMPLETED");
     }
@@ -375,7 +378,7 @@ export async function completeEntry(opts: {
         },
         now,
       );
-      return { earn, clientId: appt.clientId };
+      return { earn, clientId: appt.clientId, appointmentId: appt.id };
     }
 
     // Clientless: no visit, no loyalty - flip the appointment (idempotent on
@@ -385,8 +388,12 @@ export async function completeEntry(opts: {
       data: { status: "COMPLETED", completedAt: now },
     });
     await completeWalkInEntryForAppointmentInTx(tx, shopId, appt.id, now);
-    return { earn: null, clientId: null };
+    return { earn: null, clientId: null, appointmentId: appt.id };
   });
+
+  // A Wallet pass on this appointment re-fetches as COMPLETED. Post-commit and
+  // fire-and-forget; the poke never throws by contract.
+  if (result.appointmentId) void pokeAppointmentPass(result.appointmentId);
 
   // Post-commit, exactly like checkout: cadence recompute + the punch text,
   // fired once and only when something was actually earned.

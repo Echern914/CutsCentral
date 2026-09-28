@@ -1,5 +1,15 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
+
+// Watch the Wallet poke without dispatching one (it is fire-and-forget and
+// never throws, so the real one would only answer "nothing_to_do" here).
+const wallet = vi.hoisted(() => ({
+  poke: vi.fn(async (_appointmentId: string) => "nothing_to_do" as const),
+}));
+vi.mock("../wallet/appointmentPass.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../wallet/appointmentPass.js")>()),
+  pokeAppointmentPass: wallet.poke,
+}));
 import { prisma } from "@chairback/db";
 import { __setMessageProviderForTests } from "../messaging/twilio.js";
 import { __setPushSenderForTests, type PushSender } from "../messaging/push.js";
@@ -301,6 +311,8 @@ describe("reschedule", () => {
     expect(row!.startsAt.getTime()).toBe(T(21, 0).getTime());
     expect(row!.status).toBe("BOOKED");
     expect(row!.reminderSentAt).toBeNull();
+    // A Wallet pass for this booking is told to re-fetch the new time.
+    expect(wallet.poke).toHaveBeenCalledWith(apptId);
 
     // The old 20:00 slot is offerable again.
     const slots = await computeOpenSlots({

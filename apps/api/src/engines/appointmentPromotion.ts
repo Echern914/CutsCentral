@@ -162,6 +162,9 @@ export async function promoteFulfilledAppointments(
       await recomputeCadence(a.shopId, a.clientId);
       // The visit happened: nothing left to protect. Let the kept card go.
       void releaseCardOnFile({ shopId: a.shopId, appointmentId: a.id, reason: "completed" });
+      // Devices holding this booking's Wallet pass re-fetch it as COMPLETED.
+      // Post-commit and fire-and-forget; the poke never throws by contract.
+      void pokeAppointmentPass(a.id);
       if (earn) {
         await notifyPunchEarned({
           shopId: a.shopId,

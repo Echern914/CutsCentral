@@ -13,6 +13,7 @@ import { loadAddressSuppressions } from "../services/emailSuppression.js";
 import {
   splitAudience,
   type AudienceClient,
+  type AudienceSplit,
   type BroadcastChannelId,
   type SkipReason,
 } from "./broadcastAudience.js";
@@ -73,6 +74,19 @@ export interface BroadcastPreview {
   emailsRemaining: number | null;
   /** Why this cannot be sent right now, if it cannot. */
   blocker: BroadcastBlocker | null;
+  /**
+   * The same group counted on BOTH channels, so the barber sees what the other
+   * one would do before he picks: "0 by email, 41 by app notification" is the
+   * answer to "why is email zero?". `unavailable` = this channel cannot be sent
+   * from this shop at all right now (email switched off, or no street address),
+   * so its count must not be read as people it can reach.
+   */
+  channels: Record<
+    BroadcastChannelId,
+    { reachable: number; skipped: { reason: SkipReason; count: number }[]; unavailable: boolean }
+  >;
+  /** Current, non-archived clients in each tier - so a near-empty tier shows. */
+  tierCounts: Record<LoyaltyTier, number>;
 }
 
 export type BroadcastBlocker =
@@ -296,10 +310,25 @@ export async function previewBroadcast(params: {
     loadBroadcastShop(params.shopId),
     runWithShop(params.shopId, (tx) => loadAddressSuppressions(tx, params.shopId)),
   ]);
-  const split = splitAudience(clients, params.channel, params.tiers, suppressed);
-  const skipped = (Object.entries(split.reasonCounts) as [SkipReason, number][])
-    .filter(([, count]) => count > 0)
-    .map(([reason, count]) => ({ reason, count }));
+  // 🔴 ONE LOAD, BOTH CHANNELS. The same clients and the same rule, split twice,
+  // so the two numbers on screen can never come from two different moments.
+  const byChannel = {
+    push: splitAudience(clients, "push", params.tiers, suppressed),
+    email: splitAudience(clients, "email", params.tiers, suppressed),
+  };
+  const split = byChannel[params.channel];
+  const channels = {} as BroadcastPreview["channels"];
+  for (const c of ["push", "email"] as const) {
+    channels[c] = {
+      reachable: byChannel[c].reachable.length,
+      skipped: skippedCounts(byChannel[c]),
+      unavailable: channelUnavailable(c, shop) !== null,
+    };
+  }
+  const tierCounts: Record<LoyaltyTier, number> = { BRONZE: 0, SILVER: 0, GOLD: 0 };
+  for (const c of clients) {
+    if (c.archivedAt === null && c.loyaltyTier !== null) tierCounts[c.loyaltyTier] += 1;
+  }
 
   let emailsRemaining: number | null = null;
   let blocker: BroadcastBlocker | null = null;
@@ -313,23 +342,8 @@ export async function previewBroadcast(params: {
   }
 
   if (!blocker && params.channel === "email") {
-    if (!emailEnabled()) {
-      blocker = { kind: "email_not_configured" };
-    } else if (marketingEmailConfigError(apiEnv()) !== null) {
-      // 🔴 THE FEATURE IS OFF, NOT THE PLATFORM. A missing unsubscribe secret
-      // means links in a sent email could stop working the next time sessions
-      // are rotated, so this deployment must not send marketing email - but it
-      // must go on taking bookings, which is what refusing to BOOT stopped it
-      // doing. Push is unaffected and available right now.
-      blocker = { kind: "unsubscribe_not_configured" };
-    } else if (!shop || shop.postal === null) {
-      // 🔴 NOT A NAG. US law requires the sender's physical address in
-      // commercial email, so this is the difference between a compliant send
-      // and one that can cost the shop - and the whole platform's sending
-      // reputation. It takes a barber a minute to fix, and push is available
-      // meanwhile with no such requirement.
-      blocker = { kind: "no_postal_address" };
-    } else {
+    blocker = channelUnavailable("email", shop);
+    if (!blocker) {
       const remaining = await remainingMonthlyEmails(params.shopId, now);
       emailsRemaining = Number.isFinite(remaining) ? remaining : null;
       if (Number.isFinite(remaining) && split.reachable.length > remaining) {
@@ -342,10 +356,43 @@ export async function previewBroadcast(params: {
   return {
     reachable: split.reachable.length,
     considered: clients.length,
-    skipped,
+    skipped: channels[params.channel].skipped,
     emailsRemaining,
     blocker,
+    channels,
+    tierCounts,
   };
+}
+
+function skippedCounts(split: AudienceSplit): { reason: SkipReason; count: number }[] {
+  return (Object.entries(split.reasonCounts) as [SkipReason, number][])
+    .filter(([, count]) => count > 0)
+    .map(([reason, count]) => ({ reason, count }));
+}
+
+/**
+ * Why this CHANNEL cannot be used from this shop right now, whoever is in the
+ * group - or null. Only email has such a reason; push is always there.
+ */
+function channelUnavailable(
+  channel: BroadcastChannelId,
+  shop: BroadcastShop | null,
+): BroadcastBlocker | null {
+  if (channel !== "email") return null;
+  if (!emailEnabled()) return { kind: "email_not_configured" };
+  // 🔴 THE FEATURE IS OFF, NOT THE PLATFORM. A missing unsubscribe secret
+  // means links in a sent email could stop working the next time sessions
+  // are rotated, so this deployment must not send marketing email - but it
+  // must go on taking bookings, which is what refusing to BOOT stopped it
+  // doing. Push is unaffected and available right now.
+  if (marketingEmailConfigError(apiEnv()) !== null) return { kind: "unsubscribe_not_configured" };
+  // 🔴 NOT A NAG. US law requires the sender's physical address in
+  // commercial email, so this is the difference between a compliant send
+  // and one that can cost the shop - and the whole platform's sending
+  // reputation. It takes a barber a minute to fix, and push is available
+  // meanwhile with no such requirement.
+  if (!shop || shop.postal === null) return { kind: "no_postal_address" };
+  return null;
 }
 
 export type QueueOutcome =
@@ -421,13 +468,8 @@ export async function queueBroadcast(params: {
         const suppressed = await loadAddressSuppressions(tx, params.shopId);
         const split = splitAudience(clients, broadcast.channel, broadcast.audienceTiers, suppressed);
 
-        if (broadcast.channel === "email") {
-          if (!emailEnabled()) throw new Refused({ kind: "email_not_configured" });
-          if (marketingEmailConfigError(apiEnv()) !== null) {
-            throw new Refused({ kind: "unsubscribe_not_configured" });
-          }
-          if (!shop || shop.postal === null) throw new Refused({ kind: "no_postal_address" });
-        }
+        const unavailable = channelUnavailable(broadcast.channel, shop);
+        if (unavailable) throw new Refused(unavailable);
         if (split.reachable.length === 0) throw new Refused({ kind: "no_recipients" });
 
         // 3. THE ALLOWANCE. Push is free and unmetered, which is the entire

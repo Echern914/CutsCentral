@@ -16,6 +16,16 @@ export interface BroadcastPreview {
   skipped: { reason: string; count: number; label: string }[];
   /** Why it can't go out right now, already worded for the barber. */
   blocker: { kind: string; message: string } | null;
+  /**
+   * The same group on each channel. `unavailable` = that channel can't be sent
+   * from this shop right now at all, so its count is not people it reaches.
+   */
+  channels?: Record<
+    BroadcastChannel,
+    { reachable: number; skipped: { reason: string; count: number; label: string }[]; unavailable: boolean }
+  >;
+  /** Current clients in each tier. */
+  tierCounts?: Record<LoyaltyTierKey, number>;
 }
 
 export interface BroadcastRow {
