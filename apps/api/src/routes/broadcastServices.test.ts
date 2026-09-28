@@ -296,6 +296,20 @@ describe("the preview by service", () => {
     expect(reasonsOf(res.body.skipped)).toEqual({ not_in_audience: BOOK - FADE_ANY_TIME.length });
   });
 
+  it("🔴 narrows BOTH channels' counts, not just the one picked", async () => {
+    // Everyone in the book has the app; only the group may be counted.
+    for (const id of Object.values(c)) {
+      await prisma.pushSubscription.create({
+        data: { shopId, clientId: id, endpoint: `https://push.test/${randomToken(8)}`, kind: "web" },
+      });
+    }
+    const res = await preview({ channel: "email", services: { keys: [`id:${fadeId}`], sinceDays: null } });
+    expect(res.status).toBe(200);
+    expect(res.body.channels.email.reachable).toBe(FADE_ANY_TIME.length);
+    expect(res.body.channels.push.reachable).toBe(FADE_ANY_TIME.length);
+    expect(reasonsOf(res.body.channels.push.skipped)).toEqual({ not_in_audience: BOOK - FADE_ANY_TIME.length });
+  });
+
   it("a synced name reaches only the visits of that name", async () => {
     const res = await preview({ channel: "email", services: { keys: ["name:braids"], sinceDays: null } });
     expect(res.body.reachable).toBe(1);
