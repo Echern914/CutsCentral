@@ -14,6 +14,7 @@ import { serviceColorHex } from "@chairback/config/constants";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import { zonedMinutesOfDay } from "@chairback/config/time";
 import { lastNameHasLetter } from "@chairback/config/clientIdentity";
+import { addOnOffersService } from "@chairback/config/addOns";
 import {
   SERVICE_CHARGE_CONSENT,
   SERVICE_CHARGE_CONSENT_SERIES,
@@ -1299,12 +1300,11 @@ export function BookingClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill, demoTour, bookableServices.length]);
 
-  // Add-ons valid for the chosen service (shop-wide null, or scoped to it).
+  // Add-ons valid for the chosen service - by the rule the API charges by
+  // (shop-wide, or scoped to it).
   const addOnsForService = useMemo(() => {
     if (!serviceId) return [];
-    return data.addOns.filter(
-      (a) => a.serviceIds.length === 0 || a.serviceIds.includes(serviceId),
-    );
+    return data.addOns.filter((a) => addOnOffersService(a, serviceId));
   }, [serviceId, data.addOns]);
 
   /**

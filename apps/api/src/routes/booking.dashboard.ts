@@ -78,7 +78,7 @@ import {
   NudgeLimitError,
   sendAppointmentNudge,
 } from "../engines/appointmentNudge.js";
-import { resolveAddOns } from "../engines/addOns.js";
+import { keepsEveryAddOn, NO_ADD_ONS, resolveAddOns } from "../engines/addOns.js";
 import {
   effectiveSchedule,
   materializeTargetedRule,
@@ -3286,8 +3286,20 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
   // special has its own fixed length and price, as on the website).
   const addOns =
     d.recurrence || targeted
-      ? { snapshot: [], extraDurationMin: 0, extraPrice: 0 }
+      ? NO_ADD_ONS
       : await resolveAddOns(shopId, d.serviceId, d.addOnIds);
+  // 🔴 REFUSED, NEVER DROPPED. The barber ticked these and was shown a total
+  // with them in it. One this booking will not carry - another service's,
+  // another shop's, switched off since he opened the form, or any at all on a
+  // repeating series - would otherwise book a shorter, cheaper appointment
+  // than the one on his screen, with nothing to say so. (The customer's page
+  // still drops them: resolveAddOns leaves that choice to each caller.) A
+  // special keeps its own rule: its length and price are the special's, and
+  // add-ons are ignored - exactly as on the website, and the form says so.
+  if (!targeted && !keepsEveryAddOn(d.addOnIds, addOns)) {
+    res.status(400).json({ error: "invalid_add_on" });
+    return;
+  }
   // Effective duration for the picked slot - weekday layer plus time-of-day
   // windows (mirrors the effectivePriceAt snapshot just below). A special
   // carries its own explicit length.
@@ -3818,6 +3830,17 @@ const dashSlotsSchema = z.object({
   serviceId: z.string().min(1),
   from: z.coerce.date(),
   to: z.coerce.date(),
+  /**
+   * The add-ons ticked in the form, comma-separated. Ids only - never a
+   * length: the minutes are resolved here, by the rule the create route
+   * charges by, so a time is offered only if service + add-ons fit.
+   */
+  addOnIds: z
+    .string()
+    .max(2000)
+    .optional()
+    .transform((v) => (v ?? "").split(",").map((x) => x.trim()).filter(Boolean))
+    .pipe(z.array(z.string().min(1)).max(20)),
 });
 
 bookingDashboardRouter.get("/slots", async (req, res) => {
@@ -3835,6 +3858,16 @@ bookingDashboardRouter.get("/slots", async (req, res) => {
     res.status(400).json({ error: "not_native" });
     return;
   }
+  // 🔴 THE GRID MUST MATCH THE WRITER. The create route checks a picked time
+  // with isSlotBookable({ extraDurationMin }) - this same engine, fed the same
+  // resolved add-on minutes - so every time listed here is one it accepts. A
+  // slot that fits a haircut but not haircut + beard is simply not offered. An
+  // add-on it would refuse is refused here too.
+  const addOns = await resolveAddOns(shopId, parsed.data.serviceId, parsed.data.addOnIds);
+  if (!keepsEveryAddOn(parsed.data.addOnIds, addOns)) {
+    res.status(400).json({ error: "invalid_add_on" });
+    return;
+  }
   const now = new Date();
   const slots = await computeOpenSlots({
     shopId,
@@ -3843,6 +3876,7 @@ bookingDashboardRouter.get("/slots", async (req, res) => {
     fromDate: parsed.data.from,
     toDate: parsed.data.to,
     now,
+    extraDurationMin: addOns.extraDurationMin,
   });
 
   // The barber's own specials under THIS service (see openSpecialsFor).

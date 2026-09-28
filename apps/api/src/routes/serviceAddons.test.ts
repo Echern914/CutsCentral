@@ -7,9 +7,10 @@ import { createApp } from "../app.js";
 /**
  * Service add-ons: an extra a customer (or the barber) tacks onto a service at
  * booking. It extends the appointment length + total and is snapshotted onto
- * Appointment.addOns. Invalid/foreign ids are dropped; a service-scoped add-on
- * is only honored on its service. Tested via the barber create (customTime so
- * generated times don't need weekly hours).
+ * Appointment.addOns. A service-scoped add-on is only honored on its service;
+ * an invalid/foreign id is refused by the barber create (and dropped by the
+ * customer's page). Tested via the barber create (customTime so generated
+ * times don't need weekly hours).
  */
 const app = createApp();
 const password = "supersecret123";
@@ -129,17 +130,18 @@ describe("booking with add-ons", () => {
     expect(snap[0]!.durationMin).toBe(15);
   });
 
-  it("drops an invalid/foreign add-on id (no inflation)", async () => {
+  // The barber's form REFUSES an add-on it will not carry (he was shown a
+  // total with it in); the customer's page still drops one. Both never
+  // inflate the price. More in barberBookingAddOns.test.ts.
+  it("refuses an invalid/foreign add-on id - nothing booked, nothing inflated", async () => {
     const startsAt = tomorrowAt(16);
     const res = await request(app)
       .post("/api/booking/appointments")
       .set("Cookie", cookie)
       .send({ staffId, serviceId, startsAt, firstName: "NoAdds", lastName: "Tester", customTime: true, addOnIds: ["nope"] });
-    expect(res.status).toBe(201);
-    const appt = await prisma.appointment.findUnique({ where: { id: res.body.id } });
-    expect(appt!.endsAt.getTime() - appt!.startsAt.getTime()).toBe(30 * 60 * 1000); // just the haircut
-    expect(Number(appt!.priceAtBooking)).toBe(35);
-    expect((appt!.addOns as unknown as unknown[]).length).toBe(0);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_add_on");
+    expect(await prisma.appointment.count({ where: { firstName: "NoAdds" } })).toBe(0);
   });
 
   it("honors a shop-wide add-on on any service but a scoped one only on its service", async () => {
@@ -150,7 +152,7 @@ describe("booking with add-ons", () => {
       price: 5,
       serviceIds: [serviceId],
     });
-    // Booking the OTHER service with the scoped add-on → it's dropped.
+    // Booking the OTHER service with the scoped add-on → refused.
     const res = await request(app)
       .post("/api/booking/appointments")
       .set("Cookie", cookie)
@@ -162,11 +164,9 @@ describe("booking with add-ons", () => {
         customTime: true,
         addOnIds: [scoped.body.id],
       });
-    expect(res.status).toBe(201);
-    const appt = await prisma.appointment.findUnique({ where: { id: res.body.id } });
-    // Color is 60 min; the Haircut-scoped add-on must NOT apply.
-    expect(appt!.endsAt.getTime() - appt!.startsAt.getTime()).toBe(60 * 60 * 1000);
-    expect((appt!.addOns as unknown as unknown[]).length).toBe(0);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_add_on");
+    expect(await prisma.appointment.count({ where: { firstName: "Scoped" } })).toBe(0);
   });
 
   it("honors an add-on scoped to SEVERAL services on each of them", async () => {

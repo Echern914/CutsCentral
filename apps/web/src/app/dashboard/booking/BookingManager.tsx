@@ -398,6 +398,7 @@ export function BookingManager({
             isNative={shop.bookingMode === "native"}
             staff={initialStaff}
             services={initialServices}
+            addOns={initialAddOns}
             toast={toast}
             openAppointmentId={openAppointmentId}
             tierOpenings={shop.rewardsEnabled}
