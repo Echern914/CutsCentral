@@ -5,6 +5,23 @@ import { apiGet, apiSend } from "@/lib/api";
 
 export type BroadcastChannel = "email" | "push";
 export type LoyaltyTierKey = "BRONZE" | "SILVER" | "GOLD";
+/** Only visits in the last N days count; null = any time. */
+export type SinceDays = 90 | 365 | null;
+
+/** "Only clients who had one of these services." Never sent with no keys. */
+export interface ServiceAudience {
+  keys: string[];
+  sinceDays: SinceDays;
+}
+
+/** One service in the "By service" list, with how many clients had it. */
+export interface ServiceOption {
+  key: string;
+  label: string;
+  /** menu = on the shop's menu; synced = a name only the old booking system used. */
+  source: "menu" | "synced";
+  clients: number;
+}
 
 export interface BroadcastPreview {
   reachable: number;
@@ -33,6 +50,11 @@ export interface BroadcastRow {
   channel: BroadcastChannel;
   /** Who it was aimed at: [] = everyone, else only these loyalty tiers. */
   audienceTiers: LoyaltyTierKey[];
+  /** And only clients who had one of these services ([] = no service filter). */
+  audienceServiceKeys?: string[];
+  /** The names the barber saw when he sent it. */
+  audienceServiceLabels?: string[];
+  audienceSinceDays?: SinceDays;
   subject: string | null;
   body: string;
   status: "DRAFT" | "QUEUED" | "SENDING" | "SENT" | "PARTIAL" | "FAILED";
@@ -51,10 +73,22 @@ export interface BroadcastRow {
 export async function previewBroadcastAction(input: {
   channel: BroadcastChannel;
   tiers: LoyaltyTierKey[];
+  services?: ServiceAudience;
 }): Promise<{ ok: boolean; preview?: BroadcastPreview; error?: string }> {
   const res = await apiSend<BroadcastPreview>("POST", "/api/broadcasts/preview", input);
   if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
   return { ok: true, preview: res.data };
+}
+
+/** The shop's services and synced names, each with how many clients had it. */
+export async function broadcastServiceOptionsAction(
+  sinceDays: SinceDays,
+): Promise<{ ok: boolean; options?: ServiceOption[] }> {
+  const res = await apiGet<{ options: ServiceOption[] }>(
+    `/api/broadcasts/services${sinceDays ? `?sinceDays=${sinceDays}` : ""}`,
+  );
+  if (!res.ok || !res.data) return { ok: false };
+  return { ok: true, options: res.data.options };
 }
 
 /**
@@ -99,6 +133,7 @@ export async function removeBroadcastAction(id: string): Promise<{ ok: boolean; 
 export async function sendBroadcastAction(input: {
   channel: BroadcastChannel;
   tiers: LoyaltyTierKey[];
+  services?: ServiceAudience;
   subject: string;
   body: string;
 }): Promise<{ ok: boolean; recipients?: number; error?: string }> {

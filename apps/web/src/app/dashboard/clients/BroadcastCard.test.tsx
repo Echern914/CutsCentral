@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { BroadcastCard } from "./BroadcastCard";
 import {
+  broadcastServiceOptionsAction,
   listBroadcastsAction,
   previewBroadcastAction,
   removeBroadcastAction,
@@ -28,6 +29,13 @@ vi.mock("./broadcastActions", () => ({
   })),
   sendBroadcastAction: vi.fn(async () => ({ ok: true, recipients: 3 })),
   removeBroadcastAction: vi.fn(async () => ({ ok: true })),
+  broadcastServiceOptionsAction: vi.fn(async () => ({
+    ok: true,
+    options: [
+      { key: "id:svc1", label: "Fade", source: "menu", clients: 4 },
+      { key: "name:braids", label: "Braids", source: "synced", clients: 1 },
+    ],
+  })),
 }));
 vi.mock("@/components/ui/Toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 // Every vocabulary word this card reads is a plain string; echo the key.
@@ -276,5 +284,118 @@ describe("BroadcastCard email permission", () => {
       expect(screen.getByText("Add your shop's street address first.")).toBeTruthy();
       expect(screen.queryByText(/will get this email/)).toBeNull();
     });
+  });
+});
+
+/**
+ * "Send it to everyone who had a fade": the By service picker. Each service
+ * says how many had it; nothing picked sends nothing; the pick and the window
+ * are what the preview and the send are asked about.
+ */
+describe("BroadcastCard by service", () => {
+  it("lists services with their counts, and a synced name says where it came from", async () => {
+    render(<BroadcastCard rewardsEnabled />);
+    openComposer();
+    fireEvent.click(screen.getByRole("button", { name: "By service" }));
+    expect(await screen.findByRole("button", { name: "Fade · 4" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Braids (from Acuity) · 1" })).toBeTruthy();
+    expect(vi.mocked(broadcastServiceOptionsAction)).toHaveBeenLastCalledWith(365);
+  });
+
+  it("🔴 with nothing picked it counts nobody and cannot send", async () => {
+    vi.mocked(previewBroadcastAction).mockClear();
+    render(<BroadcastCard rewardsEnabled />);
+    openComposer();
+    fireEvent.change(screen.getByLabelText("Notification title"), { target: { value: "Fade week" } });
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Book a fade" } });
+    await waitFor(() => expect(vi.mocked(previewBroadcastAction)).toHaveBeenCalled());
+    vi.mocked(previewBroadcastAction).mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "By service" }));
+    expect(await screen.findByText(/Pick at least one service/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+    // Never asked about an empty pick - the API would refuse it anyway.
+    expect(vi.mocked(previewBroadcastAction)).not.toHaveBeenCalled();
+  });
+
+  it("asks the preview about the pick and the window, and sends them", async () => {
+    vi.mocked(previewBroadcastAction).mockClear();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<BroadcastCard rewardsEnabled />);
+    openComposer();
+    fireEvent.click(screen.getByRole("button", { name: "By service" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Fade · 4" }));
+    await waitFor(() =>
+      expect(vi.mocked(previewBroadcastAction)).toHaveBeenLastCalledWith({
+        channel: "push",
+        tiers: [],
+        services: { keys: ["id:svc1"], sinceDays: 365 },
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Last 90 days" }));
+    await waitFor(() => expect(vi.mocked(broadcastServiceOptionsAction)).toHaveBeenLastCalledWith(90));
+    fireEvent.click(await screen.findByRole("button", { name: /^Gold/ }));
+    await waitFor(() =>
+      expect(vi.mocked(previewBroadcastAction)).toHaveBeenLastCalledWith({
+        channel: "push",
+        tiers: ["GOLD"],
+        services: { keys: ["id:svc1"], sinceDays: 90 },
+      }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Notification title"), { target: { value: "Fade week" } });
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Book a fade" } });
+    const sendButton = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    await waitFor(() => expect(sendButton.disabled).toBe(false));
+    fireEvent.click(sendButton);
+    expect(confirm.mock.calls[0]![0]).toMatch(/who had Fade/);
+    await waitFor(() =>
+      expect(vi.mocked(sendBroadcastAction)).toHaveBeenLastCalledWith({
+        channel: "push",
+        tiers: ["GOLD"],
+        services: { keys: ["id:svc1"], sinceDays: 90 },
+        subject: "Fade week",
+        body: "Book a fade",
+      }),
+    );
+    confirm.mockRestore();
+  });
+
+  it("Everyone clears the service pick", async () => {
+    render(<BroadcastCard rewardsEnabled />);
+    openComposer();
+    fireEvent.click(screen.getByRole("button", { name: "By service" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Fade · 4" }));
+    fireEvent.click(screen.getByRole("button", { name: "Everyone" }));
+    expect(screen.getByRole("button", { name: "Everyone" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Fade · 4" })).toBeNull();
+  });
+
+  it("history says which services a message was for", async () => {
+    vi.mocked(listBroadcastsAction).mockResolvedValueOnce({
+      ok: true,
+      broadcasts: [
+        {
+          id: "b1",
+          channel: "push",
+          audienceTiers: [],
+          audienceServiceKeys: ["id:svc1", "name:braids"],
+          audienceServiceLabels: ["Fade", "Braids"],
+          audienceSinceDays: 90,
+          subject: "Fade week",
+          body: "Book a fade",
+          status: "SENT",
+          recipientCount: 5,
+          sentCount: 5,
+          failedCount: 0,
+          skippedCount: 0,
+          pendingCount: 0,
+          queuedAt: null,
+          sentAt: null,
+          createdAt: "2026-09-01T00:00:00Z",
+        },
+      ] as never,
+    });
+    render(<BroadcastCard rewardsEnabled />);
+    expect(await screen.findByText(/Had Fade and Braids · 5 sent/)).toBeTruthy();
   });
 });

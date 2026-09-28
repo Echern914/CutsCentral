@@ -63,6 +63,28 @@ describe("picking the group", () => {
     expect(split.reachable.map((c) => c.id)).toEqual(["gold"]);
     expect(split.reasonCounts.not_in_audience).toBe(2);
   });
+
+  it("a service group narrows it further, and a tier still has to hold too", () => {
+    const book = [
+      client({ id: "had-gold", email: "g@example.com", loyaltyTier: "GOLD" }),
+      client({ id: "had-none", email: "n@example.com", loyaltyTier: null }),
+      client({ id: "not-had", email: "x@example.com", loyaltyTier: "GOLD" }),
+      // In the group, but the group never outranks the customer's own choice.
+      client({ id: "had-unsub", email: "u@example.com", emailOptedOut: true }),
+    ];
+    const group = new Set(["had-gold", "had-none", "had-unsub"]);
+    const any = splitAudience(book, "email", [], NONE, group);
+    expect(any.reachable.map((c) => c.id)).toEqual(["had-gold", "had-none"]);
+    expect(any.skipped.map((s) => [s.client.id, s.reason])).toEqual([
+      ["not-had", "not_in_audience"],
+      ["had-unsub", "unsubscribed"],
+    ]);
+    const gold = splitAudience(book, "email", ["GOLD"], NONE, group);
+    expect(gold.reachable.map((c) => c.id)).toEqual(["had-gold"]);
+    // An empty group is nobody, not everybody. (Null is "no service filter".)
+    expect(splitAudience(book, "email", [], NONE, new Set()).reachable).toHaveLength(0);
+    expect(splitAudience(book, "email", [], NONE, null).reachable).toHaveLength(3);
+  });
 });
 
 describe("who cannot be reached", () => {

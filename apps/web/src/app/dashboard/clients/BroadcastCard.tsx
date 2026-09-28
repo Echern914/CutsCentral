@@ -8,6 +8,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useVocab } from "@/components/VocabProvider";
 import { cn } from "@/lib/cn";
 import {
+  broadcastServiceOptionsAction,
   listBroadcastsAction,
   previewBroadcastAction,
   removeBroadcastAction,
@@ -16,6 +17,8 @@ import {
   type BroadcastPreview,
   type BroadcastRow,
   type LoyaltyTierKey,
+  type ServiceOption,
+  type SinceDays,
 } from "./broadcastActions";
 
 /**
@@ -67,6 +70,20 @@ const FALLBACK_LIMITS: Record<BroadcastChannel, { subject: number; body: number 
 
 const IN_FLIGHT = new Set(["QUEUED", "SENDING"]);
 
+/** How far back "had the service" looks. Upcoming bookings always count. */
+const WINDOWS: { value: SinceDays; label: string }[] = [
+  { value: null, label: "Any time" },
+  { value: 90, label: "Last 90 days" },
+  { value: 365, label: "Last 12 months" },
+];
+
+/** "Fade, Braids and 2 more" - for the confirm and the history line. */
+function listNames(names: string[]): string {
+  if (names.length <= 2) return names.join(" and ");
+  if (names.length === 3) return `${names[0]}, ${names[1]} and ${names[2]}`;
+  return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
+}
+
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
@@ -92,6 +109,13 @@ export function BroadcastCard({
   const [tiers, setTiers] = useState<LoyaltyTierKey[]>(rewardsEnabled ? (draft?.tiers ?? []) : []);
   const [subject, setSubject] = useState(draft?.subject ?? "");
   const [body, setBody] = useState(draft?.body ?? "");
+  // By service: an axis of its own, ANDed with the tiers. On with nothing
+  // picked is not "everyone" - it sends nothing until a service is picked.
+  const [byService, setByService] = useState(false);
+  const [serviceKeys, setServiceKeys] = useState<string[]>([]);
+  const [sinceDays, setSinceDays] = useState<SinceDays>(365);
+  const [serviceOptions, setServiceOptions] = useState<ServiceOption[] | null>(null);
+  const needsService = byService && serviceKeys.length === 0;
   const [preview, setPreview] = useState<BroadcastPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(draft !== null);
@@ -111,6 +135,10 @@ export function BroadcastCard({
   function editFrom(b: BroadcastRow) {
     setChannel(b.channel);
     setTiers(rewardsEnabled ? (b.audienceTiers ?? []) : []);
+    const keys = b.audienceServiceKeys ?? [];
+    setByService(keys.length > 0);
+    setServiceKeys(keys);
+    if (keys.length > 0) setSinceDays(b.audienceSinceDays ?? null);
     setSubject(b.subject ?? "");
     setBody(b.body);
     setOpen(true);
@@ -141,12 +169,35 @@ export function BroadcastCard({
 
   // The audience is re-counted whenever the question changes, so the number on
   // screen is always the answer to what is currently selected.
+  const services = byService ? { keys: serviceKeys, sinceDays } : undefined;
   const refresh = useCallback(async () => {
+    // Nothing picked yet: there is no group to count, and the API refuses it.
+    if (byService && serviceKeys.length === 0) {
+      setPreview(null);
+      return;
+    }
     setLoading(true);
-    const r = await previewBroadcastAction({ channel, tiers });
+    const r = await previewBroadcastAction({
+      channel,
+      tiers,
+      ...(byService ? { services: { keys: serviceKeys, sinceDays } } : {}),
+    });
     setPreview(r.ok ? (r.preview ?? null) : null);
     setLoading(false);
-  }, [channel, tiers]);
+  }, [channel, tiers, byService, serviceKeys, sinceDays]);
+
+  // The list, with each service's count for this window.
+  useEffect(() => {
+    if (!open || !byService) return;
+    let live = true;
+    setServiceOptions(null);
+    void broadcastServiceOptionsAction(sinceDays).then((r) => {
+      if (live) setServiceOptions(r.ok ? (r.options ?? []) : []);
+    });
+    return () => {
+      live = false;
+    };
+  }, [open, byService, sinceDays]);
 
   const refreshHistory = useCallback(async () => {
     const r = await listBroadcastsAction();
@@ -185,6 +236,16 @@ export function BroadcastCard({
     setTiers((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
   }
 
+  function toggleService(key: string) {
+    setServiceKeys((prev) => (prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]));
+  }
+
+  function everyone() {
+    setTiers([]);
+    setByService(false);
+    setServiceKeys([]);
+  }
+
   const reachable = preview?.reachable ?? 0;
   const blocked = preview?.blocker ?? null;
   const otherChannel: BroadcastChannel = channel === "email" ? "push" : "email";
@@ -200,13 +261,18 @@ export function BroadcastCard({
     !loading &&
     !blocked &&
     !tooLong &&
+    !needsService &&
     reachable > 0 &&
     subject.trim() !== "" &&
     body.trim() !== "";
 
   function send() {
-    const who =
-      tiers.length === 0
+    const pickedNames = (serviceOptions ?? [])
+      .filter((o) => serviceKeys.includes(o.key))
+      .map((o) => o.label);
+    const who = byService
+      ? `${reachable} ${tiers.length === 0 ? vocab.clientNounPlural : describeTierAudience(tiers)} who had ${listNames(pickedNames)}`
+      : tiers.length === 0
         ? `all ${reachable} of your ${vocab.clientNounPlural}`
         : `${reachable} ${describeTierAudience(tiers)}`;
     const how = channel === "email" ? "an email" : "an app notification";
@@ -214,7 +280,13 @@ export function BroadcastCard({
     // channel, because "are you sure?" on its own tells nobody anything.
     if (!window.confirm(`Send ${how} to ${who}? This can't be undone.`)) return;
     start(async () => {
-      const r = await sendBroadcastAction({ channel, tiers, subject: subject.trim(), body: body.trim() });
+      const r = await sendBroadcastAction({
+        channel,
+        tiers,
+        ...(services ? { services } : {}),
+        subject: subject.trim(),
+        body: body.trim(),
+      });
       if (!r.ok) {
         toast(r.error ?? "Couldn't send that.", "error");
         return;
@@ -302,11 +374,11 @@ export function BroadcastCard({
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             <button
               type="button"
-              onClick={() => setTiers([])}
-              aria-pressed={tiers.length === 0}
+              onClick={everyone}
+              aria-pressed={tiers.length === 0 && !byService}
               className={cn(
                 "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                tiers.length === 0
+                tiers.length === 0 && !byService
                   ? "bg-gold/20 text-gold"
                   : "border border-subtle text-muted hover:text-offwhite",
               )}
@@ -348,6 +420,75 @@ export function BroadcastCard({
               Sending by rewards tier (Gold, Silver or Bronze) needs rewards turned on.
             </p>
           )}
+
+          {/* BY SERVICE. Its own axis: with a tier picked too, a client has to
+              be both. Each service says how many had it, so a pick that
+              reaches three people looks like three people. */}
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={() => setByService((v) => !v)}
+              aria-pressed={byService}
+              className={cn(
+                "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                byService ? "bg-gold/20 text-gold" : "border border-subtle text-muted hover:text-offwhite",
+              )}
+            >
+              By service
+            </button>
+          </div>
+          {byService && (
+            <div className="mt-2 rounded-xl border border-subtle px-3 py-2.5">
+              <p className="text-xs text-muted">Who had</p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5" role="group" aria-label="Services">
+                {serviceOptions === null ? (
+                  <span className="text-xs text-muted">Loading your services…</span>
+                ) : serviceOptions.length === 0 ? (
+                  <span className="text-xs text-muted">No services yet.</span>
+                ) : (
+                  serviceOptions.map((o) => (
+                    <button
+                      key={o.key}
+                      type="button"
+                      onClick={() => toggleService(o.key)}
+                      aria-pressed={serviceKeys.includes(o.key)}
+                      className={cn(
+                        "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                        serviceKeys.includes(o.key)
+                          ? "bg-gold/20 text-gold"
+                          : "border border-subtle text-muted hover:text-offwhite",
+                      )}
+                    >
+                      {o.label}
+                      {o.source === "synced" && " (from Acuity)"} · {o.clients}
+                    </button>
+                  ))
+                )}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="When">
+                {WINDOWS.map((w) => (
+                  <button
+                    key={String(w.value)}
+                    type="button"
+                    onClick={() => setSinceDays(w.value)}
+                    aria-pressed={sinceDays === w.value}
+                    className={cn(
+                      "rounded-full px-2.5 py-0.5 text-xs transition-colors",
+                      sinceDays === w.value
+                        ? "bg-gold/20 text-gold"
+                        : "border border-subtle text-muted hover:text-offwhite",
+                    )}
+                  >
+                    {w.label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-xs text-muted">
+                Counts a finished visit in that time, or one they&apos;re booked in for.
+                No-shows and cancellations don&apos;t count.
+              </p>
+            </div>
+          )}
         </div>
 
         <input
@@ -388,7 +529,9 @@ export function BroadcastCard({
           {/* 🔴 ALWAYS THE NUMBERS AND THE REASONS, even at zero - a zero with
               no reason is exactly the screen that reads as "broken". A blocker
               is said on top of them, never instead of them. */}
-          {loading ? (
+          {needsService ? (
+            <p className="text-sm text-muted">Pick at least one service to see who gets this.</p>
+          ) : loading ? (
             <p className="text-sm text-muted">Counting…</p>
           ) : (
             <>
@@ -521,6 +664,8 @@ function BroadcastHistory({
                   {/* Who it was aimed at, so "Gold members · 42 sent" still says
                       a year later that the rest of the book never got it. */}
                   {(b.audienceTiers?.length ?? 0) > 0 && `${describeTierAudience(b.audienceTiers)} · `}
+                  {(b.audienceServiceLabels?.length ?? 0) > 0 &&
+                    `Had ${listNames(b.audienceServiceLabels!)} · `}
                   {describe(b, vocab)}
                 </p>
               </div>
