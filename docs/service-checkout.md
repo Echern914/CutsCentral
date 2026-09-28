@@ -277,6 +277,27 @@ charges" outcome and keeps the history.
 - **Narrower stop, no deploy:** remove the consent checkbox from the booking
   page and no NEW card becomes eligible, while existing ones keep working.
 
+### How a consent ends, and the receipt it promised
+
+The v1 wording promises two things this section owns:
+
+- **"You can remove this card at any time from your appointment link."** The
+  manage link shows "Stop letting the shop charge this card" whenever the card
+  carries a consent. It writes `CardOnFile.serviceChargeWithdrawnAt` (on every
+  row of a standing appointment), and `serviceChargeAuthorized` refuses a card
+  that has one. The consent columns are left exactly as they were. There is no
+  dashboard route, and nothing writes the withdrawal back to null
+  (`serviceChargeReceiptAndOptOut.test.ts` scans the source for both). The
+  card itself stays for no-show and late-cancellation fees, except after Done,
+  where it was kept only for the service charge and is let go at once.
+- **"You will get a receipt by email every time."** Every paid settlement of a
+  `saved_card` attempt - from the response, the webhook or the reconciler -
+  queues an `EmailIntent` of kind `service_charge_receipt`, keyed
+  `service_charge_receipt:<attemptId>`. The unique key makes it one per
+  attempt; the email outbox delivers it with the same claim, attempt budget
+  and Resend Idempotency-Key as the cancellation email. A customer with no
+  address on file is recorded as `FAILED no_address`, not silently skipped.
+
 ---
 
 ## Tap to Pay on iPhone — what is owed before it can ship
