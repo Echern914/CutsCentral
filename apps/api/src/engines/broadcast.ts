@@ -87,7 +87,8 @@ export type BroadcastBlocker =
   | { kind: "already_sending" }
   | { kind: "not_found" };
 
-const CLIENT_SELECT = {
+/** What the audience rule reads - also re-read at send time (broadcastWorker.ts). */
+export const CLIENT_SELECT = {
   id: true,
   email: true,
   emailOptedOut: true,
