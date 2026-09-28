@@ -685,6 +685,7 @@ model Shop {
   broadcasts             Broadcast[]
   broadcastSends         BroadcastSend[]
   emailQuotaPeriods      ShopEmailQuota[]
+  emailAddressSuppressions EmailAddressSuppression[]
   serviceGroups          ServiceGroup[]
   goals                  ShopGoal[]
   serviceGoals           ServiceGoal[]
@@ -4768,6 +4769,34 @@ model EmailWebhookEvent {
   createdAt DateTime @default(now())
 
   @@index([messageId])
+}
+
+// A MARKETING-EMAIL SUPPRESSION BOUND TO THE ADDRESS IT IS ABOUT (#514).
+//
+// Client.emailOptedOut / emailSuppressedAt sit on a RECORD, and a record's
+// address changes (a booking, a sync, an import). Kept only there, an old
+// bounce followed the record onto its new, working address, and an
+// unsubscribed address became mailable again on any other record once the
+// opted-out record moved on. This names the address instead, so whatever
+// record carries it - now or later - it is excluded from broadcasts.
+//
+// 🔴 NEVER CLEARED by an email change, a sync, an import or a merge. Written
+// and (one day) lifted only in services/emailSuppression.ts.
+// 🔴 NO ADDRESS: addressHash = sha256 hex of `${shopId}:${emailAddressKey(address)}`,
+// so honouring an opt-out never means keeping the address of a customer who
+// deleted their data. Appointment email reads none of this.
+model EmailAddressSuppression {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  addressHash String
+  // "unsubscribe" | "bounce" | "complaint" - CHECK-pinned in the migration.
+  kind        String
+  firstSeenAt DateTime @default(now())
+  // Where the fact came from ("unsubscribe_link", "provider_webhook", "square_sync", "backfill").
+  source      String
+
+  @@unique([shopId, addressHash, kind])
 }
 
 // DURABLE OUTBOX for the cancellation email.

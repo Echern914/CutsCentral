@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import type { SquareBooking, SquareCustomer } from "./types.js";
+import { suppressionAddressHash } from "../engines/broadcastAudience.js";
 
 /**
  * Square ingest: a Booking becomes a Visit through the same idempotent path as
@@ -206,5 +207,23 @@ describe("a Square email unsubscribe carries over - and is never undone", () => 
     expect((await byPhone(phone)).emailOptedOut).toBe(false);
     await ingestAs(customer("cust_later", phone, true), "bk_later_2");
     expect((await byPhone(phone)).emailOptedOut).toBe(true);
+  });
+
+  it("🔴 the address it was about stays unsubscribed after Square's customer moves to a new one (#514)", async () => {
+    const phone = "+13025551305";
+    const unsubscribed = customer("cust_moved", phone, true);
+    await ingestAs(unsubscribed, "bk_moved_1");
+    await ingestAs({ ...unsubscribed, email_address: "moved.on@example.com", preferences: null }, "bk_moved_2");
+
+    expect((await byPhone(phone)).email).toBe("moved.on@example.com");
+    const rows = await prisma.emailAddressSuppression.findMany({
+      where: { shopId },
+      select: { addressHash: true, kind: true, source: true },
+    });
+    expect(rows).toContainEqual({
+      addressHash: suppressionAddressHash(shopId, "cust_moved@example.com"),
+      kind: "unsubscribe",
+      source: "square_sync",
+    });
   });
 });

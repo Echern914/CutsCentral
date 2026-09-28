@@ -1,7 +1,8 @@
 import { Router } from "express";
-import { prisma } from "@chairback/db";
+import { runAsOwner } from "@chairback/db";
 import { logger } from "../logger.js";
 import { unsubscribeTokenDigest } from "../engines/unsubscribeToken.js";
+import { recordEmailSuppression } from "../services/emailSuppression.js";
 
 /**
  * ONE CLICK, AND THEY ARE OUT.
@@ -82,9 +83,28 @@ async function optOut(token: string): Promise<OptOutResult> {
     // Global digest lookup: an unsubscribe link resolves before any shop is
     // known, exactly as the rewards page does - but on a credential that can
     // do only this.
-    const { count } = await prisma.client.updateMany({
-      where: { unsubscribeTokenHash: unsubscribeTokenDigest(token), emailOptedOut: false },
-      data: { emailOptedOut: true, emailOptedOutAt: new Date() },
+    const count = await runAsOwner(async (tx) => {
+      const client = await tx.client.findUnique({
+        where: { unsubscribeTokenHash: unsubscribeTokenDigest(token) },
+        select: { id: true, shopId: true, email: true },
+      });
+      if (!client) return 0;
+      const { count } = await tx.client.updateMany({
+        where: { id: client.id, emailOptedOut: false },
+        data: { emailOptedOut: true, emailOptedOutAt: new Date() },
+      });
+      // 🔴 AND THE ADDRESS, in the same transaction (#514), so it stays
+      // unsubscribed whichever record carries it later. The token names the
+      // RECORD, not the address the email went to, so this is the record's
+      // current address - the one the worker mails, and re-checks, at send.
+      // Written even when the flag was already set: the address may be new.
+      await recordEmailSuppression(tx, {
+        shopId: client.shopId,
+        address: client.email,
+        kind: "unsubscribe",
+        source: "unsubscribe_link",
+      });
+      return count;
     });
     // Correlation only: never the token, never the address.
     if (count > 0) logger.info({ kind: "broadcast" }, "client unsubscribed from emails");

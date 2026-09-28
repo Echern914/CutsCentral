@@ -3,6 +3,7 @@ import { randomToken } from "@chairback/config";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { clawBackVisitEarn, earnPunchForVisitInTx } from "../services/punch.js";
+import { recordEmailSuppression } from "../services/emailSuppression.js";
 import { logger } from "../logger.js";
 import { getSquareClientForShop, type SquareClient } from "./client.js";
 import { resolveSquareStatus } from "./mapping.js";
@@ -155,6 +156,14 @@ export async function ingestSquareBooking(
       await tx.client.updateMany({
         where: { id: dbClient.id, emailOptedOut: false },
         data: { emailOptedOut: true, emailOptedOutAt: new Date() },
+      });
+      // And the address Square's flag is about, so it stays unsubscribed
+      // whichever record carries it later (#514).
+      await recordEmailSuppression(tx, {
+        shopId: shop.id,
+        address: contact.email,
+        kind: "unsubscribe",
+        source: "square_sync",
       });
     }
 

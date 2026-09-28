@@ -9,6 +9,7 @@ import {
   reserveBroadcastEmails,
 } from "../billing/quota.js";
 import { unsubscribeTokenFor } from "./unsubscribeToken.js";
+import { loadAddressSuppressions } from "../services/emailSuppression.js";
 import {
   splitAudience,
   type AudienceClient,
@@ -92,7 +93,6 @@ export const CLIENT_SELECT = {
   id: true,
   email: true,
   emailOptedOut: true,
-  emailSuppressedAt: true,
   emailMarketingConsentAt: true,
   loyaltyTier: true,
   archivedAt: true,
@@ -107,7 +107,6 @@ type ClientRow = {
   id: string;
   email: string | null;
   emailOptedOut: boolean;
-  emailSuppressedAt: Date | null;
   emailMarketingConsentAt: Date | null;
   loyaltyTier: LoyaltyTier | null;
   archivedAt: Date | null;
@@ -292,11 +291,12 @@ export async function previewBroadcast(params: {
   now?: Date;
 }): Promise<BroadcastPreview> {
   const now = params.now ?? new Date();
-  const [clients, shop] = await Promise.all([
+  const [clients, shop, suppressed] = await Promise.all([
     loadClients(params.shopId),
     loadBroadcastShop(params.shopId),
+    runWithShop(params.shopId, (tx) => loadAddressSuppressions(tx, params.shopId)),
   ]);
-  const split = splitAudience(clients, params.channel, params.tiers);
+  const split = splitAudience(clients, params.channel, params.tiers, suppressed);
   const skipped = (Object.entries(split.reasonCounts) as [SkipReason, number][])
     .filter(([, count]) => count > 0)
     .map(([reason, count]) => ({ reason, count }));
@@ -418,7 +418,8 @@ export async function queueBroadcast(params: {
 
         // 2. THE REAL AUDIENCE, now, under the lock.
         const clients = await loadClientsInTx(tx, params.shopId);
-        const split = splitAudience(clients, broadcast.channel, broadcast.audienceTiers);
+        const suppressed = await loadAddressSuppressions(tx, params.shopId);
+        const split = splitAudience(clients, broadcast.channel, broadcast.audienceTiers, suppressed);
 
         if (broadcast.channel === "email") {
           if (!emailEnabled()) throw new Refused({ kind: "email_not_configured" });

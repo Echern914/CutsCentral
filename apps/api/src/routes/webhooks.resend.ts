@@ -85,13 +85,19 @@ resendWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
 
   let event: string | undefined;
   let messageId: string | undefined;
+  let recipient: string | undefined;
   try {
     const parsed = JSON.parse(raw.toString("utf8")) as {
       type?: unknown;
-      data?: { email_id?: unknown };
+      data?: { email_id?: unknown; to?: unknown };
     };
     if (typeof parsed.type === "string") event = parsed.type;
     if (typeof parsed.data?.email_id === "string") messageId = parsed.data.email_id;
+    // The address the message went to, so a bounce or a complaint is bound to
+    // the mailbox that refused it (#514). Only when it is unambiguous - every
+    // ChairBack email has exactly one recipient. Used, never logged or stored.
+    const to = parsed.data?.to;
+    if (Array.isArray(to) && to.length === 1 && typeof to[0] === "string") recipient = to[0];
   } catch {
     // Malformed body from a correctly-signed sender: ack so it is not retried
     // forever, and say so with a fixed classification.
@@ -113,6 +119,7 @@ resendWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
     messageId,
     event,
     svixId: req.header("svix-id"),
+    recipient,
   });
   // Event name and outcome only - never the payload, which carries the
   // recipient address and the rendered subject.

@@ -6,6 +6,7 @@ import { createApp } from "../app.js";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 import { runBroadcastWorker } from "../engines/broadcastWorker.js";
 import { unsubscribeTokenFor } from "../engines/unsubscribeToken.js";
+import { suppressionAddressHash } from "../engines/broadcastAudience.js";
 
 /**
  * SENDING ONE MESSAGE TO MANY CLIENTS, END TO END.
@@ -48,13 +49,26 @@ async function makeClient(over: {
   permitted?: boolean;
   shop?: string;
 }) {
+  const email = over.email === undefined ? `c${randomToken(6)}@example.com` : over.email;
+  if (over.suppressed) {
+    // What a real bounce leaves behind: the mailbox itself, bound to its
+    // address (#514) - the record's own flag is only for the owner's screens.
+    await prisma.emailAddressSuppression.create({
+      data: {
+        shopId: over.shop ?? shopId,
+        addressHash: suppressionAddressHash(over.shop ?? shopId, email)!,
+        kind: "bounce",
+        source: "provider_webhook",
+      },
+    });
+  }
   return prisma.client.create({
     data: {
       shopId: over.shop ?? shopId,
       acuityClientKey: `tel:+1${Math.floor(Math.random() * 9_000_000_000 + 1_000_000_000)}`,
       magicToken: randomToken(),
       firstName: "Client",
-      email: over.email === undefined ? `c${randomToken(6)}@example.com` : over.email,
+      email,
       emailOptedOut: over.emailOptedOut ?? false,
       emailMarketingConsentAt: over.permitted === false ? null : new Date("2026-01-01T00:00:00Z"),
       optedOut: over.optedOut ?? false,
@@ -99,6 +113,7 @@ beforeEach(async () => {
   outbox = [];
   await prisma.broadcast.deleteMany({ where: { shopId } });
   await prisma.client.deleteMany({ where: { shopId } });
+  await prisma.emailAddressSuppression.deleteMany({ where: { shopId } });
   await prisma.shop.updateMany({
     where: { id: shopId },
     data: {
@@ -581,8 +596,10 @@ describe("🔴 unsubscribe", () => {
     // domain every other shop depends on, far more than one honest sentence.
     const { clientId, url } = await mailOneAndGetUnsubscribeUrl();
     const path = new URL(url).pathname;
-    const original = prisma.client.updateMany;
-    (prisma.client as unknown as { updateMany: unknown }).updateMany = async () => {
+    // The flag and the address it binds (#514) are written in ONE transaction,
+    // so that is what fails here.
+    const original = prisma.$transaction;
+    (prisma as unknown as { $transaction: unknown }).$transaction = async () => {
       throw new Error("database is on fire");
     };
     try {
@@ -608,7 +625,7 @@ describe("🔴 unsubscribe", () => {
       expect(stranger.status).toBe(get.status);
       expect(stranger.text).toBe(get.text);
     } finally {
-      (prisma.client as unknown as { updateMany: unknown }).updateMany = original;
+      (prisma as unknown as { $transaction: unknown }).$transaction = original;
     }
 
     // And the flag really is still false - the page was telling the truth.

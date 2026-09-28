@@ -1,6 +1,7 @@
 import { Prisma, runAsOwner } from "@chairback/db";
 import { logger } from "../logger.js";
 import type { SendEmailInput } from "../messaging/email.js";
+import { recordEmailSuppression } from "./emailSuppression.js";
 
 /**
  * What actually happened to a transactional email.
@@ -95,26 +96,51 @@ const SUPPRESSING = new Set(["bounced", "complained", "failed"]);
  *
  * First writer wins - the `null` guard keeps the ORIGINAL reason, because the
  * first terminal event is the one that explains what happened.
+ *
+ * 🔴 AND IT IS BOUND TO THE ADDRESS THAT REFUSED US (#514). The flag above
+ * sits on the record, whose address can change; the broadcast split reads the
+ * bounce from EmailAddressSuppression instead, keyed by the address the
+ * message was sent to - the provider's own recipient when the event carries
+ * it, else the record's address now, which is the one it was sent to unless it
+ * changed in the seconds since. Written here whatever the flag already said:
+ * an earlier bounce may have been at an earlier address.
  */
 async function suppressClientEmail(
   tx: Prisma.TransactionClient,
   clientId: string,
   reason: string,
   now: Date,
+  recipient?: string | null,
 ): Promise<void> {
   await tx.client.updateMany({
     where: { id: clientId, emailSuppressedAt: null },
     data: { emailSuppressedAt: now, emailSuppressionReason: reason },
   });
+  const client = await tx.client.findUnique({
+    where: { id: clientId },
+    select: { shopId: true, email: true },
+  });
+  if (!client) return;
+  await recordEmailSuppression(tx, {
+    shopId: client.shopId,
+    address: recipient ?? client.email,
+    kind: reason === "complaint" ? "complaint" : "bounce",
+    source: "provider_webhook",
+  });
 }
 
-/** Who a dispatched message was for. Ids only - never an address or a subject. */
+/** Who a dispatched message was for. What is STORED is ids only - never an address or a subject. */
 export interface DispatchMeta {
   messageId: string;
   kind: string;
   shopId?: string | null;
   appointmentId?: string | null;
   clientId?: string | null;
+  /**
+   * The address it went to. NOT STORED: read once, to bind a bounce that beat
+   * this write to the address that bounced (see suppressClientEmail).
+   */
+  recipient?: string | null;
 }
 
 /**
@@ -171,7 +197,7 @@ export async function recordDispatchInTx(
   // ever.
   const clientId = meta.clientId ?? row.clientId;
   if (clientId && SUPPRESSING.has(row.status)) {
-    await suppressClientEmail(tx, clientId, row.failureClass ?? row.status, now);
+    await suppressClientEmail(tx, clientId, row.failureClass ?? row.status, now, meta.recipient);
   }
 }
 
@@ -196,6 +222,7 @@ export function recordEmailSent(messageId: string, input: SendEmailInput): void 
         shopId: input.meta?.shopId ?? null,
         appointmentId: input.meta?.appointmentId ?? null,
         clientId: input.meta?.clientId ?? null,
+        recipient: input.to,
       }),
     );
   })().catch(() => {});
@@ -268,7 +295,14 @@ async function lockDelivery(
  */
 export async function applyEventInTx(
   tx: Prisma.TransactionClient,
-  params: { messageId: string; event: string; svixId?: string; now?: Date },
+  params: {
+    messageId: string;
+    event: string;
+    svixId?: string;
+    now?: Date;
+    /** The provider-reported recipient, when the event carries one. Not stored. */
+    recipient?: string | null;
+  },
 ): Promise<ApplyOutcome> {
   const mapped = EVENT_STATUS[params.event];
   if (!mapped) return "ignored";
@@ -334,7 +368,13 @@ export async function applyEventInTx(
   // 4. STOP MAILING AN ADDRESS THAT REFUSED US - in the SAME transaction, so
   // the suppression cannot be lost by a crash that keeps the event marker.
   if (patch && SUPPRESSING.has(patch.status) && row.clientId) {
-    await suppressClientEmail(tx, row.clientId, patch.failureClass ?? patch.status, now);
+    await suppressClientEmail(
+      tx,
+      row.clientId,
+      patch.failureClass ?? patch.status,
+      now,
+      params.recipient,
+    );
   }
   return created ? "created" : patch ? "applied" : "ignored";
 }
@@ -349,6 +389,7 @@ export async function applyEmailEvent(params: {
   event: string;
   svixId?: string;
   now?: Date;
+  recipient?: string | null;
 }): Promise<ApplyOutcome> {
   try {
     return await runAsOwner((tx) => applyEventInTx(tx, params));

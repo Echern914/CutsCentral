@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { splitAudience, SKIP_REASON_LABEL, type AudienceClient } from "./broadcastAudience.js";
+import {
+  suppressionAddressHash,
+  splitAudience,
+  SKIP_REASON_LABEL,
+  type AddressSuppressions,
+  type AudienceClient,
+} from "./broadcastAudience.js";
 
 /**
  * Who a blast reaches, and who it misses and why.
@@ -13,7 +19,6 @@ function client(over: Partial<AudienceClient> = {}): AudienceClient {
     id: "c1",
     email: "a@example.com",
     emailOptedOut: false,
-    emailSuppressedAt: null,
     // Permitted by default, so each case below tests one other rule; the
     // permission rule has its own describe.
     emailMarketingConsentAt: new Date("2026-01-01T00:00:00Z"),
@@ -24,12 +29,22 @@ function client(over: Partial<AudienceClient> = {}): AudienceClient {
   };
 }
 
+const SHOP = "shop-1";
+/** No address-bound suppressions (EmailAddressSuppression) at all. */
+const NONE: AddressSuppressions = { shopId: SHOP, unsubscribed: new Set(), undeliverable: new Set() };
+/** The shop's table holding these addresses, hashed exactly as it stores them. */
+function suppressed(over: { unsubscribed?: string[]; undeliverable?: string[] }): AddressSuppressions {
+  const hashes = (addresses: string[] = []) => new Set(addresses.map((a) => suppressionAddressHash(SHOP, a)!));
+  return { shopId: SHOP, unsubscribed: hashes(over.unsubscribed), undeliverable: hashes(over.undeliverable) };
+}
+
 describe("picking the group", () => {
   it("no tiers means everybody reachable", () => {
     const split = splitAudience(
       [client({ id: "a", loyaltyTier: "BRONZE" }), client({ id: "b", loyaltyTier: null })],
       "email",
       [],
+      NONE,
     );
     expect(split.reachable.map((c) => c.id)).toEqual(["a", "b"]);
   });
@@ -43,6 +58,7 @@ describe("picking the group", () => {
       ],
       "email",
       ["GOLD"],
+      NONE,
     );
     expect(split.reachable.map((c) => c.id)).toEqual(["gold"]);
     expect(split.reasonCounts.not_in_audience).toBe(2);
@@ -51,13 +67,13 @@ describe("picking the group", () => {
 
 describe("who cannot be reached", () => {
   it("email needs an address, and says so when there isn't one", () => {
-    const split = splitAudience([client({ email: null }), client({ email: "  " })], "email", []);
+    const split = splitAudience([client({ email: null }), client({ email: "  " })], "email", [], NONE);
     expect(split.reachable).toHaveLength(0);
     expect(split.reasonCounts.no_email).toBe(2);
   });
 
   it("🔴 an unsubscribed client is never emailed again", () => {
-    const split = splitAudience([client({ emailOptedOut: true })], "email", []);
+    const split = splitAudience([client({ emailOptedOut: true })], "email", [], NONE);
     expect(split.reachable).toHaveLength(0);
     expect(split.reasonCounts.unsubscribed).toBe(1);
   });
@@ -65,22 +81,22 @@ describe("who cannot be reached", () => {
   it("🔴 an unsubscribe with no address left is still the unsubscribe", () => {
     // The bell shows a no_email row and never an unsubscribed one, so the
     // customer's choice has to win the label.
-    const split = splitAudience([client({ emailOptedOut: true, email: null })], "email", []);
+    const split = splitAudience([client({ emailOptedOut: true, email: null })], "email", [], NONE);
     expect(split.reachable).toHaveLength(0);
     expect(split.reasonCounts.unsubscribed).toBe(1);
     expect(split.reasonCounts.no_email).toBe(0);
   });
 
   it("push needs a device - nobody can be notified without the app", () => {
-    const split = splitAudience([client({ pushDevices: 0 })], "push", []);
+    const split = splitAudience([client({ pushDevices: 0 })], "push", [], NONE);
     expect(split.reachable).toHaveLength(0);
     expect(split.reasonCounts.no_app).toBe(1);
   });
 
   it("an archived client is excluded on every channel", () => {
     const archived = client({ archivedAt: new Date() });
-    expect(splitAudience([archived], "email", []).reachable).toHaveLength(0);
-    expect(splitAudience([archived], "push", []).reachable).toHaveLength(0);
+    expect(splitAudience([archived], "email", [], NONE).reachable).toHaveLength(0);
+    expect(splitAudience([archived], "push", [], NONE).reachable).toHaveLength(0);
   });
 });
 
@@ -91,12 +107,12 @@ describe("🔴 the two opt-outs are different things", () => {
     // broadcast. Conflating them would cut a client off from a channel they
     // never opted out of, and shrink every shop's list for an invisible reason.
     // The type carries no SMS opt-out at all, which is how that stays true.
-    const reachable = splitAudience([client()], "email", []).reachable;
+    const reachable = splitAudience([client()], "email", [], NONE).reachable;
     expect(reachable).toHaveLength(1);
   });
 
   it("an email unsubscribe does NOT silence push", () => {
-    const split = splitAudience([client({ emailOptedOut: true })], "push", []);
+    const split = splitAudience([client({ emailOptedOut: true })], "push", [], NONE);
     expect(split.reachable).toHaveLength(1);
   });
 });
@@ -119,7 +135,7 @@ describe("what the barber is told", () => {
       client({ id: "4", email: "four@example.com", archivedAt: new Date() }),
       client({ id: "5", email: "five@example.com", loyaltyTier: "BRONZE" }),
     ];
-    const split = splitAudience(clients, "email", ["GOLD"]);
+    const split = splitAudience(clients, "email", ["GOLD"], NONE);
     const skipped = Object.values(split.reasonCounts).reduce((a, b) => a + b, 0);
     expect(split.reachable.map((c) => c.id)).toEqual(["1"]);
     expect(split.reachable.length + skipped).toBe(clients.length);
@@ -137,7 +153,7 @@ describe("an unsubscribe belongs to the address, not to one record", () => {
   ];
 
   it("an address unsubscribed on ANY record - even an archived one - is out everywhere", () => {
-    const split = splitAudience(book(), "email", []);
+    const split = splitAudience(book(), "email", [], NONE);
     expect(split.reachable.map((c) => c.id)).toEqual(["someone-else"]);
     expect(split.reasonCounts.unsubscribed).toBe(2);
     expect(split.reasonCounts.archived).toBe(1);
@@ -145,9 +161,10 @@ describe("an unsubscribe belongs to the address, not to one record", () => {
 
   it("a provider refusal travels with the address too, and stays its own reason", () => {
     const split = splitAudience(
-      book({ emailOptedOut: false, emailSuppressedAt: new Date() }),
+      book({ emailOptedOut: false }),
       "email",
       [],
+      suppressed({ undeliverable: ["pat@example.com"] }),
     );
     expect(split.reachable.map((c) => c.id)).toEqual(["someone-else"]);
     expect(split.reasonCounts.undeliverable).toBe(2);
@@ -162,13 +179,59 @@ describe("an unsubscribe belongs to the address, not to one record", () => {
       ],
       "email",
       [],
+      NONE,
     );
     expect(split.reachable.map((c) => c.id)).toEqual(["b"]);
   });
 
   it("does not touch push: an email choice is not an app choice", () => {
-    const split = splitAudience(book(), "push", []);
+    const split = splitAudience(book(), "push", [], NONE);
     expect(split.reachable.map((c) => c.id).sort()).toEqual(["imported", "resynced", "someone-else"]);
+  });
+});
+
+describe("🔴 a suppression is bound to the address it was about (#514)", () => {
+  it("an address in the table is out on every record carrying it, whatever its case or padding", () => {
+    // Nobody here is flagged: the record that unsubscribed moved to another
+    // address, or was blanked. The address it was about stays out.
+    const split = splitAudience(
+      [
+        client({ id: "resynced", email: "pat@example.com" }),
+        client({ id: "imported", email: "  PAT@Example.com " }),
+        client({ id: "someone-else", email: "sam@example.com" }),
+      ],
+      "email",
+      [],
+      suppressed({ unsubscribed: ["pat@example.com"] }),
+    );
+    expect(split.reachable.map((c) => c.id)).toEqual(["someone-else"]);
+    expect(split.reasonCounts.unsubscribed).toBe(2);
+  });
+
+  it("🔴 a bounce stays with the mailbox that bounced, not the record that moved on", () => {
+    const table = suppressed({ undeliverable: ["old.typo@example.com"] });
+    const split = splitAudience(
+      [
+        client({ id: "moved-on", email: "fixed@example.com" }),
+        client({ id: "still-there", email: "Old.Typo@example.com" }),
+      ],
+      "email",
+      [],
+      table,
+    );
+    expect(split.reachable.map((c) => c.id)).toEqual(["moved-on"]);
+    expect(split.skipped.map((s) => [s.client.id, s.reason])).toEqual([["still-there", "undeliverable"]]);
+  });
+
+  it("an unsubscribe also stays on the person's own record, at any address", () => {
+    const split = splitAudience([client({ emailOptedOut: true, email: "new@example.com" })], "email", [], NONE);
+    expect(split.skipped.map((s) => s.reason)).toEqual(["unsubscribed"]);
+  });
+
+  it("is shop-scoped: one shop's hash of an address never matches in another shop", () => {
+    const otherShop: AddressSuppressions = { ...suppressed({ unsubscribed: ["pat@example.com"] }), shopId: "shop-2" };
+    const split = splitAudience([client({ email: "pat@example.com" })], "email", [], otherShop);
+    expect(split.reachable).toHaveLength(1);
   });
 });
 
@@ -181,6 +244,7 @@ describe("marketing email needs a recorded yes", () => {
       ],
       "email",
       [],
+      NONE,
     );
     expect(split.reachable.map((c) => c.id)).toEqual(["said-yes"]);
     expect(split.skipped.map((s) => [s.client.id, s.reason])).toEqual([["address-only", "not_permitted"]]);
@@ -189,12 +253,12 @@ describe("marketing email needs a recorded yes", () => {
   });
 
   it("an unsubscribe still wins over an earlier yes", () => {
-    const split = splitAudience([client({ id: "left", emailOptedOut: true })], "email", []);
+    const split = splitAudience([client({ id: "left", emailOptedOut: true })], "email", [], NONE);
     expect(split.skipped.map((s) => s.reason)).toEqual(["unsubscribed"]);
   });
 
   it("does not touch push", () => {
-    const split = splitAudience([client({ id: "app", emailMarketingConsentAt: null })], "push", []);
+    const split = splitAudience([client({ id: "app", emailMarketingConsentAt: null })], "push", [], NONE);
     expect(split.reachable.map((c) => c.id)).toEqual(["app"]);
   });
 

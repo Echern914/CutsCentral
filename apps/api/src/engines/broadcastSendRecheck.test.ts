@@ -68,6 +68,7 @@ beforeEach(async () => {
   await prisma.client.deleteMany({ where: { shopId } });
   await prisma.shopEmailQuota.deleteMany({ where: { shopId } });
   await prisma.emailDelivery.deleteMany({ where: { shopId } });
+  await prisma.emailAddressSuppression.deleteMany({ where: { shopId } });
 });
 
 async function makeClient(over: { email?: string; archived?: boolean } = {}) {
