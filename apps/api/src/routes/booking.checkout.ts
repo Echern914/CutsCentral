@@ -236,6 +236,7 @@ async function loadCheckout(
           serviceChargeConsentVersion: true,
           serviceChargeConsentAt: true,
           serviceChargeConsentScope: true,
+          serviceChargeWithdrawnAt: true,
         },
       }),
     ),

@@ -62,6 +62,8 @@ type Choice =
 /** Why a saved card is unavailable, in words a barber can act on. */
 const BLOCKER_COPY: Record<string, string> = {
   no_card: "No card saved for this booking",
+  // They agreed, then stopped it from their appointment link.
+  consent_withdrawn: "The customer stopped charges to this card",
   card_not_saved: "The saved card is not usable right now",
   // The distinction the whole consent split exists for.
   no_service_consent: "This card was only approved for no-show fees",
@@ -725,6 +727,8 @@ function errorCopy(
       return "Tap to Pay isn't turned on for this shop.";
     case "connect_required":
       return "Connect a payout account before taking card payments.";
+    case "consent_withdrawn":
+      return "The customer stopped charges to this card. Take payment another way.";
     case "tap_to_pay_canceled":
       // Deliberately not "nothing was charged": the card may have been read a
       // moment before the barber backed out, and only the server knows.

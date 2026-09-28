@@ -41,6 +41,8 @@ export interface CheckoutCardFacts {
   serviceChargeConsentVersion: string | null;
   serviceChargeConsentAt: Date | null;
   serviceChargeConsentScope: string | null;
+  /** Set when the customer withdrew the permission from their appointment link. */
+  serviceChargeWithdrawnAt: Date | null;
 }
 
 export interface ServiceCheckoutInput {
@@ -77,6 +79,8 @@ export type SavedCardBlocker =
   | "no_card"
   | "card_not_saved"
   | "no_service_consent"
+  /** The customer took the permission back from their appointment link. */
+  | "consent_withdrawn"
   | "consent_not_for_this_appointment"
   /** The 72-hour post-service window has closed. */
   | "retention_expired"
@@ -165,6 +169,10 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
     // The fee-only case, and the one that matters most: this customer agreed to
     // a no-show fee and nothing else.
     blocker = "no_service_consent";
+  } else if (card.serviceChargeWithdrawnAt) {
+    // They agreed, then said stop. Told apart from "never agreed" so the barber
+    // knows it was the customer's own choice, not a missing tick.
+    blocker = "consent_withdrawn";
   } else if (
     !serviceChargeAuthorized(card, {
       appointmentId: input.appointmentId,

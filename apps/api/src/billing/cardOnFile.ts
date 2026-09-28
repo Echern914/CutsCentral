@@ -352,6 +352,7 @@ export async function fanOutSeriesCard(params: {
         serviceChargeConsentVersion: true,
         serviceChargeConsentAt: true,
         serviceChargeConsentScope: true,
+        serviceChargeWithdrawnAt: true,
       },
     }),
   );
@@ -421,6 +422,8 @@ export async function fanOutSeriesCard(params: {
                   serviceChargeConsentVersion: anchor.serviceChargeConsentVersion,
                   serviceChargeConsentAt: anchor.serviceChargeConsentAt,
                   serviceChargeConsentScope: "series",
+                  // A withdrawal travels with the consent it ends.
+                  serviceChargeWithdrawnAt: anchor.serviceChargeWithdrawnAt,
                 }
               : {}),
           },
@@ -443,6 +446,115 @@ export async function fanOutSeriesCard(params: {
     );
   }
   return made;
+}
+
+/**
+ * The card rows a customer's service-charge permission lives on, seen from one
+ * appointment: its own row and, for a standing appointment, every row in the
+ * series (the anchor holds the card; series-scope occurrences carry copies).
+ */
+function serviceConsentRowsWhere(appointmentId: string, seriesId: string | null) {
+  return seriesId
+    ? {
+        OR: [
+          { appointmentId },
+          { seriesId },
+          { appointment: { seriesId } },
+        ],
+      }
+    : { appointmentId };
+}
+
+/**
+ * What the appointment link shows about the service-charge permission: the
+ * card it applies to and whether it is still on. Null when the customer never
+ * gave one, so the page offers nothing to stop.
+ */
+export async function serviceChargeConsentFor(params: {
+  shopId: string;
+  appointmentId: string;
+  seriesId: string | null;
+}): Promise<{ brand: string | null; last4: string | null; withdrawnAt: Date | null } | null> {
+  const rows = await runWithShop(params.shopId, (tx) =>
+    tx.cardOnFile.findMany({
+      where: {
+        ...serviceConsentRowsWhere(params.appointmentId, params.seriesId),
+        serviceChargeConsentAt: { not: null },
+      },
+      select: { appointmentId: true, brand: true, last4: true, serviceChargeWithdrawnAt: true },
+    }),
+  );
+  if (rows.length === 0) return null;
+  // This appointment's own row first; otherwise the series' card.
+  const row = rows.find((r) => r.appointmentId === params.appointmentId) ?? rows[0]!;
+  // Withdrawn means withdrawn everywhere it was given - a row still on keeps
+  // the whole answer "on", so the customer is never told it is off while any
+  // part of it is not.
+  const stillOn = rows.some((r) => r.serviceChargeWithdrawnAt === null);
+  return {
+    brand: row.brand,
+    last4: row.last4,
+    withdrawnAt: stillOn ? null : row.serviceChargeWithdrawnAt,
+  };
+}
+
+/**
+ * THE CUSTOMER TAKES BACK PERMISSION TO CHARGE THEIR SAVED CARD FOR THE SERVICE.
+ *
+ * The v1 consent promises "you can remove this card at any time from your
+ * appointment link", and this is that promise kept. Reachable ONLY from the
+ * customer's own manage link: there is no dashboard route, and nothing
+ * anywhere writes this column back to null, so a barber can neither withdraw it
+ * on the customer's behalf nor restore it afterwards.
+ *
+ * 🔴 THE CONSENT COLUMNS ARE NOT TOUCHED. Version, timestamp and scope are the
+ * customer's own record of what they agreed to and when; a charge already
+ * taken rests on them. The withdrawal is a separate timestamp that
+ * `serviceChargeAuthorized` refuses, so the history survives and the
+ * permission ends.
+ *
+ * The card itself stays saved for what the booking required it for (no-show
+ * and late-cancellation fees, where the shop has them on). The exception is an
+ * appointment already marked done: there the card was kept ONLY so the service
+ * could be charged, so with that permission gone it is let go now.
+ *
+ * Idempotent: a second press finds nothing left to withdraw.
+ */
+export async function withdrawServiceChargeConsent(params: {
+  shopId: string;
+  appointmentId: string;
+  now?: Date;
+}): Promise<{ withdrawn: number }> {
+  const now = params.now ?? new Date();
+  const appt = await runWithShop(params.shopId, (tx) =>
+    tx.appointment.findFirst({
+      where: { id: params.appointmentId, shopId: params.shopId },
+      select: { id: true, seriesId: true, status: true },
+    }),
+  );
+  if (!appt) return { withdrawn: 0 };
+  const { count } = await runWithShop(params.shopId, (tx) =>
+    tx.cardOnFile.updateMany({
+      where: {
+        ...serviceConsentRowsWhere(appt.id, appt.seriesId),
+        serviceChargeConsentAt: { not: null },
+        serviceChargeWithdrawnAt: null,
+      },
+      data: { serviceChargeWithdrawnAt: now },
+    }),
+  );
+  logger.info(
+    { shopId: params.shopId, appointmentId: appt.id, withdrawn: count },
+    "card on file: the customer withdrew service-charge permission",
+  );
+  if (count > 0 && appt.status === "COMPLETED") {
+    await releaseCardOnFile({
+      shopId: params.shopId,
+      appointmentId: appt.id,
+      reason: "service_consent_withdrawn",
+    });
+  }
+  return { withdrawn: count };
 }
 
 /**
@@ -813,6 +925,7 @@ async function retainedForServiceCheckout(
         serviceChargeConsentVersion: true,
         serviceChargeConsentAt: true,
         serviceChargeConsentScope: true,
+        serviceChargeWithdrawnAt: true,
       },
     }),
   );

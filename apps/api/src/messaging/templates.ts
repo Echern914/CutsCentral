@@ -1149,6 +1149,59 @@ export function buildWalkInRemovedBody(params: { shopName: string }): string {
 }
 
 /**
+ * The receipt for a saved card charged for the SERVICE itself, after the cut.
+ *
+ * The v1 service-charge consent promises "You will get a receipt by email every
+ * time", so this goes out for every such charge and says the four things a
+ * receipt must: how much, to which card, for what, and when. It also repeats
+ * the other promise the customer was made - that they can stop the shop
+ * charging this card from their appointment link - because a receipt is the
+ * moment somebody who has changed their mind is looking.
+ */
+export function buildServiceChargeReceiptEmail(params: {
+  firstName: string | null;
+  shopName: string;
+  serviceName: string;
+  startsAt: Date;
+  timezone: string;
+  cents: number;
+  brand: string | null;
+  last4: string | null;
+  chargedAt: Date;
+  /** A short, display-safe reference the shop can find the payment by. */
+  reference: string;
+  manageToken: string;
+}): EmailCopy {
+  const when = formatApptTime(params.startsAt, params.timezone);
+  const chargedWhen = formatApptTime(params.chargedAt, params.timezone);
+  const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
+  const who = params.firstName ?? "there";
+  const dollars = `$${(params.cents / 100).toFixed(2)}`;
+  const card = params.last4
+    ? `your ${params.brand ? `${params.brand} ` : ""}card ending ${params.last4}`
+    : "the card you saved";
+  const what = `your ${params.serviceName} at ${params.shopName} on ${when}`;
+  return {
+    subject: `Receipt: ${dollars} paid to ${params.shopName}`,
+    text:
+      `Hi ${who}, ${dollars} was charged to ${card} on ${chargedWhen} for ${what}.\n\n` +
+      `You agreed to this when you booked. Reference: ${params.reference}.\n\n` +
+      `Questions? Contact ${params.shopName} directly. You can stop ${params.shopName} charging this card from your appointment link: ${manageUrl}`,
+    html: appointmentEmailHtml({
+      heading: `Receipt: ${dollars} paid`,
+      intro:
+        `Hi ${who}, ${dollars} was charged to ${card} on ${chargedWhen} for ${what}. ` +
+        `You agreed to this when you booked. Reference: ${params.reference}. ` +
+        `You can stop ${params.shopName} charging this card from your appointment link.`,
+      shopName: params.shopName,
+      serviceName: params.serviceName,
+      when,
+      manageUrl,
+    }),
+  };
+}
+
+/**
  * "Your card was charged" - the one message a customer must hear from us and
  * not from their bank statement. Sent only after an off-session charge to a
  * card on file SUCCEEDED (a decline goes to the barber instead). Says the

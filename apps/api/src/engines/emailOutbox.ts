@@ -7,6 +7,10 @@ import {
   deliverGroupConfirmationIntent,
   isGroupConfirmationKind,
 } from "./appointmentGroupSettle.js";
+import {
+  deliverServiceChargeReceiptIntent,
+  isServiceChargeReceiptKind,
+} from "../services/serviceChargeReceipt.js";
 
 /**
  * The email outbox worker: drains PENDING EmailIntent rows.
@@ -106,9 +110,11 @@ export async function runEmailOutbox(
     // getting a delivery path of its own.
     const deliver = isGroupConfirmationKind(row.kind)
       ? deliverGroupConfirmationIntent
-      : isAffiliateEmailKind(row.kind)
-        ? deliverAffiliateIntent
-        : deliverCancellationIntent;
+      : isServiceChargeReceiptKind(row.kind)
+        ? deliverServiceChargeReceiptIntent
+        : isAffiliateEmailKind(row.kind)
+          ? deliverAffiliateIntent
+          : deliverCancellationIntent;
     const outcome = await deliver({
       intentId: row.id,
       claimToken,

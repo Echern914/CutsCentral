@@ -21,6 +21,23 @@ export async function cancelBookingAction(
 }
 
 /**
+ * Stop the shop charging the saved card for the service (customer-initiated,
+ * no login). One-way on purpose: nothing - not the customer, not the shop -
+ * can switch it back on.
+ */
+export async function stopServiceChargesAction(
+  token: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiPublicSend(
+    "POST",
+    `/api/book/manage/${encodeURIComponent(token)}/stop-service-charges`,
+    {},
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true };
+}
+
+/**
  * "On my way" check-in (customer-initiated, no login). One-way: the API only
  * ever writes 'en_route'; re-posting refreshes the optional ETA chips.
  */
