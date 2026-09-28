@@ -59,7 +59,9 @@ export function importedAfterItEnded(visit: {
  * Disconnecting in ChairBack deletes the connection row. A seller who revokes
  * ChairBack from inside Square instead leaves the row with `revokedAt` set, and
  * the webhook receiver and the resync both skip it from then on - so a revoked
- * connection is no connection.
+ * connection is no connection. The Acuity twin is `authFailedAt`: Acuity
+ * refusing our login leaves the row in place, but every lookup a webhook or
+ * the resync makes is refused, so a cancellation there never arrives either.
  */
 export async function visitsWithoutLiveSource(
   visits: Array<{ id: string; shopId: string; acuityAppointmentId: string }>,
@@ -70,7 +72,10 @@ export async function visitsWithoutLiveSource(
   if (synced.length === 0) return new Set();
   const shopIds = [...new Set(synced.map((v) => v.shopId))];
   const [acuity, square] = await Promise.all([
-    prisma.acuityConnection.findMany({ where: { shopId: { in: shopIds } }, select: { shopId: true } }),
+    prisma.acuityConnection.findMany({
+      where: { shopId: { in: shopIds }, authFailedAt: null },
+      select: { shopId: true },
+    }),
     prisma.squareConnection.findMany({
       where: { shopId: { in: shopIds }, revokedAt: null },
       select: { shopId: true },

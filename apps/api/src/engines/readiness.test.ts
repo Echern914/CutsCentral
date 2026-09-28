@@ -113,6 +113,7 @@ function ready(over: Partial<ReadinessFacts> = {}): ReadinessFacts {
     // A shop with no Acuity at all: both Acuity health items are inapplicable
     // and silent, which is the default every existing case below assumes.
     acuityConnected: false,
+    acuityAuthFailed: false,
     acuityWebhookCount: 0,
     acuityOutboundMode: "OFF",
     ...over,
@@ -193,6 +194,7 @@ describe("readiness CTA destinations", () => {
     "integration.connected": "/dashboard/booking?tab=Settings",
     "integration.live_sync": "/dashboard/booking?tab=Settings",
     "integration.chair_mapping": "/dashboard/booking?tab=Settings",
+    "integration.acuity_login": "/dashboard/booking?tab=Settings",
     "payments.connect_ready": "/dashboard/payments",
     "payments.deposit_amount": "/dashboard/payments",
     "payments.pay_direct_handle": "/dashboard/payments",
@@ -752,6 +754,52 @@ describe("Acuity live sync", () => {
       "integration.live_sync",
     )!;
     expect(i.applicable).toBe(false);
+  });
+});
+
+describe("a refused Acuity login", () => {
+  const onAcuity = {
+    bookingMode: "acuity" as const,
+    bookingUrl: "https://x.as.me",
+    acuityConnected: true,
+    acuityWebhookCount: 3,
+  };
+
+  it("a shop booking in Acuity is not 'connected and syncing': it is told to reconnect", () => {
+    const r = build({ ...onAcuity, integrationConnected: false, acuityAuthFailed: true });
+    const conn = find(r, "integration.connected")!;
+    expect(conn.applicable).toBe(true);
+    expect(conn.done).toBe(false);
+    expect(conn.evidence).toContain("stopped accepting ChairBack's sign-in");
+    expect(conn.cta?.label).toBe("Reconnect Acuity");
+    // Still advisory: an Acuity shop's page books through Acuity's own link.
+    expect(conn.blocksLaunch).toBe(false);
+    // One broken thing, one item: subscribed webhooks prove nothing now.
+    expect(find(r, "integration.live_sync")!.applicable).toBe(false);
+  });
+
+  it("a working login keeps the ordinary wording", () => {
+    const conn = find(build({ ...onAcuity, integrationConnected: true }), "integration.connected")!;
+    expect(conn.done).toBe(true);
+    expect(conn.cta?.label).toBe("Connect booking");
+    expect(find(build({ ...onAcuity, integrationConnected: true }), "integration.live_sync")!.applicable).toBe(true);
+  });
+
+  it("a shop taking bookings in ChairBack with Acuity attached is told to reconnect too", () => {
+    const attached = { bookingMode: "native" as const, acuityConnected: true, acuityOutboundMode: "ENFORCE" as const };
+    const refused = find(build({ ...attached, acuityAuthFailed: true }), "integration.acuity_login")!;
+    expect(refused.applicable).toBe(true);
+    expect(refused.done).toBe(false);
+    expect(refused.cta?.label).toBe("Reconnect Acuity");
+    expect(refused.blocksLaunch).toBe(false);
+    expect(find(build(attached), "integration.acuity_login")!.done).toBe(true);
+  });
+
+  it("is silent with no Acuity, and for a shop booking in Acuity (integration.connected says it)", () => {
+    expect(find(build(), "integration.acuity_login")!.applicable).toBe(false);
+    expect(
+      find(build({ ...onAcuity, acuityAuthFailed: true }), "integration.acuity_login")!.applicable,
+    ).toBe(false);
   });
 });
 

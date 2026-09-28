@@ -78,11 +78,15 @@ async function health(inv: ToolInvocation): Promise<ToolResult> {
       chosenSourceConnected: facts.integrationConnected,
       acuity: {
         connected: facts.acuityConnected,
+        // Connected, but Acuity refuses the login: nothing syncs and no time
+        // can be held there until the owner reconnects Acuity.
+        needsReconnect: facts.acuityAuthFailed,
         webhookCount: facts.acuityWebhookCount,
         // Zero webhooks while connected means inbound sync is dead and the two
         // calendars can sell the same chair. It is the single most important
         // bit in this whole answer.
-        inboundSyncHealthy: !facts.acuityConnected || facts.acuityWebhookCount > 0,
+        inboundSyncHealthy:
+          !facts.acuityConnected || (facts.acuityWebhookCount > 0 && !facts.acuityAuthFailed),
         outboundMode: facts.acuityOutboundMode,
         chairsWithMappingProblems,
       },

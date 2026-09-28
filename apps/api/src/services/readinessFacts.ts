@@ -142,7 +142,7 @@ export async function collectReadinessFacts(
       // measured against, and `acuityWebhookIds` is how we know inbound sync is
       // alive. Neither adds a round trip - they are columns on rows this
       // collector was already reading.
-      acuity: { select: { id: true, connectedAt: true } },
+      acuity: { select: { id: true, connectedAt: true, authFailedAt: true } },
       square: { select: { id: true } },
       acuityWebhookIds: true,
       acuityOutboundMode: true,
@@ -391,11 +391,12 @@ export async function collectReadinessFacts(
     receptionistEntitled: hasReceptionistEntitlement(shop),
     integrationConnected:
       shop.bookingMode === "acuity"
-        ? shop.acuity !== null
+        ? shop.acuity !== null && shop.acuity.authFailedAt === null
         : shop.bookingMode === "square"
           ? shop.square !== null
           : false,
     acuityConnected,
+    acuityAuthFailed: shop.acuity !== null && shop.acuity.authFailedAt !== null,
     acuityWebhookCount: shop.acuityWebhookIds.length,
     acuityOutboundMode: shop.acuityOutboundMode,
   };

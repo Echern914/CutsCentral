@@ -98,6 +98,8 @@ acuityOAuthRouter.get("/callback", async (req, res) => {
         tokenExpiresAt: token.expires_in
           ? new Date(Date.now() + token.expires_in * 1000)
           : null,
+        // A fresh login: whatever Acuity refused before no longer applies.
+        authFailedAt: null,
       },
     });
 
@@ -141,7 +143,7 @@ acuityOAuthRouter.get("/status", requireUser, requireShop, async (req, res) => {
   const [conn, clientCount, visitCount, needConsentCount] = await Promise.all([
     prisma.acuityConnection.findUnique({
       where: { shopId: shop.id },
-      select: { acuityAccountId: true, connectedAt: true },
+      select: { acuityAccountId: true, connectedAt: true, authFailedAt: true },
     }),
     prisma.client.count({ where: { shopId: shop.id } }),
     prisma.visit.count({ where: { shopId: shop.id } }),
@@ -159,18 +161,25 @@ acuityOAuthRouter.get("/status", requireUser, requireShop, async (req, res) => {
     }),
   ]);
   const connected = conn !== null;
+  // The row is still there, but Acuity has stopped accepting our login: nothing
+  // syncs until the owner signs in again. `connected` stays true (the connection
+  // and its data are kept, and Disconnect still applies); the UI says
+  // "Reconnect Acuity" off this instead of "Connected".
+  const needsReconnect = conn !== null && conn.authFailedAt !== null;
   const webhookCount = shop.acuityWebhookIds.length;
-  const liveSyncHealthy = connected && webhookCount > 0;
+  const liveSyncHealthy = connected && webhookCount > 0 && !needsReconnect;
   res.json({
     connected,
     connectedAt: conn?.connectedAt.toISOString() ?? null,
+    needsReconnect,
     webhookCount,
     liveSyncHealthy,
     clientCount,
     visitCount,
     clientsNeedingConsent: needConsentCount,
-    // Actionable hint for the UI.
-    needsRepair: connected && webhookCount === 0,
+    // Actionable hint for the UI. Repair re-subscribes with the stored login,
+    // so it cannot help while that login is refused - reconnecting is the fix.
+    needsRepair: connected && webhookCount === 0 && !needsReconnect,
   });
 });
 

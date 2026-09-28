@@ -119,7 +119,7 @@ export function ConnectPlatforms({
   // they explicitly hit Disconnect. Say so, and give them a no-risk way to feel
   // the flow (the seeded demo shop) without changing their own settings.
   const onConnectedProvider =
-    (mode === "acuity" && connect.acuityConnected) ||
+    (mode === "acuity" && connect.acuityConnected && !connect.acuityNeedsReconnect) ||
     (mode === "square" && connect.squareConnected);
 
   return (
@@ -163,6 +163,9 @@ export function ConnectPlatforms({
           const connected = isConnected[c.key];
           const available = isAvailable[c.key];
           const needsConnect = Boolean(c.connectPath) && !connected;
+          // Connected, but Acuity refuses the sign-in: nothing syncs, so this
+          // card must not say "Connected".
+          const refused = c.key === "acuity" && connect.acuityNeedsReconnect;
           return (
             <button
               key={c.key}
@@ -181,7 +184,11 @@ export function ConnectPlatforms({
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-charcoal-800 ring-1 ring-white/5">
                   <c.Logo />
                 </div>
-                {connected && c.connectPath ? (
+                {refused ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/15 px-2.5 py-1 text-xs font-medium text-amber-300">
+                    Not syncing
+                  </span>
+                ) : connected && c.connectPath ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-300">
                     <Check /> Connected
                   </span>
@@ -199,7 +206,9 @@ export function ConnectPlatforms({
                     ? c.key === "square"
                       ? "Coming soon — Square isn't enabled on this platform yet."
                       : "Not available."
-                    : c.desc}
+                    : refused
+                      ? "Acuity stopped accepting ChairBack's sign-in, so nothing is syncing. Reconnect to fix it. Your appointments and settings are kept."
+                      : c.desc}
                 </span>
               </div>
 
@@ -239,9 +248,14 @@ export function ConnectPlatforms({
                         connectOAuth(c.connectPath!);
                       }
                     }}
-                    className="inline-flex w-fit items-center rounded-full border border-subtle px-3 py-1.5 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+                    className={cn(
+                      "inline-flex w-fit items-center rounded-full px-3 py-1.5 text-xs font-medium transition-colors duration-150 ease-out",
+                      refused
+                        ? "bg-gold font-semibold text-charcoal hover:bg-gold-muted"
+                        : "border border-subtle text-offwhite hover:bg-charcoal-700",
+                    )}
                   >
-                    Reconnect
+                    {refused ? "Reconnect Acuity" : "Reconnect"}
                   </span>
                   <span
                     role="button"
