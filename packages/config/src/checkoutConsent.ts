@@ -101,6 +101,9 @@ const HONOURED_VERSIONS: ReadonlySet<string> = new Set([SERVICE_CHARGE_CONSENT_V
  * test and in a support conversation. The deliberate refusals:
  *
  *  - no version, or one this build no longer honours -> no.
+ *  - the customer WITHDREW it from their appointment link -> no, for good.
+ *    The consent columns stay as the record of what was agreed; the
+ *    withdrawal is what ends it, and nothing in the product can undo it.
  *  - `single` scope reached from a DIFFERENT appointment -> no. A card filed
  *    against one booking does not follow the customer to the next one.
  *  - `series` scope is the only thing that covers a sibling occurrence, and
@@ -110,12 +113,15 @@ export function serviceChargeAuthorized(card: {
   serviceChargeConsentVersion: string | null;
   serviceChargeConsentAt: Date | null;
   serviceChargeConsentScope: string | null;
+  /** Set when the customer took the permission back. Required, so no caller can forget it. */
+  serviceChargeWithdrawnAt: Date | null;
   /** The appointment the consent was recorded against. */
   appointmentId: string;
   /** The series this card covers, when it covers one. */
   seriesId?: string | null;
 }, target: { appointmentId: string; seriesId?: string | null }): boolean {
   if (!card.serviceChargeConsentVersion || !card.serviceChargeConsentAt) return false;
+  if (card.serviceChargeWithdrawnAt) return false;
   if (!HONOURED_VERSIONS.has(card.serviceChargeConsentVersion)) return false;
   if (card.serviceChargeConsentScope === "single") {
     return card.appointmentId === target.appointmentId;

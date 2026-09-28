@@ -3652,6 +3652,12 @@ model CardOnFile {
   /// together with the two columns above, so a scope without a timestamp and a
   /// version cannot exist.
   serviceChargeConsentScope   String?
+  /// The customer took the service-charge permission back, from their
+  /// appointment link. The three columns above are NEVER cleared - they are the
+  /// record of what was agreed and when, and a charge already taken rests on
+  /// them. This timestamp is what ends it: `serviceChargeAuthorized` refuses a
+  /// card that carries one. Only the customer can set it, and nothing unsets it.
+  serviceChargeWithdrawnAt    DateTime?
   createdAt             DateTime    @default(now())
   updatedAt             DateTime    @updatedAt
 
@@ -4832,7 +4838,8 @@ model EmailAddressSuppression {
 model EmailIntent {
   id String @id @default(cuid())
 
-  // "appointment_canceled" today; CHECK-pinned in the migration.
+  // "appointment_canceled", the affiliate kinds, "group_confirmation" and
+  // "service_charge_receipt"; CHECK-pinned in the migration.
   kind String
 
   // Stable per occurrence AND the provider Idempotency-Key. Unique, so two

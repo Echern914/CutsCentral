@@ -21,6 +21,7 @@ import {
   nudgeReplyAction,
   rescheduleBookingAction,
   rescheduleOptionsAction,
+  stopServiceChargesAction,
 } from "./actions";
 
 /**
@@ -272,8 +273,111 @@ export function ManageClient({
             )}
           </div>
         )}
+
+        {/* The v1 service-charge consent promised this customer they could
+            stop it "at any time from your appointment link". So it is shown
+            whatever the appointment's state - a done appointment is exactly
+            when a card may still be charged - and hidden only in the demo. */}
+        {data.serviceCharge && !demoTour && (
+          <ServiceChargeControl
+            token={token}
+            shopName={data.shop.name}
+            card={data.serviceCharge.card}
+            initiallyStopped={data.serviceCharge.withdrawnAt !== null}
+          />
+        )}
       </div>
     </main>
+  );
+}
+
+/**
+ * "Stop letting the shop charge this card." Two taps - the first asks, the
+ * second does it - because there is no undo: the shop cannot switch it back on,
+ * and neither can this page.
+ */
+function ServiceChargeControl({
+  token,
+  shopName,
+  card,
+  initiallyStopped,
+}: {
+  token: string;
+  shopName: string;
+  card: { brand: string | null; last4: string | null };
+  initiallyStopped: boolean;
+}) {
+  const [stopped, setStopped] = useState(initiallyStopped);
+  const [confirming, setConfirming] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [pending, start] = useTransition();
+  const cardName = card.last4
+    ? `${card.brand ? `${card.brand[0]!.toUpperCase()}${card.brand.slice(1)} ` : ""}card ending ${card.last4}`
+    : "your saved card";
+
+  function stop() {
+    setFailed(false);
+    start(async () => {
+      const res = await stopServiceChargesAction(token);
+      if (!res.ok) {
+        setFailed(true);
+        return;
+      }
+      setStopped(true);
+      setConfirming(false);
+    });
+  }
+
+  return (
+    <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-sm" data-qa="service-charge">
+      {stopped ? (
+        <p className="text-muted" role="status">
+          {shopName} can no longer charge your {cardName} for your service. You can pay another way at the shop.
+        </p>
+      ) : (
+        <>
+          <p className="text-muted">
+            You let {shopName} charge your {cardName} for your service once your appointment is finished.
+          </p>
+          {confirming ? (
+            <div className="mt-3 flex flex-col gap-2">
+              <p className="text-xs text-muted">
+                Stop it? You will pay another way at the shop. This can&rsquo;t be switched back on from here.
+              </p>
+              <button
+                type="button"
+                onClick={stop}
+                disabled={pending}
+                className="rounded-xl border border-red-500/40 py-2.5 text-center text-sm font-semibold text-red-400 disabled:opacity-50"
+              >
+                {pending ? "Stopping…" : "Yes, stop charges to this card"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                disabled={pending}
+                className="py-1 text-center text-xs text-muted underline"
+              >
+                Keep it
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirming(true)}
+              className="mt-3 w-full rounded-xl border border-white/15 py-2.5 text-center text-sm font-semibold"
+            >
+              Stop letting the shop charge this card
+            </button>
+          )}
+          {failed && (
+            <p role="alert" className="mt-2 text-xs text-red-400">
+              That didn&rsquo;t go through. Please try again.
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

@@ -2,6 +2,7 @@ import { Prisma, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { releaseCardOnFile } from "../billing/cardOnFile.js";
 import { TERMINAL_STATES, updateCheckoutAttempt } from "./serviceCheckoutAttempt.js";
+import { enqueueServiceChargeReceipt } from "./serviceChargeReceipt.js";
 
 /**
  * THE ONE PLACE A SERVICE CHECKOUT IS SETTLED.
@@ -138,6 +139,18 @@ export async function settleServiceCheckout(input: SettleInput): Promise<{ marke
       ...(input.stripePaymentIntentId ? { stripePaymentIntentId: input.stripePaymentIntentId } : {}),
       failureReason: input.failureReason ?? null,
       ...(input.outcome === "paid" ? { settledAt: now } : {}),
+    });
+  }
+
+  // 1b. The receipt the consent promised - "by email every time". Queued on
+  //     every PAID settlement of a saved-card attempt, not only the one that
+  //     moved it: whichever path learned first may have died before queueing,
+  //     and the unique key makes every later call a no-op.
+  if (input.outcome === "paid" && attempt?.method === "saved_card") {
+    await enqueueServiceChargeReceipt({
+      shopId: input.shopId,
+      appointmentId: input.appointmentId,
+      attemptId: attempt.id,
     });
   }
 

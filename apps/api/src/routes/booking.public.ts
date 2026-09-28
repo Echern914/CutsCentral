@@ -71,7 +71,12 @@ import {
   priceRangeForService,
 } from "../engines/pricing.js";
 import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
-import { createCardOnFileSetupIntent, verifyCardSaved } from "../billing/cardOnFile.js";
+import {
+  createCardOnFileSetupIntent,
+  serviceChargeConsentFor,
+  verifyCardSaved,
+  withdrawServiceChargeConsent,
+} from "../billing/cardOnFile.js";
 import { buildAppointmentIcs } from "../messaging/ics.js";
 import {
   appointmentWalletEnabled,
@@ -2706,6 +2711,7 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
     where: { manageToken: String(req.params.token) },
     select: {
       id: true,
+      shopId: true,
       status: true,
       startsAt: true,
       endsAt: true,
@@ -2775,6 +2781,15 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
           where: { appointmentId: appt.id, kind: "checkin_nudge_reply" },
         })) > 0;
 
+  // Whether this customer let the shop charge their saved card for the service,
+  // and whether they have since taken that back - so the page can offer the
+  // "stop" the consent promised, and say so once it is done.
+  const serviceChargeCard = await serviceChargeConsentFor({
+    shopId: appt.shopId,
+    appointmentId: appt.id,
+    seriesId: appt.seriesId,
+  });
+
   res.json({
     status: appt.status,
     // PENDING is a request, never a booking - and the customer should know who
@@ -2825,8 +2840,54 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
     walletPass: {
       appointment: appointmentWalletEnabled() && appt.status === "BOOKED",
     },
+    // Brand and last four only - the same display-safe facts the booking page
+    // already showed this customer. Null when they never gave the permission.
+    serviceCharge: serviceChargeCard
+      ? {
+          card: { brand: serviceChargeCard.brand, last4: serviceChargeCard.last4 },
+          withdrawnAt: serviceChargeCard.withdrawnAt?.toISOString() ?? null,
+        }
+      : null,
   });
 });
+
+// POST /api/book/manage/:token/stop-service-charges - the customer takes back
+// permission for the shop to charge their saved card for the service. The
+// promise the v1 consent made ("you can remove this card at any time from your
+// appointment link"). The token is the authorization, exactly as for cancel;
+// there is deliberately no dashboard twin, so only the customer can do this,
+// and nothing can undo it.
+bookingPublicRouter.post(
+  "/manage/:token/stop-service-charges",
+  bookingWriteLimiter,
+  async (req, res) => {
+    const appt = await prisma.appointment.findUnique({
+      where: { manageToken: String(req.params.token) },
+      select: { id: true, shopId: true, seriesId: true },
+    });
+    if (!appt) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const before = await serviceChargeConsentFor({
+      shopId: appt.shopId,
+      appointmentId: appt.id,
+      seriesId: appt.seriesId,
+    });
+    if (!before) {
+      // Nothing was ever agreed on this booking, so there is nothing to stop.
+      res.status(409).json({ error: "no_service_consent" });
+      return;
+    }
+    await withdrawServiceChargeConsent({ shopId: appt.shopId, appointmentId: appt.id });
+    const after = await serviceChargeConsentFor({
+      shopId: appt.shopId,
+      appointmentId: appt.id,
+      seriesId: appt.seriesId,
+    });
+    res.json({ ok: true, withdrawnAt: after?.withdrawnAt?.toISOString() ?? null });
+  },
+);
 
 //  Check-in ("On my way") - push-only, never SMS.
 

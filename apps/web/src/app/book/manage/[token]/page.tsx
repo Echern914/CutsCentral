@@ -52,6 +52,15 @@ export interface ManageData {
    * then simply shows no badge, which is the safe direction to fail.
    */
   walletPass?: { appointment: boolean } | null;
+  /**
+   * The customer's permission for the shop to charge their saved card for the
+   * service, when they gave one - and whether they have since stopped it.
+   * Optional: an older API does not send it, and the page then offers nothing.
+   */
+  serviceCharge?: {
+    card: { brand: string | null; last4: string | null };
+    withdrawnAt: string | null;
+  } | null;
 }
 
 export const metadata: Metadata = {

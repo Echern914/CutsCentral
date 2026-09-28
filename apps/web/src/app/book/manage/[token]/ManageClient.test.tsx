@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ManageData } from "./page";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn() }),
   usePathname: () => "/book/manage/tok",
 }));
+const stopServiceChargesAction = vi.fn();
 vi.mock("./actions", () => ({
+  stopServiceChargesAction: (...a: unknown[]) => stopServiceChargesAction(...a),
   cancelBookingAction: vi.fn(),
   checkInAction: vi.fn(),
   nudgeReplyAction: vi.fn(),
@@ -140,5 +142,36 @@ describe("the manage page tells the truth about status", () => {
     render(<ManageClient token="tok" data={data({ status: "COMPLETED" })} />);
     expect(screen.getByText("Completed")).toBeTruthy();
     expect(screen.getByText("Thanks for visiting Chern Cuts!")).toBeTruthy();
+  });
+});
+
+describe("stopping the shop charging the saved card", () => {
+  const withCard = (withdrawnAt: string | null = null) =>
+    data({ serviceCharge: { card: { brand: "visa", last4: "4242" }, withdrawnAt } });
+
+  it("offers nothing when the customer never gave the permission", () => {
+    render(<ManageClient token="tok" data={data()} />);
+    expect(screen.queryByText(/Stop letting the shop charge this card/)).toBeNull();
+  });
+
+  it("asks first, then stops it, and says so", async () => {
+    stopServiceChargesAction.mockResolvedValue({ ok: true });
+    render(<ManageClient token="tok" data={withCard()} />);
+    expect(screen.getByText(/charge your Visa card ending 4242 for your service/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Stop letting the shop charge this card"));
+    // One tap only asks - nothing is sent yet.
+    expect(stopServiceChargesAction).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Yes, stop charges to this card"));
+    });
+    expect(stopServiceChargesAction).toHaveBeenCalledWith("tok");
+    expect(screen.getByText(/can no longer charge your Visa card ending 4242/)).toBeTruthy();
+  });
+
+  it("shows it as stopped, with no button, once withdrawn - even after the visit", () => {
+    render(<ManageClient token="tok" data={{ ...withCard("2026-09-08T14:00:00Z"), status: "COMPLETED" }} />);
+    expect(screen.getByText(/can no longer charge your Visa card ending 4242/)).toBeTruthy();
+    expect(screen.queryByText(/Stop letting the shop charge this card/)).toBeNull();
   });
 });
