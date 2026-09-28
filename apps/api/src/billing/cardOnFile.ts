@@ -501,12 +501,29 @@ export async function releaseCardOnFile(params: {
   // using it?" question below counts only rows that genuinely still need it.
   // Ordering matters: doing it the other way round leaves the last release
   // seeing itself as a live user and never detaching.
-  await runWithShop(params.shopId, (tx) =>
-    tx.cardOnFile.update({
-      where: { id: row.id },
+  //
+  // 🔴 A CARD MID-CHARGE IS NOT OURS TO LET GO. `charging` means a fee or a
+  // service intent may still be confirmable at Stripe (processing, waiting on
+  // authentication, or an answer that never came back). Detaching it would
+  // strand that intent, and marking it released would tell the reconciler the
+  // card was let go while the customer is being charged on it. So this is a
+  // compare-and-set that never matches `charging`, rather than a blind write:
+  // the status read above can be stale by now, and a charge that claimed the
+  // card in between (`saved -> charging`) must win. Only the settlement that
+  // concludes that charge moves the card on.
+  const released = await runWithShop(params.shopId, (tx) =>
+    tx.cardOnFile.updateMany({
+      where: { id: row.id, status: { in: ["pending", "saved", "failed"] } },
       data: { status: "released", releasedAt: new Date() },
     }),
   );
+  if (released.count === 0) {
+    logger.info(
+      { cardOnFileId: row.id, reason: params.reason },
+      "card on file: left alone - a charge on it is still unresolved",
+    );
+    return;
+  }
 
   if (seriesId) {
     // 🔴 ONE PAYMENT METHOD, MANY OCCURRENCES. Detaching because THIS visit

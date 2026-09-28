@@ -77,7 +77,15 @@ export type OpenAttemptResult =
    * A DIFFERENT collection is already live on this appointment. Refused: the
    * first one must reach an answer before a second may begin.
    */
-  | { kind: "busy"; attempt: AttemptRow };
+  | { kind: "busy"; attempt: AttemptRow }
+  /**
+   * The appointment was already checked out - by the original chair checkout,
+   * or a collection that finished a moment ago. Nothing was opened.
+   */
+  | { kind: "paid" };
+
+/** Thrown inside the claim to roll it back; never escapes this module. */
+class AlreadyPaid extends Error {}
 
 const ATTEMPT_SELECT = {
   id: true,
@@ -121,8 +129,20 @@ export async function openCheckoutAttempt(
   const idempotencyKey = `svc-checkout:${id}`;
 
   try {
-    const created = await runWithShop(input.shopId, (tx) =>
-      tx.checkoutAttempt.create({
+    const created = await runWithShop(input.shopId, async (tx) => {
+      // 🔴 THE APPOINTMENT ROW IS THE MEETING POINT WITH THE ORIGINAL CHAIR
+      // CHECKOUT (`POST /booking/appointments/:id/checkout`). That route claims
+      // `paidAt` and then looks for a live attempt, all in one transaction;
+      // this locks the same row and then looks at `paidAt`. Whichever takes the
+      // row first, the other sees what it did - so a chair payment and a card
+      // charge can never both be recorded for one cut. The caller's earlier
+      // read of `paidAt` is not enough: it can be stale by the time we get here.
+      const rows = await tx.$queryRaw<Array<{ paidAt: Date | null }>>`
+        SELECT "paidAt" FROM "Appointment"
+        WHERE "id" = ${input.appointmentId} AND "shopId" = ${input.shopId}
+        FOR NO KEY UPDATE`;
+      if (rows[0]?.paidAt) throw new AlreadyPaid();
+      return tx.checkoutAttempt.create({
         data: {
           id,
           shopId: input.shopId,
@@ -143,10 +163,15 @@ export async function openCheckoutAttempt(
           state: "pending",
         },
         select: ATTEMPT_SELECT,
-      }),
-    );
+      });
+    });
     return { kind: "opened", attempt: created };
   } catch (err) {
+    if (err instanceof AlreadyPaid) {
+      // A double tap whose first press already settled is still a replay.
+      const same = await attemptForRequest(input.shopId, input.appointmentId, input.requestId);
+      return same ? { kind: "replay", attempt: same } : { kind: "paid" };
+    }
     if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== "P2002") throw err;
 
     // One of two indexes refused us, and which one decides the answer.
@@ -267,17 +292,23 @@ export async function attemptForRequest(
   );
 }
 
-/** The attempt currently holding this appointment, if any. */
+/**
+ * The attempt currently holding this appointment, if any.
+ *
+ * Pass `tx` to read inside a transaction the caller already holds - the chair
+ * checkout does, so its answer is read after its own `paidAt` claim.
+ */
 export async function liveAttemptFor(
   shopId: string,
   appointmentId: string,
+  tx?: Prisma.TransactionClient,
 ): Promise<AttemptRow | null> {
-  return runWithShop(shopId, (tx) =>
-    tx.checkoutAttempt.findFirst({
+  const read = (t: Prisma.TransactionClient) =>
+    t.checkoutAttempt.findFirst({
       where: { appointmentId, state: { in: [...LIVE_STATES] } },
       select: ATTEMPT_SELECT,
-    }),
-  );
+    });
+  return tx ? read(tx) : runWithShop(shopId, read);
 }
 
 /**

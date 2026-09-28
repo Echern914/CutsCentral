@@ -15,6 +15,7 @@ import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { editClient } from "../services/client.js";
+import { decimalToCents, recordPriceChange } from "../services/appointmentPriceLedger.js";
 
 /**
  * EDIT AN APPOINTMENT. One endpoint, every editable field.
@@ -161,6 +162,7 @@ export function registerAppointmentEdit(
         visitId: true,
         visit: { select: { acuityAppointmentId: true } },
         clientId: true,
+        priceAtBooking: true,
       },
     });
     if (!appt) {
@@ -388,6 +390,26 @@ export function registerAppointmentEdit(
               : {}),
           },
         });
+        // 🔴 A PRICE CHANGED HERE IS LEDGERED LIKE ONE CHANGED ON THE PRICE
+        // ROUTE. The ledger's first row is how `agreedPriceCents` knows what
+        // the customer booked at - and that caps both the no-show fee and a
+        // service charge to their saved card. An unrecorded raise here would
+        // let either be charged at a price the customer never agreed to.
+        if (d.price !== undefined && d.price !== null) {
+          const fromPriceCents = decimalToCents(appt.priceAtBooking);
+          const toPriceCents = Math.round(d.price * 100);
+          if (fromPriceCents !== toPriceCents) {
+            await recordPriceChange(tx, {
+              shopId,
+              appointmentId: appt.id,
+              actorUserId: req.userId ?? null,
+              fromPriceCents,
+              toPriceCents,
+              fromCollectedCents: null,
+              toCollectedCents: null,
+            });
+          }
+        }
         if (timeMoved) {
           mirrorOutboxIds = await swapForReschedule(tx, {
             shopId,
