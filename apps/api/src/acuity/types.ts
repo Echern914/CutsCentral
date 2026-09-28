@@ -120,6 +120,37 @@ export const acuityCalendarSchema = z
 
 export type AcuityCalendar = z.infer<typeof acuityCalendarSchema>;
 
+/**
+ * An appointment type on the connected account (GET /appointment-types) - one
+ * entry on the shop's Acuity service menu. Read by the service import
+ * (engines/acuityServiceImport.ts) and nothing else.
+ *
+ * Parsed as defensively as the rest of this file: every field but the id is
+ * optional, the flags accept a boolean or its string/number spelling, and
+ * unknown keys pass through. `description` is HTML from Acuity's editor;
+ * `price` arrives as a string ("45.00").
+ * [VERIFY LIVE] confirm the field names against a real account's response.
+ */
+export const acuityAppointmentTypeSchema = z
+  .object({
+    id: z.union([z.number(), z.string()]).transform(String),
+    name: z.string().nullish(),
+    active: z.union([z.boolean(), z.string(), z.number()]).nullish(),
+    description: z.string().nullish(),
+    duration: z.union([z.number(), z.string()]).nullish(),
+    price: z.union([z.number(), z.string()]).nullish(),
+    category: z.string().nullish(),
+    color: z.string().nullish(),
+    // Hidden from the public Acuity page, bookable only by direct link.
+    private: z.union([z.boolean(), z.string(), z.number()]).nullish(),
+    // "service" for an ordinary one-customer booking; "class" / "series" otherwise.
+    type: z.string().nullish(),
+    classSize: z.union([z.number(), z.string()]).nullish(),
+  })
+  .passthrough();
+
+export type AcuityAppointmentType = z.infer<typeof acuityAppointmentTypeSchema>;
+
 export const acuityMeSchema = z
   .object({
     id: z.union([z.number(), z.string()]).transform(String),
