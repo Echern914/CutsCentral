@@ -36,7 +36,7 @@ function dayAt(daysAhead: number, hourUtc: number): Date {
   return d;
 }
 
-async function publish(at: Date): Promise<string> {
+async function publish(at: Date, price = 150): Promise<string> {
   const res = await request(app)
     .post("/api/booking/targeted-slots")
     .set("Cookie", cookie)
@@ -46,7 +46,7 @@ async function publish(at: Date): Promise<string> {
       label: "Late night retwist",
       startsAt: at.toISOString(),
       durationMin: 90,
-      price: 150,
+      price,
     });
   expect(res.status).toBe(201);
   const row = await prisma.targetedSlot.findFirst({
@@ -87,6 +87,7 @@ type Row = {
   clientName: string;
   special?: boolean;
   afterHours?: boolean;
+  premium?: boolean;
 };
 
 async function agendaRow(id: string): Promise<Row> {
@@ -164,11 +165,27 @@ describe("afterHours on the agenda", () => {
     const s = await agendaRow(special.id);
     expect(s.special).toBe(true);
     expect(s.afterHours).toBe(true);
+    // The slot charges $150 against the service's $120: a premium, not a deal.
+    expect(s.premium).toBe(true);
     // Display only: the name itself is untouched.
     expect(s.clientName).toBe("Isaiah C");
     const r = await agendaRow(regular.id);
     expect(r.special).toBe(false);
     expect(r.afterHours).toBe(false);
+    expect(r.premium).toBe(false);
+  });
+
+  it("🔴 premium is a PRICE fact: a slot above the service price is premium, one below it is a real deal", async () => {
+    // Inside regular hours both, so time is not what tells them apart.
+    const dearAt = dayAt(6, 11);
+    const cheapAt = dayAt(6, 13);
+    const dear = await publicBook(dearAt, "Dear", { targetedSlotId: await publish(dearAt, 150) });
+    const cheap = await publicBook(cheapAt, "Cheap", { targetedSlotId: await publish(cheapAt, 90) });
+
+    const d = await agendaRow(dear.id);
+    expect(d).toMatchObject({ special: true, afterHours: false, premium: true });
+    const c = await agendaRow(cheap.id);
+    expect(c).toMatchObject({ special: true, afterHours: false, premium: false });
   });
 
   it("the barber booking someone into his own special is flagged too", async () => {

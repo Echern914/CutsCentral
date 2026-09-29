@@ -1740,6 +1740,22 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open appointments", featureId: "book-anyway" },
   },
   {
+    id: "special-chip-meaning",
+    q: "Why does a booking say Special, Premium hour or After hours?",
+    // 🔴 Two barbers asked this the same day (2026-09-29): "Special" reads as a
+    // deal, but their slots all charged MORE than the service. The chip is
+    // accurate - it only appears on a booking made into a published slot - so
+    // this answer says what each word means rather than calling it a fault.
+    a: "It means that booking was made into one of your special-priced slots — a time you published in advance with its own price. The word says what kind:\n\n• After hours — the slot starts outside your regular weekly hours.\n• Premium hour — the slot charges more than the service's normal price, like a late-night or weekend rate.\n• Special — any other slot, for example one priced below the service.\n\nIt's only a label by the client's name. The client, service and price are exactly what was booked.\n\nOne thing catches people out: the word follows your hours as they are set today. If you later stretch your hours across a slot's time, an “After hours” slot reads “Premium hour” or “Special” — nothing is wrong, it's judged against your current hours.\n\nTo stop new bookings landing in these slots, turn them off or delete them under Special-priced slots on the Services tab.",
+    keywords: [
+      "why does it say special", "what is the special", "special chip", "special tag",
+      "premium hour", "after hours chip", "after hours tag", "what does special mean",
+      "says special", "special on my booking", "special on random clients",
+    ],
+    category: "booking",
+    action: { label: "Open special-priced slots", featureId: "targeted-slots" },
+  },
+  {
     id: "addons-when-you-book",
     q: "Can I include extras when I book someone in myself?",
     a: "Yes. In New appointment, pick the service and an Add-ons card appears with the extras that go with it, each with its price and time (“+$10 · +15 min”). Tick what they want and a Total shows the new length and price. The open times reload to fit the longer visit.\n\nOn the calendar the card then reads “Haircut + Hot towel”, and the length and price on it already include the extras. Add-ons customers pick on your booking page show the same way.\n\nThree things it won't do: a special has its own length and price, so add-ons don't apply to it; a weekly repeat can't carry add-ons (ticking one turns Weekly off); and you can't add or remove add-ons on a booking that's already made. Set up your add-ons under Booking → Services → Add-ons.",

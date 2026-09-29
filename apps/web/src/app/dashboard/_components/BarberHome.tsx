@@ -32,6 +32,7 @@ export interface BarberRow {
   special?: boolean;
   /** ...outside his regular hours: the chip says "After hours". */
   afterHours?: boolean;
+  premium?: boolean;
 }
 
 export interface BarberHomeData {
@@ -153,7 +154,7 @@ export function BarberHome({
                           {timeFmt.format(new Date(r.startsAt))} ·{" "}
                           {r.clientName || "Client"}
                         </p>
-                        {r.special && <SpecialChip afterHours={r.afterHours} />}
+                        {r.special && <SpecialChip afterHours={r.afterHours} premium={r.premium} />}
                       </div>
                       <p className="mt-0.5 truncate text-xs text-muted">
                         {r.service}

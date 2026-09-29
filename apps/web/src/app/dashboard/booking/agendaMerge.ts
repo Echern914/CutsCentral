@@ -119,6 +119,7 @@ function sameRow(a: AgendaRow, b: AgendaRow): boolean {
     // sends false - the same chip (none), so not a change worth a re-render.
     !!a.special === !!b.special &&
     !!a.afterHours === !!b.afterHours &&
+    !!a.premium === !!b.premium &&
     a.end === b.end &&
     a.status === b.status &&
     a.clientName === b.clientName &&

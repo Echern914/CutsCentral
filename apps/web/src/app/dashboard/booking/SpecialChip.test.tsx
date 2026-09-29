@@ -86,6 +86,19 @@ describe("the Special / After hours chip", () => {
     expect(screen.queryByText(/after hours/i)).toBeNull();
   });
 
+  it("🔴 a slot that charges more than the service says 'Premium hour', not 'Special'", () => {
+    // "Special" reads as a deal; these slots add to the price.
+    render(card(rowFor({ special: true, afterHours: false, premium: true })));
+    const chip = screen.getByTestId("special-chip");
+    expect(chip).toHaveTextContent("Premium hour");
+    expect(chip).not.toHaveTextContent("Special");
+  });
+
+  it("after hours still comes first when a slot is both late and premium", () => {
+    render(card(rowFor({ special: true, afterHours: true, premium: true })));
+    expect(screen.getByTestId("special-chip")).toHaveTextContent("After hours");
+  });
+
   it("a regular booking has no chip at all", () => {
     render(card(rowFor({ special: false, afterHours: false })));
     expect(screen.queryByTestId("special-chip")).toBeNull();

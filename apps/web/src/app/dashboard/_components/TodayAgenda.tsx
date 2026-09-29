@@ -19,6 +19,7 @@ export interface TodayRow {
   special?: boolean;
   /** ...and that special is outside his regular hours: "After hours". */
   afterHours?: boolean;
+  premium?: boolean;
 }
 
 /**
@@ -145,7 +146,7 @@ export function TodayAgenda({
                     >
                       {r.clientName}
                     </p>
-                    {r.special && <SpecialChip afterHours={r.afterHours} />}
+                    {r.special && <SpecialChip afterHours={r.afterHours} premium={r.premium} />}
                   </div>
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 pl-[38px] text-xs text-muted">

@@ -10,6 +10,10 @@ import { cn } from "@/lib/cn";
  * daytime one (a lunch special, a morning rate): a 2 PM booking labelled
  * "After hours" would be false. Display only - the name is untouched.
  *
+ * "Special" reads as a deal. A slot that charges MORE than the service's own
+ * price says "Premium hour" instead (the API decides, comparing the slot's
+ * price with the service's) - after hours still comes first.
+ *
  * Colour is the `indigo-soft` theme token, not a raw palette class: a raw
  * indigo-300 stays pale lavender on the light theme's white cards (~1.7:1),
  * which would hide the one thing this chip is for.
@@ -17,21 +21,23 @@ import { cn } from "@/lib/cn";
  */
 export function SpecialChip({
   afterHours,
+  premium,
   className,
 }: {
   afterHours?: boolean;
+  premium?: boolean;
   className?: string;
 }) {
   return (
     <span
       data-testid="special-chip"
-      title="Booked into one of your specials"
+      title="Booked into one of your special-rate slots"
       className={cn(
         "shrink-0 rounded-full bg-indigo-soft/15 text-[10px] font-medium text-indigo-soft",
         className ?? "px-1.5 py-0.5",
       )}
     >
-      {afterHours ? "After hours" : "Special"}
+      {afterHours ? "After hours" : premium ? "Premium hour" : "Special"}
     </span>
   );
 }

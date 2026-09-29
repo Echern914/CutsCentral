@@ -811,7 +811,7 @@ function Hero({
               ↻ Weekly
             </span>
           )}
-          {row.special && <SpecialChip afterHours={row.afterHours} className="px-2.5 py-1" />}
+          {row.special && <SpecialChip afterHours={row.afterHours} premium={row.premium} className="px-2.5 py-1" />}
         </div>
       </div>
 

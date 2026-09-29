@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { outsideRegularHours, specialNameSuffix } from "./specialBooking.js";
+import { isPremiumSlot, outsideRegularHours, specialNameSuffix } from "./specialBooking.js";
 
 /**
  * "After hours" is a time fact about a special, judged against the barber's
@@ -55,8 +55,36 @@ describe("outsideRegularHours", () => {
 
 describe("specialNameSuffix", () => {
   it("names what the booking is, and nothing for an ordinary one", () => {
-    expect(specialNameSuffix({ special: true, afterHours: true })).toBe(" (After hours)");
-    expect(specialNameSuffix({ special: true, afterHours: false })).toBe(" (Special)");
-    expect(specialNameSuffix({ special: false, afterHours: false })).toBe("");
+    const on = { special: true, afterHours: false, premium: false };
+    expect(specialNameSuffix({ ...on, afterHours: true })).toBe(" (After hours)");
+    expect(specialNameSuffix(on)).toBe(" (Special)");
+    expect(specialNameSuffix({ ...on, premium: true })).toBe(" (Premium hour)");
+    expect(specialNameSuffix({ special: false, afterHours: false, premium: false })).toBe("");
+  });
+
+  it("after hours wins over premium: a late slot is said to be late first", () => {
+    expect(specialNameSuffix({ special: true, afterHours: true, premium: true })).toBe(
+      " (After hours)",
+    );
+  });
+});
+
+describe("isPremiumSlot", () => {
+  it("🔴 only a slot that charges MORE than the service is premium", () => {
+    expect(isPremiumSlot(150, 130)).toBe(true);
+    // A real deal, or the same price, stays a plain special.
+    expect(isPremiumSlot(100, 130)).toBe(false);
+    expect(isPremiumSlot(130, 130)).toBe(false);
+  });
+
+  it("reads Prisma decimals as well as numbers", () => {
+    expect(isPremiumSlot({ toString: () => "150.00" }, { toString: () => "130.00" })).toBe(true);
+    expect(isPremiumSlot({ toString: () => "99.50" }, { toString: () => "130.00" })).toBe(false);
+  });
+
+  it("nothing to compare to is never called premium", () => {
+    expect(isPremiumSlot(150, null)).toBe(false);
+    expect(isPremiumSlot(null, 130)).toBe(false);
+    expect(isPremiumSlot(undefined, undefined)).toBe(false);
   });
 });
