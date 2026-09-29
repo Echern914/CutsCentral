@@ -118,6 +118,8 @@ async function openCheckout(detail = detailFor(), row: AgendaRow = baseRow) {
 
 const field = () => screen.getByLabelText("Amount collected") as HTMLInputElement;
 const markPaid = () => screen.getByRole("button", { name: /^Mark paid/ });
+/** The footer's main button whatever it says right now (Mark paid, or Saving…). */
+const mainButton = () => screen.getByRole("button", { name: /^(Mark paid|Saving)/ }) as HTMLButtonElement;
 const pick = (method: RegExp) => fireEvent.click(screen.getByRole("button", { name: method }));
 const type = (value: string) => fireEvent.change(field(), { target: { value } });
 
@@ -245,16 +247,27 @@ describe("what the barber types", () => {
   });
 });
 
-describe("🔴 a save that fails marks nothing paid", () => {
-  it("a refused save keeps the screen, and Mark paid tries again", async () => {
+describe("🔴 a save that fails marks nothing paid - and SAYS SO in the footer", () => {
+  // A toast draws beneath the dialog, so on a phone it is invisible while the
+  // sheet is open. Drick (2026-09-29): "Pay button still did not work" - the
+  // refusal was there, and nobody could read it.
+  const footerError = () => screen.queryByTestId("checkout-error");
+
+  it("a refused save keeps the screen, says why in the footer, and Mark paid tries again", async () => {
     checkout.mockResolvedValueOnce({ ok: false, error: "failed" });
     await openCheckout();
     pick(/^Cash/);
     fireEvent.click(markPaid());
-    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't save the checkout", "error"));
+    await waitFor(() => expect(footerError()).not.toBeNull());
+    expect(footerError()!.textContent).toBe(
+      "Couldn't save the checkout (failed). Nothing was recorded. Try again.",
+    );
+    expect(footerError()!.getAttribute("role")).toBe("alert");
+    // Never a toast: it would be hidden under this dialog.
+    expect(toast).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(onChanged).not.toHaveBeenCalled();
-    // Same amount, same method, one more tap.
+    // Same amount, same method, one more tap - and the message clears.
     await waitFor(() => expect((markPaid() as HTMLButtonElement).disabled).toBe(false));
     expect(markPaid().textContent).toBe("Mark paid · $50.00");
     fireEvent.click(markPaid());
@@ -267,17 +280,102 @@ describe("🔴 a save that fails marks nothing paid", () => {
     await openCheckout();
     pick(/^Cash/);
     fireEvent.click(markPaid());
-    await waitFor(() =>
-      expect(toast).toHaveBeenCalledWith(
-        "Couldn't save the checkout. Check your connection and try again.",
-        "error",
-      ),
+    await waitFor(() => expect(footerError()).not.toBeNull());
+    expect(footerError()!.textContent).toBe(
+      "Couldn't reach ChairBack. Check your signal and try again. Nothing was recorded.",
     );
+    expect(toast).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(onChanged).not.toHaveBeenCalled();
     await waitFor(() => expect((markPaid() as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(markPaid());
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it.each([
+    ["network_error", /Couldn't reach ChairBack/],
+    ["collection_in_progress", /card payment is still being confirmed/],
+    ["not_found", /may have been canceled/],
+    ["invalid_input", /amount or payment type wasn't accepted/],
+    ["http_500", /\(http_500\)/],
+  ])("the reason %s reads plainly", async (code, wording) => {
+    checkout.mockResolvedValueOnce({ ok: false, error: code });
+    await openCheckout();
+    pick(/^Other/);
+    fireEvent.click(markPaid());
+    await waitFor(() => expect(footerError()).not.toBeNull());
+    expect(footerError()!.textContent).toMatch(wording);
+    expect(footerError()!.textContent).toContain("Nothing was recorded");
+  });
+
+  it("the message goes away when the barber changes the payment type or the amount", async () => {
+    checkout.mockResolvedValue({ ok: false, error: "failed" });
+    await openCheckout();
+    pick(/^Cash/);
+    fireEvent.click(markPaid());
+    await waitFor(() => expect(footerError()).not.toBeNull());
+    pick(/^Other/);
+    expect(footerError()).toBeNull();
+
+    fireEvent.click(markPaid());
+    await waitFor(() => expect(footerError()).not.toBeNull());
+    type("45");
+    expect(footerError()).toBeNull();
+  });
+
+  it("trying again clears the old message while it saves - no stale error beside 'Saving…'", async () => {
+    checkout.mockResolvedValueOnce({ ok: false, error: "failed" });
+    let finish!: (v: { ok: boolean }) => void;
+    checkout.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+    await openCheckout();
+    pick(/^Cash/);
+    fireEvent.click(markPaid());
+    await waitFor(() => expect(footerError()).not.toBeNull());
+    await waitFor(() => expect((markPaid() as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(markPaid());
+    await waitFor(() => expect(mainButton().textContent).toBe("Saving…"));
+    expect(footerError()).toBeNull();
+    // 🔴 While the answer is awaited the button is dead, so an impatient second
+    // tap cannot send a second payment (this pair is the failed try + this one).
+    expect(mainButton().disabled).toBe(true);
+    fireEvent.click(mainButton());
+    fireEvent.click(mainButton());
+    expect(checkout).toHaveBeenCalledTimes(2);
+    await act(async () => finish({ ok: true }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("🔴 a slow save reads 'Saving…' the whole time, not 'Mark paid' - it must not look dead", async () => {
+    let finish!: (v: { ok: boolean }) => void;
+    checkout.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+    await openCheckout();
+    pick(/^Cash/);
+    fireEvent.click(markPaid());
+    await waitFor(() => expect(mainButton().textContent).toBe("Saving…"));
+    // Still waiting a moment later: still saying so.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(mainButton().textContent).toBe("Saving…");
+    expect(mainButton().disabled).toBe(true);
+    await act(async () => finish({ ok: true }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(checkout).toHaveBeenCalledTimes(1);
+  });
+
+  it("going Back clears it too", async () => {
+    checkout.mockResolvedValueOnce({ ok: false, error: "failed" });
+    await openCheckout();
+    pick(/^Cash/);
+    fireEvent.click(markPaid());
+    await waitFor(() => expect(footerError()).not.toBeNull());
+    const footerBack = screen
+      .getAllByRole("button", { name: "Back" })
+      .find((b) => b.getAttribute("data-qa") !== "sheet-back")!;
+    fireEvent.click(footerBack);
+    fireEvent.click(screen.getByRole("button", { name: "Next", exact: true }));
+    expect(footerError()).toBeNull();
   });
 
   it("already checked out (e.g. the lost answer did land) refreshes instead of retrying", async () => {
