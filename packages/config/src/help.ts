@@ -1744,7 +1744,9 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     // can't book it after hours". The way existed (Custom time) but read as
     // small print, and it booked at the menu price instead of his late rate.
     id: "book-after-hours",
-    q: "How do I book someone after my hours?",
+    // Not "How do I book…": the q text scores too, and that opening stole the
+    // bare "How do I book?" from the booking how-to (support eval, book-howto).
+    q: "Can I take a client after hours, at my after-hours price?",
     a: "On the calendar, tap the hour you want — say 10 PM. If it isn't one of your open times, New appointment offers it anyway: under Time you'll see “10:00 PM · The time you tapped” with Book this time. Tap it, pick the client and schedule.\n\nAny other time works the same way from Custom time (top right of the Time card): pick the date and time yourself.\n\nCustom time also has a Price box. Leave it blank for the service's regular price, or type your after-hours rate — $60, say — and that's what the booking is for. Add-ons still add on top. A typed price is for one visit, so it can't be used with Weekly.\n\nIf something's already at that time, you're shown who and asked before it's booked (see Book anyway). Want customers to book late times themselves? Publish them as special-priced slots on the Services tab.",
     keywords: [
       "book after hours", "book someone after hours", "after hours appointment",
