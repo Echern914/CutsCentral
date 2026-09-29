@@ -2394,7 +2394,7 @@ export function AppointmentBlock({
               <span className="ml-1.5 text-sm font-normal text-muted">@{row.clientInstagram}</span>
             )}
           </span>
-          {row.special && <SpecialChip afterHours={row.afterHours} />}
+          {row.special && <SpecialChip afterHours={row.afterHours} premium={row.premium} />}
           {/* Booked over another appointment on purpose ("Book anyway"). By
               the name, like the special chip, so it is seen before anything
               else about the card. Theme token, not a raw palette class. */}

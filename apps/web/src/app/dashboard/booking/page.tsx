@@ -171,6 +171,7 @@ export interface AgendaRow {
    * "After hours" rather than "Special". Only ever true when `special` is.
    */
   afterHours?: boolean;
+  premium?: boolean;
   /**
    * Booked OVER another booking on purpose ("Book anyway"). The card says
    * "Double-booked" so a deliberate double is never read as an ordinary slot.

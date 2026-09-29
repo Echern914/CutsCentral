@@ -471,6 +471,12 @@ describe("findHelp — what shipped late September", () => {
     ["book over someone", "book-anyway"],
     ["what does the double-booked chip mean", "book-anyway"],
     ["double booked", "double-booking"],
+    // The Special / Premium hour / After hours chip (2026-09-29: two barbers asked)
+    ["why does it say special", "special-chip-meaning"],
+    ["what is the special", "special-chip-meaning"],
+    ["what does premium hour mean", "special-chip-meaning"],
+    ["why does it say special on random clients", "special-chip-meaning"],
+    ["what does the after hours tag mean", "special-chip-meaning"],
     // Add-ons when the barber books (#539/#519)
     ["add-ons when I book", "addons-when-you-book"],
     ["why does the calendar card show add-ons", "addons-when-you-book"],

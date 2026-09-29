@@ -2205,6 +2205,7 @@ interface AgendaRow {
   // name accordingly - specials can be daytime ones. See engines/specialBooking.
   special?: boolean;
   afterHours?: boolean;
+  premium?: boolean;
   // Native rows only: booked OVER another booking on purpose ("Book anyway"),
   // read from Appointment.overlapForcedAt. The card says "Double-booked" so a
   // deliberate double is never mistaken for an ordinary slot.

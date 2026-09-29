@@ -201,11 +201,11 @@ describe("barber booking alerts", () => {
   });
 
   /** Publish a special at `at` and book it as `firstName` C; the manage token. */
-  async function bookSpecial(at: Date, firstName: string): Promise<string> {
+  async function bookSpecial(at: Date, firstName: string, price = 60): Promise<string> {
     const pub = await request(app)
       .post("/api/booking/targeted-slots")
       .set("Cookie", cookie)
-      .send({ staffId, serviceId, startsAt: at.toISOString(), durationMin: 60, price: 60 });
+      .send({ staffId, serviceId, startsAt: at.toISOString(), durationMin: 60, price });
     expect(pub.status).toBe(201);
     const slot = await prisma.targetedSlot.findFirst({
       where: { shopId, staffId, startsAt: at },
@@ -236,14 +236,28 @@ describe("barber booking alerts", () => {
     );
   });
 
-  it("🔴 a DAYTIME special says 'Special', never 'After hours'", async () => {
-    // Noon, inside the 9-5 hours: a lunch special.
+  it("🔴 a DAYTIME special never says 'After hours': a slot above the service price says 'Premium hour'", async () => {
+    // Noon, inside the 9-5 hours: a lunch slot at $60 against a $35 service.
     await bookSpecial(futureAtHour(7, 12), "Jordan");
     await waitFor(() =>
-      barberSms().some((s) => s.body.includes("Jordan C (Special) just booked Haircut with Sam")),
+      barberSms().some((s) =>
+        s.body.includes("Jordan C (Premium hour) just booked Haircut with Sam"),
+      ),
     );
     const push = pushes.find((p) => p.payload.title === "New booking")!;
-    expect(push.payload.body).toContain("Jordan C (Special) just booked");
+    expect(push.payload.body).toContain("Jordan C (Premium hour) just booked");
+    expect(push.payload.body).not.toContain("After hours");
+  });
+
+  it("🔴 a DAYTIME slot priced BELOW the service is a real deal: 'Special'", async () => {
+    // Noon, inside the 9-5 hours: a lunch special at $20 against a $35 service.
+    await bookSpecial(futureAtHour(9, 12), "Dana", 20);
+    await waitFor(() =>
+      barberSms().some((s) => s.body.includes("Dana C (Special) just booked Haircut with Sam")),
+    );
+    const push = pushes.find((p) => p.payload.title === "New booking")!;
+    expect(push.payload.body).toContain("Dana C (Special) just booked");
+    expect(push.payload.body).not.toContain("Premium hour");
     expect(push.payload.body).not.toContain("After hours");
   });
 

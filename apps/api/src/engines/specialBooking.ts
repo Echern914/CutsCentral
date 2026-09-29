@@ -35,7 +35,11 @@ import { zonedDateParts, zonedMinutesOfDay } from "@chairback/config";
 export const TARGETED_SLOT_ORIGIN = "targeted_slot";
 
 /** The text that rides by the name, on the calendar and in the barber alert. */
-export const SPECIAL_LABEL = { afterHours: "After hours", special: "Special" } as const;
+export const SPECIAL_LABEL = {
+  afterHours: "After hours",
+  premium: "Premium hour",
+  special: "Special",
+} as const;
 
 export type HoursRule = { weekday: number; startMin: number; endMin: number };
 
@@ -57,9 +61,27 @@ export function outsideRegularHours(
   return minute < open || minute >= close;
 }
 
-export type SpecialKind = { special: boolean; afterHours: boolean };
+export type SpecialKind = { special: boolean; afterHours: boolean; premium: boolean };
 
-const NOT_SPECIAL: SpecialKind = { special: false, afterHours: false };
+const NOT_SPECIAL: SpecialKind = { special: false, afterHours: false, premium: false };
+
+/**
+ * PREMIUM is a price fact: the slot charges MORE than the service's own
+ * price. "Special" reads as a deal, so a slot that adds to the price says
+ * "Premium hour" instead (Drick and Xavier, 2026-09-29: their late slots all
+ * charge above the regular price, and every one was tagged "Special").
+ * A slot at or below the service price, or a service with no price to compare
+ * to, is left as "Special" - it may be a real deal.
+ */
+export function isPremiumSlot(
+  slotPrice: { toString(): string } | number | null | undefined,
+  servicePrice: { toString(): string } | number | null | undefined,
+): boolean {
+  if (slotPrice == null || servicePrice == null) return false;
+  const slot = Number(slotPrice.toString());
+  const base = Number(servicePrice.toString());
+  return Number.isFinite(slot) && Number.isFinite(base) && slot > base;
+}
 
 /**
  * Classify appointment rows in one read: only rows booked into a special cost
@@ -80,9 +102,22 @@ export async function specialKinds(
     where: { shopId, staffId: { in: [...new Set(specials.map((r) => r.staffId))] } },
     select: { staffId: true, weekday: true, startMin: true, endMin: true },
   });
+  // Slot price vs the service's own price, for the premium/special wording.
+  const specialIds = specials.map((r) => r.id);
+  const slots = await tx.targetedSlot.findMany({
+    where: { shopId, bookedAppointmentId: { in: specialIds } },
+    select: { bookedAppointmentId: true, price: true },
+  });
+  const appts = await tx.appointment.findMany({
+    where: { shopId, id: { in: specialIds } },
+    select: { id: true, service: { select: { price: true } } },
+  });
+  const slotPrice = new Map(slots.map((x) => [x.bookedAppointmentId, x.price]));
+  const servicePrice = new Map(appts.map((x) => [x.id, x.service?.price ?? null]));
   for (const r of specials) {
     out.set(r.id, {
       special: true,
+      premium: isPremiumSlot(slotPrice.get(r.id), servicePrice.get(r.id)),
       afterHours: outsideRegularHours(
         r.startsAt,
         timezone,
@@ -97,8 +132,14 @@ export function specialKindOf(kinds: Map<string, SpecialKind>, id: string): Spec
   return kinds.get(id) ?? NOT_SPECIAL;
 }
 
-/** " (After hours)" / " (Special)" / "" - the suffix a barber alert puts by the name. */
+/** The word for a special: after hours first (a time fact), then premium (a price fact). */
+export function specialLabelOf(kind: SpecialKind): string {
+  if (kind.afterHours) return SPECIAL_LABEL.afterHours;
+  return kind.premium ? SPECIAL_LABEL.premium : SPECIAL_LABEL.special;
+}
+
+/** " (After hours)" / " (Premium hour)" / " (Special)" / "" - the suffix a barber alert puts by the name. */
 export function specialNameSuffix(kind: SpecialKind): string {
   if (!kind.special) return "";
-  return ` (${kind.afterHours ? SPECIAL_LABEL.afterHours : SPECIAL_LABEL.special})`;
+  return ` (${specialLabelOf(kind)})`;
 }
