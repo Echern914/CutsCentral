@@ -67,14 +67,19 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    // A TAPPED notification. Only one kind needs to take the customer
-    // somewhere - an opening held for their tier, which is on Profile and
-    // expires - so the rule lives in src/pushTap.ts and everything else keeps
-    // opening the app where it was. Covers a tap that LAUNCHED the app too.
+    // A TAPPED notification. A customer's held opening goes to Profile, an
+    // announcement to Announcements, and a barber alert to the page it links
+    // to (usually one appointment) - the rule lives in src/pushTap.ts, and
+    // everything else keeps opening the app where it was. Covers a tap that
+    // LAUNCHED the app too.
     let alive = true;
     const go = (data: unknown) => {
       const path = routeForNotification(data);
-      if (alive && path) router.navigate(path as "/customer/profile");
+      if (!alive || !path) return;
+      // A barber alert opens its page in the barber screen. `at` makes each
+      // tap a new navigation, so tapping the same alert twice still lands.
+      const href = path.startsWith("/barber?") ? `${path}&at=${Date.now()}` : path;
+      router.navigate(href as "/customer/profile");
     };
     Notifications.getLastNotificationResponseAsync()
       .then((res) => go(res?.notification.request.content.data))

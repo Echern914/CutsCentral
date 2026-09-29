@@ -881,7 +881,7 @@ async function notifyBarberBookingEventImpl(params: {
         // address here on purpose: this fires when the booking is made, which
         // can be days before anyone drives anywhere - the fact is useful at
         // next-up time, and that is where it is sent.
-        url: appointmentDeepLink(appt.id),
+        url: appointmentDeepLink(appt.id, { startsAt: appt.startsAt, timezone: shop.timezone }),
         // Per-appointment tag: successive events on the SAME booking replace
         // each other (booked -> moved -> canceled), different bookings stack.
         tag: `booking-event-${appt.id}`,

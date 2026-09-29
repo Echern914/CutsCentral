@@ -195,8 +195,26 @@ export interface BarberMessage {
  * taps, typically while holding something. The sheet carries the address, the
  * phone number and the checkout, which is everything the alert is about.
  */
-export function appointmentDeepLink(appointmentId: string): string {
-  return `${apiEnv().APP_BASE_URL}/dashboard/booking?tab=Appointments&appointment=${encodeURIComponent(appointmentId)}`;
+export function appointmentDeepLink(
+  appointmentId: string,
+  /**
+   * When it is, so the calendar opens on THAT day (and loads its month) -
+   * a new booking can be weeks out, past the month the calendar starts on.
+   */
+  at?: { startsAt: Date; timezone: string },
+): string {
+  const day = at ? `&day=${shopDayKey(at.startsAt, at.timezone)}` : "";
+  return `${apiEnv().APP_BASE_URL}/dashboard/booking?tab=Appointments&appointment=${encodeURIComponent(appointmentId)}${day}`;
+}
+
+/** YYYY-MM-DD of an instant, in the shop's zone. */
+function shopDayKey(instant: Date, timezone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(instant);
 }
 
 export interface BarberSendResult {

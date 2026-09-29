@@ -287,7 +287,9 @@ export default async function BookingPage({
   // `?tab=Appointments` lets the dashboard's "Book appointment" CTA land on the
   // calendar instead of the default Settings tab. An unknown or absent value
   // falls back to the default, so a stale or hand-typed link can't render blank.
-  searchParams?: { tab?: string; appointment?: string };
+  // `?appointment=<id>&day=YYYY-MM-DD` is a barber alert's link: open that
+  // booking, on its day.
+  searchParams?: { tab?: string; appointment?: string; day?: string };
 }) {
   // The month calendar loads the current month on first paint (with a week of
   // padding on each side so the visible grid's leading/trailing days are filled),
@@ -356,6 +358,7 @@ export default async function BookingPage({
         shop={shopRes.data}
         initialTab={searchParams?.tab}
         openAppointmentId={searchParams?.appointment}
+        openDay={searchParams?.day}
         appBase={process.env.APP_BASE_URL ?? ""}
         apiBase={API_BASE}
         connect={connect}

@@ -397,6 +397,23 @@ describe("next up, for a job the barber has to travel to", () => {
     const alert = mineOnly("nextUp").find((x) => x.title.includes("Morgan"));
     expect(alert!.url).toContain(`appointment=${appt.id}`);
   });
+
+  it("🔴 names the booking's DAY in the shop's zone, so the calendar opens on it", async () => {
+    const appt = await makeAppt(staffAId, 20, "Casey");
+    await run();
+    const alert = mineOnly("nextUp").find((x) => x.title.includes("Casey"));
+    const row = await prisma.appointment.findUniqueOrThrow({
+      where: { id: appt.id },
+      select: { startsAt: true, shop: { select: { timezone: true } } },
+    });
+    const day = new Intl.DateTimeFormat("en-CA", {
+      timeZone: row.shop.timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(row.startsAt);
+    expect(alert!.url).toMatch(new RegExp(`[?&]day=${day}(&|$)`));
+  });
 });
 
 /**

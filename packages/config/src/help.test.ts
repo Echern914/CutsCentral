@@ -481,6 +481,9 @@ describe("findHelp — what shipped late September", () => {
     ["how do I delete resolved conflicts", "resolve-conflict"],
     ["all resolved appointments should be able to be deleted", "resolve-conflict"],
     ["delete a conflict", "resolve-conflict"],
+    // Tapping an appointment alert (2026-09-29)
+    ["when I tap a notification it should take me to the appointment", "tap-appointment-alert"],
+    ["what happens when I tap the next up notification", "tap-appointment-alert"],
     // The Special / Premium hour / After hours chip (2026-09-29: two barbers asked)
     ["why does it say special", "special-chip-meaning"],
     ["what is the special", "special-chip-meaning"],

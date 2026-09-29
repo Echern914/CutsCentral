@@ -188,7 +188,7 @@ async function runNextUp(shopId: string, ownerId: string, now: Date): Promise<nu
         ...(where ? { pushBody: `${body}\n${where}` } : {}),
         // Straight to THIS booking - which is where the address, the phone
         // number and the checkout all are.
-        url: appointmentDeepLink(a.id),
+        url: appointmentDeepLink(a.id, { startsAt: a.startsAt, timezone: tz }),
         tag: `next-up-${a.id}`,
       },
     });

@@ -1762,6 +1762,21 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open appointments", featureId: "appointments" },
   },
   {
+    // A barber, 2026-09-29: "when I tap a notification it should take me
+    // directly to that day and time's appointment". The iPhone app ignored the
+    // link until the update that shipped this - say so, don't promise it.
+    id: "tap-appointment-alert",
+    q: "What happens when I tap an appointment alert?",
+    a: "Next up, new booking, moved and cancelled alerts each link to their appointment. Tapping one opens your calendar on that day with the appointment open, so the phone number, address and checkout are right there. Other alerts open your calendar.\n\nIn a web browser this works now. In the iPhone app it comes with the next app update; until you have it, tapping opens the app where you left it and the appointment is on your calendar.",
+    keywords: [
+      "tap a notification", "tap the notification", "tapping a notification", "tap an alert",
+      "notification opens", "open the appointment from the notification", "next up notification",
+      "notification take me to the appointment", "notification goes nowhere",
+    ],
+    category: "booking",
+    action: { label: "Open appointments", featureId: "appointments" },
+  },
+  {
     id: "special-chip-meaning",
     q: "Why does a booking say Special, Premium hour or After hours?",
     // 🔴 Two barbers asked this the same day (2026-09-29): "Special" reads as a

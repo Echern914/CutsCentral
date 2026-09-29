@@ -35,8 +35,10 @@ export function dashboardUrl(): string {
  * sets the cb_session cookie and redirects to /dashboard, so the WebView lands
  * authenticated without any native cookie module.
  */
-export function appAuthUrl(): string {
-  return `${WEB_ORIGIN}/app-auth`;
+export function appAuthUrl(next?: string | null): string {
+  // `next`: the dashboard page a tapped notification links to. The web route
+  // lands on it only if it is a /dashboard path (see src/pushTap.ts too).
+  return next ? `${WEB_ORIGIN}/app-auth?next=${encodeURIComponent(next)}` : `${WEB_ORIGIN}/app-auth`;
 }
 
 /**
