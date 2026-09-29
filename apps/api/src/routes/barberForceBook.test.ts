@@ -210,6 +210,57 @@ describe("a slot he picked from the open list, taken while he looked", () => {
   });
 });
 
+describe("Custom time at his own price (after hours)", () => {
+  // Drick, 2026-09-29: a client wanted 10 PM, after his hours - "so I can book
+  // in my after hours manually". His after-hours cut is $60, not the menu's.
+  const priceOf = async (firstName: string) =>
+    Number(
+      (await prisma.appointment.findFirst({ where: { shopId, firstName } }))?.priceAtBooking ?? NaN,
+    );
+
+  it("books a forced time at the price he typed", async () => {
+    const res = await book({ startsAt: tomorrowAt(18), firstName: "Late", customTime: true, price: 60 });
+    expect(res.status).toBe(201);
+    expect(await priceOf("Late")).toBe(60);
+  });
+
+  it("keeps cents, and blank still means the menu price", async () => {
+    const cents = await book({ startsAt: tomorrowAt(18, 30), firstName: "Cents", customTime: true, price: 62.5 });
+    expect(cents.status).toBe(201);
+    expect(await priceOf("Cents")).toBe(62.5);
+    const menu = await book({ startsAt: tomorrowAt(19), firstName: "Menu", customTime: true });
+    expect(menu.status).toBe(201);
+    expect(await priceOf("Menu")).toBe(25);
+  });
+
+  it("🔴 an open slot cannot be booked at a typed price - only Custom time takes one", async () => {
+    // 12:00 is inside his hours: the menu price, or nothing.
+    const res = await book({ startsAt: tomorrowAt(12), firstName: "Cheap", price: 1 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("PRICE_NEEDS_CUSTOM_TIME");
+    expect(await prisma.appointment.count({ where: { shopId, firstName: "Cheap" } })).toBe(0);
+  });
+
+  it("a repeating series cannot carry one", async () => {
+    const res = await book({
+      startsAt: tomorrowAt(19, 30),
+      firstName: "Weekly",
+      customTime: true,
+      price: 60,
+      recurrence: { interval: 1, count: 2 },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("PRICE_NEEDS_CUSTOM_TIME");
+    expect(await prisma.appointment.count({ where: { shopId, firstName: "Weekly" } })).toBe(0);
+  });
+
+  it("a negative price is refused", async () => {
+    const res = await book({ startsAt: tomorrowAt(19, 45), firstName: "Neg", customTime: true, price: -5 });
+    expect(res.status).toBe(400);
+    expect(await prisma.appointment.count({ where: { shopId, firstName: "Neg" } })).toBe(0);
+  });
+});
+
 describe("everyone else is refused exactly as before", () => {
 
   it("the public booking page cannot book over a booking", async () => {

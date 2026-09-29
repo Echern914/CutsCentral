@@ -1740,6 +1740,24 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open appointments", featureId: "book-anyway" },
   },
   {
+    // A barber, 2026-09-29: a client wanted 10 PM, after his hours, and "I
+    // can't book it after hours". The way existed (Custom time) but read as
+    // small print, and it booked at the menu price instead of his late rate.
+    id: "book-after-hours",
+    q: "How do I book someone after my hours?",
+    a: "On the calendar, tap the hour you want — say 10 PM. If it isn't one of your open times, New appointment offers it anyway: under Time you'll see “10:00 PM · The time you tapped” with Book this time. Tap it, pick the client and schedule.\n\nAny other time works the same way from Custom time (top right of the Time card): pick the date and time yourself.\n\nCustom time also has a Price box. Leave it blank for the service's regular price, or type your after-hours rate — $60, say — and that's what the booking is for. Add-ons still add on top. A typed price is for one visit, so it can't be used with Weekly.\n\nIf something's already at that time, you're shown who and asked before it's booked (see Book anyway). Want customers to book late times themselves? Publish them as special-priced slots on the Services tab.",
+    keywords: [
+      "book after hours", "book someone after hours", "after hours appointment",
+      "can't book after hours", "can't book it after hours", "cant book after hours",
+      "book outside my hours", "outside my hours", "book late", "late appointment",
+      "after-hours price", "after hours price", "after hours rate", "late night rate",
+      "charge a different price", "custom price", "type a price", "book this time",
+      "the time you tapped", "book at 10 pm",
+    ],
+    category: "booking",
+    action: { label: "Open appointments", featureId: "appointments" },
+  },
+  {
     id: "special-chip-meaning",
     q: "Why does a booking say Special, Premium hour or After hours?",
     // 🔴 Two barbers asked this the same day (2026-09-29): "Special" reads as a

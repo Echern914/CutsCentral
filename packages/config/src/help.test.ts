@@ -471,6 +471,12 @@ describe("findHelp — what shipped late September", () => {
     ["book over someone", "book-anyway"],
     ["what does the double-booked chip mean", "book-anyway"],
     ["double booked", "double-booking"],
+    // Booking after hours, at his own price (2026-09-29)
+    ["how do I book someone after hours", "book-after-hours"],
+    ["I can't book it after hours", "book-after-hours"],
+    ["book a client outside my hours", "book-after-hours"],
+    ["charge my after hours price", "book-after-hours"],
+    ["custom price for one appointment", "book-after-hours"],
     // The Special / Premium hour / After hours chip (2026-09-29: two barbers asked)
     ["why does it say special", "special-chip-meaning"],
     ["what is the special", "special-chip-meaning"],
