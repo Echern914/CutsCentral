@@ -63,6 +63,7 @@ import {
   resolveIntake,
 } from "../engines/bookingIntake.js";
 import { checkPolicyAcceptance, publicBookingPolicy } from "../engines/bookingPolicy.js";
+import { normalizeClientNote } from "@chairback/config/clientNote";
 import {
   durationRangeForService,
   effectiveDurationAt,
@@ -557,6 +558,9 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       // before Confirm works. Null = the shop wrote nothing, and the page
       // shows nothing. `version` is echoed back as `policyVersion` on create.
       bookingPolicy: publicBookingPolicy(shop),
+      // The owner's note for clients, shown on the booked screen
+      // (config/clientNote.ts). Null = nothing shown.
+      clientNote: normalizeClientNote(shop.clientNote),
     },
     // Whether "Add to Apple Wallet" is a real action on the confirmation
     // screen. DARK until the WALLET_APPT_* env is set, and the page must know
@@ -2781,6 +2785,8 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
           addressCity: true,
           addressRegion: true,
           addressPostal: true,
+          // The owner's note for clients ("Please arrive 10 minutes early").
+          clientNote: true,
         },
       },
       service: { select: { name: true, durationMin: true } },
@@ -2854,6 +2860,7 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
       ...appt.shop,
       address: formatShopAddress(appt.shop),
       mapsUrl: mapsUrlFor(appt.shop),
+      clientNote: normalizeClientNote(appt.shop.clientNote),
     },
     service: appt.service,
     staff: appt.staff,

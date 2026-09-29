@@ -79,6 +79,8 @@ export interface BookShopData {
      * written; optional = an older API. Both show nothing and enforce nothing.
      */
     bookingPolicy?: BookingPolicyData | null;
+    /** The owner's note for clients, on the booked screen. Optional = older API. */
+    clientNote?: string | null;
     // Fee-free direct-payment handles (display-only); null when the barber hasn't
     // turned it on. Shown on the confirmation so the customer can pay directly.
     payDirect: {

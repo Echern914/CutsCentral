@@ -36,6 +36,8 @@ export interface BookingShop {
    */
   bookingPolicyText?: string | null;
   bookingPolicyChecklist?: string[];
+  /** The note every confirmation carries. Optional for the same reason. */
+  clientNote?: string | null;
 }
 
 /** Live connect status for the branded platform cards. */

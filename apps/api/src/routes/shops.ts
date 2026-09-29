@@ -51,6 +51,7 @@ import {
   BOOKING_POLICY_TEXT_MAX,
   normalizeBookingPolicy,
 } from "@chairback/config/bookingPolicy";
+import { CLIENT_NOTE_MAX, normalizeClientNote } from "@chairback/config/clientNote";
 import {
   applyAttributionInTx,
   planAttribution,
@@ -387,6 +388,9 @@ const updateShopSchema = createShopSchema
     bookingPolicyChecklist: z
       .array(z.string().max(BOOKING_CHECKLIST_LINE_MAX))
       .max(BOOKING_CHECKLIST_MAX_LINES),
+    // The note every confirmation carries (config/clientNote.ts). Refused over
+    // the limit, never cut; blank clears it.
+    clientNote: z.string().max(CLIENT_NOTE_MAX).nullish(),
     // Client rewards page content. rewardsWelcome: optional short greeting
     // ("" clears it). rewardsSections: visible REWARDS_SECTIONS keys (de-duped,
     // known keys only); [] = show all.
@@ -850,6 +854,10 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
     data.bookingPolicyChecklist = normalizeBookingPolicy({
       checklist: data.bookingPolicyChecklist as string[],
     }).checklist;
+  }
+  // Client note: trimmed, blank lines collapsed, blank -> null (shown nowhere).
+  if (data.clientNote !== undefined) {
+    data.clientNote = normalizeClientNote(data.clientNote as string | null);
   }
   // When the new `gallery` payload is present, it's the source of truth: write
   // galleryItems (captions stripped to undefined when blank) and keep the legacy
@@ -1741,6 +1749,7 @@ function serializeShop(shop: {
   bookingGroupsFirst: boolean;
   bookingPolicyText: string | null;
   bookingPolicyChecklist: string[];
+  clientNote: string | null;
   receptionistEnabled: boolean;
   receptionistTone: string | null;
   receptionistTermsAcceptedAt: Date | null;
@@ -1816,6 +1825,7 @@ function serializeShop(shop: {
     bookingGroupsFirst: shop.bookingGroupsFirst,
     bookingPolicyText: shop.bookingPolicyText,
     bookingPolicyChecklist: shop.bookingPolicyChecklist,
+    clientNote: shop.clientNote,
     receptionistEnabled: shop.receptionistEnabled,
     receptionistTone: shop.receptionistTone,
     receptionistTermsAcceptedAt: shop.receptionistTermsAcceptedAt?.toISOString() ?? null,

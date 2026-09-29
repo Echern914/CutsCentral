@@ -15,6 +15,7 @@ import { AddToWallet } from "@/components/AddToWallet";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { useDemoTour } from "@/components/tour/state";
 import type { ManageData } from "./page";
+import { ClientNoteBlock } from "../../ClientNoteBlock";
 import {
   cancelBookingAction,
   checkInAction,
@@ -172,6 +173,13 @@ export function ManageClient({
             </p>
           )}
         </dl>
+
+        {/* The owner's note ("Please arrive 10 minutes early") - for a visit
+            that is still ahead and booked, not a request, a cancelled one or
+            one that is over. */}
+        {data.status === "BOOKED" && !isCanceled && (
+          <ClientNoteBlock shopName={data.shop.name} note={data.shop.clientNote} />
+        )}
 
         {error && (
           <p role="alert" className="mt-4 text-xs text-red-400">

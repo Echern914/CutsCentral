@@ -7,8 +7,15 @@ import {
   shopAddressLines,
   type ShopAddressInput,
 } from "@chairback/config";
+import { clientNoteHeading, normalizeClientNote } from "@chairback/config/clientNote";
 
 const env = apiEnv();
+
+/** The note's plain-text twin for an email's text part: "" when there is none. */
+function clientNoteText(shopName: string, raw: string | null | undefined): string {
+  const note = normalizeClientNote(raw);
+  return note ? `${clientNoteHeading(shopName)}:\n${note}\n\n` : "";
+}
 
 /** Placeholders a barber can use in a custom SMS template. */
 export const SMS_PLACEHOLDERS = ["{firstName}", "{shop}", "{bookingUrl}", "{rewardsUrl}"] as const;
@@ -499,9 +506,25 @@ function appointmentEmailHtml(params: {
    * about an appointment, and the email is where people look for it.
    */
   address?: ShopAddressInput | null;
+  /**
+   * The shop's note for clients (config/clientNote.ts) - "Please arrive 10
+   * minutes early". Owner-typed, so ESCAPED here like every other field; line
+   * breaks become <br>. Null/blank renders nothing.
+   */
+  clientNote?: string | null;
 }): string {
   const withWhom = params.staffName
     ? `<div style="color:#71717a;font-size:14px;margin-top:2px">with ${escapeHtml(params.staffName)}</div>`
+    : "";
+  const note = normalizeClientNote(params.clientNote);
+  const noteBlock = note
+    ? `<div style="margin:0 28px 16px;padding:14px 16px;background:#0f0f0f;border:1px solid #2a2a2a;border-radius:12px">
+      <div style="color:#71717a;font-size:12px;letter-spacing:.04em;text-transform:uppercase">${escapeHtml(clientNoteHeading(params.shopName))}</div>
+      <div style="color:#fafafa;font-size:14px;line-height:1.5;margin-top:6px">${note
+        .split("\n")
+        .map((l) => escapeHtml(l))
+        .join("<br>")}</div>
+    </div>`
     : "";
   // "Where" sits INSIDE the details card, under the time, because that is the
   // block people screenshot. The address is a link so a phone can hand it
@@ -558,6 +581,7 @@ function appointmentEmailHtml(params: {
       <div style="color:#D4AF37;font-size:15px;font-weight:600;margin-top:8px">${escapeHtml(params.when)}</div>
       ${whereBlock}
     </div>
+    ${noteBlock}
     ${params.extraBlock ?? ""}
     ${keepRow}
     <div style="padding:4px 28px 28px">
@@ -626,6 +650,8 @@ export function buildAppointmentConfirmationEmail(params: {
     count: number;
     lines: string[];
   } | null;
+  /** The shop's note for clients ("Please arrive 10 minutes early"). */
+  clientNote?: string | null;
 }): EmailCopy {
   const when = formatApptTime(params.startsAt, params.timezone);
   const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
@@ -702,6 +728,7 @@ export function buildAppointmentConfirmationEmail(params: {
       seriesText +
       `\n` +
       (address ? `Where: ${address}\n\n` : "") +
+      clientNoteText(params.shopName, params.clientNote) +
       `Add to calendar: ${calendarUrl}\n` +
       (walletPassUrl ? `Add to Apple Wallet: ${walletPassUrl}\n` : "") +
       `\nNeed to reschedule or cancel? ${manageUrl}\n\n` +
@@ -724,6 +751,7 @@ export function buildAppointmentConfirmationEmail(params: {
       walletPassUrl,
       appStoreUrl: MOBILE_APP.appStoreUrl,
       address: params.address,
+      clientNote: params.clientNote,
     }),
   };
 }
@@ -811,6 +839,8 @@ export function buildAppointmentReminderEmail(params: {
   staffName?: string | null;
   manageToken: string;
   address?: ShopAddressInput | null;
+  /** The shop's note for clients ("Please arrive 10 minutes early"). */
+  clientNote?: string | null;
 }): EmailCopy {
   const when = formatApptTime(params.startsAt, params.timezone);
   const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
@@ -821,6 +851,7 @@ export function buildAppointmentReminderEmail(params: {
     text:
       `Reminder, ${who}: your ${params.serviceName} at ${params.shopName} is ${when}. See you then!\n\n` +
       (address ? `Where: ${address}\n\n` : "") +
+      clientNoteText(params.shopName, params.clientNote) +
       `Reschedule or cancel: ${manageUrl}\n\n` +
       `Keep your appointments and rewards in one place - get the ChairBack app: ${MOBILE_APP.appStoreUrl}`,
     html: appointmentEmailHtml({
@@ -833,6 +864,7 @@ export function buildAppointmentReminderEmail(params: {
       manageUrl,
       appStoreUrl: MOBILE_APP.appStoreUrl,
       address: params.address,
+      clientNote: params.clientNote,
     }),
   };
 }

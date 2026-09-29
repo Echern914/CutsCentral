@@ -67,6 +67,9 @@ const SHOP_SELECT = {
   addressCity: true,
   addressRegion: true,
   addressPostal: true,
+  // The owner's note for clients ("Please arrive 10 minutes early"): on the
+  // confirmation and reminder EMAILS, never the texts (config/clientNote.ts).
+  clientNote: true,
 } as const;
 
 type ApptShop = {
@@ -82,6 +85,7 @@ type ApptShop = {
   addressCity: string | null;
   addressRegion: string | null;
   addressPostal: string | null;
+  clientNote: string | null;
 };
 
 type ApptClient = {
@@ -467,6 +471,7 @@ async function notifyAppointmentConfirmationImpl(params: {
           // The template cannot know whether the pass type is configured, and
           // an Add-to-Wallet button whose link 404s is worse than none.
           walletPassAvailable: appointmentWalletEnabled(),
+          clientNote: shop.clientNote,
         });
         const sent = await sendAppointmentEmail({
           shopId: shop.id,
@@ -569,6 +574,7 @@ export async function notifyAppointmentReminder(params: {
           timezone: shop.timezone,
           staffName: appt.staff.name,
           manageToken: appt.manageToken,
+          clientNote: shop.clientNote,
         });
         const sent = await sendAppointmentEmail({
           shopId: shop.id,

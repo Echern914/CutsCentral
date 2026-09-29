@@ -38,6 +38,7 @@
     "./clientIdentity": "./src/clientIdentity.ts",
     "./bookingLinks": "./src/bookingLinks.ts",
     "./bookingPolicy": "./src/bookingPolicy.ts",
+    "./clientNote": "./src/clientNote.ts",
     "./addOns": "./src/addOns.ts"
   },
   "scripts": {

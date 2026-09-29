@@ -25,6 +25,8 @@ export interface ManageData {
     /** Formatted by the API from the one formatter; null when the shop has not published one. */
     address: string | null;
     mapsUrl: string | null;
+    /** The owner's note for clients ("Please arrive 10 minutes early"). Optional = older API. */
+    clientNote?: string | null;
   };
   service: { name: string; durationMin: number };
   staff: { name: string };

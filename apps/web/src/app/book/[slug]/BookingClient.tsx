@@ -62,6 +62,7 @@ import {
 } from "./BookingPolicy";
 import { groupsToAutoExpand } from "./autoExpand";
 import { revealElement } from "./reveal";
+import { ClientNoteBlock } from "../ClientNoteBlock";
 
 /** One selectable time in the calendar grid, with who can serve it. */
 interface DaySlot {
@@ -2116,6 +2117,9 @@ export function BookingClient({
               </>
             )}
           </p>
+          {/* The owner's note ("Please arrive 10 minutes early"). Not on a
+              request: nothing is booked yet, and its approval email carries it. */}
+          {!wasRequest && <ClientNoteBlock shopName={data.shop.name} note={data.shop.clientNote} />}
           <Link
             href={`/book/manage/${confirmedToken}`}
             className="mt-5 inline-block rounded-xl px-5 py-2.5 text-sm font-semibold"

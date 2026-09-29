@@ -1711,7 +1711,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "booking-policies",
     q: "How do I add my booking policies, or a checklist customers have to tick?",
-    a: "Booking → Settings → “Your policies”, the last card on that tab.\n\nPolicy is your rules in your own words — deposits, lateness, no-shows, what to bring — up to 2,000 characters. Checklist is up to 8 short lines, like “I'll arrive 5 minutes early”: type one, tap Add, and when you're done tap Save policies.\n\nCustomers see it under “Before you book” on the last step of your booking page, right above Confirm. Every checklist line is a box they have to tick — Confirm stays off until they do. If you change your policies while someone is mid-booking, their ticks clear and they're asked to read them again.\n\nWhat they agreed to is kept on the appointment: open it and you'll see “Agreed to your policies when booking”, with the lines they ticked and the policy they read.\n\nLeave both blank and nothing shows. Policy text with no checklist is shown, but nobody has to tick anything. Keep the list short — every line is one more step between someone and their booking. It doesn't apply to appointments you book in yourself.",
+    a: "Booking → Settings → “Your policies”, near the bottom of that tab.\n\nPolicy is your rules in your own words — deposits, lateness, no-shows, what to bring — up to 2,000 characters. Checklist is up to 8 short lines, like “I'll arrive 5 minutes early”: type one, tap Add, and when you're done tap Save policies.\n\nCustomers see it under “Before you book” on the last step of your booking page, right above Confirm. Every checklist line is a box they have to tick — Confirm stays off until they do. If you change your policies while someone is mid-booking, their ticks clear and they're asked to read them again.\n\nWhat they agreed to is kept on the appointment: open it and you'll see “Agreed to your policies when booking”, with the lines they ticked and the policy they read.\n\nLeave both blank and nothing shows. Policy text with no checklist is shown, but nobody has to tick anything. Keep the list short — every line is one more step between someone and their booking. It doesn't apply to appointments you book in yourself.",
     keywords: [
       "add my policy", "add a policy", "booking policy", "booking policies", "shop policy",
       "shop rules", "house rules", "my rules", "policy checklist", "checklist", "tick boxes",
@@ -1775,6 +1775,21 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     ],
     category: "booking",
     action: { label: "Open appointments", featureId: "appointments" },
+  },
+  {
+    // A barber, 2026-09-29: "if we could add notes to the confirmations. Like
+    // I would tell people please arrive 10 minutes early."
+    id: "client-note",
+    q: "Can I add a note to my clients' confirmations?",
+    a: "Yes. Booking → Settings → Note for clients. Write a line or two (up to 300 characters), like “Please arrive 10 minutes early. Parking is around the back”, and save.\n\nIt shows under “A note from” your shop name on the screen clients see right after booking, on their appointment page, and in the confirmation and reminder emails. It isn't added to text messages, which cost per character. Clear the box and save to remove it.\n\nThis isn't your policies: those are what clients tick before they can book. The note is just information for after.",
+    keywords: [
+      "note for clients", "note to clients", "note on confirmations", "note on the confirmation",
+      "add a note to confirmations", "add notes to the confirmations", "confirmation note",
+      "arrive 10 minutes early", "arrive early message", "message on the confirmation",
+      "tell clients to arrive early", "parking instructions",
+    ],
+    category: "booking",
+    action: { label: "Open booking settings", featureId: "booking-policies" },
   },
   {
     id: "special-chip-meaning",

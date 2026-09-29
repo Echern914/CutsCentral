@@ -484,6 +484,10 @@ describe("findHelp — what shipped late September", () => {
     // Tapping an appointment alert (2026-09-29)
     ["when I tap a notification it should take me to the appointment", "tap-appointment-alert"],
     ["what happens when I tap the next up notification", "tap-appointment-alert"],
+    // The note on confirmations (2026-09-29)
+    ["can we add notes to the confirmations", "client-note"],
+    ["tell people please arrive 10 minutes early", "client-note"],
+    ["how do I add a note for clients", "client-note"],
     // The Special / Premium hour / After hours chip (2026-09-29: two barbers asked)
     ["why does it say special", "special-chip-meaning"],
     ["what is the special", "special-chip-meaning"],
