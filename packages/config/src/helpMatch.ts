@@ -629,12 +629,20 @@ export function searchFeatures(
     // "Affiliates", "tier" is the synonym "tiers", "change tier" (verb dropped)
     // is "tiers" too. Before this, "affiliate" lost to an entry that merely
     // LISTED the word as a synonym, because the name was one letter longer.
+    //
+    // 🔴 But token equality folds STOPWORDS away, so "by service" and
+    // "services" share the key "service" and could not be told apart: the
+    // composer's synonym "by service" and Services' synonym "services" both
+    // earned the same bonus for both queries, and the name weight decided.
+    // A synonym typed WORD FOR WORD - stopwords and all - is the stronger
+    // claim (somebody wrote that exact phrase against that entry), so it
+    // earns the name's bonus; a match that only holds once the stopwords and
+    // plurals are folded away keeps the old +8.
     const nq = normalize(query);
     if (nq) {
       if (normalize(entry.name) === nq || tokenKey(entry.name) === queryKey) score += 10;
-      else if (
-        entry.synonyms.some((s) => normalize(s) === nq || tokenKey(s) === queryKey)
-      ) {
+      else if (entry.synonyms.some((s) => normalize(s) === nq)) score += 10;
+      else if (entry.synonyms.some((s) => tokenKey(s) === queryKey)) {
         score += 8;
       } else if (
         nq.includes(" ") &&

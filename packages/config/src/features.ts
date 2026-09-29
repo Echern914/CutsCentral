@@ -330,6 +330,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
       "google calendar",
       "migrate",
       "import my calendar",
+      "connect acuity",
     ],
     description: "Keep your current booking site and sync it into ChairBack",
     // 🔴 ?tab=Settings, not the bare route. ConnectPlatforms - the card that
@@ -345,6 +346,26 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
       "how do I connect acuity",
       "why did my integration stop syncing",
     ],
+  },
+  {
+    // Same card as `integrations`, named for the moment it matters: Acuity
+    // stopped accepting ChairBack's sign-in and the tile says Not syncing
+    // (#526). MANAGER, because /api/acuity/oauth/start is requireManager.
+    id: "acuity-reconnect",
+    name: "Reconnect Acuity",
+    synonyms: [
+      "reconnect",
+      "acuity not syncing",
+      "not syncing",
+      "acuity disconnected",
+      "acuity login",
+      "acuity sign in",
+      "sync stopped",
+    ],
+    description: "Sign in to Acuity when it stops accepting ChairBack - your appointments and settings are kept",
+    href: "/dashboard/booking?tab=Settings",
+    category: "booking",
+    questions: ["why does it say reconnect acuity", "why is acuity not syncing"],
   },
   {
     id: "shop-timezone",
@@ -443,6 +464,23 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     tourStepId: "book-services",
   },
   {
+    // The card at the top of the Services tab, shown while Acuity is
+    // connected (#524). Never a bare "services": that is Services & pricing.
+    id: "acuity-service-import",
+    name: "Import services from Acuity",
+    synonyms: [
+      "import services",
+      "import my services",
+      "acuity services",
+      "copy services from acuity",
+      "services from acuity",
+    ],
+    description: "Copy your Acuity services in - see the list first, and only what's missing is added",
+    href: "/dashboard/booking?tab=Services",
+    category: "booking",
+    questions: ["can I import my services from acuity"],
+  },
+  {
     id: "addons",
     name: "Service add-ons",
     synonyms: ["extras", "upsell", "hot towel", "add ons", "addons"],
@@ -494,10 +532,12 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     id: "conflicts",
     name: "Conflicts",
     // The manager's list of double-booked chairs: every walk-in that was
-    // RECORDED over something already on the chair (#439/#440). "walk in" and
-    // "double booking" themselves stay with `appointments`/the help corpus;
-    // this is the inbox where a collision waits until a person deals with it.
-    synonyms: ["double-booked", "double booked", "conflict", "conflicts tab", "unresolved conflicts", "booking conflicts"],
+    // RECORDED over something already on the chair (#439/#440). "walk in"
+    // stays with `appointments`; this is the inbox where a collision waits
+    // until a person deals with it. The NOUN ("double booking", "double
+    // booked") lands here; the verb ("double book") is `book-anyway`, which
+    // makes one on purpose and is not listed here.
+    synonyms: ["double-booked", "double booked", "double booking", "conflict", "conflicts tab", "unresolved conflicts", "booking conflicts"],
     description: "Double-booked chairs waiting for someone to deal with them",
     href: "/dashboard/booking?tab=Conflicts",
     category: "booking",
@@ -553,6 +593,53 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
       "how do I collect vehicle information",
       "can customers add a note when they book",
     ],
+  },
+  {
+    // The "Your policies" card, last on the Settings tab (#537). NOT "rules":
+    // that word is the Booking rules entry's name, and a bare synonym here
+    // would pull "rules" onto a page about a checklist.
+    id: "booking-policies",
+    name: "Your policies",
+    synonyms: [
+      "policy",
+      "policies",
+      "booking policy",
+      "booking policies",
+      "checklist",
+      "policy checklist",
+      "shop rules",
+      "before you book",
+      "agree before booking",
+    ],
+    description: "Your rules in your own words, plus a checklist customers check off before they can book",
+    href: "/dashboard/booking?tab=Settings",
+    category: "booking",
+    questions: [
+      "how do I add my booking policies",
+      "can customers agree to my rules before they book",
+    ],
+  },
+  {
+    // Book anyway lives inside New appointment and the edit sheet (#538), so
+    // it resolves to the book. "double booked" itself stays with Conflicts,
+    // the list of walk-ins recorded over a booked chair.
+    id: "book-anyway",
+    name: "Book anyway",
+    synonyms: [
+      "double book",
+      "double-book",
+      "force",
+      "force a booking",
+      "book over",
+      "overbook",
+      "squeeze in",
+      "double-booked chip",
+      "custom time",
+    ],
+    description: "Book someone in over a taken time on purpose - marked Double-booked on the calendar",
+    href: "/dashboard/booking?tab=Appointments",
+    category: "booking",
+    questions: ["can I book over another appointment", "how do I double-book on purpose"],
   },
   {
     id: "booking-approval",
@@ -642,7 +729,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "vip-cards",
     name: "VIP & custom cards",
-    synonyms: ["vip", "exclusive card", "invite only", "card types"],
+    synonyms: ["vip", "vips", "exclusive card", "invite only", "card types"],
     description: "Extra card types — including invite-only VIP cards for your best clients",
     href: "/dashboard/rewards",
     category: "retention",
@@ -653,11 +740,60 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     id: "loyalty-tiers",
     name: "Loyalty status tiers",
     synonyms: ["bronze", "silver", "gold", "status", "tier", "tiers", "tier visits", "visits needed", "levels", "member", "vip status", "badge"],
-    description: "Clients climb Bronze → Silver → Gold on lifetime visits",
+    // 🔴 Said "on lifetime visits" long after tiers became configurable
+    // (visits and/or money, per month or across their history).
+    description: "Clients climb Bronze → Silver → Gold on the visits or amount spent you choose",
     href: "/dashboard/rewards#tiers",
     category: "retention",
     tourStepId: "rewards-extras",
     flag: "rewardsEnabled",
+  },
+  {
+    // The card under the rewards switch (#528). Flagged: it renders only while
+    // rewards are on, and the API answers 409 rewards_off otherwise.
+    id: "past-visits",
+    name: "Past visits",
+    synonyms: [
+      "credit past visits",
+      "credit old visits",
+      "old visits",
+      "visits before rewards",
+      "rewards start date",
+    ],
+    description: "Give punches for visits from before you turned rewards on - nothing is sent to customers",
+    href: "/dashboard/rewards",
+    category: "retention",
+    flag: "rewardsEnabled",
+    questions: ["can old visits earn punches"],
+  },
+  {
+    // The composer on the Clients page (#532/#534). Its name carries "service"
+    // on purpose: "by service" reduces to the single token "service" once the
+    // stopword goes, and only a name hit plus the exact-synonym bonus puts the
+    // composer ahead of Services & pricing for it.
+    id: "message-clients",
+    name: "Send a message to your clients",
+    synonyms: [
+      "message your clients",
+      "by service",
+      "by tier",
+      "send by service",
+      "message by service",
+      "broadcast",
+      "announcement",
+      "email my clients",
+      "notify my clients",
+      "message all clients",
+      "message my gold",
+      "only gold",
+    ],
+    description: "One app notification or email to everyone, a rewards tier, or the clients who had a service",
+    href: "/dashboard/clients",
+    category: "retention",
+    questions: [
+      "how do I message only my gold clients",
+      "how do I email the clients who had a certain service",
+    ],
   },
   {
     id: "rebook-nudges",
@@ -673,7 +809,9 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "clients",
     name: "Client book",
-    synonyms: ["customers", "customer list", "contacts", "contact list", "client list", "crm", "export", "csv", "import", "import clients", "merge", "merge clients", "duplicate client", "opt out", "consent", "unsubscribe", "client notes", "notes", "tags", "broadcast", "message all clients", "email my clients", "notify my clients", "announcement"],
+    // The messaging words moved to `message-clients`, the composer's own entry:
+    // same page, but the result now says what the barber was looking for.
+    synonyms: ["customers", "customer list", "contacts", "contact list", "client list", "crm", "export", "csv", "import", "import clients", "merge", "merge clients", "duplicate client", "opt out", "consent", "unsubscribe", "client notes", "notes", "tags", "my clients", "marketing email"],
     description: "Your client list — yours to keep, filter, and export",
     href: "/dashboard/clients",
     category: "data",
@@ -931,7 +1069,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "support",
     name: "Contact support",
-    synonyms: ["support", "help", "contact us", "contact support", "email us", "human", "talk to a person", "bug", "report a problem", "something is broken"],
+    synonyms: ["support", "help", "contact", "contact us", "contact support", "email us", "human", "talk to a person", "bug", "report a problem", "something is broken"],
     description: "Reach a person at ChairBack",
     href: "/support",
     category: "account",

@@ -142,6 +142,50 @@ describe("knowledge authority", () => {
   });
 });
 
+describe("what shipped late September, through the one engine", () => {
+  // The help bubble, the Assistant tab and the MCP connector all resolve here,
+  // so these are the three surfaces' answers at once - and the actor gate that
+  // keeps dashboard instructions away from a customer applies to all of them.
+  const staffOnly: Array<[string, string]> = [
+    ["how do I add my policy", "booking-policies"],
+    ["force a booking", "book-anyway"],
+    ["why can't email reach anyone", "email-reaches-nobody"],
+    ["acuity says reconnect", "acuity-reconnect"],
+    ["credit old visits", "rewards-past-visits"],
+    ["charge the saved card", "saved-card-charge"],
+  ];
+
+  it.each(staffOnly)("%j answers a shop seat with %s", (q, id) => {
+    for (const actor of ["owner", "manager", "barber"] as const) {
+      const r = ask(q, { actor });
+      expect(r.outcome, `${actor}: ${q}`).toBe("ANSWERED");
+      expect(r.answer!.id).toBe(id);
+    }
+  });
+
+  it.each(staffOnly)("%j is withheld from a customer, with a way to a person", (q) => {
+    const r = ask(q, { actor: "public_customer" });
+    expect(r.outcome).toBe("UNSUPPORTED");
+    expect(r.answer).toBeNull();
+    expect(r.escalation).not.toBeNull();
+  });
+
+  it("the one answer a customer acts on themselves is served to them", () => {
+    // Stopping saved-card charges happens on the CUSTOMER's appointment link.
+    const r = ask("how do I stop the shop charging my card", { actor: "verified_customer" });
+    expect(r.outcome).toBe("ANSWERED");
+    expect(r.answer!.id).toBe("customer-stop-card-charges");
+  });
+
+  it("a barber seat keeps the answer but gets no button to a manager page", () => {
+    const r = ask("how do I add my policy", { actor: "barber", seat: { role: "BARBER" } });
+    expect(r.outcome).toBe("ANSWERED");
+    expect(r.answer!.action).toBeNull();
+    const owner2 = ask("how do I add my policy");
+    expect(owner2.answer!.action?.href).toBe("/dashboard/booking?tab=Settings");
+  });
+});
+
 describe("resolving a tapped suggestion by id", () => {
   it("returns that exact answer rather than re-guessing from its text", () => {
     const r = resolveSupportAnswerById("contact-human", owner);

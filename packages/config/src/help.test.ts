@@ -444,3 +444,159 @@ describe("findHelp — messaging many clients", () => {
     expect(helpAnswerById("promotions")?.a).toMatch(/Email or notify/);
   });
 });
+
+/**
+ * What shipped on 2026-09-28 (#510-#539), in the words a barber types.
+ *
+ * Before these entries, "how do I add my policy" and "book anyway" got a
+ * shrug, "why can't email reach anyone" answered the SPAM-folder entry,
+ * "book over someone" answered the client import, "customer wants to stop
+ * card charges" answered refunds, and "waitlist text button" answered the
+ * rewards-link resend. Both assistants read this corpus through the shared
+ * engine, so a row here is a row for the help bubble, the Assistant tab and
+ * the MCP connector at once.
+ */
+describe("findHelp — what shipped late September", () => {
+  const BATTERY: [string, string][] = [
+    // Booking policies + checklist (#537)
+    ["how do I add my policy", "booking-policies"],
+    ["add my policies", "booking-policies"],
+    ["policy checklist", "booking-policies"],
+    ["customers agree to my rules before booking", "booking-policies"],
+    ["what does agreed to your policies mean", "booking-policies"],
+    ["where do I put my shop rules", "booking-policies"],
+    // Book anyway (#538)
+    ["force a booking", "book-anyway"],
+    ["book anyway", "book-anyway"],
+    ["book over someone", "book-anyway"],
+    ["what does the double-booked chip mean", "book-anyway"],
+    ["double booked", "double-booking"],
+    // Add-ons when the barber books (#539/#519)
+    ["add-ons when I book", "addons-when-you-book"],
+    ["why does the calendar card show add-ons", "addons-when-you-book"],
+    // Message by tier or service (#532/#534)
+    ["send to only gold clients", "message-all-clients"],
+    ["send to people who had a haircut", "message-by-service"],
+    ["message clients who had a service", "message-by-service"],
+    // The marketing-email yes (#515/#525/#527/#529)
+    ["why can't email reach anyone", "email-reaches-nobody"],
+    ["why does email say 0 people", "email-reaches-nobody"],
+    ["how does a client say yes to marketing emails", "email-marketing-yes"],
+    ["record a client's yes to email", "email-marketing-yes"],
+    ["client unsubscribed from email", "email-unsubscribed"],
+    ["resubscribe a client", "email-unsubscribed"],
+    // Acuity (#524/#526)
+    ["import my acuity services", "acuity-import-services"],
+    ["acuity says reconnect", "acuity-reconnect"],
+    ["reconnect acuity", "acuity-reconnect"],
+    ["acuity disconnected", "acuity-reconnect"],
+    // Past visits (#528)
+    ["credit old visits", "rewards-past-visits"],
+    ["past visits", "rewards-past-visits"],
+    ["rewards start date", "rewards-past-visits"],
+    ["turned on rewards and old visits didn't count", "rewards-past-visits"],
+    // Waitlist Text button (#518)
+    ["text someone on the waitlist", "waitlist-text"],
+    ["waitlist text button", "waitlist-text"],
+    // Saved-card service charge (#533/#535)
+    ["customer wants to stop card charges", "customer-stop-card-charges"],
+    ["stop charging my card", "customer-stop-card-charges"],
+    ["charge the saved card", "saved-card-charge"],
+    ["the customer stopped charges to this card", "saved-card-refused"],
+    ["why can't I charge the card yet", "saved-card-refused"],
+    ["card was refused approved only up to", "saved-card-refused"],
+    // Add client + import (#510/#517/#522)
+    ["add client says already exists", "add-client-manually"],
+    ["two clients share a phone", "import-skipped-rows"],
+    ["does importing clients opt them in", "import-skipped-rows"],
+    // Wallet pass after the visit (#531)
+    ["appointment pass after the visit", "apple-wallet"],
+    ["remove the wallet pass", "apple-wallet"],
+  ];
+  it.each(BATTERY)("%j -> %s", (q, id) => expectAnswer(q, id));
+
+  it("the card's own title reaches the import, by its how-to or its pointer", () => {
+    // The generated "Where do I find Import services from Acuity?" pointer and
+    // the hand-written how-to sit a hundredth of a point apart on the card's
+    // exact title. Either is a right answer - both name the card and open it.
+    expect(["acuity-import-services", "feature-acuity-service-import"]).toContain(
+      findHelp("import services from acuity").answer?.id,
+    );
+  });
+
+  /**
+   * Words the new entries were measured stealing, one by one, from every
+   * question and keyword the corpus carried before them. A question text
+   * scores as heavily as a keyword and a substring of it earns the phrase
+   * bonus, so "How do I import my services from Acuity?" took the bare words
+   * "import" and "services", and "…the waitlist?" took "waitlist".
+   */
+  it("keeps the words the new entries were caught stealing", () => {
+    expectAnswer("services", "feature-services");
+    expectAnswer("import", "import-clients");
+    expectAnswer("csv", "import-clients");
+    expectAnswer("waitlist", "feature-waitlist");
+    expectAnswer("add ons", "feature-addons");
+    expectAnswer("new appointment", "feature-appointments");
+    expectAnswer("already taken", "slot-taken");
+    expectAnswer("find me", "find-my-shop");
+    expectAnswer("menu", "add-services");
+    expectAnswer("punches", "punch-cards");
+    expectAnswer("marketing", "more-clients");
+    expectAnswer("saved", "walk-in-saved-twice");
+    expectAnswer("what is my cancellation policy", "my-policy");
+    // The trial's words, inside the app where the trial answer is filtered
+    // out, must not fall onto the slot-taken entry that now says "wait until".
+    for (const q of ["try it first", "try before"]) {
+      expect(findHelp(q, { inApp: true }).answer?.id, q).not.toBe("slot-taken");
+    }
+    expect(findHelp("texts left", { inApp: true }).answer?.id).not.toBe("waitlist-text");
+    expect(findHelp("unsubscribe", { inApp: true }).answer?.id).toBe("opt-out");
+  });
+
+  /**
+   * Answers that today's work made WRONG. Each pin names the sentence that
+   * used to be there, so it cannot drift back.
+   */
+  it("no longer says what stopped being true", () => {
+    const a = (id: string) => helpAnswerById(id)!.a;
+    // Book anyway: customers still can't double-book; owners and managers can.
+    expect(a("double-booking")).toMatch(/Not by a customer/);
+    expect(a("double-booking")).toMatch(/Book anyway/);
+    expect(a("double-booking")).not.toMatch(/one deliberate exception/);
+    expect(a("slot-taken")).not.toMatch(/refused rather than squeezed in/);
+    expect(a("slot-taken")).toMatch(/Book anyway/);
+    expect(a("book-anyway")).toMatch(/Customers can never do this/);
+    expect(a("book-anyway")).toMatch(/customer who is paying for or confirming/);
+    // Rewards start at the switch-on; the pause does not backfill itself.
+    expect(a("turn-off-rewards")).not.toMatch(/nobody loses credit/);
+    expect(a("turn-off-rewards")).toMatch(/Past visits/);
+    expect(a("punch-cards")).toMatch(/Once rewards are on/);
+    // Add client never overwrites, and a number is not a yes to texts.
+    expect(a("add-client-manually")).not.toMatch(/immediately eligible/);
+    expect(a("add-client-manually")).toMatch(/already belongs to a client/);
+    // The client-page switch is texts only; STOP is theirs to undo.
+    expect(a("opt-out")).not.toMatch(/opt anyone out \(or back in\)/);
+    expect(a("opt-out")).toMatch(/only they can opt back in/);
+    // Email goes only to a recorded yes, and an import is never one.
+    expect(a("message-all-clients")).toMatch(/only goes to clients who have said yes/);
+    expect(a("email-reaches-nobody")).toMatch(/importing a client never counts as a yes/);
+    expect(a("import-clients")).toMatch(/aren't texted, or sent your marketing emails/);
+    // The Wallet pass: what it says after the visit, and what we cannot do.
+    expect(a("apple-wallet")).not.toMatch(/greys itself out/);
+    expect(a("apple-wallet")).toMatch(/COMPLETED, MISSED/);
+    expect(a("apple-wallet")).toMatch(/can't delete a pass/);
+    // The cancellation email's button follows the booking mode.
+    expect(a("cancellation-email")).toMatch(/Book another appointment/);
+  });
+
+  it("keeps the saved-card charge where it applies, and conditional there", () => {
+    // Only some shops' checkout can charge a saved card. The general payment
+    // answers must not promise it; the answers about it say "where offered".
+    for (const id of ["get-paid", "record-payment", "no-show-fee", "take-a-deposit"]) {
+      expect(helpAnswerById(id)!.a, id).not.toMatch(/saved card/i);
+    }
+    expect(helpAnswerById("saved-card-charge")!.a).toMatch(/^Where your checkout offers it/);
+    expect(helpAnswerById("saved-card-charge")!.a).toMatch(/72 hours/);
+  });
+});
