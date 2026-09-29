@@ -200,6 +200,59 @@ describe("feature search: round two (owner vocabulary)", () => {
   });
 });
 
+/**
+ * Round three, 2026-09-28: the screens and cards that shipped that day, and
+ * the words that must still land where they did. Measured against the whole
+ * previous vocabulary (every name, synonym and help keyword), so each row is
+ * either new reach or a route the new entries could have stolen.
+ */
+const EXPECTED_3: [string, string][] = [
+  ["policies", "Your policies"],
+  ["policy", "Your policies"],
+  ["checklist", "Your policies"],
+  ["book anyway", "Book anyway"],
+  ["double book", "Book anyway"],
+  ["force a booking", "Book anyway"],
+  // The walk-in collision list keeps the noun.
+  ["double booked", "Conflicts"],
+  ["double booking", "Conflicts"],
+  ["import services", "Import services from Acuity"],
+  ["acuity services", "Import services from Acuity"],
+  ["import my acuity services", "Import services from Acuity"],
+  ["past visits", "Past visits"],
+  ["credit old visits", "Past visits"],
+  ["reconnect acuity", "Reconnect Acuity"],
+  ["not syncing", "Reconnect Acuity"],
+  ["connect acuity", "Acuity & Square sync"],
+  // 🔴 "by service" folds to the single token "service", the same key as
+  // "services" - only the verbatim-synonym bonus tells them apart.
+  ["by service", "Send a message to your clients"],
+  ["send by service", "Send a message to your clients"],
+  ["message your clients", "Send a message to your clients"],
+  ["broadcast", "Send a message to your clients"],
+  ["only gold", "Send a message to your clients"],
+  // One client is a conversation, not a broadcast.
+  ["message a client", "Inbox"],
+  ["my clients", "Client book"],
+  // The verbatim-synonym bonus moved these; each is pinned where it belongs.
+  ["contact", "Contact support"],
+  ["email us", "Contact support"],
+  ["contacts", "Client book"],
+  ["log", "Activity feed"],
+  ["vips", "VIP & custom cards"],
+];
+
+describe("feature search: round three (shipped 2026-09-28)", () => {
+  it.each(EXPECTED_3)("%j finds %j", (query, expected) => {
+    expect(top(query)).toBe(expected);
+  });
+
+  it("Past visits exists only while rewards are on, like the card", () => {
+    const off = searchableFeatures({ role: "OWNER", flagsOff: ["rewardsEnabled"] });
+    expect(off.map((f) => f.id)).not.toContain("past-visits");
+  });
+});
+
 describe("feature search: what it must NOT match", () => {
   /**
    * Every one of these was a real, confidently-wrong result under the old

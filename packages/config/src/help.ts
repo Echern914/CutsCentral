@@ -164,8 +164,21 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "import-clients",
     q: "Can I bring my existing clients over?",
-    a: "Yes. If you connect Acuity or Square, your past appointments backfill automatically and those clients land in your client book with their history intact.\n\nIf you're coming from paper or a phone, add them from the client book — name and number is enough to start.",
-    keywords: ["import", "existing clients", "migrate", "bring over", "transfer", "upload", "csv", "backfill"],
+    // 🔴 Three things this used to leave out, each of which a shop acted on:
+    // backfilled visits from before rewards were switched on earn no punches
+    // until credited (#528), an import never writes over a client on a shared
+    // phone (#510/#517/#522), and an import never counts as a yes to texts or
+    // marketing email.
+    a: "Yes. If you connect Acuity or Square, your past appointments backfill automatically and those clients land in your client book with their history intact. Visits from before you switched rewards on don't earn punches by themselves — you can credit them under Rewards → Past visits.\n\nComing from a spreadsheet? Clients → Import CSV takes names, phones and emails. It never writes over a client you already have: a row that shares a phone or email with someone in your book is skipped and listed so you can decide, and so is a name-only row for someone you already have.\n\nImported clients aren't texted, or sent your marketing emails, until they say yes themselves — a contact list isn't proof anyone agreed. Your Acuity services come across separately, from Booking → Services.",
+    keywords: [
+      "import", "existing clients", "migrate", "bring over", "transfer", "upload", "csv", "backfill",
+      "import csv", "spreadsheet", "import from acuity",
+    ],
+    // A bare "import" means the client list. The Acuity service import owns
+    // its own multi-word phrases; without this its generated "Where do I find
+    // Import services from Acuity?" pointer took the bare word on its question
+    // text alone.
+    primaryFor: ["import"],
     category: "start",
     action: { label: "Open client book", featureId: "clients" },
   },
@@ -209,7 +222,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "add-services",
     q: "How do I add a service or change a price?",
-    a: "Services carry the name, price, duration, and the hours you offer them — add or edit them under Services.\n\nYou can also charge differently by weekday or by time of day (a Saturday fade priced above a Tuesday one), and the client sees the honest price for the slot they're picking.",
+    a: "Services carry the name, price, duration, and the hours you offer them — add or edit them under Services.\n\nYou can also charge differently by weekday or by time of day (a Saturday fade priced above a Tuesday one), and the client sees the honest price for the slot they're picking.\n\nAlready set up in Acuity? Bring them across instead of typing them again — see “Can I copy what I sell on Acuity into ChairBack?”.",
     keywords: [
       "service", "price", "menu", "duration", "add service", "change price",
       "cost of cut", "how long", "haircut", "takes", "minutes", "length",
@@ -262,15 +275,15 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "waitlist",
     q: "What happens when I'm fully booked?",
-    a: "Full days feed a waitlist instead of turning people away. When a slot frees up — a cancellation, a moved appointment — the queue gets pinged automatically.\n\nThat's usually where a cancelled Saturday gets refilled before you've even noticed it opened.",
-    keywords: ["waitlist", "wait list", "fully booked", "full", "cancellation", "standby", "sold out", "no slots"],
+    a: "Full days feed a waitlist instead of turning people away. When a slot frees up — a cancellation, a moved appointment — the queue gets pinged automatically.\n\nThat's usually where a cancelled Saturday gets refilled before you've even noticed it opened.\n\nThe people waiting are under Booking → Waitlist. Each card has Book appointment, and a Text button that opens a message to them from your own phone.",
+    keywords: ["waitlist", "wait list", "fully booked", "full", "cancellation", "standby", "sold out", "no slots", "use the waitlist"],
     category: "booking",
     action: { label: "Open booking settings", featureId: "waitlist" },
   },
   {
     id: "addons",
     q: "Can clients add extras to a booking?",
-    a: "Yes. Set up add-ons — a hot towel, a beard trim, a wash — and clients tack them on while booking. The extra time and the extra money both land on the appointment.\n\nWhen the schedule has room for it, the add-on is offered; when it doesn't, it isn't.",
+    a: "Yes. Set up add-ons under Booking → Services → Add-ons — a hot towel, a beard trim, a wash — and clients tack them on while booking. The extra time and the extra money both land on the appointment, and the calendar card shows them: “Haircut + Hot towel”.\n\nWhen the schedule has room for it, the add-on is offered; when it doesn't, it isn't.\n\nYou can add them yourself too, when you book someone in — see “Can I include extras when I book someone in myself?”.",
     keywords: ["add on", "addon", "extras", "upsell", "hot towel", "beard", "wash", "upgrade"],
     category: "booking",
     action: { label: "Open services", featureId: "addons" },
@@ -319,7 +332,10 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     // for a cut that already happened is not a reservation request). A barber
     // reading the amber warning and asking this question was being told it
     // could not happen.
-    a: "Not by a booking. A slot is held the instant it's taken and stops being offered to anyone else — including bookings that arrive from Acuity or Square, and time you've blocked off. Anyone trying to book a chair that's already taken for that time is refused.\n\nA walk-in is the one deliberate exception. A walk-in is a receipt for a cut that already happened — the money's in the till and the person is in the chair — so ChairBack records it even if that chair was already booked for the time, and warns you straight away: an amber panel on the calendar, a push to whoever's chair it is, and a line under the Conflicts tab until someone deals with it. Nothing gets cancelled for you. You ring whoever's booked and decide.",
+    // 🔴 And "the one deliberate exception" stopped being true with Book anyway
+    // (#538): an owner or manager can now double-book on purpose. CUSTOMERS
+    // still cannot, on any path - that half of the old answer stands.
+    a: "Not by a customer. A slot is held the instant it's taken and stops being offered to anyone else — including bookings that arrive from Acuity or Square, and time you've blocked off. A customer trying to take a chair that's already booked for that time is refused, whether they use your booking page, their appointment link or the texting receptionist.\n\nThere are two deliberate exceptions, and both are yours to make:\n\n• Book anyway. When you book someone in, or move a booking, over a taken time, ChairBack names what's there and asks first. Say yes and both stay on the calendar, with yours marked Double-booked.\n• A walk-in. A walk-in is a receipt for a cut that already happened — the money's in the till and the person is in the chair — so ChairBack records it even if that chair was already booked for the time, and warns you straight away: an amber panel on the calendar, a push to whoever's chair it is, and a line under the Conflicts tab until someone deals with it.\n\nNothing gets cancelled for you either way. You ring whoever's booked and decide.",
     keywords: ["double book", "double booking", "double-booked", "double booked", "overlap", "conflict", "two clients", "same time", "collide"],
     category: "booking",
     action: { label: "Open Conflicts", featureId: "conflicts" },
@@ -327,7 +343,10 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "slot-taken",
     q: "It says the slot is taken when I try to book someone in",
-    a: "Because that chair really is occupied for that time — by another booking, a synced appointment from Acuity or Square, or a hold someone still has on it. Booking is refused rather than squeezed in, so nobody ends up double-booked.\n\nPick another time — or, if you're recording a cut that already happened, use the walk-in instead. A walk-in is a receipt, not a reservation, so it goes on the books even when the chair was busy, with a warning if it overlaps something.",
+    // 🔴 "Booking is refused rather than squeezed in" stopped being the whole
+    // truth with Book anyway (#538). The panel that says the time is taken now
+    // offers it - except over a customer's live hold, which it never overrides.
+    a: "Because that chair really is occupied for that time — by another booking, a synced appointment from Acuity or Square, or a hold someone still has on it. The form lists what's there.\n\nPick another time. If you mean to double-book, tap Book anyway, then Yes, book it: both stay on the calendar and yours is marked Double-booked. That isn't offered while a customer is paying for or confirming that exact time — wait until their hold runs out.\n\nIf you're recording a cut that already happened, use the walk-in instead. A walk-in is a receipt, not a reservation, so it goes on the books even when the chair was busy, with a warning if it overlaps something.",
     keywords: [
       "slot taken", "slot_taken", "time taken", "already taken", "cant book that time",
       "can't book that time", "wont let me book", "won't let me book", "refused",
@@ -522,7 +541,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "punch-cards",
     q: "How do punch cards work?",
-    a: "Automatically. Every completed visit punches the client's card — you don't hand out anything, and they don't carry anything.\n\nThey see their card on a private rewards page you text them, and when they hit the threshold the reward redeems right at the chair.",
+    a: "Automatically. Once rewards are on, every completed visit punches the client's card — you don't hand out anything, and they don't carry anything.\n\nThey see their card on a private rewards page you text them, and when they hit the threshold the reward redeems right at the chair.\n\nRewards start the moment you switch them on, so earlier visits don't punch by themselves — Past visits on the Rewards page can add them.",
     keywords: ["punch card", "loyalty", "stamps", "punches", "rewards", "free cut", "card"],
     category: "clients",
     action: { label: "Open rewards", featureId: "punch-cards" },
@@ -530,7 +549,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "what-counts-punch",
     q: "What counts as a punch?",
-    a: "Completed appointments — nothing else. Cancellations and no-shows never earn punches, so the cards stay honest.\n\nIf you ever need to correct one, you can adjust a client's balance from their profile in the client book.",
+    a: "Completed appointments that finish while rewards are on — nothing else. Cancellations and no-shows never earn punches, so the cards stay honest. Visits from before you switched rewards on can be credited under Past visits on the Rewards page.\n\nIf you ever need to correct one, you can adjust a client's balance from their profile in the client book.",
     keywords: ["counts", "what earns", "punch rules", "no show punch", "cancellation", "adjust balance", "fix punches"],
     category: "clients",
     action: { label: "Open client book", featureId: "clients" },
@@ -600,7 +619,10 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "nudges",
     q: "How do rebooking nudges work?",
-    a: "ChairBack watches how often each client normally comes in. When someone goes quiet past their own rhythm, they get an automatic \"time to rebook\" text or push — with a link straight to your booking page.\n\nIt's per-client, not a blanket blast, which is why it reads as your shop noticing rather than marketing.",
+    // 🔴 "a link straight to your booking page" was not what every shop sends:
+    // a ChairBack-booking shop with no outside link saved sends the client's
+    // rewards link. The after-visit push (#521) had no entry at all.
+    a: "ChairBack watches how often each client normally comes in. When someone goes quiet past their own rhythm, they get an automatic \"time to rebook\" text or push with a link back to your shop.\n\nIt's per-client, not a blanket blast, which is why it reads as your shop noticing rather than marketing.\n\nSeparately, about half an hour after a visit, a client with the ChairBack app gets a push asking if they want to lock in their next one. It skips anyone who's already booked again — in ChairBack, or in Acuity or Square if you sync one.",
     keywords: ["nudge", "win back", "winback", "lapsed", "overdue", "come back", "retention", "drifting", "automatic text"],
     category: "clients",
     action: { label: "Open nudges", featureId: "rebook-nudges" },
@@ -675,14 +697,17 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "opt-out",
     q: "How does a client stop texts?",
-    a: "They reply STOP to any message and they're opted out instantly — that's automatic and required by law.\n\nYou can also opt anyone out (or back in) yourself from their profile in the client book.",
+    // 🔴 "opt anyone out (or back in)" was wrong on both counts: the client
+    // page's switch is TEXTS only, and a client who texted STOP can only be
+    // opted back in by themselves. Email has its own rules (#525/#529).
+    a: "They reply STOP to any message and they're opted out instantly — that's automatic and required by law.\n\nYou can also opt someone out of texts yourself, from their page in the client book. If they texted STOP, only they can opt back in — by texting START, or from their rewards page.\n\nEmail is separate: a text STOP doesn't stop your emails, and unsubscribing from your emails doesn't stop texts. See “A client unsubscribed from my emails — can I turn them back on?”.",
     keywords: ["stop", "opt out", "unsubscribe", "no texts", "quit texting", "remove from texts", "spam"],
     category: "texting",
   },
   {
     id: "consent",
     q: "Do I need permission to text clients?",
-    a: "Yes, and ChairBack handles it. Clients consent when they book or sign up, STOP replies opt them out instantly, and send caps stop any runaway texting.\n\nEvery message is logged, so if it's ever questioned you have the record.",
+    a: "Yes, and ChairBack handles it. Clients consent when they book or sign up, STOP replies opt them out instantly, and send caps stop any runaway texting.\n\nA client you add or import yourself isn't texted until they agree — tick the box on Add client only if they told you yes. Every message is logged, so if it's ever questioned you have the record.\n\nMarketing email has its own yes — see “How does a client say yes to getting my emails?”.",
     keywords: ["consent", "permission", "legal", "compliance", "tcpa", "allowed", "opt in", "10dlc"],
     category: "texting",
   },
@@ -712,7 +737,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "acuity",
     q: "Does it work with my Acuity account?",
-    a: "Yes. Connect Acuity once with one click. Past appointments backfill automatically, and new ones flow in as they happen.\n\nBlocked time on your Acuity calendar syncs too, so your ChairBack availability matches reality without you maintaining two calendars.\n\nIt can also run the other way: with holding switched on, a ChairBack booking blocks that time in Acuity, so the same hour can't be sold on both. See “Can I keep taking bookings in Acuity while I use ChairBack?”.",
+    a: "Yes. Connect Acuity once with one click. Past appointments backfill automatically, and new ones flow in as they happen.\n\nBlocked time on your Acuity calendar syncs too, so your ChairBack availability matches reality without you maintaining two calendars. Your Acuity services can come across as well, from Booking → Services → Import services from Acuity.\n\nIt can also run the other way: with holding switched on, a ChairBack booking blocks that time in Acuity, so the same hour can't be sold on both. See “Can I keep taking bookings in Acuity while I use ChairBack?”.\n\nIf Acuity ever stops accepting ChairBack's sign-in, you'll see Reconnect Acuity on your home screen and in Settings — one tap fixes it.",
     keywords: ["acuity", "acuity scheduling", "connect acuity", "squarespace scheduling", "sync"],
     category: "integrations",
     action: { label: "Connect a calendar", featureId: "integrations" },
@@ -1029,7 +1054,11 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "turn-off-rewards",
     q: "Can I turn punch cards off?",
-    a: "Yes — loyalty is a switch in your Rewards settings, and everything else (booking, reminders, your public page) works exactly the same with it off.\n\nTurning it back on later keeps the visit history, so nobody loses credit for cuts they already had.",
+    // 🔴 "Turning it back on later keeps the visit history, so nobody loses
+    // credit for cuts they already had" read as "the pause backfills itself".
+    // Since #528 rewards START at the switch-on: punches already earned are
+    // kept, but visits from before it earn only when the owner credits them.
+    a: "Yes — loyalty is a switch in your Rewards settings, and everything else (booking, reminders, your public page) works exactly the same with it off.\n\nTurning it off keeps every punch clients have already earned. But visits don't earn while it's off, and switching it back on starts rewards from that moment — cuts from before then don't punch by themselves.\n\nTo give them credit, use Past visits on the Rewards page: pick 3, 6 or 12 months, tap Check to see what it would give, then Credit them.",
     keywords: ["turn off", "disable", "switch off", "dont want", "hide rewards", "no loyalty", "remove punch"],
     category: "clients",
     action: { label: "Open rewards", featureId: "punch-cards" },
@@ -1156,7 +1185,9 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "cancellation-email",
     q: "Does a client get an email when an appointment is canceled?",
-    a: "Yes — whether you cancel it or they do. It tells them the appointment is no longer booked and offers a link to book another time.\n\nIt's queued the instant the cancellation saves, so it survives a restart or a hiccup at our end and can't go out twice.\n\nTwo deliberate exceptions: marking someone a no-show sends nothing, and an appointment with no email address on it has nobody to write to.",
+    // "offers a link to book another time" was true only when there was one
+    // to offer (#523): the button follows the shop's booking mode.
+    a: "Yes — whether you cancel it or they do. It tells them the appointment is no longer booked, with a Book another appointment button that goes wherever you take bookings: your ChairBack booking page, or the booking link you've saved if you book through Acuity, Square or your own site. If your booking page is off and no link is saved, it goes out without the button.\n\nIt's queued the instant the cancellation saves, so it survives a restart or a hiccup at our end and can't go out twice.\n\nTwo deliberate exceptions: marking someone a no-show sends nothing, and an appointment with no email address on it has nobody to write to.",
     keywords: [
       "cancellation email", "canceled email", "cancel email", "do they get told",
       "does the client know", "notify cancel", "cancellation notice",
@@ -1179,10 +1210,15 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "apple-wallet",
     q: "Can a client keep their punch card or appointment in Apple Wallet?",
-    a: "That's built, in two pieces: a punch card that lives in Wallet and updates its balance on its own, and an appointment pass that shows the time and greys itself out if the booking is canceled.\n\nOn an iPhone, the Add to Apple Wallet button shows up on their rewards page, and on the confirmation email for the appointment one. It doesn't appear inside the ChairBack app itself — that's an Apple limitation, so send them to the page in Safari.\n\nIf the button isn't there at all, Wallet passes aren't switched on yet. That's a one-time setup on our side, not something you can enable — email support@getchairback.com and we'll tell you where it stands.",
+    // 🔴 "greys itself out if the booking is canceled" promised a look that is
+    // Wallet's decision, not ours, and the pass now also ends when the visit
+    // does (#531). ChairBack can never delete a pass from someone's phone.
+    a: "Yes, in two pieces: a punch card that lives in Wallet and updates its balance on its own, and an appointment pass that keeps itself up to date — if the time moves, it moves, and once the visit is over it reads COMPLETED, MISSED (a no-show) or CANCELED.\n\nOn an iPhone, the Add to Apple Wallet button for the appointment is on their confirmation email, the booking confirmation screen, their appointment link and their rewards page — for booked appointments, not requests still waiting on you. The punch card's button is on their rewards page. If a button doesn't show inside the ChairBack app, open the page in Safari.\n\nChairBack can't delete a pass from anyone's phone. When the visit ends the pass is marked as over, and Wallet decides whether to grey it out, file it with expired passes or hide it. The customer can always delete it themselves.\n\nNo button at all on an iPhone, for a booked appointment? Email support@getchairback.com and we'll look into it.",
     keywords: [
       "wallet", "apple wallet", "pkpass", "add to wallet", "phone wallet", "passbook",
       "digital punch card", "card in wallet", "wallet pass",
+      "appointment pass", "pass after the visit", "remove the pass", "delete the pass",
+      "pass says completed", "pass says missed",
     ],
     primaryFor: ["wallet", "apple wallet"],
     category: "clients",
@@ -1271,7 +1307,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "my-policy",
     q: "What is my cancellation policy set to?",
-    a: "Dashboard → Payments holds all of it: how customers pay, the free-cancel cutoff in hours, and the fee charged inside that cutoff.\n\nA cutoff of 0 means every cancellation is a full refund. A fee of 100% means no refund inside the cutoff.\n\nOne catch worth knowing: a cancellation fee can only actually be charged if you take payment through ChairBack. If you're set to pay-in-person, the fee sits there as a number and nothing collects it.",
+    a: "Dashboard → Payments holds all of it: how customers pay, the free-cancel cutoff in hours, and the fee charged inside that cutoff.\n\nA cutoff of 0 means every cancellation is a full refund. A fee of 100% means no refund inside the cutoff.\n\nOne catch worth knowing: a cancellation fee can only actually be charged if you take payment through ChairBack. If you're set to pay-in-person, the fee sits there as a number and nothing collects it.\n\nYour own rules in your own words — lateness, what to bring — plus a checklist customers tick before booking are a separate card: Booking → Settings → Your policies.",
     keywords: [
       "cancellation policy", "my policy", "cancel policy", "refund policy", "cutoff",
       "cancellation fee", "late cancel", "what is my policy", "policy set",
@@ -1318,7 +1354,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "record-payment",
     q: "How do I record what someone paid?",
-    a: "Open the appointment on the calendar and check them out. You record what they actually handed over — cash, card, whatever — plus a tip if there was one, and that's what feeds Insights.\n\nIt's deliberately what you TOOK, not what the service is priced at, so a discount or a friend rate doesn't quietly inflate your numbers.",
+    a: "Open the appointment on the calendar and tap Start checkout. The amount due is already filled in — change it if they paid something different (a tip or a discount goes there), pick how they paid, and tap Mark paid. You record what they actually handed over — cash, card, whatever — and that's what feeds Insights.\n\nIt's deliberately what you TOOK, not what the service is priced at, so a discount or a friend rate doesn't quietly inflate your numbers.",
     keywords: [
       "mark as paid", "record payment", "checkout", "check out", "cash", "took payment",
       "paid me", "how much they paid", "close out", "ring up", "settle up",
@@ -1385,10 +1421,15 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "add-client-manually",
     q: "How do I add a client myself?",
-    a: "Add them in your client book with a name and a mobile number — that's all it takes, and they're immediately eligible for punches, reminders and rebooking nudges.\n\nIf you're moving a whole book across, import the list in one go rather than typing them in one at a time.",
+    // 🔴 This said a name and a number made a client "immediately eligible for
+    // reminders and rebooking nudges" - not true without their yes to texts -
+    // and said nothing about a number that is already on someone (#517).
+    a: "Clients → Add client. A first name is all it needs; add a mobile number or an email if you have one. Tick “This client agreed to receive text reminders” only if they told you yes — without it they aren't texted, reminders or nudges, until they opt in themselves.\n\nIf that phone number — or, with no phone, that email — already belongs to a client, nothing is added or changed, and it tells you who has it. Same person? Open their page and update them there. Someone else on a shared family phone? Add them with their own phone or email, or with no contact details.\n\nMoving a whole book across? Use Import CSV rather than typing them in one at a time.",
     keywords: [
       "add a client", "new client", "add customer", "enter a client", "put a client in",
       "add someone", "create client", "add them manually",
+      "client already exists", "already has this phone number", "already has this email",
+      "add client says", "cant add client",
     ],
     category: "clients",
     action: { label: "Open clients", featureId: "clients" },
@@ -1396,7 +1437,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "text-everyone",
     q: "How do I text all my clients at once?",
-    a: "Write it as a promotion and send it out — that's the blast. It only goes to clients who haven't opted out, and it counts against your monthly text allowance.\n\nIt doesn't have to be a text: Message your clients on the Clients page sends the same news as an app notification or an email — to everyone, or just one loyalty tier — and uses no texts at all.\n\nOne piece of advice worth more than the feature: a blast to everyone converts worse than a rebooking nudge to the twenty people who are actually overdue. Use it for genuine news, not for filling a Tuesday.",
+    a: "Write it as a promotion and send it out — that's the blast. It only goes to clients who haven't opted out, and it counts against your monthly text allowance.\n\nIt doesn't have to be a text: Message your clients on the Clients page sends the same news as an app notification or an email — to everyone, a loyalty tier, or the clients who had a certain service — and uses no texts at all.\n\nOne piece of advice worth more than the feature: a blast to everyone converts worse than a rebooking nudge to the twenty people who are actually overdue. Use it for genuine news, not for filling a Tuesday.",
     keywords: [
       "text everyone", "text all", "blast", "mass text", "bulk text", "send to everyone",
       "text my list", "everyone at once",
@@ -1413,7 +1454,10 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     // Multi-word keywords only: a bare "email" would swallow every email question.
     id: "message-all-clients",
     q: "How do I send an announcement to all my clients, or just my Gold members?",
-    a: "Use Message your clients on the Clients page. Send it as an app notification — free, and it reaches everyone signed in to the ChairBack app — or as an email, which counts against your monthly email allowance and only goes to clients who have said yes to your marketing emails. Send it to everyone, to the loyalty tiers you pick (like just your Gold members), or By service: only clients who had the services you pick, at any time or in the last 90 days or 12 months. Anyone booked in for one of them counts too; no-shows and cancellations don't. Pick a tier and a service together and a client has to match both. Before you send, it shows how many will get it and why the rest won't.\n\nIt uses no texts and works on every plan. Every message that reaches a client also stays in their Announcements, the bell in the ChairBack app, so it's still there after they swipe the notification away.\n\nRunning a promo? Tap Email or notify on it and the message starts already written. Want to text everyone instead? That's a promotion, and it uses your text allowance.",
+    // Corrected against #532/#534: the app channel reaches people who INSTALLED
+    // the app (the preview's own words), several tiers or services mean any of
+    // them, and the count box lists every reason someone is left out.
+    a: "Use Message your clients on the Clients page — tap Write a message. Send it as an app notification — free, and it reaches anyone who installed the ChairBack app — or as an email, which counts against your monthly email allowance and only goes to clients who have said yes to your marketing emails.\n\nUnder Who gets it, pick Everyone, the loyalty tiers you want (like just your Gold members — each chip shows how many), or By service: only clients who had the services you pick, at any time or in the last 90 days or 12 months. Pick a tier and a service together and a client has to match both.\n\nBefore you send, the count shows how many will get it — on both channels — and lists why the rest won't: no email address, unsubscribed, bounced, hasn't said yes to email yet, hasn't installed the app, or not in the group you picked.\n\nIt uses no texts. Owners and managers can send, on any active plan. Every message that reaches a client also stays in their Announcements, the bell in the ChairBack app, so it's still there after they swipe the notification away.\n\nRunning a promo? Tap Email or notify on it and the message starts already written. Want to text everyone instead? That's a promotion, and it uses your text allowance.",
     keywords: [
       "announcement", "announcements", "broadcast", "newsletter", "send news",
       "message all clients", "message my clients", "message everyone", "message my gold",
@@ -1648,6 +1692,214 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     ],
     category: "booking",
     action: { label: "Open calendar", featureId: "online-booking" },
+  },
+
+  /* ======================= Shipped late September =========================
+   * Booking policies (#537), Book anyway (#538), add-ons in New appointment
+   * (#539/#519), messaging by service (#532/#534), the marketing-email yes
+   * (#515/#525/#527/#529), Acuity service import and reconnect (#524/#526),
+   * past-visit credit (#528), the waitlist Text button (#518), client import
+   * safety (#510/#517/#522) and the saved-card service charge (#533/#535).
+   *
+   * Every screen, card and button name below is the one the code renders.
+   * 🔴 Multi-word keywords only, and no `primaryFor` on a generic word:
+   * scoring is per TOKEN, so a bare "email", "card", "service" or "add" here
+   * would swallow every other question that contains it.
+   * ====================================================================== */
+  {
+    id: "booking-policies",
+    q: "How do I add my booking policies, or a checklist customers have to tick?",
+    a: "Booking → Settings → “Your policies”, the last card on that tab.\n\nPolicy is your rules in your own words — deposits, lateness, no-shows, what to bring — up to 2,000 characters. Checklist is up to 8 short lines, like “I'll arrive 5 minutes early”: type one, tap Add, and when you're done tap Save policies.\n\nCustomers see it under “Before you book” on the last step of your booking page, right above Confirm. Every checklist line is a box they have to tick — Confirm stays off until they do. If you change your policies while someone is mid-booking, their ticks clear and they're asked to read them again.\n\nWhat they agreed to is kept on the appointment: open it and you'll see “Agreed to your policies when booking”, with the lines they ticked and the policy they read.\n\nLeave both blank and nothing shows. Policy text with no checklist is shown, but nobody has to tick anything. Keep the list short — every line is one more step between someone and their booking. It doesn't apply to appointments you book in yourself.",
+    keywords: [
+      "add my policy", "add a policy", "booking policy", "booking policies", "shop policy",
+      "shop rules", "house rules", "my rules", "policy checklist", "checklist", "tick boxes",
+      "tick each line", "agree to my rules", "agree before booking", "agreed to your policies",
+      "before you book", "lateness policy", "late policy", "what to bring",
+    ],
+    category: "booking",
+    action: { label: "Open your policies", featureId: "booking-policies" },
+  },
+  {
+    // The answer has to carry BOTH halves of the rule: an owner or manager may
+    // double-book on purpose, a customer never can, and a customer's live hold
+    // is the one thing Book anyway will not override.
+    id: "book-anyway",
+    q: "Can I book someone in over a time that's taken?",
+    a: "Yes — that's Book anyway, for when you mean to double-book. In New appointment, or when you move a booking with Edit, pick the time and save. If something's already there, the form lists who and what, with Book anyway and Choose another time. Tap Book anyway, read the question (“This overlaps … Book it anyway?”) and tap Yes, book it. Need a time that isn't offered? Use Custom time.\n\nBoth appointments stay on the calendar, and the one you forced shows a Double-booked chip, so anyone can see it was on purpose. Nobody is cancelled or messaged, and it isn't listed under Conflicts — that tab is for walk-ins.\n\nIt won't book over a customer who is paying for or confirming that time right now — wait until their hold runs out. Two appointments can't start at the exact same minute on one chair (start one at :05), and a weekly repeat skips clashing dates instead of forcing them.\n\nIf ChairBack holds your bookings in Acuity and Acuity refuses to block the time, a forced new booking is undone and you're told why — otherwise that hour would still be for sale on Acuity.\n\nCustomers can never do this: your booking page, their appointment link and the texting receptionist always refuse a taken time. Owners and managers only.",
+    keywords: [
+      "book anyway", "force a booking", "force booking", "force it", "book over",
+      "book over someone", "book on top", "double book on purpose", "double-book on purpose",
+      "overbook", "squeeze in", "squeeze someone in", "double-booked chip",
+      "yes book it", "choose another time", "custom time", "overlaps another booking",
+    ],
+    // "anyway" is this entry's word and nobody else's. Without it declared,
+    // "book anyway" went to the generated "Where do I find Book anyway?"
+    // pointer by a tenth of a point.
+    primaryFor: ["anyway"],
+    category: "booking",
+    action: { label: "Open appointments", featureId: "book-anyway" },
+  },
+  {
+    id: "addons-when-you-book",
+    q: "Can I include extras when I book someone in myself?",
+    a: "Yes. In New appointment, pick the service and an Add-ons card appears with the extras that go with it, each with its price and time (“+$10 · +15 min”). Tick what they want and a Total shows the new length and price. The open times reload to fit the longer visit.\n\nOn the calendar the card then reads “Haircut + Hot towel”, and the length and price on it already include the extras. Add-ons customers pick on your booking page show the same way.\n\nThree things it won't do: a special has its own length and price, so add-ons don't apply to it; a weekly repeat can't carry add-ons (ticking one turns Weekly off); and you can't add or remove add-ons on a booking that's already made. Set up your add-ons under Booking → Services → Add-ons.",
+    keywords: [
+      "add-ons when i book", "add ons when i book", "add-on to an appointment",
+      "add an add-on", "add extras when booking",       "add-ons on the calendar", "add ons on the calendar", "calendar card add-ons",
+      "plus on the calendar card", "hot towel on a booking",
+    ],
+    category: "booking",
+    action: { label: "Open appointments", featureId: "appointments" },
+  },
+  {
+    id: "message-by-service",
+    q: "How do I message only the clients who had a certain service?",
+    a: "Clients → Message your clients → Write a message. Under Who gets it, tap By service, pick the services under Who had, and choose how far back: Any time, Last 90 days or Last 12 months (the default).\n\nA client counts if they finished one of those services in that time, or are booked in for one. No-shows, cancellations, requests still waiting on you, and visits nobody marked done don't count. Pick several services and any of them counts; pick a tier too and they have to match both.\n\nServices from Acuity show up too, marked “(from Acuity)”, and match on the exact name. Square visits carry no service name, so they can't be picked this way.\n\nBefore you send, the count shows how many will get it and why the rest won't.",
+    keywords: [
+      "by service", "message by service", "send by service", "clients who had",
+      "people who had", "send to people who had", "had a certain service",
+      "email clients who had", "notify clients who had", "who had a haircut",
+      "service they had", "last 90 days", "last 12 months",
+    ],
+    category: "clients",
+    action: { label: "Open Message your clients", featureId: "message-clients" },
+  },
+  {
+    id: "email-marketing-yes",
+    q: "How does a client say yes to getting my emails?",
+    a: "Three ways, and your emails from Message your clients go only to people with one:\n\n1. They tick “Email me news and offers” on your booking page. It starts unticked.\n2. They tap “Email me news and offers” on their rewards page.\n3. You record it. Open the client, find the Marketing email card, tap Record their yes, and pick how they told you: In person, By text, By email or Paper form. Only record a yes they actually gave you. It needs an email address on file.\n\nThe card then shows when and how they said yes. A yes belongs to one address — if their email changes, it's cleared and they're back to “Not yet”. Adding or importing a client never counts as a yes.\n\nBooking emails, like confirmations, go out either way.",
+    keywords: [
+      "yes to marketing emails", "marketing email", "marketing emails", "record their yes",
+      "record a yes", "email consent", "email opt in", "opt in to email", "agree to emails",
+      "email me news and offers", "news and offers", "said yes to email",
+    ],
+    category: "clients",
+    action: { label: "Open clients", featureId: "clients" },
+  },
+  {
+    // The composer's own sentence when email reaches nobody, answered with the
+    // reason and the two ways forward. Without this, "why can't email reach
+    // anyone" landed on the spam-folder answer - a confident wrong one.
+    id: "email-reaches-nobody",
+    q: "Why can't my email reach anyone?",
+    a: "Because nobody in that group has said yes to your marketing emails yet. Email from Message your clients only goes to people who agreed to it — having their address isn't enough, and adding or importing a client never counts as a yes.\n\nThe count box lists everyone left out and why: no email address, unsubscribed, bounced or marked as spam, hasn't agreed to your marketing emails yet, or not in the group you picked.\n\nWhat to do:\n• Send it as an app notification instead — free, and it reaches everyone who installed the app.\n• Collect yeses: clients tick the box on your booking page or tap the button on their rewards page, and you can record a yes they gave you on their page (Marketing email → Record their yes).\n\nIf it says the email can't be sent from your shop yet, add your shop's street address first — marketing email has to carry it by law.",
+    keywords: [
+      "email reach anyone", "email reaches nobody", "email cant reach", "email says 0 people",
+      "email to nobody", "no one gets my email", "nobody said yes", "cant send email",
+      "email wont send", "email skipped", "hasnt agreed to your marketing emails",
+      "cant be sent from your shop",
+    ],
+    category: "clients",
+    action: { label: "Open Message your clients", featureId: "message-clients" },
+  },
+  {
+    id: "email-unsubscribed",
+    q: "A client unsubscribed from my emails — can I turn them back on?",
+    a: "No — only they can. Every marketing email carries an “Unsubscribe from these emails” link, and their rewards page has Stop these emails. Once they use either, their page shows Unsubscribed and your messages skip that address.\n\nTo come back, they open the Unsubscribe link at the bottom of one of your emails and press Resubscribe. You can't record a yes for them over an unsubscribe.\n\nUnsubscribing only stops your news and offers — their booking emails still arrive. And texts are separate: an email unsubscribe doesn't stop texts, and a text STOP doesn't stop email.",
+    keywords: [
+      "unsubscribed", "unsubscribed from my emails", "resubscribe", "subscribe again",
+      "turn emails back on", "stop these emails", "opted out of email",
+    ],
+    category: "clients",
+    action: { label: "Open clients", featureId: "clients" },
+  },
+  {
+    id: "acuity-import-services",
+    q: "Can I copy what I sell on Acuity into ChairBack?",
+    a: "Yes — Booking → Services → “Import services from Acuity”, at the top of the tab while Acuity is connected. Tap Check my Acuity services and you see the whole list first — nothing is added until you say so.\n\nEach service shows New, or why it's left out: already in ChairBack (same name), turned off or private in Acuity, a class, or a length that can't be booked here. The button then counts the New ones (“Add 6 services”) and brings in all of them or none.\n\nWhat comes across: the name, length, price and description, and the Acuity category as a service group. Services you already have are never changed, and running it again adds nothing twice. New services are offered by everyone on your team and use your regular hours, so set per-service hours or day pricing afterwards if you use them. Add-ons don't come across — add those under Add-ons.\n\nIf it says it couldn't reach Acuity, try again; if it keeps happening, reconnect Acuity in Settings.",
+    keywords: [
+      "import services", "import my services", "import acuity services", "import my acuity services",
+      "import services from acuity", "copy services from acuity", "services from acuity", "acuity services",
+      "check my acuity services", "bring my services over",
+    ],
+    category: "integrations",
+    action: { label: "Open services", featureId: "acuity-service-import" },
+  },
+  {
+    id: "acuity-reconnect",
+    q: "Acuity says Reconnect — what do I do?",
+    a: "Tap Reconnect Acuity and sign in to Acuity again. It means Acuity stopped accepting ChairBack's sign-in, so nothing is syncing: new Acuity bookings, moves and cancellations aren't reaching ChairBack.\n\nYou'll see it on your home screen, on the Acuity tile under Booking → Settings (it says Not syncing), and in your setup list on the Assistant tab.\n\nReconnecting keeps your appointments, clients and settings. It switches live updates back on and imports your history again.\n\nUntil you do, past Acuity visits aren't marked done and don't earn punches, reminder texts for Acuity appointments are held back, and if ChairBack holds your bookings in Acuity, those holds are refused. Owners and managers can reconnect.",
+    keywords: [
+      "reconnect acuity", "acuity says reconnect", "reconnect", "not syncing",
+      "acuity not syncing", "acuity disconnected", "acuity stopped syncing", "acuity sign in",
+      "acuity login", "acuity stopped working", "sync stopped",
+    ],
+    category: "integrations",
+    action: { label: "Reconnect Acuity", featureId: "acuity-reconnect" },
+  },
+  {
+    id: "rewards-past-visits",
+    q: "How do I credit past visits from before I turned rewards on?",
+    a: "Rewards → Past visits, just under the rewards switch (it shows while rewards are on). Rewards start the moment you switch them on, so visits that ended before then don't earn punches by themselves.\n\nPick how far back — 3 months, 6 months or 12 months — and tap Check. It shows what that would give, like “Credit 40 past visits: 40 punches to 25 customers”, and the dates it covers. Tap Credit them, or Cancel.\n\nOnly finished visits count, never cancellations or no-shows, and a visit is never credited twice, so pressing it again is safe. Customers aren't sent anything. To take back one punch, use Undo in that client's punch history.\n\nTiers aren't affected — they already count every finished visit, credited or not.",
+    keywords: [
+      "past visits", "credit past visits", "credit old visits", "old visits", "credit them",
+      "visits before rewards", "before i turned rewards on", "punches for old visits",
+      "rewards start date", "when rewards started", "old visits didnt count", "earlier visits",
+      "old cuts didnt count", "backdate visits",
+    ],
+    category: "clients",
+    action: { label: "Open past visits", featureId: "past-visits" },
+  },
+  {
+    id: "waitlist-text",
+    q: "How do I text someone who's waiting for a spot?",
+    a: "Booking → Waitlist, then tap Text on their card. It opens a new message to them in your own phone's Messages — you write it, it comes from your number, and ChairBack sends nothing, so it costs none of your texts.\n\nTexting doesn't change their status: tap Contacted once you have, or Book appointment to put them straight on the calendar.\n\nNo Text button? There's no usable phone number on that card. If they gave an email, it shows as a link instead.",
+    keywords: [
+      "text someone on the waitlist", "text the waitlist", "waitlist text", "text button",
+      "message the waitlist", "contact the waitlist", "text them from the waitlist",
+      "reach out to the waitlist", "call the waitlist",
+    ],
+    category: "booking",
+    action: { label: "Open waitlist", featureId: "waitlist" },
+  },
+  {
+    id: "import-skipped-rows",
+    q: "Why did some of my clients get skipped?",
+    a: "A client import never writes over a client you already have, so a row it can't be sure about is skipped and listed:\n\n• It shares a phone or email with a client you have. Families often share a phone, and it can't tell if it's the same person, so your client isn't changed — even where the file only had details they were missing. Same person? Open them and update them there. Someone else? Add them with Add client using their own phone or email.\n• It has only a name, and you already have someone by that name, so it doesn't add a second one.\n• The phone number couldn't be read — fix that row and import the file again.\n\nImporting the same file again is safe; nobody is added a second time. And an import never counts as anyone agreeing to texts or marketing email — they opt in themselves.",
+    keywords: [
+      "import skipped", "skipped rows", "skipped clients", "csv skipped", "why skipped",
+      "shares a phone", "share a phone", "shared phone", "family phone", "same phone as",
+      "import didnt add", "import opt in", "importing clients opt them in",
+    ],
+    category: "clients",
+    action: { label: "Open clients", featureId: "clients" },
+  },
+  {
+    // 🔴 Only some shops' checkout can charge a saved card, so every answer
+    // here is conditional on the option being THERE. No general payments
+    // answer promises it.
+    id: "saved-card-charge",
+    q: "How do I charge a customer's card after the appointment?",
+    a: "Where your checkout offers it: open the appointment, tap Start checkout, and pick “Charge card ending ••••”. It's only there when the customer ticked “Let this shop charge my saved card for the service when my appointment is done” when they booked.\n\nThe rules they agreed to:\n• Only after the appointment — once you've marked it done or its end time has passed.\n• Capped at what they booked: the agreed amount, less anything already paid. If the balance is higher, the card can't be used — take it another way.\n• Within 72 hours of the end.\n\nThey get an email receipt each time (when there's an email on the booking), with a link to stop further charges. Charging doesn't mark the appointment done, so tap Done when you're finished.\n\nNo card option in your checkout? Then it isn't available for your shop — record what they paid with Mark paid as usual.",
+    keywords: [
+      "charge the saved card", "charge their saved card", "charge saved card",
+      "charge the card after", "charge card ending", "saved card", "charge a customer's card",
+    ],
+    category: "money",
+    action: { label: "Open calendar", featureId: "appointments" },
+  },
+  {
+    id: "saved-card-refused",
+    q: "Why won't it let me charge the customer's card?",
+    a: "Your checkout says why, where the card would be:\n\n• “The saved card can be charged once the appointment is done” — mark it done, or wait for its end time.\n• “The saved card was approved only up to $…” — the balance is above what they agreed to when they booked. Take the balance another way.\n• “The customer stopped charges to this card” — they switched it off from their appointment link, and nobody can switch it back on. Take payment another way.\n• “This card was only approved for no-show fees” — they saved it for fees, not for the service.\n• “Too long since this appointment to charge the saved card” — it's been over 72 hours.\n\nIn every case, cash and your other ways to take payment still work.",
+    keywords: [
+      "cant charge the card", "card was refused", "approved only up to",
+      "customer stopped charges", "stopped charges to this card",
+      "saved card not working", "saved card refused",
+    ],
+    category: "money",
+    action: { label: "Open calendar", featureId: "appointments" },
+  },
+  {
+    id: "customer-stop-card-charges",
+    q: "How does a customer stop the shop charging their card?",
+    a: "From their appointment link — the one in their confirmation and in every card receipt. It says they let the shop charge their card for the service, with a button: Stop letting the shop charge this card. They confirm with Yes, stop charges to this card.\n\nAfter that nobody can switch it back on, you included, and your checkout shows “The customer stopped charges to this card”, so take payment another way. For a standing appointment it stops the whole series.\n\nIt doesn't delete the card: it stays on file for a no-show or late-cancel fee, if you charge those. A charge that's already going through isn't stopped.",
+    keywords: [
+      "stop card charges", "stop charging my card", "stop charges", "wants to stop card charges",
+      "stop letting the shop charge", "customer wants to stop", "remove permission to charge",
+      "dont charge my card",
+    ],
+    category: "money",
   },
 ];
 

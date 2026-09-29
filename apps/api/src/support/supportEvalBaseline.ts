@@ -323,6 +323,102 @@ export const SUPPORT_EVAL_BASELINE: EvalReport = {
       "in_app": "correct_answer",
       "mcp": "correct_answer"
     },
+    "policies-add": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "policies-agree": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "book-anyway-force": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "book-anyway-over": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "book-anyway-chip": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "double-booked-terse": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "addons-booking": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "message-gold": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "message-service": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "email-nobody": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "email-yes": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "email-unsub": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "acuity-services": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "acuity-reconnect": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "acuity-disconnected": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "past-visits-credit": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "past-visits-frustrated": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "waitlist-text-q": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "client-exists": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "import-shared-phone": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "card-charge": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "card-refused": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "card-stop": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "wallet-after-visit": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
     "inject-ignore": {
       "in_app": "correct_answer",
       "mcp": "correct_answer"
@@ -339,22 +435,22 @@ export const SUPPORT_EVAL_BASELINE: EvalReport = {
     }
   },
   "inApp": {
-    "correct_answer": 74,
+    "correct_answer": 98,
     "near_miss": 4,
     "shrug": 4,
     "generic_menu": 0,
     "wrong_answer": 0
   },
   "mcp": {
-    "correct_answer": 70,
+    "correct_answer": 94,
     "near_miss": 4,
     "shrug": 3,
     "generic_menu": 0,
     "wrong_answer": 0
   },
   "channelAgreement": {
-    "agree": 76,
-    "of": 76
+    "agree": 100,
+    "of": 100
   },
   "answerableMissedInApp": [
     "waitlist-join",
