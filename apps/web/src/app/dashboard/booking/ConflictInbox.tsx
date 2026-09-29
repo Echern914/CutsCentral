@@ -6,6 +6,8 @@ import { Dialog } from "@/components/ui/Dialog";
 import { cn } from "@/lib/cn";
 import { useVocab } from "@/components/VocabProvider";
 import {
+  deleteConflictAction,
+  deleteResolvedConflictsAction,
   listConflictsAction,
   resolveAllConflictsAction,
   resolveConflictAction,
@@ -144,6 +146,17 @@ export function ConflictInbox({
    */
   const [asOf, setAsOf] = useState<string | null>(null);
   const [confirmingAll, setConfirmingAll] = useState(false);
+  /**
+   * DELETE, for RESOLVED conflicts only (a barber: "all resolved appointments
+   * should be able to be deleted"). It takes the note off this list and
+   * nothing else - the server keeps the record and changes no booking.
+   */
+  const [resolvedCount, setResolvedCount] = useState(0);
+  const [deleting, setDeleting] = useState<ConflictRow | null>(null);
+  const [deletingAll, setDeletingAll] = useState(false);
+  // A refused delete is read in the dialog's own footer: the page-level
+  // notice sits behind the dialog, where a phone can't show it.
+  const [dialogError, setDialogError] = useState<string | null>(null);
 
   const publishCount = useCallback(
     (n: number) => {
@@ -167,6 +180,7 @@ export function ConflictInbox({
       setRows(res.data.items);
       setCursor(res.data.nextCursor);
       publishCount(res.data.unresolvedCount);
+      setResolvedCount(res.data.resolvedCount ?? 0);
       setAsOf(res.data.asOf);
     },
     [publishCount],
@@ -193,7 +207,56 @@ export function ConflictInbox({
     });
     setCursor(res.data.nextCursor);
     publishCount(res.data.unresolvedCount);
+    setResolvedCount(res.data.resolvedCount ?? 0);
     setAsOf(res.data.asOf);
+  }
+
+  async function confirmDelete() {
+    if (!deleting || saving) return;
+    setSaving(true);
+    setDialogError(null);
+    const res = await deleteConflictAction(deleting.id);
+    setSaving(false);
+    if (!res.ok) {
+      setDialogError(
+        res.error === "still_open"
+          ? "This one isn't resolved, so it can't be deleted. Mark it resolved first."
+          : "Couldn't delete it. Nothing was changed. Try again.",
+      );
+      return;
+    }
+    setNotice(
+      res.changed ? "Deleted from the list. No booking was changed." : "It was already deleted.",
+    );
+    setDeleting(null);
+    void load(status);
+  }
+
+  async function confirmDeleteAll() {
+    if (!asOf || resolvedCount <= 0 || saving) return;
+    setSaving(true);
+    setDialogError(null);
+    const res = await deleteResolvedConflictsAction({ asOf, expected: resolvedCount });
+    setSaving(false);
+    if (!res.ok) {
+      if (res.error === "conflicts_changed") {
+        // Nothing was deleted. Show the real list and let them decide again.
+        setDeletingAll(false);
+        setNotice("More were resolved while you were deciding. Nothing was deleted — check the list and try again.");
+        void load(status);
+        return;
+      }
+      setDialogError("Couldn't delete them. Nothing was changed. Try again.");
+      return;
+    }
+    const n = res.deleted ?? 0;
+    setNotice(
+      n === 0
+        ? "They had already been deleted."
+        : `Deleted ${n} resolved from the list. No booking was changed.`,
+    );
+    setDeletingAll(false);
+    void load(status);
   }
 
   async function confirmResolveAll() {
@@ -321,6 +384,23 @@ export function ConflictInbox({
             {`Resolve all (${openCount})`}
           </button>
         )}
+        {/* Tidying the history: resolved ones only, on the lists that show them. */}
+        {status !== "open" && resolvedCount > 0 && asOf && !loading && (
+          <button
+            type="button"
+            onClick={() => {
+              setNotice(null);
+              setDialogError(null);
+              setDeletingAll(true);
+            }}
+            className={cn(
+              "shrink-0 rounded-lg border border-subtle px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:border-red-400/50 hover:text-red-300",
+              !(status !== "resolved" && openCount > 0) && "ml-auto",
+            )}
+          >
+            {`Delete all resolved (${resolvedCount})`}
+          </button>
+        )}
       </div>
 
       {notice && (
@@ -385,10 +465,23 @@ export function ConflictInbox({
                 </dl>
 
                 {r.resolvedAt ? (
-                  <p className="mt-3 text-xs text-muted">
-                    Resolved by {r.resolvedByName ?? "a teammate"}
-                    {r.resolutionNote ? ` — “${r.resolutionNote}”` : ""}
-                  </p>
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                    <p className="min-w-0 text-xs text-muted">
+                      Resolved by {r.resolvedByName ?? "a teammate"}
+                      {r.resolutionNote ? ` — “${r.resolutionNote}”` : ""}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNotice(null);
+                        setDialogError(null);
+                        setDeleting(r);
+                      }}
+                      className="min-h-[2.75rem] shrink-0 rounded-lg border border-subtle px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:border-red-400/50 hover:text-red-300"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 ) : (
                   <button
                     type="button"
@@ -472,6 +565,64 @@ export function ConflictInbox({
         </div>
       </Dialog>
 
+      {/* 🔴 DELETE says what it does NOT do, like Mark resolved - and a
+          refusal is read in this footer, not behind the dialog. */}
+      <Dialog
+        open={deleting !== null}
+        onClose={() => {
+          if (!saving) setDeleting(null);
+        }}
+        title="Delete this conflict?"
+        className="max-w-md"
+        footer={
+          <DeleteFooter
+            error={dialogError}
+            saving={saving}
+            label="Delete"
+            onCancel={() => setDeleting(null)}
+            onConfirm={() => void confirmDelete()}
+          />
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-offwhite">It comes off this list.</p>
+          <p className="text-sm text-muted">
+            It does <strong className="text-offwhite">not</strong> cancel, move or refund either
+            booking, and it doesn&rsquo;t tell anyone anything. Both appointments stay exactly as
+            they are.
+          </p>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={deletingAll}
+        onClose={() => {
+          if (!saving) setDeletingAll(false);
+        }}
+        title={`Delete ${resolvedCount} resolved?`}
+        className="max-w-md"
+        footer={
+          <DeleteFooter
+            error={dialogError}
+            saving={saving}
+            label={`Delete ${resolvedCount}`}
+            onCancel={() => setDeletingAll(false)}
+            onConfirm={() => void confirmDeleteAll()}
+          />
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-offwhite">
+            {`All ${resolvedCount} resolved conflicts come off this list, including any not shown on this page yet. Open ones stay.`}
+          </p>
+          <p className="text-sm text-muted">
+            It does <strong className="text-offwhite">not</strong> cancel, move or refund any
+            booking, and it doesn&rsquo;t tell anyone anything. Every appointment stays exactly as it
+            is.
+          </p>
+        </div>
+      </Dialog>
+
       {/* 🔴 Same promise as the single one, said for the whole list. */}
       <Dialog
         open={confirmingAll}
@@ -524,6 +675,49 @@ export function ConflictInbox({
           </label>
         </div>
       </Dialog>
+    </div>
+  );
+}
+
+/** A delete dialog's footer: its refusal (if any) above Cancel / Delete. */
+function DeleteFooter({
+  error,
+  saving,
+  label,
+  onCancel,
+  onConfirm,
+}: {
+  error: string | null;
+  saving: boolean;
+  label: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      {error && (
+        <p role="alert" data-testid="delete-error" className="text-xs text-red-300">
+          {error}
+        </p>
+      )}
+      <div className="flex flex-wrap justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="rounded-lg border border-subtle px-3 py-1.5 text-sm text-muted transition-colors hover:text-offwhite disabled:opacity-60"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          disabled={saving}
+          className="rounded-lg bg-red-500/90 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-red-500 disabled:opacity-60"
+        >
+          {saving ? "Deleting…" : label}
+        </button>
+      </div>
     </div>
   );
 }

@@ -477,6 +477,10 @@ describe("findHelp — what shipped late September", () => {
     ["book a client outside my hours", "book-after-hours"],
     ["charge my after hours price", "book-after-hours"],
     ["custom price for one appointment", "book-after-hours"],
+    // Deleting resolved conflicts (2026-09-29)
+    ["how do I delete resolved conflicts", "resolve-conflict"],
+    ["all resolved appointments should be able to be deleted", "resolve-conflict"],
+    ["delete a conflict", "resolve-conflict"],
     // The Special / Premium hour / After hours chip (2026-09-29: two barbers asked)
     ["why does it say special", "special-chip-meaning"],
     ["what is the special", "special-chip-meaning"],

@@ -49,6 +49,11 @@ export interface ConflictPage {
   /** Always the OPEN count, whatever the filter - it drives the tab badge. */
   unresolvedCount: number;
   /**
+   * Resolved conflicts still on the list, whatever the filter. "Delete all
+   * resolved" shows it and sends it back as the most it may take off.
+   */
+  resolvedCount: number;
+  /**
    * When the server read this page. "Resolve all" sends it back, with the
    * count above, so it can never reach a conflict the manager was not shown.
    */
@@ -136,4 +141,44 @@ export async function resolveAllConflictsAction(opts: {
   );
   if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
   return { ok: true, resolved: res.data.resolved };
+}
+
+export interface DeleteResult {
+  ok: boolean;
+  /** false = it was already off the list (a teammate, or a double tap). */
+  changed?: boolean;
+  /** "still_open" = it isn't resolved, so it can't be deleted. */
+  error?: string;
+}
+
+/** Take one RESOLVED conflict off the list. Changes no booking. */
+export async function deleteConflictAction(id: string): Promise<DeleteResult> {
+  const res = await apiSend<{ ok: boolean; changed: boolean }>(
+    "POST",
+    `/api/booking-conflicts/${encodeURIComponent(id)}/delete`,
+    {},
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, changed: res.data.changed };
+}
+
+export interface DeleteAllResult {
+  ok: boolean;
+  deleted?: number;
+  /** "conflicts_changed" = more were resolved than shown; nothing was deleted. */
+  error?: string;
+}
+
+/** Take every RESOLVED conflict the manager was shown off the list. */
+export async function deleteResolvedConflictsAction(opts: {
+  asOf: string;
+  expected: number;
+}): Promise<DeleteAllResult> {
+  const res = await apiSend<{ ok: boolean; deleted: number }>(
+    "POST",
+    "/api/booking-conflicts/delete-resolved",
+    { asOf: opts.asOf, expected: opts.expected },
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, deleted: res.data.deleted };
 }
