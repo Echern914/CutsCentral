@@ -233,42 +233,54 @@ export function AppointmentSheet({
     typed.ok && typed.value !== null && typed.value <= 100_000 ? typed.value : null;
   const amountValid = parsedAmount !== null;
 
+  // 🔴 A REFUSED SAVE IS READ IN THE FOOTER, not in a toast. A toast draws
+  // beneath the dialog, so on a phone "Couldn't save the checkout" was
+  // invisible and Mark paid just looked dead (Drick, 2026-09-29). Cleared the
+  // moment the barber changes the amount or the method, or tries again.
+  const [payError, setPayError] = useState<string | null>(null);
+  // 🔴 "SAVING…" IS ITS OWN STATE. `useTransition`'s pending flag does not stay
+  // on while an async callback awaits (React 18), so during a slow save the
+  // button read "Mark paid" and could be tapped again: nothing seemed to be
+  // happening. This is true from the tap until the answer is in, and it
+  // disables the button, so a second tap can't send a second payment.
+  const [saving, setSaving] = useState(false);
+
   function submitCheckout() {
-    if (!method || parsedAmount === null) return;
+    if (saving || !method || parsedAmount === null) return;
     const amountToSave = parsedAmount;
-    start(async () => {
-      let res: Awaited<ReturnType<typeof checkoutAppointmentAction>>;
+    setPayError(null);
+    setSaving(true);
+    void (async () => {
       try {
-        res = await checkoutAppointmentAction(row.id, { amount: amountToSave, method });
-      } catch {
-        // No answer (no signal, the app backgrounded). The API records the
-        // payment and the completion together or not at all, so nothing is
-        // half-saved: the screen stays as it was, and Mark paid tries again.
-        toast("Couldn't save the checkout. Check your connection and try again.", "error");
-        return;
-      }
-      if (!res.ok) {
-        if (res.error === "paid_already") {
-          // Already recorded - by another device, or by an attempt whose
-          // answer never arrived. Show the calendar what is true, not a retry.
-          toast(`This ${vocab.serviceNoun} was already checked out`, "error");
-          onChanged();
-          onClose();
+        let res: Awaited<ReturnType<typeof checkoutAppointmentAction>>;
+        try {
+          res = await checkoutAppointmentAction(row.id, { amount: amountToSave, method });
+        } catch {
+          // No answer (no signal, the app backgrounded). The API records the
+          // payment and the completion together or not at all, so nothing is
+          // half-saved: the screen stays as it was, and Mark paid tries again.
+          setPayError(checkoutFailureCopy("network_error"));
           return;
         }
-        if (res.error === "collection_in_progress") {
-          // A card charge from the newer checkout is still unresolved; money
-          // recorded here now could be the customer paying twice.
-          toast("A card payment is still being confirmed. Nothing was recorded.", "error");
+        if (!res.ok) {
+          if (res.error === "paid_already") {
+            // Already recorded - by another device, or by an attempt whose
+            // answer never arrived. Show the calendar what is true, not a retry.
+            toast(`This ${vocab.serviceNoun} was already checked out`, "error");
+            onChanged();
+            onClose();
+            return;
+          }
+          setPayError(checkoutFailureCopy(res.error));
           return;
         }
-        toast("Couldn't save the checkout", "error");
-        return;
+        toast(`Paid $${amountToSave.toFixed(2)} · ${row.clientName}`, "success");
+        onChanged();
+        onClose();
+      } finally {
+        setSaving(false);
       }
-      toast(`Paid $${amountToSave.toFixed(2)} · ${row.clientName}`, "success");
-      onChanged();
-      onClose();
-    });
+    })();
   }
 
   /**
@@ -348,18 +360,32 @@ export function AppointmentSheet({
       // would be a way to charge from a step that has not shown the amount.
       // The ORIGINAL screen keeps the footer it always had.
       newCheckout ? null : (
-        <TwoUp
-          secondary={{ label: "Back", onClick: () => setView("charges") }}
-          primary={{
-            label: pending
-              ? "Saving…"
-              : method
-                ? `Mark paid · $${parsedAmount !== null ? parsedAmount.toFixed(2) : "—"}`
-                : "Pick a payment method",
-            onClick: submitCheckout,
-            disabled: pending || !method || !amountValid,
-          }}
-        />
+        <div className="flex w-full flex-col gap-2">
+          {payError && (
+            <p role="alert" data-testid="checkout-error" className="text-sm text-danger-soft">
+              {payError}
+            </p>
+          )}
+          <TwoUp
+            secondary={{
+              label: "Back",
+              onClick: () => {
+                setPayError(null);
+                setView("charges");
+              },
+            }}
+            primary={{
+              label:
+                pending || saving
+                  ? "Saving…"
+                  : method
+                    ? `Mark paid · $${parsedAmount !== null ? parsedAmount.toFixed(2) : "—"}`
+                    : "Pick a payment method",
+              onClick: submitCheckout,
+              disabled: pending || saving || !method || !amountValid,
+            }}
+          />
+        </div>
       )
     ) : (
       <DetailFooter detail={detail} notice={savedNotice} onEdit={() => setView("edit")} />
@@ -417,12 +443,18 @@ export function AppointmentSheet({
             dateLabel={dateLabel}
             timeLabel={timeLabel}
             amount={amountValue}
-            setAmount={setAmount}
+            setAmount={(v) => {
+              setPayError(null);
+              setAmount(v);
+            }}
             amountValid={amountValid}
             prepaidCents={prepaidCents}
             ticketCents={ticketCents}
             method={method}
-            setMethod={setMethod}
+            setMethod={(m) => {
+              setPayError(null);
+              setMethod(m);
+            }}
           />
         )
       ) : (
@@ -2237,6 +2269,27 @@ function EditFooter({
       />
     </div>
   );
+}
+
+/**
+ * What the checkout footer says when the save is refused, by the reason the
+ * API gave. Always ends by saying nothing was recorded, so the barber knows
+ * it is safe to try again. The reason code is shown for anything unexpected,
+ * so a screenshot tells us what happened.
+ */
+function checkoutFailureCopy(code: string | undefined): string {
+  switch (code) {
+    case "network_error":
+      return "Couldn't reach ChairBack. Check your signal and try again. Nothing was recorded.";
+    case "collection_in_progress":
+      return "A card payment is still being confirmed. Nothing was recorded.";
+    case "not_found":
+      return "This appointment can't be checked out - it may have been canceled. Nothing was recorded.";
+    case "invalid_input":
+      return "That amount or payment type wasn't accepted. Check the amount and try again. Nothing was recorded.";
+    default:
+      return `Couldn't save the checkout${code ? ` (${code})` : ""}. Nothing was recorded. Try again.`;
+  }
 }
 
 /**
