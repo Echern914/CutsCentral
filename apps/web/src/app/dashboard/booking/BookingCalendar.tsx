@@ -215,6 +215,9 @@ export function BookingCalendar({
   const router = useRouter();
   // Which sheet is open, and the ISO instant / day it targets.
   const [addAt, setAddAt] = useState<string | null>(null);
+  // Whether `addAt` is an hour he TAPPED on the day (the time he means), or the
+  // "+ New appointment" button's default start.
+  const [addTapped, setAddTapped] = useState(false);
   // "Book appointment" tapped on the waitlist board: the board dispatches the
   // entry, the calendar opens the SAME create form it uses everywhere else,
   // prefilled. Keeps one booking flow in the app rather than two.
@@ -662,7 +665,10 @@ export function BookingCalendar({
             toast={toast}
             isNative={isNative}
             staff={staff}
-            onAddAt={(hour) => setAddAt(isoForDayHour(shownDay, hour, tz))}
+            onAddAt={(hour, tapped) => {
+              setAddAt(isoForDayHour(shownDay, hour, tz));
+              setAddTapped(tapped === true);
+            }}
             onBlock={() => setBlockDay({ dayKey: shownDay, hour: 12 })}
             onOfferToTier={tierOpenings ? () => setTierDay(shownDay) : undefined}
             onChanged={refreshAgenda}
@@ -773,7 +779,10 @@ export function BookingCalendar({
               toast={toast}
               isNative={isNative}
               staff={staff}
-              onAddAt={(hour) => setAddAt(isoForDayHour(selectedDay, hour, tz))}
+              onAddAt={(hour, tapped) => {
+                setAddAt(isoForDayHour(selectedDay, hour, tz));
+                setAddTapped(tapped === true);
+              }}
               onBlock={() => setBlockDay({ dayKey: selectedDay, hour: 12 })}
               onOfferToTier={tierOpenings ? () => setTierDay(selectedDay) : undefined}
               onChanged={refreshAgenda}
@@ -796,6 +805,7 @@ export function BookingCalendar({
           addOns={addOns}
           timezone={tz}
           prefillISO={addAt}
+          tapped={addTapped}
           onClose={() => setAddAt(null)}
           onCreated={() => {
             setAddAt(null);
@@ -1527,7 +1537,8 @@ function DayPlanner({
   isNative: boolean;
   /** Active barbers - the walk-in bar asks whose chair when there's a choice. */
   staff: StaffRow[];
-  onAddAt: (hour: number) => void;
+  /** `tapped`: the barber tapped THIS hour's row, so it is the time he means. */
+  onAddAt: (hour: number, tapped?: boolean) => void;
   onBlock: () => void;
   /** "Offer to a tier" - absent when the shop has no tiers (rewards off). */
   onOfferToTier?: () => void;
@@ -1855,7 +1866,7 @@ function DayPlanner({
                     // A "+" bubble to add an appointment at this open hour.
                     <button
                       type="button"
-                      onClick={() => onAddAt(h)}
+                      onClick={() => onAddAt(h, true)}
                       className="group flex w-full items-center gap-2 py-1 text-xs text-muted/40 transition-colors hover:text-gold"
                     >
                       <span className="flex h-5 w-5 items-center justify-center rounded-full border border-subtle text-muted transition-colors group-hover:border-gold/50 group-hover:text-gold">

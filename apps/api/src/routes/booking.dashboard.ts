@@ -2971,6 +2971,14 @@ const createApptSchema = z
     // enforced so two real appointments can't collide.
     customTime: z.boolean().optional(),
     /**
+     * The barber's own price for a Custom time booking - his after-hours rate
+     * on a time he forced outside his hours (Drick: "so I can book in my after
+     * hours manually"). Replaces the service's price for this one visit;
+     * add-ons still add on top. Custom time only: an open slot books at the
+     * menu price and a special at its own, so neither takes one.
+     */
+    price: z.number().finite().min(0).max(10_000).optional(),
+    /**
      * Confirms booking OVER the exact spans a previous 409 `external_block`
      * named: the `confirmation` digest from that refusal, replayed. It
      * authorises those blocks and nothing else - if the conflict changed, the
@@ -3188,6 +3196,13 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     return;
   }
   const d = parsed.data;
+  // A typed price rides only on a single Custom time booking - never a special
+  // (its own price) or a repeating series (one price, many dates, no screen
+  // that showed it for each).
+  if (d.price !== undefined && (!d.customTime || d.targetedSlotId || d.recurrence)) {
+    res.status(400).json({ error: "invalid_input", code: "PRICE_NEEDS_CUSTOM_TIME" });
+    return;
+  }
 
   // Validate the staff offers an active service; compute end + snapshot price.
   const service = await prisma.service.findFirst({
@@ -3315,16 +3330,19 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
   const endsAt = new Date(
     startsAt.getTime() + (effectiveDuration + addOns.extraDurationMin) * 60_000,
   );
-  // A special snapshots ITS price - that is the point of publishing one.
+  // A special snapshots ITS price - that is the point of publishing one. A
+  // Custom time booking may carry the price the barber typed.
   const basePrice = targeted
     ? Number(targeted.price)
-    : effectivePriceAt(service.price === null ? null : Number(service.price), {
-        at: startsAt,
-        timezone: shop.timezone,
-        weekdayOverrides: service.priceOverrides,
-        dateOverrides: service.dateOverrides,
-        timeWindows: service.timeOverrides,
-      });
+    : d.price !== undefined
+      ? Math.round(d.price * 100) / 100
+      : effectivePriceAt(service.price === null ? null : Number(service.price), {
+          at: startsAt,
+          timezone: shop.timezone,
+          weekdayOverrides: service.priceOverrides,
+          dateOverrides: service.dateOverrides,
+          timeWindows: service.timeOverrides,
+        });
   const effectivePrice =
     basePrice === null && addOns.extraPrice === 0
       ? null

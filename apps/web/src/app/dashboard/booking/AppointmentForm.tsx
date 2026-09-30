@@ -19,6 +19,7 @@ import {
 } from "./actions";
 import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
 import { shopLocalInputValue } from "./shopLocalInput";
+import { parsePrice } from "@/lib/serviceFields";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
 
@@ -50,6 +51,12 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  * offered, exactly as the booking itself would refuse it. A special has its
  * own length and price, and a repeating series takes none, so neither carries
  * add-ons.
+ *
+ * ANY TIME, AT HIS PRICE. A barber whose client wanted 10 PM - after his hours
+ * - tapped the 10 PM row and got a list that did not have 10 PM on it, with
+ * Custom time as small print ("I can't book it after hours"). So an hour he
+ * TAPPED that is not an open time is offered as itself ("Book this time"), and
+ * Custom time takes a price: his after-hours rate instead of the menu's.
  */
 export function AppointmentForm({
   staff,
@@ -57,6 +64,7 @@ export function AppointmentForm({
   addOns = [],
   timezone,
   prefillISO,
+  tapped = false,
   waitlist,
   onClose,
   onCreated,
@@ -69,6 +77,12 @@ export function AppointmentForm({
   timezone: string;
   /** ISO instant of the tapped hour, prefills date + time. */
   prefillISO: string;
+  /**
+   * The barber tapped that hour's row on the calendar, so it is the time he
+   * means - not the "+ New appointment" button's default start. When it is not
+   * an open time, the form offers it as one tap.
+   */
+  tapped?: boolean;
   /**
    * Booking someone straight off the waitlist (phase E). Prefills who/what/
    * which chair, shows what they actually asked for, and carries `entryId`
@@ -102,6 +116,8 @@ export function AppointmentForm({
   );
   const [startsAt, setStartsAt] = useState<string>(prefillISO);
   const [customTime, setCustomTime] = useState(false);
+  // Custom time's price, as typed. Empty = the service's own price.
+  const [priceText, setPriceText] = useState("");
   const [slots, setSlots] = useState<DashSlot[]>([]);
   // The DAY's specials, across every service - listed before a service is
   // picked, because the special comes first and picks its own service.
@@ -202,9 +218,14 @@ export function AppointmentForm({
     });
     return (iso: string) => fmt.format(new Date(iso)) === dayKey;
   }, [timezone, dayKey]);
-  // The window around the tapped day both lists fetch; `onDay` trims it.
-  const windowFrom = new Date(new Date(prefillISO).getTime() - 12 * 3600_000).toISOString();
-  const windowTo = new Date(new Date(prefillISO).getTime() + 36 * 3600_000).toISOString();
+  // The window both lists fetch: the WHOLE shop-local day, whatever hour was
+  // tapped, with an hour's slack each side (a 25-hour DST day); `onDay` trims
+  // it. It used to be the tapped hour -12h/+36h - so opened from the 10 PM
+  // row, the window began at 10 AM and that morning's 9 AM special vanished.
+  const [dayY, dayM, dayD] = dayKey.split("-").map(Number);
+  const dayStartMs = zonedWallTimeToUtc(dayY!, dayM! - 1, dayD!, 0, timezone).getTime();
+  const windowFrom = new Date(dayStartMs - 3600_000).toISOString();
+  const windowTo = new Date(dayStartMs + 26 * 3600_000).toISOString();
 
   // Load open slots for the chosen (staff, service, add-ons) on the prefill day.
   // The add-ons go as ids: the API resolves their minutes itself, and only
@@ -276,10 +297,35 @@ export function AppointmentForm({
   const addOnPrice = chosenAddOns.reduce((sum, a) => sum + (a.price ?? 0), 0);
   const totalMin =
     (selectedService?.durationMin ?? 0) + chosenAddOns.reduce((sum, a) => sum + a.durationMin, 0);
-  const totalPrice =
-    selectedService?.price == null && addOnPrice === 0
-      ? null
-      : (selectedService?.price ?? 0) + addOnPrice;
+  // Custom time's typed price, read by the same parser the Services tab uses.
+  // Outside Custom time nothing typed counts: an open time books at the menu
+  // price, a special at its own.
+  const typedPrice = customTime ? parsePrice(priceText) : null;
+  const customPrice = typedPrice?.ok ? typedPrice.value : null;
+  const basePrice = customPrice ?? selectedService?.price ?? null;
+  const totalPrice = basePrice == null && addOnPrice === 0 ? null : (basePrice ?? 0) + addOnPrice;
+
+  /**
+   * The hour he tapped, offered as itself when it is not one of the times
+   * listed. Only once the list has loaded (so "not listed" is known), and only
+   * for a TAPPED hour - the "+ New appointment" button's default start is not
+   * a time he chose.
+   */
+  const offerTapped =
+    tapped &&
+    !customTime &&
+    serviceId !== null &&
+    staffId !== null &&
+    !loadingSlots &&
+    onDay(prefillISO) &&
+    !slots.some((s) => s.startsAt === prefillISO) &&
+    !specials.some((t) => t.startsAt === prefillISO);
+
+  function bookTappedTime() {
+    setCustomTime(true);
+    setStartsAt(prefillISO);
+    setTargetedSlotId(null);
+  }
 
   function toggleAddOn(id: string) {
     const on = addOnIds.includes(id);
@@ -355,6 +401,11 @@ export function AppointmentForm({
     if (!startsAt) return setError("Pick a time.");
     if (!clientId && !newName.trim()) return setError("Pick a client or enter a name.");
     if (repeat && endMode === "until" && !until) return setError("Pick an end date.");
+    if (typedPrice && !typedPrice.ok) return setError(typedPrice.error);
+    if (customPrice !== null && customPrice > 10_000) return setError("Enter a price under $10,000.");
+    if (customPrice !== null && repeat) {
+      return setError("A typed price is for one visit. Turn off Repeat, or clear the price.");
+    }
 
     // `until` is inclusive of the chosen day (the server stops once an
     // occurrence starts AFTER untilDate), so send END of that day in the
@@ -383,6 +434,8 @@ export function AppointmentForm({
         phone: clientId ? undefined : newPhone.trim() || undefined,
         note: note.trim() || undefined,
         customTime,
+        // Custom time only (typedPrice is null otherwise); empty = menu price.
+        price: customPrice ?? undefined,
         externalBlockConfirmation,
         overlapConfirmation,
         recurrence,
@@ -693,6 +746,31 @@ export function AppointmentForm({
                 Any time works, even over another booking - you&apos;ll see who&apos;s there
                 and be asked before it&apos;s booked.
               </p>
+              {/* His price for a time he forced - an after-hours rate, say.
+                  Blank books at the service's own price, as before. */}
+              <Field
+                label="Price"
+                hint={
+                  selectedService?.price != null
+                    ? `Leave blank for the regular ${formatSpecialPrice(selectedService.price)}. Type your after-hours price to charge that instead.`
+                    : "Leave blank for no price, or type what to charge for this visit."
+                }
+              >
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  aria-label="Price"
+                  className={INPUT}
+                  placeholder={
+                    selectedService?.price != null ? selectedService.price.toFixed(2) : "0.00"
+                  }
+                  value={priceText}
+                  onChange={(e) => {
+                    setPriceText(e.target.value);
+                    setError(null);
+                  }}
+                />
+              </Field>
             </div>
           ) : (
             <div className="flex min-w-0 flex-col gap-3">
@@ -776,6 +854,24 @@ export function AppointmentForm({
                   {chosenAddOns.length > 0 ? " long enough with the add-ons." : "."}{" "}
                   Use Custom time to force one.
                 </p>
+              )}
+              {offerTapped && (
+                <button
+                  type="button"
+                  data-qa="book-tapped-time"
+                  onClick={bookTappedTime}
+                  className="flex min-h-[2.75rem] w-full min-w-0 items-center justify-between gap-3 rounded-xl border border-subtle px-4 py-2.5 text-left text-sm transition-colors duration-150 ease-out hover:bg-charcoal-700/40"
+                >
+                  <span className="min-w-0">
+                    <span className="block font-medium text-offwhite">
+                      {timeFmt.format(new Date(prefillISO))}
+                    </span>
+                    <span className="block text-xs text-muted">
+                      The time you tapped · not one of your open times
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs font-semibold text-gold">Book this time</span>
+                </button>
               )}
             </div>
           )}

@@ -508,6 +508,12 @@ export interface CreateApptInput {
   note?: string;
   customTime?: boolean;
   /**
+   * The barber's own price for a Custom time booking (his after-hours rate).
+   * Replaces the service's price for this visit; add-ons still add. The API
+   * refuses it on anything but a single Custom time booking.
+   */
+  price?: number;
+  /**
    * Answers a refusal: the `confirmation` digest the API sent with an
    * `external_block` 409, replayed after the barber chose to go ahead. It
    * authorises the exact blocks that refusal named - if the conflict has
