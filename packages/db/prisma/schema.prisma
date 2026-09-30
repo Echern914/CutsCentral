@@ -5496,6 +5496,20 @@ model BookingConflict {
   /// name, number or price belongs here any more than in the row above.
   resolutionNote   String?
 
+  /// Set when a manager DELETED a resolved conflict from the inbox. Null =
+  /// still listed.
+  ///
+  /// 🔴 A SOFT DELETE, ON PURPOSE. The row is the audit trail (see resolvedAt)
+  /// and it is the dedupe: the unique key below is what stops the same
+  /// (receipt, conflicting record) pair ever being written - and alerted -
+  /// twice. The inbox filters these rows out; nothing else changes.
+  ///
+  /// Only a RESOLVED conflict can be deleted: the route refuses an open one,
+  /// and a CHECK constraint refuses it again underneath (migration
+  /// 20261034000000). Like resolving, deleting changes no booking.
+  deletedAt       DateTime?
+  deletedByUserId String?
+
   @@unique([shopId, receiptId, conflictingKind, conflictingId])
   @@index([shopId, resolvedAt, detectedAt])
 }

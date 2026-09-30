@@ -382,9 +382,11 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "resolve-conflict",
     q: "What does “Mark resolved” do on a conflict?",
-    a: "It notes that a person has dealt with it — that's all. Nothing about either booking changes: it doesn't cancel, move or refund anything, and it doesn't message the customer. If someone needs moving, do that on the calendar as you normally would.\n\nYou can add a line saying what you did (“rang him, moved to 3pm”) for whoever reads the list next. It's kept, with who resolved it and when — resolved conflicts move to the Resolved filter rather than disappearing.\n\nIf you see “Already resolved by …”, a teammate got there first; the list shows their name, not yours.",
+    a: "It notes that a person has dealt with it — that's all. Nothing about either booking changes: it doesn't cancel, move or refund anything, and it doesn't message the customer. If someone needs moving, do that on the calendar as you normally would.\n\nYou can add a line saying what you did (“rang him, moved to 3pm”) for whoever reads the list next. It's kept, with who resolved it and when — resolved conflicts move to the Resolved filter rather than disappearing.\n\nDone with them? A resolved one has a Delete button, and the Resolved and All filters have Delete all resolved. Deleting only takes it off this list: no booking changes and nobody is told. Open conflicts can't be deleted — resolve them first.\n\nIf you see “Already resolved by …”, a teammate got there first; the list shows their name, not yours.",
     keywords: [
       "mark resolved", "marking resolved", "mark it resolved", "resolve", "resolved", "resolving",
+      "delete resolved", "delete resolved conflicts", "delete a conflict", "delete conflicts",
+      "remove resolved conflicts", "clear resolved conflicts", "delete all resolved",
       "already resolved", "resolved by", "resolved by someone", "someone else resolved",
       "resolve conflict", "resolve a conflict", "resolving a conflict", "marking a conflict resolved",
       "does resolving cancel", "cancel the other appointment", "clear the conflict", "dismiss conflict",

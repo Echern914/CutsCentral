@@ -20,6 +20,8 @@ import { logger } from "../logger.js";
  * human dealt with one. It cannot cancel, move, reschedule or refund anything,
  * and it never deletes a row: resolving is bookkeeping, and the history of a
  * chair that was double-booked has to survive somebody tidying the list.
+ * "Delete" on a RESOLVED conflict (a barber asked for it) only takes it off
+ * this list - `deletedAt` - and the row stays.
  *
  * Its own router file, deliberately, for the reason walkIn.dashboard.ts gives:
  * the open Square stack edits booking.dashboard.ts, and this is not booking
@@ -78,6 +80,13 @@ const resolveAllSchema = z.object({
   /** The open count the manager was shown - see MORE THAN WAS SHOWN below. */
   expected: z.number().int().min(1).max(100_000),
   note: z.string().trim().max(280).optional(),
+});
+
+const deleteResolvedSchema = z.object({
+  /** The `asOf` of the list the manager was looking at - see POST /delete-resolved. */
+  asOf: z.string().datetime(),
+  /** The resolved count the manager was shown. */
+  expected: z.number().int().min(1).max(100_000),
 });
 
 /** Thrown inside the transaction purely to roll it back. */
@@ -216,6 +225,8 @@ bookingConflictsRouter.get("/", async (req, res) => {
 
   const where = {
     shopId,
+    // Deleted from the list by a manager: kept, never shown again.
+    deletedAt: null,
     ...(status === "open" ? { resolvedAt: null } : {}),
     ...(status === "resolved" ? { resolvedAt: { not: null } } : {}),
     // Strictly BEFORE the cursor in (detectedAt desc, id desc) order. The id
@@ -230,7 +241,7 @@ bookingConflictsRouter.get("/", async (req, res) => {
       : {}),
   };
 
-  const [rows, unresolvedCount] = await runWithShop(shopId, async (tx) =>
+  const [rows, unresolvedCount, resolvedCount] = await runWithShop(shopId, async (tx) =>
     Promise.all([
       tx.bookingConflict.findMany({
         where,
@@ -239,6 +250,9 @@ bookingConflictsRouter.get("/", async (req, res) => {
         take: limit + 1,
       }),
       tx.bookingConflict.count({ where: { shopId, resolvedAt: null } }),
+      // What "Delete all resolved" would take off the list - and the number it
+      // sends back, so it can never reach more than the manager was shown.
+      tx.bookingConflict.count({ where: { shopId, resolvedAt: { not: null }, deletedAt: null } }),
     ]),
   );
 
@@ -298,7 +312,103 @@ bookingConflictsRouter.get("/", async (req, res) => {
     resolutionNote: r.resolutionNote,
   }));
 
-  res.json({ items, nextCursor, unresolvedCount, asOf: asOf.toISOString() });
+  res.json({ items, nextCursor, unresolvedCount, resolvedCount, asOf: asOf.toISOString() });
+});
+
+/**
+ * POST /:id/delete - take one RESOLVED conflict off the list.
+ *
+ * 🔴 CHANGES NOTHING ABOUT EITHER BOOKING, and does not erase the record: it
+ * stamps `deletedAt` and the inbox stops listing it.
+ *
+ * 🔴 OPEN ONES STAY. A conflict nobody has dealt with is two people who may
+ * turn up for one chair; it leaves the list by being resolved, never by being
+ * deleted. Refused here (409 `still_open`) and again by the table's CHECK.
+ *
+ * Deleting one that is already gone answers 200 with `changed: false` - the
+ * work is done either way (two managers, or a double tap).
+ */
+bookingConflictsRouter.post("/:id/delete", async (req, res) => {
+  const shopId = req.shop!.id;
+  const userId = req.userId!;
+  const conflictId = String(req.params.id ?? "");
+
+  const outcome = await runWithShop(shopId, async (tx) => {
+    const existing = await tx.bookingConflict.findFirst({
+      where: { id: conflictId, shopId },
+      select: { id: true, resolvedAt: true, deletedAt: true },
+    });
+    if (!existing) return "not_found" as const;
+    if (!existing.resolvedAt) return "still_open" as const;
+    const { count } = await tx.bookingConflict.updateMany({
+      where: { id: conflictId, shopId, resolvedAt: { not: null }, deletedAt: null },
+      data: { deletedAt: new Date(), deletedByUserId: userId },
+    });
+    return count === 0 ? ("already" as const) : ("deleted" as const);
+  });
+
+  if (outcome === "not_found") {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (outcome === "still_open") {
+    res.status(409).json({ error: "still_open" });
+    return;
+  }
+  if (outcome === "deleted") {
+    logger.info(
+      { shopId, conflictId, userId },
+      "resolved booking conflict deleted from the list (no booking was changed)",
+    );
+  }
+  res.json({ ok: true, changed: outcome === "deleted" });
+});
+
+/**
+ * POST /delete-resolved - take every RESOLVED conflict off the list.
+ *
+ * The same guards as "resolve all": bounded by the `asOf` of the list the
+ * manager was looking at (one resolved after it was never on the screen), and
+ * rolled back and refused if it would touch MORE than the count he confirmed.
+ * Fewer is fine - a teammate deleted some first. Open conflicts are never
+ * touched: the WHERE requires `resolvedAt`, and the CHECK backs it.
+ */
+bookingConflictsRouter.post("/delete-resolved", async (req, res) => {
+  const shopId = req.shop!.id;
+  const userId = req.userId!;
+  const parsed = deleteResolvedSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const now = new Date();
+  const asOf = new Date(Math.min(new Date(parsed.data.asOf).getTime(), now.getTime()));
+
+  let deleted: number;
+  try {
+    deleted = await runWithShop(shopId, async (tx) => {
+      const { count } = await tx.bookingConflict.updateMany({
+        where: { shopId, resolvedAt: { not: null, lte: asOf }, deletedAt: null },
+        data: { deletedAt: now, deletedByUserId: userId },
+      });
+      if (count > parsed.data.expected) throw new MoreThanShown();
+      return count;
+    });
+  } catch (err) {
+    if (err instanceof MoreThanShown) {
+      res.status(409).json({ error: "conflicts_changed" });
+      return;
+    }
+    throw err;
+  }
+
+  if (deleted > 0) {
+    logger.info(
+      { shopId, userId, deleted },
+      "resolved booking conflicts deleted from the list in bulk (no booking was changed)",
+    );
+  }
+  res.json({ ok: true, deleted });
 });
 
 /**
