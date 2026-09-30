@@ -629,6 +629,12 @@ model Shop {
   // never ask. What was agreed is frozen onto Appointment.policySnapshot.
   bookingPolicyChecklist String[] @default([])
 
+  // A note for clients on every confirmation ("Please arrive 10 minutes
+  // early") - the booked screen, their appointment page, the confirmation and
+  // reminder emails. Never SMS. Information, not something agreed to, so not
+  // versioned. Limits in config/clientNote.ts. NULL = nothing shown.
+  clientNote String?
+
   payDirectEnabled Boolean @default(false)
   payDirectZelle   String? // Zelle email or phone number
   payDirectVenmo   String? // Venmo @handle (without the leading @)

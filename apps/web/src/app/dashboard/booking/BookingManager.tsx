@@ -17,6 +17,7 @@ import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { BookingQuestionsCard } from "./BookingQuestionsCard";
 import { BookingPolicyCard } from "./BookingPolicyCard";
+import { ClientNoteCard } from "./ClientNoteCard";
 import { useDemoTour } from "@/components/tour/state";
 import Link from "next/link";
 import { cn } from "@/lib/cn";
@@ -358,6 +359,9 @@ export function BookingManager({
             initialChecklist={shop.bookingPolicyChecklist ?? []}
             toast={toast}
           />
+          {/* What every confirmation says after booking - "Please arrive 10
+              minutes early". Blank = nothing shown. */}
+          <ClientNoteCard shopName={shop.name} initialNote={shop.clientNote ?? null} toast={toast} />
         </div>
       )}
       {tab === "Staff" && <StaffTab initial={initialStaff} toast={toast} />}

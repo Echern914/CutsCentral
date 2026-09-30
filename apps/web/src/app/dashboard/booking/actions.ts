@@ -96,6 +96,15 @@ export async function saveBookingPolicyAction(input: {
   return done(await apiSend("PATCH", "/api/shops/me", input));
 }
 
+/**
+ * Save the note every confirmation carries ("Please arrive 10 minutes
+ * early"). null clears it. Limit: config/clientNote.ts - the API refuses a
+ * longer one rather than cutting it.
+ */
+export async function saveClientNoteAction(clientNote: string | null): Promise<Result> {
+  return done(await apiSend("PATCH", "/api/shops/me", { clientNote }));
+}
+
 //  Staff
 
 export async function createStaffAction(input: {

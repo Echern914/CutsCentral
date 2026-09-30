@@ -1,0 +1,11 @@
+-- A shop's note for clients, shown with every booking confirmation (a barber:
+-- "add notes to the confirmations - please arrive 10 minutes early").
+--
+-- The prefix is a SEQUENCE NUMBER, not a date (see CLAUDE.md). 20261034000000
+-- is taken by the resolved-conflict delete (open alongside this); this one
+-- sorts after it.
+--
+-- EXPAND ONLY. One nullable column: every existing shop gets NULL, which shows
+-- nothing anywhere - exactly today's confirmations. A running old API neither
+-- reads nor writes it.
+ALTER TABLE "Shop" ADD COLUMN IF NOT EXISTS "clientNote" TEXT;
