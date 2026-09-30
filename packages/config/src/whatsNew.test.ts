@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WHATS_NEW, unseenWhatsNew, type WhatsNewEntry } from "./whatsNew";
+import { WHATS_NEW, unseenWhatsNew, type WhatsNewEntry } from "./whatsNew.js";
 
 /**
  * The bell's changelog is edited by hand in every PR that ships something a
