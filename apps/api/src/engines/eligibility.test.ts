@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   isNudgeEligible,
   isNudgeDueByCadence,
+  nudgeWindowEndDays,
   type EligibilityInput,
 } from "./eligibility.js";
+import { isWinbackDue } from "./winbackEligibility.js";
 
 // A baseline ELIGIBLE client; each test flips ONE rail to false.
 const base: EligibilityInput = {
@@ -47,6 +49,38 @@ describe("isNudgeEligible", () => {
 
   it("R2: one day past the threshold is overdue", () => {
     expect(isNudgeEligible({ ...base, daysSinceLastVisit: 38 })).toBe(true);
+  });
+
+  // The far edge. A 30-day client stays due to day 90 (3x, the win-back line)
+  // and is gone from day 91 - where it used to be "time for a cut" every 21
+  // days for ever.
+  it("R2: still due on the win-back line itself", () => {
+    expect(nudgeWindowEndDays(30, 7)).toBe(90);
+    expect(isNudgeEligible({ ...base, daysSinceLastVisit: 90 })).toBe(true);
+  });
+
+  it("R2: past the win-back line the client is gone, not due", () => {
+    expect(isNudgeEligible({ ...base, daysSinceLastVisit: 91 })).toBe(false);
+    expect(isNudgeEligible({ ...base, daysSinceLastVisit: 700 })).toBe(false);
+  });
+
+  it("R2: the far edge is exactly where win-back begins", () => {
+    const gone = { ...base, daysSinceLastVisit: 91, daysSinceLastWinback: null };
+    expect(isNudgeDueByCadence(gone)).toBe(false);
+    expect(isWinbackDue(gone)).toBe(true);
+    const due = { ...gone, daysSinceLastVisit: 90 };
+    expect(isNudgeDueByCadence(due)).toBe(true);
+    expect(isWinbackDue(due)).toBe(false);
+  });
+
+  it("R2: a short rhythm still gets its nudge - the window is at least one suppression period", () => {
+    // 3 x 3 = 9 comes BEFORE 3 + 7 = 10, so the win-back line alone would
+    // leave this client no nudge day at all.
+    expect(nudgeWindowEndDays(3, 7)).toBe(31); // 3 + 7 + 21
+    const short = { ...base, medianIntervalDays: 3 };
+    expect(isNudgeEligible({ ...short, daysSinceLastVisit: 11 })).toBe(true);
+    expect(isNudgeEligible({ ...short, daysSinceLastVisit: 31 })).toBe(true);
+    expect(isNudgeEligible({ ...short, daysSinceLastVisit: 32 })).toBe(false);
   });
 
   it("R3: has an upcoming booking", () => {
@@ -108,6 +142,10 @@ describe("isNudgeDueByCadence", () => {
 
   it("still enforces R2 (must be overdue)", () => {
     expect(isNudgeDueByCadence({ ...base, daysSinceLastVisit: 37 })).toBe(false);
+  });
+
+  it("still enforces R2's far edge - no push to the gone either", () => {
+    expect(isNudgeDueByCadence({ ...base, daysSinceLastVisit: 91 })).toBe(false);
   });
 
   it("still enforces R3 (no upcoming booking)", () => {

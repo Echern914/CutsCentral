@@ -1,4 +1,4 @@
-import { NUDGE } from "@chairback/config";
+import { NUDGE, WINBACK } from "@chairback/config";
 
 /**
  * Pure nudge-eligibility predicate. Operates on already-fetched data so every
@@ -6,7 +6,8 @@ import { NUDGE } from "@chairback/config";
  *
  * ALL must hold:
  *   R1: >= 2 completed visits (need history for a cadence)
- *   R2: overdue - daysSinceLastVisit > medianIntervalDays + nudgeBufferDays
+ *   R2: overdue - daysSinceLastVisit > medianIntervalDays + nudgeBufferDays -
+ *       but not GONE: at most nudgeWindowEndDays (past it, win-back's audience)
  *   R3: no upcoming SCHEDULED visit
  *   R4: no nudge in the last suppressionDays (21)
  *   R5: not opted out
@@ -25,6 +26,30 @@ export interface EligibilityInput {
   // TCPA gate: null = never consented => never textable. Distinct from optedOut
   // (which is the STOP/START toggle on a client who DID once consent).
   smsConsentAt: Date | null;
+}
+
+/**
+ * The last day since their last visit that a client is still DUE rather than
+ * GONE.
+ *
+ * 🔴 Without it the nudge had no far edge: a client who stopped coming got
+ * "time for a cut" every 21 days (R4) for ever - about 17 texts a year, to a
+ * list that only grows. Past this line they belong to win-back
+ * (winbackEligibility.ts W2, median x WINBACK.overdueMultiplier): a switch the
+ * shop turns on itself, with a 90-day suppression built for exactly them.
+ *
+ * Never less than one suppression period past the day they became due, so a
+ * short rhythm - where 3x the median comes before median + buffer - still gets
+ * its nudge instead of skipping straight to "gone".
+ */
+export function nudgeWindowEndDays(
+  medianIntervalDays: number,
+  nudgeBufferDays: number,
+): number {
+  return Math.max(
+    medianIntervalDays * WINBACK.overdueMultiplier,
+    medianIntervalDays + nudgeBufferDays + NUDGE.suppressionDays,
+  );
 }
 
 /**
@@ -51,6 +76,13 @@ export function isNudgeDueByCadence(input: EligibilityInput): boolean {
   if (
     input.daysSinceLastVisit <=
     input.medianIntervalDays + input.nudgeBufferDays
+  ) {
+    return false;
+  }
+  // R2, the far edge: not late any more - gone. Win-back's, not ours.
+  if (
+    input.daysSinceLastVisit >
+    nudgeWindowEndDays(input.medianIntervalDays, input.nudgeBufferDays)
   ) {
     return false;
   }

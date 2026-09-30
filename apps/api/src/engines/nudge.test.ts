@@ -24,7 +24,12 @@ const fakeProvider: MessageProvider = {
 let userId: string;
 let shop: Shop;
 
-async function makeOverdueClient(shopId: string, key: string, phone: string) {
+async function makeOverdueClient(
+  shopId: string,
+  key: string,
+  phone: string,
+  lastSeenDaysAgo = 60,
+) {
   const db = forShop(shopId);
   const client = await db.client.upsert({
     where: { shopId_acuityClientKey: { shopId, acuityClientKey: key } },
@@ -37,7 +42,7 @@ async function makeOverdueClient(shopId: string, key: string, phone: string) {
       smsConsentSource: "barber_attest",
       // overdue: median 30, last visit 60 days ago, buffer 7 -> 60 > 37
       medianIntervalDays: 30,
-      lastVisitAt: addDays(NOW, -60),
+      lastVisitAt: addDays(NOW, -lastSeenDaysAgo),
     },
     update: {},
   });
@@ -49,7 +54,7 @@ async function makeOverdueClient(shopId: string, key: string, phone: string) {
         clientId: client.id,
         acuityAppointmentId: `${key}-v${i}`,
         status: "COMPLETED",
-        scheduledAt: addDays(NOW, -60 - i * 30),
+        scheduledAt: addDays(NOW, -lastSeenDaysAgo - i * 30),
       },
       update: {},
     });
@@ -402,5 +407,36 @@ describe("🔴 never to a client who already booked (engines/upcomingBooking.ts)
     await makeOverdueClient(own.id, "tel:+13025551403", "+13025551403");
     const summary = await sweepShop(own, { now: NOW, dryRun: false });
     expect(summary.sent).toBe(1);
+  });
+});
+
+// 🔴 A client who stopped coming is win-back's (a switch the shop turns on),
+// not a "time for a cut" every 21 days for ever. This is the case a completed
+// import of years-old history creates in bulk.
+describe("🔴 never to a client who is gone (eligibility.ts, R2's far edge)", () => {
+  async function ownShop() {
+    return prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Gone Nudge Shop",
+        bookingUrl: "https://nudge.test",
+        webhookSecret: randomToken(),
+        dailySendCap: 5,
+        nudgeBufferDays: 7,
+      },
+    });
+  }
+
+  it("a 30-day client last seen two years ago gets no nudge, while one 60 days out does", async () => {
+    const own = await ownShop();
+    await makeOverdueClient(own.id, "tel:+13025551501", "+13025551501", 730);
+    await makeOverdueClient(own.id, "tel:+13025551502", "+13025551502", 60);
+    const summary = await sweepShop(own, { now: NOW, dryRun: false });
+    expect(summary.considered).toBe(2);
+    expect(summary.sent).toBe(1);
+    expect(sent.map((s) => s.to)).toEqual(["+13025551502"]);
+    // Nothing written for the gone client either - not even a skipped row.
+    const rows = await prisma.nudge.findMany({ where: { shopId: own.id }, select: { client: { select: { phone: true } } } });
+    expect(rows.map((r) => r.client.phone)).toEqual(["+13025551502"]);
   });
 });
