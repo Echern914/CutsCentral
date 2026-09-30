@@ -281,8 +281,12 @@ export async function verifyCardSaved(params: {
  *
  * Returns null when there is genuinely nothing to charge, which is the same
  * answer the caller already handles as `no_card`.
+ *
+ * Exported for the checkout SCREEN (routes/booking.checkout.ts): it must judge
+ * "is there a card to offer" by this same lookup, or it refuses the card on
+ * every occurrence after the first while the charge path would accept it.
  */
-async function paymentMethodFor(
+export async function paymentMethodFor(
   shopId: string,
   appointmentId: string,
   ownMethodId: string | null,
