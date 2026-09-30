@@ -106,6 +106,11 @@ model User {
   // skips) the dashboard welcome carousel. null = never seen, so the tour
   // auto-opens once. Replaying it from the account card does NOT clear this.
   welcomeSeenAt DateTime?
+  // "What's new" in the dashboard bell: the id of the newest changelog entry
+  // (@chairback/config/whatsNew) this person has seen. Everything above it in
+  // the list is new to them. Per PERSON, not per device, so opening the bell
+  // on the phone clears it on the laptop too. null = never opened it.
+  whatsNewSeenId String?
   // Acquisition attribution, captured at signup from a first-party cookie the
   // middleware sets when a visitor lands with utm_*/gclid/fbclid params (see
   // apps/web/src/middleware.ts). `acquisition` is the raw first-touch blob

@@ -12,6 +12,7 @@ export * from "./shopAddress.js";
 export * from "./bookingErrors.js";
 export * from "./relativeTime.js";
 export * from "./customerStatus.js";
+export * from "./whatsNew.js";
 export * from "./demo.js";
 export * from "./demoTour.js";
 export * from "./features.js";

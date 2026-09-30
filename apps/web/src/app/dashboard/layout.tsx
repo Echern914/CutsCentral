@@ -109,7 +109,11 @@ export default async function DashboardLayout({
             {/* Shown for EVERY seat, unlike search: readiness answers for an
                 employee too, and "what needs me" is the one thing a barber-only
                 dashboard should still surface. */}
-            <NotificationBell signals={bellSignals} />
+            <NotificationBell
+              signals={bellSignals}
+              whatsNew={me.data?.whatsNew ?? null}
+              demo={me.data?.demo ?? false}
+            />
             {shops.length + teams.length > 1 && (
               <ShopSwitcher shops={shops} teams={teams} activeShopId={activeShopId} />
             )}

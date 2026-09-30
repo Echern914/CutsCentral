@@ -68,6 +68,12 @@ export interface Me {
    * Optional so a web deploy ahead of the API defaults to dark.
    */
   theme?: "dark" | "light";
+  /**
+   * "What's new" in the bell: the newest changelog entry this person has seen,
+   * and when their account began. Optional: an older API does not send it, and
+   * the bell then marks nothing new.
+   */
+  whatsNew?: { seenId: string | null; accountCreatedAt: string } | null;
 }
 
 /**
