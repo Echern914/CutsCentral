@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { countBookingRefusals } from "../services/bookingRefusal.js";
 import {
@@ -2805,9 +2805,40 @@ bookingPublicRouter.get(
 );
 
 bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
-  const appt = await prisma.appointment.findUnique({
-    where: { manageToken: String(req.params.token) },
-    select: {
+  const manageToken = String(req.params.token);
+  const load = () =>
+    prisma.appointment.findUnique({
+      where: { manageToken },
+      select: MANAGE_SELECT,
+    });
+  let appt = await load();
+  if (!appt) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // 🔴 A CARD THAT IS ALREADY SAVED IS A BOOKING, WHATEVER THE ROW SAYS YET.
+  //
+  // This page is where Stripe sends the customer back after a confirmation
+  // that leaves the page (the intent's return_url), and it usually arrives a
+  // second BEFORE Stripe's webhook. It used to render the hold as it stood -
+  // "Requested - not booked yet" - and never refresh, for an appointment that
+  // was booked a moment later (a real client, 2026-09-30: page at 2:59:11,
+  // card saved at 2:59:12). So ask Stripe now - the same server-side check
+  // the booking page's card-saved call makes - and show what is true.
+  if (appt.status === "PENDING" && appt.holdReason === "payment") {
+    const settled = await verifyCardSaved({ shopId: appt.shopId, appointmentId: appt.id }).catch(
+      (err: unknown) => {
+        logger.warn({ err, appointmentId: appt!.id }, "manage page: could not check the card with Stripe");
+        return "unknown" as const;
+      },
+    );
+    if (settled === "saved" || settled === "already") appt = (await load()) ?? appt;
+  }
+  await renderManage(res, appt);
+});
+
+/** Everything the manage page shows about one appointment. */
+const MANAGE_SELECT = {
       id: true,
       shopId: true,
       status: true,
@@ -2840,12 +2871,11 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
       },
       service: { select: { name: true, durationMin: true } },
       staff: { select: { name: true } },
-    },
-  });
-  if (!appt) {
-    res.status(404).json({ error: "not_found" });
-    return;
-  }
+} satisfies Prisma.AppointmentSelect;
+
+type ManageRow = Prisma.AppointmentGetPayload<{ select: typeof MANAGE_SELECT }>;
+
+async function renderManage(res: Response, appt: ManageRow): Promise<void> {
   const now = new Date();
   const canChange = appt.status === "BOOKED" && appt.startsAt > now;
 
@@ -2963,7 +2993,7 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
         }
       : null,
   });
-});
+}
 
 // POST /api/book/manage/:token/stop-service-charges - the customer takes back
 // permission for the shop to charge their saved card for the service. The
