@@ -43,6 +43,7 @@ import {
   getMergedSlotsAction,
   getOpenDaysAction,
   getUpgradesAction,
+  resumeCheckoutAction,
   type DayBundlesResult,
   type DayService,
   type MergedSlotsResult,
@@ -69,6 +70,12 @@ import {
   rememberBooker,
   type RememberedBooker,
 } from "./rememberedBooker";
+import {
+  forgetUnfinishedBooking,
+  readUnfinishedBooking,
+  rememberUnfinishedBooking,
+  type UnfinishedBooking,
+} from "./unfinishedBooking";
 import { groupsToAutoExpand } from "./autoExpand";
 import { revealElement } from "./reveal";
 import { ClientNoteBlock } from "../ClientNoteBlock";
@@ -337,6 +344,23 @@ export function BookingClient({
     setPhone((cur) => cur || r.contact.phone);
     setEmail((cur) => cur || r.contact.email);
     // Once, on arrival. A later edit to the form is the customer's own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * A booking this device started here and left at its card step
+   * (unfinishedBooking.ts). While its hold lasts the page offers to finish it
+   * - and must: the time is held BY that booking, so starting again would find
+   * it taken. Read after mount; never on the demo shop.
+   */
+  const [unfinished, setUnfinished] = useState<UnfinishedBooking | null>(null);
+  /** The start of a booking reopened from here, for the screens that follow. */
+  const [resumedStartsAt, setResumedStartsAt] = useState<string | null>(null);
+  const [resumeNote, setResumeNote] = useState<string | null>(null);
+  const [resuming, setResuming] = useState(false);
+  useEffect(() => {
+    if (isDemoShop) return;
+    setUnfinished(readUnfinishedBooking(data.shop.slug));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   /**
@@ -1702,6 +1726,16 @@ export function BookingClient({
       setSeriesResult(res.series ?? null);
       // Pay-ahead: the booking is created; collect payment before confirming.
       if (res.paymentClientSecret) {
+        // If they leave this screen, this device can pick the booking up again
+        // while the hold lasts (unfinishedBooking.ts) - the one way back to a
+        // time their own unfinished booking is holding.
+        if (res.manageToken && res.paymentExpiresAt && !isDemoShop) {
+          rememberUnfinishedBooking(data.shop.slug, {
+            token: res.manageToken,
+            startsAt: slot,
+            expiresAt: res.paymentExpiresAt,
+          });
+        }
         setManageTokenPending(res.manageToken ?? null);
         setPaymentSecret(res.paymentClientSecret);
         setPayCharge(
@@ -1760,6 +1794,8 @@ export function BookingClient({
     for (;;) {
       const res = await bookingStatusAction(token);
       if (res.ok && res.status === "BOOKED") {
+        forgetUnfinishedBooking(data.shop.slug);
+        setUnfinished(null);
         setPayConfirm("no");
         setConfirmedToken(token);
         return;
@@ -1768,6 +1804,8 @@ export function BookingClient({
       // full by the same path). Saying so is the only honest option - the
       // alternative is a confirmation for an appointment that does not exist.
       if (res.ok && (res.status === "CANCELED" || res.status === "NO_SHOW")) {
+        forgetUnfinishedBooking(data.shop.slug);
+        setUnfinished(null);
         setPayConfirm("gone");
         return;
       }
@@ -1777,6 +1815,51 @@ export function BookingClient({
       }
       await new Promise((r) => setTimeout(r, 1500));
     }
+  }
+
+  /**
+   * "Finish booking": reopen the card step of the booking this device left
+   * unfinished. The server decides what is true - the same intent while the
+   * hold lasts, BOOKED if the card landed after all, CANCELED once it ran out.
+   */
+  async function finishUnfinished() {
+    if (!unfinished || resuming) return;
+    setResuming(true);
+    setResumeNote(null);
+    const res = await resumeCheckoutAction(unfinished.token);
+    setResuming(false);
+    if (res.ok && res.status === "BOOKED") {
+      forgetUnfinishedBooking(data.shop.slug);
+      setUnfinished(null);
+      setResumedStartsAt(unfinished.startsAt);
+      setConfirmedToken(unfinished.token);
+      return;
+    }
+    if (res.ok && res.finish) {
+      setResumedStartsAt(unfinished.startsAt);
+      setManageTokenPending(unfinished.token);
+      // The same words the first card screen said: they agreed to this there.
+      setServiceChargeConsent(res.finish.serviceChargeConsent);
+      setPayCharge({
+        amountCents: res.finish.amountCents,
+        isDeposit: res.finish.isDeposit,
+        balanceDueCents: res.finish.balanceDueCents,
+        holdMinutes: null,
+        expiresAt: res.finish.expiresAt,
+        kind: res.finish.kind,
+      });
+      setPaymentSecret(res.finish.clientSecret);
+      return;
+    }
+    if (res.ok) {
+      // A definite answer that there is nothing to finish: the hold ran out.
+      forgetUnfinishedBooking(data.shop.slug);
+      setUnfinished(null);
+      setResumeNote("That hold ran out and the time went back on sale. Pick a time below.");
+      return;
+    }
+    // No answer at all (offline): keep the offer - it may still be live.
+    setResumeNote("Couldn't reopen it just now. Try again in a moment.");
   }
 
   // When the repeat control may be shown - and, identically, when a chosen
@@ -1956,11 +2039,21 @@ export function BookingClient({
       </p>
     ) : null;
 
+  // The time being booked: the one picked on this page, or - when a booking
+  // left unfinished was reopened - the one it was holding.
+  const shownSlot = slot ?? resumedStartsAt;
+
   // ---- Payment screen (pay-ahead: booking created, collect card/Apple Pay) ----
   if (paymentSecret !== null && confirmedToken === null) {
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
         <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+          {/* 🔴 SAID FIRST, BEFORE ANYTHING ELSE. Customers read "Your time is
+              held" as "booked", left this screen, and the hold ran out ten
+              minutes later with the time back on sale. */}
+          <p className="text-xs font-semibold uppercase tracking-wide text-gold" data-qa="not-booked-yet">
+            Not booked yet
+          </p>
           <h1 ref={paymentHeadingRef} tabIndex={-1} className="font-display text-2xl outline-none">
             {payCharge?.kind === "setup"
               ? "Save a card to confirm"
@@ -1968,6 +2061,11 @@ export function BookingClient({
                 ? "Deposit to confirm"
                 : "Pay to confirm"}
           </h1>
+          {shownSlot !== null && (
+            <p className="mt-1 text-sm font-medium text-offwhite" data-qa="payment-slot">
+              {dateFmt.format(new Date(shownSlot))} · {timeFmt.format(new Date(shownSlot))}
+            </p>
+          )}
           <p className="mt-1 mb-4 text-sm text-muted">
             {payCharge?.kind === "setup" ? (
               <>
@@ -2150,9 +2248,9 @@ export function BookingClient({
           </h1>
           {/* Spell out WHEN — "You're booked!" with no date/time forced the
               customer into the manage page just to see what they booked. */}
-          {slot !== null && (
+          {shownSlot !== null && (
             <p className="mt-2 text-base font-semibold">
-              {dateFmt.format(new Date(slot))} · {timeFmt.format(new Date(slot))}
+              {dateFmt.format(new Date(shownSlot))} · {timeFmt.format(new Date(shownSlot))}
               {selectedService ? (
                 <span className="font-normal text-muted"> · {selectedService.name}</span>
               ) : null}
@@ -2378,6 +2476,51 @@ export function BookingClient({
           </a>
         )}
       </header>
+
+      {/* A booking this device started and left at its card step. Its time is
+          held BY that booking, so without this the customer who comes back
+          finds their own time taken - and believes they were booked. */}
+      {unfinished && (
+        <div
+          role="status"
+          className="mb-6 rounded-xl border border-gold/40 bg-gold/10 p-4 text-sm"
+          data-qa="unfinished-booking"
+        >
+          <p className="text-xs font-semibold uppercase tracking-wide text-gold">Not booked yet</p>
+          <p className="mt-1 text-offwhite">
+            You didn&rsquo;t finish booking {dateFmt.format(new Date(unfinished.startsAt))} at{" "}
+            {timeFmt.format(new Date(unfinished.startsAt))}. It&rsquo;s held for you until{" "}
+            {timeFmt.format(new Date(unfinished.expiresAt))}.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void finishUnfinished()}
+              disabled={resuming}
+              aria-busy={resuming}
+              className="rounded-full px-4 py-2 text-xs font-semibold disabled:opacity-60"
+              style={{ backgroundColor: accent, color: onAccent }}
+            >
+              {resuming ? "Opening…" : "Finish booking"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                forgetUnfinishedBooking(data.shop.slug);
+                setUnfinished(null);
+              }}
+              className="rounded-full border border-subtle px-4 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
+            >
+              Not now
+            </button>
+          </div>
+        </div>
+      )}
+      {resumeNote && (
+        <p role="alert" className="mb-6 text-center text-xs text-muted" data-qa="resume-note">
+          {resumeNote}
+        </p>
+      )}
 
       {/* Standing waitlist entry: available regardless of slot availability. */}
       {data.shop.waitlistEnabled && (

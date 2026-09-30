@@ -66,6 +66,7 @@ import { checkPolicyAcceptance, publicBookingPolicy } from "../engines/bookingPo
 import { normalizeClientNote } from "@chairback/config/clientNote";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { fillBlankClientFields } from "../services/clientFill.js";
+import { neverBooked, unfinishedCheckoutFor } from "../services/unfinishedCheckout.js";
 import {
   durationRangeForService,
   effectiveDurationAt,
@@ -2820,6 +2821,8 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
       // Which of PENDING's three meanings this is - read by requestedReason().
       holdReason: true,
       holdExpiresAt: true,
+      // The balance line on a reopened card step (unfinishedCheckoutFor).
+      priceAtBooking: true,
       shop: {
         select: {
           name: true,
@@ -2889,14 +2892,25 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
     seriesId: appt.seriesId,
   });
 
+  // A booking still waiting on its card: the same card step, reopened, so the
+  // customer who left it can finish instead of finding the time gone.
+  const finish = await unfinishedCheckoutFor(appt, now);
+
   res.json({
     status: appt.status,
     // PENDING is a request, never a booking - and the customer should know who
-    // they are waiting on. The reason only; the hold's expiry stays private.
+    // they are waiting on. The reason only; a receptionist hold's expiry stays
+    // private (a payment hold's deadline is in `finish`, for the customer
+    // whose card it is waiting on).
     requested:
       appt.status === "PENDING"
         ? { reason: requestedReason({ holdReason: appt.holdReason, holdExpiresAt: appt.holdExpiresAt }) }
         : null,
+    finish,
+    // Never a booking at all: the card never arrived before the hold ran out.
+    // The page says "not booked", not "canceled" - the customer cancelled
+    // nothing, and "canceled" reads as though the shop turned them away.
+    neverBooked: neverBooked(appt),
     firstName: appt.firstName,
     startsAt: appt.startsAt.toISOString(),
     endsAt: appt.endsAt.toISOString(),

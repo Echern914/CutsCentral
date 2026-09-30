@@ -120,13 +120,27 @@ export function requestedReason(hold: {
   return "approval";
 }
 
-/** The one line under "Requested", naming who the customer is waiting on. */
-export function requestedDetail(reason: RequestedReason, shopName: string): string {
+/**
+ * The one line under "Requested", naming who the customer is waiting on.
+ *
+ * 🔴 "payment" SAYS "NOT BOOKED". It used to say "Payment not finished", and
+ * customers read the appointment above it as theirs: they had picked the time
+ * and seen it on their list, so they left - and the hold ran out ten minutes
+ * later with the time back on sale. `until` is the deadline, already in the
+ * shop's own time ("1:04 PM"), when the caller has it.
+ */
+export function requestedDetail(
+  reason: RequestedReason,
+  shopName: string,
+  opts: { until?: string | null } = {},
+): string {
   switch (reason) {
     case "approval":
       return `Waiting for ${shopName} to confirm`;
     case "payment":
-      return "Payment not finished";
+      return opts.until
+        ? `Not booked yet: finish checkout by ${opts.until}`
+        : "Not booked yet: checkout isn't finished";
     case "arranging":
       return `Being arranged by text with ${shopName}`;
     default:

@@ -2,9 +2,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ManageData } from "./page";
 
+const refresh = vi.fn();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn(), refresh }),
   usePathname: () => "/book/manage/tok",
+}));
+// The card form is Stripe's; here it is a button that "saves the card".
+vi.mock("../../[slug]/PaymentStep", () => ({
+  PaymentStep: (p: { onPaid: () => void; intent: string }) => (
+    <button type="button" onClick={p.onPaid}>
+      {`stub ${p.intent} form`}
+    </button>
+  ),
+}));
+const cardSavedAction = vi.fn(async () => ({ ok: true, status: "BOOKED" }));
+const bookingStatusAction = vi.fn(async () => ({ ok: true, status: "BOOKED" }));
+vi.mock("../../[slug]/actions", () => ({
+  cardSavedAction: (...a: unknown[]) => cardSavedAction(...(a as [])),
+  bookingStatusAction: (...a: unknown[]) => bookingStatusAction(...(a as [])),
 }));
 const stopServiceChargesAction = vi.fn();
 vi.mock("./actions", () => ({
@@ -108,14 +123,14 @@ describe("the manage page tells the truth about status", () => {
     expect(screen.getByText("Waiting for Chern Cuts to confirm")).toBeTruthy();
   });
 
-  it("names an unfinished payment instead of the shop", () => {
+  it("🔴 an unfinished checkout says NOT BOOKED, not the shop's name", () => {
     render(
       <ManageClient
         token="tok"
         data={data({ status: "PENDING", requested: { reason: "payment" }, canCancel: false, canReschedule: false })}
       />,
     );
-    expect(screen.getByText("Payment not finished")).toBeTruthy();
+    expect(screen.getByText("Not booked yet: checkout isn't finished")).toBeTruthy();
   });
 
   it("still says 'Requested' when an older API sends no reason", () => {
@@ -173,5 +188,69 @@ describe("stopping the shop charging the saved card", () => {
     render(<ManageClient token="tok" data={{ ...withCard("2026-09-08T14:00:00Z"), status: "COMPLETED" }} />);
     expect(screen.getByText(/can no longer charge your Visa card ending 4242/)).toBeTruthy();
     expect(screen.queryByText(/Stop letting the shop charge this card/)).toBeNull();
+  });
+});
+
+describe("a booking left at its card step, from its own link", () => {
+  // 15:00Z is 11:00 AM in New York; the hold runs to 11:08 AM.
+  const finish = {
+    kind: "setup" as const,
+    clientSecret: "seti_live_secret",
+    amountCents: 0,
+    isDeposit: false,
+    balanceDueCents: 3500,
+    expiresAt: "2026-09-08T15:08:00Z",
+    serviceChargeConsent: false,
+  };
+  const held = () =>
+    data({
+      status: "PENDING",
+      requested: { reason: "payment" },
+      canCancel: false,
+      canReschedule: false,
+      finish,
+    });
+
+  it("🔴 says it is NOT booked, until when, and offers the card step to finish it", () => {
+    render(<ManageClient token="tok" data={held()} />);
+    expect(screen.getByText("Not booked yet: finish checkout by 11:08 AM")).toBeTruthy();
+    expect(screen.getByText("Save a card to book this time")).toBeTruthy();
+    expect(screen.getByText("stub setup form")).toBeTruthy();
+    expect(screen.queryByText("Booked")).toBeNull();
+  });
+
+  it("saving the card there asks the server to check, then shows the real booking", async () => {
+    vi.useRealTimers();
+    cardSavedAction.mockClear();
+    refresh.mockClear();
+    render(<ManageClient token="tok" data={held()} />);
+    await act(async () => {
+      fireEvent.click(screen.getByText("stub setup form"));
+    });
+    expect(cardSavedAction).toHaveBeenCalledWith("tok");
+    expect(refresh).toHaveBeenCalled();
+  });
+
+  it("repeats what they agreed to on the booking page - never less", () => {
+    render(<ManageClient token="tok" data={{ ...held(), finish: { ...finish, serviceChargeConsent: true } }} />);
+    expect(screen.getByText(/As you agreed, Chern Cuts can charge this card for your service/)).toBeTruthy();
+  });
+
+  it("🔴 a hold that ran out reads 'Not booked', never 'Canceled'", () => {
+    render(
+      <ManageClient
+        token="tok"
+        data={data({ status: "CANCELED", neverBooked: true, canCancel: false, canReschedule: false })}
+      />,
+    );
+    expect(screen.getByText("Not booked")).toBeTruthy();
+    expect(screen.queryByText("Canceled")).toBeNull();
+    expect(screen.getByText(/wasn't booked: the checkout wasn't finished before the hold ran out/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Book a new time" })).toBeTruthy();
+  });
+
+  it("a real cancellation still reads 'Canceled'", () => {
+    render(<ManageClient token="tok" data={data({ status: "CANCELED", neverBooked: false })} />);
+    expect(screen.getByText("Canceled")).toBeTruthy();
   });
 });
