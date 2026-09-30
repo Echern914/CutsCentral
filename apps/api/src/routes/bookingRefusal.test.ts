@@ -5,6 +5,11 @@ import { randomToken, zonedWallTimeToUtc } from "@chairback/config";
 import { createApp } from "../app.js";
 import { readBookingRefusals, recordBookingRefusal } from "../services/bookingRefusal.js";
 import { shopDayAhead } from "../testing/shopDay.js";
+import {
+  armBackgroundWorkTracking,
+  disarmBackgroundWorkTracking,
+  settleBackgroundWork,
+} from "../backgroundWork.js";
 
 /**
  * The booking canary.
@@ -30,9 +35,15 @@ let shopId: string;
 let staffId: string;
 let serviceId: string;
 
-const settle = () => new Promise((r) => setTimeout(r, 250));
+/**
+ * Wait for every refusal this test recorded to be WRITTEN - a fact, not a
+ * sleep. It was `setTimeout(250)`: enough on a laptop, not under CI load,
+ * where a slow bump left a count one short and the file went red at random.
+ */
+const settle = () => settleBackgroundWork();
 
 beforeAll(async () => {
+  armBackgroundWorkTracking();
   const email = `canary-${randomToken(6)}@test.chairback`.toLowerCase();
   emails.push(email);
   const user = await prisma.user.create({ data: { email, name: "C" }, select: { id: true } });
@@ -75,6 +86,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
+  disarmBackgroundWorkTracking();
   for (const email of emails) {
     const user = await prisma.user.findUnique({ where: { email } });
     if (user) {

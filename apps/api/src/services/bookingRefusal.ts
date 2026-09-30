@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { Prisma, prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { captureError } from "../sentry.js";
+import { trackBackgroundWork } from "../backgroundWork.js";
 
 /**
  * THE BOOKING CANARY.
@@ -81,7 +82,10 @@ export function recordBookingRefusal(
   code: string,
   now: Date = new Date(),
 ): void {
-  void (async () => {
+  // Tracked so a test can WAIT for it (backgroundWork.ts) instead of sleeping
+  // and hoping - a fixed 250ms was enough on a laptop and not under CI load.
+  // Inert in production.
+  void trackBackgroundWork((async () => {
     const hits = await bump(refusalHourKey(code, shopId, now), 2 * DAY_MS, now);
     await bump(refusalDayKey(code, shopId, now), DAILY_RETENTION_MS, now);
     const threshold = ALERT_THRESHOLDS[code];
@@ -92,7 +96,7 @@ export function recordBookingRefusal(
       );
       captureError(new Error(`booking_refusal_${code}`), { shopId, code, hits });
     }
-  })().catch(() => {});
+  })().catch(() => {}));
 }
 
 /**
