@@ -36,6 +36,7 @@ import {
 } from "../messaging/templates.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { sendPushToClient } from "../messaging/push.js";
+import { fillBlankClientFields } from "../services/clientFill.js";
 
 /**
  * Waitlist phase C: ONE customer at a time gets a freed slot, held for them.
@@ -901,14 +902,12 @@ export async function claimOffer(params: {
           email,
           source: "manual",
         },
-        update: {
-          firstName,
-          lastName: lastName ?? undefined,
-          phone: phone ?? undefined,
-          email: email ?? undefined,
-        },
+        // 🔴 Never overwrite an existing client from a public claim - a shared
+        // phone is not the same person (services/clientFill.ts).
+        update: {},
         select: { id: true },
       });
+      await fillBlankClientFields(tx, client.id, { firstName, lastName, phone, email });
       // FILL a missing handle, never replace one: the claim's phone is typed,
       // not proven, and the barber is the one who corrects a handle.
       if (instagram) {

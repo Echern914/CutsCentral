@@ -241,6 +241,35 @@ describe("POST /api/book/offer/:token/claim", () => {
     expect(appt.client?.instagram).toBe(handle);
   });
 
+  it("🔴 a claim on a phone already on file never renames that client or swaps their email", async () => {
+    // A shared phone is not the same person: the entry's name and email are
+    // someone else's (services/clientFill.ts).
+    const phone = "+13025550177";
+    const regular = await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `tel:${phone}`,
+        magicToken: randomToken(),
+        firstName: "Marcus",
+        lastName: "Reed",
+        phone,
+        email: "marcus@own.test",
+      },
+    });
+    const o = await heldOffer();
+    const res = await request(app).post(`/api/book/offer/${o.token}/claim`).send({ phone });
+    expect(res.status).toBe(201);
+    const after = await prisma.client.findUniqueOrThrow({ where: { id: regular.id } });
+    expect([after.firstName, after.lastName, after.email]).toEqual(["Marcus", "Reed", "marcus@own.test"]);
+    // The booking itself keeps who actually claimed it.
+    const appt = await prisma.appointment.findFirstOrThrow({
+      where: { shopId, staffId, startsAt: o.slot.startsAt },
+      select: { clientId: true, firstName: true },
+    });
+    expect(appt.clientId).toBe(regular.id);
+    expect(appt.firstName).not.toBe("Marcus");
+  });
+
   it("🔴 the claim fills a missing handle but never replaces one already on file", async () => {
     // The phone on a claim is typed, not proven; the barber corrects handles.
     const phone = "+13025550199";

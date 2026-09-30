@@ -65,6 +65,7 @@ import {
 import { checkPolicyAcceptance, publicBookingPolicy } from "../engines/bookingPolicy.js";
 import { normalizeClientNote } from "@chairback/config/clientNote";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
+import { fillBlankClientFields } from "../services/clientFill.js";
 import {
   durationRangeForService,
   effectiveDurationAt,
@@ -2003,13 +2004,17 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         smsConsentAt: consented ? now : null,
         smsConsentSource: consented ? "booking" : null,
       },
-      update: {
-        firstName: d.firstName,
-        lastName: d.lastName || undefined,
-        phone: phone ?? undefined,
-        email: d.email || undefined,
-      },
+      // 🔴 Never overwrite an existing client from a public form - a shared
+      // phone is not the same person (services/clientFill.ts). Blanks fill
+      // below; each booking row keeps exactly what was typed.
+      update: {},
       select: { id: true },
+    });
+    await fillBlankClientFields(prisma, client.id, {
+      firstName: d.firstName,
+      lastName: d.lastName,
+      phone,
+      email: d.email,
     });
     if (consented) {
       await prisma.client.updateMany({
@@ -2307,13 +2312,17 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           smsConsentAt: consented ? now : null,
           smsConsentSource: consented ? "booking" : null,
         },
-        update: {
-          firstName: d.firstName,
-          lastName: d.lastName || undefined,
-          phone: phone ?? undefined,
-          email: d.email || undefined,
-        },
+        // 🔴 Never overwrite an existing client from a public form - a shared
+        // phone is not the same person (services/clientFill.ts). Blanks fill
+        // below; the booking row keeps exactly what was typed.
+        update: {},
         select: { id: true },
+      });
+      await fillBlankClientFields(tx, client.id, {
+        firstName: d.firstName,
+        lastName: d.lastName,
+        phone,
+        email: d.email,
       });
       if (consented) {
         await tx.client.updateMany({

@@ -130,6 +130,33 @@ const createGroup = (
     .post(`/api/book/${slug}/group`)
     .send({ staffId, startsAt: startsAt.toISOString(), attendees, ...booker, ...extra });
 
+describe("🔴 a shared phone is not the same person", () => {
+  it("a group booked on a phone already on file keeps that client's own name and email", async () => {
+    const phone = "+12015550188";
+    const regular = await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `tel:${phone}`,
+        magicToken: randomToken(),
+        firstName: "Maria",
+        lastName: "Lopez",
+        phone,
+        email: "maria@own.test",
+      },
+    });
+    const res = await createGroup(
+      [
+        { firstName: "Tony", serviceId: cutId },
+        { firstName: "Kid", serviceId: cutId },
+      ],
+      { firstName: "Tony", lastName: "Lopez", phone, email: "tony@other.test" },
+    );
+    expect(res.status).toBe(201);
+    const after = await prisma.client.findUniqueOrThrow({ where: { id: regular.id } });
+    expect([after.firstName, after.lastName, after.email]).toEqual(["Maria", "Lopez", "maria@own.test"]);
+  });
+});
+
 /** Everything on the barber calendar for the shared day, in order. */
 const calendar = () =>
   prisma.appointment.findMany({
