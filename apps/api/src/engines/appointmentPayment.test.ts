@@ -24,7 +24,7 @@ function pay(over: Partial<PaymentRowFacts> = {}): PaymentRowFacts {
 
 const base = {
   price: 40,
-  payment: null as PaymentRowFacts | null,
+  payments: [] as PaymentRowFacts[],
   chairPaid: null as number | null,
   chairMethod: null as string | null,
   chairCheckedOut: false,
@@ -50,7 +50,7 @@ describe("what ChairBack refuses to claim", () => {
     const snap = appointmentPaymentSnapshot({
       ...base,
       external: true,
-      payment: pay({ amount: 1000 }),
+      payments: [pay({ amount: 1000 })],
     });
     expect(snap.state).toBe("deposit");
     expect(snap.onlineCents).toBe(1000);
@@ -62,7 +62,7 @@ describe("what ChairBack refuses to claim", () => {
     const snap = appointmentPaymentSnapshot({
       ...base,
       external: true,
-      payment: pay({ amount: 1000 }),
+      payments: [pay({ amount: 1000 })],
       chairPaid: 30,
       chairMethod: "cash",
       chairCheckedOut: true,
@@ -94,7 +94,7 @@ describe("what ChairBack refuses to claim", () => {
       const snap = appointmentPaymentSnapshot({
         ...base,
         external,
-        payment: pay(),
+        payments: [pay()],
         chairPaid: 40,
         chairMethod: "card",
       });
@@ -122,7 +122,7 @@ describe("collected money", () => {
   it("a deposit online leaves the rest owed at the chair", () => {
     const snap = appointmentPaymentSnapshot({
       ...base,
-      payment: pay({ amount: 1500 }),
+      payments: [pay({ amount: 1500 })],
       price: 40,
     });
     expect(snap.state).toBe("deposit");
@@ -133,7 +133,7 @@ describe("collected money", () => {
   it("online + chair money ADD (they never overlap)", () => {
     const snap = appointmentPaymentSnapshot({
       ...base,
-      payment: pay({ amount: 1500 }),
+      payments: [pay({ amount: 1500 })],
       chairPaid: 25,
       chairMethod: "cash",
     });
@@ -160,7 +160,7 @@ describe("holds are not collected money", () => {
   it("requires_capture keeps the balance owed and surfaces the hold separately", () => {
     const snap = appointmentPaymentSnapshot({
       ...base,
-      payment: pay({ status: "requires_capture", amount: 4000 }),
+      payments: [pay({ status: "requires_capture", amount: 4000 })],
     });
     expect(snap.state).toBe("unpaid");
     expect(snap.collectedCents).toBe(0);
@@ -171,7 +171,7 @@ describe("holds are not collected money", () => {
   it("a captured hold counts only the captured cents", () => {
     const snap = appointmentPaymentSnapshot({
       ...base,
-      payment: pay({ status: "succeeded", amount: 4000, capturedAmount: 3000 }),
+      payments: [pay({ status: "succeeded", amount: 4000, capturedAmount: 3000 })],
     });
     expect(snap.onlineCents).toBe(3000);
     expect(snap.authorizedCents).toBe(0);
@@ -190,7 +190,7 @@ describe("refunds", () => {
   it("a FULL refund is its own state, not 'unpaid'", () => {
     const snap = appointmentPaymentSnapshot({
       ...base,
-      payment: pay({ status: "refunded", amount: 4000, refundedAmount: 4000 }),
+      payments: [pay({ status: "refunded", amount: 4000, refundedAmount: 4000 })],
     });
     expect(snap.state).toBe("refunded");
     expect(snap.refundedCents).toBe(4000);
@@ -200,7 +200,7 @@ describe("refunds", () => {
   it("a PARTIAL refund leaves what is still held as the collected figure", () => {
     const snap = appointmentPaymentSnapshot({
       ...base,
-      payment: pay({ status: "partially_refunded", amount: 4000, refundedAmount: 1000 }),
+      payments: [pay({ status: "partially_refunded", amount: 4000, refundedAmount: 1000 })],
     });
     expect(snap.onlineCents).toBe(3000);
     expect(snap.refundedCents).toBe(1000);
@@ -243,5 +243,36 @@ describe("a closed chair moment", () => {
     expect(snap.remainingCents).toBe(0);
     expect(snap.state).toBe("paid");
     expect(snap.inPersonCents).toBe(3500);
+  });
+});
+
+describe("🔴 several payment rows are ALL counted (deposit + checkout balance)", () => {
+  it("a $10 deposit and a $30 balance collected at checkout read PAID on a $40 cut", () => {
+    const s = appointmentPaymentSnapshot({
+      ...base,
+      payments: [pay({ amount: 1000 }), pay({ amount: 3000 })],
+    });
+    expect(s.onlineCents).toBe(4000);
+    expect(s.remainingCents).toBe(0);
+    expect(s.state).toBe("paid");
+  });
+
+  it("the deposit alone still reads as a deposit with the rest owed", () => {
+    const s = appointmentPaymentSnapshot({ ...base, payments: [pay({ amount: 1000 })] });
+    expect(s.state).toBe("deposit");
+    expect(s.remainingCents).toBe(3000);
+  });
+
+  it("refunds and holds add up across rows too", () => {
+    const s = appointmentPaymentSnapshot({
+      ...base,
+      payments: [
+        pay({ status: "partially_refunded", amount: 2000, refundedAmount: 500 }),
+        pay({ status: "requires_capture", amount: 1500 }),
+      ],
+    });
+    expect(s.onlineCents).toBe(1500);
+    expect(s.refundedCents).toBe(500);
+    expect(s.authorizedCents).toBe(1500);
   });
 });
