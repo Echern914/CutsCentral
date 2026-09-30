@@ -1,7 +1,9 @@
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
+import { backfillSquareShop } from "../square/backfill.js";
 import { getSquareClientForShop } from "../square/client.js";
 import { ingestSquareBooking } from "../square/ingest.js";
+import { recordSquareSync } from "../square/syncHealth.js";
 import { walkSquareBookings } from "../square/walk.js";
 import type { SquareCustomer } from "../square/types.js";
 import {
@@ -37,12 +39,22 @@ import {
  * Idempotent + safe on the single-replica scheduler (see scheduler.ts). Never
  * throws out of one shop's failure: an expired token or a Square outage at one
  * merchant must not stall the sweep for everyone else.
+ *
+ * 🔴 A CONNECTION THAT HAS NEVER HAD ITS WHOLE BOOK GETS IT HERE. Until the
+ * walk learned Square's 31-day limit, every connect-time import failed, so
+ * shops that connected Square had no history and nothing booked ahead of the
+ * day they connected. `backfilledAt` is NULL for exactly those connections
+ * (and for any future import that fails, or a reconnect), and this sweep
+ * runs the full import for them instead of the short window - the fix
+ * reaches every affected shop on its own, without anyone pressing Repair.
  */
 
 export interface SquareResyncResult {
   shops: number;
   ingested: number;
   failedShops: number;
+  /** Shops that received their whole-book import this sweep. */
+  backfilled: number;
 }
 
 /** Re-sync one shop's recent Square window. Returns how many were ingested. */
@@ -54,28 +66,34 @@ async function resyncShop(
   const shop = await prisma.shop.findUnique({ where: { id: shopId } });
   if (!shop) return 0;
 
-  const client = await getSquareClientForShop(shopId);
-  const startAtMin = new Date(now.getTime() - SQUARE_RESYNC_LOOKBACK_MS).toISOString();
-  const startAtMax = new Date(now.getTime() + SQUARE_RESYNC_LOOKAHEAD_MS).toISOString();
-  // Shared for the whole shop: one token read + decrypt, and one fetch per
-  // PERSON rather than per booking (see SquareIngestDeps). Scoped to this
-  // sweep, so a customer edited in Square is picked up on the next one.
-  const deps = { client, customers: new Map<string, SquareCustomer | null>() };
+  try {
+    const client = await getSquareClientForShop(shopId);
+    const startAtMin = new Date(now.getTime() - SQUARE_RESYNC_LOOKBACK_MS).toISOString();
+    const startAtMax = new Date(now.getTime() + SQUARE_RESYNC_LOOKAHEAD_MS).toISOString();
+    // Shared for the whole shop: one token read + decrypt, and one fetch per
+    // PERSON rather than per booking (see SquareIngestDeps). Scoped to this
+    // sweep, so a customer edited in Square is picked up on the next one.
+    const deps = { client, customers: new Map<string, SquareCustomer | null>() };
 
-  const { handled, failed } = await walkSquareBookings(
-    client,
-    { shopId, locationId, startAtMin, startAtMax },
-    async (booking) => {
-      // Pass the booking we already have rather than re-fetching it by id -
-      // one HTTP call per booking would make a 500-booking shop a 500-request
-      // sweep every 30 minutes.
-      await ingestSquareBooking(shop, booking.id, booking, deps);
-    },
-  );
-  if (failed > 0) {
-    logger.warn({ shopId, failed }, "square resync: some bookings failed to ingest");
+    const { handled, failed } = await walkSquareBookings(
+      client,
+      { shopId, locationId, startAtMin, startAtMax },
+      async (booking) => {
+        // Pass the booking we already have rather than re-fetching it by id -
+        // one HTTP call per booking would make a 500-booking shop a
+        // 500-request sweep every 30 minutes.
+        await ingestSquareBooking(shop, booking.id, booking, deps);
+      },
+    );
+    if (failed > 0) {
+      logger.warn({ shopId, failed }, "square resync: some bookings failed to ingest");
+    }
+    await recordSquareSync(shopId, { ok: true, at: now });
+    return handled;
+  } catch (err) {
+    await recordSquareSync(shopId, { ok: false, error: err });
+    throw err;
   }
-  return handled;
 }
 
 export async function runSquareResync(now = new Date()): Promise<SquareResyncResult> {
@@ -85,25 +103,36 @@ export async function runSquareResync(now = new Date()): Promise<SquareResyncRes
     // Sweeping them would burn two requests and log an error per shop, every
     // 30 minutes, forever - noise that hides a real failure.
     where: { revokedAt: null },
-    select: { shopId: true, squareLocationId: true },
+    select: { shopId: true, squareLocationId: true, backfilledAt: true },
   });
   // Hard no-op when no Square shops are connected - the common case today, and
   // it must cost nothing.
-  if (conns.length === 0) return { shops: 0, ingested: 0, failedShops: 0 };
+  if (conns.length === 0) return { shops: 0, ingested: 0, failedShops: 0, backfilled: 0 };
 
   let ingested = 0;
   let failedShops = 0;
+  let backfilled = 0;
   for (const conn of conns) {
     try {
-      ingested += await resyncShop(conn.shopId, conn.squareLocationId, now);
+      if (conn.backfilledAt === null) {
+        // The whole book covers this sweep's window too - no second walk.
+        // null = the connect callback's own import is still running.
+        const handled = await backfillSquareShop(conn.shopId);
+        if (handled !== null) {
+          ingested += handled;
+          backfilled++;
+        }
+      } else {
+        ingested += await resyncShop(conn.shopId, conn.squareLocationId, now);
+      }
     } catch (err) {
       failedShops++;
       logger.error({ err, shopId: conn.shopId }, "square resync failed for shop");
     }
   }
   logger.info(
-    { shops: conns.length, ingested, failed: failedShops },
+    { shops: conns.length, ingested, backfilled, failed: failedShops },
     "square resync sweep complete",
   );
-  return { shops: conns.length, ingested, failedShops };
+  return { shops: conns.length, ingested, failedShops, backfilled };
 }

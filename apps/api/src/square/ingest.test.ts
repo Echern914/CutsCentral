@@ -43,7 +43,7 @@ vi.mock("./client.js", () => ({
   refreshAccessToken: async () => "tok",
 }));
 
-const { ingestSquareBooking } = await import("./ingest.js");
+const { ingestSquareBooking, squareBookingMinutes } = await import("./ingest.js");
 const { earnPunchForVisit } = await import("../services/punch.js");
 
 let userId: string;
@@ -133,6 +133,75 @@ describe("ingestSquareBooking", () => {
     });
     const netBalance = (net._sum.punchesEarned ?? 0) - (net._sum.punchesRedeemed ?? 0);
     expect(netBalance).toBe(0);
+  });
+});
+
+describe("how long a Square booking holds the chair", () => {
+  const visitFor = (bookingId: string) =>
+    prisma.visit.findUniqueOrThrow({
+      where: { shopId_acuityAppointmentId: { shopId, acuityAppointmentId: `square:${bookingId}` } },
+    });
+
+  it("🔴 every service and the gap between them - not just the first service", async () => {
+    currentCustomer = CUSTOMER;
+    currentBooking = {
+      id: "bk_two_services",
+      status: "ACCEPTED",
+      start_at: "2026-02-10T15:00:00Z",
+      location_id: "loc_1",
+      customer_id: "cust_1",
+      appointment_segments: [
+        { duration_minutes: 30, intermission_minutes: 10 },
+        // Nothing follows the last one, so its gap holds nothing.
+        { duration_minutes: 20, intermission_minutes: 15 },
+      ],
+    };
+    await ingestSquareBooking(await getShop(), "bk_two_services");
+    // 30 + 10 + 20 minutes. Reading the first segment alone ended it at
+    // 15:30, and the slot engine sold 15:30-16:00 while the chair was full.
+    expect((await visitFor("bk_two_services")).endAt?.toISOString()).toBe("2026-02-10T16:00:00.000Z");
+  });
+
+  it("half an hour when Square gives no length at all", () => {
+    expect(squareBookingMinutes({ appointment_segments: [] })).toBe(30);
+    expect(squareBookingMinutes({ appointment_segments: [{ duration_minutes: null }] })).toBe(30);
+    expect(squareBookingMinutes({ appointment_segments: [{ duration_minutes: 45 }] })).toBe(45);
+  });
+});
+
+describe("a cancelled Square booking keeps the date it was cancelled", () => {
+  const cancelled = (updatedAt: string): SquareBooking => ({
+    id: "bk_cancelled",
+    status: "CANCELLED_BY_CUSTOMER",
+    start_at: "2026-03-01T15:00:00Z",
+    updated_at: updatedAt,
+    location_id: "loc_1",
+    customer_id: "cust_1",
+    appointment_segments: [{ duration_minutes: 30 }],
+  });
+  const canceledAt = async () =>
+    (
+      await prisma.visit.findUniqueOrThrow({
+        where: { shopId_acuityAppointmentId: { shopId, acuityAppointmentId: "square:bk_cancelled" } },
+      })
+    ).canceledAt?.toISOString() ?? null;
+
+  it("🔴 dated by Square's last update, and a re-read never moves it to 'now'", async () => {
+    currentCustomer = CUSTOMER;
+    currentBooking = cancelled("2026-02-20T09:00:00Z");
+    await ingestSquareBooking(await getShop(), "bk_cancelled");
+    expect(await canceledAt()).toBe("2026-02-20T09:00:00.000Z");
+
+    // The sweep re-reads it every half hour; Square may have touched it since.
+    currentBooking = cancelled("2026-02-25T09:00:00Z");
+    await ingestSquareBooking(await getShop(), "bk_cancelled");
+    expect(await canceledAt()).toBe("2026-02-20T09:00:00.000Z");
+  });
+
+  it("re-accepted in Square, it has no cancellation date", async () => {
+    currentBooking = { ...cancelled("2026-02-26T09:00:00Z"), status: "ACCEPTED" };
+    await ingestSquareBooking(await getShop(), "bk_cancelled");
+    expect(await canceledAt()).toBeNull();
   });
 });
 

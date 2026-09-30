@@ -1233,6 +1233,19 @@ model SquareConnection {
   revokedAt        DateTime? // set on oauth.authorization.revoked (seller disconnect)
   connectedAt      DateTime @default(now())
   updatedAt        DateTime @updatedAt
+  // SYNC HEALTH. Every sync used to fail silently - the connect card said
+  // "Connected" while Square refused each request - so these say what
+  // actually happened:
+  //   backfilledAt  when the whole book (history + everything ahead) last came
+  //                 in. NULL = never, and the resync sweep imports it: a first
+  //                 connect whose import failed heals on its own, and a
+  //                 reconnect sets it back to NULL to re-read everything.
+  //   lastSyncedAt  the last import or sweep Square answered in full.
+  //   lastSyncError the SquareError code (or "failed") from the last attempt
+  //                 that did not; cleared by the next success.
+  backfilledAt     DateTime?
+  lastSyncedAt     DateTime?
+  lastSyncError    String?
 
   @@index([squareMerchantId])
 }

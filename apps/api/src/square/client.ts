@@ -34,10 +34,54 @@ export class SquareError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    /**
+     * Square's own reason (`errors[0].code`, e.g. "BAD_REQUEST",
+     * "UNAUTHORIZED", "RATE_LIMITED"), when the response carried one. The
+     * status alone said "Square 400" for months while every sync failed on the
+     * same range rule; the code and detail say which rule.
+     */
+    public readonly code: string | null = null,
   ) {
     super(message);
   }
 }
+
+/** Retries when Square answers 429 (RATE_LIMITED), before giving up. */
+const RATE_LIMIT_RETRIES = 3;
+
+/**
+ * How long to wait before retry `attempt` (0-based). Square's Retry-After when
+ * it sends one (capped - a sweep must not stall for a minute on one shop),
+ * else 1s, 2s, 4s.
+ */
+export function rateLimitDelayMs(retryAfter: string | null, attempt: number): number {
+  const seconds = retryAfter === null ? Number.NaN : Number(retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 10_000);
+  return 1000 * 2 ** attempt;
+}
+
+/**
+ * The SquareError for a failed response: status, plus Square's code and a
+ * short detail from the body when it is the usual `{ errors: [...] }` shape.
+ * The detail is Square's description of the rule that failed, never a
+ * customer's data.
+ */
+async function squareErrorFrom(res: Response, path: string): Promise<SquareError> {
+  let code: string | null = null;
+  let detail: string | null = null;
+  try {
+    const body = (await res.json()) as { errors?: { code?: unknown; detail?: unknown }[] };
+    const first = body?.errors?.[0];
+    if (typeof first?.code === "string") code = first.code;
+    if (typeof first?.detail === "string") detail = first.detail.slice(0, 200);
+  } catch {
+    // Not JSON - the status is all there is.
+  }
+  const why = code ? ` (${code}${detail ? `: ${detail}` : ""})` : "";
+  return new SquareError(res.status, `Square ${res.status} on ${path}${why}`, code);
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export interface SquareClient {
   getBooking(id: string): Promise<SquareBooking>;
@@ -84,8 +128,16 @@ export async function getSquareClientForShop(shopId: string): Promise<SquareClie
       accessToken = await refreshAccessToken(shopId, refreshToken);
       res = await doFetch(accessToken);
     }
+    // A first connect walks years of history in one go; being told to slow
+    // down part-way must not throw the whole import away.
+    for (let attempt = 0; res.status === 429 && attempt < RATE_LIMIT_RETRIES; attempt++) {
+      const waitMs = rateLimitDelayMs(res.headers.get("retry-after"), attempt);
+      logger.info({ shopId, attempt: attempt + 1, waitMs }, "square rate limited - retrying");
+      await sleep(waitMs);
+      res = await doFetch(accessToken);
+    }
     if (!res.ok) {
-      throw new SquareError(res.status, `Square ${res.status} on ${path}`);
+      throw await squareErrorFrom(res, path);
     }
     return res.json();
   }

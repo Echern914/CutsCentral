@@ -33,6 +33,26 @@ function parseDate(value: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/** The half hour utilization assumes when Square gives no length at all. */
+const FALLBACK_DURATION_MIN = 30;
+
+/**
+ * How long the chair is taken, in minutes: EVERY segment, and the gaps Square
+ * leaves between them. A haircut + beard booking is two segments, and reading
+ * only the first made the Visit end halfway through - the slot engine then
+ * offered the second half of an appointment that was still in the chair.
+ * The last segment's intermission is not counted: nothing follows it.
+ */
+export function squareBookingMinutes(booking: Pick<SquareBooking, "appointment_segments">): number {
+  const segments = booking.appointment_segments;
+  let total = 0;
+  segments.forEach((s, i) => {
+    total += Math.max(0, s.duration_minutes ?? 0);
+    if (i < segments.length - 1) total += Math.max(0, s.intermission_minutes ?? 0);
+  });
+  return total > 0 ? total : FALLBACK_DURATION_MIN;
+}
+
 /** Pull contact fields off the Square Customer for the client mapping. */
 function contactFromCustomer(customer: SquareCustomer | null): {
   firstName: string | null;
@@ -111,15 +131,19 @@ export async function ingestSquareBooking(
     );
     return;
   }
-  // Square bookings don't inline an end time or price; derive end from the first
-  // segment's duration when present. Service name needs a Catalog lookup we skip
-  // in v1 (null is fine — punches earn on the shop's default punchesPerVisit).
+  // Square bookings don't inline an end time or price; the end is the start
+  // plus every segment (squareBookingMinutes). Service name needs a Catalog
+  // lookup we skip in v1 (null is fine — punches earn on the shop's default
+  // punchesPerVisit).
   // Never null: a null endAt is invisible to the slot engine's `endAt: { gt }`
   // busy-join (Prisma gt excludes NULL) and the visit would block nothing.
-  // Missing duration falls back to the same half hour utilization assumes.
-  const durationMin = booking.appointment_segments[0]?.duration_minutes ?? null;
-  const endAt = new Date(scheduledAt.getTime() + (durationMin ?? 30) * 60_000);
+  const endAt = new Date(scheduledAt.getTime() + squareBookingMinutes(booking) * 60_000);
   const sourceId = `square:${booking.id}`;
+  // When it was cancelled, as near as Square says: its last update. A sync
+  // that re-reads a cancelled booking must not move the date to "now" - the
+  // sweep re-reads every booking in its window every half hour, and a
+  // connect-time import would stamp years-old cancellations with today.
+  const cancelledAt = status === "CANCELED" ? (parseDate(booking.updated_at) ?? new Date()) : null;
 
   const { clientId, clawedBack } = await runWithShop(shop.id, async (tx) => {
     const dbClient = await tx.client.upsert({
@@ -172,7 +196,7 @@ export async function ingestSquareBooking(
     // override (a retroactive cancel is real and must claw back the punch).
     const existing = await tx.visit.findUnique({
       where: { shopId_acuityAppointmentId: { shopId: shop.id, acuityAppointmentId: sourceId } },
-      select: { status: true },
+      select: { status: true, canceledAt: true },
     });
     const keepCompleted =
       existing?.status === "COMPLETED" && status !== "CANCELED" && status !== "NO_SHOW";
@@ -190,14 +214,16 @@ export async function ingestSquareBooking(
         endAt,
         serviceName: null,
         noShow: status === "NO_SHOW",
-        canceledAt: status === "CANCELED" ? new Date() : null,
+        canceledAt: cancelledAt,
       },
       update: {
         status: keepCompleted ? undefined : status,
         scheduledAt,
         endAt,
         noShow: status === "NO_SHOW",
-        canceledAt: status === "CANCELED" ? new Date() : null,
+        // The first date it was seen cancelled stands; a booking no longer
+        // cancelled (re-accepted in Square) has none.
+        canceledAt: cancelledAt ? (existing?.canceledAt ?? cancelledAt) : null,
         completedAt: revokeCompleted ? null : undefined,
       },
     });
