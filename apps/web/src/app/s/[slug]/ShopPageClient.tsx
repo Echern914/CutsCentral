@@ -3,31 +3,27 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { motion } from "framer-motion";
 import {
-  APP_NAME,
-  serviceNounForShop,
   DEFAULT_LAYOUT_STYLE,
   DEFAULT_PAGE_FONT,
   DEFAULT_SECTION_ORDER,
   LAYOUT_STYLES,
   PAGE_FONTS,
   PAGE_THEMES,
+  pageDesignFor,
   type LayoutStyleKey,
   type PageFontKey,
   type PageSectionKey,
   type PageThemeKey,
 } from "@chairback/config/constants";
-import { DEMO } from "@chairback/config/demo";
 import { isUsableBookingLink } from "@chairback/config/bookingLinks";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
-import { BackToDashboard } from "@/components/BackToDashboard";
-import { CustomerBack } from "@/components/CustomerBack";
-import { DemoTour } from "@/components/tour/DemoTour";
-import { TextToBook } from "@/components/TextToBook";
-import { RequestForm } from "./RequestForm";
 import { ShopWaitlistForm } from "./ShopWaitlistForm";
-import { ReviewForm } from "./ReviewForm";
+import { Gallery, Hours, Promotions, Rewards, Reviews, StampMark } from "./pageSections";
+import { PrimaryCta, ShopChrome, ShopFooter, TextToBookBlock } from "./pageChrome";
+import { DesignedPage } from "./designs/DesignedPage";
+import type { DesignCtx } from "./designs/model";
 import type { ShopPageData } from "./page";
 
 /**
@@ -36,6 +32,10 @@ import type { ShopPageData } from "./page";
  * sections render in the shop's chosen order. Two shops share zero visual
  * identity. Self-contained styling - deliberately avoids the app's dark-chrome
  * utility classes.
+ *
+ * The shop's PAGE DESIGN picks the layout. "classic" - the page every shop had
+ * before designs existed, and the default - renders below exactly as it always
+ * did; every other design is built from the same pieces in designs/.
  *
  * `preview` renders the exact same page for the in-editor live preview, but
  * neutralizes anything that would navigate or submit (booking link, request
@@ -134,42 +134,34 @@ export function ShopPageClient({
     hours: <Hours key="hours" data={data} theme={theme} surface={surface} />,
   };
 
+  const design = pageDesignFor(data.pageDesign);
+  if (design !== "classic") {
+    const ctx: DesignCtx = {
+      data,
+      preview,
+      inApp,
+      mounted,
+      theme,
+      accent,
+      layout,
+      surface,
+      rootStyle,
+      bookHref,
+      bookIsNative,
+      hasBooking,
+      showRequestForm,
+      bookQuery,
+      rewardsHref,
+      rewardsLabel,
+      sections,
+      order,
+    };
+    return <DesignedPage design={design} ctx={ctx} />;
+  }
+
   return (
     <div className="min-h-dvh" style={rootStyle}>
-      {/* Guided client-experience tour — demo tenant only, never the editor
-          preview. Step anchors are the data-tour attributes below (keep in
-          sync with packages/config/src/demoTour.ts). */}
-      {!preview && data.slug === DEMO.SHOP_SLUG && <DemoTour route="shop" />}
-      {/* Barber-only "back to dashboard" - shows only when opened from the
-          dashboard (?from=dashboard), never for customers, never in the editor
-          preview. */}
-      {!preview && (
-        <BackToDashboard
-          fallbackHref="/dashboard/site"
-          className="fixed left-4 top-4 z-20 px-3.5 py-2 text-xs font-medium shadow-lg backdrop-blur transition-transform duration-200 ease-out hover:scale-[1.03]"
-          style={{
-            backgroundColor: theme.surface,
-            border: `1px solid ${theme.border}`,
-            color: theme.text,
-            borderRadius: layout.buttonRadius,
-          }}
-        />
-      )}
-      {/* Customer "← Back" — in the app WebView this page has no browser
-          chrome, so arriving from the rewards page ("More from {shop}") was a
-          dead end. Same spot as BackToDashboard; the two never both render
-          (CustomerBack hides itself under ?from=dashboard). */}
-      {!preview && (
-        <CustomerBack
-          className="fixed left-4 top-4 z-20 px-3.5 py-2 text-xs font-medium shadow-lg backdrop-blur transition-transform duration-200 ease-out hover:scale-[1.03]"
-          style={{
-            backgroundColor: theme.surface,
-            border: `1px solid ${theme.border}`,
-            color: theme.text,
-            borderRadius: layout.buttonRadius,
-          }}
-        />
-      )}
+      <ShopChrome data={data} preview={preview} theme={theme} layout={layout} />
       <motion.main
         variants={staggerContainer}
         initial="hidden"
@@ -240,69 +232,18 @@ export function ShopPageClient({
           </div>
         </motion.header>
 
-        {/* The AI text line, above the booking CTA: for a lot of clients
-            texting IS the booking flow, and it answers "are you open Saturday?"
-            which no button on this page can. Renders only when the shop has a
-            reachable receptionist (the API nulls the number otherwise). */}
-        {data.receptionistNumber && (
-          <motion.div variants={fadeUp} className="mt-6">
-            <TextToBook
-              number={data.receptionistNumber}
-              shopName={data.name}
-              accent={accent}
-              muted={theme.muted}
-              text={theme.text}
-            />
-          </motion.div>
-        )}
+        <TextToBookBlock data={data} accent={accent} theme={theme} />
 
-        {/* Primary CTA. Native booking and the lead form are mutually exclusive:
-            native is real self-serve booking, so it replaces the request form. */}
-        <motion.div variants={fadeUp} className="mt-6" data-tour="book-cta">
-          {showRequestForm ? (
-            <>
-              <RequestForm
-                slug={data.slug}
-                shopName={data.name}
-                accent={accent}
-                preview={preview}
-                theme={{
-                  surface: theme.surface,
-                  border: theme.border,
-                  muted: theme.muted,
-                  scheme: theme.scheme,
-                  radius: layout.radius,
-                  buttonRadius: layout.buttonRadius,
-                }}
-              />
-              {/* The "or book online" shortcut only makes sense with a real link. */}
-              {hasBooking && (
-                <a
-                  href={preview ? undefined : bookHref ?? undefined}
-                  onClick={preview ? (e) => e.preventDefault() : undefined}
-                  className="mt-3 block text-center text-xs underline-offset-2 hover:underline"
-                  style={{ color: theme.muted }}
-                >
-                  Or book online instantly →
-                </a>
-              )}
-            </>
-          ) : hasBooking ? (
-            <a
-              href={preview ? undefined : bookHref ?? undefined}
-              onClick={preview ? (e) => e.preventDefault() : undefined}
-              className="block w-full py-3.5 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01]"
-              style={{
-                backgroundColor: accent,
-                color: theme.scheme === "light" ? "#FFFFFF" : "#101012",
-                boxShadow: `0 8px 30px -10px ${accent}AA`,
-                borderRadius: layout.buttonRadius,
-              }}
-            >
-              Book an appointment
-            </a>
-          ) : null}
-        </motion.div>
+        <PrimaryCta
+          data={data}
+          preview={preview}
+          theme={theme}
+          layout={layout}
+          accent={accent}
+          bookHref={bookHref}
+          hasBooking={hasBooking}
+          showRequestForm={showRequestForm}
+        />
 
         {/* A known client's way to their punch card. Its own block, OUTSIDE the
             data-tour="book-cta" div above - the demo tour spotlights that
@@ -350,395 +291,18 @@ export function ShopPageClient({
         {/* Movable sections, in the shop's chosen order */}
         {order.map((key) => sections[key])}
 
-        {/* Bottom CTA + footer. Flex column so the pill and the powered-by line
-            stack + center reliably — as inline-block siblings they crowded onto
-            one line when both fit. */}
-        <motion.footer variants={fadeUp} className="mt-10 flex flex-col items-center gap-6 text-center">
-          {hasBooking && (
-            <a
-              href={preview ? undefined : bookHref ?? undefined}
-              onClick={preview ? (e) => e.preventDefault() : undefined}
-              className="px-8 py-3 text-sm font-semibold"
-              style={{ border: `1px solid ${accent}`, color: accent, borderRadius: layout.buttonRadius }}
-            >
-              Book with {data.name}
-            </a>
-          )}
-          {/* The rewards-recovery door, only when this visitor DIDN'T arrive
-              through their rewards link (token-holders get "Your rewards"
-              above) and isn't inside the app (where their rewards session
-              already exists). Preview keeps it inert like every footer link.
-              /my-rewards is shop-agnostic - the link says nothing about who
-              this customer is anywhere else. */}
-          {!rewardsHref && !inApp && (
-            <a
-              href={preview ? undefined : "/my-rewards"}
-              onClick={preview ? (e) => e.preventDefault() : undefined}
-              className="text-[11px] underline-offset-2 hover:underline"
-              style={{ color: theme.muted }}
-            >
-              Lost your rewards link? Find my rewards
-            </a>
-          )}
-          {/* Growth loop: every shop page quietly markets the platform. Inside
-              the iOS app it must be INERT text - the marketing site it links to
-              leads to business signup, which is forbidden in-app (3.1.1). The
-              site-editor preview keeps the full (already inert) link so the
-              barber sees exactly what browser visitors see, even when editing
-              from inside the app. */}
-          {inApp && !preview ? (
-            <span className="text-[11px]" style={{ color: theme.muted }}>
-              Powered by {APP_NAME}
-            </span>
-          ) : (
-            <a
-              href={preview ? undefined : `/?ref=${encodeURIComponent(data.slug)}`}
-              onClick={preview ? (e) => e.preventDefault() : undefined}
-              className="text-[11px] underline-offset-2 hover:underline"
-              style={{ color: theme.muted }}
-            >
-              Powered by {APP_NAME}, loyalty for your shop
-            </a>
-          )}
-        </motion.footer>
+        <ShopFooter
+          data={data}
+          preview={preview}
+          inApp={inApp}
+          theme={theme}
+          layout={layout}
+          accent={accent}
+          bookHref={bookHref}
+          hasBooking={hasBooking}
+          rewardsHref={rewardsHref}
+        />
       </motion.main>
     </div>
   );
-}
-
-type Theme = (typeof PAGE_THEMES)[PageThemeKey];
-type Layout = (typeof LAYOUT_STYLES)[LayoutStyleKey];
-
-function Promotions({
-  data,
-  accent,
-  theme,
-  layout,
-  mounted,
-}: {
-  data: ShopPageData;
-  accent: string;
-  theme: Theme;
-  layout: Layout;
-  mounted: boolean;
-}) {
-  if (data.promotions.length === 0) return null;
-  return (
-    <motion.section variants={fadeUp} className="mt-8" data-tour="promotions">
-      <SectionTitle muted={theme.muted}>Right now</SectionTitle>
-      <div className="flex flex-col gap-3">
-        {data.promotions.map((promo) => {
-          const value = promoValue(promo);
-          const ends = mounted ? endsLabel(promo.endsAt) : null;
-          return (
-            <div
-              key={promo.id}
-              className="relative overflow-hidden p-5"
-              style={{ backgroundColor: theme.surface, border: `1px solid ${theme.border}`, borderRadius: layout.radius }}
-            >
-              <div className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: accent }} aria-hidden />
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold">
-                    {promo.title}
-                    {value && <span className="ml-2" style={{ color: accent }}>{value}</span>}
-                  </p>
-                  {promo.description && (
-                    <p className="mt-1 text-xs" style={{ color: theme.muted }}>{promo.description}</p>
-                  )}
-                  <p className="mt-1.5 min-h-4 text-[11px] uppercase tracking-wide" style={{ color: theme.muted }}>
-                    {ends ?? ""}
-                  </p>
-                </div>
-                {promo.code && (
-                  <span
-                    className="shrink-0 rounded-lg px-2.5 py-1.5 font-mono text-xs"
-                    style={{ border: `1px dashed ${theme.border}` }}
-                  >
-                    {promo.code}
-                  </span>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </motion.section>
-  );
-}
-
-function Rewards({
-  data,
-  accent,
-  theme,
-  surface,
-}: {
-  data: ShopPageData;
-  accent: string;
-  theme: Theme;
-  surface: CSSProperties;
-}) {
-  if (data.rewards.length === 0) return null;
-  return (
-    <motion.section variants={fadeUp} className="mt-8" data-tour="rewards-menu">
-      <SectionTitle muted={theme.muted}>Loyalty rewards</SectionTitle>
-      <div className="overflow-hidden" style={surface}>
-        {data.rewards.map((reward, i) => (
-          <div
-            key={reward.id}
-            className="flex items-center justify-between gap-3 px-5 py-4"
-            style={i > 0 ? { borderTop: `1px solid ${theme.border}` } : undefined}
-          >
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">
-                {reward.emoji ? `${reward.emoji} ` : ""}
-                {reward.name}
-              </p>
-              {reward.description && (
-                <p className="mt-0.5 truncate text-xs" style={{ color: theme.muted }}>{reward.description}</p>
-              )}
-            </div>
-            <span
-              className="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
-              style={{ backgroundColor: `${accent}22`, color: accent }}
-            >
-              {reward.punchCost} {reward.punchCost === 1 ? "punch" : "punches"}
-            </span>
-          </div>
-        ))}
-        <p
-          className="px-5 py-3 text-[11px]"
-          style={{ color: theme.muted, borderTop: `1px solid ${theme.border}` }}
-        >
-          Every visit earns {data.punchesPerVisit} {data.punchesPerVisit === 1 ? "punch" : "punches"}. Members get a
-          personal rewards link by text after their first visit.
-        </p>
-      </div>
-    </motion.section>
-  );
-}
-
-/** Static, clearly-labeled sample reviews. Shown ONLY in the editor preview when
- *  a shop has no approved reviews yet, so the barber can see how the section will
- *  look. These are NEVER rendered on the live public page (guarded by `preview`),
- *  so real visitors never see fabricated reviews presented as real. */
-const exampleReviews = (serviceNoun: string) => [
-  { id: "ex1", rating: 5, authorName: "Jordan M.", body: `Best ${serviceNoun} I've had in years. In and out, super clean.` },
-  { id: "ex2", rating: 5, authorName: "Sam R.", body: "Great with my kids and always on time. Highly recommend." },
-  { id: "ex3", rating: 4, authorName: "Alex P.", body: `Solid ${serviceNoun} and good conversation. Will be back.` },
-];
-
-function Reviews({
-  data,
-  accent,
-  theme,
-  layout,
-  surface,
-  preview,
-}: {
-  data: ShopPageData;
-  accent: string;
-  theme: Theme;
-  layout: Layout;
-  surface: CSSProperties;
-  preview: boolean;
-}) {
-  // 🔴 A CARD NEEDS WORDS (Drick: "only show the ones with words"). The API
-  // already sends only reviews with text; this says the same thing for a
-  // payload from an API deploy that predates it, since the two ship
-  // separately - otherwise a star-only rating is a card with nothing to read.
-  const real = data.reviews.filter((r) => r.body?.trim());
-  const hasReal = real.length > 0;
-  // In the editor preview with no real reviews yet, show labeled examples so the
-  // barber sees the layout. Live page with no reviews: just the form, no examples.
-  const showExamples = preview && !hasReal;
-  const list = hasReal ? real : showExamples ? exampleReviews(serviceNounForShop(data)) : [];
-  const avg = data.reviewSummary.avgRating;
-  // ...but the stars count EVERY approved rating, words or not. So the header
-  // stands on its own - a shop whose ratings are all star-only still shows its
-  // average - and it says "ratings", which is why "4.9 · 37 ratings" over
-  // fewer than 37 cards is not a contradiction.
-  const ratingCount = data.reviewSummary.count;
-
-  return (
-    <motion.section variants={fadeUp} className="mt-8" data-tour="reviews">
-      <SectionTitle muted={theme.muted}>Reviews</SectionTitle>
-
-      {/* Average rating header (real data only). */}
-      {ratingCount > 0 && avg != null && (
-        <div className="mb-3 flex items-center gap-2 px-1">
-          <Stars value={Math.round(avg)} accent={accent} border={theme.border} />
-          <span className="text-sm font-semibold">{avg.toFixed(1)}</span>
-          <span className="text-xs" style={{ color: theme.muted }}>
-            · {ratingCount} {ratingCount === 1 ? "rating" : "ratings"}
-          </span>
-        </div>
-      )}
-
-      {showExamples && (
-        <p className="mb-3 px-1 text-[11px] uppercase tracking-wide" style={{ color: theme.muted }}>
-          Example — your approved written reviews will appear here
-        </p>
-      )}
-
-      {list.length > 0 && (
-        <div className="flex flex-col gap-3">
-          {list.map((r) => (
-            <div
-              key={r.id}
-              className="p-4"
-              style={{ ...surface, ...(showExamples ? { opacity: 0.65 } : null) }}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <Stars value={r.rating} accent={accent} border={theme.border} />
-                {r.authorName && (
-                  <span className="text-xs font-medium" style={{ color: theme.muted }}>
-                    {r.authorName}
-                  </span>
-                )}
-              </div>
-              {r.body && <p className="mt-2 text-sm">{r.body}</p>}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Anyone can leave a review; it lands pending until the barber approves. */}
-      <div className="mt-3">
-        <ReviewForm
-          slug={data.slug}
-          shopName={data.name}
-          accent={accent}
-          googleReviewUrl={data.googleReviewUrl}
-          preview={preview}
-          theme={{
-            surface: theme.surface,
-            border: theme.border,
-            muted: theme.muted,
-            scheme: theme.scheme,
-            radius: layout.radius,
-            buttonRadius: layout.buttonRadius,
-          }}
-        />
-      </div>
-    </motion.section>
-  );
-}
-
-/** Five stars, filled up to `value`. Presentational only. */
-function Stars({ value, accent, border }: { value: number; accent: string; border: string }) {
-  return (
-    <span className="text-sm leading-none" aria-label={`${value} out of 5 stars`}>
-      {[1, 2, 3, 4, 5].map((n) => (
-        <span key={n} style={{ color: n <= value ? accent : border }}>
-          ★
-        </span>
-      ))}
-    </span>
-  );
-}
-
-function Gallery({ data, theme, layout }: { data: ShopPageData; theme: Theme; layout: Layout }) {
-  if (data.gallery.length === 0) return null;
-  return (
-    <motion.section variants={fadeUp} className="mt-8">
-      <SectionTitle muted={theme.muted}>The work</SectionTitle>
-      <div className="grid grid-cols-2 gap-3">
-        {data.gallery.map((item, i) => (
-          <figure key={i} className="group relative overflow-hidden" style={{ borderRadius: layout.radius }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={item.url}
-              alt={item.caption || `${data.name} work ${i + 1}`}
-              loading="lazy"
-              className="aspect-square w-full object-cover transition-transform duration-200 ease-out group-hover:scale-105"
-              style={{ border: `1px solid ${theme.border}`, borderRadius: layout.radius }}
-            />
-            {item.caption && (
-              <figcaption
-                className="absolute inset-x-0 bottom-0 px-3 py-2 text-[11px] font-medium text-white opacity-0 transition-opacity duration-200 ease-out group-hover:opacity-100"
-                style={{ background: "linear-gradient(0deg, rgba(0,0,0,0.7), transparent)" }}
-              >
-                {item.caption}
-              </figcaption>
-            )}
-          </figure>
-        ))}
-      </div>
-    </motion.section>
-  );
-}
-
-function Hours({
-  data,
-  theme,
-  surface,
-}: {
-  data: ShopPageData;
-  theme: Theme;
-  surface: CSSProperties;
-}) {
-  if (!data.hoursText) return null;
-  return (
-    <motion.section variants={fadeUp} className="mt-8">
-      <SectionTitle muted={theme.muted}>Hours</SectionTitle>
-      <div className="whitespace-pre-line p-5 text-sm" style={surface}>
-        {data.hoursText}
-      </div>
-    </motion.section>
-  );
-}
-
-function SectionTitle({ children, muted }: { children: React.ReactNode; muted: string }) {
-  return (
-    <h2
-      className="mb-3 px-1 text-xs font-medium uppercase tracking-[0.18em]"
-      style={{ color: muted, fontFamily: "var(--page-body)" }}
-    >
-      {children}
-    </h2>
-  );
-}
-
-function promoValue(p: ShopPageData["promotions"][number]): string | null {
-  switch (p.kind) {
-    case "PERCENT_OFF":
-      return p.percentOff ? `${p.percentOff}% off` : null;
-    case "AMOUNT_OFF":
-      return p.amountOff ? `$${p.amountOff} off` : null;
-    case "FREE_ADDON":
-      return null;
-    case "EXTRA_PUNCHES":
-      return p.extraPunches ? `+${p.extraPunches} ${p.extraPunches === 1 ? "punch" : "punches"} per visit` : null;
-  }
-}
-
-/** Punch-card mark for the client's rewards entry. */
-function StampMark() {
-  return (
-    <svg
-      className="h-4 w-4"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <rect x="3" y="6" width="18" height="12" rx="2.5" />
-      <circle cx="8" cy="12" r="1.4" />
-      <circle cx="12" cy="12" r="1.4" />
-      <circle cx="16" cy="12" r="1.4" />
-    </svg>
-  );
-}
-
-function endsLabel(endsAt: string | null): string | null {
-  if (!endsAt) return null;
-  const days = Math.ceil((new Date(endsAt).getTime() - Date.now()) / 86_400_000);
-  if (days <= 0) return null;
-  if (days === 1) return "last day";
-  if (days <= 14) return `ends in ${days} days`;
-  return `ends ${new Date(endsAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }

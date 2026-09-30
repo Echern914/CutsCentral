@@ -350,6 +350,9 @@ model Shop {
   slug              String?  @unique // URL handle; backfilled from name
   publicPageEnabled Boolean  @default(true)
   theme             String   @default("classic") // PAGE_THEMES key
+  // PAGE_DESIGNS key: the whole-page layout (config pageDesignFor). "classic"
+  // is the page every shop had before designs existed, and stays the default.
+  pageDesign        String   @default("classic")
   bio               String? // short intro shown on the hero
   heroImageUrl      String? // wide banner image
   instagramHandle   String? // without the @

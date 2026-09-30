@@ -11,6 +11,7 @@ import {
   LAYOUT_STYLE_KEYS,
   PAGE_FONTS,
   PAGE_FONT_KEYS,
+  PAGE_DESIGNS,
   PAGE_TEMPLATES,
   PAGE_TEMPLATE_KEYS,
   PAGE_THEMES,
@@ -18,7 +19,9 @@ import {
   REWARDS_SECTION_KEYS,
   REWARDS_WELCOME_MAX,
   SLUG_REGEX,
+  pageDesignFor,
   type LayoutStyleKey,
+  type PageDesignKey,
   type PageFontKey,
   type PageSectionKey,
   type PageThemeKey,
@@ -30,9 +33,10 @@ import { FormError } from "@/components/ui/FormError";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import { useLeaveGuard } from "@/lib/useLeaveGuard";
-import type { ShopPageSettings } from "./page";
+import type { PageMenu, ShopPageSettings } from "./page";
 import type { ShopPageData } from "@/app/s/[slug]/page";
 import { savePageAction, type PageSettingsInput } from "./actions";
+import { DesignPicker } from "./DesignPicker";
 import { GalleryEditor } from "./GalleryEditor";
 import { ImageField } from "./ImageField";
 import { SectionOrderEditor } from "./SectionOrderEditor";
@@ -61,6 +65,7 @@ const FIELD_LABELS: Record<string, string> = {
   heroImageUrl: "Hero banner",
   gallery: "Gallery",
   theme: "Theme",
+  pageDesign: "Page design",
   fontKey: "Typography",
   layoutStyle: "Shape",
   sectionOrder: "Sections",
@@ -73,9 +78,12 @@ const FIELD_LABELS: Record<string, string> = {
 
 export function PageEditor({
   settings,
+  menu = { services: [], staff: [] },
   appBase,
 }: {
   settings: ShopPageSettings;
+  /** The shop's services and team: photo tags, and the preview of the designs that show them. */
+  menu?: PageMenu;
   appBase: string;
 }) {
   const vocab = useVocab();
@@ -84,6 +92,7 @@ export function PageEditor({
   const [slug, setSlug] = useState(settings.slug ?? "");
   const [enabled, setEnabled] = useState(settings.publicPageEnabled);
   const [theme, setTheme] = useState<string>(settings.theme);
+  const [pageDesign, setPageDesign] = useState<PageDesignKey>(pageDesignFor(settings.pageDesign));
   const [bio, setBio] = useState(settings.bio ?? "");
   const [logoUrl, setLogoUrl] = useState(settings.logoUrl ?? "");
   const [accentColor, setAccentColor] = useState(settings.accentColor ?? "");
@@ -158,6 +167,7 @@ export function PageEditor({
     slug: slug.trim().toLowerCase(),
     publicPageEnabled: enabled,
     theme,
+    pageDesign,
     bio: bio.trim(),
     logoUrl: logoUrl.trim(),
     accentColor: accentTrimmed,
@@ -173,6 +183,8 @@ export function PageEditor({
     gallery: gallery.map((g) => ({
       url: g.url,
       ...(g.caption?.trim() ? { caption: g.caption.trim() } : {}),
+      ...(g.serviceId ? { serviceId: g.serviceId } : {}),
+      ...(g.staffId ? { staffId: g.staffId } : {}),
     })),
     fontKey,
     layoutStyle,
@@ -194,6 +206,29 @@ export function PageEditor({
   const dirty = changedKeys.length > 0;
   useLeaveGuard(dirty && !pending, "You have unsaved page edits. Leave and lose them?");
 
+  // The menu and team as the PUBLIC page will see them - the same rule as the
+  // API's page payload: a shop that books here, active and not hidden services,
+  // people still on the team; a photo's tags only while they name one of those.
+  const publicMenu = useMemo(() => {
+    const booksHere = settings.bookingMode === "native";
+    const services = booksHere
+      ? menu.services
+          .filter((s) => s.active && s.visibility !== "hidden")
+          .map(({ id, name, description, imageUrl, durationMin, price }) => ({
+            id,
+            name,
+            description,
+            imageUrl,
+            durationMin,
+            price,
+          }))
+      : [];
+    const staff = booksHere
+      ? menu.staff.filter((s) => s.active).map(({ id, name, imageUrl }) => ({ id, name, imageUrl }))
+      : [];
+    return { services, staff };
+  }, [menu, settings.bookingMode]);
+
   // Map the in-progress editor state onto the public ShopPageData shape so the
   // live preview renders EXACTLY what clients will see (same component).
   const previewData: ShopPageData = useMemo(
@@ -204,6 +239,9 @@ export function PageEditor({
       industry: settings.industry,
       serviceNoun: settings.serviceNoun,
       theme,
+      pageDesign,
+      services: publicMenu.services,
+      staff: publicMenu.staff,
       logoUrl: logoUrl.trim() || null,
       heroImageUrl: heroImageUrl.trim() || null,
       accentColor: validHex ? accentTrimmed : null,
@@ -219,7 +257,11 @@ export function PageEditor({
         addressPostal: addressPostal.trim() || null,
         addressPrivate,
       }),
-      gallery,
+      gallery: gallery.map(({ serviceId, staffId, ...photo }) => ({
+        ...photo,
+        ...(serviceId && publicMenu.services.some((s) => s.id === serviceId) ? { serviceId } : {}),
+        ...(staffId && publicMenu.staff.some((s) => s.id === staffId) ? { staffId } : {}),
+      })),
       fontKey,
       layoutStyle,
       sectionOrder,
@@ -247,6 +289,8 @@ export function PageEditor({
       slug,
       bio,
       theme,
+      pageDesign,
+      publicMenu,
       logoUrl,
       heroImageUrl,
       accentColor,
@@ -339,6 +383,21 @@ export function PageEditor({
             >
               {enabled ? "Live" : "Hidden"}
             </button>
+          </div>
+        </Card>
+
+        {/* Page design: the whole layout. Classic is the page every shop
+            already has; the rest lead with the work. */}
+        <Card className="overflow-hidden">
+          <CardHeader title="Page design" subtitle="How your page is laid out. Classic is the page you have now." />
+          <div className="flex flex-col gap-3 px-5 py-5">
+            <DesignPicker value={pageDesign} onChange={setPageDesign} theme={activeTheme} accent={previewAccent} />
+            {pageDesign !== "classic" && gallery.length === 0 && (
+              <p className="text-xs text-muted" role="status">
+                {PAGE_DESIGNS[pageDesign].label} leads with your photos. Add some under Photo gallery below — until
+                you do, the preview shows examples and your live page skips the photo parts.
+              </p>
+            )}
           </div>
         </Card>
 
@@ -669,9 +728,17 @@ export function PageEditor({
 
         {/* Gallery */}
         <Card className="overflow-hidden">
-          <CardHeader title="Photo gallery" subtitle="Upload your best work. Drag to reorder, add a caption." />
+          <CardHeader
+            title="Photo gallery"
+            subtitle="Upload your best work. Drag to reorder, add a caption, and say which service each photo shows so clients can book it."
+          />
           <div className="px-5 py-5">
-            <GalleryEditor items={gallery} onChange={setGallery} />
+            <GalleryEditor
+              items={gallery}
+              onChange={setGallery}
+              services={menu.services.filter((s) => s.active)}
+              staff={menu.staff.filter((s) => s.active)}
+            />
           </div>
         </Card>
 
@@ -712,6 +779,11 @@ export function PageEditor({
               <p className="mt-1.5 text-[11px] text-muted">
                 Applies instantly to the order below — drag to fine-tune, then Save.
               </p>
+              {pageDesign !== "classic" && (
+                <p className="mt-1.5 text-[11px] text-muted">
+                  In {PAGE_DESIGNS[pageDesign].label} your photos lead the page, so these sections follow below them.
+                </p>
+              )}
             </div>
             <SectionOrderEditor value={sectionOrder} onChange={setSectionOrder} />
           </div>

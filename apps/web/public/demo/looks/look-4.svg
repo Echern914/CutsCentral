@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" width="600" height="600">
+  <defs>
+    <radialGradient id="bg" cx="300" cy="200" r="470" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#57241f"/>
+      <stop offset="0.55" stop-color="#221110"/>
+      <stop offset="1" stop-color="#0d0707"/>
+    </radialGradient>
+    <radialGradient id="rim" cx="300" cy="300" r="250" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E0453A" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#E0453A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="shade" x1="182" y1="0" x2="418" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#000000" stop-opacity="0.42"/>
+      <stop offset="0.42" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="0.72" stop-color="#ffffff" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.3"/>
+    </linearGradient>
+    <linearGradient id="hair" x1="0" y1="150" x2="0" y2="440" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#151010" stop-opacity="1"/>
+      <stop offset="0.34" stop-color="#151010" stop-opacity="1"/>
+      <stop offset="0.48" stop-color="#151010" stop-opacity="0.55"/>
+      <stop offset="0.6" stop-color="#151010" stop-opacity="0.14"/>
+      <stop offset="0.67" stop-color="#151010" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="grain" width="6" height="6" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="0.9" fill="#ffffff" fill-opacity="0.06"/>
+      <circle cx="4.5" cy="4.2" r="0.8" fill="#000000" fill-opacity="0.3"/>
+    </pattern>
+    <clipPath id="head">
+      <ellipse cx="300" cy="290" rx="118" ry="140"/>
+    </clipPath>
+    <clipPath id="zone">
+      <ellipse cx="300" cy="290" rx="118" ry="140"/>
+      <path d="M184 240 C182 172 236 143 300 143 C364 143 418 172 416 240 C388 222 212 222 184 240 Z"/>
+    </clipPath>
+    <radialGradient id="vig" cx="300" cy="270" r="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0.55" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.6"/>
+    </radialGradient>
+  </defs>
+  <rect width="600" height="600" fill="url(#bg)"/>
+  <ellipse cx="300" cy="300" rx="250" ry="250" fill="url(#rim)"/>
+  <path d="M30 600 C52 482 168 440 300 438 C432 440 548 482 570 600 Z" fill="#0a0707"/>
+  <path d="M30 600 C52 482 168 440 300 438 C432 440 548 482 570 600" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="3"/>
+  <path d="M246 382 L354 382 L364 450 C338 462 262 462 236 450 Z" fill="#7c4e33"/>
+  <ellipse cx="183" cy="304" rx="17" ry="31" fill="#7c4e33"/>
+  <ellipse cx="417" cy="304" rx="17" ry="31" fill="#7c4e33"/>
+  <ellipse cx="300" cy="290" rx="118" ry="140" fill="#9a6443"/>
+  <g clip-path="url(#head)">
+    <rect x="170" y="140" width="260" height="310" fill="url(#hair)"/>
+    <rect x="170" y="140" width="260" height="190" fill="url(#grain)"/>
+    <rect x="170" y="140" width="260" height="310" fill="url(#shade)"/>
+  </g>
+  <path d="M184 240 C182 172 236 143 300 143 C364 143 418 172 416 240 C388 222 212 222 184 240 Z" fill="#151010"/>
+  <g clip-path="url(#zone)">
+    <path d="M186 268 C210 238 254 222 312 219" fill="none" stroke="#9a6443" stroke-width="5" stroke-linecap="round"/>
+    <path d="M186 272 C210 243 254 227 312 224" fill="none" stroke="#000000" stroke-opacity="0.25" stroke-width="2" stroke-linecap="round"/>
+  </g>
+  <path d="M244 184 C278 164 350 166 384 194" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="5" stroke-linecap="round"/>
+  <path d="M256 428 C284 438 316 438 344 428" fill="none" stroke="#000000" stroke-opacity="0.28" stroke-width="6" stroke-linecap="round"/>
+  <rect width="600" height="600" fill="url(#vig)"/>
+</svg>

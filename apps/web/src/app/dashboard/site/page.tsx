@@ -33,7 +33,9 @@ export interface ShopPageSettings {
   // Keep the street off the public page, Google and the receptionist. Optional
   // only for the deploy window where this page is newer than the API.
   addressPrivate?: boolean;
-  gallery: { url: string; caption?: string }[];
+  /** PAGE_DESIGNS key. Optional only for the deploy window where this page is newer than the API. */
+  pageDesign?: string;
+  gallery: { url: string; caption?: string; serviceId?: string; staffId?: string; addedAt?: string }[];
   fontKey: string | null;
   layoutStyle: string | null;
   sectionOrder: string[];
@@ -48,14 +50,39 @@ export interface ShopPageSettings {
   punchesPerVisit: number;
 }
 
+/**
+ * The shop's services and team, for tagging photos and for the live preview
+ * of the designs that show them. Same rows the Booking settings list.
+ */
+export interface PageMenu {
+  services: {
+    id: string;
+    name: string;
+    description: string | null;
+    imageUrl: string | null;
+    durationMin: number;
+    price: number | null;
+    active: boolean;
+    visibility?: string;
+  }[];
+  staff: { id: string; name: string; imageUrl: string | null; active: boolean }[];
+}
+
 export default async function PageSettingsPage() {
-  const [res, domainRes] = await Promise.all([
+  const [res, domainRes, servicesRes, staffRes] = await Promise.all([
     apiGet<ShopPageSettings>("/api/shops/me"),
     apiGet<DomainStatus>("/api/domains"),
+    apiGet<{ services: PageMenu["services"] }>("/api/booking/services"),
+    apiGet<{ staff: PageMenu["staff"] }>("/api/booking/staff"),
   ]);
   if (!res.ok || !res.data) {
     return <main className="p-8 text-muted">Could not load your page settings.</main>;
   }
+  // Tagging is an extra: without the lists the editor simply offers no tags.
+  const menu: PageMenu = {
+    services: servicesRes.ok && servicesRes.data ? servicesRes.data.services : [],
+    staff: staffRes.ok && staffRes.data ? staffRes.data.staff : [],
+  };
 
   return (
     <main className="mx-auto w-full max-w-6xl px-5 py-8">
@@ -70,7 +97,7 @@ export default async function PageSettingsPage() {
         </p>
       </header>
       <div data-tour="site-setup">
-        <PageEditor settings={res.data} appBase={process.env.APP_BASE_URL ?? ""} />
+        <PageEditor settings={res.data} menu={menu} appBase={process.env.APP_BASE_URL ?? ""} />
       </div>
       {/* Custom domain: separate from the editor on purpose - it's a stateful
           connect/verify flow, not a form field, and must never ride (or dirty)
