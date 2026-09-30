@@ -283,8 +283,10 @@ adminPortalRouter.get("/preflight", async (_req, res) => {
 
 /**
  * THE TEXTING SWITCH. Every text costs money; email and app notifications do
- * not. Off stops every SMS on the platform (reminders, alerts, sign-in codes,
- * the AI receptionist) and moves what has an email or push version there. It
+ * not. Off stops every SMS on the platform (reminders, alerts, the AI
+ * receptionist) except the one-time codes a customer asks for - sign-in and a
+ * saved card's code, which follow SMS_SIGNIN_ENABLED (see signInTextsEnabled
+ * in messaging/twilio.ts) - and moves what has an email or push version there. It
  * takes effect in this process at once and in every other within
  * services/platformSwitches.ts REFRESH_MS - no deploy, no restart.
  *

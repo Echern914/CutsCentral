@@ -72,6 +72,7 @@ import {
 } from "../engines/acuityBackfill.js";
 import { toCents } from "../billing/payments.js";
 import { releaseCardOnFile } from "../billing/cardOnFile.js";
+import { attachClientSavedCard } from "../billing/savedCard.js";
 import { createTerminalPaymentIntent, terminalEnabled } from "../billing/terminal.js";
 import {
   APPOINTMENT_NUDGE_KIND,
@@ -3675,7 +3676,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       const forced = guard.overlapsCrossed
         ? { specialsTakenOffSale: guard.overlapsCrossed.targetedIds }
         : null;
-      return { id: appt.id, forced };
+      return { id: appt.id, forced, clientId };
     });
     const forced = result.forced;
     // After commit: place the block. Best-effort by design - the barber is
@@ -3720,9 +3721,13 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         { shopId, appointmentId: result.id, actorUserId: req.userId ?? null, mirror },
         "dashboard booking made OVER a conflict (Book anyway)",
       );
+      await attachClientSavedCard({ shopId, appointmentId: result.id, clientId: result.clientId });
       res.status(201).json({ ok: true, id: result.id, forced: true, mirror });
       return;
     }
+    // The client saved a card here: this booking carries it too, so a no-show
+    // on a booking made by phone is covered like one they made themselves.
+    await attachClientSavedCard({ shopId, appointmentId: result.id, clientId: result.clientId });
     res.status(201).json({ ok: true, id: result.id });
   } catch (err) {
     // The one refusal that must be SHOWN, not just returned: which block, when,

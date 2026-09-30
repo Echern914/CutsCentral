@@ -8,6 +8,7 @@ import {
 } from "@chairback/config";
 import { serviceCollectedCents } from "../engines/serviceCheckout.js";
 import { logger } from "../logger.js";
+import { detachSavedCardIfUnused, saveCardConsentForBooking, saveCardFromBooking } from "./savedCard.js";
 import { stripeClient } from "./stripe.js";
 import { errorClassification, stripeErrorFacts } from "./stripeErrors.js";
 
@@ -64,6 +65,14 @@ export interface CreateCardOnFileInput {
    * read off the booking request the customer themselves submitted.
    */
   serviceChargeConsent?: { accepted: boolean; scope: ServiceChargeConsentScope } | null;
+  /**
+   * 🔴 The customer's own tick: keep this card for their FUTURE appointments
+   * at this shop (config SAVED_CARD_CONSENT). Recorded on the row; the card
+   * becomes a SavedCard once it is saved and the booking stands
+   * (billing/savedCard.ts). Absent = the card is let go after this visit, as
+   * it always was.
+   */
+  saveForFuture?: boolean;
 }
 
 export async function createCardOnFileSetupIntent(
@@ -149,6 +158,8 @@ export async function createCardOnFileSetupIntent(
                 serviceChargeConsentScope: input.serviceChargeConsent.scope,
               }
             : {}),
+          // A standing appointment's card is not offered for keeping (v1).
+          ...(input.seriesId ? {} : saveCardConsentForBooking(input.saveForFuture, new Date())),
         },
       }),
     );
@@ -246,7 +257,11 @@ export async function markCardSaved(
   const outcome = await promotePaidHold({ appointmentId });
   if (outcome === "lapsed" || outcome === "slot_taken") {
     await releaseCardOnFile({ shopId, appointmentId, reason: outcome });
+    return "saved";
   }
+  // The booking stands. If the client asked to keep the card for next time,
+  // keep it now - only a card whose booking went through is ever kept.
+  await saveCardFromBooking({ shopId, appointmentId });
   return "saved";
 }
 
@@ -292,6 +307,18 @@ export async function paymentMethodFor(
   ownMethodId: string | null,
 ): Promise<string | null> {
   if (ownMethodId) return ownMethodId;
+  // A card booked with (or first saved as) the client's SAVED card: the method
+  // lives on the SavedCard, never on this row (billing/savedCard.ts). Detached
+  // means gone - nothing to charge.
+  const saved = await runWithShop(shopId, (tx) =>
+    tx.cardOnFile.findUnique({
+      where: { appointmentId },
+      select: { savedCard: { select: { stripePaymentMethodId: true, detachedAt: true } } },
+    }),
+  );
+  if (saved?.savedCard) {
+    return saved.savedCard.detachedAt ? null : saved.savedCard.stripePaymentMethodId;
+  }
   const appt = await runWithShop(shopId, (tx) =>
     tx.appointment.findFirst({
       where: { id: appointmentId, shopId },
@@ -575,7 +602,7 @@ export async function releaseCardOnFile(params: {
   const row = await runWithShop(params.shopId, (tx) =>
     tx.cardOnFile.findUnique({
       where: { appointmentId: params.appointmentId },
-      select: { id: true, status: true, stripePaymentMethodId: true, seriesId: true },
+      select: { id: true, status: true, stripePaymentMethodId: true, seriesId: true, savedCardId: true },
     }),
   );
   if (!row || row.status === "released" || row.status === "charged") return;
@@ -637,6 +664,19 @@ export async function releaseCardOnFile(params: {
     logger.info(
       { cardOnFileId: row.id, reason: params.reason },
       "card on file: left alone - a charge on it is still unresolved",
+    );
+    return;
+  }
+
+  // 🔴 THE CLIENT'S SAVED CARD IS NOT THIS VISIT'S TO LET GO. They asked the
+  // shop to keep it for their future appointments; this appointment is done
+  // with it, the card is not. It is detached only once they have removed it
+  // and no appointment still needs it (billing/savedCard.ts).
+  if (row.savedCardId) {
+    await detachSavedCardIfUnused(params.shopId, row.savedCardId);
+    logger.info(
+      { cardOnFileId: row.id, reason: params.reason },
+      "card on file released - the client's saved card stays on file",
     );
     return;
   }

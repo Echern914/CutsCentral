@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-09-30-saved-cards",
+    date: "2026-09-30",
+    kind: "feature",
+    title: "Clients can save their card for next time",
+    body:
+      "If your shop keeps a card on file, clients can tick \"Save this card\" when they book. Next time they pick a " +
+      "time and book in one tap. The card shows on their client profile, and bookings you make for them carry it too.",
+  },
+  {
     id: "2026-09-30-confirm-books-once",
     date: "2026-09-30",
     kind: "fix",

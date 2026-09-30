@@ -728,6 +728,9 @@ model Shop {
   serviceUpgradeRuleSources ServiceUpgradeRuleSource[]
   payments               Payment[]
   cardsOnFile            CardOnFile[]
+  savedCards             SavedCard[]
+  savedCardDevices       SavedCardDevice[]
+  savedCardCodes         SavedCardCode[]
   checkoutAttempts       CheckoutAttempt[]
 
   // Team: who else can sign in to this shop, and outstanding invites.
@@ -1412,6 +1415,9 @@ model Client {
   customerLinks       CustomerClientLink[]
   // Openings held for this record's tier that it was told about. See TierOpening.
   tierOpeningInvites  TierOpeningRecipient[]
+  // The card this client asked the shop to keep for their future appointments
+  // (at most one live at a time - see SavedCard).
+  savedCards          SavedCard[]
 
   @@unique([shopId, acuityClientKey]) // tenant-scoped identity + idempotent upsert
   @@index([shopId])
@@ -3739,7 +3745,107 @@ model CardOnFile {
   seriesId              String?          @unique
   series                RecurringSeries? @relation(fields: [seriesId], references: [id], onDelete: Cascade)
 
+  /// This appointment's card IS the client's saved card (SavedCard): booked
+  /// with it, or the booking it was first saved on. Such a row never owns the
+  /// payment method - `stripePaymentMethodId` stays NULL and the method is read
+  /// through the SavedCard (paymentMethodFor) - so releasing this appointment
+  /// can never detach a card the client asked the shop to keep. NULL on every
+  /// ordinary card-on-file booking.
+  savedCardId           String?
+  savedCard             SavedCard? @relation(fields: [savedCardId], references: [id], onDelete: SetNull)
+  /// 🔴 THE CUSTOMER'S OWN TICK: "save this card for my future appointments at
+  /// this shop" (config/checkoutConsent SAVED_CARD_CONSENT), on THIS booking.
+  /// When the card is saved, a SavedCard is made from it. Both or neither -
+  /// CHECK-pinned in SQL. Never set on the customer's behalf.
+  saveCardConsentVersion String?
+  saveCardConsentAt      DateTime?
+
   @@index([shopId, status])
+  @@index([savedCardId])
+}
+
+/// 🔴 A CARD THE CLIENT ASKED THIS SHOP TO KEEP FOR THEIR FUTURE APPOINTMENTS.
+///
+/// A barber, 2026-09-30: "save a universal card so appointments go straight
+/// through after they select time". Until then every booking at a card-on-file
+/// shop asked for the card again, and every card was let go after its visit.
+///
+/// One live card per client per shop (partial unique on removedAt IS NULL, in
+/// SQL). Its OWN Stripe Customer on the platform account, never shared with
+/// another shop - a card saved at shop A is structurally unchargeable for B.
+/// Each appointment booked with it gets an ordinary CardOnFile row pointing
+/// here, so every existing charge rule (no-show, late cancel, service checkout
+/// with its own per-booking consent) works on it unchanged.
+///
+/// Using it on the booking page needs possession, never a typed phone number:
+/// a device token issued when it was saved (SavedCardDevice), or a one-time
+/// text code to the client's phone on a new device (SavedCardCode).
+model SavedCard {
+  id                    String    @id
+  shopId                String
+  shop                  Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId              String
+  client                Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  stripeCustomerId      String
+  stripePaymentMethodId String
+  // Out-of-PCI-scope display facts, verbatim from Stripe.
+  brand                 String?
+  last4                 String?
+  expMonth              Int?
+  expYear               Int?
+  /// The wording the client accepted (SAVED_CARD_CONSENT) and when.
+  consentVersion        String
+  consentAt             DateTime
+  /// The booking it was first saved on - provenance only.
+  sourceAppointmentId   String?
+  /// The client took it off (from their appointment link) or replaced it. It
+  /// is never offered again; appointments already booked with it keep it until
+  /// they are done, and the method is detached when the last one lets go.
+  removedAt             DateTime?
+  /// When the payment method was detached at Stripe - nothing can charge it.
+  detachedAt            DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  cardsOnFile CardOnFile[]
+  devices     SavedCardDevice[]
+  codes       SavedCardCode[]
+
+  @@index([shopId, clientId])
+}
+
+/// A device that may use a SavedCard without re-entering it: the booking page
+/// on the phone it was saved on, or one that proved itself with a text code.
+/// Only a hash of the token is stored; the token lives on the device.
+model SavedCardDevice {
+  id          String    @id @default(cuid())
+  shopId      String
+  shop        Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  savedCardId String
+  savedCard   SavedCard @relation(fields: [savedCardId], references: [id], onDelete: Cascade)
+  tokenHash   String    @unique
+  createdAt   DateTime  @default(now())
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+
+  @@index([savedCardId])
+}
+
+/// A one-time code texted to the saved card's client, so a NEW device can use
+/// the card. Hash only; short-lived; a few attempts; used once.
+model SavedCardCode {
+  id          String    @id @default(cuid())
+  shopId      String
+  shop        Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  savedCardId String
+  savedCard   SavedCard @relation(fields: [savedCardId], references: [id], onDelete: Cascade)
+  codeHash    String
+  expiresAt   DateTime
+  attempts    Int       @default(0)
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([savedCardId, createdAt])
 }
 
 /// One attempt to collect an appointment's balance after the service.

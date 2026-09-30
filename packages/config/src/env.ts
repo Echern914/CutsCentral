@@ -341,8 +341,10 @@ const apiSchema = z.object({
   // One-time SIGN-IN codes by text (My ChairBack sign-in and "add a phone")
   // keep going while SMS_ENABLED is off - see signInTextsEnabled() in the
   // API's messaging/twilio.ts for why email cannot stand in for them. One
-  // text per code, under CUSTOMER_SIGNIN_SMS_HOURLY_CAP / _DAILY_CAP. Set
-  // exactly `false` to stop these too.
+  // text per code, under CUSTOMER_SIGNIN_SMS_HOURLY_CAP / _DAILY_CAP. A saved
+  // card's code on a new phone rides this switch too, under its own
+  // SAVED_CARD_SMS_HOURLY_CAP / _DAILY_CAP (the API's billing/savedCard.ts).
+  // Set exactly `false` to stop these too.
   SMS_SIGNIN_ENABLED: boolish.default("true"),
   // Waitlist phase F2. OFF by default and shipped dark: the sweep is the first
   // thing here that changes a customer's standing with nobody deciding to, so

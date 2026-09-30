@@ -22,8 +22,10 @@ vi.mock("../../[slug]/actions", () => ({
   bookingStatusAction: (...a: unknown[]) => bookingStatusAction(...(a as [])),
 }));
 const stopServiceChargesAction = vi.fn();
+const removeSavedCardAction = vi.fn(async () => ({ ok: true }));
 vi.mock("./actions", () => ({
   stopServiceChargesAction: (...a: unknown[]) => stopServiceChargesAction(...a),
+  removeSavedCardAction: (...a: unknown[]) => removeSavedCardAction(...(a as [])),
   cancelBookingAction: vi.fn(),
   checkInAction: vi.fn(),
   nudgeReplyAction: vi.fn(),
@@ -252,5 +254,26 @@ describe("a booking left at its card step, from its own link", () => {
   it("a real cancellation still reads 'Canceled'", () => {
     render(<ManageClient token="tok" data={data({ status: "CANCELED", neverBooked: false })} />);
     expect(screen.getByText("Canceled")).toBeTruthy();
+  });
+});
+
+describe("the saved card on the appointment link", () => {
+  it("shows the card the shop keeps for them, and takes it off in two taps", async () => {
+    removeSavedCardAction.mockClear();
+    render(<ManageClient token="tok" data={data({ savedCard: { brand: "visa", last4: "4242" } })} />);
+    expect(screen.getByText("Saved card: Visa •••• 4242")).toBeTruthy();
+    fireEvent.click(screen.getByText("Remove this card from Chern Cuts"));
+    // One tap only asks.
+    expect(removeSavedCardAction).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Yes, remove it"));
+    });
+    expect(removeSavedCardAction).toHaveBeenCalledWith("tok");
+    expect(screen.getByText(/Visa •••• 4242 is no longer saved at Chern Cuts/)).toBeTruthy();
+  });
+
+  it("says nothing when no card is saved", () => {
+    render(<ManageClient token="tok" data={data({ savedCard: null })} />);
+    expect(screen.queryByText(/Saved card:/)).toBeNull();
   });
 });

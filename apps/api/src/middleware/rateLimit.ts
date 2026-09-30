@@ -233,6 +233,17 @@ export const recoverySmsLimiter = make({
   limit: 6,
   keyGenerator: publicIpKey,
 });
+/**
+ * "Text me a code to use my saved card" - each call can text a real phone.
+ * Per IP here; the per-card cooldown and hourly cap live on SavedCardCode
+ * (billing/savedCard.ts), so they hold across replicas.
+ */
+export const savedCardCodeLimiter = make({
+  name: "savedCardCode",
+  windowMs: 60 * 1000,
+  limit: 6,
+  keyGenerator: publicIpKey,
+});
 export const recoveryReadLimiter = make({
   name: "recoveryRead",
   windowMs: 60 * 1000,

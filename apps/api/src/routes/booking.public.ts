@@ -83,6 +83,17 @@ import {
   verifyCardSaved,
   withdrawServiceChargeConsent,
 } from "../billing/cardOnFile.js";
+import {
+  attachSavedCardToAppointment,
+  createSavedCardCode,
+  formMatchesSavedCardClient,
+  issueFirstDeviceToken,
+  liveSavedCardFor,
+  removeSavedCard,
+  savedCardForToken,
+  verifySavedCardCode,
+} from "../billing/savedCard.js";
+import { getSignInMessageProvider, signInTextsEnabled } from "../messaging/twilio.js";
 import { buildAppointmentIcs } from "../messaging/ics.js";
 import {
   appointmentWalletEnabled,
@@ -114,6 +125,7 @@ import {
   rewardsLimiter,
   bookingReadLimiter,
   bookingWriteLimiter,
+  savedCardCodeLimiter,
 } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
 
@@ -1525,6 +1537,19 @@ const createSchema = z
      * is no barber-side path that can supply it.
      */
     serviceChargeConsent: z.boolean().optional(),
+    /**
+     * 🔴 The customer's own tick: keep this card for their FUTURE appointments
+     * at this shop (config SAVED_CARD_CONSENT). Only means anything where a
+     * card is kept at booking; the card is kept once its booking stands.
+     */
+    saveCard: z.boolean().optional(),
+    /**
+     * A returning client paying with the card they saved here: the device
+     * token this browser was given (billing/savedCard.ts). Possession is the
+     * proof - never a typed phone number - and the person on the form must
+     * still be the card's client. No card step, no hold: the booking stands.
+     */
+    savedCardToken: z.string().min(20).max(200).optional(),
     // Chosen service add-ons (ids). Invalid/foreign ids are dropped server-side.
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
     // Answers to the shop's own booking questions. Ids that aren't this shop's
@@ -2268,7 +2293,20 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     stripeConnectAccountId: shop.stripeConnectAccountId,
     chargeCents,
   });
-  const collectsUpFront = collection !== null;
+  // A card shop, and this device holds a SAVED card for the person on the
+  // form: the card is already on file, so there is nothing to wait for - no
+  // card step and no hold. A token that fails (removed, revoked, someone
+  // else's) is simply not used, and the answer says so, so the page forgets it
+  // and the ordinary card step follows.
+  const savedCardWanted = collection === "card" && Boolean(d.savedCardToken) && !d.recurrence;
+  const savedCardFound = savedCardWanted ? await savedCardForToken(shop.id, d.savedCardToken!) : null;
+  const savedCard =
+    savedCardFound &&
+    (await formMatchesSavedCardClient(shop.id, savedCardFound.clientId, { phone, email: d.email ?? null }))
+      ? savedCardFound
+      : null;
+  const savedCardRefused = savedCardWanted && savedCard === null;
+  const collectsUpFront = collection !== null && savedCard === null;
   const holdExpiresAt = collectsUpFront ? paymentHoldExpiry(now) : null;
 
   let appointmentId: string;
@@ -2326,6 +2364,11 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         update: {},
         select: { id: true },
       });
+      // 🔴 A saved card books only its OWN client. The form matched the
+      // card's client by phone or email; if this booking nonetheless landed on
+      // another record, nothing is written and the page books with a card
+      // step instead.
+      if (savedCard && client.id !== savedCard.clientId) throw new SavedCardNotTheirsError();
       await fillBlankClientFields(tx, client.id, {
         firstName: d.firstName,
         lastName: d.lastName,
@@ -2438,6 +2481,10 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       res.status(409).json({ error: "day_full", code: "DAY_FULL" });
       return;
     }
+    if (err instanceof SavedCardNotTheirsError) {
+      res.status(409).json({ error: "saved_card_unavailable", code: "SAVED_CARD_UNAVAILABLE" });
+      return;
+    }
     if (err instanceof SlotTakenError) {
       // The atomic guard in engines/bookingWrite.ts. This is the ONLY thing
       // besides the appointment unique index that may say the slot is gone.
@@ -2540,6 +2587,27 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     }
   }
 
+  // Booked with the client's saved card: this appointment gets its card on
+  // file now - before anything announces it - so a no-show or a late cancel
+  // is covered exactly as if they had typed the card in. The service may be
+  // charged only if they ticked that on THIS booking.
+  if (savedCard) {
+    const attached = await attachSavedCardToAppointment({
+      shopId: shop.id,
+      appointmentId,
+      savedCardId: savedCard.card.id,
+      serviceChargeConsent: d.serviceChargeConsent === true,
+      deviceId: savedCard.deviceId,
+      now,
+    });
+    if (!attached) {
+      logger.error(
+        { shopId: shop.id, appointmentId },
+        "saved card: booked with it, but the card could not be put on the appointment",
+      );
+    }
+  }
+
   // Confirmation SMS/email after commit (gated by consent/quiet-hours/billing
   // inside notify; honors DRY_RUN). Fire-and-forget: a send issue must not fail
   // the booking, which is already durably saved.
@@ -2593,7 +2661,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
      */
     expiresAt: string | null;
   } | null = null;
-  if (collection === "card" && shop.stripeConnectAccountId) {
+  if (collection === "card" && !savedCard && shop.stripeConnectAccountId) {
     // Card on file: save the card, charge nothing. The hold is promoted when
     // the SetupIntent succeeds - by the webhook, or by the browser asking us to
     // verify (POST /manage/:token/card-saved) so a customer's confirmation never
@@ -2611,6 +2679,8 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       serviceChargeConsent: d.serviceChargeConsent
         ? { accepted: true, scope: "single" as const }
         : null,
+      // Their own tick: keep it for next time, once this booking stands.
+      saveForFuture: d.saveCard === true,
     });
     if (created) {
       payment = {
@@ -2699,10 +2769,23 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     pending: shop.requireBookingApproval,
     // When present, the client must confirm payment with the Payment Element.
     payment,
+    // Booked with the client's saved card - what the page can name.
+    ...(savedCard ? { savedCard: { brand: savedCard.card.brand, last4: savedCard.card.last4 } } : {}),
+    // The saved card this device offered could not be used (removed, or not
+    // this person's): the page forgets it. The booking above went ahead with
+    // an ordinary card step.
+    ...(savedCardRefused ? { savedCardRefused: true } : {}),
   });
 });
 
 // SlotTakenError moved to engines/bookingWrite.ts (shared by every write site).
+
+/** A saved card's device offered it for someone who is not its client. */
+class SavedCardNotTheirsError extends Error {
+  constructor() {
+    super("saved card belongs to a different client");
+  }
+}
 
 //  Manage by token (cancel / reschedule) - the token IS the authorization.
 
@@ -2854,6 +2937,8 @@ const MANAGE_SELECT = {
       holdExpiresAt: true,
       // The balance line on a reopened card step (unfinishedCheckoutFor).
       priceAtBooking: true,
+      // Whose appointment this is - for the card they saved here, if any.
+      clientId: true,
       shop: {
         select: {
           name: true,
@@ -2925,6 +3010,9 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
   // A booking still waiting on its card: the same card step, reopened, so the
   // customer who left it can finish instead of finding the time gone.
   const finish = await unfinishedCheckoutFor(appt, now);
+  // The card the client asked this shop to keep, if any: shown here with the
+  // way to take it off, as the consent promised (brand and last four only).
+  const savedCardOnFile = appt.clientId ? await liveSavedCardFor(appt.shopId, appt.clientId) : null;
 
   res.json({
     status: appt.status,
@@ -2937,6 +3025,7 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
         ? { reason: requestedReason({ holdReason: appt.holdReason, holdExpiresAt: appt.holdExpiresAt }) }
         : null,
     finish,
+    savedCard: savedCardOnFile ? { brand: savedCardOnFile.brand, last4: savedCardOnFile.last4 } : null,
     // Never a booking at all: the card never arrived before the hold ran out.
     // The page says "not booked", not "canceled" - the customer cancelled
     // nothing, and "canceled" reads as though the shop turned them away.
@@ -3289,8 +3378,22 @@ bookingPublicRouter.post(
           }
         : {};
 
+    /**
+     * The client asked to keep this card for next time and the booking went
+     * through: THIS browser - the one the card was just typed into - may use
+     * it again without typing it. Once per saved card, and only within the
+     * hour after saving (issueFirstDeviceToken); every other phone proves
+     * itself with a text code.
+     */
+    const firstDevice = async () => {
+      const device = await issueFirstDeviceToken({ shopId: appt.shopId, appointmentId: appt.id });
+      return device
+        ? { savedCard: { token: device.token, brand: device.card.brand, last4: device.card.last4 } }
+        : {};
+    };
+
     if (appt.status === "BOOKED") {
-      res.json({ ok: true, status: "BOOKED", ...(await seriesBooked()) });
+      res.json({ ok: true, status: "BOOKED", ...(await seriesBooked()), ...(await firstDevice()) });
       return;
     }
     const outcome = await verifyCardSaved({ shopId: appt.shopId, appointmentId: appt.id });
@@ -3303,9 +3406,103 @@ bookingPublicRouter.post(
       outcome,
       status: after?.status ?? appt.status,
       ...(await seriesBooked()),
+      ...(after?.status === "BOOKED" ? await firstDevice() : {}),
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+// SAVED CARDS on a NEW phone: a one-time code to the client's phone on file.
+// The phone the card was saved on already holds a token; any other device
+// proves itself here. Never by a typed number alone - the code goes to the
+// number on the CLIENT RECORD, and both answers are the same whether or not a
+// saved card exists, so the page can't be used to learn who has one.
+// ---------------------------------------------------------------------------
+
+const savedCardCodeSchema = z.object({ phone: z.string().min(7).max(32) }).strict();
+const savedCardVerifySchema = z
+  .object({ phone: z.string().min(7).max(32), code: z.string().min(6).max(6) })
+  .strict();
+
+// POST /api/book/:slug/saved-card/code
+bookingPublicRouter.post("/:slug/saved-card/code", savedCardCodeLimiter, async (req, res) => {
+  const parsed = savedCardCodeSchema.safeParse(req.body ?? {});
+  const shop = await resolveNativeShop(req.params.slug);
+  const phone = parsed.success ? toE164(parsed.data.phone) : null;
+  if (!shop || !phone) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  // 🔴 A ONE-TIME CODE THE CLIENT ASKED FOR, to the number on their own
+  // record - the same kind of text as a sign-in code, so it follows the
+  // SIGN-IN switch, not the texting one. Texting has been off platform-wide
+  // since 2026-09-22; on that switch a new phone could never get a code, and
+  // every client on one would type their card again. Its own ceiling bounds
+  // what it costs (createSavedCardCode). With no way to send at all
+  // (SMS_SIGNIN_ENABLED=false too, or no access) say so - the page falls back
+  // to entering the card.
+  if (!signInTextsEnabled() || !hasActiveAccess(shop)) {
+    res.status(409).json({ error: "codes_unavailable" });
+    return;
+  }
+  // A STOP is absolute, even for a code they asked for - and settled before
+  // anything is spent. The same answer either way.
+  const optedOut = await prisma.client.findFirst({
+    where: { shopId: shop.id, phone, optedOut: true },
+    select: { id: true },
+  });
+  const issued = optedOut
+    ? null
+    : await createSavedCardCode({ shopId: shop.id, shopName: shop.name, phoneE164: phone });
+  if (issued) {
+    try {
+      await getSignInMessageProvider().send({
+        to: issued.phone,
+        body: issued.body,
+        from: shop.twilioNumber ?? undefined,
+      });
+    } catch (err) {
+      // The code stays valid; they can ask again after the cooldown. Never
+      // the phone or the code in the log.
+      logger.error({ err, shopId: shop.id }, "saved card: code text failed");
+    }
+  }
+  res.json({ ok: true });
+});
+
+// POST /api/book/:slug/saved-card/verify
+bookingPublicRouter.post("/:slug/saved-card/verify", bookingWriteLimiter, async (req, res) => {
+  const parsed = savedCardVerifySchema.safeParse(req.body ?? {});
+  const shop = await resolveNativeShop(req.params.slug);
+  const phone = parsed.success ? toE164(parsed.data.phone) : null;
+  if (!parsed.success || !shop || !phone) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const verified = await verifySavedCardCode({ shopId: shop.id, phoneE164: phone, code: parsed.data.code });
+  if (!verified) {
+    res.status(400).json({ error: "invalid_code" });
+    return;
+  }
+  res.json({ ok: true, savedCard: { token: verified.token, brand: verified.card.brand, last4: verified.card.last4 } });
+});
+
+// POST /api/book/manage/:token/saved-card/remove - the client takes their saved
+// card off this shop's file. The appointment link is the authorization, as for
+// every other change the client makes. Appointments already booked with it
+// keep it until they are done; it is never offered again.
+bookingPublicRouter.post("/manage/:token/saved-card/remove", bookingWriteLimiter, async (req, res) => {
+  const appt = await prisma.appointment.findUnique({
+    where: { manageToken: String(req.params.token) },
+    select: { shopId: true, clientId: true },
+  });
+  if (!appt?.clientId) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const { removed } = await removeSavedCard({ shopId: appt.shopId, clientId: appt.clientId });
+  res.json({ ok: true, removed });
+});
 
 // POST /api/book/manage/:token/cancel - the customer cancels their own booking.
 // scope "future" (a standing appointment only) cancels this visit AND every
