@@ -52,6 +52,7 @@ import {
   normalizeBookingPolicy,
 } from "@chairback/config/bookingPolicy";
 import { CLIENT_NOTE_MAX, normalizeClientNote } from "@chairback/config/clientNote";
+import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import {
   applyAttributionInTx,
   planAttribution,
@@ -1356,8 +1357,25 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
 
   const phone = toE164(d.phone) ?? (d.phone?.trim() || null);
   const email = d.email || null;
-  const serviceId = d.serviceId || null;
-  const staffId = d.staffId || null;
+  // 🔴 ONLY THIS SHOP'S, AND ONLY WHAT A CLIENT MAY PICK. These arrive from an
+  // unauthenticated form and used to be stored as sent: another shop's id, a
+  // retired service, or a hidden one (engines/serviceVisibility.ts) all landed
+  // on the entry. One that doesn't check out reads as "any" - the join still
+  // happens (a page left open while a service was retired is not the
+  // client's fault), it just carries no preference it could not have had.
+  const [serviceOk, staffOk] = await Promise.all([
+    d.serviceId
+      ? prisma.service.findFirst({
+          where: { id: d.serviceId, shopId: shop.id, ...PUBLIC_SERVICE },
+          select: { id: true },
+        })
+      : null,
+    d.staffId
+      ? prisma.staff.findFirst({ where: { id: d.staffId, shopId: shop.id, active: true }, select: { id: true } })
+      : null,
+  ]);
+  const serviceId = serviceOk?.id ?? null;
+  const staffId = staffOk?.id ?? null;
 
   const dedupeKey = joinFingerprint({ phone, email, serviceId, staffId, windows });
   const { token, hash } = mintCancelToken();

@@ -418,7 +418,10 @@ export function Landing() {
 const STEPS = [
   {
     title: "Connect your booking",
-    body: "One click links Acuity or Square - past appointments backfill your clients' punch cards instantly. No booking app? Use ChairBack's own booking page, or just log visits with one tap.",
+    // Not "past appointments backfill punch cards": since rewards count from
+    // the day they're switched on (Shop.rewardsStartedAt), a past visit earns
+    // only when the owner credits it on the Rewards page.
+    body: "One click links Acuity or Square - your clients and their visit history come right in, and you choose which past visits count toward rewards. No booking app? Use ChairBack's own booking page, or just log visits with one tap.",
   },
   {
     title: "Set your reward",

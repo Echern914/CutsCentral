@@ -8,6 +8,7 @@ import {
   formatShopAddress,
   formatShopLocality,
 } from "@chairback/config";
+import { bookNowUrl } from "@chairback/config/bookingLinks";
 import {
   durationRangeForService,
   parseDateOverrides,
@@ -208,6 +209,9 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       stripeConnectAccountId: true,
       requireBookingApproval: true,
       publicPageEnabled: true,
+      // Where "book online" goes (config/bookingLinks.ts): the mode decides.
+      bookingMode: true,
+      bookingUrl: true,
     },
   });
   if (!shop) return null;
@@ -352,10 +356,12 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
     timezone: shop.timezone,
     hours: formatHours(activeRules, shop.hoursText),
     serviceMenu: menuLines.length > 0 ? menuLines.join("\n") : "not configured yet",
+    // 🔴 THE ONE RULE (config/bookingLinks.ts), not "the page is on". An
+    // Acuity-booking shop's /book/<slug> refuses it, so the receptionist used
+    // to text a dead link; its real page is the saved Acuity link.
     bookingUrl:
-      shop.publicPageEnabled && shop.slug
-        ? `${apiEnv().APP_BASE_URL}/book/${shop.slug}`
-        : "no online booking page - book through this conversation",
+      bookNowUrl(shop, apiEnv().APP_BASE_URL) ??
+      "no online booking page - book through this conversation",
     depositPolicy: deposit,
     cancellationPolicy: cancellation,
     noShowPolicy: noShow,

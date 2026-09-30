@@ -229,3 +229,63 @@ describe("🔴 waitlist join: a last name or an Instagram handle, so the shop ca
   });
 });
 
+
+describe("🔴 waitlist join: only this shop's services and staff, and only ones a client may pick", () => {
+  let slug: string;
+  let shopId: string;
+  let serviceId: string;
+  let hiddenId: string;
+  let staffId: string;
+  let foreignServiceId: string;
+  beforeAll(async () => {
+    const email = `wl-ids-${randomToken(6)}@test.local`.toLowerCase();
+    emails.push(email);
+    const shop = await signupAndShop(email, "WL Ids Cuts");
+    await enableWaitlist(shop.cookie);
+    slug = shop.slug;
+    shopId = shop.shopId;
+    staffId = (await request(app).post("/api/booking/staff").set("Cookie", shop.cookie).send({ name: "Sam" })).body.id;
+    const svc = (name: string) =>
+      request(app)
+        .post("/api/booking/services")
+        .set("Cookie", shop.cookie)
+        .send({ name, durationMin: 30, price: 40, staffIds: [staffId] });
+    serviceId = (await svc("Cut")).body.id;
+    hiddenId = (await svc("Private cut")).body.id;
+    await request(app)
+      .patch(`/api/booking/services/${hiddenId}`)
+      .set("Cookie", shop.cookie)
+      .send({ visibility: "hidden" });
+    const otherEmail = `wl-ids-other-${randomToken(6)}@test.local`.toLowerCase();
+    emails.push(otherEmail);
+    const other = await signupAndShop(otherEmail, "WL Other Cuts");
+    foreignServiceId = (
+      await request(app)
+        .post("/api/booking/services")
+        .set("Cookie", other.cookie)
+        .send({ name: "Theirs", durationMin: 30, price: 40 })
+    ).body.id;
+  });
+  const join = async (body: Record<string, unknown>) => {
+    const email = `ids-${randomToken(6)}@test.local`.toLowerCase();
+    const res = await request(app)
+      .post(`/api/page/${slug}/waitlist`)
+      .send({ firstName: "Mike", lastName: "Test", email, ...body });
+    expect(res.status).toBe(201);
+    return prisma.waitlistEntry.findFirstOrThrow({
+      where: { shopId, email },
+      select: { serviceId: true, staffId: true },
+    });
+  };
+
+  it("keeps a real service and barber of this shop", async () => {
+    expect(await join({ serviceId, staffId })).toEqual({ serviceId, staffId });
+  });
+
+  it("🔴 another shop's service, a hidden one, or a made-up id reads as 'any' - never stored", async () => {
+    for (const bad of [foreignServiceId, hiddenId, "not-a-real-id"]) {
+      expect((await join({ serviceId: bad })).serviceId).toBeNull();
+    }
+    expect((await join({ staffId: "not-a-real-id" })).staffId).toBeNull();
+  });
+});
