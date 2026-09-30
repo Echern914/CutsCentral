@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
+import { WHATS_NEW, unseenWhatsNew } from "@chairback/config/whatsNew";
 import type { BellSignal } from "@/lib/notificationSignals";
+import { WhatsNewSection } from "./WhatsNewSection";
+import { markWhatsNewSeenAction } from "./whatsNewActions";
 
 /**
  * The header bell: what needs the barber right now, in one place.
@@ -19,9 +22,47 @@ import type { BellSignal } from "@/lib/notificationSignals";
  * it means "N things need you right now" and decays to zero as the queues get
  * worked. A seen-flag would mean building the whole notifications backend this
  * is specifically avoiding.
+ *
+ * WHAT'S NEW rides in the same panel - the one exception to "no read state",
+ * and a deliberately small one: a single marker per person
+ * (User.whatsNewSeenId) over a list that lives in code
+ * (@chairback/config/whatsNew). Unseen updates show a GOLD dot, never the red
+ * count: news must not look like work that needs the barber right now.
+ * Opening the bell marks them seen - on every device - while this open still
+ * shows which ones were new.
  */
-export function NotificationBell({ signals }: { signals: BellSignal[] }) {
+export function NotificationBell({
+  signals,
+  whatsNew = null,
+  demo = false,
+}: {
+  signals: BellSignal[];
+  whatsNew?: { seenId: string | null; accountCreatedAt: string } | null;
+  /** The read-only demo session: nothing may be stamped as seen. */
+  demo?: boolean;
+}) {
   const [open, setOpen] = useState(false);
+  // What was new when the page loaded. Kept for this visit so the entries stay
+  // marked "New" in the open panel after the marker has been saved.
+  const unseenIds = useMemo(
+    () =>
+      new Set(
+        whatsNew ? unseenWhatsNew(whatsNew.seenId, new Date(whatsNew.accountCreatedAt)).map((e) => e.id) : [],
+      ),
+    [whatsNew],
+  );
+  const [updatesSeen, setUpdatesSeen] = useState(false);
+  const hasUnseenUpdates = unseenIds.size > 0 && !updatesSeen;
+
+  function toggle() {
+    setOpen((v) => !v);
+    if (hasUnseenUpdates && !demo && WHATS_NEW[0]) {
+      setUpdatesSeen(true);
+      void markWhatsNewSeenAction(WHATS_NEW[0].id).catch(() => {
+        // Best-effort: the dot simply shows again next time.
+      });
+    }
+  }
   // Portals need a DOM; this component is server-rendered into the layout.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -39,16 +80,19 @@ export function NotificationBell({ signals }: { signals: BellSignal[] }) {
   // Past 99 the exact number stops being actionable and starts breaking the
   // badge's width. Same cap the waitlist shortcut uses.
   const shown = total > 99 ? "99+" : String(total);
-  const label =
+  const needs =
     total === 0
       ? "Notifications — nothing needs you right now."
       : `Notifications — ${total} ${total === 1 ? "thing needs" : "things need"} you.`;
+  const label = hasUnseenUpdates
+    ? `${needs} ${unseenIds.size} new ${unseenIds.size === 1 ? "update" : "updates"}.`
+    : needs;
 
   return (
     <>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         aria-label={label}
         title={label}
         aria-expanded={open}
@@ -82,6 +126,15 @@ export function NotificationBell({ signals }: { signals: BellSignal[] }) {
           >
             {shown}
           </span>
+        )}
+        {total === 0 && hasUnseenUpdates && (
+          // News, not work: a gold dot, never the red count. aria-hidden -
+          // the label already says how many updates are new.
+          <span
+            aria-hidden
+            data-qa="whats-new-dot"
+            className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-gold ring-2 ring-charcoal-900"
+          />
         )}
       </button>
 
@@ -132,6 +185,7 @@ export function NotificationBell({ signals }: { signals: BellSignal[] }) {
                   ))}
                 </ul>
               )}
+              <WhatsNewSection entries={WHATS_NEW} unseenIds={unseenIds} />
             </div>
           </div>,
           document.body,

@@ -5,6 +5,7 @@ import {
   ACTIVE_SHOP_COOKIE_NAME,
   serviceNounForShop,
   vocabularyForShop,
+  WHATS_NEW,
 } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
 import { hashPassword, verifyPassword } from "../auth/password.js";
@@ -199,6 +200,10 @@ authRouter.get("/me", requireUser, async (req, res) => {
       avatarUrl: true,
       isAdmin: true,
       welcomeSeenAt: true,
+      // "What's new" in the bell: the last entry seen, and when the account
+      // began (a new account is not greeted with the whole history).
+      whatsNewSeenId: true,
+      createdAt: true,
       theme: true,
       // Exposed only as the hasPassword boolean below - lets the account card
       // say "Set a password" instead of asking a social-only (Apple/Google)
@@ -241,7 +246,7 @@ authRouter.get("/me", requireUser, async (req, res) => {
     req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as string | undefined,
   );
   const activeShop = access?.shop ?? null;
-  const { welcomeSeenAt, passwordHash, googleId, appleId, ...rest } = user;
+  const { welcomeSeenAt, passwordHash, googleId, appleId, whatsNewSeenId, createdAt, ...rest } = user;
   // Whether the ACTIVE shop has rewards on - the dashboard chrome hides every
   // rewards surface (nav tab etc.) for a rewards-off shop. industry/serviceNoun
   // ride the same read so /me can hand the dashboard its resolved visit-noun.
@@ -259,6 +264,7 @@ authRouter.get("/me", requireUser, async (req, res) => {
   res.json({
     ...rest,
     welcomeSeen: welcomeSeenAt !== null,
+    whatsNew: { seenId: whatsNewSeenId, accountCreatedAt: createdAt.toISOString() },
     hasPassword: passwordHash !== null,
     hasGoogle: googleId !== null,
     hasApple: appleId !== null,
@@ -308,6 +314,28 @@ authRouter.post("/welcome-seen", requireUser, async (req, res) => {
     where: { id: req.userId, welcomeSeenAt: null },
     data: { welcomeSeenAt: new Date() },
   });
+  res.json({ ok: true });
+});
+
+// "What's new" was opened: remember the newest entry this person has now seen,
+// so the bell stops marking it new - on every device, since it is stored here.
+// Only an id the changelog actually contains is accepted (a stale or invented
+// one would make the bell count the wrong things), and it only ever moves
+// FORWARD: a tab left open on an older deploy cannot un-see newer entries.
+const whatsNewSeenSchema = z.object({ id: z.string().min(1).max(120) });
+authRouter.post("/whats-new-seen", requireUser, async (req, res) => {
+  const parsed = whatsNewSeenSchema.safeParse(req.body);
+  const at = parsed.success ? WHATS_NEW.findIndex((e) => e.id === parsed.data.id) : -1;
+  if (!parsed.success || at < 0) {
+    res.status(400).json({ error: "unknown_entry" });
+    return;
+  }
+  const user = await prisma.user.findUnique({ where: { id: req.userId }, select: { whatsNewSeenId: true } });
+  const current = user?.whatsNewSeenId ? WHATS_NEW.findIndex((e) => e.id === user.whatsNewSeenId) : -1;
+  // Newest first: a SMALLER index is newer. Unknown current = accept.
+  if (current < 0 || at < current) {
+    await prisma.user.update({ where: { id: req.userId }, data: { whatsNewSeenId: parsed.data.id } });
+  }
   res.json({ ok: true });
 });
 
