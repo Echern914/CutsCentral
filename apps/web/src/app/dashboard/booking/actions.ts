@@ -1683,7 +1683,17 @@ export interface AppointmentDetail {
    * so a later edit to the policy never rewrites it. Null (or absent from an
    * older API) when nothing was asked.
    */
-  policyAgreement?: { acceptedAt: string; text: string | null; checklist: string[] } | null;
+  policyAgreement?: {
+    acceptedAt: string;
+    text: string | null;
+    checklist: string[];
+    /**
+     * Set when they were NOT asked on this booking: their phone remembered
+     * them ticking these same words on an earlier one, on this date. Absent
+     * from an older API.
+     */
+    agreedEarlierAt?: string | null;
+  } | null;
   contact: DetailContact;
   /** Whether Text is a real action here, and why not when it isn't. */
   sms: DetailSms;

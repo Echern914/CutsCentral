@@ -53,6 +53,7 @@ import { PaymentStep } from "./PaymentStep";
 import { WaitlistForm } from "./WaitlistForm";
 import { EmailMarketingChoice, emailMarketingYes } from "./EmailMarketingChoice";
 import {
+  BookingPolicyAgreed,
   BookingPolicyPanel,
   POLICY_CHANGED_MESSAGE,
   POLICY_HINT,
@@ -60,6 +61,14 @@ import {
   readBookingPolicy,
   useBookingPolicy,
 } from "./BookingPolicy";
+import {
+  agreedAtFor,
+  contactIdentity,
+  forgetBooker,
+  readRememberedBooker,
+  rememberBooker,
+  type RememberedBooker,
+} from "./rememberedBooker";
 import { groupsToAutoExpand } from "./autoExpand";
 import { revealElement } from "./reveal";
 import { ClientNoteBlock } from "../ClientNoteBlock";
@@ -306,6 +315,83 @@ export function BookingClient({
   // The shop's own policies and the lines the customer must tick ("Before you
   // book"). Every box starts unticked; Confirm waits until all are ticked.
   const bookingPolicy = useBookingPolicy(data.shop.bookingPolicy);
+  /**
+   * A RETURNING CLIENT, remembered on this device (rememberedBooker.ts): their
+   * details are filled in, and a policy they already agreed to is not asked
+   * again. Read after mount - the server render cannot see this browser - and
+   * never on the demo shop, whose tour fills in its own sample person.
+   */
+  const isDemoShop = data.shop.slug === DEMO.SHOP_SLUG;
+  const [remembered, setRemembered] = useState<RememberedBooker | null>(null);
+  // "Remember my details on this device". A convenience, not a consent - it
+  // lets nobody contact or charge anyone - so it starts on; unticking it at
+  // booking forgets them.
+  const [rememberMe, setRememberMe] = useState(true);
+  useEffect(() => {
+    if (isDemoShop) return;
+    const r = readRememberedBooker();
+    if (!r) return;
+    setRemembered(r);
+    setFirstName((cur) => cur || r.contact.firstName);
+    setLastName((cur) => cur || r.contact.lastName);
+    setPhone((cur) => cur || r.contact.phone);
+    setEmail((cur) => cur || r.contact.email);
+    // Once, on arrival. A later edit to the form is the customer's own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  /**
+   * When the person NOW on the form agreed to these exact words here, or null
+   * (ask them). Recomputed as they type: change the phone to someone else's
+   * and the boxes come back, unticked.
+   */
+  const carriedPolicyAt =
+    remembered && bookingPolicy.policy && bookingPolicy.policy.checklist.length > 0
+      ? agreedAtFor(
+          remembered,
+          data.shop.slug,
+          bookingPolicy.policy.version,
+          contactIdentity({ phone, email }),
+        )
+      : null;
+  const policyReady = bookingPolicy.complete || carriedPolicyAt !== null;
+
+  /** "Not you?" - forget this device's person, and clear what they filled. */
+  function notMe() {
+    forgetBooker();
+    setRemembered(null);
+    setFirstName("");
+    setLastName("");
+    setPhone("");
+    setEmail("");
+    firstNameRef.current?.focus();
+  }
+
+  /**
+   * After a booking the server ACCEPTED: remember this person for next time -
+   * or forget them, if they unticked "Remember my details". The agreement
+   * keeps its first date when it was carried, so "when you booked on" stays
+   * the day they actually read and ticked it.
+   */
+  function rememberAfterBooking() {
+    if (isDemoShop) return;
+    if (!rememberMe) {
+      forgetBooker();
+      setRemembered(null);
+      return;
+    }
+    const p = bookingPolicy.policy;
+    const next = rememberBooker(
+      { firstName, lastName, phone, email },
+      p && p.checklist.length > 0
+        ? {
+            shop: data.shop.slug,
+            version: p.version,
+            agreedAt: carriedPolicyAt ?? new Date().toISOString(),
+          }
+        : null,
+    );
+    if (next) setRemembered(next);
+  }
   /**
    * The shop's own booking questions, keyed by question id.
    *
@@ -1436,8 +1522,9 @@ export function BookingClient({
       showQuestionError(missing.id, `${missing.label} is required.`);
       return;
     }
-    // Confirm is disabled until every line is ticked; this is the backstop.
-    if (!bookingPolicy.complete) {
+    // Confirm is disabled until every line is ticked (or this person already
+    // agreed to these words here); this is the backstop.
+    if (!policyReady) {
       setError(POLICY_HINT);
       return;
     }
@@ -1489,6 +1576,10 @@ export function BookingClient({
         // one - the API refuses a stale version rather than record agreement
         // to words the customer never saw.
         policyVersion: bookingPolicy.acceptedVersion,
+        // Not asked this time: they agreed to this same version on an earlier
+        // booking here. The API still checks the version; this makes the
+        // record say they were not re-asked.
+        policyAgreedAt: carriedPolicyAt ?? undefined,
       });
       /**
        * Refresh the available times, then say what happened.
@@ -1601,6 +1692,9 @@ export function BookingClient({
         }
         return;
       }
+      // The server took the booking, so these details are good ones to fill
+      // in next time - even when a card screen follows.
+      rememberAfterBooking();
       // A STANDING APPOINTMENT keeps its series summary across the card step.
       // Set BEFORE the early return below: the confirmation screen reads it
       // after the card clears, and without this a card-on-file series showed a
@@ -3068,6 +3162,26 @@ export function BookingClient({
             </div>
           )}
           <div className="flex flex-col gap-3" data-tour="checkout">
+            {/* A returning client: filled in from this device, with the way
+                out right beside it for anyone who isn't them. */}
+            {remembered && (
+              <div
+                className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted"
+                data-qa="remembered-booker"
+              >
+                <span className="min-w-0 [overflow-wrap:anywhere]">
+                  Welcome back, {remembered.contact.firstName}. Your details are filled in from
+                  last time.
+                </span>
+                <button
+                  type="button"
+                  onClick={notMe}
+                  className="min-h-11 shrink-0 font-medium text-offwhite underline"
+                >
+                  Not you?
+                </button>
+              </div>
+            )}
             <div className="flex gap-2">
               <input
                 ref={firstNameRef}
@@ -3126,6 +3240,18 @@ export function BookingClient({
               aria-describedby={fieldError?.field === "email" ? "book-error-email" : undefined}
             />
             <FieldError field="email" />
+            {!isDemoShop && (
+              <label className="flex items-start gap-2 text-xs text-muted">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="mt-0.5"
+                  data-qa="remember-me"
+                />
+                <span>Remember my details on this device for next time</span>
+              </label>
+            )}
 
             {/* THE SHOP'S OWN QUESTIONS - what it has to know before it can do
                 the job (a mobile mechanic's address, the vehicle he is quoting
@@ -3363,15 +3489,24 @@ export function BookingClient({
             {/* BEFORE YOU BOOK: the shop's own policies, its money terms, and
                 the lines to tick. Right above Confirm, because this is the
                 moment it matters. Nothing renders for a shop that wrote none. */}
-            {bookingPolicy.policy && (
-              <BookingPolicyPanel
-                policy={bookingPolicy.policy}
-                ticked={bookingPolicy.ticked}
-                onToggle={bookingPolicy.toggle}
-                moneyLines={moneyTermsLines(data.shop.payment)}
-                accent={accent}
-              />
-            )}
+            {bookingPolicy.policy &&
+              (carriedPolicyAt ? (
+                // Agreed to these exact words here before - the shop's rule is
+                // "agree on the first booking", so they are not asked again.
+                <BookingPolicyAgreed
+                  policy={bookingPolicy.policy}
+                  agreedAt={carriedPolicyAt}
+                  moneyLines={moneyTermsLines(data.shop.payment)}
+                />
+              ) : (
+                <BookingPolicyPanel
+                  policy={bookingPolicy.policy}
+                  ticked={bookingPolicy.ticked}
+                  onToggle={bookingPolicy.toggle}
+                  moneyLines={moneyTermsLines(data.shop.payment)}
+                  accent={accent}
+                />
+              ))}
 
             {error && (
               <p role="alert" className="text-xs text-red-400">
@@ -3381,9 +3516,9 @@ export function BookingClient({
             <button
               type="button"
               onClick={submit}
-              disabled={pending || !bookingPolicy.complete}
+              disabled={pending || !policyReady}
               aria-busy={pending}
-              aria-describedby={!bookingPolicy.complete ? "booking-policy-hint" : undefined}
+              aria-describedby={!policyReady ? "booking-policy-hint" : undefined}
               className={primaryBtn}
               style={{ backgroundColor: accent, color: onAccent }}
             >
@@ -3395,7 +3530,7 @@ export function BookingClient({
             </button>
             {/* Why Confirm is grey - a disabled button with no reason reads
                 as a broken page. */}
-            {!bookingPolicy.complete && (
+            {!policyReady && (
               <p id="booking-policy-hint" className="text-center text-xs text-muted">
                 {POLICY_HINT}
               </p>

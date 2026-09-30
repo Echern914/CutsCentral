@@ -644,8 +644,21 @@ function DetailView({
           {detail?.policyAgreement && (
             <Panel title="Your policies">
               <p className="text-sm text-offwhite/85">
-                Agreed to your policies when booking,{" "}
-                {fmtDay(detail.policyAgreement.acceptedAt, detail.timezone)}.
+                {/* Two different facts, so two sentences: a customer who was
+                    not shown the boxes this time must never read as one who
+                    ticked them on this booking. */}
+                {detail.policyAgreement.agreedEarlierAt ? (
+                  <>
+                    Agreed to your policies when they first booked,{" "}
+                    {fmtDay(detail.policyAgreement.agreedEarlierAt, detail.timezone)}. Not asked
+                    again this time: the wording hasn&apos;t changed since.
+                  </>
+                ) : (
+                  <>
+                    Agreed to your policies when booking,{" "}
+                    {fmtDay(detail.policyAgreement.acceptedAt, detail.timezone)}.
+                  </>
+                )}
               </p>
               {detail.policyAgreement.checklist.length > 0 && (
                 <ul className="mt-2 flex flex-col gap-1.5">

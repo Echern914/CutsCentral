@@ -148,7 +148,16 @@ export interface AppointmentDetail {
    * Null when nothing was asked: no checklist, a booking the barber made, the
    * SMS receptionist, a synced booking, or anything before this feature.
    */
-  policyAgreement: { acceptedAt: string; text: string | null; checklist: string[] } | null;
+  /**
+   * `agreedEarlierAt`: not asked on THIS booking - their device remembered
+   * them ticking these same words when they first booked (the date shown).
+   */
+  policyAgreement: {
+    acceptedAt: string;
+    text: string | null;
+    checklist: string[];
+    agreedEarlierAt: string | null;
+  } | null;
   contact: DetailContact;
   /** Whether Text is a real action here, and why not when it isn't. */
   sms: DetailSms;

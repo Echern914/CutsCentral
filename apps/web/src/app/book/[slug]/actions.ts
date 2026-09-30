@@ -238,6 +238,12 @@ export interface BookInput {
    * book"). Required by the API whenever the shop has one.
    */
   policyVersion?: string;
+  /**
+   * When this device remembers the customer agreeing to that same version on
+   * an earlier booking, so they were not asked to tick it again (ISO). The API
+   * still checks `policyVersion`; this only makes the record say so.
+   */
+  policyAgreedAt?: string;
 }
 
 /**

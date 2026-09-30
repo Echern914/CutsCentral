@@ -262,6 +262,82 @@ describe("a single booking", () => {
     expect(res.status).toBe(201);
   });
 
+  // A returning client whose phone remembers them agreeing to these words
+  // before is not shown the boxes again (web rememberedBooker.ts). The record
+  // must say so - it is a different fact from ticking them on this booking.
+  it("a REMEMBERED agreement books, and the record says they were not re-asked", async () => {
+    await withChecklist();
+    const p = (await pagePolicy())!;
+    const earlier = "2026-09-01T15:30:00.000Z";
+    const res = await bookOne(futureAtHour(4, 10), { policyVersion: p.version, policyAgreedAt: earlier });
+    expect(res.status).toBe(201);
+    const appt = await prisma.appointment.findFirst({
+      where: { shopId },
+      select: { id: true, policyAcceptedAt: true, policySnapshot: true },
+    });
+    expect(appt!.policySnapshot).toEqual({
+      version: p.version,
+      text: TEXT,
+      checklist: CHECKLIST,
+      agreedEarlierAt: earlier,
+    });
+    const detail = await request(app)
+      .get(`/api/booking/appointments/${appt!.id}/detail`)
+      .set("Cookie", cookie);
+    expect(detail.body.policyAgreement).toMatchObject({ checklist: CHECKLIST, agreedEarlierAt: earlier });
+  });
+
+  it("a ticked agreement carries no earlier date", async () => {
+    await withChecklist();
+    const p = (await pagePolicy())!;
+    expect((await bookOne(futureAtHour(4, 11), { policyVersion: p.version })).status).toBe(201);
+    const appt = await prisma.appointment.findFirst({ where: { shopId }, select: { id: true } });
+    const detail = await request(app)
+      .get(`/api/booking/appointments/${appt!.id}/detail`)
+      .set("Cookie", cookie);
+    expect(detail.body.policyAgreement.agreedEarlierAt).toBeNull();
+  });
+
+  it("🔴 a remembered agreement to OLD words is a 409 like any other - the owner's edit asks again", async () => {
+    await withChecklist();
+    const seen = (await pagePolicy())!.version;
+    await withChecklist([...CHECKLIST, "Cash only"]);
+    const res = await bookOne(futureAtHour(4, 12), {
+      policyVersion: seen,
+      policyAgreedAt: "2026-09-01T15:30:00.000Z",
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("POLICY_CHANGED");
+    expect(await prisma.appointment.count({ where: { shopId } })).toBe(0);
+  });
+
+  it("🔴 a remembered date is no permission on its own - without the version it is refused", async () => {
+    await withChecklist();
+    const res = await bookOne(futureAtHour(4, 13), { policyAgreedAt: "2026-09-01T15:30:00.000Z" });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("POLICY_NOT_ACCEPTED");
+    expect(await prisma.appointment.count({ where: { shopId } })).toBe(0);
+  });
+
+  it("a remembered date ahead of now (a phone's clock) is clamped to now, never stored as the future", async () => {
+    await withChecklist();
+    const p = (await pagePolicy())!;
+    const future = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    const res = await bookOne(futureAtHour(4, 14), { policyVersion: p.version, policyAgreedAt: future });
+    expect(res.status).toBe(201);
+    const appt = await prisma.appointment.findFirst({ where: { shopId }, select: { policySnapshot: true } });
+    const stored = (appt!.policySnapshot as { agreedEarlierAt: string }).agreedEarlierAt;
+    expect(Date.parse(stored)).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("a malformed remembered date is refused before anything is written", async () => {
+    await withChecklist();
+    const p = (await pagePolicy())!;
+    const res = await bookOne(futureAtHour(4, 15), { policyVersion: p.version, policyAgreedAt: "last week" });
+    expect(res.status).toBe(400);
+    expect(await prisma.appointment.count({ where: { shopId } })).toBe(0);
+  });
+
   it("a stale page that still sends a version after the checklist was removed just books", async () => {
     await withChecklist();
     const seen = (await pagePolicy())!.version;
