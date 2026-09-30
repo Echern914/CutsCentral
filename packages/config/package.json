@@ -39,6 +39,7 @@
     "./bookingLinks": "./src/bookingLinks.ts",
     "./bookingPolicy": "./src/bookingPolicy.ts",
     "./clientNote": "./src/clientNote.ts",
+    "./serviceVisibility": "./src/serviceVisibility.ts",
     "./addOns": "./src/addOns.ts"
   },
   "scripts": {

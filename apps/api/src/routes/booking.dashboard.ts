@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { businessType, normalizeServiceName, randomToken, SERVICE_COLOR_KEYS } from "@chairback/config";
+import { SERVICE_VISIBILITIES } from "@chairback/config/serviceVisibility";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -328,6 +329,9 @@ const serviceSchema = z
     // its group's target.
     dailyTarget: z.number().int().min(1).max(1000).nullable().optional(),
     active: z.boolean().optional(),
+    // The eye icon: "hidden" = only the barber books it; clients never see it
+    // (config/serviceVisibility.ts). Separate from `active` (gone for everyone).
+    visibility: z.enum(SERVICE_VISIBILITIES).optional(),
     sortOrder: z.number().int().min(0).max(1000).optional(),
     // "Offered by every barber" as a live intent. When true, staffIds is ignored
     // and the offering is kept in sync with all active staff (now and future).
@@ -391,6 +395,7 @@ bookingDashboardRouter.post("/services", async (req, res) => {
       priceOverrides: d.priceOverrides ?? {},
       dateOverrides: d.dateOverrides ?? {},
       active: d.active ?? true,
+      visibility: d.visibility ?? "public",
       sortOrder: d.sortOrder ?? 0,
       dailyTarget: d.dailyTarget ?? null,
       offeredByAll: d.offeredByAll ?? false,
@@ -450,6 +455,7 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
       ? { dailyTarget: d.dailyTarget ?? null }
       : {}),
     ...(d.active !== undefined ? { active: d.active } : {}),
+    ...(d.visibility !== undefined ? { visibility: d.visibility } : {}),
     ...(d.sortOrder !== undefined ? { sortOrder: d.sortOrder } : {}),
     ...(d.offeredByAll !== undefined ? { offeredByAll: d.offeredByAll } : {}),
   };

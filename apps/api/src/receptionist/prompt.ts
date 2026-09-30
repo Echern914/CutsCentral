@@ -16,6 +16,7 @@ import {
 import { connectEnabled } from "../billing/stripe.js";
 import { forShop, prisma } from "@chairback/db";
 import { logger } from "../logger.js";
+import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 
 /**
  * Runtime loader + per-shop renderer for the receptionist's system prompt.
@@ -219,7 +220,7 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       select: { id: true, name: true },
     }),
     db.service.findMany({
-      where: { active: true },
+      where: { ...PUBLIC_SERVICE },
       orderBy: { sortOrder: "asc" },
       // Every pricing layer, not just the base. The menu used to read
       // `price`/`durationMin` alone while the booking tool wrote the

@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { BUSINESS_TYPES } from "@chairback/config/businessTypes";
-import { ServiceCard, serviceSummary } from "./ServiceCard";
+import { EyeIcon, ServiceCard, serviceSummary } from "./ServiceCard";
 
 /**
  * The Services list card.
@@ -173,6 +173,26 @@ describe("the card", () => {
     render(<Card />);
     const labels = screen.getAllByRole("button").map((b) => b.textContent);
     expect(labels).toEqual(["Edit", "Duplicate", "Remove"]);
+  });
+});
+
+describe("hidden from clients (the eye)", () => {
+  it("says Hidden beside the name when the barber has hidden it", () => {
+    render(<Card hidden />);
+    expect(screen.getByTestId("service-hidden-badge")).toHaveTextContent("Hidden");
+  });
+
+  it("says nothing extra for a service clients can see", () => {
+    render(<Card />);
+    expect(screen.queryByTestId("service-hidden-badge")).toBeNull();
+  });
+
+  it("the eye is struck through only when hidden", () => {
+    const open = render(<EyeIcon off={false} />);
+    expect(open.container.querySelectorAll("path")).toHaveLength(1);
+    open.unmount();
+    const off = render(<EyeIcon off />);
+    expect(off.container.querySelectorAll("path")).toHaveLength(2);
   });
 });
 

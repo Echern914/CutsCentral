@@ -106,12 +106,34 @@ function barberLabel(
   return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
 }
 
+/** The Services list's eye: open = clients can see it, struck through = hidden. */
+export function EyeIcon({ off }: { off: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+      {off && <path d="M3 3l18 18" />}
+    </svg>
+  );
+}
+
 export function ServiceCard({
   name,
   summary,
   selected = false,
   flagged = false,
   flagTitle,
+  hidden = false,
   actions,
 }: {
   name: string;
@@ -121,6 +143,8 @@ export function ServiceCard({
   /** Custom hours: keeps the existing gold star affordance. */
   flagged?: boolean;
   flagTitle?: string;
+  /** Hidden from clients (the eye): only the barber can book it. */
+  hidden?: boolean;
   actions: ReactNode;
 }) {
   const vocab = useVocab();
@@ -156,6 +180,14 @@ export function ServiceCard({
               </>
             )}
             <span className="min-w-0 truncate">{name}</span>
+            {hidden && (
+              <span
+                data-testid="service-hidden-badge"
+                className="shrink-0 rounded-full border border-subtle px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
+              >
+                Hidden
+              </span>
+            )}
           </p>
           {/* One line of four facts. It WRAPS on a phone (where it owns the
               full width) and truncates from sm up, where it shares the row

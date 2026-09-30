@@ -1792,6 +1792,20 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open booking settings", featureId: "booking-policies" },
   },
   {
+    // A barber, 2026-09-29: "a service that is NOT visible to clients and only
+    // me ... tap the eye icon to turn it off" (Acuity's "Private" types).
+    id: "hidden-service",
+    q: "Can I have a service clients can't see, that only I can book?",
+    a: "Yes. Booking → Services, then tap the eye on that service. It shows “Hidden” and comes off your booking page, the texting receptionist and the walk-in kiosk, and clients can't book it even with a direct link. Tap the eye again to put it back.\n\nYou can still book it yourself from New appointment, like any other service. Anyone already booked into it keeps their appointment, and can still move or cancel it from their link.\n\nA special-priced slot listed only under hidden services isn't offered to clients either. List it under a visible service too if you want it on your page.\n\nComing from Acuity? Its “Private” types aren't imported automatically: add the service here, then tap its eye.",
+    keywords: [
+      "hidden service", "hide a service", "hide service", "private service", "private appointment type",
+      "service clients can't see", "only I can book", "not visible to clients", "eye icon",
+      "hide from booking page", "invisible service", "secret service",
+    ],
+    category: "booking",
+    action: { label: "Open services", featureId: "services" },
+  },
+  {
     id: "special-chip-meaning",
     q: "Why does a booking say Special, Premium hour or After hours?",
     // 🔴 Two barbers asked this the same day (2026-09-29): "Special" reads as a

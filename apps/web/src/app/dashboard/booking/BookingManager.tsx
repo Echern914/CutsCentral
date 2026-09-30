@@ -85,7 +85,8 @@ import {
   MoneyField,
 } from "@/components/ui/UnitField";
 import { TargetedSlotCard } from "./TargetedSlotCard";
-import { ServiceCard, serviceSummary } from "./ServiceCard";
+import { EyeIcon, ServiceCard, serviceSummary } from "./ServiceCard";
+import { isHiddenService } from "@chairback/config/serviceVisibility";
 import { UpgradeRules } from "./UpgradeRules";
 import {
   MIN_SERVICE_MINUTES,
@@ -1046,6 +1047,27 @@ function ServicesTab({
     });
   }
 
+  /**
+   * The eye (a barber: "I can create a service and tap the eye icon to turn it
+   * off and make it not visible"). Hidden = off the booking page, the texting
+   * receptionist and the kiosk; still bookable from New appointment, and
+   * anyone already booked into it keeps their appointment.
+   */
+  function toggleVisibility(s: ServiceRow) {
+    const hide = !isHiddenService(s);
+    start(async () => {
+      const r = await updateServiceAction(s.id, { visibility: hide ? "hidden" : "public" });
+      toast(
+        !r.ok
+          ? "Couldn't change that"
+          : hide
+            ? `"${s.name}" is hidden from clients. You can still book it yourself.`
+            : `"${s.name}" is back on your booking page.`,
+        r.ok ? "success" : "error",
+      );
+    });
+  }
+
   function remove(id: string) {
     // One tap here used to destroy a fully-configured service — per-day prices
     // and durations, hours, time-of-day windows, staff assignments — with no
@@ -1173,6 +1195,7 @@ function ServicesTab({
               selected={editing?.id === s.id}
               flagged={offHours}
               flagTitle="Not on regular hours"
+              hidden={isHiddenService(s)}
               summary={serviceSummary({
                 vocab,
                 durationMin: s.durationMin,
@@ -1188,6 +1211,24 @@ function ServicesTab({
               })}
               actions={
                 <>
+                  <button
+                    type="button"
+                    onClick={() => toggleVisibility(s)}
+                    disabled={pending}
+                    aria-pressed={isHiddenService(s)}
+                    aria-label={
+                      isHiddenService(s)
+                        ? `Show ${s.name} to clients`
+                        : `Hide ${s.name} from clients`
+                    }
+                    title={isHiddenService(s) ? "Hidden from clients - tap to show" : "Visible to clients - tap to hide"}
+                    className={cn(
+                      "-m-2 flex h-11 w-11 items-center justify-center rounded-lg transition-colors disabled:opacity-50",
+                      isHiddenService(s) ? "text-muted hover:text-offwhite" : "text-gold hover:text-gold/80",
+                    )}
+                  >
+                    <EyeIcon off={isHiddenService(s)} />
+                  </button>
                   <button
                     onClick={() => setEditing(s)}
                     className="text-xs text-gold hover:underline"

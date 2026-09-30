@@ -30,6 +30,7 @@ import { checkPolicyAcceptance } from "../engines/bookingPolicy.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { bookingReadLimiter, bookingWriteLimiter, rewardsLimiter } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
+import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 
 /**
  * Back-to-back group booking: "me and my brother, one after the other".
@@ -107,7 +108,7 @@ async function loadGroupServices(
 ): Promise<Map<string, GroupPlanService & { name: string; hoursWindows: unknown }> | null> {
   const unique = [...new Set(serviceIds)];
   const services = await prisma.service.findMany({
-    where: { id: { in: unique }, shopId, active: true },
+    where: { id: { in: unique }, shopId, ...PUBLIC_SERVICE },
     select: {
       id: true,
       name: true,

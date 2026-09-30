@@ -30,6 +30,7 @@ import { buildPassForClient, walletEnabled } from "../wallet/pass.js";
 import { appointmentWalletEnabled } from "../wallet/appointmentPass.js";
 import { receptionistEnabledForShop } from "../receptionist/config.js";
 import { logger } from "../logger.js";
+import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 
 const env = apiEnv();
 
@@ -224,7 +225,9 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
           shopId: client.shopId,
           clientId: client.id,
           status: { in: ["BOOKED", "COMPLETED"] },
-          service: { active: true },
+          // Bookable BY THE CLIENT: a hidden service is not on their booking
+          // page, so a rebook link to it would dead-end the same way.
+          service: { ...PUBLIC_SERVICE },
           staff: { active: true },
         },
         orderBy: { startsAt: "desc" },
