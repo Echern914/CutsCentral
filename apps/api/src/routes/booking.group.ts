@@ -31,6 +31,7 @@ import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { bookingReadLimiter, bookingWriteLimiter, rewardsLimiter } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
+import { fillBlankClientFields } from "../services/clientFill.js";
 
 /**
  * Back-to-back group booking: "me and my brother, one after the other".
@@ -621,13 +622,16 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
           smsConsentAt: consented ? now : null,
           smsConsentSource: consented ? "booking" : null,
         },
-        update: {
-          firstName: d.firstName,
-          lastName: who.lastName ?? undefined,
-          phone: phone ?? undefined,
-          email: d.email || undefined,
-        },
+        // 🔴 Never overwrite an existing client from a public form - a shared
+        // phone is not the same person (services/clientFill.ts).
+        update: {},
         select: { id: true },
+      });
+      await fillBlankClientFields(tx, client.id, {
+        firstName: d.firstName,
+        lastName: who.lastName,
+        phone,
+        email: d.email,
       });
       // A typed phone FILLS a missing handle and never replaces one: this form
       // is unauthenticated, and the barber is the one who corrects a handle.
