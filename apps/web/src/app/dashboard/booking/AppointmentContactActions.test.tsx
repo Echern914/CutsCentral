@@ -120,9 +120,13 @@ async function openContactMenu(detail = detailFor()) {
   render(
     <AppointmentSheet row={row} toast={toast} onClose={vi.fn()} onChanged={vi.fn()} />,
   );
-  const contact = await screen.findByRole("button", { name: /contact/i });
+  // 5s, not the default 1s: the sheet is a heavy render, and on a loaded CI
+  // runner the menu arrived after the 1s find gave up ("Unable to find
+  // role=menu", 2026-09-30) while passing every time locally. A menu that
+  // truly never appears still fails - just later.
+  const contact = await screen.findByRole("button", { name: /contact/i }, { timeout: 5000 });
   fireEvent.click(contact);
-  return await screen.findByRole("menu", { name: /reach your client/i });
+  return await screen.findByRole("menu", { name: /reach your client/i }, { timeout: 5000 });
 }
 
 beforeEach(() => {
