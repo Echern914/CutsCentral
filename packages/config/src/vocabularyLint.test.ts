@@ -174,6 +174,20 @@ const ALLOWED: Exception[] = [
     why: "expo-router destination after the OAuth callback resolves.",
   },
   {
+    path: "apps/mobile/src/pushTap.ts",
+    lexeme: "barber",
+    snippet: "`/barber?next= `",
+    count: 1,
+    why: "expo-router destination (app/barber.tsx) a tapped barber alert opens, with the page it links to.",
+  },
+  {
+    path: "apps/mobile/app/_layout.tsx",
+    lexeme: "barber",
+    snippet: '"/barber?"',
+    count: 1,
+    why: "Recognises that same expo-router destination to add the per-tap marker. A route path, not copy.",
+  },
+  {
     path: "apps/mobile/src/push.ts",
     lexeme: "barber",
     snippet: "` /api/barber/push/native`",

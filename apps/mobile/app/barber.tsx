@@ -19,6 +19,7 @@ import { clearSession, loadSession } from "@/src/session";
 import { registerBarberPush } from "@/src/push";
 import { ModeSwitchBar } from "@/src/ModeSwitchBar";
 import { announceScript, TapToPayHost } from "@/src/tapToPay/TapToPayHost";
+import { safeDashboardPath } from "@/src/pushTap";
 
 /**
  * Barber mode: a WebView of the existing /dashboard. The barber reaches here via
@@ -39,8 +40,16 @@ import { announceScript, TapToPayHost } from "@/src/tapToPay/TapToPayHost";
  * postMessage "cb:auth" the dashboard emits - whichever arrives first.
  */
 export default function BarberScreen() {
-  const { demo } = useLocalSearchParams<{ demo?: string }>();
+  const { demo, next: nextParam, at } = useLocalSearchParams<{
+    demo?: string;
+    next?: string;
+    at?: string;
+  }>();
   const isDemo = demo === "1";
+  // The page a tapped notification links to (src/pushTap.ts) - one
+  // appointment, usually. Re-checked here: only a /dashboard path is opened,
+  // and always on OUR origin.
+  const next = isDemo ? null : safeDashboardPath(nextParam);
   const registered = useRef(false);
   // The live WebView, so Tap to Pay can answer a collection in the page that
   // asked for it.
@@ -75,16 +84,31 @@ export default function BarberScreen() {
           registerBarberPush(token);
         }
         setSource({
-          uri: appAuthUrl(),
+          uri: appAuthUrl(next),
           headers: { Authorization: `Bearer ${token}` },
         });
       } else {
         // No native session (shouldn't happen on the barber path); load the
         // dashboard directly - it falls back to the in-page web login.
-        setSource({ uri: dashboardUrl() });
+        setSource({ uri: next ? `${WEB_ORIGIN}${next}` : dashboardUrl() });
       }
     })();
+    // Mount-time only: a LATER tap is handled below, without re-running the
+    // session handoff.
   }, [isDemo]);
+
+  // A notification tapped while this screen is ALREADY open: the root layout
+  // navigates here again with a new `next` (and a fresh `at`, so the same
+  // alert tapped twice still counts). Point the signed-in WebView at it - its
+  // own cookie is already set, so no handoff is needed.
+  const firstLink = useRef(true);
+  useEffect(() => {
+    if (firstLink.current) {
+      firstLink.current = false;
+      return;
+    }
+    if (next) setSource({ uri: `${WEB_ORIGIN}${next}` });
+  }, [next, at]);
 
   function onMessage(e: WebViewMessageEvent) {
     try {

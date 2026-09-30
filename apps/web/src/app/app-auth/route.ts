@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
 import { sessionCookieDomain } from "@/lib/sessionCookieDomain";
+import { appAuthLanding } from "@/lib/appAuthLanding";
 
 /**
  * Native-app session handoff. After native Apple/Google sign-in (the iOS app),
@@ -29,7 +30,8 @@ const COOKIE_OPTS = {
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const authz = req.headers.get("authorization");
   const token = authz?.startsWith("Bearer ") ? authz.slice(7) : null;
-  const res = NextResponse.redirect(new URL("/dashboard", req.url));
+  const landing = appAuthLanding(req.nextUrl.searchParams.get("next"));
+  const res = NextResponse.redirect(new URL(landing, req.url));
   if (token) {
     res.cookies.set(SESSION_COOKIE_NAME, token, COOKIE_OPTS);
     const domain = sessionCookieDomain(req.headers.get("host"));

@@ -178,6 +178,7 @@ export function BookingCalendar({
   addOns = [],
   toast,
   openAppointmentId,
+  openDay,
   tierOpenings = false,
   pendingWaitlistBooking = null,
   onPendingWaitlistBookingTaken,
@@ -199,6 +200,13 @@ export function BookingCalendar({
    * on it meant finding the row and opening it, three or four taps in.
    */
   openAppointmentId?: string;
+  /**
+   * That booking's shop-local day (YYYY-MM-DD), from the same link. The
+   * calendar opens on it - and loads its month - so a booking made for next
+   * month still opens (a barber: "take me directly to that day and time's
+   * appointment"). Anything that isn't a date is ignored.
+   */
+  openDay?: string;
   /**
    * A waitlist "Book appointment" tapped on the WAITLIST TAB, where this
    * calendar is not mounted and so could not hear the event. BookingManager
@@ -329,9 +337,11 @@ export function BookingCalendar({
   }, [agenda, tz]);
 
   // ---- Visible month + selected day ----
-  const [viewYear, setViewYear] = useState(todayParts.y);
-  const [viewMonth, setViewMonth] = useState(todayParts.m); // 1-12
-  const [selectedDay, setSelectedDay] = useState<string | null>(todayKey);
+  // A notification's link names the day to open on; otherwise today.
+  const linkedDay = openDay && /^\d{4}-\d{2}-\d{2}$/.test(openDay) ? openDay : null;
+  const [viewYear, setViewYear] = useState(linkedDay ? Number(linkedDay.slice(0, 4)) : todayParts.y);
+  const [viewMonth, setViewMonth] = useState(linkedDay ? Number(linkedDay.slice(5, 7)) : todayParts.m); // 1-12
+  const [selectedDay, setSelectedDay] = useState<string | null>(linkedDay ?? todayKey);
   // Month overview vs one-day planner. Day view needs a day, so the switch
   // falls back to today when the month view was sitting collapsed.
   const [view, setView] = useState<CalendarView>("month");
@@ -575,11 +585,19 @@ export function BookingCalendar({
    */
   const [deepLinkId, setDeepLinkId] = useState<string | null>(openAppointmentId ?? null);
   useEffect(() => {
-    if (!openAppointmentId) return;
+    if (!openAppointmentId && !openDay) return;
     const url = new URL(window.location.href);
     url.searchParams.delete("appointment");
+    url.searchParams.delete("day");
     window.history.replaceState(null, "", url.pathname + url.search);
-  }, [openAppointmentId]);
+  }, [openAppointmentId, openDay]);
+  // Opened on a linked day in another month: load that month, and the
+  // booking's sheet opens as soon as its row arrives (deepLinkedRow below).
+  useEffect(() => {
+    if (linkedDay) ensureMonthLoaded(viewYear, viewMonth);
+    // Mount only: the linked day is where the calendar STARTS.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const deepLinkedRow = deepLinkId
     ? (agenda.find((r) => r.id === deepLinkId && r.source === "appointment") ?? null)
     : null;

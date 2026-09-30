@@ -181,6 +181,7 @@ export function BookingManager({
   initialAddOns,
   initialQuestions,
   openAppointmentId,
+  openDay,
   initialAgenda,
   initialWaitlist,
 }: {
@@ -197,6 +198,8 @@ export function BookingManager({
   initialQuestions: BookingQuestionRow[];
   /** A booking to open on arrival, from a barber alert's deep link. */
   openAppointmentId?: string;
+  /** Its shop-local day (YYYY-MM-DD), so the calendar opens on it. */
+  openDay?: string;
   initialAgenda: AgendaResponse;
   initialWaitlist: WaitlistRow[];
 }) {
@@ -401,6 +404,7 @@ export function BookingManager({
             addOns={initialAddOns}
             toast={toast}
             openAppointmentId={openAppointmentId}
+            openDay={openDay}
             tierOpenings={shop.rewardsEnabled}
             pendingWaitlistBooking={waitlistHandoff.pending}
             onPendingWaitlistBookingTaken={waitlistHandoff.taken}
