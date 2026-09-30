@@ -226,7 +226,8 @@ export function ConnectPlatforms({
                     data-qa="square-sync-line"
                     className={cn(
                       "mt-1.5 block text-xs leading-relaxed",
-                      syncLine.tone === "warn" ? "text-amber-300" : "text-muted",
+                      // Theme tokens: gold reads in both themes, amber-300 does not.
+                      syncLine.tone === "warn" ? "text-gold" : "text-muted",
                     )}
                   >
                     {syncLine.text}
