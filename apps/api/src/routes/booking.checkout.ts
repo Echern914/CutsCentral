@@ -8,6 +8,7 @@ import { requireActiveAccess } from "../middleware/billing.js";
 import { logger } from "../logger.js";
 import {
   chargeSavedCardForService,
+  paymentMethodFor,
   releaseCardOnFile,
   restoreCardAfterCanceledCharge,
 } from "../billing/cardOnFile.js";
@@ -261,6 +262,20 @@ async function loadCheckout(
       : null,
   ]);
 
+  // 🔴 THE SAME CARD THE CHARGE WOULD USE. Occurrences 2..N of a standing
+  // appointment carry no payment method of their own - by design, it lives on
+  // the series anchor (billing/cardOnFile.ts fanOutSeriesCard) and the charge
+  // path resolves it there. This screen read only the row's own column, so
+  // every occurrence after the first said "no usable card" while the charge
+  // would have succeeded. Resolved the same way here; consent is still judged
+  // on the occurrence's own row.
+  const cardWithMethod = card
+    ? {
+        ...card,
+        stripePaymentMethodId: await paymentMethodFor(shopId, appt.id, card.stripePaymentMethodId),
+      }
+    : null;
+
   const state = serviceCheckoutState({
     appointmentId: appt.id,
     seriesId: appt.seriesId,
@@ -268,7 +283,7 @@ async function loadCheckout(
     chairPaid: appt.paidAmount == null ? null : Number(appt.paidAmount),
     chairCheckedOut: appt.paidAt !== null,
     payments,
-    card,
+    card: cardWithMethod,
     external: appointmentOwnedByPlatform(appt),
     endsAt: appt.endsAt,
     status: appt.status,

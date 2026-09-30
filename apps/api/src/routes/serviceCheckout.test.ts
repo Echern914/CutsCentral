@@ -437,6 +437,122 @@ describe("what the checkout screen may offer", () => {
   });
 });
 
+/**
+ * A standing appointment exactly as fanOutSeriesCard leaves it: the ANCHOR
+ * holds the payment method (and the series id); each later occurrence has its
+ * own row with the consent copied and NO method of its own.
+ */
+async function seedSeries(consent: "series" | "single") {
+  const client = await prisma.client.create({
+    data: {
+      shopId,
+      firstName: "Pat",
+      acuityClientKey: `svc-series-${randomToken(10)}`,
+      magicToken: randomToken(20),
+    },
+  });
+  const series = await prisma.recurringSeries.create({
+    data: {
+      shopId,
+      staffId,
+      serviceId,
+      clientId: client.id,
+      firstName: "Pat",
+      weekday: 1,
+      startMin: 600,
+      count: 2,
+      manageToken: randomToken(20),
+    },
+  });
+  const occurrence = (weeksAgo: number) => {
+    const startsAt = new Date(Date.now() - 60 * 60 * 1000 - weeksAgo * 7 * 24 * 3600_000);
+    return prisma.appointment.create({
+      data: {
+        shopId,
+        clientId: client.id,
+        staffId,
+        serviceId,
+        seriesId: series.id,
+        firstName: "Pat",
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60 * 1000),
+        status: "BOOKED",
+        manageToken: randomToken(20),
+        priceAtBooking: new Prisma.Decimal("40.00"),
+      },
+    });
+  };
+  const anchor = await occurrence(1);
+  const later = await occurrence(0);
+  const consentFields = {
+    serviceChargeConsentVersion: SERVICE_CHARGE_CONSENT_VERSION,
+    serviceChargeConsentAt: new Date(),
+    serviceChargeConsentScope: consent,
+  };
+  const anchorPm = `pm_anchor_${randomToken(8)}`;
+  const anchorSeti = `seti_${randomToken(10)}`;
+  await prisma.cardOnFile.create({
+    data: {
+      id: `cof_${randomToken(12)}`,
+      shopId,
+      appointmentId: anchor.id,
+      seriesId: series.id,
+      stripeCustomerId: `cus_${randomToken(10)}`,
+      stripeSetupIntentId: anchorSeti,
+      stripePaymentMethodId: anchorPm,
+      brand: "visa",
+      last4: "4242",
+      status: "saved",
+      savedAt: new Date(),
+      ...consentFields,
+    },
+  });
+  await prisma.cardOnFile.create({
+    data: {
+      id: `cof_${randomToken(12)}`,
+      shopId,
+      appointmentId: later.id,
+      stripeCustomerId: `cus_${randomToken(10)}`,
+      stripeSetupIntentId: `${anchorSeti}:${later.id}`,
+      stripePaymentMethodId: null,
+      brand: "visa",
+      last4: "4242",
+      status: "saved",
+      savedAt: new Date(),
+      // fanOutSeriesCard copies consent only for series scope.
+      ...(consent === "series" ? consentFields : {}),
+    },
+  });
+  return { laterId: later.id, anchorPm };
+}
+
+describe("🔴 a standing appointment's later visits can use the saved card", () => {
+  it("the second visit offers the card the customer saved for the series", async () => {
+    const { laterId } = await seedSeries("series");
+    const res = await getCheckout(laterId);
+    expect(res.status).toBe(200);
+    expect(res.body.methods.savedCard.available).toBe(true);
+    expect(res.body.methods.savedCard.card).toEqual({ brand: "visa", last4: "4242" });
+  });
+
+  it("and charging it uses the series card's payment method", async () => {
+    fake.reset();
+    const { laterId, anchorPm } = await seedSeries("series");
+    const res = await chargeCard(laterId, { amountCents: 4000, requestId: press() });
+    expect(res.status).toBe(200);
+    expect(res.body.result).toBe("paid");
+    expect(fake.calls.paymentIntents).toHaveLength(1);
+    expect(fake.calls.paymentIntents[0]!.params.payment_method).toBe(anchorPm);
+  });
+
+  it("🔴 consent for one visit still does not reach the next one", async () => {
+    const { laterId } = await seedSeries("single");
+    const res = await getCheckout(laterId);
+    expect(res.body.methods.savedCard.available).toBe(false);
+    expect(res.body.methods.savedCard.blocker).toBe("no_service_consent");
+  });
+});
+
 describe("charging the saved card", () => {
   it("charges exactly the confirmed amount, and marks the cut paid without changing its status", async () => {
     fake.reset();
