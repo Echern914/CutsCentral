@@ -75,6 +75,20 @@ acuityOAuthRouter.get("/callback", async (req, res) => {
     });
     const me = acuityMeSchema.parse(await meRes.json());
 
+    // 🔴 A DIFFERENT ACUITY ACCOUNT RESTARTS THE CONNECTION CLOCK. Calendar
+    // mappings are judged stale by `mappedAt < connectedAt`
+    // (engines/acuityCalendarMap.ts) because on another account calendar id
+    // 4471 is a stranger's chair - but the upsert below never moved
+    // connectedAt, so a switched account kept mirroring onto the old ids.
+    // The SAME account logging in again (an expired login) keeps its date:
+    // its calendars are still its own, and forcing a remap of every chair
+    // would be noise.
+    const previous = await prisma.acuityConnection.findUnique({
+      where: { shopId: shop.id },
+      select: { acuityAccountId: true },
+    });
+    const accountChanged = previous !== null && previous.acuityAccountId !== me.id;
+
     await prisma.acuityConnection.upsert({
       where: { shopId: shop.id },
       create: {
@@ -100,6 +114,7 @@ acuityOAuthRouter.get("/callback", async (req, res) => {
           : null,
         // A fresh login: whatever Acuity refused before no longer applies.
         authFailedAt: null,
+        ...(accountChanged ? { connectedAt: new Date() } : {}),
       },
     });
 

@@ -183,6 +183,43 @@ describe("clearing it", () => {
   });
 });
 
+describe("reconnecting: same account vs a different one", () => {
+  /** Reconnect as `accountId`; the background history import is stubbed away. */
+  async function reconnectAs(accountId: string) {
+    answer = (url) => {
+      if (url === ACUITY.tokenUrl) return json({ access_token: "fresh-access", token_type: "Bearer" });
+      if (url === `${ACUITY.apiBase}/me`) return json({ id: accountId });
+      if (url === `${ACUITY.apiBase}/webhooks`) return json({ id: 1 });
+      return new Response("{}", { status: 500 });
+    };
+    const state = createOAuthState(shopId, Math.floor(Date.now() / 1000));
+    const res = await request(app)
+      .get(`/api/acuity/oauth/callback?code=fixture-code&state=${encodeURIComponent(state)}`)
+      .set("Cookie", `${OAUTH_STATE_COOKIE}=${encodeURIComponent(state)}`);
+    expect(res.status).toBe(302);
+    // Let the background import hit the stub before it is taken away.
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  const connectedAt = async () =>
+    (await prisma.acuityConnection.findUniqueOrThrow({ where: { shopId } })).connectedAt;
+  const LONG_AGO = new Date("2026-01-01T00:00:00Z");
+
+  it("the SAME account logging in again keeps its connection date - its calendars are still its own", async () => {
+    await prisma.acuityConnection.update({ where: { shopId }, data: { connectedAt: LONG_AGO } });
+    await reconnectAs("acct_login_test");
+    expect((await connectedAt()).toISOString()).toBe(LONG_AGO.toISOString());
+  });
+
+  it("🔴 a DIFFERENT account restarts it, so chair mappings made on the old account read stale", async () => {
+    await prisma.acuityConnection.update({ where: { shopId }, data: { connectedAt: LONG_AGO } });
+    const before = Date.now();
+    await reconnectAs("acct_someone_else");
+    const row = await prisma.acuityConnection.findUniqueOrThrow({ where: { shopId } });
+    expect(row.acuityAccountId).toBe("acct_someone_else");
+    expect(row.connectedAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
+});
+
 describe("what the owner sees", () => {
   it("settings: connected but needs reconnecting, not healthy, and no Repair offered", async () => {
     await prisma.acuityConnection.update({ where: { shopId }, data: { authFailedAt: new Date() } });

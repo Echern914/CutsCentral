@@ -1,4 +1,5 @@
 import { apiEnv, randomToken } from "@chairback/config";
+import { bookNowUrl } from "@chairback/config/bookingLinks";
 import { Prisma, runAsOwner, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import {
@@ -621,10 +622,24 @@ async function deliverRecipient(params: {
  * My ChairBack opens the Announcements screen, where the message stays after
  * the notification is swiped away. The booking page ignores it. It is the
  * broadcast's id, which names a shop's message and no person.
+ *
+ * 🔴 ONLY A PAGE THAT WILL OPEN. The booking page refuses a shop that isn't
+ * on ChairBack booking or has its page switched off, so /book/<slug> was a
+ * dead end for those shops. The booking page when the one rule
+ * (config/bookingLinks.ts) says it opens; otherwise the shop's own page when
+ * that is on; otherwise ChairBack's home. Never an outside booking link: the
+ * `?announcement=` cue is ChairBack's, and a web push must land on a
+ * ChairBack page to mean anything.
  */
 export function pushLandingFor(shop: BroadcastShop, broadcastId: string): string {
-  const base = apiEnv().APP_BASE_URL;
-  return `${shop.slug ? `${base}/book/${shop.slug}` : base}?announcement=${encodeURIComponent(broadcastId)}`;
+  const base = apiEnv().APP_BASE_URL.replace(/\/+$/, "");
+  const landing =
+    shop.bookingMode === "native" && bookNowUrl(shop, base)
+      ? bookNowUrl(shop, base)!
+      : shop.slug && shop.publicPageEnabled
+        ? `${base}/s/${shop.slug}`
+        : base;
+  return `${landing}?announcement=${encodeURIComponent(broadcastId)}`;
 }
 
 /**

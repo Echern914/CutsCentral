@@ -160,4 +160,22 @@ describe("renderPromptForShop", () => {
     // Every config placeholder got filled.
     expect(text).not.toMatch(/\{\{(SHOP_NAME|BARBER_NAMES|TIMEZONE|HOURS|SERVICE_MENU|BOOKING_URL|DEPOSIT_POLICY|CANCELLATION_POLICY|NO_SHOW_POLICY|TONE|FIRST_BARBER|OTHER_BARBER_OFFER|ADDRESS)\}\}/);
   });
+
+  it("🔴 an Acuity-booking shop's receptionist sends its Acuity link, never a ChairBack page that refuses it", async () => {
+    const shop = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Acuity Cuts",
+        slug: `acuity-${randomToken(5)}`,
+        webhookSecret: randomToken(),
+        bookingMode: "acuity",
+        bookingUrl: "https://acuitycuts.as.me/schedule",
+        timezone: "America/Chicago",
+      },
+      select: { id: true, slug: true },
+    });
+    const text = (await renderPromptForShop(shop.id))!;
+    expect(text).toContain("https://acuitycuts.as.me/schedule");
+    expect(text).not.toContain(`/book/${shop.slug}`);
+  });
 });

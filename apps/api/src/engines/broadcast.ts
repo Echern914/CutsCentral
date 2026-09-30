@@ -229,6 +229,10 @@ export interface BroadcastShop {
   postal: string | null;
   /** Tiers exist only while this is on - see the tiers_need_rewards blocker. */
   rewardsEnabled: boolean;
+  /** Where a tapped push may land - the facts config/bookingLinks.ts reads. */
+  bookingMode: string;
+  bookingUrl: string | null;
+  publicPageEnabled: boolean;
 }
 
 /** The shop facts a send needs. */
@@ -249,6 +253,9 @@ export async function loadBroadcastShop(shopId: string): Promise<BroadcastShop |
       addressRegion: true,
       addressPostal: true,
       rewardsEnabled: true,
+      bookingMode: true,
+      bookingUrl: true,
+      publicPageEnabled: true,
     },
   });
   if (!shop) return null;
@@ -258,6 +265,9 @@ export async function loadBroadcastShop(shopId: string): Promise<BroadcastShop |
     ownerEmail: shop.owner?.email ?? null,
     postal: postalAddress(shop),
     rewardsEnabled: shop.rewardsEnabled,
+    bookingMode: shop.bookingMode,
+    bookingUrl: shop.bookingUrl,
+    publicPageEnabled: shop.publicPageEnabled,
   };
 }
 

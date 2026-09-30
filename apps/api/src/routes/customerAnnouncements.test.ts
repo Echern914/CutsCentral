@@ -630,9 +630,30 @@ describe("a shop merging duplicate records", () => {
 });
 
 describe("a broadcast push", () => {
+  const shop = {
+    name: "Alpha Cuts",
+    slug: "alpha",
+    ownerEmail: null,
+    postal: null,
+    rewardsEnabled: false,
+    bookingMode: "native",
+    bookingUrl: null,
+    publicPageEnabled: true,
+  };
+
   it("carries the announcement cue the app routes on, and still lands on the booking page", () => {
-    const shop = { name: "Alpha Cuts", slug: "alpha", ownerEmail: null, postal: null, rewardsEnabled: false };
     expect(pushLandingFor(shop, "bc_1")).toMatch(/\/book\/alpha\?announcement=bc_1$/);
     expect(pushLandingFor({ ...shop, slug: null }, "bc_1")).toMatch(/\?announcement=bc_1$/);
+  });
+
+  it("🔴 never the booking page when it would refuse the shop - its own page instead", () => {
+    // Acuity-booking shop: /book/<slug> refuses it; an Acuity link is not ChairBack's to cue.
+    const acuity = { ...shop, bookingMode: "acuity", bookingUrl: "https://app.acuityscheduling.com/x" };
+    expect(pushLandingFor(acuity, "bc_1")).toMatch(/\/s\/alpha\?announcement=bc_1$/);
+    expect(pushLandingFor(acuity, "bc_1")).not.toContain("acuityscheduling");
+    // Page switched off: nowhere of the shop's opens, so ChairBack's home.
+    const off = { ...shop, publicPageEnabled: false };
+    expect(pushLandingFor(off, "bc_1")).not.toMatch(/\/(book|s)\/alpha/);
+    expect(pushLandingFor(off, "bc_1")).toMatch(/\?announcement=bc_1$/);
   });
 });
