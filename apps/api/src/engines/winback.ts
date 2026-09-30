@@ -10,6 +10,7 @@ import { isWinbackDue, isWinbackEligible } from "./winbackEligibility.js";
 import { inQuietHours } from "./quietHours.js";
 import { hasPremiumAccess } from "../billing/entitlements.js";
 import { remainingMonthlySms } from "../billing/quota.js";
+import { clientsWithUpcomingBooking } from "./upcomingBooking.js";
 
 const env = apiEnv();
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
@@ -103,15 +104,9 @@ export async function loadWinbackData(
       where: { shopId, clientId: { in: clientIds }, status: "COMPLETED" },
       _count: { _all: true },
     });
-    const upcoming = await tx.visit.groupBy({
-      by: ["clientId"],
-      where: {
-        shopId,
-        clientId: { in: clientIds },
-        status: "SCHEDULED",
-        scheduledAt: { gt: now },
-      },
-    });
+    // Booked ahead on ChairBack OR in a synced calendar - one rule, shared
+    // with the nudge (engines/upcomingBooking.ts).
+    const upcoming = await clientsWithUpcomingBooking(tx, shopId, clientIds, now);
     const winbacks = await tx.nudge.groupBy({
       by: ["clientId"],
       where: {
@@ -127,7 +122,7 @@ export async function loadWinbackData(
   });
 
   const completedCounts = new Map(completed.map((r) => [r.clientId, r._count._all]));
-  const upcomingIds = new Set(upcoming.map((r) => r.clientId));
+  const upcomingIds = upcoming;
   const lastWinbackAt = new Map<string, Date>();
   for (const n of winbacks) {
     if (n._max.createdAt) lastWinbackAt.set(n.clientId, n._max.createdAt);
