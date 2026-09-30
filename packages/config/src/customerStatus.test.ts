@@ -73,10 +73,13 @@ describe("the vocabulary itself", () => {
 });
 
 describe("why a request is still a request", () => {
-  it("names the payment hold", () => {
+  it("🔴 a payment hold says NOT BOOKED - and, when known, by when to finish", () => {
     const r = requestedReason({ holdReason: "payment", holdExpiresAt: new Date() });
     expect(r).toBe("payment");
-    expect(requestedDetail(r, "Drickcuttinup")).toBe("Payment not finished");
+    expect(requestedDetail(r, "Drickcuttinup")).toBe("Not booked yet: checkout isn't finished");
+    expect(requestedDetail(r, "Drickcuttinup", { until: "1:04 PM" })).toBe(
+      "Not booked yet: finish checkout by 1:04 PM",
+    );
   });
 
   it("names the receptionist hold", () => {

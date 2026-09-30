@@ -15,6 +15,24 @@ export interface ManageData {
    * "Requested", just without naming the reason.
    */
   requested?: { reason: RequestedReason } | null;
+  /**
+   * A booking still waiting on its card (or payment): the SAME card step,
+   * reopened, so a customer who left it can finish. Only while the hold is
+   * live. Optional because an older API does not send it.
+   */
+  finish?: {
+    kind: "setup" | "payment";
+    clientSecret: string;
+    amountCents: number;
+    isDeposit: boolean;
+    balanceDueCents: number;
+    /** When the time goes back on sale. */
+    expiresAt: string;
+    /** Card on file: they agreed the shop may charge it for the service. */
+    serviceChargeConsent: boolean;
+  } | null;
+  /** The card never arrived before the hold ran out: this was never a booking. */
+  neverBooked?: boolean;
   firstName: string;
   startsAt: string;
   endsAt: string;

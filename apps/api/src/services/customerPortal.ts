@@ -233,6 +233,16 @@ function sourceForVisit(acuityAppointmentId: string): AppointmentSource {
   return "chairback";
 }
 
+/** "1:04 PM" in the shop's own time, or null when there is no instant (or zone) to show. */
+function shopClock(at: Date | null, timezone: string): string | null {
+  if (!at) return null;
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit" }).format(at);
+  } catch {
+    return null;
+  }
+}
+
 function cents(v: { toString(): string } | null): number | null {
   if (v === null) return null;
   const n = Number(v.toString());
@@ -440,9 +450,17 @@ function normalizeEvents(
       source: "chairback",
       status,
       statusLabel: CUSTOMER_STATUS_LABEL[status],
+      // A payment hold says "Not booked yet: finish checkout by 1:04 PM" - the
+      // app renders this line as-is, so an app already on phones tells the
+      // truth without an update. It used to say "Payment not finished" under
+      // the appointment, which customers read as booked.
       statusDetail:
         status === "requested"
-          ? requestedDetail(requestedReason({ holdReason: a.holdReason, holdExpiresAt: a.holdExpiresAt }), shop.name)
+          ? requestedDetail(
+              requestedReason({ holdReason: a.holdReason, holdExpiresAt: a.holdExpiresAt }),
+              shop.name,
+              { until: a.holdReason === "payment" ? shopClock(a.holdExpiresAt, shop.timezone) : null },
+            )
           : null,
       startsAt: a.startsAt.toISOString(),
       endsAt: a.endsAt.toISOString(),

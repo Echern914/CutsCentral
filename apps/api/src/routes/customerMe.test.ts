@@ -386,6 +386,29 @@ describe("history - native and synced, one list", () => {
     expect(past.some((a: { serviceName: string }) => a.serviceName === "Beard trim")).toBe(true);
   });
 
+  it("🔴 a live payment hold says NOT BOOKED, and by when - in the shop's own time", async () => {
+    const phone = randomPhone();
+    const c = await client(shopA, { phone });
+    const deadline = from(8 * 60_000);
+    const held = await appointment(shopA, c.id, {
+      status: "PENDING",
+      startsAt: from(5 * DAY),
+      holdReason: "payment",
+      holdExpiresAt: deadline,
+    });
+    const me = await account({ phone });
+    const { upcoming } = (await get("/api/me/appointments", me.token)).body;
+    const row = upcoming.find((a: { id: string }) => a.id === `a_${held.id}`);
+    const shopTime = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(deadline);
+    // The app prints this line under the appointment. "Payment not finished"
+    // there read as booked; customers left, and the time went back on sale.
+    expect(row).toMatchObject({ statusLabel: "Requested", statusDetail: `Not booked yet: finish checkout by ${shopTime}` });
+  });
+
   it("a lapsed payment hold, and a request whose time passed unanswered, are not history", async () => {
     const phone = randomPhone();
     const c = await client(shopA, { phone });

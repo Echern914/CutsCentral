@@ -392,6 +392,33 @@ export async function bookingStatusAction(
   return { ok: true, status: res.data.status };
 }
 
+/** The card step of a booking still waiting on it (the API's `finish`). */
+export interface ReopenedCheckout {
+  kind: "setup" | "payment";
+  clientSecret: string;
+  amountCents: number;
+  isDeposit: boolean;
+  balanceDueCents: number;
+  expiresAt: string;
+  serviceChargeConsent: boolean;
+}
+
+/**
+ * Reopen the card step of a booking this device started and left unfinished
+ * (unfinishedBooking.ts). The server decides: `finish` is there only while the
+ * hold is live, and `status` says what became of it otherwise - BOOKED if the
+ * card landed after all, CANCELED once the hold ran out.
+ */
+export async function resumeCheckoutAction(
+  token: string,
+): Promise<{ ok: boolean; status?: string; finish?: ReopenedCheckout | null }> {
+  const res = await apiPublicGet<{ status: string; finish?: ReopenedCheckout | null }>(
+    `/api/book/manage/${encodeURIComponent(token)}`,
+  );
+  if (!res.ok || !res.data) return { ok: false };
+  return { ok: true, status: res.data.status, finish: res.data.finish ?? null };
+}
+
 /**
  * Card on file: tell the server the SetupIntent cleared, and have it CHECK.
  *

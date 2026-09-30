@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { DEMO } from "@chairback/config/demo";
 import { untilLabel } from "@chairback/config/relativeTime";
 import {
@@ -16,6 +17,7 @@ import { DemoTour } from "@/components/tour/DemoTour";
 import { useDemoTour } from "@/components/tour/state";
 import type { ManageData } from "./page";
 import { ClientNoteBlock } from "../../ClientNoteBlock";
+import { FinishCheckout } from "./FinishCheckout";
 import {
   cancelBookingAction,
   checkInAction,
@@ -42,6 +44,7 @@ export function ManageClient({
   // Clear the native app's WebView spinner (reachable from a booking
   // confirmation link opened inside the app).
   useSignalNativeReady();
+  const router = useRouter();
 
   // What the customer canceled: just this visit, or this and every later one.
   const [canceledScope, setCanceledScope] = useState<"this" | "future" | null>(null);
@@ -80,6 +83,11 @@ export function ManageClient({
     [data.shop.timezone],
   );
   const when = whenFmt.format(new Date(movedTo ?? data.startsAt));
+  // "1:04 PM" in the shop's own time - the deadline of an unfinished checkout.
+  const timeFmt = useMemo(
+    () => new Intl.DateTimeFormat("en-US", { timeZone: data.shop.timezone, hour: "numeric", minute: "2-digit" }),
+    [data.shop.timezone],
+  );
   // "How long until?" - re-read every minute so a page left open on the way to
   // the shop keeps telling the truth. Same helper the app's next-visit card
   // uses, so the two never disagree.
@@ -111,10 +119,14 @@ export function ManageClient({
   // reads. This page used to decide for itself and called a request nobody had
   // accepted "Confirmed", and a no-show "Completed".
   const status = isCanceled ? "canceled" : customerStatusForAppointment(data.status);
-  const statusLabel = CUSTOMER_STATUS_LABEL[status];
+  // A hold whose card never arrived was never a booking. "Canceled" read as
+  // though someone had cancelled it - the customer, or the shop - when the
+  // truth is that it was never booked at all.
+  const statusLabel = data.neverBooked && canceledScope === null ? "Not booked" : CUSTOMER_STATUS_LABEL[status];
+  const holdEndsAt = data.finish ? timeFmt.format(new Date(data.finish.expiresAt)) : null;
   const requestedLine =
     status === "requested" && data.requested
-      ? requestedDetail(data.requested.reason, data.shop.name)
+      ? requestedDetail(data.requested.reason, data.shop.name, { until: holdEndsAt })
       : null;
 
   return (
@@ -189,9 +201,11 @@ export function ManageClient({
 
         {isCanceled ? (
           <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-center text-sm text-muted">
-            {canceledScope === "future"
-              ? `This appointment and your ${laterVisits} later ${laterVisits === 1 ? "visit" : "visits"} are canceled.`
-              : "This appointment is canceled."}
+            {data.neverBooked && canceledScope === null
+              ? "This time wasn't booked: the checkout wasn't finished before the hold ran out, so the time went back on sale. Nothing was charged."
+              : canceledScope === "future"
+                ? `This appointment and your ${laterVisits} later ${laterVisits === 1 ? "visit" : "visits"} are canceled.`
+                : "This appointment is canceled."}
             {data.shop.slug && (
               <Link
                 href={`/book/${data.shop.slug}`}
@@ -201,6 +215,17 @@ export function ManageClient({
               </Link>
             )}
           </div>
+        ) : data.finish && holdEndsAt && !demoTour ? (
+          // Still waiting on the card: finish it here, rather than find the
+          // time gone. Nothing else on this page applies to a hold.
+          <FinishCheckout
+            token={token}
+            finish={data.finish}
+            shopName={data.shop.name}
+            shopSlug={data.shop.slug}
+            until={holdEndsAt}
+            onBooked={() => router.refresh()}
+          />
         ) : isDone ? (
           <p className="mt-6 text-center text-sm text-muted">
             {/* A no-show did not visit; thanking them for it read as a mistake. */}
