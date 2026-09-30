@@ -343,3 +343,64 @@ describe("sweepShop", () => {
     expect(sent.length).toBe(0);
   });
 });
+
+describe("🔴 never to a client who already booked (engines/upcomingBooking.ts)", () => {
+  async function ownShop() {
+    return prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Booked Nudge Shop",
+        bookingUrl: "https://nudge.test",
+        webhookSecret: randomToken(),
+        dailySendCap: 5,
+        nudgeBufferDays: 7,
+      },
+    });
+  }
+
+  it("an overdue client with a ChairBack appointment ahead gets no nudge", async () => {
+    const own = await ownShop();
+    const client = await makeOverdueClient(own.id, "tel:+13025551401", "+13025551401");
+    const staff = await prisma.staff.create({ data: { shopId: own.id, name: "Sam" } });
+    const service = await prisma.service.create({ data: { shopId: own.id, name: "Cut", durationMin: 30 } });
+    await prisma.appointment.create({
+      data: {
+        shopId: own.id,
+        staffId: staff.id,
+        serviceId: service.id,
+        clientId: client.id,
+        firstName: "Over",
+        status: "BOOKED",
+        startsAt: addDays(NOW, 2),
+        endsAt: new Date(addDays(NOW, 2).getTime() + 30 * 60_000),
+        manageToken: randomToken(),
+      },
+    });
+    const summary = await sweepShop(own, { now: NOW, dryRun: false });
+    expect(summary.sent).toBe(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("an overdue client whose synced visit ahead was RESCHEDULED gets no nudge", async () => {
+    const own = await ownShop();
+    const client = await makeOverdueClient(own.id, "tel:+13025551402", "+13025551402");
+    await prisma.visit.create({
+      data: {
+        shopId: own.id,
+        clientId: client.id,
+        acuityAppointmentId: "moved-once",
+        status: "RESCHEDULED",
+        scheduledAt: addDays(NOW, 4),
+      },
+    });
+    const summary = await sweepShop(own, { now: NOW, dryRun: false });
+    expect(summary.sent).toBe(0);
+  });
+
+  it("an overdue client with nothing ahead is still nudged (the control)", async () => {
+    const own = await ownShop();
+    await makeOverdueClient(own.id, "tel:+13025551403", "+13025551403");
+    const summary = await sweepShop(own, { now: NOW, dryRun: false });
+    expect(summary.sent).toBe(1);
+  });
+});

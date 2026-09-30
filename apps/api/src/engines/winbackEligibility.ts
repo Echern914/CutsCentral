@@ -10,7 +10,8 @@ import { WINBACK } from "@chairback/config";
  *   W1: >= WINBACK.minCompletedVisits completed visits (need a real cadence)
  *   W2: deeply overdue - daysSinceLastVisit > medianIntervalDays * overdueMultiplier
  *       (NOT just median + buffer; this is the "we miss you", not "you're due" line)
- *   W3: no upcoming SCHEDULED visit (they already came back - don't win-back)
+ *   W3: nothing booked ahead - a ChairBack appointment or a synced visit
+ *       (engines/upcomingBooking.ts); they already came back - don't win-back
  *   W4: no win-back in the last WINBACK.suppressionDays (90) - long, so a lapsed
  *       client is contacted at most a few times a year, never pestered
  *   W5: not opted out

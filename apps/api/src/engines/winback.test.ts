@@ -199,6 +199,47 @@ describe("sweepShopWinback", () => {
   });
 });
 
+describe("🔴 never to a client who already booked (engines/upcomingBooking.ts)", () => {
+  it("a lapsed client with a ChairBack appointment ahead is not won back", async () => {
+    const shop = await makeShop();
+    const client = await makeLapsedClient(shop.id, "tel:+13025552301", "+13025552301", 120);
+    const staff = await prisma.staff.create({ data: { shopId: shop.id, name: "Sam" } });
+    const service = await prisma.service.create({ data: { shopId: shop.id, name: "Cut", durationMin: 30 } });
+    await prisma.appointment.create({
+      data: {
+        shopId: shop.id,
+        staffId: staff.id,
+        serviceId: service.id,
+        clientId: client.id,
+        firstName: "Lapsed",
+        status: "BOOKED",
+        startsAt: addDays(NOW, 3),
+        endsAt: new Date(addDays(NOW, 3).getTime() + 30 * 60_000),
+        manageToken: randomToken(),
+      },
+    });
+    const summary = await sweepShopWinback(shop, { now: NOW, dryRun: false });
+    expect(summary.sent).toBe(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("a lapsed client whose Acuity visit ahead was RESCHEDULED is not won back", async () => {
+    const shop = await makeShop();
+    const client = await makeLapsedClient(shop.id, "tel:+13025552302", "+13025552302", 120);
+    await prisma.visit.create({
+      data: {
+        shopId: shop.id,
+        clientId: client.id,
+        acuityAppointmentId: "moved-once",
+        status: "RESCHEDULED",
+        scheduledAt: addDays(NOW, 5),
+      },
+    });
+    const summary = await sweepShopWinback(shop, { now: NOW, dryRun: false });
+    expect(summary.sent).toBe(0);
+  });
+});
+
 describe("runWinbackSweep (shop gate)", () => {
   it("skips a shop with winbackTextsEnabled = false", async () => {
     const offShop = await makeShop({
