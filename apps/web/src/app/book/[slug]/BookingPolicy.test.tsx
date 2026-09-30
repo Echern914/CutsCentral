@@ -259,6 +259,8 @@ async function reachLastStep(data: BookShopData) {
   });
   fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Tester" } });
   fireEvent.change(screen.getByLabelText("Email"), { target: { value: "casey@example.com" } });
+  // See reachLastStepReturning: Confirm reads "Booking…" until the page settles.
+  await screen.findByRole("button", { name: "Confirm booking" }, { timeout: 3000 });
 }
 
 const confirmButton = () =>
@@ -340,11 +342,19 @@ function rememberOnThisDevice(agreements: Record<string, unknown> = {}) {
   localStorage.setItem(KEY, JSON.stringify({ contact: CASEY, agreements }));
 }
 
-/** The last step, WITHOUT typing - whatever is in the form was filled in. */
+/**
+ * The last step, WITHOUT typing - whatever is in the form was filled in.
+ *
+ * Waits for Confirm to read "Confirm booking": picking the time starts the
+ * add-on fetch, and every transition on the page shares one pending flag, so
+ * the button says "Booking…" until that settles. With no typing in between,
+ * a slow runner reached the button first (CI, 2026-09-30).
+ */
 async function reachLastStepReturning(data: BookShopData) {
   render(<BookingClient data={data} />);
   fireEvent.click(await screen.findByRole("button", { name: /Soonest available/ }));
   await screen.findByLabelText("First name", {}, { timeout: 3000 });
+  await screen.findByRole("button", { name: "Confirm booking" }, { timeout: 3000 });
 }
 
 const value = (label: string) => (screen.getByLabelText(label) as HTMLInputElement).value;
