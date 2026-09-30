@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { randomToken, zonedWallTimeToUtc } from "@chairback/config";
 import { createApp } from "../app.js";
 
 /**
@@ -12,6 +12,8 @@ import { createApp } from "../app.js";
  * generated future dates don't need weekly hours configured.
  */
 const app = createApp();
+/** The test shop's zone - it has a DST change, which is the point. */
+const SHOP_TZ = "America/New_York";
 const password = "supersecret123";
 let cookie: string;
 let staffId: string;
@@ -34,7 +36,7 @@ beforeAll(async () => {
   await request(app)
     .patch("/api/shops/me")
     .set("Cookie", cookie)
-    .send({ bookingMode: "native", timezone: "America/New_York", bookingLeadHours: 1 });
+    .send({ bookingMode: "native", timezone: SHOP_TZ, bookingLeadHours: 1 });
   const staff = await request(app).post("/api/booking/staff").set("Cookie", cookie).send({ name: "Sam" });
   staffId = staff.body.id;
   const service = await request(app)
@@ -62,6 +64,36 @@ function futureTuesdayAt(hourUtc: number): string {
   while (d.getUTCDay() !== 2) d.setUTCDate(d.getUTCDate() + 1);
   d.setUTCHours(hourUtc, 0, 0, 0);
   return d.toISOString();
+}
+
+/**
+ * Where the series REALLY puts occurrence `weeks`: the same shop-local wall
+ * time that many weeks on. Not `+ weeks * 7 * 24h` - across a DST change
+ * (early November, New York) that lands an hour off the real occurrence, so a
+ * "collision" set up that way collides with nothing. That is how this file
+ * went red on 2026-09-30 (anchor Oct 20 + 14 days = Nov 3, after Nov 1).
+ */
+function sameShopTimeWeeksLater(iso: string, weeks: number): string {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: SHOP_TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(new Date(iso))
+      .map((p) => [p.type, p.value]),
+  );
+  return zonedWallTimeToUtc(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day) + 7 * weeks,
+    Number(parts.hour) * 60 + Number(parts.minute),
+    SHOP_TZ,
+  ).toISOString();
 }
 
 async function createRecurring(body: Record<string, unknown>) {
@@ -95,13 +127,18 @@ describe("recurring appointment create", () => {
     expect(new Set(rows.map((r) => r.manageToken)).size).toBe(4);
     expect(rows.every((r) => r.status === "BOOKED")).toBe(true);
     // 7 days apart.
-    expect(rows[1]!.startsAt.getTime() - rows[0]!.startsAt.getTime()).toBe(7 * 24 * 3600_000);
+    // (Same shop-local time a week on - 7 x 24h only when no DST change
+    // falls between them.)
+    expect(rows[1]!.startsAt.toISOString()).toBe(
+      sameShopTimeWeeksLater(rows[0]!.startsAt.toISOString(), 1),
+    );
   });
 
   it("skips an occurrence that collides with an existing booking (not fatal)", async () => {
     const startsAt = futureTuesdayAt(18);
-    // Pre-book occurrence 2's slot (2 weeks after anchor) as a one-off.
-    const conflict = new Date(new Date(startsAt).getTime() + 14 * 24 * 3600_000).toISOString();
+    // Pre-book occurrence 2's slot (2 weeks after anchor, same shop-local
+    // time) as a one-off.
+    const conflict = sameShopTimeWeeksLater(startsAt, 2);
     const pre = await createRecurring({
       staffId,
       serviceId,
