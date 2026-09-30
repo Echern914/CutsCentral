@@ -182,6 +182,28 @@ describe("a booking left at its card step", () => {
     expect(res.body.finish).toBeNull();
   });
 
+  it("🔴 a card Stripe has already saved reads as BOOKED on the booking's page - before any webhook", async () => {
+    // A real client, 2026-09-30: Stripe sent her back to this page at 2:59:11
+    // and its webhook landed at 2:59:12. The page said "Requested" for a
+    // booking that stood, and never refreshed.
+    const { manageToken, clientSecret } = await book(6, 10);
+    fake.succeed(clientSecret.replace(/_secret$/, ""));
+    // No card-saved call and no webhook: only the page load.
+    const res = await manage(manageToken);
+    expect(res.body.status).toBe("BOOKED");
+    expect(res.body.requested).toBeNull();
+    expect(res.body.finish).toBeNull();
+    const appt = await prisma.appointment.findUniqueOrThrow({ where: { manageToken }, select: { status: true, holdReason: true } });
+    expect(appt).toEqual({ status: "BOOKED", holdReason: null });
+  });
+
+  it("a card not yet saved is left alone - still the card step, still held", async () => {
+    const { manageToken } = await book(6, 12);
+    const res = await manage(manageToken);
+    expect(res.body.status).toBe("PENDING");
+    expect(res.body.finish?.kind).toBe("setup");
+  });
+
   it("🔴 once the hold has run out it offers nothing - the time may already be someone else's", async () => {
     const { manageToken } = await book(4, 10);
     await prisma.appointment.update({

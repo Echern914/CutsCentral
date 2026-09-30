@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-09-30-booked-right-after-saving-card",
+    date: "2026-09-30",
+    kind: "fix",
+    title: "Clients see \"Booked\" right after saving their card",
+    body:
+      "A client who saved their card could still see \"Requested\" on their appointment for a moment - and the " +
+      "page didn't update. It now checks with the card processor as it opens, so a saved card always shows as booked.",
+  },
+  {
     id: "2026-09-30-unfinished-bookings-say-not-booked",
     date: "2026-09-30",
     kind: "fix",
