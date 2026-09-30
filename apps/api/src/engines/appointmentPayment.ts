@@ -65,8 +65,20 @@ export interface PaymentRowFacts {
 export interface AppointmentPaymentInput {
   /** Ticket price in DOLLARS (`Appointment.priceAtBooking`); null = unpriced. */
   price: number | null;
-  /** The `Payment` row for this appointment, if one was ever created. */
-  payment: PaymentRowFacts | null;
+  /**
+   * Every `Payment` row paid TOWARD THIS SERVICE - the booking deposit / pay-
+   * ahead and any balance collected at checkout, all of them, added. [] when
+   * none was ever created.
+   *
+   * 🔴 A LIST, AND NOT A FEE. An appointment can carry several rows since the
+   * service-checkout release, and this used to take "the" row - the first the
+   * database returned - so a sheet with a deposit AND a checkout balance showed
+   * only one of them and told the barber the cut still owed money. A no-show
+   * fee (`purpose: "fee"`) is left out by the caller, the same rule the
+   * checkout balance uses (engines/serviceCheckout.ts): it is money for a
+   * missed visit, not toward this one, and the card-on-file status says so.
+   */
+  payments: PaymentRowFacts[];
   /** Dollars collected at the chair (`Appointment.paidAmount`); null = not checked out. */
   chairPaid: number | null;
   /** "cash" | "direct" | "card" | "other" - a LABEL, never a card record. */
@@ -180,11 +192,11 @@ export function appointmentPaymentSnapshot(
       ? { brand: input.cardOnFile.brand, last4: input.cardOnFile.last4 }
       : null;
   const cardOnFile = input.cardOnFile ? { status: input.cardOnFile.status } : null;
-  const onlineCents = stripeCollectedCents(input.payment);
+  const onlineCents = input.payments.reduce((sum, p) => sum + stripeCollectedCents(p), 0);
   const inPersonCents = Math.max(0, dollarsToCents(input.chairPaid));
   const collectedCents = onlineCents + inPersonCents;
-  const refundedCents = Math.max(0, input.payment?.refundedAmount ?? 0);
-  const authorizedCents = stripeAuthorizedCents(input.payment);
+  const refundedCents = input.payments.reduce((sum, p) => sum + Math.max(0, p.refundedAmount), 0);
+  const authorizedCents = input.payments.reduce((sum, p) => sum + stripeAuthorizedCents(p), 0);
   // A closed chair moment owes NOTHING, even when the figure was zero: the
   // barber comped the cut, and telling them $40 is still due on a booking they
   // deliberately gave away is the same class of lie as guessing at Acuity.
@@ -202,7 +214,7 @@ export function appointmentPaymentSnapshot(
   // see - and an `external` flag that disagrees is the flag that is wrong, not
   // the record. Falling through here is what keeps a mislabeled origin from
   // ever hiding a deposit again.
-  if (input.external && input.payment === null) {
+  if (input.external && input.payments.length === 0) {
     return {
       state: "external",
       totalCents,

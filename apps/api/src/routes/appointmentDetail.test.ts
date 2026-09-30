@@ -200,6 +200,52 @@ describe("a native ChairBack booking", () => {
     expect(res.body.payment.remainingCents).toBe(2500);
   });
 
+  it("🔴 a deposit AND a balance collected at checkout: both count, and the cut reads PAID", async () => {
+    // Two rows since the service-checkout release. The sheet used to read
+    // whichever one the database returned first.
+    const a = await makeAppt();
+    for (const [purpose, amount] of [
+      ["booking", 1500],
+      ["service_checkout", 2500],
+    ] as const) {
+      await prisma.payment.create({
+        data: {
+          shopId,
+          appointmentId: a.id,
+          purpose,
+          stripePaymentIntentId: `pi_${randomToken(10)}`,
+          stripeConnectAccountId: "acct_test",
+          mode: "ahead",
+          amount,
+          status: "succeeded",
+        },
+      });
+    }
+    const res = await getAppt(a.id);
+    expect(res.body.payment.onlineCents).toBe(4000);
+    expect(res.body.payment.remainingCents).toBe(0);
+    expect(res.body.payment.state).toBe("paid");
+  });
+
+  it("🔴 a no-show fee is not a payment toward the cut", async () => {
+    const a = await makeAppt();
+    await prisma.payment.create({
+      data: {
+        shopId,
+        appointmentId: a.id,
+        purpose: "fee",
+        stripePaymentIntentId: `pi_${randomToken(10)}`,
+        stripeConnectAccountId: "acct_test",
+        mode: "ahead",
+        amount: 2000,
+        status: "succeeded",
+      },
+    });
+    const res = await getAppt(a.id);
+    expect(res.body.payment.onlineCents).toBe(0);
+    expect(res.body.payment.remainingCents).toBe(4000);
+  });
+
   it("NEVER returns card data or a Stripe id, on any payment path", async () => {
     const a = await makeAppt({ paidAmount: 40, paidMethod: "card" });
     await prisma.payment.create({

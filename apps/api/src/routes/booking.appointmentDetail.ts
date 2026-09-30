@@ -512,9 +512,14 @@ export function registerAppointmentDetail(router: Router): void {
       return;
     }
 
-    // The Payment row is read separately for the same typing reason.
-    const payment = await prisma.payment.findFirst({
-      where: { appointmentId: appt.id, shopId },
+    // The Payment rows are read separately for the same typing reason.
+    // 🔴 EVERY ROW TOWARD THE SERVICE, not "the first one". A deposit and a
+    // balance collected at checkout are two rows, and reading one of them told
+    // the barber a paid-in-full cut still owed. A no-show fee is not toward
+    // the service (engines/serviceCheckout.ts) - the card-on-file status shows
+    // it was taken.
+    const payments = await prisma.payment.findMany({
+      where: { appointmentId: appt.id, shopId, purpose: { not: "fee" } },
       select: {
         status: true,
         amount: true,
@@ -578,7 +583,7 @@ export function registerAppointmentDetail(router: Router): void {
       history,
       payment: appointmentPaymentSnapshot({
         price,
-        payment,
+        payments,
         chairPaid: appt.paidAmount == null ? null : Number(appt.paidAmount),
         chairMethod: appt.paidMethod,
         chairCheckedOut: appt.paidAt !== null,
@@ -701,7 +706,7 @@ export function registerAppointmentDetail(router: Router): void {
       // not take money for, and will not invent one.
       payment: appointmentPaymentSnapshot({
         price,
-        payment: null,
+        payments: [],
         chairPaid: null,
         chairMethod: null,
         chairCheckedOut: false,

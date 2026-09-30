@@ -282,8 +282,11 @@ export function registerAppointmentEdit(
 
     // Money never moves as a side effect of an edit. Read separately: the
     // forShop() tenant wrapper erases nested-relation types.
+    // The BOOKING payment (at most one per appointment): this guard is about a
+    // prepaid booking whose price would change - the same row the reschedule
+    // guard reads. Unfiltered, it could pick up a checkout or fee row instead.
     const payment = await prisma.payment.findFirst({
-      where: { appointmentId: appt.id, shopId },
+      where: { appointmentId: appt.id, shopId, purpose: "booking" },
       select: { status: true, amount: true },
     });
     if (
