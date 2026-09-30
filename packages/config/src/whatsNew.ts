@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-09-30-confirm-books-once",
+    date: "2026-09-30",
+    kind: "fix",
+    title: "Confirm books once, even on a double tap",
+    body:
+      "On your booking page, Confirm now says \"Booking…\" and stays off until the booking is done. A quick second " +
+      "tap used to send a second request, which told your client their own time had just been taken.",
+  },
+  {
     id: "2026-09-30-booked-right-after-saving-card",
     date: "2026-09-30",
     kind: "fix",
