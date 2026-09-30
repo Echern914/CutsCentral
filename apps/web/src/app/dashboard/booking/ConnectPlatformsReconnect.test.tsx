@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import type { ConnectStatus } from "./page";
 
@@ -24,11 +24,15 @@ const connect = (over: Partial<ConnectStatus> = {}): ConnectStatus => ({
   acuityAvailable: true,
   squareConnected: false,
   squareAvailable: false,
+  squareSync: null,
   ...over,
 });
 
-const renderCard = (c: ConnectStatus) =>
-  render(<ConnectPlatforms mode="acuity" onPick={() => {}} connect={c} apiBase="https://api.test" />);
+const renderCard = (c: ConnectStatus, mode: "acuity" | "square" = "acuity") =>
+  render(<ConnectPlatforms mode={mode} onPick={() => {}} connect={c} apiBase="https://api.test" />);
+
+const squareOnly = (sync: ConnectStatus["squareSync"]): ConnectStatus =>
+  connect({ acuityConnected: false, squareConnected: true, squareAvailable: true, squareSync: sync });
 
 describe("the Acuity card", () => {
   it("a working connection reads Connected, with a plain Reconnect", () => {
@@ -49,5 +53,39 @@ describe("the Acuity card", () => {
     expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
     // And it no longer promises that appointments keep syncing.
     expect(screen.queryByText(/Your account stays connected/)).toBeNull();
+  });
+});
+
+describe("the Square card says what the sync actually did", () => {
+  const recent = new Date(Date.now() - 5 * 60_000).toISOString();
+
+  it("a working sync reads Connected, with what arrived and when", () => {
+    renderCard(
+      squareOnly({ backfilledAt: recent, lastSyncedAt: recent, lastSyncError: null, importedVisits: 87 }),
+      "square",
+    );
+    expect(screen.getByText("Connected")).toBeTruthy();
+    expect(screen.getByText(/^87 appointments from Square · synced 5 min ago$/)).toBeTruthy();
+    cleanup();
+  });
+
+  it("before the whole book is in, it says it is importing", () => {
+    renderCard(squareOnly({ backfilledAt: null, lastSyncedAt: null, lastSyncError: null, importedVisits: 0 }), "square");
+    expect(screen.getByText(/Importing your Square appointments/)).toBeTruthy();
+    cleanup();
+  });
+
+  it("🔴 a sync Square refuses reads Not syncing and asks to Reconnect Square - never Connected", () => {
+    renderCard(
+      squareOnly({ backfilledAt: null, lastSyncedAt: null, lastSyncError: "UNAUTHORIZED", importedVisits: 0 }),
+      "square",
+    );
+    expect(screen.queryByText("Connected")).toBeNull();
+    expect(screen.getByText("Not syncing")).toBeTruthy();
+    expect(screen.getByText(/Square refused ChairBack's request/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reconnect Square" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
+    expect(screen.queryByText(/Your account stays connected/)).toBeNull();
+    cleanup();
   });
 });

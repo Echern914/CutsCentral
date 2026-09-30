@@ -27,10 +27,12 @@ export const squareTokenSchema = z
 export type SquareToken = z.infer<typeof squareTokenSchema>;
 
 // A single segment of a booking (service + team member + duration). A booking
-// can have multiple, but v1 reads the first for duration/service hints.
+// with two services has two, run back to back; `intermission_minutes` is the
+// gap Square leaves after a segment before the next one starts.
 export const squareAppointmentSegmentSchema = z
   .object({
     duration_minutes: z.number().nullish(),
+    intermission_minutes: z.number().nullish(),
     service_variation_id: z.string().nullish(),
     team_member_id: z.string().nullish(),
     service_variation_version: z.union([z.number(), z.string()]).nullish(),

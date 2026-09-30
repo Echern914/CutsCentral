@@ -156,8 +156,11 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
   // bookings are Visit rows the native job above cannot see. Separate lease so
   // one job failing never suppresses the other, and offset off the :00/:20/:40
   // tick so the two sweeps don't contend for the same connections.
+  // 🔴 A LIST, not "10-59/20": node-cron counts a step from ZERO, not from the
+  // start of the range, so that read as :20/:40 - two runs an hour, both ON
+  // the native job's ticks (scheduler.cron.test.ts).
   {
-    cronExpr: "10-59/20 * * * *",
+    cronExpr: "10,30,50 * * * *",
     name: "synced-visit-reminders",
     ttlMs: 5 * MINUTE,
     run: () => runSyncedVisitReminders(),
@@ -221,10 +224,16 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
   // Offset to :15/:45 so the two integration sweeps don't run head-to-head on
   // a multi-source account (same trick as synced-visit-reminders vs
   // appointment-reminders). No-op when no Square shops are connected.
+  // 🔴 A LIST, not "15-59/30": node-cron counts a step from ZERO, so that ran
+  // once an hour at :30 - head-to-head with acuity-resync, the one thing the
+  // offset existed to avoid (scheduler.cron.test.ts).
+  // TTL just under the interval: a sweep may now run a shop's whole-book
+  // import (years of history, see engines/squareResync.ts), and a lease that
+  // lapsed mid-import would let the next tick start a second one.
   {
-    cronExpr: "15-59/30 * * * *",
+    cronExpr: "15,45 * * * *",
     name: "square-resync",
-    ttlMs: 15 * MINUTE,
+    ttlMs: 29 * MINUTE,
     run: async () => {
       const { ingested } = await runSquareResync();
       if (ingested > 0) logger.info({ ingested }, "square resync ingested bookings");

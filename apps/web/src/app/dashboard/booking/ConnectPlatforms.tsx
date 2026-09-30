@@ -8,6 +8,7 @@ import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import { disconnectAcuityAction, disconnectSquareAction } from "./actions";
 import type { BookingShop, ConnectStatus } from "./page";
+import { squareSyncLine } from "./squareSyncStatus";
 
 /**
  * The branded "How customers book" picker — a grid of platform cards (ChairBack
@@ -118,9 +119,15 @@ export function ConnectPlatforms({
   // picking a mode only sets bookingMode; the provider stays connected until
   // they explicitly hit Disconnect. Say so, and give them a no-risk way to feel
   // the flow (the seeded demo shop) without changing their own settings.
+  // What the Square sync actually did - "Connected" alone once stood over a
+  // sync Square refused every time.
+  const squareLine =
+    connect.squareConnected && connect.squareSync ? squareSyncLine(connect.squareSync, new Date()) : null;
+  const squareRefused = squareLine?.tone === "refused";
+
   const onConnectedProvider =
     (mode === "acuity" && connect.acuityConnected && !connect.acuityNeedsReconnect) ||
-    (mode === "square" && connect.squareConnected);
+    (mode === "square" && connect.squareConnected && !squareRefused);
 
   return (
     <Card className="p-5">
@@ -163,9 +170,11 @@ export function ConnectPlatforms({
           const connected = isConnected[c.key];
           const available = isAvailable[c.key];
           const needsConnect = Boolean(c.connectPath) && !connected;
-          // Connected, but Acuity refuses the sign-in: nothing syncs, so this
-          // card must not say "Connected".
-          const refused = c.key === "acuity" && connect.acuityNeedsReconnect;
+          // Connected, but the platform refuses ChairBack: nothing syncs, so
+          // this card must not say "Connected".
+          const refused =
+            (c.key === "acuity" && connect.acuityNeedsReconnect) || (c.key === "square" && squareRefused);
+          const syncLine = c.key === "square" && !refused ? squareLine : null;
           return (
             <button
               key={c.key}
@@ -207,9 +216,22 @@ export function ConnectPlatforms({
                       ? "Coming soon — Square isn't enabled on this platform yet."
                       : "Not available."
                     : refused
-                      ? "Acuity stopped accepting ChairBack's sign-in, so nothing is syncing. Reconnect to fix it. Your appointments and settings are kept."
+                      ? c.key === "square"
+                        ? squareLine!.text
+                        : "Acuity stopped accepting ChairBack's sign-in, so nothing is syncing. Reconnect to fix it. Your appointments and settings are kept."
                       : c.desc}
                 </span>
+                {syncLine && (
+                  <span
+                    data-qa="square-sync-line"
+                    className={cn(
+                      "mt-1.5 block text-xs leading-relaxed",
+                      syncLine.tone === "warn" ? "text-amber-300" : "text-muted",
+                    )}
+                  >
+                    {syncLine.text}
+                  </span>
+                )}
               </div>
 
               {needsConnect && available && (
@@ -255,7 +277,7 @@ export function ConnectPlatforms({
                         : "border border-subtle text-offwhite hover:bg-charcoal-700",
                     )}
                   >
-                    {refused ? "Reconnect Acuity" : "Reconnect"}
+                    {refused ? (c.key === "square" ? "Reconnect Square" : "Reconnect Acuity") : "Reconnect"}
                   </span>
                   <span
                     role="button"

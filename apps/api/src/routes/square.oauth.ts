@@ -131,6 +131,11 @@ squareOAuthRouter.get("/callback", async (req, res) => {
         refreshToken: encrypt(token.refresh_token, env.TOKEN_ENCRYPTION_KEY),
         tokenExpiresAt: new Date(token.expires_at),
         revokedAt: null,
+        // A reconnect re-reads the whole book (idempotent): whatever went
+        // unsynced while it was broken arrives, and if the import below fails
+        // the sweep retries it rather than trusting an old stamp.
+        backfilledAt: null,
+        lastSyncError: null,
       },
     });
 
@@ -154,14 +159,33 @@ squareOAuthRouter.get("/status", requireUser, requireShop, async (req, res) => {
   const shop = req.shop!;
   const conn = await prisma.squareConnection.findUnique({
     where: { shopId: shop.id },
-    select: { squareMerchantId: true, squareLocationId: true, connectedAt: true, revokedAt: true },
+    select: {
+      squareMerchantId: true,
+      squareLocationId: true,
+      connectedAt: true,
+      revokedAt: true,
+      backfilledAt: true,
+      lastSyncedAt: true,
+      lastSyncError: true,
+    },
   });
+  // What actually arrived, so "Connected" is never the only word on the card
+  // while nothing syncs (which is how every import failed unseen).
+  const importedVisits = conn
+    ? await prisma.visit.count({
+        where: { shopId: shop.id, acuityAppointmentId: { startsWith: "square:" } },
+      })
+    : 0;
   res.json({
     available: squareEnabled(),
     connected: conn !== null && conn.revokedAt === null,
     connectedAt: conn?.connectedAt.toISOString() ?? null,
     locationId: conn?.squareLocationId ?? null,
     revoked: conn?.revokedAt !== null && conn?.revokedAt !== undefined,
+    backfilledAt: conn?.backfilledAt?.toISOString() ?? null,
+    lastSyncedAt: conn?.lastSyncedAt?.toISOString() ?? null,
+    lastSyncError: conn?.lastSyncError ?? null,
+    importedVisits,
   });
 });
 
@@ -180,6 +204,8 @@ squareOAuthRouter.post("/repair", requireUser, requireShop, requireManager, asyn
     res.status(500).json({ error: "token_decrypt_failed" });
     return;
   }
+  // If this run fails, the sweep picks the whole import up again.
+  await prisma.squareConnection.update({ where: { shopId: shop.id }, data: { backfilledAt: null } });
   void backfillSquareShop(shop.id).catch((err) =>
     logger.error({ err, shopId: shop.id }, "square repair backfill failed"),
   );

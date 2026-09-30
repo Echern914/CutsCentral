@@ -3,6 +3,7 @@ import type { BookingModeKey } from "@chairback/config/constants";
 import { API_BASE, apiGet } from "@/lib/api";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { BookingManager } from "./BookingManager";
+import type { SquareSyncStatus } from "./squareSyncStatus";
 
 export const metadata: Metadata = { title: "Booking" };
 
@@ -48,6 +49,8 @@ export interface ConnectStatus {
   acuityAvailable: boolean;
   squareConnected: boolean;
   squareAvailable: boolean;
+  /** What the Square sync actually did (null: an older API, or not connected). */
+  squareSync: SquareSyncStatus | null;
 }
 export interface StaffRow {
   id: string;
@@ -333,7 +336,9 @@ export default async function BookingPage({
       // Connect status for the branded cards. These can 404/503 when a platform
       // isn't configured; treat any non-ok as "not connected / unavailable".
       apiGet<{ connected: boolean; needsReconnect?: boolean }>("/api/acuity/oauth/status"),
-      apiGet<{ connected: boolean; available: boolean }>("/api/square/oauth/status"),
+      apiGet<{ connected: boolean; available: boolean } & Partial<SquareSyncStatus>>(
+        "/api/square/oauth/status",
+      ),
     ]);
 
   if (!shopRes.ok || !shopRes.data) {
@@ -347,6 +352,15 @@ export default async function BookingPage({
     acuityAvailable: acuityRes.ok,
     squareConnected: Boolean(squareRes.data?.connected),
     squareAvailable: Boolean(squareRes.data?.available),
+    squareSync:
+      squareRes.data?.connected && typeof squareRes.data.importedVisits === "number"
+        ? {
+            backfilledAt: squareRes.data.backfilledAt ?? null,
+            lastSyncedAt: squareRes.data.lastSyncedAt ?? null,
+            lastSyncError: squareRes.data.lastSyncError ?? null,
+            importedVisits: squareRes.data.importedVisits,
+          }
+        : null,
   };
 
   return (
