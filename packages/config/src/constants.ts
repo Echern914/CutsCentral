@@ -788,6 +788,44 @@ export type PageTemplateKey = keyof typeof PAGE_TEMPLATES;
 export const PAGE_TEMPLATE_KEYS = Object.keys(PAGE_TEMPLATES) as PageTemplateKey[];
 
 /**
+ * PAGE DESIGNS - the whole-page layout a shop's public page is built with.
+ *
+ * Not PAGE_TEMPLATES above: those are one-tap section ORDER presets that are
+ * never stored. A design IS stored (`Shop.pageDesign`) and changes the page's
+ * structure - where the photos sit, whether each service shows its photos,
+ * tabs or one long page.
+ *
+ * 🔴 "classic" IS THE PAGE EVERY SHOP ALREADY HAS, and the default. A shop
+ * that never opens the picker sees no change, and an unknown or missing value
+ * (an old row, an API older than the web) renders classic too - see
+ * pageDesignFor.
+ *
+ * Labels and hints are vertical-neutral on purpose: salons and studios pick
+ * from the same list (pageDesigns.test.ts holds them to it).
+ */
+export const PAGE_DESIGNS = {
+  classic: { label: "Classic", hint: "The page you have now" },
+  grid: { label: "Photos first", hint: "Your work in a grid, right under Book" },
+  lookbook: { label: "Lookbook", hint: "Every service shows its photos" },
+  reel: { label: "The reel", hint: "Your best photos play at the top" },
+  profile: { label: "Profile", hint: "Work, services, reviews and info tabs" },
+  fresh: { label: "Fresh work", hint: "Newest photos first, with your reviews" },
+} as const satisfies Record<string, { label: string; hint: string }>;
+
+export type PageDesignKey = keyof typeof PAGE_DESIGNS;
+
+export const PAGE_DESIGN_KEYS = Object.keys(PAGE_DESIGNS) as PageDesignKey[];
+
+export const DEFAULT_PAGE_DESIGN: PageDesignKey = "classic";
+
+/** The design to render for a stored value: anything unknown or missing is classic. */
+export function pageDesignFor(value: string | null | undefined): PageDesignKey {
+  return value && (PAGE_DESIGN_KEYS as string[]).includes(value)
+    ? (value as PageDesignKey)
+    : DEFAULT_PAGE_DESIGN;
+}
+
+/**
  * Optional blocks on the CLIENT rewards page (/r/[magicToken]) the barber can
  * show or hide. Unlike the public page's PAGE_SECTIONS these are NOT reorderable
  * - the rewards page has a deliberate emotional order (balance -> consent ->
@@ -825,6 +863,16 @@ export const GALLERY_CAPTION_MAX = 80;
 export interface GalleryItem {
   url: string;
   caption?: string;
+  /** The service the photo shows: "Book this" opens booking with it picked. */
+  serviceId?: string;
+  /** Who did the work: the Profile design filters the photos by it. */
+  staffId?: string;
+  /**
+   * When the photo was added (ISO), stamped by the API - never taken from the
+   * client. Absent on photos added before it existed; the Fresh design lists
+   * those after the dated ones, with no date shown.
+   */
+  addedAt?: string;
 }
 
 /**

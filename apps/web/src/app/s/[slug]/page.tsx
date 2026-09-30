@@ -12,6 +12,36 @@ import { appleItunesApp } from "@/lib/appBanner";
 import { ShopPageClient } from "./ShopPageClient";
 import { shopJsonLd } from "./shopJsonLd";
 
+/**
+ * A gallery photo. `serviceId` / `staffId` arrive only while they name a
+ * service a client may book and someone still on the team; `addedAt` only on
+ * photos added since dates existed.
+ */
+export interface PagePhoto {
+  url: string;
+  caption?: string;
+  serviceId?: string;
+  staffId?: string;
+  addedAt?: string;
+}
+
+/** A service a client may book, as the public page shows it. */
+export interface PageService {
+  id: string;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  durationMin: number;
+  price: number | null;
+}
+
+/** Someone on the team, as the public page shows them. */
+export interface PageStaff {
+  id: string;
+  name: string;
+  imageUrl: string | null;
+}
+
 export interface ShopPageData {
   name: string;
   slug: string;
@@ -42,7 +72,18 @@ export interface ShopPageData {
   addressCity: string | null;
   addressRegion: string | null;
   addressPostal: string | null;
-  gallery: { url: string; caption?: string }[];
+  /**
+   * PAGE_DESIGNS key - the whole-page layout. Absent from an API older than
+   * designs, and anything unknown, renders classic (pageDesignFor).
+   */
+  pageDesign?: string;
+  gallery: PagePhoto[];
+  /**
+   * The bookable menu and the team, for the designs that show them. Empty for
+   * a shop that books somewhere else; absent from an API older than designs.
+   */
+  services?: PageService[];
+  staff?: PageStaff[];
   fontKey: string | null;
   layoutStyle: string | null;
   sectionOrder: string[];

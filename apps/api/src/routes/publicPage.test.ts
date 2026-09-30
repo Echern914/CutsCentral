@@ -129,11 +129,13 @@ describe("public shop page", () => {
     expect(page.body.fontKey).toBe("classic");
     expect(page.body.layoutStyle).toBe("sharp");
     expect(page.body.sectionOrder).toEqual(["gallery", "rewards"]);
+    // Each photo saved through `gallery` is dated by the server (pageDesign.test.ts).
     expect(page.body.gallery[0]).toEqual({
       url: "https://img.test/cut.jpg",
       caption: "Skin fade",
+      addedAt: expect.any(String),
     });
-    expect(page.body.gallery[1]).toEqual({ url: "https://img.test/beard.jpg" });
+    expect(page.body.gallery[1]).toEqual({ url: "https://img.test/beard.jpg", addedAt: expect.any(String) });
   });
 
   it("rejects a junk font/layout key and an oversized gallery", async () => {

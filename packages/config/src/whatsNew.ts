@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-09-30-page-designs",
+    date: "2026-09-30",
+    kind: "feature",
+    title: "Five new designs for your page",
+    body:
+      "Your page can now lead with your work. Under Your page, pick Photos first, Lookbook, The reel, Profile or " +
+      "Fresh work. Tag each photo with its service and clients can book that exact look in one tap. Your page stays " +
+      "Classic until you change it.",
+  },
+  {
     id: "2026-09-30-saved-cards",
     date: "2026-09-30",
     kind: "feature",

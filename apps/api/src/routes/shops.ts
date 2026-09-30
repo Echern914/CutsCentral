@@ -11,9 +11,11 @@ import {
   GALLERY_CAPTION_MAX,
   GALLERY_MAX,
   LAYOUT_STYLE_KEYS,
+  PAGE_DESIGN_KEYS,
   PAGE_FONT_KEYS,
   PAGE_SECTION_KEYS,
   PAGE_THEME_KEYS,
+  pageDesignFor,
   REWARDS_SECTION_DEFAULT,
   REWARDS_SECTION_KEYS,
   REWARDS_WELCOME_MAX,
@@ -184,9 +186,14 @@ const httpUrl = (max: number) =>
 
 // A gallery photo: http(s) image URL + optional caption. Same XSS guard on the
 // URL as everywhere else; caption is plain text rendered as textContent.
+// serviceId / staffId say what the photo shows and who did it; the PATCH keeps
+// them only when they name this shop's own service or team member. `addedAt`
+// is not accepted at all - the server dates a photo (see the PATCH).
 const galleryItemSchema = z.object({
   url: httpUrl(500),
   caption: z.string().trim().max(GALLERY_CAPTION_MAX).optional().or(z.literal("")),
+  serviceId: z.string().trim().max(64).nullish(),
+  staffId: z.string().trim().max(64).nullish(),
 });
 
 const createShopSchema = z
@@ -275,6 +282,8 @@ const updateShopSchema = createShopSchema
       ),
     publicPageEnabled: z.boolean(),
     theme: z.enum(PAGE_THEME_KEYS as [string, ...string[]]),
+    // The whole-page layout. "classic" is the page shops already have.
+    pageDesign: z.enum(PAGE_DESIGN_KEYS as [string, ...string[]]),
     bio: z.string().trim().max(500).nullish().or(z.literal("")),
     heroImageUrl: httpUrl(500).nullish().or(z.literal("")),
     instagramHandle: z
@@ -445,11 +454,19 @@ function readGallery(shop: {
     const items = raw
       .map((it): GalleryItem | null => {
         if (it && typeof it === "object" && typeof (it as { url?: unknown }).url === "string") {
-          const url = (it as { url: string }).url;
-          const caption = (it as { caption?: unknown }).caption;
-          return typeof caption === "string" && caption.trim()
-            ? { url, caption: caption.trim() }
-            : { url };
+          const row = it as { url: string; caption?: unknown; serviceId?: unknown; staffId?: unknown; addedAt?: unknown };
+          const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+          const caption = text(row.caption);
+          const serviceId = text(row.serviceId);
+          const staffId = text(row.staffId);
+          const addedAt = text(row.addedAt);
+          return {
+            url: row.url,
+            ...(caption ? { caption } : {}),
+            ...(serviceId ? { serviceId } : {}),
+            ...(staffId ? { staffId } : {}),
+            ...(addedAt ? { addedAt } : {}),
+          };
         }
         return null;
       })
@@ -458,6 +475,25 @@ function readGallery(shop: {
   }
   // Fall back to legacy bare URLs.
   return (shop.galleryUrls ?? []).map((url) => ({ url }));
+}
+
+/**
+ * A gallery photo as a STRANGER may see it: its tags only while they still
+ * name a service a client may book (active, not hidden) and someone still on
+ * the team. The photo itself always shows - a hidden service's photo just stops
+ * offering to book that service.
+ */
+function publicGalleryItem(
+  item: GalleryItem,
+  publicServiceIds: ReadonlySet<string>,
+  activeStaffIds: ReadonlySet<string>,
+): GalleryItem {
+  const { serviceId, staffId, ...rest } = item;
+  return {
+    ...rest,
+    ...(serviceId && publicServiceIds.has(serviceId) ? { serviceId } : {}),
+    ...(staffId && activeStaffIds.has(staffId) ? { staffId } : {}),
+  };
 }
 
 /** Section order for the public page: stored order if set, else the default. */
@@ -864,10 +900,41 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
   // galleryItems (captions stripped to undefined when blank) and keep the legacy
   // galleryUrls column mirrored so a rollback still renders photos.
   if (gallery !== undefined) {
-    const items: GalleryItem[] = gallery.map((g) => ({
-      url: g.url,
-      ...(g.caption ? { caption: g.caption } : {}),
-    }));
+    const shopId = req.shop!.id;
+    // What a photo shows and who did it: kept only when the id names THIS
+    // shop's service or team member. A deleted service, or an id pasted from
+    // somewhere else, just drops - it never reaches the page, let alone another
+    // shop's booking link.
+    const wanted = (pick: (g: NonNullable<typeof gallery>[number]) => string | null | undefined) => [
+      ...new Set(gallery.map(pick).filter((v): v is string => Boolean(v))),
+    ];
+    const serviceIds = wanted((g) => g.serviceId);
+    const staffIds = wanted((g) => g.staffId);
+    const [ownServices, ownStaff] = await Promise.all([
+      serviceIds.length
+        ? prisma.service.findMany({ where: { shopId, id: { in: serviceIds } }, select: { id: true } })
+        : Promise.resolve([]),
+      staffIds.length
+        ? prisma.staff.findMany({ where: { shopId, id: { in: staffIds } }, select: { id: true } })
+        : Promise.resolve([]),
+    ]);
+    const isService = new Set(ownServices.map((s) => s.id));
+    const isStaff = new Set(ownStaff.map((s) => s.id));
+    // WHEN each photo went up - stamped here, never taken from the client. A
+    // photo the shop already had keeps its date (or its lack of one: photos
+    // from before dates existed stay undated); a new one is dated now.
+    const datedBefore = new Map(readGallery(req.shop!).map((it) => [it.url, it.addedAt]));
+    const now = new Date().toISOString();
+    const items: GalleryItem[] = gallery.map((g) => {
+      const addedAt = datedBefore.has(g.url) ? datedBefore.get(g.url) : now;
+      return {
+        url: g.url,
+        ...(g.caption ? { caption: g.caption } : {}),
+        ...(g.serviceId && isService.has(g.serviceId) ? { serviceId: g.serviceId } : {}),
+        ...(g.staffId && isStaff.has(g.staffId) ? { staffId: g.staffId } : {}),
+        ...(addedAt ? { addedAt } : {}),
+      };
+    });
     data.galleryItems = items;
     data.galleryUrls = items.map((g) => g.url);
   }
@@ -1049,7 +1116,12 @@ publicPageRouter.get("/:slug", async (req, res) => {
   // Blank text never reaches the column (the submit route stores it as null),
   // so `not: null` is the whole of "has words".
   const writtenReviews = { shopId: shop.id, status: "APPROVED", body: { not: null } };
-  const [rewards, approvedReviews, ratingAgg, promotions, writtenCount] = await Promise.all([
+  // The menu and the team as a client may see them, for the page designs that
+  // show services (Lookbook, Profile) and who did the work. Only for a shop
+  // that books here: its booking page already publishes exactly these, while a
+  // shop that books elsewhere may never have kept its list here up to date.
+  const booksHere = shop.bookingMode === "native";
+  const [rewards, approvedReviews, ratingAgg, promotions, writtenCount, services, staff] = await Promise.all([
     // Rewards off = the public page simply has no rewards section (no empty
     // card, no dead copy) - everything else renders as usual.
     shop.rewardsEnabled
@@ -1095,7 +1167,23 @@ publicPageRouter.get("/:slug", async (req, res) => {
     }),
     // How many cards there are in all - the list above is capped.
     prisma.review.count({ where: writtenReviews }),
+    booksHere
+      ? prisma.service.findMany({
+          where: { shopId: shop.id, ...PUBLIC_SERVICE },
+          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          select: { id: true, name: true, description: true, imageUrl: true, durationMin: true, price: true },
+        })
+      : Promise.resolve([]),
+    booksHere
+      ? prisma.staff.findMany({
+          where: { shopId: shop.id, active: true },
+          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          select: { id: true, name: true, imageUrl: true },
+        })
+      : Promise.resolve([]),
   ]);
+  const publicServiceIds = new Set(services.map((s) => s.id));
+  const activeStaffIds = new Set(staff.map((s) => s.id));
   res.json({
     name: shop.name,
     slug: shop.slug,
@@ -1135,7 +1223,10 @@ publicPageRouter.get("/:slug", async (req, res) => {
     // and region only: street and ZIP are null here, and stay in the columns
     // for the booked-client surfaces that read them directly.
     ...publicShopAddress(shop),
-    gallery: readGallery(shop),
+    pageDesign: pageDesignFor(shop.pageDesign),
+    gallery: readGallery(shop).map((it) => publicGalleryItem(it, publicServiceIds, activeStaffIds)),
+    services: services.map((s) => ({ ...s, price: s.price === null ? null : Number(s.price) })),
+    staff,
     fontKey: shop.fontKey,
     layoutStyle: shop.layoutStyle,
     sectionOrder: readSectionOrder(shop.sectionOrder),
@@ -1731,6 +1822,7 @@ function serializeShop(shop: {
   slug: string | null;
   publicPageEnabled: boolean;
   theme: string;
+  pageDesign: string;
   bio: string | null;
   heroImageUrl: string | null;
   instagramHandle: string | null;
@@ -1798,6 +1890,7 @@ function serializeShop(shop: {
     slug: shop.slug,
     publicPageEnabled: shop.publicPageEnabled,
     theme: shop.theme,
+    pageDesign: pageDesignFor(shop.pageDesign),
     bio: shop.bio,
     heroImageUrl: shop.heroImageUrl,
     instagramHandle: shop.instagramHandle,

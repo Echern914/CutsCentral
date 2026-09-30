@@ -12,13 +12,23 @@ import { useImageUpload } from "./useImageUpload";
  *
  * No drag-and-drop library: HTML5 drag events for reorder, a hidden file input
  * for picking. Everything is local state; the parent persists on Save.
+ *
+ * Each photo can also say which service it shows and who did it. That is what
+ * lets the page designs offer "Book this look" with both already picked, list
+ * a service's photos with it, and filter the work by person.
  */
 export function GalleryEditor({
   items,
   onChange,
+  services = [],
+  staff = [],
 }: {
   items: GalleryItem[];
   onChange: (next: GalleryItem[]) => void;
+  /** The shop's active services - hidden ones included, labeled as such. */
+  services?: { id: string; name: string; visibility?: string }[];
+  /** The shop's active team. The "who" choice shows only with two or more. */
+  staff?: { id: string; name: string }[];
 }) {
   const { uploading, error, upload, clearError, accept } = useImageUpload("gallery");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -58,6 +68,21 @@ export function GalleryEditor({
     const next = items.map((it, idx) => (idx === i ? { ...it, caption } : it));
     onChange(next);
   }
+
+  function setTag(i: number, key: "serviceId" | "staffId", value: string) {
+    onChange(
+      items.map((it, idx) => {
+        if (idx !== i) return it;
+        const next: GalleryItem = { ...it };
+        delete next[key];
+        return value ? { ...next, [key]: value } : next;
+      }),
+    );
+  }
+  const tagsService = services.length > 0;
+  const tagsStaff = staff.length > 1;
+  const tagSelect =
+    "w-full min-w-0 truncate rounded-lg border border-subtle bg-charcoal-800 px-1.5 py-1 text-[11px] text-offwhite focus:border-gold/50";
 
   function remove(i: number) {
     onChange(items.filter((_, idx) => idx !== i));
@@ -134,8 +159,43 @@ export function GalleryEditor({
                 onChange={(e) => setCaption(i, e.target.value.slice(0, GALLERY_CAPTION_MAX))}
                 placeholder="Add a caption"
                 maxLength={GALLERY_CAPTION_MAX}
+                aria-label={`Caption for photo ${i + 1}`}
                 className="w-full bg-transparent px-2.5 py-2 text-xs text-offwhite placeholder:text-muted/70 focus:outline-none"
               />
+              {(tagsService || tagsStaff) && (
+                <div className="flex gap-1 border-t border-subtle px-1.5 py-1.5">
+                  {tagsService && (
+                    <select
+                      value={item.serviceId ?? ""}
+                      onChange={(e) => setTag(i, "serviceId", e.target.value)}
+                      aria-label={`Service in photo ${i + 1}`}
+                      className={tagSelect}
+                    >
+                      <option value="">No service</option>
+                      {services.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.visibility === "hidden" ? `${s.name} (hidden)` : s.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {tagsStaff && (
+                    <select
+                      value={item.staffId ?? ""}
+                      onChange={(e) => setTag(i, "staffId", e.target.value)}
+                      aria-label={`Who did photo ${i + 1}`}
+                      className={tagSelect}
+                    >
+                      <option value="">Anyone</option>
+                      {staff.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
             </figcaption>
           </figure>
         ))}

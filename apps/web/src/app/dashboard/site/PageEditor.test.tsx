@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ShopPageData } from "@/app/s/[slug]/page";
 import type { ShopPageSettings } from "./page";
 
@@ -114,5 +114,69 @@ describe("keeping the street address private", () => {
     );
     expect(privacySwitch()).toHaveAttribute("aria-checked", "false");
     expect(screen.getByRole("button", { name: "Save page" })).toBeDisabled();
+  });
+});
+
+/**
+ * "Have them as templates... keep the one that everyone has been using now as
+ * the default." The picker starts on Classic for a shop that never chose, a
+ * pick previews at once and saves as its one field, and a photo can say what
+ * it shows and who did it.
+ */
+describe("the page design", () => {
+  const designs = () => within(screen.getByRole("group", { name: "Page design" }));
+
+  it("🔴 a shop that never picked one is on Classic, with nothing to save", () => {
+    render(<PageEditor settings={settings()} appBase="https://app.test" />);
+    expect(designs().getByRole("button", { name: /^Classic/ })).toHaveAttribute("aria-pressed", "true");
+    expect(preview.last?.pageDesign).toBe("classic");
+    expect(screen.getByRole("button", { name: "Save page" })).toBeDisabled();
+  });
+
+  it("picking one previews it at once and saves that field alone", async () => {
+    render(<PageEditor settings={settings({ pageDesign: "classic" })} appBase="https://app.test" />);
+    fireEvent.click(designs().getByRole("button", { name: /^Photos first/ }));
+    expect(designs().getByRole("button", { name: /^Photos first/ })).toHaveAttribute("aria-pressed", "true");
+    expect(preview.last?.pageDesign).toBe("grid");
+    fireEvent.click(screen.getByRole("button", { name: "Save page" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toEqual({ pageDesign: "grid" });
+  });
+
+  it("🔴 a photo's tags save with it; the preview keeps only tags a client could book", async () => {
+    const menu = {
+      services: [
+        { id: "svc-cut", name: "Haircut", description: null, imageUrl: null, durationMin: 30, price: 35, active: true, visibility: "public" },
+        { id: "svc-private", name: "Private", description: null, imageUrl: null, durationMin: 60, price: 90, active: true, visibility: "hidden" },
+      ],
+      staff: [
+        { id: "st-a", name: "Marcus", imageUrl: null, active: true },
+        { id: "st-b", name: "Dre", imageUrl: null, active: true },
+      ],
+    };
+    render(
+      <PageEditor
+        settings={settings({ gallery: [{ url: "https://img.test/1.jpg", addedAt: "2026-09-01T00:00:00.000Z" }] })}
+        menu={menu}
+        appBase="https://app.test"
+      />,
+    );
+    fireEvent.change(screen.getByRole("combobox", { name: "Service in photo 1" }), { target: { value: "svc-cut" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Who did photo 1" }), { target: { value: "st-b" } });
+    expect(preview.last?.gallery[0]).toMatchObject({ serviceId: "svc-cut", staffId: "st-b" });
+    expect(preview.last?.services?.map((s) => s.id)).toEqual(["svc-cut"]);
+
+    // A hidden service can be tagged - it's still the shop's - but the page
+    // won't offer to book it, and the preview shows exactly that.
+    expect(screen.getByRole("option", { name: "Private (hidden)" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Service in photo 1" }), { target: { value: "svc-private" } });
+    expect(preview.last?.gallery[0]?.serviceId).toBeUndefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save page" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    // The date is the server's to keep; the editor never sends one.
+    expect(save.mock.calls[0]![0]).toEqual({
+      gallery: [{ url: "https://img.test/1.jpg", serviceId: "svc-private", staffId: "st-b" }],
+    });
   });
 });

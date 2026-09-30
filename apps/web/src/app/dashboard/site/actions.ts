@@ -7,6 +7,7 @@ export interface PageSettingsInput {
   slug: string;
   publicPageEnabled: boolean;
   theme: string;
+  pageDesign: string;
   bio: string;
   logoUrl: string;
   accentColor: string;
@@ -19,7 +20,8 @@ export interface PageSettingsInput {
   addressRegion: string;
   addressPostal: string;
   addressPrivate: boolean;
-  gallery: { url: string; caption?: string }[];
+  // What each photo shows and who did it. No date: the API dates photos itself.
+  gallery: { url: string; caption?: string; serviceId?: string; staffId?: string }[];
   fontKey: string;
   layoutStyle: string;
   sectionOrder: string[];
@@ -49,6 +51,7 @@ const PAGE_FIELDS = [
   "slug",
   "publicPageEnabled",
   "theme",
+  "pageDesign",
   "bio",
   "logoUrl",
   "accentColor",
