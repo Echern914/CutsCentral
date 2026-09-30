@@ -37,6 +37,13 @@ export interface PolicySnapshot {
   version: string;
   text: string | null;
   checklist: string[];
+  /**
+   * Set when the customer was NOT asked to tick this time, because their
+   * device remembers them ticking these exact words on an earlier booking
+   * (web `rememberedBooker.ts`) - when that was, as the page reported it.
+   * Absent means they ticked every line on this booking.
+   */
+  agreedEarlierAt?: string;
 }
 
 interface ShopPolicyColumns {
@@ -91,11 +98,20 @@ export type PolicyCheck =
  *  - A checklist and no version: refused, 422.
  *  - A checklist and a different version: refused, 409, with the current
  *    policy so the page can show it and ask again.
+ *
+ * `agreedEarlierAt`: the page did not ask this time, because this device
+ * remembers the customer ticking this same version before. The version check
+ * is exactly as strict - a remembered agreement to OLD words is a 409 like any
+ * other - and the record says which it was, so the barber's sheet never shows
+ * a tick-by-tick agreement that did not happen on this booking. A date ahead
+ * of now (a phone's clock) is clamped rather than refused: it is a note on the
+ * record, not the permission itself.
  */
 export function checkPolicyAcceptance(
   shop: ShopPolicyColumns,
   acceptedVersion: string | undefined,
   now: Date,
+  opts: { agreedEarlierAt?: Date | null } = {},
 ): PolicyCheck {
   const policy = publicBookingPolicy(shop);
   if (!policy || policy.checklist.length === 0) return { ok: true, record: null };
@@ -113,11 +129,21 @@ export function checkPolicyAcceptance(
       body: { error: "policy_changed", code: "POLICY_CHANGED", policy },
     };
   }
+  const earlier = opts.agreedEarlierAt;
+  const agreedEarlierAt =
+    earlier && !Number.isNaN(earlier.getTime())
+      ? new Date(Math.min(earlier.getTime(), now.getTime())).toISOString()
+      : null;
   return {
     ok: true,
     record: {
       policyAcceptedAt: now,
-      policySnapshot: { version: policy.version, text: policy.text, checklist: policy.checklist },
+      policySnapshot: {
+        version: policy.version,
+        text: policy.text,
+        checklist: policy.checklist,
+        ...(agreedEarlierAt ? { agreedEarlierAt } : {}),
+      },
     },
   };
 }
@@ -129,11 +155,18 @@ export function checkPolicyAcceptance(
  */
 export function readPolicySnapshot(
   raw: unknown,
-): { text: string | null; checklist: string[] } | null {
+): { text: string | null; checklist: string[]; agreedEarlierAt: string | null } | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
-  const { text, checklist } = raw as Record<string, unknown>;
+  const { text, checklist, agreedEarlierAt } = raw as Record<string, unknown>;
   const lines = Array.isArray(checklist)
     ? checklist.filter((l): l is string => typeof l === "string")
     : [];
-  return { text: typeof text === "string" ? text : null, checklist: lines };
+  return {
+    text: typeof text === "string" ? text : null,
+    checklist: lines,
+    agreedEarlierAt:
+      typeof agreedEarlierAt === "string" && !Number.isNaN(Date.parse(agreedEarlierAt))
+        ? agreedEarlierAt
+        : null,
+  };
 }

@@ -113,6 +113,25 @@ describe("the agreement on the appointment sheet", () => {
     cleanup();
   });
 
+  it("🔴 a returning client who was NOT re-asked never reads as one who ticked this time", async () => {
+    await open(
+      detailFor({
+        policyAgreement: {
+          acceptedAt: "2026-09-29T16:00:00.000Z",
+          text: null,
+          checklist: ["I'll arrive 5 minutes early"],
+          agreedEarlierAt: "2026-09-10T16:00:00.000Z",
+        },
+      }),
+    );
+    expect(
+      await screen.findByText(/Agreed to your policies when they first booked, Sep 10\. Not asked again/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Agreed to your policies when booking/)).toBeNull();
+    expect(screen.getByText("I'll arrive 5 minutes early")).toBeTruthy();
+    cleanup();
+  });
+
   it("says nothing for a booking that was never asked", async () => {
     await open(detailFor({ policyAgreement: null }));
     await screen.findAllByText("Sample Client");

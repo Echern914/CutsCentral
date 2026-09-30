@@ -1542,6 +1542,11 @@ const createSchema = z
     // gave it (engines/bookingPolicy.ts). Sent only once every box is ticked;
     // REQUIRED by the handler whenever the shop has a checklist.
     policyVersion: z.string().trim().min(1).max(64).optional(),
+    // Sent INSTEAD of fresh ticks when this device remembers the customer
+    // agreeing to this same version on an earlier booking: when that was.
+    // Never a permission on its own - `policyVersion` is still required and
+    // still checked - only a note so the record says they were not re-asked.
+    policyAgreedAt: z.string().datetime({ offset: true }).optional(),
     // Booking a barber-published TARGETED slot: its id fixes the time, length,
     // and price (validated server-side against the slot row; capacity 1).
     targetedSlotId: z.string().min(1).optional(),
@@ -1865,7 +1870,9 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
   // series (the branch below). A stale version is a 409 carrying the current
   // policy, so the page can show it rather than record agreement to words the
   // customer never saw.
-  const policy = checkPolicyAcceptance(shop, d.policyVersion, now);
+  const policy = checkPolicyAcceptance(shop, d.policyVersion, now, {
+    agreedEarlierAt: d.policyAgreedAt ? new Date(d.policyAgreedAt) : null,
+  });
   if (!policy.ok) {
     res.status(policy.status).json(policy.body);
     return;

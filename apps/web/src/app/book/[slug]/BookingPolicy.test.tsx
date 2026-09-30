@@ -49,7 +49,12 @@ const POLICY: BookingPolicyData = {
   version: "v1v1v1v1v1v1v1v1",
 };
 
-afterEach(() => cleanup());
+// A successful booking now remembers the booker on this "device" - wipe it, or
+// one test's customer would be filled into the next test's form.
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 describe("the panel", () => {
   function Harness({ policy }: { policy: BookingPolicyData }) {
@@ -319,5 +324,155 @@ describe("the booking page's last step", () => {
     fireEvent.click(confirmButton());
     await waitFor(() => expect(bookAction).toHaveBeenCalled());
     expect(bookAction.mock.calls[0]![1].policyVersion).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A RETURNING CLIENT (rememberedBooker.ts): details filled in from this device,
+// and a policy they already agreed to here not asked again.
+// ---------------------------------------------------------------------------
+
+const KEY = "chairback:booker:v1";
+const FIRST = "2026-09-01T15:30:00.000Z";
+const CASEY = { firstName: "Casey", lastName: "Tester", phone: "3025550142", email: "casey@example.com" };
+
+function rememberOnThisDevice(agreements: Record<string, unknown> = {}) {
+  localStorage.setItem(KEY, JSON.stringify({ contact: CASEY, agreements }));
+}
+
+/** The last step, WITHOUT typing - whatever is in the form was filled in. */
+async function reachLastStepReturning(data: BookShopData) {
+  render(<BookingClient data={data} />);
+  fireEvent.click(await screen.findByRole("button", { name: /Soonest available/ }));
+  await screen.findByLabelText("First name", {}, { timeout: 3000 });
+}
+
+const value = (label: string) => (screen.getByLabelText(label) as HTMLInputElement).value;
+const checklistBoxes = () =>
+  screen
+    .queryAllByRole("checkbox")
+    .filter((b) => POLICY.checklist.some((l) => b.closest("label")?.textContent?.includes(l)));
+
+describe("a returning client", () => {
+  it("has their details filled in, and 'Not you?' clears the form and forgets them", async () => {
+    rememberOnThisDevice();
+    await reachLastStepReturning(shopData(null));
+    expect(value("First name")).toBe("Casey");
+    expect(value("Last name")).toBe("Tester");
+    expect(value("Mobile number")).toBe("3025550142");
+    expect(value("Email")).toBe("casey@example.com");
+    expect(screen.getByText(/Welcome back, Casey\./)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Not you?" }));
+    expect(value("First name")).toBe("");
+    expect(value("Mobile number")).toBe("");
+    expect(value("Email")).toBe("");
+    expect(localStorage.getItem(KEY)).toBeNull();
+    expect(screen.queryByText(/Welcome back/)).toBeNull();
+  });
+
+  it("🔴 is never ticked into a consent - the text-me box starts EMPTY for them too", async () => {
+    rememberOnThisDevice();
+    await reachLastStepReturning(shopData(null));
+    const textMe = screen
+      .getAllByRole("checkbox")
+      .find((b) => b.closest("label")?.textContent?.includes("Text me appointment confirmations"));
+    expect((textMe as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("🔴 is not asked to tick a policy they already agreed to here - and the booking says so", async () => {
+    rememberOnThisDevice({
+      "sample-studio": { version: POLICY.version, agreedAt: FIRST, who: "tel:3025550142" },
+    });
+    bookAction.mockResolvedValue({ ok: true, manageToken: "tok" });
+    await reachLastStepReturning(shopData(POLICY));
+    expect(checklistBoxes()).toHaveLength(0);
+    expect(screen.getByText(/You agreed to these policies when you booked on/)).toBeTruthy();
+    expect(screen.queryByText(POLICY_HINT)).toBeNull();
+    // The words are one tap away.
+    fireEvent.click(screen.getByRole("button", { name: "Read them again" }));
+    expect(screen.getByText(POLICY.checklist[0]!)).toBeTruthy();
+
+    expect(confirmButton().disabled).toBe(false);
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(bookAction).toHaveBeenCalled());
+    expect(bookAction.mock.calls[0]![1]).toMatchObject({
+      policyVersion: POLICY.version,
+      policyAgreedAt: FIRST,
+    });
+  });
+
+  it("🔴 someone else's number on this phone brings the boxes back, unticked", async () => {
+    rememberOnThisDevice({
+      "sample-studio": { version: POLICY.version, agreedAt: FIRST, who: "tel:3025550142" },
+    });
+    await reachLastStepReturning(shopData(POLICY));
+    expect(checklistBoxes()).toHaveLength(0);
+    fireEvent.change(screen.getByLabelText("Mobile number"), { target: { value: "2125550199" } });
+    const boxes = checklistBoxes();
+    expect(boxes).toHaveLength(2);
+    for (const b of boxes) expect((b as HTMLInputElement).checked).toBe(false);
+    expect(confirmButton().disabled).toBe(true);
+  });
+
+  it("🔴 changed words are asked again, like anyone new", async () => {
+    rememberOnThisDevice({
+      "sample-studio": { version: "an-older-version", agreedAt: FIRST, who: "tel:3025550142" },
+    });
+    bookAction.mockResolvedValue({ ok: true, manageToken: "tok" });
+    await reachLastStepReturning(shopData(POLICY));
+    expect(checklistBoxes()).toHaveLength(2);
+    expect(confirmButton().disabled).toBe(true);
+    fireEvent.click(screen.getByText(POLICY.checklist[0]!));
+    fireEvent.click(screen.getByText(POLICY.checklist[1]!));
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(bookAction).toHaveBeenCalled());
+    // Ticked on THIS booking, so no earlier date is claimed.
+    expect(bookAction.mock.calls[0]![1].policyAgreedAt).toBeUndefined();
+  });
+
+  it("a first booking remembers the details and the agreement, dated now", async () => {
+    bookAction.mockResolvedValue({ ok: true, manageToken: "tok" });
+    await reachLastStep(shopData(POLICY));
+    fireEvent.click(screen.getByText(POLICY.checklist[0]!));
+    fireEvent.click(screen.getByText(POLICY.checklist[1]!));
+    const before = Date.now();
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(localStorage.getItem(KEY)).not.toBeNull());
+    const stored = JSON.parse(localStorage.getItem(KEY)!);
+    expect(stored.contact).toEqual({ firstName: "Casey", lastName: "Tester", phone: "", email: "casey@example.com" });
+    expect(stored.agreements["sample-studio"]).toMatchObject({
+      version: POLICY.version,
+      who: "mail:casey@example.com",
+    });
+    expect(Date.parse(stored.agreements["sample-studio"].agreedAt)).toBeGreaterThanOrEqual(before - 1000);
+  });
+
+  it("unticking 'Remember my details' forgets them when they book", async () => {
+    rememberOnThisDevice();
+    bookAction.mockResolvedValue({ ok: true, manageToken: "tok" });
+    await reachLastStepReturning(shopData(null));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Remember my details on this device/ }));
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(bookAction).toHaveBeenCalled());
+    await waitFor(() => expect(localStorage.getItem(KEY)).toBeNull());
+  });
+
+  it("🔴 the public demo shop never fills in a real person from this device", async () => {
+    rememberOnThisDevice();
+    const demo = shopData(null);
+    demo.shop.slug = "demo";
+    await reachLastStepReturning(demo);
+    expect(value("First name")).toBe("");
+    expect(screen.queryByText(/Welcome back/)).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /Remember my details/ })).toBeNull();
+  });
+
+  it("a refused booking remembers nothing", async () => {
+    bookAction.mockResolvedValue({ ok: false, code: "BOOKING_FAILED", error: "failed" });
+    await reachLastStep(shopData(null));
+    fireEvent.click(confirmButton());
+    await screen.findByText("Something went wrong. Please try again.");
+    expect(localStorage.getItem(KEY)).toBeNull();
   });
 });

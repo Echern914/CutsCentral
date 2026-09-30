@@ -150,6 +150,81 @@ export function BookingPolicyPanel({
 }
 
 /**
+ * "BEFORE YOU BOOK" for someone who already agreed to these exact words, on
+ * this device (rememberedBooker.ts) - so the shop's rule "agree once, on the
+ * first booking" holds without asking again.
+ *
+ * 🔴 NOT PRE-TICKED BOXES. There are no boxes: a pre-ticked box would say they
+ * ticked it now. This says what is true - they agreed on that date, and the
+ * words haven't changed - with the words themselves one tap away, and the
+ * booking records it the same way (`policyAgreedAt`).
+ */
+export function BookingPolicyAgreed({
+  policy,
+  agreedAt,
+  moneyLines = [],
+}: {
+  policy: BookingPolicyData;
+  /** ISO - when they ticked these words. */
+  agreedAt: string;
+  moneyLines?: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const when = new Date(agreedAt);
+  const sameYear = when.getFullYear() === new Date().getFullYear();
+  const day = when.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+  return (
+    <section
+      aria-labelledby="before-you-book"
+      data-qa="booking-policy-agreed"
+      className="flex min-w-0 flex-col gap-2 rounded-xl border border-white/10 px-3 py-3"
+    >
+      <h3 id="before-you-book" className="text-sm font-semibold text-offwhite">
+        Before you book
+      </h3>
+      <p className="text-xs text-muted [overflow-wrap:anywhere]">
+        <span aria-hidden="true">✓ </span>
+        You agreed to these policies when you booked on {day}. They haven&apos;t changed since.
+      </p>
+      {moneyLines.map((line) => (
+        <p key={line} className="text-xs text-muted [overflow-wrap:anywhere]">
+          {line}
+        </p>
+      ))}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls="booking-policy-agreed-words"
+        className="min-h-11 self-start text-xs font-medium text-offwhite underline"
+      >
+        {open ? "Hide them" : "Read them again"}
+      </button>
+      {open && (
+        <div id="booking-policy-agreed-words" className="flex min-w-0 flex-col gap-1.5">
+          {policy.text && (
+            <p className="whitespace-pre-line text-xs leading-relaxed text-muted [overflow-wrap:anywhere]">
+              {policy.text}
+            </p>
+          )}
+          <ul className="flex list-disc flex-col gap-1 pl-4">
+            {policy.checklist.map((line, i) => (
+              <li key={`${i}-${line}`} className="text-xs text-muted [overflow-wrap:anywhere]">
+                {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
  * The shop's money terms as two plain lines, from the SAME shared sentences
  * the receptionist speaks (config/shopPolicy.ts, sent by the API). Only when
  * a payment is actually taken at booking - otherwise the API sends no
