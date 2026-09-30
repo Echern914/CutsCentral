@@ -26,7 +26,9 @@ import { RESEND_REFUSAL_HTTP, resendRewardsLink } from "../services/rewardsLinkR
  *  - the doors that can only text answer "texting is off" (or the answer the
  *    shipped app already understands) instead of promising a text;
  *  - EXCEPT one-time sign-in codes, which keep going unless
- *    SMS_SIGNIN_ENABLED=false too - and only through their own provider;
+ *    SMS_SIGNIN_ENABLED=false too - and only through their own provider
+ *    (a saved card's code on a new phone rides the same switch and provider,
+ *    pinned in routes/savedCard.test.ts);
  *  - an alert someone asked for by text arrives by email instead.
  *
  * The flows are covered where they live: booking alerts in

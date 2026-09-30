@@ -93,8 +93,7 @@ import {
   savedCardForToken,
   verifySavedCardCode,
 } from "../billing/savedCard.js";
-import { buildSavedCardCodeBody } from "../messaging/templates.js";
-import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
+import { getSignInMessageProvider, signInTextsEnabled } from "../messaging/twilio.js";
 import { buildAppointmentIcs } from "../messaging/ics.js";
 import {
   appointmentWalletEnabled,
@@ -3434,31 +3433,38 @@ bookingPublicRouter.post("/:slug/saved-card/code", savedCardCodeLimiter, async (
     res.status(400).json({ error: "invalid_input" });
     return;
   }
-  // No texting (or no access): there is no way to send a code, so say so -
-  // the page falls back to entering the card.
-  if (!smsEnabled() || !hasActiveAccess(shop)) {
+  // 🔴 A ONE-TIME CODE THE CLIENT ASKED FOR, to the number on their own
+  // record - the same kind of text as a sign-in code, so it follows the
+  // SIGN-IN switch, not the texting one. Texting has been off platform-wide
+  // since 2026-09-22; on that switch a new phone could never get a code, and
+  // every client on one would type their card again. Its own ceiling bounds
+  // what it costs (createSavedCardCode). With no way to send at all
+  // (SMS_SIGNIN_ENABLED=false too, or no access) say so - the page falls back
+  // to entering the card.
+  if (!signInTextsEnabled() || !hasActiveAccess(shop)) {
     res.status(409).json({ error: "codes_unavailable" });
     return;
   }
-  const issued = await createSavedCardCode({ shopId: shop.id, phoneE164: phone });
+  // A STOP is absolute, even for a code they asked for - and settled before
+  // anything is spent. The same answer either way.
+  const optedOut = await prisma.client.findFirst({
+    where: { shopId: shop.id, phone, optedOut: true },
+    select: { id: true },
+  });
+  const issued = optedOut
+    ? null
+    : await createSavedCardCode({ shopId: shop.id, shopName: shop.name, phoneE164: phone });
   if (issued) {
-    // A STOP is absolute, even for a code they asked for.
-    const optedOut = await prisma.client.findFirst({
-      where: { shopId: shop.id, phone: issued.phone, optedOut: true },
-      select: { id: true },
-    });
-    if (!optedOut) {
-      try {
-        await getMessageProvider().send({
-          to: issued.phone,
-          body: buildSavedCardCodeBody({ shopName: shop.name, code: issued.code }),
-          from: shop.twilioNumber ?? undefined,
-        });
-      } catch (err) {
-        // The code stays valid; they can ask again after the cooldown. Never
-        // the phone or the code in the log.
-        logger.error({ err, shopId: shop.id }, "saved card: code text failed");
-      }
+    try {
+      await getSignInMessageProvider().send({
+        to: issued.phone,
+        body: issued.body,
+        from: shop.twilioNumber ?? undefined,
+      });
+    } catch (err) {
+      // The code stays valid; they can ask again after the cooldown. Never
+      // the phone or the code in the log.
+      logger.error({ err, shopId: shop.id }, "saved card: code text failed");
     }
   }
   res.json({ ok: true });

@@ -1,6 +1,6 @@
 import request from "supertest";
 import type { Express } from "express";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { __setMessageProviderForTests } from "../messaging/twilio.js";
@@ -154,6 +154,9 @@ beforeAll(async () => {
   process.env.STRIPE_CONNECT_WEBHOOK_SECRET = "whsec_test_dummy";
   process.env.DRY_RUN = "true";
   __resetEnvCacheForTests();
+  // The code-text ceiling's windows persist in the shared test database; a
+  // rerun inside the same hour must not find them already spent.
+  await prisma.rateLimitCounter.deleteMany({ where: { key: { startsWith: "savedCardSms:" } } });
   __setMessageProviderForTests({
     channel: "SMS",
     send: async (input: { to: string; body: string }) => {
@@ -346,6 +349,63 @@ describe("a new phone: a code to the number on file", () => {
   it("asking again inside a minute sends nothing new", async () => {
     await request(app).post(`/api/book/${slug}/saved-card/code`).send({ phone: SAM.phone });
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe("a new phone while texting is off - as production has been since 2026-09-22", () => {
+  // The suites run with texting ON (vitest.setup.ts), which is how a code that
+  // could never have gone out in production first passed here.
+  afterEach(() => {
+    process.env.SMS_ENABLED = "true";
+    delete process.env.SMS_SIGNIN_ENABLED;
+    __resetEnvCacheForTests();
+  });
+
+  it("🔴 the code still goes - one the client asked for follows the sign-in switch, not the texting one", async () => {
+    await bookAndSaveAs("(302) 555-0181", "off.one@example.com");
+    sent = [];
+    process.env.SMS_ENABLED = "false";
+    __resetEnvCacheForTests();
+    const res = await request(app).post(`/api/book/${slug}/saved-card/code`).send({ phone: "(302) 555-0181" });
+    expect(res.body).toEqual({ ok: true });
+    expect(sent.map((s) => s.to)).toEqual(["+13025550181"]);
+    expect(sent[0]!.body).toMatch(/^\d{6} is your code/);
+  });
+
+  it("SMS_SIGNIN_ENABLED=false stops them too - the page is told, and falls back to the card", async () => {
+    await bookAndSaveAs("(302) 555-0182", "off.two@example.com");
+    sent = [];
+    process.env.SMS_ENABLED = "false";
+    process.env.SMS_SIGNIN_ENABLED = "false";
+    __resetEnvCacheForTests();
+    const res = await request(app).post(`/api/book/${slug}/saved-card/code`).send({ phone: "(302) 555-0182" });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "codes_unavailable" });
+    expect(sent).toHaveLength(0);
+  });
+});
+
+describe("the platform ceiling on code texts", () => {
+  afterEach(() => {
+    delete process.env.SAVED_CARD_SMS_HOURLY_CAP;
+  });
+
+  it("🔴 past it nothing is sent, the answer is the same, and no code or cooldown is left behind", async () => {
+    await bookAndSaveAs("(302) 555-0183", "cap.one@example.com");
+    await bookAndSaveAs("(302) 555-0184", "cap.two@example.com");
+    sent = [];
+    await prisma.rateLimitCounter.deleteMany({ where: { key: { startsWith: "savedCardSms:" } } });
+    process.env.SAVED_CARD_SMS_HOURLY_CAP = "1";
+    const first = await request(app).post(`/api/book/${slug}/saved-card/code`).send({ phone: "(302) 555-0183" });
+    const second = await request(app).post(`/api/book/${slug}/saved-card/code`).send({ phone: "(302) 555-0184" });
+    expect(first.body).toEqual({ ok: true });
+    expect(second.body).toEqual({ ok: true });
+    expect(sent.map((s) => s.to)).toEqual(["+13025550183"]);
+    const refused = await prisma.savedCard.findFirstOrThrow({
+      where: { shopId, removedAt: null, client: { phone: "+13025550184" } },
+      select: { id: true },
+    });
+    expect(await prisma.savedCardCode.count({ where: { savedCardId: refused.id } })).toBe(0);
   });
 });
 

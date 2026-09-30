@@ -63,7 +63,9 @@ export function smsEnabled(): boolean {
  * May a one-time SIGN-IN code go out by text (My ChairBack sign-in, and
  * "add a phone" on a signed-in account)? Always while texting is on; while it
  * is off, unless `SMS_SIGNIN_ENABLED` says false. Every other text still asks
- * smsEnabled().
+ * smsEnabled() - except a saved card's code on a new phone
+ * (billing/savedCard.ts), the same kind of text: a code the customer asked
+ * for, to the number on their own record, under its own platform ceiling.
  *
  * 🔴 EMAIL CANNOT STAND IN FOR THESE. Turning texting off also turned phone
  * sign-in off, so every new customer signed in by email - and an imported
@@ -127,9 +129,10 @@ export function getMessageProvider(): MessageProvider {
 }
 
 /**
- * The provider for one-time SIGN-IN codes, and nothing else: it follows
- * signInTextsEnabled(), so a code can go while texting is off. Every other
- * path uses getMessageProvider() and is still refused.
+ * The provider for one-time codes a customer asks for - sign-in codes and a
+ * saved card's code - and nothing else: it follows signInTextsEnabled(), so a
+ * code can go while texting is off. Every other path uses getMessageProvider()
+ * and is still refused.
  */
 export function getSignInMessageProvider(): MessageProvider {
   if (!signInTextsEnabled()) return new SmsDisabledProvider();

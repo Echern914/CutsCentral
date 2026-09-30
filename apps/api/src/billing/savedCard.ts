@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { prisma, runWithShop } from "@chairback/db";
+import { prisma, runAsOwner, runWithShop } from "@chairback/db";
 import { SAVED_CARD_CONSENT_VERSION, SERVICE_CHARGE_CONSENT_VERSION } from "@chairback/config";
 import {
   CODE_TTL_MS,
@@ -12,6 +12,8 @@ import {
   hashOtp,
   mintCode,
 } from "../engines/otpPolicy.js";
+import { buildSavedCardCodeBody } from "../messaging/templates.js";
+import { billableSegments, positiveCapFromEnv, takeWindowedBudget } from "../services/recoverySmsBudget.js";
 import { logger } from "../logger.js";
 import { stripeClient } from "./stripe.js";
 import { stripeErrorFacts } from "./stripeErrors.js";
@@ -454,6 +456,17 @@ export async function formMatchesSavedCardClient(
 // ---------------------------------------------------------------------------
 
 /**
+ * The platform ceiling on these texts, in billable segments: an hourly and a
+ * daily window on their OWN ledger (services/recoverySmsBudget.ts), so a flood
+ * of them can never starve sign-in codes, or the other way round. They go
+ * while texting is off - they follow the sign-in switch, see
+ * signInTextsEnabled() - so this is what bounds what they cost. Read at call
+ * time; anything missing or not a positive number falls back to the default.
+ */
+export const SAVED_CARD_SMS_HOURLY_CAP_DEFAULT = 50;
+export const SAVED_CARD_SMS_DAILY_CAP_DEFAULT = 200;
+
+/**
  * The live saved card of the client at this shop with this phone, if any.
  * Internal: callers must never tell the requester whether one was found.
  */
@@ -467,16 +480,18 @@ async function savedCardByPhone(shopId: string, phoneE164: string) {
 }
 
 /**
- * Start a code: returns the code to send and the phone to send it to, or null
+ * Start a code: returns the text to send and the phone to send it to, or null
  * when there is nothing to send (no saved card for that phone, a send within
- * the last minute, or the hourly cap - engines/otpPolicy.ts, the rules every
- * code in the product follows). The ROUTE answers the same either way.
+ * the last minute, the hourly cap - engines/otpPolicy.ts, the rules every
+ * code in the product follows - or the platform ceiling above). The ROUTE
+ * answers the same either way.
  */
 export async function createSavedCardCode(params: {
   shopId: string;
+  shopName: string;
   phoneE164: string;
   now?: Date;
-}): Promise<{ code: string; phone: string; clientId: string } | null> {
+}): Promise<{ code: string; body: string; phone: string; clientId: string } | null> {
   const now = params.now ?? new Date();
   const card = await savedCardByPhone(params.shopId, params.phoneE164);
   if (!card?.client.phone) return null;
@@ -490,6 +505,20 @@ export async function createSavedCardCode(params: {
   if (recent.length >= MAX_SENDS_PER_WINDOW) return null;
   if (recent[0] && now.getTime() - recent[0].createdAt.getTime() < RESEND_COOLDOWN_MS) return null;
   const code = mintCode();
+  const body = buildSavedCardCodeBody({ shopName: params.shopName, code });
+  // 🔴 THE PLATFORM CEILING, the last gate before spend: reserved before the
+  // code exists, so a refusal leaves no code and no cooldown behind, and never
+  // given back - an ambiguous provider outcome may still have cost money. The
+  // owner connection: rate_limit_counter has no tenant policy.
+  const funded = await runAsOwner((tx) =>
+    takeWindowedBudget(tx, now, billableSegments(body), {
+      keyPrefix: "savedCardSms:budget",
+      hourlyCap: positiveCapFromEnv("SAVED_CARD_SMS_HOURLY_CAP", SAVED_CARD_SMS_HOURLY_CAP_DEFAULT),
+      dailyCap: positiveCapFromEnv("SAVED_CARD_SMS_DAILY_CAP", SAVED_CARD_SMS_DAILY_CAP_DEFAULT),
+      label: { words: "saved card code SMS", code: "saved_card_sms_budget" },
+    }),
+  );
+  if (!funded) return null;
   await runWithShop(params.shopId, (tx) =>
     tx.savedCardCode.create({
       data: {
@@ -500,7 +529,7 @@ export async function createSavedCardCode(params: {
       },
     }),
   );
-  return { code, phone: card.client.phone, clientId: card.clientId };
+  return { code, body, phone: card.client.phone, clientId: card.clientId };
 }
 
 /**
