@@ -111,7 +111,7 @@ export function PhotoViewer({
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
       className="fixed inset-0 z-[210] flex flex-col"
-      style={{ backgroundColor: "rgba(6,5,5,0.96)", color: theme.text, fontFamily: "var(--page-body)" }}
+      style={{ backgroundColor: "#060505", color: theme.text, fontFamily: "var(--page-body)" }}
     >
       <div className="flex items-center justify-between p-4">
         <button
