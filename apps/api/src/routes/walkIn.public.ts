@@ -40,6 +40,7 @@ import {
 } from "../engines/walkInQueue.js";
 import { resolveWaitlistClient } from "../engines/waitlistClientLink.js";
 import { notifyBarberWalkInJoined } from "../services/walkInNotify.js";
+import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 
 /**
  * Walk-In Mode: the PUBLIC surface - the kiosk tablet and the customer's
@@ -123,7 +124,8 @@ walkInPublicRouter.post("/kiosk/resolve", kioskReadLimiter, async (req, res) => 
   const accepting = shop.walkInAcceptingNow && hasActiveAccess(shop);
   const [services, staff, offerings] = await Promise.all([
     prisma.service.findMany({
-      where: { shopId: shop.id, active: true },
+      // The kiosk is client-facing: a hidden service is not on it.
+      where: { shopId: shop.id, ...PUBLIC_SERVICE },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       select: {
         id: true,
@@ -206,7 +208,7 @@ walkInPublicRouter.post("/kiosk/estimate", kioskReadLimiter, async (req, res) =>
 
   const now = new Date();
   const services = await prisma.service.findMany({
-    where: { shopId: shop.id, id: { in: parsed.data.serviceIds }, active: true },
+    where: { shopId: shop.id, id: { in: parsed.data.serviceIds }, ...PUBLIC_SERVICE },
     select: { id: true, durationMin: true },
   });
   if (services.length !== new Set(parsed.data.serviceIds).size) {

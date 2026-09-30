@@ -64,6 +64,7 @@ import {
 } from "../engines/bookingIntake.js";
 import { checkPolicyAcceptance, publicBookingPolicy } from "../engines/bookingPolicy.js";
 import { normalizeClientNote } from "@chairback/config/clientNote";
+import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import {
   durationRangeForService,
   effectiveDurationAt,
@@ -418,7 +419,7 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       select: { id: true, name: true, bio: true, imageUrl: true },
     }),
     prisma.service.findMany({
-      where: { shopId: shop.id, active: true },
+      where: { shopId: shop.id, ...PUBLIC_SERVICE },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       select: {
         id: true,
@@ -495,6 +496,9 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
   // from their own table, so they need the same subtraction here or a weekly
   // special keeps selling chips straight through a blocked vacation week.
   const targetedSlots = await filterBlockedTargeted(shop.id, shop.timezone, rawTargetedSlots);
+  // The services a client may see (already public-only above) - what a
+  // special may be listed under on this page.
+  const publicServiceIds = new Set(services.map((s) => s.id));
   res.json({
     shop: {
       name: shop.name,
@@ -617,18 +621,27 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
     // The (service, staff) offering matrix so the UI can filter either way.
     offerings: links,
     // One-off special slots, listed under their parent service in the picker.
-    targetedSlots: targetedSlots.map((t) => ({
-      id: t.id,
-      staffId: t.staffId,
-      // serviceId stays for older clients; serviceIds is the real answer and is
-      // what the picker keys off - one slot can be listed under several.
-      serviceId: t.serviceId,
-      serviceIds: slotServiceIds(t),
-      label: t.label,
-      startsAt: t.startsAt.toISOString(),
-      durationMin: t.durationMin,
-      price: Number(t.price),
-    })),
+    // 🔴 ONLY UNDER SERVICES A CLIENT CAN SEE: a hidden service's id is never
+    // sent, and a special listed only under hidden services is not offered at
+    // all - the public create refuses it too (its service lookup is public-only).
+    targetedSlots: targetedSlots.flatMap((t) => {
+      const serviceIds = slotServiceIds(t).filter((id) => publicServiceIds.has(id));
+      if (serviceIds.length === 0) return [];
+      return [
+        {
+          id: t.id,
+          staffId: t.staffId,
+          // serviceId stays for older clients; serviceIds is the real answer and
+          // is what the picker keys off - one slot can be listed under several.
+          serviceId: publicServiceIds.has(t.serviceId) ? t.serviceId : serviceIds[0]!,
+          serviceIds,
+          label: t.label,
+          startsAt: t.startsAt.toISOString(),
+          durationMin: t.durationMin,
+          price: Number(t.price),
+        },
+      ];
+    }),
     // Optional add-ons. serviceIds [] = offered on every service; non-empty =
     // only with those. The client shows the ones valid for the chosen service.
     addOns: addOns.map((a) => ({
@@ -669,6 +682,19 @@ bookingPublicRouter.get("/:slug/slots", bookingReadLimiter, async (req, res) => 
   const to =
     parsed.data.to ??
     new Date(now.getTime() + shop.bookingMaxDays * 24 * 60 * 60 * 1000);
+  // A hidden service has no public times - the same empty answer an inactive
+  // one gets. (The slot engine itself stays neutral: the dashboard and a
+  // client moving their own booking use it too.)
+  if (
+    parsed.data.serviceId &&
+    !(await prisma.service.findFirst({
+      where: { id: parsed.data.serviceId, shopId: shop.id, ...PUBLIC_SERVICE },
+      select: { id: true },
+    }))
+  ) {
+    res.json({ timezone: shop.timezone, slots: [] });
+    return;
+  }
   const slots = await computeOpenSlots({
     shopId: shop.id,
     staffId: parsed.data.staffId,
@@ -784,7 +810,7 @@ async function computeDayBody(
 ): Promise<unknown> {
   const [services, links, groups, rawTargeted] = await Promise.all([
     prisma.service.findMany({
-      where: { shopId: shop.id, active: true },
+      where: { shopId: shop.id, ...PUBLIC_SERVICE },
       // groupSortOrder first so each bundle's members come out in saved order.
       orderBy: [{ groupSortOrder: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
       select: {
@@ -1039,7 +1065,7 @@ bookingPublicRouter.get("/:slug/upgrades", bookingReadLimiter, async (req, res) 
 
   const [services, links, ruleSources] = await Promise.all([
     prisma.service.findMany({
-      where: { shopId: shop.id, active: true },
+      where: { shopId: shop.id, ...PUBLIC_SERVICE },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       select: {
         id: true,
@@ -1263,7 +1289,7 @@ async function computeOpenDays(shop: {
   const toDate = new Date(now.getTime() + scanDays * 24 * 60 * 60 * 1000);
   const [services, links, rawTargeted] = await Promise.all([
     prisma.service.findMany({
-      where: { shopId: shop.id, active: true },
+      where: { shopId: shop.id, ...PUBLIC_SERVICE },
       select: { id: true },
     }),
     prisma.serviceStaff.findMany({
@@ -1347,9 +1373,13 @@ async function computeOpenDays(shop: {
     for (const s of swept[i]!) consider(s.startsAt, p.serviceId, p.staffId);
   });
   // A multi-service special opens its day for EVERY service it is listed
-  // under, or the date strip greys out a day that is genuinely bookable.
+  // under, or the date strip greys out a day that is genuinely bookable -
+  // every PUBLIC one: a special only under hidden services opens nothing here.
+  const publicIds = new Set(services.map((s) => s.id));
   for (const t of targeted) {
-    for (const sid of slotServiceIds(t)) consider(t.startsAt, sid, t.staffId);
+    for (const sid of slotServiceIds(t)) {
+      if (publicIds.has(sid)) consider(t.startsAt, sid, t.staffId);
+    }
   }
   const soonestOut = soonest as {
     startsAt: Date;
@@ -1717,7 +1747,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
 
   // Validate staff offers an active service, compute the end time, bounds-check.
   const service = await prisma.service.findFirst({
-    where: { id: d.serviceId, shopId: shop.id, active: true },
+    where: { id: d.serviceId, shopId: shop.id, ...PUBLIC_SERVICE },
     select: {
       id: true,
       durationMin: true,

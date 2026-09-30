@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import type { BookingModeKey } from "@chairback/config/constants";
+import type { ServiceVisibility } from "@chairback/config/serviceVisibility";
 import { apiGet, apiSend } from "@/lib/api";
 import type { AgendaResponse } from "./page";
 
@@ -179,6 +180,8 @@ export async function updateServiceAction(
     priceOverrides?: Record<string, number>;
     dateOverrides?: Record<string, number>;
     active?: boolean;
+    /** The eye: "hidden" = only the barber books it (config/serviceVisibility.ts). */
+    visibility?: ServiceVisibility;
     color?: string | null;
     dailyTarget?: number | null;
     offeredByAll?: boolean;

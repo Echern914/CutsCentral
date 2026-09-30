@@ -488,6 +488,10 @@ describe("findHelp — what shipped late September", () => {
     ["can we add notes to the confirmations", "client-note"],
     ["tell people please arrive 10 minutes early", "client-note"],
     ["how do I add a note for clients", "client-note"],
+    // Hidden services (2026-09-29)
+    ["how do I hide a service from clients", "hidden-service"],
+    ["make a service that is not visible to clients", "hidden-service"],
+    ["private service only I can book", "hidden-service"],
     // The Special / Premium hour / After hours chip (2026-09-29: two barbers asked)
     ["why does it say special", "special-chip-meaning"],
     ["what is the special", "special-chip-meaning"],

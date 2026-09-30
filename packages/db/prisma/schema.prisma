@@ -2545,6 +2545,11 @@ model Service {
   // existing services keep their exact current (snapshotted) offering set.
   offeredByAll   Boolean  @default(false)
   active         Boolean  @default(true)
+  // "public" | "hidden" (config/serviceVisibility.ts, CHECK-pinned in SQL).
+  // Hidden = the barber books it from the dashboard; no client-facing surface
+  // lists it or accepts a booking for it. Not `active`: an inactive service is
+  // gone for everyone, a hidden one is only off the public menu.
+  visibility     String   @default("public")
   sortOrder      Int      @default(0)
   // DISPLAY-ONLY daily slot target ("I aim for 12 haircuts a day"), used as the
   // denominator of the calendar day gauge (12/16). Deliberately NOT a cap: no

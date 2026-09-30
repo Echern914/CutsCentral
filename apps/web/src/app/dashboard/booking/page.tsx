@@ -90,6 +90,11 @@ export interface ServiceRow {
   // still lists the current concrete set). False = the hand-picked staffIds.
   offeredByAll: boolean;
   active: boolean;
+  /**
+   * "public" | "hidden" (config/serviceVisibility.ts). Hidden = only the
+   * barber books it. Optional so a web deploy ahead of the API reads public.
+   */
+  visibility?: string;
   sortOrder: number;
   // Display-only daily slot target driving the calendar day gauge ("Fades 6/8").
   // NOT a cap - the slot engine never reads it, so a 7th booking just reads 7/6.

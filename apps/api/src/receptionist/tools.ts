@@ -25,6 +25,7 @@ import { formatApptTime } from "../messaging/templates.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import type { ToolExecutionResult, ToolExecutor } from "./agent.js";
+import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 
 /**
  * The receptionist's tools: the ONLY way the model touches the calendar. Names
@@ -353,7 +354,7 @@ async function resolveService(
   // menu line as the model's only source - and the corrected figure showed up
   // only in book_appointment's result, after it had already quoted a number.
   const services = await db.service.findMany({
-    where: { active: true },
+    where: { ...PUBLIC_SERVICE },
     select: {
       id: true,
       name: true,
@@ -647,7 +648,7 @@ async function loadSlotContext(
   const db = forShop(ctx.shopId);
   const [service, staff] = await Promise.all([
     db.service.findFirst({
-      where: { id: decoded.serviceId, active: true },
+      where: { id: decoded.serviceId, ...PUBLIC_SERVICE },
       select: {
         id: true,
         name: true,

@@ -25,7 +25,7 @@ const LEFT_OUT: Record<Exclude<AcuityImportRow["status"], "new">, string> = {
   exists: "Already in ChairBack",
   duplicate: "Same name as one above",
   inactive: "Turned off in Acuity",
-  private: "Private in Acuity - add it by hand if you want it on your page",
+  private: "Private in Acuity - add it by hand, then tap its eye to hide it from clients",
   class: "A class - not imported",
   bad_length: "Length can't be booked here",
 };
