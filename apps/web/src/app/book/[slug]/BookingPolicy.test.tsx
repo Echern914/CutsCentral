@@ -259,7 +259,6 @@ async function reachLastStep(data: BookShopData) {
   });
   fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Tester" } });
   fireEvent.change(screen.getByLabelText("Email"), { target: { value: "casey@example.com" } });
-  // See reachLastStepReturning: Confirm reads "Booking…" until the page settles.
   await screen.findByRole("button", { name: "Confirm booking" }, { timeout: 3000 });
 }
 
@@ -345,10 +344,10 @@ function rememberOnThisDevice(agreements: Record<string, unknown> = {}) {
 /**
  * The last step, WITHOUT typing - whatever is in the form was filled in.
  *
- * Waits for Confirm to read "Confirm booking": picking the time starts the
- * add-on fetch, and every transition on the page shares one pending flag, so
- * the button says "Booking…" until that settles. With no typing in between,
- * a slow runner reached the button first (CI, 2026-09-30).
+ * Confirm used to read "Booking…" while the add-on offers loaded (every
+ * transition on the page shared one pending flag), and a slow CI runner caught
+ * it twice. It now reads "Booking…" only while a booking is in flight - see
+ * "the Confirm button" below.
  */
 async function reachLastStepReturning(data: BookShopData) {
   render(<BookingClient data={data} />);
@@ -484,5 +483,47 @@ describe("a returning client", () => {
     fireEvent.click(confirmButton());
     await screen.findByText("Something went wrong. Please try again.");
     expect(localStorage.getItem(KEY)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CONFIRM WHILE A BOOKING IS IN FLIGHT. The button used the page's transition
+// flag, which (React 18) ends when the request is SENT, not answered: it came
+// back to life mid-booking, so a double tap sent two.
+// ---------------------------------------------------------------------------
+
+describe("the Confirm button", () => {
+  /** bookAction held open until the test answers it. */
+  function holdTheAnswer() {
+    let answer: (v: unknown) => void = () => {};
+    bookAction.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }) as never,
+    );
+    return (v: unknown) => act(async () => answer(v));
+  }
+
+  it("🔴 a double tap sends ONE booking - Confirm reads Booking… and stays off until the answer is back", async () => {
+    const answer = holdTheAnswer();
+    await reachLastStep(shopData(null));
+    const confirm = confirmButton();
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(bookAction).toHaveBeenCalledTimes(1);
+    const busy = screen.getByRole("button", { name: "Booking…" }) as HTMLButtonElement;
+    expect(busy.disabled).toBe(true);
+    await answer({ ok: true, manageToken: "tok" });
+    expect(await screen.findByText("You're booked!")).toBeTruthy();
+  });
+
+  it("🔴 a refused booking gives Confirm back, so they can fix it and try again", async () => {
+    const answer = holdTheAnswer();
+    await reachLastStep(shopData(null));
+    fireEvent.click(confirmButton());
+    await answer({ ok: false, code: "BOOKING_FAILED", error: "failed" });
+    await screen.findByText("Something went wrong. Please try again.");
+    expect(confirmButton().disabled).toBe(false);
   });
 });

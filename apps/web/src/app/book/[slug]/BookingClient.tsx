@@ -488,7 +488,12 @@ export function BookingClient({
    * guessing in either direction. "gone" = the server says it did not survive.
    */
   const [payConfirm, setPayConfirm] = useState<"no" | "checking" | "slow" | "gone">("no");
-  const [pending, startTransition] = useTransition();
+  // The transition's own pending flag is deliberately unused: it ends the
+  // moment an async callback returns (React 18), long before a booking's
+  // answer - see `submitting`.
+  const [, startTransition] = useTransition();
+  /** A booking request is in flight - from Confirm until its answer is back. */
+  const [submitting, setSubmitting] = useState(false);
   // Waitlist: null = hidden; "standing" = generic join; "slot" = join for the
   // currently-chosen service/provider (a fully-booked day).
   const [waitlistMode, setWaitlistMode] = useState<null | "standing" | "slot">(null);
@@ -1563,7 +1568,14 @@ export function BookingClient({
       setConfirmedToken(DEMO.MANAGE_TOKEN);
       return;
     }
-    startTransition(async () => {
+    // 🔴 OUR OWN FLAG, HELD UNTIL THE ANSWER IS BACK. React 18's transition
+    // `pending` ends when this callback RETURNS - the moment the request is
+    // sent - so Confirm was live again while the booking was in flight (a
+    // double tap sent two), and it read "Booking…" whenever ANY transition ran
+    // (loading a day's times, the add-on offers) though nothing was booking.
+    if (submitting) return;
+    setSubmitting(true);
+    startTransition(() => void (async () => {
       const res = await bookAction(data.shop.slug, {
         staffId: writeStaffId,
         serviceId,
@@ -1754,7 +1766,7 @@ export function BookingClient({
       }
       setWasRequest(Boolean(res.pending));
       setConfirmedToken(res.manageToken ?? null);
-    });
+    })().finally(() => setSubmitting(false)));
   }
 
   /**
@@ -3659,13 +3671,13 @@ export function BookingClient({
             <button
               type="button"
               onClick={submit}
-              disabled={pending || !policyReady}
-              aria-busy={pending}
+              disabled={submitting || !policyReady}
+              aria-busy={submitting}
               aria-describedby={!policyReady ? "booking-policy-hint" : undefined}
               className={primaryBtn}
               style={{ backgroundColor: accent, color: onAccent }}
             >
-              {pending
+              {submitting
                 ? "Booking…"
                 : repeatOffered && repeat
                   ? `Confirm ${repeat.count} visits`
