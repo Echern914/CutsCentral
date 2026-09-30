@@ -40,6 +40,7 @@ import { isOwnDataRead } from "../middleware/wallExemptions.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { hasPremiumAccess } from "../billing/entitlements.js";
 import { remainingMonthlySms } from "../billing/quota.js";
+import { liveSavedCardFor } from "../billing/savedCard.js";
 import { smsLimiter } from "../middleware/rateLimit.js";
 import {
   adjustLedgerEntry,
@@ -2398,11 +2399,15 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
   const shopName = name(client);
   const appName = (await appNamesForClients(shop.id, [client.id])).get(client.id) ?? null;
   const nameFromApp = shopName === "Unknown" && appName !== null;
+  // The card this client asked the shop to keep for their future appointments
+  // (billing/savedCard.ts): brand, last four, expiry - display facts only.
+  const savedCard = await liveSavedCardFor(shop.id, client.id);
 
   res.json({
     client: {
       id: client.id,
       name: nameFromApp && appName ? appName : shopName,
+      savedCard,
       appName,
       nameFromApp,
       firstName: client.firstName,

@@ -59,6 +59,12 @@ export const BOOKING_ERROR_CODES = [
    * agreement to words the customer never saw would be worse than no record.
    */
   "POLICY_CHANGED",
+  /**
+   * The saved card this device offered belongs to a different client record
+   * than the person now on the form. Nothing was written; the page forgets
+   * the card and books with a card step instead.
+   */
+  "SAVED_CARD_UNAVAILABLE",
   /** Anything unexpected. The customer sees a safe generic message. */
   "BOOKING_FAILED",
 ] as const;

@@ -87,6 +87,40 @@ export const SERVICE_CHARGE_CONSENT_SERIES: ServiceChargeConsent = {
 };
 
 /**
+ * 🔴 KEEPING THE CARD FOR NEXT TIME - a third, separate agreement.
+ *
+ * The card-on-file consent covers THIS booking's no-show and late-cancellation
+ * fees, and the card is let go after the visit. Keeping it for the client's
+ * FUTURE appointments is a different use, and Stripe requires the customer to
+ * be told the intended future use of a saved payment method before it is
+ * saved for it. So it is its own unticked box, in these words, and the version
+ * is stored on the card (SavedCard.consentVersion).
+ *
+ * It does NOT widen what the card may be charged for: future bookings are
+ * covered for exactly what a card on file covers today (the shop's no-show and
+ * late-cancellation policy), and a SERVICE charge still needs the customer's
+ * own tick on that booking (SERVICE_CHARGE_CONSENT, scope `single`).
+ *
+ * Removal is promised only as what ChairBack can keep: the card is taken off
+ * the shop's file. It says nothing about the customer's phone wallet, which
+ * ChairBack cannot touch.
+ */
+export const SAVED_CARD_CONSENT_VERSION = "2026-09-30.v1";
+
+export const SAVED_CARD_CONSENT: ServiceChargeConsent = {
+  version: SAVED_CARD_CONSENT_VERSION,
+  label: "Save this card for my future appointments at this shop",
+  body:
+    "The shop keeps this card on file for your future appointments here, so you " +
+    "won't have to enter it again - on this phone you'll book with it in one tap, " +
+    "and on a new phone we'll text you a code first. It's only used the way a card " +
+    "on file is used today: for a no-show or a late cancellation under the shop's " +
+    "policy, and for your service only on a booking where you tick the box that " +
+    "allows it. Nothing is charged now. You can take it off the shop's file at any " +
+    "time from your appointment link.",
+};
+
+/**
  * Every wording a stored consent may legitimately be on. A card whose version
  * is not in here is NOT chargeable for services - which is exactly what makes
  * every card saved before this shipped fee-only, with no backfill and no way

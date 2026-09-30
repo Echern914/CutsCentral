@@ -33,6 +33,12 @@ export interface ManageData {
   } | null;
   /** The card never arrived before the hold ran out: this was never a booking. */
   neverBooked?: boolean;
+  /**
+   * The card the client asked this shop to keep for their future appointments
+   * (brand and last four only), shown with the way to take it off. Optional:
+   * an older API does not send it.
+   */
+  savedCard?: { brand: string | null; last4: string | null } | null;
   firstName: string;
   startsAt: string;
   endsAt: string;

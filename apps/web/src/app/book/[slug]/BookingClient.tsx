@@ -16,6 +16,7 @@ import { zonedMinutesOfDay } from "@chairback/config/time";
 import { lastNameHasLetter } from "@chairback/config/clientIdentity";
 import { addOnOffersService } from "@chairback/config/addOns";
 import {
+  SAVED_CARD_CONSENT,
   SERVICE_CHARGE_CONSENT,
   SERVICE_CHARGE_CONSENT_SERIES,
 } from "@chairback/config/checkoutConsent";
@@ -44,6 +45,8 @@ import {
   getOpenDaysAction,
   getUpgradesAction,
   resumeCheckoutAction,
+  requestSavedCardCodeAction,
+  verifySavedCardCodeAction,
   type DayBundlesResult,
   type DayService,
   type MergedSlotsResult,
@@ -76,6 +79,13 @@ import {
   rememberUnfinishedBooking,
   type UnfinishedBooking,
 } from "./unfinishedBooking";
+import {
+  forgetDeviceSavedCard,
+  readDeviceSavedCard,
+  rememberDeviceSavedCard,
+  savedCardLabel,
+  type DeviceSavedCard,
+} from "./savedCardDevice";
 import { groupsToAutoExpand } from "./autoExpand";
 import { revealElement } from "./reveal";
 import { ClientNoteBlock } from "../ClientNoteBlock";
@@ -361,6 +371,22 @@ export function BookingClient({
   useEffect(() => {
     if (isDemoShop) return;
     setUnfinished(readUnfinishedBooking(data.shop.slug));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * THE CLIENT'S SAVED CARD, when this device holds the key to it
+   * (savedCardDevice.ts): "Pay with Visa •••• 4242" and the booking goes
+   * straight through - no card step, no hold. Chosen by default; "Use a
+   * different card" is always one tap away. `saveCard` is the unticked box
+   * that keeps a NEW card for next time - never ticked for them.
+   */
+  const [deviceCard, setDeviceCard] = useState<DeviceSavedCard | null>(null);
+  const [useSavedCard, setUseSavedCard] = useState(true);
+  const [saveCard, setSaveCard] = useState(false);
+  useEffect(() => {
+    if (isDemoShop) return;
+    setDeviceCard(readDeviceSavedCard(data.shop.slug));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   /**
@@ -1616,6 +1642,11 @@ export function BookingClient({
         // booking here. The API still checks the version; this makes the
         // record say they were not re-asked.
         policyAgreedAt: carriedPolicyAt ?? undefined,
+        // The client's saved card, when this device holds its key and they
+        // left it chosen: the booking goes straight through, no card step.
+        savedCardToken: payingWithSavedCard && deviceCard ? deviceCard.token : undefined,
+        // Only ever true from their own tick: keep this NEW card for next time.
+        saveCard: offerSaveCard && saveCard ? true : undefined,
       });
       /**
        * Refresh the available times, then say what happened.
@@ -1688,6 +1719,14 @@ export function BookingClient({
           setError("Too many attempts just now. Wait a moment and try again.");
           return;
         }
+        if (res.code === "SAVED_CARD_UNAVAILABLE") {
+          // The saved card on this device is not for the person on the form.
+          // Nothing was booked; forget it here and let them add a card.
+          forgetDeviceSavedCard(data.shop.slug);
+          setDeviceCard(null);
+          setError("That saved card can't be used for this booking. Confirm again to add a card.");
+          return;
+        }
         if (res.code === "SLOT_UNAVAILABLE" && res.error === "slot_taken") {
           // Refresh availability so the taken slot disappears — day-first
           // refetches the whole day; service-first reloads the SAME pool the
@@ -1731,6 +1770,13 @@ export function BookingClient({
       // The server took the booking, so these details are good ones to fill
       // in next time - even when a card screen follows.
       rememberAfterBooking();
+      // The saved card this device offered no longer works (removed at the
+      // shop, or not this person's): forget it. The booking went ahead with an
+      // ordinary card step, which follows below.
+      if (res.savedCardRefused) {
+        forgetDeviceSavedCard(data.shop.slug);
+        setDeviceCard(null);
+      }
       // A STANDING APPOINTMENT keeps its series summary across the card step.
       // Set BEFORE the early return below: the confirmation screen reads it
       // after the card clears, and without this a card-on-file series showed a
@@ -1792,6 +1838,12 @@ export function BookingClient({
     // the poll below still catches the webhook if it wins the race.
     if (payCharge?.kind === "setup") {
       const verified = await cardSavedAction(token);
+      // They asked to keep the card: this browser gets the key to use it
+      // next time without typing it (savedCardDevice.ts).
+      if (verified.ok && verified.savedCard && !isDemoShop) {
+        rememberDeviceSavedCard(data.shop.slug, verified.savedCard);
+        setDeviceCard(verified.savedCard);
+      }
       // The real number of occurrences that became bookings, counted from the
       // rows after promotion - a chair can be taken while a card is typed, and
       // the screen must not claim it.
@@ -1878,6 +1930,14 @@ export function BookingClient({
   // repeat is sent. One expression for both, so they cannot drift.
   const repeatOffered =
     data.shop.recurringAvailable === true && !slotTargeted && addOnIds.length === 0;
+  // A saved card covers ONE booking at a time (a standing appointment keeps
+  // its own card, as before).
+  const standingChosen = repeatOffered && repeat !== null;
+  const collectsCard = data.shop.payment?.collects === "card";
+  const payingWithSavedCard = collectsCard && deviceCard !== null && useSavedCard && !standingChosen;
+  // The unticked box to keep a NEW card for next time - only where a card is
+  // being taken now.
+  const offerSaveCard = collectsCard && !payingWithSavedCard && !standingChosen && !isDemoShop;
   const repeatMax = Math.max(2, Math.min(52, data.shop.recurringMaxCount ?? 12));
 
   // Sorted day keys (YYYY-MM-DD; lexicographic == chronological). Everything
@@ -3608,6 +3668,68 @@ export function BookingClient({
               onChange={setEmailMarketing}
             />
 
+            {/* THE CLIENT'S SAVED CARD. With this device's key, it is chosen and
+                the booking goes straight through (no card step); "Use a
+                different card" is always there. Without one, a new phone can
+                unlock it with a code texted to the number on file. */}
+            {collectsCard && !standingChosen && deviceCard && (
+              <fieldset className="flex flex-col gap-1.5 rounded-lg border border-white/10 p-2.5 text-xs" data-qa="saved-card-choice">
+                <legend className="px-1 text-muted">Your card</legend>
+                <label className="flex items-center gap-2 text-offwhite">
+                  <input
+                    type="radio"
+                    name="saved-card-choice"
+                    checked={useSavedCard}
+                    onChange={() => setUseSavedCard(true)}
+                  />
+                  <span>
+                    Pay with <strong>{savedCardLabel(deviceCard)}</strong>
+                    <span className="text-muted"> - saved at {data.shop.name}</span>
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 text-muted">
+                  <input
+                    type="radio"
+                    name="saved-card-choice"
+                    checked={!useSavedCard}
+                    onChange={() => setUseSavedCard(false)}
+                  />
+                  Use a different card
+                </label>
+              </fieldset>
+            )}
+            {collectsCard && !standingChosen && !deviceCard && !isDemoShop && (
+              <SavedCardUnlock
+                slug={data.shop.slug}
+                phone={phone}
+                onUnlocked={(card) => {
+                  rememberDeviceSavedCard(data.shop.slug, card);
+                  setDeviceCard(card);
+                  setUseSavedCard(true);
+                }}
+              />
+            )}
+            {/* 🔴 KEEPING THE CARD FOR NEXT TIME IS ITS OWN PROMISE, in its own
+                words (config SAVED_CARD_CONSENT, versioned on the card), and
+                never ticked for them. Unticked, the card is let go after this
+                visit exactly as it always was. */}
+            {offerSaveCard && (
+              <label className="flex items-start gap-2 rounded-lg border border-white/10 p-2.5 text-xs text-muted">
+                <input
+                  type="checkbox"
+                  checked={saveCard}
+                  onChange={(e) => setSaveCard(e.target.checked)}
+                  className="mt-0.5"
+                  data-qa="save-card-consent"
+                />
+                <span>
+                  <strong className="text-offwhite">{SAVED_CARD_CONSENT.label}</strong>
+                  <br />
+                  {SAVED_CARD_CONSENT.body}
+                </span>
+              </label>
+            )}
+
             {/* 🔴 A SEPARATE PROMISE FROM THE ONE ABOVE, AND FROM THE CARD
                 ITSELF. Keeping a card on file covers no-shows and late
                 cancellations; it does not make it fair to charge someone for
@@ -3989,6 +4111,108 @@ function PayDirectInfo({
  * still succeed and will simply be refunded, and a customer who knows that
  * calls the shop instead of assuming they are booked.
  */
+/**
+ * "Saved a card here before?" on a phone that doesn't hold the key: a code
+ * goes to the number on the client's record at this shop (never simply the
+ * number typed here - that is only how the record is found), and the right
+ * code gives THIS device its own key. The answer is the same whether or not a
+ * saved card exists, so the page can't be used to learn who has one.
+ */
+function SavedCardUnlock({
+  slug,
+  phone,
+  onUnlocked,
+}: {
+  slug: string;
+  /** The number on the booking form - the one to look the record up by. */
+  phone: string;
+  onUnlocked: (card: DeviceSavedCard) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [stage, setStage] = useState<"ask" | "code">("ask");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="self-start text-xs text-muted underline underline-offset-4 hover:text-offwhite"
+        data-qa="saved-card-unlock"
+      >
+        Saved a card here before? Use it
+      </button>
+    );
+  }
+
+  async function sendCode() {
+    if (!phone.trim()) {
+      setNote("Enter your mobile number above first.");
+      return;
+    }
+    setBusy(true);
+    setNote(null);
+    const res = await requestSavedCardCodeAction(slug, phone);
+    setBusy(false);
+    if (!res.ok) {
+      setNote(res.unavailable ? "Codes can't be sent right now - add your card below instead." : "Couldn't send a code. Try again in a minute.");
+      return;
+    }
+    setStage("code");
+    setNote("If you have a card saved here, we just texted a code to the number we have for you.");
+  }
+
+  async function checkCode() {
+    setBusy(true);
+    const res = await verifySavedCardCodeAction(slug, phone, code.trim());
+    setBusy(false);
+    if (res.ok && res.savedCard) {
+      onUnlocked(res.savedCard);
+      return;
+    }
+    setNote("That code didn't work. Check it, or ask for a new one in a minute.");
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-white/10 p-2.5 text-xs text-muted" data-qa="saved-card-unlock-panel">
+      <p className="text-offwhite">Use the card you saved here</p>
+      {stage === "ask" ? (
+        <button
+          type="button"
+          onClick={() => void sendCode()}
+          disabled={busy}
+          className="self-start rounded-full border border-subtle px-3 py-1.5 text-offwhite disabled:opacity-60"
+        >
+          {busy ? "Sending…" : "Text me a code"}
+        </button>
+      ) : (
+        <div className="flex items-center gap-2">
+          <input
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+            aria-label="Code from the text"
+            className="w-28 rounded-lg border border-white/15 bg-transparent px-2 py-1.5 tracking-widest text-offwhite"
+          />
+          <button
+            type="button"
+            onClick={() => void checkCode()}
+            disabled={busy || code.trim().length !== 6}
+            className="rounded-full border border-subtle px-3 py-1.5 text-offwhite disabled:opacity-60"
+          >
+            {busy ? "Checking…" : "Use my card"}
+          </button>
+        </div>
+      )}
+      {note && <p role="status">{note}</p>}
+    </div>
+  );
+}
+
 function HoldCountdown({ expiresAt }: { expiresAt: string }) {
   const target = new Date(expiresAt).getTime();
   const [msLeft, setMsLeft] = useState(() => Math.max(0, target - Date.now()));

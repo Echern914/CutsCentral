@@ -38,6 +38,20 @@ export async function stopServiceChargesAction(
 }
 
 /**
+ * Take the saved card off the shop's file - the promise the save-card consent
+ * made. Appointments already booked with it keep it until they are done; it is
+ * never offered again.
+ */
+export async function removeSavedCardAction(token: string): Promise<{ ok: boolean }> {
+  const res = await apiPublicSend(
+    "POST",
+    `/api/book/manage/${encodeURIComponent(token)}/saved-card/remove`,
+    {},
+  );
+  return { ok: res.ok };
+}
+
+/**
  * "On my way" check-in (customer-initiated, no login). One-way: the API only
  * ever writes 'en_route'; re-posting refreshes the optional ETA chips.
  */

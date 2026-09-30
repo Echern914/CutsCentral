@@ -25,6 +25,7 @@ import {
   rescheduleBookingAction,
   rescheduleOptionsAction,
   stopServiceChargesAction,
+  removeSavedCardAction,
 } from "./actions";
 
 /**
@@ -319,8 +320,93 @@ export function ManageClient({
             initiallyStopped={data.serviceCharge.withdrawnAt !== null}
           />
         )}
+
+        {/* The card they asked this shop to keep for their future
+            appointments, and the way to take it off - the promise the
+            save-card consent made. */}
+        {data.savedCard && !demoTour && (
+          <SavedCardOnFile token={token} shopName={data.shop.name} card={data.savedCard} />
+        )}
       </div>
     </main>
+  );
+}
+
+/**
+ * "Your saved card" on the appointment link. Two taps to remove - the first
+ * asks, the second does it. Removal takes it off the shop's file (it is never
+ * offered again); it cannot touch the card in their phone's wallet, and says
+ * nothing that would promise it.
+ */
+function SavedCardOnFile({
+  token,
+  shopName,
+  card,
+}: {
+  token: string;
+  shopName: string;
+  card: { brand: string | null; last4: string | null };
+}) {
+  const [stage, setStage] = useState<"shown" | "confirm" | "removed">("shown");
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const name = `${card.brand ? card.brand.charAt(0).toUpperCase() + card.brand.slice(1) : "Card"}${card.last4 ? ` •••• ${card.last4}` : ""}`;
+
+  async function remove() {
+    setBusy(true);
+    setFailed(false);
+    const res = await removeSavedCardAction(token);
+    setBusy(false);
+    if (res.ok) setStage("removed");
+    else setFailed(true);
+  }
+
+  if (stage === "removed") {
+    return (
+      <p role="status" className="mt-6 rounded-xl border border-subtle p-4 text-sm text-muted" data-qa="saved-card-removed">
+        {name} is no longer saved at {shopName}. Appointments you already booked with it keep it until they&rsquo;re done.
+      </p>
+    );
+  }
+  return (
+    <div className="mt-6 rounded-xl border border-subtle p-4 text-sm" data-qa="saved-card-on-file">
+      <p className="font-medium text-offwhite">Saved card: {name}</p>
+      <p className="mt-1 text-muted">
+        {shopName} keeps it for your future appointments, so you don&rsquo;t have to enter it again.
+      </p>
+      {stage === "shown" ? (
+        <button
+          type="button"
+          onClick={() => setStage("confirm")}
+          className="mt-3 text-xs font-medium text-muted underline underline-offset-4 hover:text-offwhite"
+        >
+          Remove this card from {shopName}
+        </button>
+      ) : (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void remove()}
+            disabled={busy}
+            className="rounded-full border border-subtle px-3 py-1.5 text-xs font-semibold text-offwhite disabled:opacity-60"
+          >
+            {busy ? "Removing…" : "Yes, remove it"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setStage("shown")}
+            className="text-xs text-muted underline underline-offset-4"
+          >
+            Keep it
+          </button>
+        </div>
+      )}
+      {failed && (
+        <p role="alert" className="mt-2 text-xs text-muted">
+          Couldn&rsquo;t remove it just now. Try again.
+        </p>
+      )}
+    </div>
   );
 }
 

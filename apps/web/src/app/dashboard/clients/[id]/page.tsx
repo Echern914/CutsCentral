@@ -14,6 +14,7 @@ import { UpcomingVisits, type UpcomingRow } from "./UpcomingVisits";
 import { ClientActions } from "./ClientActions";
 import { EditClient } from "./EditClient";
 import { EmailMarketing, type ClientEmailMarketing } from "./EmailMarketing";
+import { SavedCardPanel, type SavedCardFacts } from "./SavedCardPanel";
 import { MergeClient } from "./MergeClient";
 import { NotesEditor } from "./NotesEditor";
 import { PunchHistory } from "./PunchHistory";
@@ -38,6 +39,8 @@ interface ClientDetail {
     optedOut: boolean;
     /** Their yes to the shop's marketing email. Optional: an older API sends none. */
     emailMarketing?: ClientEmailMarketing;
+    /** The card they asked the shop to keep for their future appointments. */
+    savedCard?: SavedCardFacts | null;
     archived: boolean;
     notes: string;
     source: string;
@@ -250,6 +253,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           initial={client.emailMarketing}
           timezone={timezone}
         />
+        {client.savedCard && <SavedCardPanel card={client.savedCard} timezone={timezone} />}
       </div>
 
       {/* Snapshot (punch/reward stats only exist for rewards shops) */}

@@ -1137,6 +1137,19 @@ export function buildWalkInVerificationBody(params: {
 }
 
 /**
+ * "Use my saved card" on a new phone: the code that lets this device book with
+ * the card the client saved at this shop. Same shape and the same rules as the
+ * kiosk code above - terse, no link, never logged or stored (only its hash
+ * is). The last line is for the one who did not ask.
+ */
+export function buildSavedCardCodeBody(params: { shopName: string; code: string }): string {
+  return (
+    `${params.code} is your code to use your saved card at ${params.shopName}. ` +
+    `It expires in 5 minutes. Didn't ask for it? You can ignore this.`
+  );
+}
+
+/**
  * Walk-In Mode tracking link ("My Place in Line"). Transactional - it IS the
  * thing the customer just asked the kiosk for. The URL carries the credential
  * in its FRAGMENT, so this body must never be persisted either (Nudge rows

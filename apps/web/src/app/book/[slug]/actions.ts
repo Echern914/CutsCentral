@@ -244,6 +244,13 @@ export interface BookInput {
    * still checks `policyVersion`; this only makes the record say so.
    */
   policyAgreedAt?: string;
+  /**
+   * 🔴 Only ever true from the customer's own tick: keep this card for their
+   * future appointments at this shop (config SAVED_CARD_CONSENT).
+   */
+  saveCard?: boolean;
+  /** This device's key to the client's saved card: book with it, no card step. */
+  savedCardToken?: string;
 }
 
 /**
@@ -308,10 +315,16 @@ export async function bookAction(
   message?: string;
   /** With POLICY_CHANGED: the shop's current policy, to show and ask again. */
   policy?: unknown;
+  /** Booked with the client's saved card: the brand and last four to name. */
+  savedCard?: { brand: string | null; last4: string | null };
+  /** The saved card this device offered can't be used - forget it here. */
+  savedCardRefused?: boolean;
 }> {
   const res = await apiPublicSend<{
     ok: boolean;
     manageToken: string;
+    savedCard?: { brand: string | null; last4: string | null };
+    savedCardRefused?: boolean;
     payment: {
       /** "payment" moves money now; "setup" keeps the card and charges nothing. */
       kind?: "payment" | "setup";
@@ -361,7 +374,49 @@ export async function bookAction(
     paymentHoldMinutes: res.data.payment?.holdMinutes ?? null,
     paymentExpiresAt: res.data.payment?.expiresAt ?? null,
     pending: Boolean(res.data.pending),
+    ...(res.data.savedCard ? { savedCard: res.data.savedCard } : {}),
+    ...(res.data.savedCardRefused ? { savedCardRefused: true } : {}),
   };
+}
+
+/** A saved card's key and display facts, as the API hands it to this device. */
+export interface SavedCardKey {
+  token: string;
+  brand: string | null;
+  last4: string | null;
+}
+
+/**
+ * "Saved a card here before?" on a new phone: text a code to the number on
+ * the client's record. The answer is the same whether or not a saved card
+ * exists - the page can't be used to learn who has one.
+ */
+export async function requestSavedCardCodeAction(
+  slug: string,
+  phone: string,
+): Promise<{ ok: boolean; unavailable?: boolean }> {
+  const res = await apiPublicSend<{ ok: boolean }>(
+    "POST",
+    `/api/book/${encodeURIComponent(slug)}/saved-card/code`,
+    { phone },
+  );
+  if (res.ok) return { ok: true };
+  // Texting is off (or the shop can't take bookings): no code can come.
+  return { ok: false, unavailable: res.error === "codes_unavailable" };
+}
+
+/** The code from that text: on success this device gets its own key. */
+export async function verifySavedCardCodeAction(
+  slug: string,
+  phone: string,
+  code: string,
+): Promise<{ ok: boolean; savedCard?: SavedCardKey }> {
+  const res = await apiPublicSend<{ ok: boolean; savedCard: SavedCardKey }>(
+    "POST",
+    `/api/book/${encodeURIComponent(slug)}/saved-card/verify`,
+    { phone, code },
+  );
+  return res.ok && res.data?.savedCard ? { ok: true, savedCard: res.data.savedCard } : { ok: false };
 }
 
 /**
@@ -441,13 +496,24 @@ export async function cardSavedAction(token: string): Promise<{
   status?: string;
   /** Standing appointments only: how many occurrences are really booked. */
   series?: { id: string; booked: number };
+  /**
+   * The client ticked "save this card" and the booking stood: this browser's
+   * key to it, for next time (savedCardDevice.ts).
+   */
+  savedCard?: SavedCardKey;
 }> {
   const res = await apiPublicSend<{
     status: string;
     series?: { id: string; booked: number };
+    savedCard?: SavedCardKey;
   }>("POST", `/api/book/manage/${encodeURIComponent(token)}/card-saved`, {});
   if (!res.ok || !res.data) return { ok: false };
-  return { ok: true, status: res.data.status, series: res.data.series };
+  return {
+    ok: true,
+    status: res.data.status,
+    series: res.data.series,
+    ...(res.data.savedCard ? { savedCard: res.data.savedCard } : {}),
+  };
 }
 
 /** A date+time preference. Null on either half means ANY for that half. */
