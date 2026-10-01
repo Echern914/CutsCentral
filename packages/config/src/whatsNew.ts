@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-09-30-rewards-in-the-app",
+    date: "2026-09-30",
+    kind: "feature",
+    title: "Clients get their whole rewards in the app",
+    body:
+      "With the next ChairBack app update, a client's Rewards tab shows everything their rewards page does: the " +
+      "countdown to rebook, their punch card, your deals and the rewards they've claimed. The Your rewards button " +
+      "then comes off your page inside the app.",
+  },
+  {
     id: "2026-09-30-page-designs",
     date: "2026-09-30",
     kind: "feature",

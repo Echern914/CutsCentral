@@ -55,6 +55,7 @@ import {
 } from "@chairback/config/bookingPolicy";
 import { CLIENT_NOTE_MAX, normalizeClientNote } from "@chairback/config/clientNote";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
+import { livePromotions } from "../services/livePromotions.js";
 import {
   applyAttributionInTx,
   planAttribution,
@@ -1144,27 +1145,8 @@ publicPageRouter.get("/:slug", async (req, res) => {
       _avg: { rating: true },
       _count: true,
     }),
-    prisma.promotion.findMany({
-      where: {
-        shopId: shop.id,
-        active: true,
-        startsAt: { lte: now },
-        OR: [{ endsAt: null }, { endsAt: { gt: now } }],
-      },
-      orderBy: [{ endsAt: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
-      take: 6,
-      select: {
-        id: true,
-        kind: true,
-        title: true,
-        description: true,
-        code: true,
-        percentOff: true,
-        amountOff: true,
-        extraPunches: true,
-        endsAt: true,
-      },
-    }),
+    // Live deals - the one rule every client surface shares.
+    livePromotions(prisma, shop.id, now),
     // How many cards there are in all - the list above is capped.
     prisma.review.count({ where: writtenReviews }),
     booksHere
@@ -1244,11 +1226,7 @@ publicPageRouter.get("/:slug", async (req, res) => {
     tierPerks: shop.rewardsEnabled ? parseTierPerks(shop.tierPerks) : {},
     tierThresholds: shop.rewardsEnabled ? parseTierThresholds(shop.tierThresholds) : null,
     rewards,
-    promotions: promotions.map((p) => ({
-      ...p,
-      amountOff: p.amountOff === null ? null : Number(p.amountOff),
-      endsAt: p.endsAt?.toISOString() ?? null,
-    })),
+    promotions,
     reviews: approvedReviews.map((r) => ({
       id: r.id,
       rating: r.rating,

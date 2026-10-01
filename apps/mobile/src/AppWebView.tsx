@@ -122,13 +122,17 @@ true;
  * so those pages ALSO hide the forbidden UI themselves (HideInNativeApp); this
  * is the backstop for cold loads, server redirects, and plain <a> links.
  */
-// Tells our pages this build can open a system authentication browser on
-// request (the "cb:open-auth" message). A page that sees the bridge but NOT
-// this flag knows it is inside an older build and offers a browser instead.
+// Tells our pages what this build can do. A page that sees the bridge but not
+// a flag knows it is inside an older build and keeps its own fallback:
+// - openAuth: it can open a system authentication browser on request (the
+//   "cb:open-auth" message); without it a page offers a browser instead.
+// - rewardsTab: its Rewards tab holds a client's whole rewards - the rebooking
+//   timer, the stamps, the deals, what they've claimed - so a shop's page drops
+//   its own "Your rewards" button here (web useAppHasRewardsTab).
 const ANNOUNCE_CAPABILITIES = `
 (function () {
   try {
-    window.__cbNative = Object.assign(window.__cbNative || {}, { openAuth: true });
+    window.__cbNative = Object.assign(window.__cbNative || {}, { openAuth: true, rewardsTab: true });
   } catch (e) {}
 })();
 true;

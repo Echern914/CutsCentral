@@ -622,6 +622,99 @@ describe("rewards", () => {
   });
 });
 
+/**
+ * The owner: "the client rewards under book appointment in public page to be
+ * in rewards in the client side ... with the timer and everything with it".
+ * The Rewards tab now carries what the rewards page shows - and the timer is
+ * the SAME timer, by the same rule (config/rebook.ts).
+ */
+describe("the Rewards tab carries the timer and everything with it", () => {
+  async function customer() {
+    const phone = randomPhone();
+    const c = await client(shopA, { phone });
+    const me = await account({ phone });
+    const both = async () => {
+      const [tabRes, pageRes] = await Promise.all([
+        get("/api/me/rewards", me.token),
+        request(app).get(`/api/rewards/${c.magicToken}`),
+      ]);
+      return { tab: tabRes.body.programs[0], page: pageRes.body };
+    };
+    return { c, me, both };
+  }
+
+  it("🔴 the app's timer is the rewards page's timer - same state, same deadline", async () => {
+    const { c, both } = await customer();
+    await visit(shopA, c.id, { id: `rb-${randomToken(8)}`, status: "COMPLETED", at: from(-3 * DAY) });
+    const { tab, page } = await both();
+    expect(tab.rebook.state).toBe("counting");
+    expect(tab.rebook).toEqual(page.rebook);
+    // Last visit + the shop's 14-day window.
+    expect(Date.parse(tab.rebook.deadline) - Date.now()).toBeGreaterThan(10 * DAY);
+  });
+
+  it("booked beats the timer - in both, with the same next visit", async () => {
+    const { c, both } = await customer();
+    await visit(shopA, c.id, { id: `rb-${randomToken(8)}`, status: "COMPLETED", at: from(-30 * DAY) });
+    await appointment(shopA, c.id, { status: "BOOKED", startsAt: from(4 * DAY) });
+    const { tab, page } = await both();
+    expect(tab.rebook.state).toBe("booked");
+    expect(tab.rebook).toEqual(page.rebook);
+  });
+
+  it("their own cadence sets the window, in both", async () => {
+    const { c, both } = await customer();
+    await prisma.client.update({ where: { id: c.id }, data: { preferredCadence: "MONTHLY" } });
+    await visit(shopA, c.id, { id: `rb-${randomToken(8)}`, status: "COMPLETED", at: from(-20 * DAY) });
+    const { tab, page } = await both();
+    expect(tab.rebook).toMatchObject({ state: "counting", windowDays: 30 });
+    expect(tab.rebook).toEqual(page.rebook);
+  });
+
+  it("the sections are the shop's own choice - the same list the page gets", async () => {
+    const { c, both } = await customer();
+    await prisma.punchLedger.create({
+      data: { shopId: shopA, clientId: c.id, punchesEarned: 1, runningBalance: 1, note: "bonus" },
+    });
+    try {
+      await prisma.shop.update({ where: { id: shopA }, data: { rewardsSections: ["rebook", "punchGrid"] } });
+      const { tab, page } = await both();
+      expect(tab.sections).toEqual(["rebook", "punchGrid"]);
+      expect(page.shop.rewardsSections).toEqual(tab.sections);
+    } finally {
+      await prisma.shop.update({ where: { id: shopA }, data: { rewardsSections: [] } });
+    }
+  });
+
+  it("the shop's live deals ride along - an ended one doesn't", async () => {
+    const { c, both } = await customer();
+    await prisma.punchLedger.create({
+      data: { shopId: shopA, clientId: c.id, punchesEarned: 1, runningBalance: 1, note: "bonus" },
+    });
+    const live = await prisma.promotion.create({
+      data: {
+        shopId: shopA,
+        kind: "AMOUNT_OFF",
+        title: "Weekday deal",
+        amountOff: 5,
+        startsAt: from(-1 * DAY),
+        endsAt: from(6 * DAY),
+      },
+    });
+    const ended = await prisma.promotion.create({
+      data: { shopId: shopA, kind: "PERCENT_OFF", title: "Gone", percentOff: 10, startsAt: from(-9 * DAY), endsAt: from(-1 * DAY) },
+    });
+    try {
+      const { tab, page } = await both();
+      expect(tab.promotions.map((p: { title: string }) => p.title)).toEqual(["Weekday deal"]);
+      expect(tab.promotions[0]).toMatchObject({ amountOff: 5, endsAt: expect.any(String) });
+      expect(tab.promotions).toEqual(page.promotions);
+    } finally {
+      await prisma.promotion.deleteMany({ where: { id: { in: [live.id, ended.id] } } });
+    }
+  });
+});
+
 describe("links out to the shop's own pages", () => {
   it("the storefront is the customer's own /r/ link; the manage page is the booking's own", async () => {
     const { me, a1, booked, acuityNext } = await regular();

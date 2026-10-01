@@ -193,6 +193,39 @@ export interface RewardProgram {
   cards: RewardCard[];
   activity: { date: string; kind: "earned" | "redeemed" | "bonus" | "adjusted"; punches: number; label: string }[];
   otherProfileHasPunches: boolean;
+  /**
+   * The rebooking countdown - the same timer as the client's rewards page, by
+   * the same rule on the server. Absent from an older API.
+   */
+  rebook?: RebookInfo;
+  /** The rewards sections this shop shows. Absent from an older API: everything shows, as before. */
+  sections?: RewardsSection[];
+  /** The shop's live deals. Absent from an older API. */
+  promotions?: Promotion[];
+}
+
+export interface RebookInfo {
+  state: "booked" | "counting" | "overdue" | "none";
+  /** ISO. When the window closes; null unless counting or overdue. */
+  deadline: string | null;
+  windowDays: number;
+  /** ISO. The next booked visit; null unless booked. */
+  upcomingAt: string | null;
+}
+
+/** The shop's rewards sections (config REWARDS_SECTIONS keys). */
+export type RewardsSection = "rebook" | "promotions" | "rewardMenu" | "punchGrid" | "claimed" | "visits";
+
+export interface Promotion {
+  id: string;
+  kind: "PERCENT_OFF" | "AMOUNT_OFF" | "FREE_ADDON" | "EXTRA_PUNCHES";
+  title: string;
+  description: string | null;
+  code: string | null;
+  percentOff: number | null;
+  amountOff: number | null;
+  extraPunches: number | null;
+  endsAt: string | null;
 }
 
 export interface Profile {

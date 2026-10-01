@@ -1,5 +1,6 @@
+import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
-import { color, radius, space, TOUCH } from "./theme";
+import { color, radius, space, statusColor, TOUCH } from "./theme";
 import {
   calendarBlock,
   countLabel,
@@ -8,9 +9,21 @@ import {
   remainingLine,
   shortDate,
   spokenWhen,
+  timeLabel,
   timeRange,
   untilLabel,
 } from "./format";
+import {
+  claimed,
+  countdownSpoken,
+  dealEnds,
+  dealValue,
+  pad2,
+  shows,
+  stamps,
+  timerNote,
+  timerView,
+} from "./rewardsTab";
 import { Cancel, Details, MapPin, Reschedule } from "./icons";
 import { tierProgressLine } from "./tierStatus";
 import { Avatar, Button, Group, ProgressBar, Row, Separator, StatusLabel, Tap, Txt, useLargeText } from "./ui";
@@ -18,6 +31,8 @@ import type {
   AmbiguousShop,
   Appointment,
   AppointmentDetail,
+  Promotion,
+  RebookInfo,
   RewardProgram,
   RewardSummary,
   SavedShop,
@@ -360,7 +375,23 @@ export function RewardSummaryList({ rewards, onOpen }: { rewards: RewardSummary[
   );
 }
 
-export function RewardProgramCard({ program, now = new Date() }: { program: RewardProgram; now?: Date }) {
+/**
+ * One shop's rewards - everything the client's rewards page shows, in the app:
+ * the rebooking timer, each card with its stamps and menu, the shop's deals,
+ * the rewards they've claimed and the activity. Each part follows the shop's
+ * own choice of what its clients see (`sections`, shared with the page).
+ */
+export function RewardProgramCard({
+  program,
+  now = new Date(),
+  onBook,
+}: {
+  program: RewardProgram;
+  now?: Date;
+  /** Opens the shop's page, where Book is. */
+  onBook?: () => void;
+}) {
+  const claimedRows = claimed(program);
   return (
     <View style={styles.program}>
       <View style={styles.programHead}>
@@ -384,6 +415,10 @@ export function RewardProgramCard({ program, now = new Date() }: { program: Rewa
         </Txt>
       ) : null}
 
+      {shows(program, "rebook") ? (
+        <RebookTimer rebook={program.rebook} timezone={program.shop.timezone} onBook={onBook} />
+      ) : null}
+
       {program.cards.map((card) => {
         const line = card.next ? progressLine(card.balance, card.next.cost, card.unit) : countLabel(Math.max(0, card.balance), card.unit);
         const ready = card.rewards.filter((r) => r.ready);
@@ -401,6 +436,7 @@ export function RewardProgramCard({ program, now = new Date() }: { program: Rewa
                 {remainingLine(card.next.remaining, card.next.rewardName, card.unit)}
               </Txt>
             ) : null}
+            {card.next && shows(program, "punchGrid") ? <Stamps balance={card.balance} cost={card.next.cost} /> : null}
             {ready.length > 0 ? (
               <View style={styles.readyBox} accessible accessibilityLabel={`Ready to use: ${ready.map((r) => r.name).join(", ")}. Ask at your next visit.`}>
                 <Txt variant="subheadStrong" tone="gold">
@@ -411,7 +447,7 @@ export function RewardProgramCard({ program, now = new Date() }: { program: Rewa
                 </Txt>
               </View>
             ) : null}
-            {card.rewards.length > 0 ? (
+            {shows(program, "rewardMenu") && card.rewards.length > 0 ? (
               <View style={styles.menu}>
                 {card.rewards.map((r) => (
                   <View key={r.name} style={styles.menuRow}>
@@ -434,13 +470,40 @@ export function RewardProgramCard({ program, now = new Date() }: { program: Rewa
         );
       })}
 
+      {shows(program, "promotions") && program.promotions && program.promotions.length > 0 ? (
+        <Deals promotions={program.promotions} timezone={program.shop.timezone} now={now} />
+      ) : null}
+
+      {shows(program, "claimed") && claimedRows.length > 0 ? (
+        <View style={styles.activity}>
+          <Txt variant="footnoteStrong" tone="secondary" accessibilityRole="header">
+            Rewards claimed
+          </Txt>
+          {claimedRows.slice(0, 6).map((r, i) => (
+            <View
+              key={`${r.date}:${i}`}
+              style={styles.activityRow}
+              accessible
+              accessibilityLabel={`${shortDate(r.date, program.shop.timezone, now)}. ${r.label}`}
+            >
+              <Txt variant="footnote" tone="secondary" style={styles.activityDate}>
+                {shortDate(r.date, program.shop.timezone, now)}
+              </Txt>
+              <Txt variant="subhead" style={styles.flex} numberOfLines={1}>
+                {r.label}
+              </Txt>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
       {program.otherProfileHasPunches ? (
         <Txt variant="footnote" tone="secondary" style={styles.note}>
           {`${program.shop.name} has a second profile for you with punches on it. Ask them to combine your profiles.`}
         </Txt>
       ) : null}
 
-      {program.activity.length > 0 ? (
+      {shows(program, "visits") && program.activity.length > 0 ? (
         <View style={styles.activity}>
           <Txt variant="footnoteStrong" tone="secondary" accessibilityRole="header">
             Activity
@@ -460,6 +523,169 @@ export function RewardProgramCard({ program, now = new Date() }: { program: Rewa
           ))}
         </View>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * The rebooking countdown, as on the client's rewards page: ticking while it
+ * counts, coral once under two days or past due, "You're booked" with the next
+ * visit once they are. Read aloud to the minute (rewardsTab.countdownSpoken).
+ */
+function RebookTimer({
+  rebook,
+  timezone,
+  onBook,
+}: {
+  rebook: RebookInfo | undefined;
+  timezone: string;
+  onBook?: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  const ticking = rebook?.state === "counting";
+  useEffect(() => {
+    if (!ticking) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [ticking]);
+
+  const view = timerView(rebook, now);
+  if (view.kind === "hidden") return null;
+
+  if (view.kind === "booked") {
+    return (
+      <View
+        style={[styles.timer, styles.timerBooked]}
+        accessible
+        accessibilityLabel={`You're booked. Next visit ${spokenWhen(view.upcomingAt, timezone)}`}
+      >
+        <Txt variant="captionStrong" style={[styles.timerLabel, { color: statusColor.completed }]}>
+          {"You're booked"}
+        </Txt>
+        <Txt variant="subhead" style={styles.center}>
+          {`Next visit: ${dayLabel(view.upcomingAt, timezone)} · ${timeLabel(view.upcomingAt, timezone)}`}
+        </Txt>
+      </View>
+    );
+  }
+
+  const urgent = view.kind === "overdue" || view.urgent;
+  const accent = urgent ? statusColor.no_show : color.goldText;
+  const note = timerNote(view);
+  return (
+    <View style={[styles.timer, urgent ? styles.timerUrgent : styles.timerCalm]}>
+      <Txt variant="captionStrong" tone="secondary" style={styles.timerLabel}>
+        {view.kind === "overdue" ? "It's time for your next visit" : "Time left to rebook"}
+      </Txt>
+      {view.kind === "overdue" ? (
+        <Txt variant="title2" style={[styles.center, { color: accent }]}>
+          {"Don't lose your spot"}
+        </Txt>
+      ) : (
+        <View style={styles.clock} accessible accessibilityRole="timer" accessibilityLabel={countdownSpoken(view.left)}>
+          <ClockBlock value={view.left.days} unit="days" tint={accent} />
+          <ClockColon />
+          <ClockBlock value={view.left.hours} unit="hrs" tint={accent} />
+          <ClockColon />
+          <ClockBlock value={view.left.minutes} unit="min" tint={accent} />
+          <ClockColon />
+          <ClockBlock value={view.left.seconds} unit="sec" tint={accent} />
+        </View>
+      )}
+      {note ? (
+        <Txt variant="footnote" tone="secondary" style={styles.center}>
+          {note}
+        </Txt>
+      ) : null}
+      {onBook ? <Button label="Book now" onPress={onBook} /> : null}
+    </View>
+  );
+}
+
+function ClockBlock({ value, unit, tint }: { value: number; unit: string; tint: string }) {
+  return (
+    <View style={styles.clockBlock} importantForAccessibility="no-hide-descendants">
+      <Txt variant="title1" style={[styles.clockDigits, { color: tint }]}>
+        {pad2(value)}
+      </Txt>
+      <Txt variant="caption" tone="tertiary" style={styles.clockUnit}>
+        {unit}
+      </Txt>
+    </View>
+  );
+}
+
+function ClockColon() {
+  return (
+    <Txt variant="title2" tone="tertiary" style={styles.clockColon} importantForAccessibility="no">
+      :
+    </Txt>
+  );
+}
+
+/** One stamp per punch the next reward costs, filled up to the balance. */
+function Stamps({ balance, cost }: { balance: number; cost: number }) {
+  const row = stamps(balance, cost);
+  if (!row) return null;
+  const filled = row.filter(Boolean).length;
+  return (
+    <View style={styles.stamps} accessible accessibilityLabel={`${filled} of ${cost} on your card`}>
+      {row.map((on, i) => (
+        <View key={i} style={[styles.stamp, on ? styles.stampOn : null]} />
+      ))}
+    </View>
+  );
+}
+
+/** The shop's live deals - "Right now", as its page calls them. */
+function Deals({ promotions, timezone, now }: { promotions: Promotion[]; timezone: string; now: Date }) {
+  return (
+    <View style={styles.sectionBlock}>
+      <Txt variant="footnoteStrong" tone="secondary" accessibilityRole="header">
+        Right now
+      </Txt>
+      {promotions.map((p) => {
+        const value = dealValue(p);
+        const ends = dealEnds(p.endsAt, now.getTime(), timezone);
+        return (
+          <View
+            key={p.id}
+            style={styles.deal}
+            accessible
+            accessibilityLabel={[p.title, value, p.description, ends, p.code ? `Code ${p.code}` : null]
+              .filter(Boolean)
+              .join(". ")}
+          >
+            <View style={styles.dealHead}>
+              <Txt variant="subheadStrong" style={styles.flex}>
+                {p.title}
+              </Txt>
+              {value ? (
+                <Txt variant="subheadStrong" tone="gold">
+                  {value}
+                </Txt>
+              ) : null}
+            </View>
+            {p.description ? (
+              <Txt variant="footnote" tone="secondary">
+                {p.description}
+              </Txt>
+            ) : null}
+            {ends || p.code ? (
+              <View style={styles.dealFoot}>
+                <Txt variant="caption" tone="tertiary">
+                  {ends ?? ""}
+                </Txt>
+                {p.code ? (
+                  <View style={styles.code}>
+                    <Txt variant="captionStrong">{p.code}</Txt>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -636,6 +862,41 @@ const styles = StyleSheet.create({
     borderBottomColor: color.hairline,
   },
   note: { lineHeight: 18 },
+
+  timer: {
+    borderWidth: 1,
+    borderRadius: radius.lg,
+    padding: space.s2,
+    gap: space.s1 + 2,
+    backgroundColor: color.surfaceRaised,
+  },
+  timerCalm: { borderColor: "rgba(212,175,55,0.30)" },
+  timerUrgent: { borderColor: "rgba(224,138,123,0.40)" },
+  timerBooked: { borderColor: "rgba(111,207,151,0.35)" },
+  timerLabel: { textAlign: "center", textTransform: "uppercase", letterSpacing: 1.6 },
+  center: { textAlign: "center" },
+  // Wraps rather than overflowing at the largest text sizes.
+  clock: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", alignItems: "flex-start", gap: space.half },
+  clockBlock: { alignItems: "center", minWidth: 52 },
+  clockDigits: { fontVariant: ["tabular-nums"] },
+  clockUnit: { textTransform: "uppercase", letterSpacing: 0.8 },
+  clockColon: { marginTop: 2 },
+  stamps: { flexDirection: "row", flexWrap: "wrap", gap: space.s1 - 2, marginTop: space.half },
+  stamp: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: color.hairlineStrong },
+  stampOn: { backgroundColor: color.gold, borderColor: color.gold },
+  sectionBlock: { gap: space.s1 },
+  deal: { padding: space.s2 - 4, borderRadius: radius.md, backgroundColor: color.surfaceRaised, gap: 4 },
+  dealHead: { flexDirection: "row", alignItems: "center", gap: space.s1 },
+  dealFoot: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 2 },
+  code: {
+    paddingHorizontal: space.s1,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: color.hairlineStrong,
+  },
+
   activity: { gap: space.half },
   activityRow: { flexDirection: "row", alignItems: "center", gap: space.s2 - 4, minHeight: 32 },
   activityDate: { width: 64 },

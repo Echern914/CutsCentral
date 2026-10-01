@@ -86,12 +86,12 @@ export function RatingLine({ ctx, className, center }: { ctx: DesignCtx; classNa
 
 /**
  * A known client's way to their punch card, kept small: these designs lead with
- * the work. Left out in the app, whose Rewards tab already holds every shop's
- * card (the owner: "move that to customer side"). On the web it stays - a
- * client without the app has no other way back to their card from here.
+ * the work. Left out inside an app build whose Rewards tab holds the client's
+ * whole rewards, timer included (the owner: "move that to customer side"). On
+ * the web, and in an older build, it stays - there it is the way to the card.
  */
 export function RewardsPill({ ctx }: { ctx: DesignCtx }) {
-  if (!ctx.rewardsHref || ctx.inApp) return null;
+  if (!ctx.rewardsHref || ctx.appRewardsTab) return null;
   return (
     <motion.div variants={fadeUp} className="mt-3 flex justify-center">
       <a

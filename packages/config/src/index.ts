@@ -27,3 +27,4 @@ export * from "./shopHandle.js";
 export * from "./clientIdentity.js";
 export * from "./checkoutConsent.js";
 export * from "./walkInBackdate.js";
+export * from "./rebook.js";

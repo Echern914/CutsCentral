@@ -28,6 +28,8 @@ export interface DesignCtx {
   bookQuery?: string;
   rewardsHref?: string;
   rewardsLabel: string;
+  /** Inside an app build whose Rewards tab holds the client's whole rewards (useAppHasRewardsTab). */
+  appRewardsTab: boolean;
   /** The movable sections, rendered - a design shows the ones below its own top. */
   sections: Record<PageSectionKey, React.ReactNode>;
   /** The shop's section order (which also hides the ones left out). */
