@@ -288,14 +288,16 @@ describe("a refused save is visible where the barber is looking", () => {
     expect(within(footer()).queryByRole("alert")).toBeNull();
   });
 
-  it("hours refusals name the service's own hours, not only the barber's", async () => {
+  it("hours refusals name the service's own hours, not only the barber's - and offer Save anyway", async () => {
+    // The full override flow is pinned in AppointmentEditSaveAnyway.test.tsx;
+    // here, only that the refusal is visible and names both kinds of hours.
     editAppointment.mockResolvedValueOnce({ ok: false, error: "invalid_slot" });
     await openEdit();
     fireEvent.change(screen.getByLabelText("Start"), { target: { value: "15:00" } });
     fireEvent.click(saveButton());
-    expect(await within(footer()).findByRole("alert")).toHaveTextContent(
-      "That time isn't open for this service — it's outside your hours or the hours this service is offered.",
-    );
+    const refusal = await screen.findByRole("alertdialog");
+    expect(refusal).toHaveTextContent("outside your hours or the service's");
+    expect(within(refusal).getByRole("button", { name: "Save anyway" })).toBeTruthy();
     expect(toast).not.toHaveBeenCalled();
   });
 
