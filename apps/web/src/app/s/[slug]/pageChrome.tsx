@@ -190,6 +190,7 @@ export function ShopFooter({
   bookHref,
   hasBooking,
   rewardsHref,
+  platformOrigin = "",
 }: {
   data: ShopPageData;
   preview: boolean;
@@ -201,6 +202,11 @@ export function ShopFooter({
   bookHref: string | null;
   hasBooking: boolean;
   rewardsHref?: string;
+  /**
+   * "" on getchairback.com; the platform's origin when this page is served on
+   * the shop's own domain, where "/" is the shop's page, not ChairBack's.
+   */
+  platformOrigin?: string;
 }) {
   return (
     <motion.footer variants={fadeUp} className="mt-10 flex flex-col items-center gap-6 text-center">
@@ -222,7 +228,7 @@ export function ShopFooter({
           this customer is anywhere else. */}
       {!rewardsHref && !inApp && (
         <a
-          href={preview ? undefined : "/my-rewards"}
+          href={preview ? undefined : `${platformOrigin}/my-rewards`}
           onClick={preview ? (e) => e.preventDefault() : undefined}
           className="text-[11px] underline-offset-2 hover:underline"
           style={{ color: theme.muted }}
@@ -242,7 +248,7 @@ export function ShopFooter({
         </span>
       ) : (
         <a
-          href={preview ? undefined : `/?ref=${encodeURIComponent(data.slug)}`}
+          href={preview ? undefined : `${platformOrigin}/?ref=${encodeURIComponent(data.slug)}`}
           onClick={preview ? (e) => e.preventDefault() : undefined}
           className="text-[11px] underline-offset-2 hover:underline"
           style={{ color: theme.muted }}

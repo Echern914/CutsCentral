@@ -1,10 +1,62 @@
 import { describe, expect, it } from "vitest";
-import { DOMAIN_PARAM, expectedDomain, normalizeDomain, servesDomain } from "./customDomainGuard";
+import {
+  DOMAIN_PARAM,
+  classifyDomainLookup,
+  expectedDomain,
+  normalizeDomain,
+  normalizeHost,
+  servesDomain,
+} from "./customDomainGuard";
 
 /**
  * The same-shop rule for a visit that came through a custom domain. Pure, so
  * every edge is pinned here and the pages only have to call it.
  */
+
+describe("normalizeHost", () => {
+  it("case, a port and the root dot do not make a different name - www is kept", () => {
+    expect(normalizeHost("StudioOne.COM")).toBe("studioone.com");
+    expect(normalizeHost("studioone.com:443")).toBe("studioone.com");
+    expect(normalizeHost("studioone.com.")).toBe("studioone.com");
+    // The middleware has to SEE www to send it to the apex.
+    expect(normalizeHost(" WWW.StudioOne.com.:8080 ")).toBe("www.studioone.com");
+  });
+
+  it("refuses anything that is not a hostname, so it never reaches a lookup or a URL", () => {
+    for (const bad of ["", "localhost", "127.0.0.1", "studio one.com", "-bad.com", "bad-.com", "a..com", "café.com", `${"x".repeat(250)}.com`]) {
+      expect(normalizeHost(bad), bad).toBeNull();
+    }
+  });
+});
+
+describe("classifyDomainLookup", () => {
+  it("a slug is the only thing that reads as a shop", () => {
+    expect(classifyDomainLookup({ ok: true, status: 200, data: { slug: "studio-one" } })).toEqual({
+      kind: "found",
+      slug: "studio-one",
+    });
+  });
+
+  it("only a definite no from the API is a no", () => {
+    expect(classifyDomainLookup({ ok: false, status: 404, data: null, error: "not_found" })).toEqual({ kind: "none" });
+    expect(classifyDomainLookup({ ok: false, status: 400, data: null, error: "bad_host" })).toEqual({ kind: "none" });
+  });
+
+  it("🔴 anything else is no answer at all - never read as 'no such domain'", () => {
+    const cases: [Parameters<typeof classifyDomainLookup>[0], string | null][] = [
+      [{ ok: false, status: 0, data: null, error: "network_error" }, "network_error"],
+      [{ ok: false, status: 429, data: null, error: "rate_limited" }, "rate_limited"],
+      [{ ok: false, status: 500, data: null }, null],
+      [{ ok: false, status: 503, data: null, error: "http_503" }, "http_503"],
+      [{ ok: true, status: 200, data: {} }, "no_slug_in_answer"],
+      [{ ok: true, status: 200, data: { slug: "" } }, "no_slug_in_answer"],
+      [{ ok: true, status: 200, data: { slug: 42 } }, "no_slug_in_answer"],
+    ];
+    for (const [res, error] of cases) {
+      expect(classifyDomainLookup(res), JSON.stringify(res)).toEqual({ kind: "unavailable", status: res.status, error });
+    }
+  });
+});
 
 describe("normalizeDomain", () => {
   it("case, a port, the root dot and www are all the same domain", () => {
