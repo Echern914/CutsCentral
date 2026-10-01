@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-01-addons-say-why",
+    date: "2026-10-01",
+    kind: "fix",
+    title: "Add-ons say why they won't fit",
+    body:
+      "When an add-on needs more time than is free after the time a client picked - say your next booking starts " +
+      "right after - your booking page now tells them, and to pick another time, instead of just greying it out.",
+  },
+  {
     id: "2026-10-01-service-edits-save",
     date: "2026-10-01",
     kind: "fix",

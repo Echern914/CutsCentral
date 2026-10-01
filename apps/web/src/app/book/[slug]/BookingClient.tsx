@@ -3272,10 +3272,12 @@ export function BookingClient({
               <p className="mb-2 flex items-baseline justify-between gap-2 text-xs font-medium uppercase tracking-wide opacity-60">
                 <span>Add-ons</span>
                 {/* The budget, stated once. Without it a greyed-out row reads as
-                    broken rather than as "that one is too long for this slot". */}
+                    broken rather than as "that one is too long for this slot".
+                    "0 min left" read as a bug to the shop that reported it -
+                    nothing says what the zero is about. */}
                 {roomLeftMin !== null && (
                   <span className="normal-case tracking-normal">
-                    {roomLeftMin} min left
+                    {roomLeftMin > 0 ? `${roomLeftMin} min left` : "No extra time"}
                   </span>
                 )}
               </p>
@@ -3324,6 +3326,19 @@ export function BookingClient({
                   );
                 })}
               </div>
+              {/* 🔴 SAY WHY A ROW IS GREYED OUT. The only explanation used to be
+                  the button's `title` - a hover tooltip, which a phone never
+                  shows - so a customer who couldn't tick the trim assumed the
+                  page was broken, and so did the shop: the room after the
+                  chosen time was simply taken (in that case by the customer's
+                  own next booking). One line, under the list, that says what
+                  to do about it. */}
+              {slot && addOnsForService.some((a) => !addOnFits(a)) && (
+                <p className="mt-2 text-xs opacity-70">
+                  Greyed-out add-ons need more time than is free after your{" "}
+                  {timeFmt.format(new Date(slot))}. Pick another time to add them.
+                </p>
+              )}
             </div>
           )}
 
