@@ -13,8 +13,9 @@ import { addDays, zonedDateParts, zonedWallTimeToUtc } from "@chairback/config";
  *
  * computeOpenSlots already subtracts all three from the GRID. This module
  * exists for the surfaces the grid does not cover — above all TARGETED slots,
- * which deliberately bypass hours/lead/max ("my 9pm special") and used to
- * bypass blocks with them. That was the vacation-week bug: a weekly special
+ * which deliberately bypass hours ("my 9pm special") and used to bypass blocks
+ * with them (and the booking rules - see bookingWindow.ts). That was the
+ * vacation-week bug: a weekly special
  * kept publishing bookable chips straight through the barber's blocked days.
  * BLOCKED TIME ALWAYS WINS over a published special: hours say when he
  * normally works; a block says he is NOT THERE. The special is standing

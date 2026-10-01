@@ -9,8 +9,9 @@ import { createApp } from "../app.js";
  *
  * A barber blocked his days off, and a booking request still came through: his
  * weekly special (targeted slot) kept publishing chips straight through the
- * blocked days. Targeted slots deliberately bypass HOURS and the lead/max
- * window — that's the feature — but a block is "I'm not there", and it beats
+ * blocked days. Targeted slots deliberately bypass HOURS — that's the feature
+ * (the booking rules hold, see targetedSlotBookingRules.test.ts) — but a block
+ * is "I'm not there", and it beats
  * the barber's own standing special on every public surface:
  *
  *   - the flat payload (GET /:slug targetedSlots)

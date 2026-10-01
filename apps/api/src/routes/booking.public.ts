@@ -56,6 +56,7 @@ import {
 } from "../engines/targetedSlotServices.js";
 import { resolveAddOns } from "../engines/addOns.js";
 import { filterBlockedTargeted } from "../engines/targetedSlotAvailability.js";
+import { bookableStartsAt, bookingWindow, insideBookingWindow } from "../engines/bookingWindow.js";
 import { TARGETED_SLOT_ORIGIN } from "../engines/specialBooking.js";
 import {
   bookingQuestionsForShop,
@@ -415,6 +416,7 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
+  const now = new Date();
   const [
     staff,
     services,
@@ -462,14 +464,15 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       select: { id: true, name: true, durationMin: true, price: true, serviceIds: true },
     }),
-    // Barber-published targeted slots: future, active, still unbooked. Shown
-    // under their parent service with a badge + THEIR price.
+    // Barber-published targeted slots: active, still unbooked, and inside the
+    // shop's booking rules - min notice to book-up-to (engines/bookingWindow.ts).
+    // Shown under their parent service with a badge + THEIR price.
     prisma.targetedSlot.findMany({
       where: {
         shopId: shop.id,
         active: true,
         bookedAppointmentId: null,
-        startsAt: { gt: new Date() },
+        startsAt: bookableStartsAt(bookingWindow(shop, now), now),
       },
       orderBy: { startsAt: "asc" },
       take: 100,
@@ -856,14 +859,11 @@ async function computeDayBody(
         shopId: shop.id,
         active: true,
         bookedAppointmentId: null,
-        // Floor at NOW when the requested day is today - the flat payload
-        // (GET /:slug) filters gt: now, and the booking POST rejects
-        // startsAt <= now, so a passed same-day special must not render as
-        // a tappable chip that can only ever 409.
-        startsAt: {
-          ...(dayStart.getTime() > now.getTime() ? { gte: dayStart } : { gt: now }),
-          lt: dayEnd,
-        },
+        // This day, AND the shop's booking rules: the booking POST refuses a
+        // special that has passed, sits inside the min notice, or lies beyond
+        // book-up-to, so none of those may render as a tappable chip that can
+        // only ever 409 (engines/bookingWindow.ts).
+        startsAt: bookableStartsAt(bookingWindow(shop, now), now, { from: dayStart, before: dayEnd }),
       },
       orderBy: { startsAt: "asc" },
       select: {
@@ -1296,6 +1296,7 @@ bookingPublicRouter.get("/:slug/open-days", bookingReadLimiter, async (req, res)
 async function computeOpenDays(shop: {
   id: string;
   timezone: string;
+  bookingLeadHours: number;
   bookingMaxDays: number;
 }): Promise<unknown> {
   const now = new Date();
@@ -1311,13 +1312,15 @@ async function computeOpenDays(shop: {
       select: { serviceId: true, staffId: true },
     }),
     // Unbooked targeted specials count as openings too — a day whose only
-    // availability is a published special must not render greyed.
+    // availability is a published special must not render greyed. Only ones
+    // inside the shop's booking rules, though: a special inside the min notice
+    // must not light up today (engines/bookingWindow.ts).
     prisma.targetedSlot.findMany({
       where: {
         shopId: shop.id,
         active: true,
         bookedAppointmentId: null,
-        startsAt: { gt: now, lt: toDate },
+        startsAt: bookableStartsAt(bookingWindow(shop, now), now, { before: toDate }),
       },
       select: {
         startsAt: true,
@@ -1851,9 +1854,20 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       res.status(409).json({ error: "slot_taken", code: "SLOT_UNAVAILABLE" });
       return;
     }
-    // BLOCKED TIME WINS. A targeted slot deliberately bypasses hours and the
-    // lead/max window (it is explicit barber inventory) — but a block is the
-    // barber saying "I'm not there", and it beats his own standing special.
+    // 🔴 THE SHOP'S BOOKING RULES HOLD FOR SPECIALS TOO. A special may sit
+    // outside the barber's weekly hours - that is what it is for - but "Min
+    // notice" and "Book up to" are his rules for when CUSTOMERS book, and this
+    // path used to skip them: a 9 PM special could be booked at 8:55 PM over a
+    // 2-hour notice. 409 as slot_taken, not too_soon: the read surfaces stopped
+    // offering it the moment it crossed the line, so to the client it IS "no
+    // longer available" (engines/bookingWindow.ts).
+    if (!insideBookingWindow(slot.startsAt, bookingWindow(shop, now), now)) {
+      res.status(409).json({ error: "slot_taken", code: "SLOT_UNAVAILABLE" });
+      return;
+    }
+    // BLOCKED TIME WINS. A targeted slot deliberately bypasses the weekly hours
+    // (it is explicit barber inventory) — but a block is the barber saying
+    // "I'm not there", and it beats his own standing special.
     // Without this, a crafted POST (or a chip served just before the block
     // landed) books straight into a blocked-off vacation day. 409 as
     // slot_taken: to the client it IS "no longer available".
@@ -1943,17 +1957,16 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     basePrice === null && addOns.extraPrice === 0
       ? null
       : (basePrice ?? 0) + addOns.extraPrice;
-  // Bounds + availability apply to GRID slots only: a targeted slot is explicit
-  // barber inventory - deliberately bookable outside the weekly hours and the
-  // lead/max window (already validated: future, active, unbooked, exact time).
+  // The grid's own checks. A targeted slot was held to the same booking rules
+  // above (and to blocks); it is deliberately bookable outside the weekly
+  // hours, so the availability check below is for grid slots only.
   if (!targeted) {
-    const earliest = now.getTime() + shop.bookingLeadHours * 60 * 60_000;
-    const latest = now.getTime() + shop.bookingMaxDays * 24 * 60 * 60_000;
-    if (startsAt.getTime() < earliest) {
+    const { earliest, latest } = bookingWindow(shop, now);
+    if (startsAt.getTime() < earliest.getTime()) {
       res.status(400).json({ error: "too_soon" });
       return;
     }
-    if (startsAt.getTime() > latest) {
+    if (startsAt.getTime() > latest.getTime()) {
       res.status(400).json({ error: "too_far" });
       return;
     }

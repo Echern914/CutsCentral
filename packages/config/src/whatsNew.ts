@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-01-targeted-slots-booking-rules",
+    date: "2026-10-01",
+    kind: "fix",
+    title: "Targeted slots follow your booking rules",
+    body:
+      "Your min notice and how far ahead clients can book now apply to targeted slots too, so nobody grabs one at " +
+      "the last minute. They can still sit outside your regular hours, and you can still book a client into one " +
+      "yourself from New appointment.",
+  },
+  {
     id: "2026-09-30-own-domain-stays",
     date: "2026-09-30",
     kind: "fix",
