@@ -850,6 +850,18 @@ export const REWARDS_SECTION_KEYS = Object.keys(REWARDS_SECTIONS) as RewardsSect
 /** Default visible rewards-page sections (everything on), in declaration order. */
 export const REWARDS_SECTION_DEFAULT: RewardsSectionKey[] = [...REWARDS_SECTION_KEYS];
 
+/**
+ * The rewards sections a shop shows its clients: its own choice, or all of
+ * them when it never chose. One rule for the web rewards page and the app's
+ * Rewards tab, so hiding a section hides it in both.
+ */
+export function visibleRewardsSections(stored: readonly string[] | null | undefined): RewardsSectionKey[] {
+  const known = (stored ?? []).filter((k): k is RewardsSectionKey =>
+    (REWARDS_SECTION_KEYS as string[]).includes(k),
+  );
+  return known.length > 0 ? known : [...REWARDS_SECTION_DEFAULT];
+}
+
 /** Max length of the barber's custom welcome line on the rewards page. */
 export const REWARDS_WELCOME_MAX = 140;
 

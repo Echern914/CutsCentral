@@ -8,13 +8,18 @@ import {
   formatShopAddress,
   isUpcomingStatus,
   parseTierRules,
+  rebookCountdown,
   requestedDetail,
   requestedReason,
+  visibleRewardsSections,
   vocabularyForShop,
   type CustomerStatus,
+  type RebookInfo,
+  type RewardsSectionKey,
 } from "@chairback/config";
 import { createHmac } from "node:crypto";
 import { buildLoyaltyView, loadLoyaltyInputs, type LoyaltyView } from "./loyaltyView.js";
+import { livePromotions, type PublicPromotion } from "./livePromotions.js";
 import { syncCustomerLinks, syncCustomerView, type ActiveLink } from "./customerIdentity.js";
 import { PUBLIC_SHOP_SELECT, toPublicShop } from "./shopByHandle.js";
 
@@ -176,12 +181,16 @@ interface ShopRow {
   tierThresholds: unknown;
   tierRules: unknown;
   tierPerks: unknown;
+  rebookWindowDays: number;
+  rewardsSections: string[];
 }
 
 interface ClientRow {
   id: string;
   firstName: string | null;
   lastVisitAt: Date | null;
+  /** Their self-reported cadence - sets the rebook window when present. */
+  preferredCadence: string | null;
   createdAt: Date;
 }
 
@@ -298,6 +307,8 @@ export async function loadPortalView(accountId: string, now = new Date()): Promi
         tierThresholds: true,
         tierRules: true,
         tierPerks: true,
+        rebookWindowDays: true,
+        rewardsSections: true,
       },
     }),
   );
@@ -310,7 +321,7 @@ export async function loadPortalView(accountId: string, now = new Date()): Promi
       const [clients, appts, visits] = await Promise.all([
         tx.client.findMany({
           where: { shopId: shop.id, id: { in: clientIds } },
-          select: { id: true, firstName: true, lastVisitAt: true, createdAt: true },
+          select: { id: true, firstName: true, lastVisitAt: true, preferredCadence: true, createdAt: true },
         }),
         tx.appointment.findMany({
           where: { shopId: shop.id, clientId: { in: clientIds } },
@@ -707,6 +718,15 @@ export interface PortalRewardProgram {
   activity: { date: string; kind: "earned" | "redeemed" | "bonus" | "adjusted"; punches: number; label: string }[];
   /** Another of this customer's records at the SAME shop holds punches too. */
   otherProfileHasPunches: boolean;
+  /**
+   * The rebooking countdown - the timer on their rewards page, by the same
+   * rule (config/rebook.ts), so the app and the page never disagree.
+   */
+  rebook: RebookInfo;
+  /** The sections this shop shows on a client's rewards - its own choice. */
+  sections: RewardsSectionKey[];
+  /** The shop's live deals. */
+  promotions: PublicPromotion[];
 }
 
 /**
@@ -724,11 +744,12 @@ export async function rewardPrograms(bundles: PortalShopBundle[]): Promise<Porta
   for (const b of bundles) {
     if (!b.shop.rewardsEnabled) continue;
     const primary = b.primaryClientId;
+    const primaryRow = b.clients.find((c) => c.id === primary);
     const others = b.links.map((l) => l.clientId).filter((id) => id !== primary);
     const rules = parseTierRules(b.shop.tierRules, b.shop.tierThresholds);
     const data = await runWithShop(b.shop.id, async (tx) => {
       const inputs = await loadLoyaltyInputs(tx, b.shop.id, primary, rules, now);
-      const [earnRules, cardUnits, ledger, otherBalances] = await Promise.all([
+      const [earnRules, cardUnits, ledger, otherBalances, lastCompleted, nextSynced, nextBooked, promotions] = await Promise.all([
         tx.earnRule.count({ where: { shopId: b.shop.id, active: true } }),
         tx.cardType.findMany({ where: { shopId: b.shop.id }, select: { id: true, punchesPerVisit: true } }),
         tx.punchLedger.findMany({
@@ -756,8 +777,32 @@ export async function rewardPrograms(bundles: PortalShopBundle[]): Promise<Porta
               where: { shopId: b.shop.id, clientId: { in: others } },
               _sum: { punchesEarned: true, punchesRedeemed: true },
             }),
+        // The rebooking countdown's inputs - the same reads as the rewards page
+        // (routes/rewards.ts): the last completed visit, and the next booked
+        // one from whichever system holds it.
+        tx.visit.findFirst({
+          where: { shopId: b.shop.id, clientId: primary, status: "COMPLETED" },
+          orderBy: { scheduledAt: "desc" },
+          select: { scheduledAt: true },
+        }),
+        tx.visit.findFirst({
+          where: {
+            shopId: b.shop.id,
+            clientId: primary,
+            status: { in: ["SCHEDULED", "RESCHEDULED"] },
+            scheduledAt: { gt: now },
+          },
+          orderBy: { scheduledAt: "asc" },
+          select: { scheduledAt: true },
+        }),
+        tx.appointment.findFirst({
+          where: { shopId: b.shop.id, clientId: primary, status: "BOOKED", startsAt: { gt: now } },
+          orderBy: { startsAt: "asc" },
+          select: { startsAt: true },
+        }),
+        livePromotions(tx, b.shop.id, now),
       ]);
-      return { inputs, earnRules, cardUnits, ledger, otherBalances };
+      return { inputs, earnRules, cardUnits, ledger, otherBalances, lastCompleted, nextSynced, nextBooked, promotions };
     });
 
     if (data.inputs.rewards.length === 0) continue;
@@ -842,6 +887,20 @@ export async function rewardPrograms(bundles: PortalShopBundle[]): Promise<Porta
       otherProfileHasPunches: data.otherBalances.some(
         (g) => (g._sum.punchesEarned ?? 0) - (g._sum.punchesRedeemed ?? 0) > 0,
       ),
+      rebook: rebookCountdown({
+        lastVisitAt: primaryRow?.lastVisitAt ?? data.lastCompleted?.scheduledAt ?? null,
+        preferredCadence: primaryRow?.preferredCadence ?? null,
+        shopWindowDays: b.shop.rebookWindowDays,
+        // The sooner of the two, as the rewards page decides it.
+        upcomingAt:
+          data.nextBooked &&
+          (data.nextSynced === null || data.nextBooked.startsAt.getTime() <= data.nextSynced.scheduledAt.getTime())
+            ? data.nextBooked.startsAt
+            : (data.nextSynced?.scheduledAt ?? null),
+        now,
+      }),
+      sections: visibleRewardsSections(b.shop.rewardsSections),
+      promotions: data.promotions,
     });
   }
   return programs;

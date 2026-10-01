@@ -12,6 +12,8 @@ vi.mock("../actions", () => ({
 }));
 const nativeApp = vi.hoisted(() => vi.fn(() => false as boolean | null));
 vi.mock("@/lib/useIsNativeApp", () => ({ useIsNativeApp: nativeApp }));
+const rewardsTab = vi.hoisted(() => vi.fn(() => false));
+vi.mock("@/lib/useAppHasRewardsTab", () => ({ useAppHasRewardsTab: rewardsTab }));
 
 const { ShopPageClient } = await import("../ShopPageClient");
 
@@ -84,6 +86,7 @@ function page(over: Partial<ShopPageData> = {}): ShopPageData {
 
 beforeEach(() => {
   nativeApp.mockReturnValue(false);
+  rewardsTab.mockReturnValue(false);
 });
 
 describe("the design a shop gets", () => {
@@ -165,20 +168,31 @@ describe("a photo, full screen", () => {
 });
 
 describe("the rewards button", () => {
-  const withRewards = (design: string) => (
+  const withRewards = (design: string | undefined) => (
     <ShopPageClient data={page({ pageDesign: design })} rewardsHref="/r/tok/rewards" rewardsLabel="Your rewards · 3 punches" />
   );
 
-  it("🔴 in the app it leaves the page - the app's Rewards tab holds every shop's card", () => {
-    nativeApp.mockReturnValue(true);
-    render(withRewards("grid"));
-    expect(screen.queryByText("Your rewards · 3 punches")).toBeNull();
-  });
+  for (const design of [undefined, "grid"]) {
+    const name = design ?? "classic";
 
-  it("on the web it stays, small, for a client without the app", () => {
-    render(withRewards("grid"));
-    expect(screen.getByRole("link", { name: /Your rewards · 3 punches/ }).getAttribute("href")).toBe("/r/tok/rewards");
-  });
+    it(`🔴 ${name}: inside an app build whose Rewards tab holds it all - timer included - it leaves the page`, () => {
+      nativeApp.mockReturnValue(true);
+      rewardsTab.mockReturnValue(true);
+      render(withRewards(design));
+      expect(screen.queryByText("Your rewards · 3 punches")).toBeNull();
+    });
+
+    it(`🔴 ${name}: an older app build keeps it - its Rewards tab has no timer yet`, () => {
+      nativeApp.mockReturnValue(true);
+      render(withRewards(design));
+      expect(screen.getByRole("link", { name: /Your rewards · 3 punches/ }).getAttribute("href")).toBe("/r/tok/rewards");
+    });
+
+    it(`${name}: on the web it stays - there it is the way to the card`, () => {
+      render(withRewards(design));
+      expect(screen.getByRole("link", { name: /Your rewards · 3 punches/ })).toBeTruthy();
+    });
+  }
 });
 
 describe("the designs' own jobs", () => {

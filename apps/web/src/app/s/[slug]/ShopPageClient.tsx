@@ -19,6 +19,7 @@ import { isUsableBookingLink } from "@chairback/config/bookingLinks";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
+import { useAppHasRewardsTab } from "@/lib/useAppHasRewardsTab";
 import { ShopWaitlistForm } from "./ShopWaitlistForm";
 import { Gallery, Hours, Promotions, Rewards, Reviews, StampMark } from "./pageSections";
 import { PrimaryCta, ShopChrome, ShopFooter, TextToBookBlock } from "./pageChrome";
@@ -70,6 +71,10 @@ export function ShopPageClient({
   useSignalNativeReady();
   // In-app, the powered-by footer must not link out to the marketing site (3.1.1).
   const inApp = useIsNativeApp();
+  // An app build whose Rewards tab holds the client's whole rewards, timer
+  // included: there, "Your rewards" leaves this page (the owner: "the client
+  // rewards under book appointment ... to be in rewards in the client side").
+  const appRewardsTab = useAppHasRewardsTab();
 
   const theme =
     PAGE_THEMES[(data.theme as PageThemeKey) in PAGE_THEMES ? (data.theme as PageThemeKey) : "classic"];
@@ -153,6 +158,7 @@ export function ShopPageClient({
       bookQuery,
       rewardsHref,
       rewardsLabel,
+      appRewardsTab,
       sections,
       order,
     };
@@ -249,8 +255,9 @@ export function ShopPageClient({
             data-tour="book-cta" div above - the demo tour spotlights that
             anchor, and this link only exists for real token-holding clients,
             never in the demo. Deliberately secondary to Book: this page exists
-            to get them booked; the card is what they check on the way. */}
-        {rewardsHref && (
+            to get them booked; the card is what they check on the way. Inside
+            an app build whose Rewards tab holds it all, it isn't here at all. */}
+        {rewardsHref && !appRewardsTab && (
           <motion.div variants={fadeUp} className="mt-3">
             <a
               href={rewardsHref}

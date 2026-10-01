@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
 import {
-  REWARDS_SECTION_DEFAULT,
   apiEnv,
   CADENCE_KEYS,
   cadenceToDays,
@@ -12,8 +11,11 @@ import {
   randomToken,
   formatShopAddress,
   mapsUrlFor,
+  rebookCountdown,
+  visibleRewardsSections,
 } from "@chairback/config";
 import { bookNowUrl } from "@chairback/config/bookingLinks";
+import { livePromotions } from "../services/livePromotions.js";
 import { buildLoyaltyView } from "../services/loyaltyView.js";
 import { loadClientTierStats } from "../engines/tierStats.js";
 import { consentView, optInClientInTx, optOutClientInTx } from "../services/clientConsent.js";
@@ -133,27 +135,8 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
         cardTypeId: true,
       },
     }),
-    tx.promotion.findMany({
-      where: {
-        shopId: client.shopId,
-        active: true,
-        startsAt: { lte: now },
-        OR: [{ endsAt: null }, { endsAt: { gt: now } }],
-      },
-      orderBy: [{ endsAt: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
-      take: 6,
-      select: {
-        id: true,
-        kind: true,
-        title: true,
-        description: true,
-        code: true,
-        percentOff: true,
-        amountOff: true,
-        extraPunches: true,
-        endsAt: true,
-      },
-    }),
+    // The shop's live deals - the one rule every client surface shares.
+    livePromotions(tx, client.shopId, now),
     // Rewards the client has actually claimed, newest first. Same "real, still
     // standing" predicate as the dashboard ledger: a real redemption
     // (punchesRedeemed > 0), not since undone (reversedAt null), and not itself
@@ -328,23 +311,8 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
         }
       : null;
 
-  // Rebooking countdown: deadline = lastVisit + rebookWindowDays. The client-side
-  // timer ticks down to this ISO instant. We surface the state so the UI can show
-  // the right message (booked / counting down / overdue / no-data).
+  // The last completed visit - what the rebooking countdown counts from.
   const lastVisitAt = client.lastVisitAt ?? visits[0]?.scheduledAt ?? null;
-  // Personalized rebook window: a client's self-reported cadence (captured with
-  // one tap at first open) overrides the shop's flat default, so a "monthly"
-  // client counts down over ~30 days, not everyone's 14. Falls back to the shop
-  // window when there's no self-report.
-  const windowDays = client.preferredCadence
-    ? cadenceToDays(client.preferredCadence)
-    : client.shop.rebookWindowDays;
-  let rebook: {
-    state: "booked" | "counting" | "overdue" | "none";
-    deadline: string | null;
-    windowDays: number;
-    upcomingAt: string | null;
-  };
   // The customer's next appointment, from whichever system holds it: a
   // ChairBack booking (with a manage link) or an Acuity-synced visit (without).
   // Time, place and "how long until" all come from the same shared helpers the
@@ -376,19 +344,16 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
           mapsUrl: mapsUrlFor(client.shop),
         }
       : null;
-  if (nextVisit) {
-    rebook = { state: "booked", deadline: null, windowDays, upcomingAt: nextVisit.startsAt };
-  } else if (lastVisitAt) {
-    const deadline = new Date(lastVisitAt.getTime() + windowDays * 86_400_000);
-    rebook = {
-      state: deadline.getTime() > now.getTime() ? "counting" : "overdue",
-      deadline: deadline.toISOString(),
-      windowDays,
-      upcomingAt: null,
-    };
-  } else {
-    rebook = { state: "none", deadline: null, windowDays, upcomingAt: null };
-  }
+  // The rebooking countdown: THE rule (config/rebook.ts), shared with the app's
+  // Rewards tab so a client never sees two deadlines. Booked, counting toward
+  // last visit + window (their own cadence, else the shop's), overdue, or none.
+  const rebook = rebookCountdown({
+    lastVisitAt,
+    preferredCadence: client.preferredCadence,
+    shopWindowDays: client.shop.rebookWindowDays,
+    upcomingAt: nextVisit?.startsAt ?? null,
+    now,
+  });
 
   // Master rewards gate: with rewards OFF the page stays a useful hub (shop
   // identity, booking CTA, visit history, consent, promotions) but carries NO
@@ -413,12 +378,9 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
       fontKey: client.shop.fontKey,
       layoutStyle: client.shop.layoutStyle,
       // Content control: the barber's optional welcome line + which optional
-      // sections to show. [] in the DB means "show all" -> the default list.
+      // sections to show - the same rule as the app's Rewards tab.
       rewardsWelcome: client.shop.rewardsWelcome,
-      rewardsSections:
-        client.shop.rewardsSections.length > 0
-          ? client.shop.rewardsSections
-          : REWARDS_SECTION_DEFAULT,
+      rewardsSections: visibleRewardsSections(client.shop.rewardsSections),
       // Link to the shop's public mini-site when it's live.
       pageSlug: client.shop.publicPageEnabled ? client.shop.slug : null,
       // The shop's AI text line. Same gate as the public page: only surfaced
@@ -498,17 +460,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     // web page renders the stacked multi-card view from this when there's more
     // than one; a single entry falls back to the classic single-card layout.
     cards: rewardsOn ? cards : [],
-    promotions: promotions.map((p) => ({
-      id: p.id,
-      kind: p.kind,
-      title: p.title,
-      description: p.description,
-      code: p.code,
-      percentOff: p.percentOff,
-      amountOff: p.amountOff === null ? null : Number(p.amountOff),
-      extraPunches: p.extraPunches,
-      endsAt: p.endsAt?.toISOString() ?? null,
-    })),
+    promotions,
     rebook,
     // The card at the top of the app: what, when, with whom, where, and the
     // manage link when ChairBack holds the booking. null when nothing is ahead.
