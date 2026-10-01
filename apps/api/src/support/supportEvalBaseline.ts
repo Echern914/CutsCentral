@@ -235,6 +235,18 @@ export const SUPPORT_EVAL_BASELINE: EvalReport = {
       "in_app": "correct_answer",
       "mcp": "correct_answer"
     },
+    "block-client-asked": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "block-client-ban": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
+    "block-client-terse": {
+      "in_app": "correct_answer",
+      "mcp": "correct_answer"
+    },
     "acuity-both": {
       "in_app": "correct_answer",
       "mcp": "correct_answer"
@@ -435,22 +447,22 @@ export const SUPPORT_EVAL_BASELINE: EvalReport = {
     }
   },
   "inApp": {
-    "correct_answer": 98,
+    "correct_answer": 101,
     "near_miss": 4,
     "shrug": 4,
     "generic_menu": 0,
     "wrong_answer": 0
   },
   "mcp": {
-    "correct_answer": 94,
+    "correct_answer": 97,
     "near_miss": 4,
     "shrug": 3,
     "generic_menu": 0,
     "wrong_answer": 0
   },
   "channelAgreement": {
-    "agree": 100,
-    "of": 100
+    "agree": 103,
+    "of": 103
   },
   "answerableMissedInApp": [
     "waitlist-join",

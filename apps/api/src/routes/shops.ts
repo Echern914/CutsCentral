@@ -56,6 +56,7 @@ import {
 import { CLIENT_NOTE_MAX, normalizeClientNote } from "@chairback/config/clientNote";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { livePromotions } from "../services/livePromotions.js";
+import { bookingBlockedFor, CONTACT_SHOP_ERROR } from "../services/clientBookingBlock.js";
 import {
   applyAttributionInTx,
   planAttribution,
@@ -1448,6 +1449,19 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
   ]);
   const serviceId = serviceOk?.id ?? null;
   const staffId = staffOk?.id ?? null;
+
+  // A client the shop blocked from booking can't queue for a time either.
+  // After every check that does not depend on who is joining, before anything
+  // is written - the same place the booking page asks
+  // (services/clientBookingBlock.ts). The sentence is the customer's whole
+  // answer: the forms show a refusal's `message` as it is.
+  if (await bookingBlockedFor(prisma, shop.id, { phone, email })) {
+    res.status(403).json({
+      error: CONTACT_SHOP_ERROR,
+      message: "We can't add you to the waitlist online. Please contact the shop.",
+    });
+    return;
+  }
 
   const dedupeKey = joinFingerprint({ phone, email, serviceId, staffId, windows });
   const { token, hash } = mintCancelToken();

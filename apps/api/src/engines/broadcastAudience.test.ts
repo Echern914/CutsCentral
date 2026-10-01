@@ -24,6 +24,7 @@ function client(over: Partial<AudienceClient> = {}): AudienceClient {
     emailMarketingConsentAt: new Date("2026-01-01T00:00:00Z"),
     loyaltyTier: "GOLD",
     archivedAt: null,
+    bookingBlockedAt: null,
     pushDevices: 1,
     ...over,
   };
@@ -119,6 +120,26 @@ describe("who cannot be reached", () => {
     const archived = client({ archivedAt: new Date() });
     expect(splitAudience([archived], "email", [], NONE).reachable).toHaveLength(0);
     expect(splitAudience([archived], "push", [], NONE).reachable).toHaveLength(0);
+  });
+
+  it("a client the shop blocked from booking is excluded on every channel, under its own reason", () => {
+    const blocked = client({ bookingBlockedAt: new Date() });
+    for (const channel of ["email", "push"] as const) {
+      const split = splitAudience([blocked], channel, [], NONE);
+      expect(split.reachable).toHaveLength(0);
+      expect(split.reasonCounts.blocked).toBe(1);
+    }
+    expect(SKIP_REASON_LABEL.blocked).toBe("Blocked from booking");
+  });
+
+  it("🔴 a client read without the block field is skipped, never sent to", () => {
+    // A query that forgot to select bookingBlockedAt must close the gate. The
+    // broadcast loaders cast their rows, so the type alone cannot catch it.
+    const unread = { ...client() } as Partial<AudienceClient>;
+    delete unread.bookingBlockedAt;
+    const split = splitAudience([unread as AudienceClient], "email", [], NONE);
+    expect(split.reachable).toHaveLength(0);
+    expect(split.reasonCounts.blocked).toBe(1);
   });
 });
 

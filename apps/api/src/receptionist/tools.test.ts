@@ -345,6 +345,67 @@ describe("reschedule", () => {
   });
 });
 
+describe("🔴 a client the shop blocked from booking", () => {
+  const BARRED_PHONE = "+15551230009";
+  let barredId: string;
+
+  beforeAll(async () => {
+    barredId = (
+      await prisma.client.create({
+        data: {
+          shopId,
+          acuityClientKey: `tel:${BARRED_PHONE}`,
+          magicToken: randomToken(),
+          firstName: "Barred",
+          phone: BARRED_PHONE,
+          smsConsentAt: NOW,
+          source: "manual",
+          bookingBlockedAt: NOW,
+        },
+        select: { id: true },
+      })
+    ).id;
+  });
+
+  it("can't hold or book a time by text, and the model is told not to say why", async () => {
+    const exec = makeToolExecutor(ctxFor(barredId, BARRED_PHONE));
+    for (const tool of ["hold_slot", "book_appointment"] as const) {
+      const res = await exec(tool, { slot_id: slotIdAt(18, 30) });
+      expect(res.isError, tool).toBe(true);
+      expect(res.result, tool).toMatch(/do not say why/i);
+    }
+    expect(await prisma.appointment.count({ where: { shopId, startsAt: T(18, 30) } })).toBe(0);
+  });
+
+  it("an appointment they already had can be cancelled by text, but not moved", async () => {
+    const appt = await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        clientId: barredId,
+        firstName: "Barred",
+        phone: BARRED_PHONE,
+        status: "BOOKED",
+        startsAt: T(19, 30),
+        endsAt: T(20, 0),
+        manageToken: randomToken(),
+      },
+      select: { id: true },
+    });
+    const exec = makeToolExecutor(ctxFor(barredId, BARRED_PHONE));
+
+    const moved = await exec("reschedule", { appointment_id: appt.id, new_slot_id: slotIdAt(18, 30) });
+    expect(moved.isError).toBe(true);
+    expect(moved.result).toMatch(/do not say why/i);
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id: appt.id } });
+    expect(row.startsAt.getTime()).toBe(T(19, 30).getTime());
+
+    const cancelled = await exec("cancel", { appointment_id: appt.id });
+    expect(cancelled.isError).toBe(false);
+  });
+});
+
 describe("cancel", () => {
   it("cancels the client's own upcoming appointment and frees the slot", async () => {
     const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));

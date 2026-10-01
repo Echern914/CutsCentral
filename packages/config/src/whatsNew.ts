@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-01-block-clients",
+    date: "2026-10-01",
+    kind: "feature",
+    title: "Block a client from booking",
+    body:
+      "Open a client and tap Block from booking. They can't book, join your waitlist or move a booking online, " +
+      "and they stop getting your rebook reminders and deals. Their booked appointments stay, and you can still book " +
+      "them yourself.",
+  },
+  {
     id: "2026-10-01-edit-save-anyway",
     date: "2026-10-01",
     kind: "fix",

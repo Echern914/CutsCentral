@@ -1411,11 +1411,27 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "delete-client",
     q: "How do I delete a client?",
-    a: "You can't remove a client outright, and that's deliberate — their visits, punches and payment history are your books, so deleting one would quietly rewrite your own numbers.\n\nWhat you can do: merge them if they're a duplicate of another client, and stop texting them (their profile has the opt-out). If you need a client's data erased for a privacy request, email support@getchairback.com and we'll handle it properly.\n\nThis is a different thing from closing your OWN account — that's in Account, and it removes everything.",
+    a: "You can't remove a client outright, and that's deliberate — their visits, punches and payment history are your books, so deleting one would quietly rewrite your own numbers.\n\nWhat you can do: merge them if they're a duplicate of another client, stop texting them (their profile has the opt-out), or block them from booking online — see “Can I block a client from booking?”. If you need a client's data erased for a privacy request, email support@getchairback.com and we'll handle it properly.\n\nThis is a different thing from closing your OWN account — that's in Account, and it removes everything.",
     keywords: [
       "delete a client", "remove a client", "delete client", "remove client",
       "get rid of a client", "duplicate client", "merge client", "wrong client",
       "clean up my list", "delete customer", "remove customer",
+    ],
+    category: "clients",
+    action: { label: "Open clients", featureId: "clients" },
+  },
+  {
+    // A shop, 2026-10-01: "Can you block a client from booking". Multi-word
+    // keywords only - a bare "block" belongs to blocking off time.
+    id: "block-client",
+    q: "Can I block a client from booking?",
+    a: "Yes. Open them in your client book and tap Block from booking, under Online booking. Owners and managers can do this; other team logins don't see it.\n\nAfter that they can't book, join your waitlist or move a booking online with that phone number or email — not on your booking page, not from their appointment link, not by text. They're asked to contact you instead, and aren't told why. They also stop getting your rebook reminders, deals and announcements.\n\nAnything they already have booked stays booked — cancel it yourself if you don't want to keep it. They can still cancel on their own, and you can always book them yourself. Unblock gives them online booking back.\n\nSomeone who comes back with a new number and a new email is a new client to block too. Pick Blocked from booking in your client book's filter to see everyone you've blocked.",
+    keywords: [
+      "block a client", "block client", "block someone", "block this client",
+      "ban a client", "ban client", "banned", "unblock",
+      "stop a client booking", "stop someone booking", "stop them booking",
+      "dont want them to book", "dont let them book", "not allowed to book",
+      "problem client", "difficult client",
     ],
     category: "clients",
     action: { label: "Open clients", featureId: "clients" },

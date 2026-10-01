@@ -1368,6 +1368,19 @@ model Client {
   // does NOT auto-unarchive (un-hiding is an explicit barber choice).
   archivedAt DateTime?
 
+  // The shop blocked this client from booking online, and when. null = not
+  // blocked. Set and cleared only by an owner or manager from the client's page
+  // (POST /api/dashboard/clients/:id/booking-block).
+  //
+  // 🔴 IT BLOCKS THE CONTACT, NOT JUST THIS ROW. A customer booking path finds
+  // or creates a record from what was TYPED, so checking only the row the
+  // booking lands on would let a new email (or a new number) walk straight
+  // past it. services/clientBookingBlock.ts refuses any booking, waitlist join
+  // or reschedule whose phone or email matches a blocked record, and the
+  // marketing sends skip the record itself. The shop's own bookings
+  // (dashboard, New appointment) are never refused - it is the shop's call.
+  bookingBlockedAt DateTime?
+
   // cadence (recomputed by the engine; null until >=2 completed visits)
   medianIntervalDays Int?
   lastVisitAt        DateTime?

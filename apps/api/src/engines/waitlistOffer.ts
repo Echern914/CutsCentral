@@ -37,6 +37,7 @@ import {
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { sendPushToClient } from "../messaging/push.js";
 import { fillBlankClientFields } from "../services/clientFill.js";
+import { loadBookingBlocks } from "../services/clientBookingBlock.js";
 
 /**
  * Waitlist phase C: ONE customer at a time gets a freed slot, held for them.
@@ -398,6 +399,10 @@ async function pickCandidate(
   let scanned = 0;
   let pages = 0;
   let cursor: ScanKeyPart[] | null = null;
+  // A client the shop blocked from booking is never offered a time: the claim
+  // would refuse them, and a hold nobody can take is the next person's time
+  // lost for the length of the hold. Loaded once for the whole walk.
+  const blocks = await loadBookingBlocks(tx, slot.shopId);
 
   for (;;) {
     const and: Prisma.WaitlistEntryWhereInput[] = [
@@ -501,6 +506,13 @@ async function pickCandidate(
       scanned += 1;
       scanTrace?.push(c.id);
       try {
+        if (blocks.covers({ clientId: c.clientId, phone: c.phone, email: c.email })) {
+          logger.debug(
+            { shopId: slot.shopId, entryId: c.id, code: "booking_blocked" },
+            "waitlist match: candidate skipped",
+          );
+          continue;
+        }
         const verdict = entryPrefsMatchSlot(c, slot, {
           shopTimezone: slot.timezone,
           now,
@@ -728,7 +740,13 @@ export type ClaimResult =
    * shows as free. The offer is left alone: this is a shop-configuration
    * problem, and burning the customer's hold over it would be unfair to them.
    */
-  | { outcome: "unavailable_external" };
+  | { outcome: "unavailable_external" }
+  /**
+   * The shop blocked this client from booking online after the offer went out
+   * (offers skip blocked clients, so only a block landing mid-hold reaches
+   * this). The offer is RELEASED, as for a deposit, and nothing is written.
+   */
+  | { outcome: "contact_shop" };
 
 /**
  * Redeem a claim token: revalidate and book ATOMICALLY.
@@ -858,6 +876,35 @@ export async function claimOffer(params: {
         return { outcome: "deposit_required" as const };
       }
 
+      const firstName = params.customer?.firstName?.trim() || offer.entry.firstName;
+      const lastName = params.customer?.lastName?.trim() || offer.entry.lastName || null;
+      const email = params.customer?.email?.trim() || offer.entry.email || null;
+      const phone = params.customer?.phone?.trim() || offer.entry.phone || null;
+
+      // A client the shop blocked since the offer went out books nothing -
+      // checked against the joined contact AND the claim form's, since either
+      // would land the booking. Released like a deposit refusal, so the time
+      // goes back rather than sitting held for someone who can't take it.
+      const blocks = await loadBookingBlocks(tx, offer.shopId);
+      if (
+        blocks.covers({ phone: offer.entry.phone, email: offer.entry.email }) ||
+        blocks.covers({ phone, email })
+      ) {
+        await tx.waitlistOffer.update({
+          where: { id: offer.id },
+          data: { status: "RELEASED" },
+        });
+        await recordWaitlistEvent(tx, {
+          shopId: offer.shopId,
+          entryId: offer.entryId,
+          offerId: offer.id,
+          type: "offer.released",
+          actor: CUSTOMER_ACTOR,
+          metadata: { code: "contact_shop", via: "claim" },
+        });
+        return { outcome: "contact_shop" as const };
+      }
+
       // Same guard as every booking write; our own hold must not block us.
       await lockStaffAndAssertSlotFree(tx, {
         walkInCapacity: "enforce",
@@ -870,11 +917,6 @@ export async function claimOffer(params: {
         serviceDayLimit: { serviceId: offer.serviceId, timezone: shop.timezone },
         now,
       });
-
-      const firstName = params.customer?.firstName?.trim() || offer.entry.firstName;
-      const lastName = params.customer?.lastName?.trim() || offer.entry.lastName || null;
-      const email = params.customer?.email?.trim() || offer.entry.email || null;
-      const phone = params.customer?.phone?.trim() || offer.entry.phone || null;
       // The handle the customer gave when they joined. The claim itself asks
       // for nothing new: a held slot is never refused over a name, and entries
       // from before the last-name-or-Instagram rule simply carry neither.

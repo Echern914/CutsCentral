@@ -122,6 +122,8 @@ export type GroupCreateOutcome =
   | { kind: "policy"; policy?: unknown }
   /** The request never completed. SAFE TO RETRY with the same key. */
   | { kind: "network" }
+  /** The shop takes this booker's bookings itself (CONTACT_SHOP). Nothing was booked. */
+  | { kind: "contact_shop" }
   | { kind: "error" };
 
 export interface GroupCreateInput {
@@ -183,6 +185,7 @@ export async function groupCreateAction(
     return { kind: "booked", groupId: res.data.groupId, manageToken: res.data.manageToken };
   }
   if (res.error === "group_payments_unsupported") return { kind: "payments" };
+  if (res.code === "CONTACT_SHOP") return { kind: "contact_shop" };
   if (res.code === "POLICY_CHANGED" || res.code === "POLICY_NOT_ACCEPTED") {
     return { kind: "policy", ...(res.policy ? { policy: res.policy } : {}) };
   }

@@ -1,6 +1,7 @@
 import { Router, type Response } from "express";
 import { z } from "zod";
 import { countBookingRefusals } from "../services/bookingRefusal.js";
+import { bookingBlockedFor, CONTACT_SHOP_ERROR } from "../services/clientBookingBlock.js";
 import {
   dayAvailabilityCache,
   noteAvailabilityChanged,
@@ -381,6 +382,11 @@ bookingPublicRouter.post(
         // booking page gives, so a customer gets one consistent answer rather
         // than a refusal from one entry point and silence from another.
         res.status(409).json({ error: "slot_unavailable_external", code: "SLOT_UNAVAILABLE" });
+        return;
+      case "contact_shop":
+        // The shop blocked this client after the offer went out. The offer
+        // was RELEASED so the time is not held for nobody.
+        res.status(403).json({ error: CONTACT_SHOP_ERROR, code: "CONTACT_SHOP" });
         return;
       default: {
         //  🔴 EXHAUSTIVENESS, AND WHY IT IS HERE.
@@ -2012,6 +2018,15 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     return;
   }
 
+  // A CLIENT THE SHOP BLOCKED books nothing online - a single visit or a
+  // series. Asked here, after every check that does not depend on WHO is
+  // booking and before anything is written, so a valid request differs from a
+  // booking only by this answer (services/clientBookingBlock.ts).
+  if (await bookingBlockedFor(prisma, shop.id, { acuityClientKey, phone, email: d.email })) {
+    res.status(403).json({ error: CONTACT_SHOP_ERROR, code: "CONTACT_SHOP" });
+    return;
+  }
+
   // ── A STANDING APPOINTMENT ────────────────────────────────────────────────
   //
   // Everything above still applied: the service is real and offered by this
@@ -2950,8 +2965,11 @@ const MANAGE_SELECT = {
       holdExpiresAt: true,
       // The balance line on a reopened card step (unfinishedCheckoutFor).
       priceAtBooking: true,
-      // Whose appointment this is - for the card they saved here, if any.
+      // Whose appointment this is - for the card they saved here, if any, and
+      // whether the shop blocked them from moving it (never sent to the page).
       clientId: true,
+      phone: true,
+      email: true,
       shop: {
         select: {
           name: true,
@@ -2976,6 +2994,15 @@ type ManageRow = Prisma.AppointmentGetPayload<{ select: typeof MANAGE_SELECT }>;
 async function renderManage(res: Response, appt: ManageRow): Promise<void> {
   const now = new Date();
   const canChange = appt.status === "BOOKED" && appt.startsAt > now;
+  // A client the shop blocked from booking may cancel, never move. The
+  // reschedule route refuses them; this stops the page offering it.
+  const canMove =
+    canChange &&
+    !(await bookingBlockedFor(prisma, appt.shopId, {
+      clientId: appt.clientId,
+      phone: appt.phone,
+      email: appt.email,
+    }));
 
   // A standing appointment: how many LATER visits are still on the books, so
   // the page can offer "cancel this and the rest" instead of making the
@@ -3057,7 +3084,7 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     service: appt.service,
     staff: appt.staff,
     canCancel: canChange,
-    canReschedule: canChange,
+    canReschedule: canMove,
     series: appt.seriesId ? { remaining: remainingInSeries } : null,
     // Check-in ("On my way"): the window is computed HERE so the client needs
     // no timezone math - it just renders the button when open is true. A
@@ -3677,6 +3704,10 @@ bookingPublicRouter.post(
         serviceId: true,
         status: true,
         startsAt: true,
+        // Who it is for - a client the shop blocked can't move it online.
+        clientId: true,
+        phone: true,
+        email: true,
         // Booked into a special? Moving it gives the special back (below).
         bookedVia: true,
         // The BOOKING payment: what the customer prepaid to hold this slot.
@@ -3719,6 +3750,19 @@ bookingPublicRouter.post(
     }
     if (appt.status !== "BOOKED" || appt.startsAt <= new Date()) {
       res.status(409).json({ error: "not_reschedulable" });
+      return;
+    }
+    // Moving a booking is booking a new time: a client the shop blocked asks
+    // the shop instead. Cancelling stays open to them - a blocked client who
+    // can't cancel is a no-show waiting to happen.
+    if (
+      await bookingBlockedFor(prisma, appt.shopId, {
+        clientId: appt.clientId,
+        phone: appt.phone,
+        email: appt.email,
+      })
+    ) {
+      res.status(403).json({ error: CONTACT_SHOP_ERROR });
       return;
     }
 

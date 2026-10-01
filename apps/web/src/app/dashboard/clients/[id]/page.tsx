@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/Card";
 import { Avatar } from "@/components/ui/Avatar";
 import { InstagramHandle } from "@/components/InstagramHandle";
 import { UpcomingVisits, type UpcomingRow } from "./UpcomingVisits";
+import { BookingBlock } from "./BookingBlock";
 import { ClientActions } from "./ClientActions";
 import { EditClient } from "./EditClient";
 import { EmailMarketing, type ClientEmailMarketing } from "./EmailMarketing";
@@ -42,6 +43,8 @@ interface ClientDetail {
     /** The card they asked the shop to keep for their future appointments. */
     savedCard?: SavedCardFacts | null;
     archived: boolean;
+    /** When the shop blocked them from booking online, or null. Optional: an older API sends none. */
+    bookingBlockedAt?: string | null;
     notes: string;
     source: string;
     magicToken: string;
@@ -196,6 +199,11 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
                 opted out
               </span>
             )}
+            {client.bookingBlockedAt && (
+              <span className="ml-2 text-[10px] uppercase tracking-wide text-danger-soft">
+                blocked from booking
+              </span>
+            )}
           </p>
           </div>
         </div>
@@ -208,8 +216,9 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           overdue={overdue}
           // A nudge goes to their ChairBack app first, which needs no phone
           // number and no text consent - the API says where it went, or why
-          // it couldn't (no app, and texting off or not allowed).
-          canNudge
+          // it couldn't (no app, and texting off or not allowed). Not for a
+          // client blocked from booking: a nudge says "time to book".
+          canNudge={!client.bookingBlockedAt}
         />
       </header>
 
@@ -254,6 +263,12 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           timezone={timezone}
         />
         {client.savedCard && <SavedCardPanel card={client.savedCard} timezone={timezone} />}
+        <BookingBlock
+          clientId={client.id}
+          initial={client.bookingBlockedAt}
+          upcoming={upcoming.length}
+          timezone={timezone}
+        />
       </div>
 
       {/* Snapshot (punch/reward stats only exist for rewards shops) */}

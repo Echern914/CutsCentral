@@ -65,6 +65,16 @@ export const BOOKING_ERROR_CODES = [
    * the card and books with a card step instead.
    */
   "SAVED_CARD_UNAVAILABLE",
+  /**
+   * The shop takes this person's bookings itself: the phone or email on the
+   * form belongs to a client it blocked from booking online. Nothing was
+   * written.
+   *
+   * 🔴 NAMED FOR WHAT THE CUSTOMER CAN DO, NOT WHY. The answer goes to whoever
+   * typed that phone or email, who need not be the person the shop blocked, so
+   * neither the code nor the copy says "blocked".
+   */
+  "CONTACT_SHOP",
   /** Anything unexpected. The customer sees a safe generic message. */
   "BOOKING_FAILED",
 ] as const;

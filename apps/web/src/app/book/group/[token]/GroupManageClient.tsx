@@ -92,7 +92,9 @@ export function GroupManageClient({
           ? "That time was just taken. Nobody was moved - please pick another."
           : res.code === "canceled"
             ? "This group has been cancelled."
-            : "That time did not work. Please pick another.",
+            : res.code === "contact_shop"
+              ? "This booking can't be moved online. Please contact the shop to change it."
+              : "That time did not work. Please pick another.",
       );
       return;
     }

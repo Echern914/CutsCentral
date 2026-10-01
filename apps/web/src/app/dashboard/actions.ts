@@ -271,6 +271,26 @@ export async function toggleOptOutAction(
   return { ok: res.ok, error: res.error };
 }
 
+/**
+ * Block a client from booking online, or unblock them. Answers with when the
+ * block started (null = not blocked), so the panel shows the saved state.
+ */
+export async function setBookingBlockAction(
+  clientId: string,
+  blocked: boolean,
+): Promise<{ ok: boolean; bookingBlockedAt?: string | null }> {
+  const res = await apiSend<{ ok: boolean; bookingBlockedAt: string | null }>(
+    "POST",
+    `/api/dashboard/clients/${clientId}/booking-block`,
+    { blocked },
+  );
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  revalidatePath("/dashboard/clients");
+  return res.ok && res.data
+    ? { ok: true, bookingBlockedAt: res.data.bookingBlockedAt }
+    : { ok: false };
+}
+
 export async function saveNotesAction(
   clientId: string,
   notes: string,

@@ -614,6 +614,24 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     neverExpose: [],
   },
   {
+    id: "block_client_from_booking",
+    intent: "Can I stop a particular client from booking with me?",
+    // Asked by a live shop the day it was built. The near miss is the
+    // block-off-time answer: same verb, and it would send the owner to their
+    // calendar instead of the client's page. Blocking is an owner's or a
+    // manager's call, so a barber seat is answered and pointed upstairs.
+    actors: SEAT_ACTORS,
+    dataClass: "product_knowledge",
+    authority: "help_corpus",
+    corpusIds: ["block-client"],
+    wrongCorpusIds: ["time-off"],
+    mcpTool: "help_find_feature",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "Open the client's page in the client book and tap Block from booking.",
+    neverExpose: [],
+  },
+  {
     id: "double_booking_why",
     intent: "Why did a double booking happen?",
     actors: SEAT_ACTORS,

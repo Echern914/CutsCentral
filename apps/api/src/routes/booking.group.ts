@@ -32,6 +32,7 @@ import { bookingReadLimiter, bookingWriteLimiter, rewardsLimiter } from "../midd
 import { logger } from "../logger.js";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { fillBlankClientFields } from "../services/clientFill.js";
+import { bookingBlockedFor, CONTACT_SHOP_ERROR } from "../services/clientBookingBlock.js";
 
 /**
  * Back-to-back group booking: "me and my brother, one after the other".
@@ -586,6 +587,13 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
     baseKey.startsWith("anon:") && who.instagram ? `${baseKey}@ig:${who.instagram}` : baseKey;
   const consented = d.smsConsent === true;
 
+  // A booker the shop blocked books no party online - the same question, in
+  // the same place, as the single booking (services/clientBookingBlock.ts).
+  if (await bookingBlockedFor(prisma, shop.id, { acuityClientKey, phone, email: d.email })) {
+    res.status(403).json({ error: CONTACT_SHOP_ERROR, code: "CONTACT_SHOP" });
+    return;
+  }
+
   // Collected inside the transaction, acted on after it commits.
   const appointmentIds: string[] = [];
   const mirrorOutboxIds: string[] = [];
@@ -871,6 +879,10 @@ async function groupByToken(token: string | undefined) {
       staffId: true,
       status: true,
       firstName: true,
+      // The booker - a client the shop blocked can't move the party online.
+      clientId: true,
+      phone: true,
+      email: true,
       shop: { select: { slug: true, timezone: true, name: true, bookingBufferMin: true } },
       staff: { select: { name: true } },
       appointments: {
@@ -981,6 +993,18 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
   const shop = await prisma.shop.findUnique({ where: { id: group.shopId } });
   if (!shop) {
     res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // Moving the party is booking new times: a booker the shop blocked asks the
+  // shop. Cancelling stays open, exactly as for a single booking.
+  if (
+    await bookingBlockedFor(prisma, shop.id, {
+      clientId: group.clientId,
+      phone: group.phone,
+      email: group.email,
+    })
+  ) {
+    res.status(403).json({ error: CONTACT_SHOP_ERROR });
     return;
   }
 

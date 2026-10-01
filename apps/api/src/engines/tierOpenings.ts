@@ -2,6 +2,7 @@ import { LOYALTY_TIERS, apiEnv, randomToken } from "@chairback/config";
 import { Prisma, prisma, runAsOwner, runWithShop, type LoyaltyTier } from "@chairback/db";
 import { logger } from "../logger.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
+import { bookingBlockedFor } from "../services/clientBookingBlock.js";
 import { settleClientLinks } from "../services/customerIdentity.js";
 import { sendPushToClient } from "../messaging/push.js";
 import { formatApptTime } from "../messaging/templates.js";
@@ -91,7 +92,9 @@ async function invitees(
       shopId,
       status: "active",
       account: { isDemo: false },
-      client: { shopId, archivedAt: null, loyaltyTier: { in: tiers } },
+      // Never someone the shop blocked from booking: an invitation they could
+      // not use is a time held for nobody.
+      client: { shopId, archivedAt: null, bookingBlockedAt: null, loyaltyTier: { in: tiers } },
     },
     orderBy: [{ linkedAt: "asc" }, { id: "asc" }],
     select: { accountId: true, clientId: true, client: { select: { loyaltyTier: true } } },
@@ -116,7 +119,9 @@ export async function previewTierOpening(shopId: string, minTier: LoyaltyTier): 
   const tiers = tiersAtOrAbove(minTier);
   const [members, people] = await Promise.all([
     runWithShop(shopId, (tx) =>
-      tx.client.count({ where: { shopId, archivedAt: null, loyaltyTier: { in: tiers } } }),
+      tx.client.count({
+        where: { shopId, archivedAt: null, bookingBlockedAt: null, loyaltyTier: { in: tiers } },
+      }),
     ),
     runAsOwner((tx) => invitees(tx, shopId, minTier)),
   ]);
@@ -426,7 +431,9 @@ export async function openingsForAccount(accountId: string, now = new Date()): P
       where: {
         accountId,
         opening: { status: "HELD", heldUntil: { gt: now }, startsAt: { gt: now } },
-        client: { customerLinks: { some: { accountId, status: "active" } } },
+        // A record the shop has since blocked from booking: its invitation
+        // goes quietly, as one for an unlinked record does.
+        client: { customerLinks: { some: { accountId, status: "active" } }, bookingBlockedAt: null },
       },
       orderBy: { opening: { startsAt: "asc" } },
       take: 20,
@@ -496,7 +503,9 @@ export type ClaimTierOpeningResult =
   | { outcome: "slot_taken" }
   | { outcome: "day_full" }
   | { outcome: "deposit_required" }
-  | { outcome: "unavailable_external" };
+  | { outcome: "unavailable_external" }
+  /** The shop blocked this client from booking online since the invitation. */
+  | { outcome: "contact_shop" };
 
 /**
  * Book an opening as one of its invited members - revalidated and written
@@ -566,6 +575,18 @@ export async function claimTierOpening(params: {
         }),
       ]);
       if (!shop || !client) return { outcome: "not_found" };
+      // Blocked since the invitation - this record, or anyone holding its
+      // phone or email (services/clientBookingBlock.ts). Nothing is written and
+      // the hold stays for the other members.
+      if (
+        await bookingBlockedFor(tx, opening.shopId, {
+          clientId: client.id,
+          phone: client.phone,
+          email: client.email,
+        })
+      ) {
+        return { outcome: "contact_shop" };
+      }
 
       // The shop turned deposits on mid-hold: never an unpaid booking. The hold
       // goes back to the pool so the slot is not lost to everyone.

@@ -179,6 +179,7 @@ async function audienceOf(ids: string[]) {
         emailOptedOut: true,
         loyaltyTier: true,
         archivedAt: true,
+        bookingBlockedAt: true,
         emailMarketingConsentAt: true,
       },
     }),

@@ -1838,3 +1838,78 @@ describe("🔴 loyalty rank reorders the queue without changing what the queue i
     expect([...trace]).toEqual(byJoinTime);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* A client the shop blocked from booking                              */
+/* ------------------------------------------------------------------ */
+
+describe("🔴 a client the shop blocked from booking is never held a time", () => {
+  /** A client record the shop blocked, holding this contact. */
+  async function blockedClient(contact: { email?: string; phone?: string }) {
+    return prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: contact.phone ? `tel:${contact.phone}` : `mail:${contact.email}`,
+        magicToken: randomToken(),
+        firstName: "Blocked",
+        email: contact.email ?? null,
+        phone: contact.phone ?? null,
+        bookingBlockedAt: new Date(),
+      },
+      select: { id: true },
+    });
+  }
+
+  it("the walk skips them - by email, by phone, or by their linked record - and holds the time for the next person", async () => {
+    const slot = freshSlot();
+    // Joined first, so each would be first in line - all three blocked.
+    const byEmail = await makeEntry();
+    await blockedClient({ email: byEmail.email!.toUpperCase() });
+    const byPhone = await makeEntry({ email: null, phone: "+12025550161" });
+    await blockedClient({ phone: "+12025550161" });
+    const linked = await blockedClient({ email: `linked-${randomToken(4)}@test.local` });
+    const byLink = await makeEntry({ email: null, phone: "+12025550162", clientId: linked.id });
+    const next = await makeEntry();
+
+    const res = await offerFreedSlot(slot, new Date());
+    expect(res.outcome).toBe("offered");
+    if (res.outcome !== "offered") throw new Error("unreachable");
+    expect(res.entryId).toBe(next.id);
+    for (const skipped of [byEmail, byPhone, byLink]) {
+      expect(await prisma.waitlistOffer.count({ where: { entryId: skipped.id } })).toBe(0);
+    }
+  });
+
+  it("blocked after the offer went out: the claim books nothing and lets the time go", async () => {
+    const slot = freshSlot();
+    const entry = await makeEntry();
+    const res = await offerTo(slot);
+    expect(res.entryId).toBe(entry.id);
+
+    await blockedClient({ email: entry.email! });
+    const claim = await claimOffer({ token: res.token, now: new Date() });
+    expect(claim.outcome).toBe("contact_shop");
+
+    const offer = await prisma.waitlistOffer.findUnique({ where: { id: res.offerId } });
+    expect(offer!.status).toBe("RELEASED");
+    expect(
+      await prisma.appointment.count({
+        where: { shopId, staffId, startsAt: slot.startsAt, status: { in: ["BOOKED", "PENDING"] } },
+      }),
+    ).toBe(0);
+    // Still waiting, as after a deposit refusal - and never offered again.
+    const e = await prisma.waitlistEntry.findUnique({ where: { id: entry.id } });
+    expect(e!.status).toBe("WAITING");
+  });
+
+  it("a claim form that types a blocked contact is refused too", async () => {
+    const slot = freshSlot();
+    await makeEntry();
+    const res = await offerTo(slot);
+    const typed = `claim-typed-${randomToken(4)}@test.local`;
+    await blockedClient({ email: typed });
+
+    const claim = await claimOffer({ token: res.token, now: new Date(), customer: { email: typed } });
+    expect(claim.outcome).toBe("contact_shop");
+  });
+});

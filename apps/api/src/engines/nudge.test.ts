@@ -312,6 +312,30 @@ describe("sweepShop", () => {
     expect(after.considered).toBe(1);
   });
 
+  it("🔴 never nudges a client the shop blocked from booking - \"time to book\" they can't act on", async () => {
+    // Isolated shop, one overdue, consented client: the only thing that
+    // decides whether they are swept is the block.
+    const blockShop = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Block Gate Shop",
+        bookingUrl: "https://block.test",
+        webhookSecret: randomToken(),
+        nudgeBufferDays: 7,
+      },
+    });
+    const client = await makeOverdueClient(blockShop.id, "tel:+13025551098", "+13025551098");
+    await prisma.client.update({ where: { id: client.id }, data: { bookingBlockedAt: NOW } });
+
+    const summary = await sweepShop(blockShop, { now: NOW, dryRun: true });
+    expect(summary.considered).toBe(0);
+    expect(await prisma.nudge.count({ where: { shopId: blockShop.id, clientId: client.id } })).toBe(0);
+
+    // Sanity: unblocked, the SAME client is a candidate again.
+    await prisma.client.update({ where: { id: client.id }, data: { bookingBlockedAt: null } });
+    expect((await sweepShop(blockShop, { now: NOW, dryRun: true })).considered).toBe(1);
+  });
+
   it("sends nothing during TCPA quiet hours (real run)", async () => {
     await makeOverdueClient(shop.id, "tel:+13025551001", "+13025551001");
     // 06:00 UTC = 02:00 America/New_York (EDT) -> deep in quiet hours.

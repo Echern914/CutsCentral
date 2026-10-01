@@ -255,6 +255,12 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
       setNotice("We could not reach the shop. Tap Confirm again - this will not double-book.");
       return;
     }
+    if (res.kind === "contact_shop") {
+      // Another time would get the same answer, so no "pick another" - and
+      // never a word about why (bookingErrors.ts CONTACT_SHOP).
+      setNotice("We can't take this booking online. Please contact the shop directly to book.");
+      return;
+    }
     setNotice(
       res.kind === "invalid"
         ? (res.message ?? "Please check the names and your details.")

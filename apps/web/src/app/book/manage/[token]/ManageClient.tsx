@@ -278,6 +278,13 @@ export function ManageClient({
                 }}
               />
             )}
+            {/* Cancellable but not movable: only a client the shop takes
+                bookings from itself. Who to ask, never why. */}
+            {data.canCancel && !data.canReschedule && !demoTour && (
+              <p className="text-center text-xs text-muted">
+                To move this appointment, please contact the shop.
+              </p>
+            )}
             {data.canCancel && !demoTour && (
               <button
                 type="button"
@@ -816,6 +823,14 @@ function ReschedulePicker({
     setSelected(iso);
     startTransition(async () => {
       const res = await rescheduleBookingAction(token, iso);
+      if (!res.ok && res.error === "contact_shop") {
+        // The shop arranges this client's bookings itself. Any other time
+        // would get the same answer, so no refreshed list - just who to ask.
+        // Cancelling is still open to them.
+        setSelected(null);
+        setErr("This appointment can't be moved online. Please contact the shop to change it.");
+        return;
+      }
       if (!res.ok) {
         setSelected(null);
         // slot_taken is the one error worth its own words: somebody booked it

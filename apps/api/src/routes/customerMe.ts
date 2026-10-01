@@ -324,6 +324,10 @@ customerMeRouter.post("/openings/:id/book", async (req, res) => {
     }
     case "not_found":
     case "not_linked":
+    // Blocked from booking since the invitation: the opening is no longer
+    // theirs, and the app already reads a 404 as "that one's gone" - never a
+    // word about a block.
+    case "contact_shop":
       // A record the shop corrected since the invitation is not this person's
       // to book as - and saying so would confirm whose it is.
       return notFound(res);
