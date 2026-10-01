@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-01-edit-save-anyway",
+    date: "2026-10-01",
+    kind: "fix",
+    title: "Change a booking's service at any time",
+    body:
+      "Changing a booking to another service - or another time - no longer dead-ends when it isn't one of the usual " +
+      "openings clients get. Edit appointment tells you why and lets you Save anyway. It still can't overlap another " +
+      "booking.",
+  },
+  {
     id: "2026-10-01-addons-say-why",
     date: "2026-10-01",
     kind: "fix",

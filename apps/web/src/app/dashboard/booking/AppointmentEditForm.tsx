@@ -122,6 +122,16 @@ export interface AppointmentEditState {
   overlapConflict: BlockConflict | null;
   confirmOverlap: () => void;
   dismissOverlap: () => void;
+  /**
+   * The time isn't one of this service's usual openings (invalid_slot) - off
+   * its usual start times, outside the hours, inside the booking notice. Those
+   * are rules for CUSTOMERS booking online; the barber editing his own
+   * calendar can keep the time anyway (the API's `customTime`, the same
+   * override New appointment's custom time sends). Overlap is still checked.
+   */
+  offHoursConflict: BlockConflict | null;
+  confirmOffHours: () => void;
+  dismissOffHours: () => void;
   row: AgendaRow;
   detail: AppointmentDetail | null;
   fields: {
@@ -193,6 +203,9 @@ export function useAppointmentEdit({
   // The overlap he already said yes to, carried on the retry that follows - so
   // answering an overlap and THEN an Acuity block sends both answers.
   const acceptedOverlap = useRef<string | null>(null);
+  // "Save anyway" on a time that isn't a usual opening: carried the same way.
+  const [offHoursConflict, setOffHoursConflict] = useState<BlockConflict | null>(null);
+  const acceptedCustomTime = useRef(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   // 🔴 NOT useTransition's `isPending` on its own. React 18 ends a transition
   // when the callback RETURNS, and an async callback returns its promise
@@ -288,9 +301,11 @@ export function useAppointmentEdit({
   useEffect(() => {
     setSaveError(null);
     // A "Book anyway" answered ONE question - this time, this chair, this
-    // length. Any edit asks a different one.
+    // length. Any edit asks a different one. So did a "Save anyway".
     setOverlapConflict(null);
     acceptedOverlap.current = null;
+    setOffHoursConflict(null);
+    acceptedCustomTime.current = false;
   }, [draftKey]);
 
   function save(opts?: { confirmation?: string; overlap?: string }) {
@@ -322,6 +337,9 @@ export function useAppointmentEdit({
     // Same for "Book anyway": the digest names the exact bookings he was
     // shown, so anything new in the way is asked about again.
     if (acceptedOverlap.current) patch.overlapConfirmation = acceptedOverlap.current;
+    // "Save anyway": skip the usual-openings check for this save. Overlap and
+    // blocked time are still checked under the lock, and still asked about.
+    if (acceptedCustomTime.current) patch.customTime = true;
 
     inFlight.current = true;
     setSaving(true);
@@ -366,16 +384,29 @@ export function useAppointmentEdit({
           );
           return;
         }
+        // Not a usual opening for this service. That used to be a dead end
+        // that also blamed the wrong thing ("outside your hours") - a barber
+        // changing a 9:30 twist to a 90-minute braid was refused only because
+        // 9:30 isn't one of the braid's usual start times. Offer the override.
+        // (If it comes back even with the override sent, that's the answer.)
+        if (res.error === "invalid_slot" && !acceptedCustomTime.current) {
+          setBlockConflict(null);
+          setOverlapConflict(null);
+          setOffHoursConflict({ reason: OFF_HOURS_REASON, confirmation: "custom-time" });
+          return;
+        }
         // Any other refusal is the authoritative answer now - the banners are
         // out of date, so they go and the real error is what he sees. Not a
         // toast: see `saveError`.
         setBlockConflict(null);
         setOverlapConflict(null);
+        setOffHoursConflict(null);
         setSaveError(errorCopy(vocab)[res.error ?? ""] ?? "Couldn't save those changes. Try again.");
         return;
       }
       setBlockConflict(null);
       setOverlapConflict(null);
+      setOffHoursConflict(null);
       setSaveError(null);
       // Honest about the Acuity half. A move whose block did not confirm is
       // NOT a clean success, and saying so is the whole point of reporting it.
@@ -408,6 +439,12 @@ export function useAppointmentEdit({
     overlapConflict,
     confirmOverlap: () => save({ overlap: overlapConflict?.confirmation }),
     dismissOverlap: () => setOverlapConflict(null),
+    offHoursConflict,
+    confirmOffHours: () => {
+      acceptedCustomTime.current = true;
+      save();
+    },
+    dismissOffHours: () => setOffHoursConflict(null),
     row,
     detail,
     fields: {
@@ -497,6 +534,18 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
           }
           onConfirm={state.confirmOverlap}
           onDismiss={state.dismissOverlap}
+        />
+      )}
+      {state.offHoursConflict && (
+        <ExternalBlockBanner
+          conflict={state.offHoursConflict}
+          pending={state.pending}
+          confirmLabel="Save anyway"
+          pendingLabel="Saving…"
+          consequence="Those times are for clients booking online. You can still keep this booking as it is - it just can't overlap another booking."
+          dismissLabel="Go back"
+          onConfirm={state.confirmOffHours}
+          onDismiss={state.dismissOffHours}
         />
       )}
       {row.status === "pending" && (
@@ -724,6 +773,16 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
   );
 }
 
+/**
+ * Why a time isn't a "usual opening" (invalid_slot). The API can't say which
+ * rule it was, so this names every one it might be - the most common for an
+ * edit first: a new service steps from opening time by its OWN length, so a
+ * time that suited a 75-minute service may not be one of a 90-minute one's.
+ */
+const OFF_HOURS_REASON =
+  "That time isn't one of this service's usual openings. It may be between its usual start times, " +
+  "outside your hours or the service's, or inside your booking notice.";
+
 // A function of the shop's words rather than a module constant: two of these
 // name the workspace or the provider, and a module-level constant has no
 // vocabulary to read.
@@ -735,9 +794,9 @@ const errorCopy = (vocab: BusinessVocabulary): Record<string, string> => ({
   // "Book anyway" cleared every overlap, and this is the one rule with no
   // override: two bookings cannot START at the same minute on one chair.
   same_start: "Another appointment starts at exactly that minute. Start this one a few minutes later (e.g. :05).",
-  // Hours are the staff member's AND the service's own: a service offered only
-  // 1-2:30 and 4:30-8 is refused at 3:00 even inside the working day.
-  invalid_slot: "That time isn't open for this service — it's outside your hours or the hours this service is offered.",
+  // Normally answered by the "Save anyway" banner (OFF_HOURS_REASON); this is
+  // what shows only if it comes back with the override already sent.
+  invalid_slot: OFF_HOURS_REASON,
   // Only a FALLBACK: the server names the actual block and window, and that
   // sentence is what the banner shows. This is what it says if a refusal ever
   // arrives without one.
