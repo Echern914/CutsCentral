@@ -4,12 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 /**
- * A SHOP'S OWN DOMAIN, FROM THE TAP TO THE PAGE.
+ * BOOKING FROM A SHOP'S OWN DOMAIN, FROM THE TAP TO THE PAGE.
  *
- * The chain a customer takes from an Instagram bio: the middleware sees
- * drickcuttinup.com and rewrites to the resolver; the resolver looks the
- * domain up and 308s to getchairback.com; the browser follows; the page
- * renders a shop. What this file pins, in that order:
+ * The chain a customer takes from a /book link on the shop's domain: the
+ * middleware rewrites it to the resolver; the resolver looks the domain up and
+ * 308s to booking on getchairback.com; the browser follows; the page renders
+ * a shop. (The shop's page itself is served on the domain, not redirected -
+ * app/custom-domain/[host]/customDomainPage.test.tsx pins that one.) What this
+ * file pins, in that order:
  *
  *   - the visitor's own query (utm_*, fbclid) survives every hop;
  *   - a lookup that could not answer shows a retry page ON the domain -
@@ -155,13 +157,14 @@ beforeEach(() => {
 
 //  ── the chain ─────────────────────────────────────────────────────────────
 
-/** The customer taps a link on the shop's own domain: middleware, then the resolver. */
+/** The customer taps a booking link on the shop's own domain: middleware, then the resolver. */
 async function tap(url: string): Promise<Response> {
   const u = new URL(url);
   const mw = middleware(new NextRequest(u, { headers: { host: u.host } }));
   const rewrite = mw.headers.get("x-middleware-rewrite");
   expect(rewrite).toBeTruthy();
   const r = new URL(rewrite!);
+  expect(r.pathname.startsWith("/from-domain/")).toBe(true);
   const host = decodeURIComponent(r.pathname.replace("/from-domain/", ""));
   // Exactly what Next does with the middleware's request-header override:
   // the header it set arrives on the route's request.
@@ -210,11 +213,11 @@ const IG = "utm_source=ig&utm_medium=social&utm_content=link_in_bio&fbclid=PAZXh
 //  ── the resolver ──────────────────────────────────────────────────────────
 
 describe("the resolver on a shop's domain", () => {
-  it("🔴 308s to the shop with Instagram's query intact, and says which domain it came from", async () => {
-    const res = await tap(`https://drickcuttinup.com/?${IG}`);
+  it("🔴 308s to the shop's booking with Instagram's query intact, and says which domain it came from", async () => {
+    const res = await tap(`https://drickcuttinup.com/book?${IG}`);
     expect(res.status).toBe(308);
     const to = new URL(res.headers.get("location")!);
-    expect(`${to.origin}${to.pathname}`).toBe("https://getchairback.com/s/drickcuttinup");
+    expect(`${to.origin}${to.pathname}`).toBe("https://getchairback.com/book/drickcuttinup");
     for (const [k, v] of new URLSearchParams(IG)) expect(to.searchParams.get(k)).toBe(v);
     expect(to.searchParams.get("cb_domain")).toBe("drickcuttinup.com");
     // The internal path carrier never leaks out.
@@ -226,25 +229,28 @@ describe("the resolver on a shop's domain", () => {
   });
 
   it("🔴 looks the domain up fresh - never from a cache that can outlive a slug", async () => {
-    await tap("https://drickcuttinup.com/");
+    await tap("https://drickcuttinup.com/book");
     const lookup = apiPublicGet.mock.calls.find((c) => String(c[0]).includes("by-domain"))!;
     expect(lookup[0]).toBe("/api/page/-/by-domain/drickcuttinup.com");
     expect(lookup[1]).toBeUndefined();
   });
 
-  it("/book on the domain goes to booking, query intact; www and case land on the same shop", async () => {
+  it("a prefill rides along; any spelling of booking, and any case, lands on the same shop", async () => {
     const book = new URL((await tap(`https://drickcuttinup.com/book?service=svc_1&${IG}`)).headers.get("location")!);
     expect(book.pathname).toBe("/book/drickcuttinup");
     expect(book.searchParams.get("service")).toBe("svc_1");
     expect(book.searchParams.get("utm_source")).toBe("ig");
     expect(book.searchParams.get("cb_domain")).toBe("drickcuttinup.com");
-    const www = new URL((await tap("https://WWW.DrickCuttinUp.com/")).headers.get("location")!);
-    expect(www.pathname).toBe("/s/drickcuttinup");
-    expect(www.searchParams.get("cb_domain")).toBe("drickcuttinup.com");
+    // The slug in the path is never read: the domain names the shop.
+    for (const url of ["https://DrickCuttinUp.com/BOOK", "https://drickcuttinup.com/book/other-barber"]) {
+      const to = new URL((await tap(url)).headers.get("location")!);
+      expect(to.pathname, url).toBe("/book/drickcuttinup");
+      expect(to.searchParams.get("cb_domain"), url).toBe("drickcuttinup.com");
+    }
   });
 
   it("a domain nobody has verified goes to the platform, temporarily, query intact", async () => {
-    const res = await tap(`https://notconnected.com/?${IG}`);
+    const res = await tap(`https://notconnected.com/book?${IG}`);
     expect(res.status).toBe(302);
     const to = new URL(res.headers.get("location")!);
     expect(to.origin).toBe("https://getchairback.com");
@@ -363,52 +369,53 @@ describe("🔴 THE RACE: the slug is reclaimed after the lookup, before the redi
     ];
   }
 
-  it("the shop page fails closed - the other shop never appears", async () => {
-    const res = await tap(`https://drickcuttinup.com/?${IG}`);
+  it("the booking page fails closed - no form for the wrong shop", async () => {
+    const res = await tap(`https://drickcuttinup.com/book?${IG}`);
     const dest = follow(res.headers.get("location")!);
+    expect(dest.kind).toBe("book");
     expect(dest.slug).toBe("drickcuttinup"); // what the lookup said, a moment ago
     reclaim();
     const out = await land(dest);
     expect(out.notFound).toBe(true);
     expect(out.shopName).toBeNull();
     expect(JSON.stringify(out.metadata)).not.toContain("Imposter");
-    expect(ShopPageClient).not.toHaveBeenCalled();
-  });
-
-  it("the booking page fails closed - no form for the wrong shop", async () => {
-    const res = await tap(`https://drickcuttinup.com/book?${IG}`);
-    const dest = follow(res.headers.get("location")!);
-    reclaim();
-    const out = await land(dest);
-    expect(out.notFound).toBe(true);
-    expect(JSON.stringify(out.metadata)).not.toContain("Imposter");
     expect(BookingClient).not.toHaveBeenCalled();
   });
 
+  it("an old link to the shop page from the redirect days fails closed the same way", async () => {
+    // Visitors were sent to /s/<slug>?cb_domain= before the page was served on
+    // the domain itself, and a copied link keeps that shape.
+    reclaim();
+    const out = await land({ kind: "s", slug: "drickcuttinup", searchParams: { cb_domain: "drickcuttinup.com" } });
+    expect(out.notFound).toBe(true);
+    expect(JSON.stringify(out.metadata)).not.toContain("Imposter");
+    expect(ShopPageClient).not.toHaveBeenCalled();
+  });
+
   it("fails closed even when the stale page is still in the cache - then the next tap lands right", async () => {
-    const res = await tap("https://drickcuttinup.com/");
+    const res = await tap("https://drickcuttinup.com/book");
     const dest = follow(res.headers.get("location")!);
     const before = shops;
     reclaim();
-    // The worst case: the cached copy of /api/page/drickcuttinup is Drick's
+    // The worst case: the cached copy of /api/book/drickcuttinup is Drick's
     // (from before), the live one is the impostor's.
     cachedShops = before;
     const stale = await land(dest);
-    // The cached copy passes the check because it IS Drick's page, a minute
+    // The cached copy passes the check because it IS Drick's page, moments
     // old - the domain proves whose it is. Never the impostor's.
     expect(stale.notFound).toBe(false);
     expect(stale.shopName).toBe("Drick Cuttin Up");
     expect(JSON.stringify(stale.metadata)).not.toContain("Imposter");
     cachedShops = null;
     // The next tap looks the domain up fresh and lands on Drick's new name.
-    const next = follow((await tap("https://drickcuttinup.com/")).headers.get("location")!);
+    const next = follow((await tap("https://drickcuttinup.com/book")).headers.get("location")!);
     expect(next.slug).toBe("drick-new");
     const out = await land(next);
     expect(out.shopName).toBe("Drick Cuttin Up");
   });
 
   it("control: with no reclaim, the same redirect lands on Drick", async () => {
-    const dest = follow((await tap(`https://drickcuttinup.com/?${IG}`)).headers.get("location")!);
+    const dest = follow((await tap(`https://drickcuttinup.com/book?${IG}`)).headers.get("location")!);
     const out = await land(dest);
     expect(out.notFound).toBe(false);
     expect(out.shopName).toBe("Drick Cuttin Up");

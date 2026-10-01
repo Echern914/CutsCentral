@@ -167,6 +167,49 @@ describe("a photo, full screen", () => {
   });
 });
 
+describe("the page served on a shop's own domain", () => {
+  it("🔴 every way to book - and back to ChairBack - leads to the platform", () => {
+    // Served on the shop's domain, where "/" is this page and booking does
+    // not live: Book, the photo's Book this look, the rewards finder and the
+    // powered-by line all point at getchairback.com.
+    for (const design of ["classic", "grid"]) {
+      const { unmount } = render(
+        <ShopPageClient
+          data={page({ pageDesign: design })}
+          bookQuery="?cb_domain=shop.example"
+          platformOrigin="https://getchairback.com"
+        />,
+      );
+      for (const link of screen.getAllByRole("link", { name: /Book an appointment|Book with Fresh Studio/ })) {
+        expect(link.getAttribute("href"), design).toBe("https://getchairback.com/book/fresh?cb_domain=shop.example");
+      }
+      expect(screen.getByRole("link", { name: /Find my rewards/ }).getAttribute("href"), design).toBe(
+        "https://getchairback.com/my-rewards",
+      );
+      expect(screen.getByRole("link", { name: /Powered by/ }).getAttribute("href"), design).toBe(
+        "https://getchairback.com/?ref=fresh",
+      );
+      if (design === "grid") {
+        fireEvent.click(screen.getByRole("button", { name: "Skin taper" }));
+        const book = within(screen.getByRole("dialog")).getByRole("link", { name: "Book this look" });
+        expect(book.getAttribute("href")).toBe(
+          "https://getchairback.com/book/fresh?cb_domain=shop.example&service=svc-cut&staff=st-marcus",
+        );
+      }
+      unmount();
+    }
+  });
+
+  it("on getchairback.com itself, the same links stay on this site", () => {
+    render(<ShopPageClient data={page({ pageDesign: undefined })} />);
+    for (const link of screen.getAllByRole("link", { name: /Book an appointment|Book with Fresh Studio/ })) {
+      expect(link.getAttribute("href")).toBe("/book/fresh");
+    }
+    expect(screen.getByRole("link", { name: /Find my rewards/ }).getAttribute("href")).toBe("/my-rewards");
+    expect(screen.getByRole("link", { name: /Powered by/ }).getAttribute("href")).toBe("/?ref=fresh");
+  });
+});
+
 describe("the rewards button", () => {
   const withRewards = (design: string | undefined) => (
     <ShopPageClient data={page({ pageDesign: design })} rewardsHref="/r/tok/rewards" rewardsLabel="Your rewards · 3 punches" />

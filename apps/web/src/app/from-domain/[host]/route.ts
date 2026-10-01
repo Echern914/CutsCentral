@@ -1,13 +1,20 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { apiPublicGet } from "@/lib/api";
-import { DOMAIN_PARAM, PATH_HEADER, normalizeDomain } from "@/lib/customDomainGuard";
+import {
+  DOMAIN_PARAM,
+  PATH_HEADER,
+  classifyDomainLookup,
+  normalizeDomain,
+  reportLookupUnavailable,
+} from "@/lib/customDomainGuard";
+import { PLATFORM_ORIGIN, customDomainTarget } from "@/lib/customDomainRouting";
 
 /**
- * Custom-domain resolver. The middleware rewrites every request on a foreign
- * host here; this route looks the domain up and issues the REDIRECT that is
- * the whole design: 308 to the shop's canonical getchairback.com URL. Google
- * follows the 308, indexes the ChairBack URL, and shows it in results - the
- * barber's domain is a pointer, on purpose.
+ * Custom-domain resolver, for BOOKING on a shop's own domain: the middleware
+ * rewrites the domain's /book (and /book/<slug>) to this route, which looks
+ * the domain up and 308s to the shop's booking on getchairback.com - where
+ * booking lives (lib/customDomainRouting.ts says why). The shop's page itself
+ * is not redirected: it is served on the domain (app/custom-domain).
  *
  * Three answers, and they must never be confused:
  *
@@ -34,8 +41,6 @@ import { DOMAIN_PARAM, PATH_HEADER, normalizeDomain } from "@/lib/customDomainGu
  * landing page's own domain check closes that. Uncached calls forward the
  * visitor's IP, so the API rate-limits each visitor on their own.
  */
-
-const CANONICAL_ORIGIN = "https://getchairback.com";
 
 /** Our own redirects are never cached: the answer is live, and so is the slug. */
 const NO_STORE = "private, no-store";
@@ -123,36 +128,28 @@ export async function GET(
   const incoming = req.nextUrl.searchParams;
   const query = visitorQuery(incoming);
   const host = normalizeDomain(params.host);
-  if (!host) return redirect(withQuery(CANONICAL_ORIGIN, query), 302);
+  if (!host) return redirect(withQuery(PLATFORM_ORIGIN, query), 302);
 
   // Uncached: see the note at the top.
-  const res = await apiPublicGet<{ slug: string }>(
-    `/api/page/-/by-domain/${encodeURIComponent(host)}`,
+  const lookup = classifyDomainLookup(
+    await apiPublicGet<{ slug: string }>(`/api/page/-/by-domain/${encodeURIComponent(host)}`),
   );
 
-  if (res.ok && res.data?.slug) {
-    const slug = encodeURIComponent(res.data.slug);
-    // Their /book goes to booking; everything else lands on the shop page.
-    const target = originalPath(req).startsWith("/book")
-      ? `${CANONICAL_ORIGIN}/book/${slug}`
-      : `${CANONICAL_ORIGIN}/s/${slug}`;
+  if (lookup.kind === "found") {
+    const slug = encodeURIComponent(lookup.slug);
+    // Booking, read by the same table the middleware used to send it here (so
+    // /BOOK is booking in both). Anything else that reaches this route lands
+    // on the shop page.
+    const target =
+      customDomainTarget(originalPath(req)) === "book"
+        ? `${PLATFORM_ORIGIN}/book/${slug}`
+        : `${PLATFORM_ORIGIN}/s/${slug}`;
     query.set(DOMAIN_PARAM, host);
     return redirect(withQuery(target, query), 308);
   }
 
-  // A definite "no such domain" from the API. Anything else is not an answer.
-  if (res.status === 404 || res.status === 400) {
-    return redirect(withQuery(CANONICAL_ORIGIN, query), 302);
-  }
+  if (lookup.kind === "none") return redirect(withQuery(PLATFORM_ORIGIN, query), 302);
 
-  // Not silent: the host and the status, never anything about a visitor.
-  console.error(
-    JSON.stringify({
-      event: "custom_domain_lookup_unavailable",
-      host,
-      status: res.status,
-      error: res.error ?? (res.ok ? "no_slug_in_answer" : null),
-    }),
-  );
+  reportLookupUnavailable(host, lookup);
   return retryPage(host, withQuery(originalPath(req), query));
 }

@@ -136,6 +136,7 @@ export function FreshDesign({ ctx }: { ctx: DesignCtx }) {
         bookHref={ctx.bookHref}
         hasBooking={ctx.hasBooking}
         rewardsHref={ctx.rewardsHref}
+        platformOrigin={ctx.platformOrigin}
       />
     </DesignFrame>
   );

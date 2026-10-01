@@ -1,13 +1,14 @@
 /**
  * A SHOP'S OWN DOMAIN MUST NEVER LAND A VISITOR ON ANOTHER SHOP.
  *
- * drickcuttinup.com redirects to getchairback.com/s/<slug>, and a slug is not
- * an identity: a shop can rename, and another shop can take the name it let
- * go. A lookup - however fresh - answers for the moment it ran, and the
- * browser follows the redirect a moment later. So the redirect carries the
- * domain it came from (`?cb_domain=`), and the page it lands on renders only
- * if the shop it is about to show OWNS that verified domain. Anything else
- * fails closed: the visitor gets a plain not-found, never a stranger's page.
+ * A domain is looked up to a slug, and a slug is not an identity: a shop can
+ * rename, and another shop can take the name it let go. A lookup - however
+ * fresh - answers for the moment it ran, and the shop's page is read a moment
+ * later: in the same render when the page is served on the domain itself
+ * (app/custom-domain), after a redirect when booking is (`?cb_domain=` on
+ * getchairback.com). Either way the page renders only if the shop it is about
+ * to show OWNS that verified domain. Anything else fails closed: the visitor
+ * gets a plain not-found, never a stranger's page.
  *
  * Dependency-free on purpose - the middleware, the resolver route and the
  * pages all import it.
@@ -35,21 +36,65 @@ export const PATH_HEADER = "x-cb-domain-path";
 /** One DNS label; a host is two or more, ending in an alphabetic TLD. */
 const HOST_SHAPE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
+const plausible = (host: string): string | null =>
+  host.length > 0 && host.length <= 253 && HOST_SHAPE.test(host) ? host : null;
+
 /**
- * A domain as it is stored and compared: lowercase, no port, no trailing root
- * dot, no leading `www.` (we attach www alongside the apex). Null for anything
- * that is not a plausible hostname, so garbage never reaches a lookup, a URL
- * we build, or a page.
+ * A Host header as the platform compares it: lowercase, no port, no trailing
+ * root dot (`example.com.` is the same name). Keeps a leading `www.` - the
+ * middleware needs to see it to send www to the apex. Null for anything that
+ * is not a plausible hostname (an international name arrives in the punycode
+ * form browsers send).
+ */
+export function normalizeHost(raw: string): string | null {
+  return plausible(raw.trim().toLowerCase().replace(/:\d+$/, "").replace(/\.$/, ""));
+}
+
+/**
+ * A domain as it is stored and compared: normalizeHost, and no leading `www.`
+ * (we attach www alongside the apex). Null for anything that is not a
+ * plausible hostname, so garbage never reaches a lookup, a URL we build, or a
+ * page.
  */
 export function normalizeDomain(raw: string): string | null {
-  const host = raw
-    .trim()
-    .toLowerCase()
-    .replace(/:\d+$/, "")
-    .replace(/\.$/, "")
-    .replace(/^www\./, "");
-  if (host.length === 0 || host.length > 253) return null;
-  return HOST_SHAPE.test(host) ? host : null;
+  const host = normalizeHost(raw);
+  return host ? plausible(host.replace(/^www\./, "")) : null;
+}
+
+/** What the by-domain lookup said - three answers that must never be confused. */
+export type DomainLookup =
+  /** A verified domain with a live page: this slug. */
+  | { kind: "found"; slug: string }
+  /** A definite no: unknown, unverified, disconnected, or the page is off. */
+  | { kind: "none" }
+  /**
+   * No answer at all - network, timeout, rate limit, 5xx, nonsense. Says
+   * nothing about the domain, so it is never read as "none": the visitor gets
+   * a retry, not somebody else's page and not the ChairBack home page.
+   */
+  | { kind: "unavailable"; status: number; error: string | null };
+
+/** Read the API's answer. The one rule for every caller (the page and the resolver). */
+export function classifyDomainLookup(res: {
+  ok: boolean;
+  status: number;
+  data: { slug?: unknown } | null;
+  error?: string;
+}): DomainLookup {
+  const slug = res.ok ? res.data?.slug : undefined;
+  if (typeof slug === "string" && slug.length > 0) return { kind: "found", slug };
+  if (res.status === 404 || res.status === 400) return { kind: "none" };
+  return { kind: "unavailable", status: res.status, error: res.error ?? (res.ok ? "no_slug_in_answer" : null) };
+}
+
+/**
+ * Not silent: the host and the status, never anything about a visitor. The
+ * event name is what to search the logs for.
+ */
+export function reportLookupUnavailable(host: string, lookup: Extract<DomainLookup, { kind: "unavailable" }>): void {
+  console.error(
+    JSON.stringify({ event: "custom_domain_lookup_unavailable", host, status: lookup.status, error: lookup.error }),
+  );
 }
 
 /**

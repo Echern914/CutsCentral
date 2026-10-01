@@ -48,6 +48,7 @@ export function ShopPageClient({
   rewardsHref,
   rewardsLabel = "Your rewards",
   bookQuery,
+  platformOrigin = "",
 }: {
   data: ShopPageData;
   preview?: boolean;
@@ -57,6 +58,14 @@ export function ShopPageClient({
    * same same-shop check the landing page just passed.
    */
   bookQuery?: string;
+  /**
+   * Where this page's links to ChairBack itself point - booking, finding your
+   * rewards, the powered-by line. Empty (this same site) on getchairback.com;
+   * the platform's origin when the page is served on the shop's OWN domain,
+   * where "/" is this very page and booking does not live
+   * (lib/customDomainRouting.ts).
+   */
+  platformOrigin?: string;
   /**
    * Set only when a KNOWN client is viewing (i.e. rendered from
    * /r/<magicToken>, where the token identifies them). Adds an entry back into
@@ -86,7 +95,7 @@ export function ShopPageClient({
   // The shared rule (bookingLinks.ts): an outside link only when a customer
   // could actually open it - a malformed one is no destination, not a dead button.
   const outsideLink = isUsableBookingLink(data.bookingUrl) ? data.bookingUrl : null;
-  const bookHref = bookIsNative ? `/book/${data.slug}${bookQuery ?? ""}` : outsideLink;
+  const bookHref = bookIsNative ? `${platformOrigin}/book/${data.slug}${bookQuery ?? ""}` : outsideLink;
   // A shop may have NO booking destination (no native, no external link). Then
   // we hide the "Book" CTAs and lean on the request form instead.
   const hasBooking = bookIsNative || outsideLink !== null;
@@ -156,6 +165,7 @@ export function ShopPageClient({
       hasBooking,
       showRequestForm,
       bookQuery,
+      platformOrigin,
       rewardsHref,
       rewardsLabel,
       appRewardsTab,
@@ -308,6 +318,7 @@ export function ShopPageClient({
           bookHref={bookHref}
           hasBooking={hasBooking}
           rewardsHref={rewardsHref}
+          platformOrigin={platformOrigin}
         />
       </motion.main>
     </div>
