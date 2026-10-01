@@ -346,6 +346,8 @@ promotionsRouter.post("/:id/blast", smsLimiter, async (req, res) => {
       smsConsentAt: { not: null },
       phone: { not: null },
       archivedAt: null,
+      // A deal is an invitation to book - not for a client the shop blocked.
+      bookingBlockedAt: null,
       // Client.loyaltyTier is the stored badge config/tierRules.ts stamps -
       // the same one the client book, the rewards page and broadcasts read.
       // A client with no tier yet is on none of them.

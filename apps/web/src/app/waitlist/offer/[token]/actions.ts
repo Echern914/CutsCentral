@@ -15,6 +15,8 @@ export type ClaimActionResult =
   | { ok: false; reason: "gone" }
   /** The shop switched on deposits mid-hold; book through their page instead. */
   | { ok: false; reason: "deposit" }
+  /** The shop arranges this person's bookings itself (CONTACT_SHOP). The hold was let go. */
+  | { ok: false; reason: "contact_shop" }
   | { ok: false; reason: "error" };
 
 /**
@@ -43,6 +45,7 @@ export async function claimOfferAction(
     };
   }
   if (res.status === 410 || res.status === 404) return { ok: false, reason: "expired" };
+  if (res.code === "CONTACT_SHOP") return { ok: false, reason: "contact_shop" };
   if (res.status === 409) {
     return { ok: false, reason: res.error === "deposit_required" ? "deposit" : "gone" };
   }

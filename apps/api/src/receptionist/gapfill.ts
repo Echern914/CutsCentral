@@ -74,6 +74,8 @@ interface Candidate {
 /** Textable = the FULL marketing bar (unlike inbound conversational replies). */
 const TEXTABLE = {
   archivedAt: null,
+  // Never offer an opening to a client the shop blocked from booking.
+  bookingBlockedAt: null,
   optedOut: false,
   smsConsentAt: { not: null },
   phone: { not: null },

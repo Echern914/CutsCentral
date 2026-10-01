@@ -1727,6 +1727,13 @@ export function BookingClient({
           setError("That saved card can't be used for this booking. Confirm again to add a card.");
           return;
         }
+        if (res.code === "CONTACT_SHOP") {
+          // The shop takes this person's bookings itself. Nothing was booked,
+          // and another time would get the same answer - so no refresh and no
+          // "pick another", and never a word about why (bookingErrors.ts).
+          setError(`We can't take this booking online. Please contact ${data.shop.name} directly to book.`);
+          return;
+        }
         if (res.code === "SLOT_UNAVAILABLE" && res.error === "slot_taken") {
           // Refresh availability so the taken slot disappears — day-first
           // refetches the whole day; service-first reloads the SAME pool the

@@ -130,6 +130,16 @@ describe("sweepShopWinback", () => {
     expect(sent[0]!.body).not.toContain("old-acuity.test");
   });
 
+  it("🔴 never tries to win back a client the shop blocked from booking", async () => {
+    const shop = await makeShop();
+    const client = await makeLapsedClient(shop.id, "tel:+13025552009", "+13025552009", 120);
+    await prisma.client.update({ where: { id: client.id }, data: { bookingBlockedAt: NOW } });
+    const summary = await sweepShopWinback(shop, { now: NOW, dryRun: false });
+    expect(summary.considered).toBe(0);
+    expect(sent.length).toBe(0);
+    expect(await prisma.nudge.count({ where: { shopId: shop.id, clientId: client.id } })).toBe(0);
+  });
+
   it("a merely-overdue client (past median+buffer but not the multiple) is NOT swept", async () => {
     const shop = await makeShop();
     // 60 days lapsed: a regular-nudge candidate, but 60 <= 30*3=90, so no win-back.

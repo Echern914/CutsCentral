@@ -318,6 +318,21 @@ describe("a conflict books nothing", () => {
     expect(await screen.findByText(/Nothing was booked/)).toBeTruthy();
     expect(screen.queryByText(/You're booked/)).toBeNull();
   });
+
+  it("a booker the shop takes bookings from itself is sent to the shop, not back to the times", async () => {
+    createAction.mockResolvedValue({ kind: "contact_shop" });
+    await reachReview();
+    fillBooker();
+    fireEvent.click(screen.getByRole("button", { name: /Confirm 2 appointments/ }));
+
+    expect(
+      await screen.findByText("We can't take this booking online. Please contact the shop directly to book."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/You're booked/)).toBeNull();
+    // Still on the review - not sent back to the times, which can't help.
+    expect(screen.getByRole("button", { name: /Confirm 2 appointments/ })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/block/i);
+  });
 });
 
 describe("a shop that takes money at booking", () => {

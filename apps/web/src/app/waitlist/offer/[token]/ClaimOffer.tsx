@@ -35,6 +35,7 @@ export function ClaimOffer({
     | { phase: "expired" }
     | { phase: "gone" }
     | { phase: "deposit" }
+    | { phase: "contact_shop" }
     | { phase: "error" }
   >({ phase: "idle" });
   const [email, setEmail] = useState(offer?.email ?? "");
@@ -116,6 +117,19 @@ export function ClaimOffer({
     );
   }
 
+  // The shop arranges this person's bookings itself. Says who to ask and
+  // nothing about why (bookingErrors.ts CONTACT_SHOP).
+  if (state.phase === "contact_shop") {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+        <h1 className="font-display text-2xl">Please contact the shop</h1>
+        <p className="mt-2 text-sm text-muted">
+          We can&rsquo;t book this time online. Please contact {offer.shopName} directly to book.
+        </p>
+      </div>
+    );
+  }
+
   if (state.phase === "gone") {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
@@ -181,6 +195,7 @@ export function ClaimOffer({
             else if (res.reason === "expired") setState({ phase: "expired" });
             else if (res.reason === "gone") setState({ phase: "gone" });
             else if (res.reason === "deposit") setState({ phase: "deposit" });
+            else if (res.reason === "contact_shop") setState({ phase: "contact_shop" });
             else setState({ phase: "error" });
           })
         }

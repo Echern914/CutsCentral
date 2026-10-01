@@ -277,3 +277,35 @@ describe("the saved card on the appointment link", () => {
     expect(screen.queryByText(/Saved card:/)).toBeNull();
   });
 });
+
+describe("a client the shop takes bookings from itself (blocked from booking)", () => {
+  it("is not offered Reschedule - just who to ask, never why - and can still cancel", () => {
+    render(<ManageClient token="tok" data={data({ canReschedule: false })} />);
+    expect(screen.getByText("To move this appointment, please contact the shop.")).toBeTruthy();
+    expect(screen.queryByText("Reschedule")).toBeNull();
+    expect(screen.getByText("Cancel appointment")).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/block/i);
+  });
+
+  it("an appointment they can move shows no such line", () => {
+    render(<ManageClient token="tok" data={data()} />);
+    expect(screen.queryByText(/please contact the shop/i)).toBeNull();
+  });
+
+  it("blocked after the page opened: the move is refused with who to ask, and the times aren't reloaded", async () => {
+    const actions = await import("./actions");
+    const options = vi.mocked(actions.rescheduleOptionsAction);
+    options.mockReset();
+    options.mockResolvedValue({ timezone: "America/New_York", slots: ["2026-09-12T15:00:00Z"] });
+    vi.mocked(actions.rescheduleBookingAction).mockResolvedValue({ ok: false, error: "contact_shop" });
+
+    render(<ManageClient token="tok" data={data()} />);
+    await act(async () => fireEvent.click(screen.getByText("Reschedule")));
+    await act(async () => fireEvent.click(await screen.findByText("11:00 AM")));
+
+    expect(screen.getByRole("alert").textContent).toBe(
+      "This appointment can't be moved online. Please contact the shop to change it.",
+    );
+    expect(options).toHaveBeenCalledTimes(1);
+  });
+});

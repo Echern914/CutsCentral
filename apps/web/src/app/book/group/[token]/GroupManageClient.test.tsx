@@ -245,6 +245,25 @@ describe("moving the whole party", () => {
     fireEvent.click(await screen.findByRole("button", { name: /4:00 PM/ }));
     expect(await screen.findByText(/Nobody was moved/)).toBeTruthy();
   });
+
+  it("a booker the shop takes bookings from itself is told who to ask, not to pick again", async () => {
+    slotsAction.mockResolvedValue({
+      ok: true,
+      data: {
+        timezone: TZ,
+        totalDurationMin: 50,
+        slots: [{ startsAt: "2026-03-14T20:00:00.000Z", endsAt: "2026-03-14T20:50:00.000Z" }],
+      },
+    });
+    rescheduleAction.mockResolvedValue({ ok: false, code: "contact_shop" });
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Move the whole group" }));
+    fireEvent.click(await screen.findByRole("button", { name: /4:00 PM/ }));
+    expect(
+      await screen.findByText("This booking can't be moved online. Please contact the shop to change it."),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/block/i);
+  });
 });
 
 describe("🔴 the token is a credential", () => {

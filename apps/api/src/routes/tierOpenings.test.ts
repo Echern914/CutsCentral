@@ -393,3 +393,40 @@ describe("refusals hold nothing", () => {
     }
   });
 });
+
+describe("🔴 a client the shop blocked from booking", () => {
+  it("is not invited, not shown an opening held before the block, and cannot book it", async () => {
+    const blocked = await member("GOLD", "Barred");
+    const preview = async () =>
+      (await request(app).post("/api/tier-openings/preview").set("Cookie", cookie).send({ minTier: "GOLD" })).body as {
+        members: number;
+        inApp: number;
+      };
+
+    // Held while they could still book: invited like any Gold member.
+    const at = freshStart();
+    const { openingId } = (await hold(at)).body;
+    expect(await prisma.tierOpeningRecipient.count({ where: { openingId, accountId: blocked.accountId } })).toBe(1);
+    const before = await preview();
+
+    await prisma.client.update({ where: { id: blocked.clientId }, data: { bookingBlockedAt: new Date() } });
+
+    // The barber's count drops by exactly them.
+    expect(await preview()).toEqual({ members: before.members - 1, inApp: before.inApp - 1 });
+    // Gone from their app, and a stale tap books nothing - the app reads the
+    // 404 as "that one's gone", never a word about a block.
+    const list = await request(app).get("/api/me/openings").set(asCustomer(blocked));
+    expect(list.body.openings.map((o: { id: string }) => o.id)).not.toContain(openingId);
+    expect(await claimTierOpening({ accountId: blocked.accountId, openingId })).toEqual({ outcome: "contact_shop" });
+    const tap = await request(app).post(`/api/me/openings/${openingId}/book`).set(asCustomer(blocked));
+    expect(tap.status).toBe(404);
+    expect(await prisma.appointment.count({ where: { shopId, startsAt: at } })).toBe(0);
+    // Still held for everyone else invited.
+    expect((await prisma.tierOpening.findUniqueOrThrow({ where: { id: openingId } })).status).toBe("HELD");
+
+    // Held after the block: never invited at all.
+    const later = (await hold(freshStart())).body.openingId as string;
+    expect(await prisma.tierOpeningRecipient.count({ where: { openingId: later, accountId: blocked.accountId } })).toBe(0);
+    expect(await prisma.tierOpeningRecipient.count({ where: { openingId: later, accountId: gold2.accountId } })).toBe(1);
+  });
+});

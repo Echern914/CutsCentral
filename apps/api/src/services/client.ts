@@ -193,6 +193,8 @@ export interface MergeAudit {
  *    source). We never fabricate consent or advance its date by merging.
  *  - emailOptedOut = winner OR loser (an email unsubscribe on EITHER wins, with
  *    the earliest date); a provider suppression moves only with its own address.
+ *  - bookingBlockedAt = winner OR loser, the earliest date (a block on EITHER
+ *    record wins - the shop decided it about the person).
  *
  * EVERYTHING the customer did moves, not just the loyalty trail: their
  * appointments and standing appointments (or the survivor shows no upcoming
@@ -371,6 +373,15 @@ export async function mergeClients(
         update.emailSuppressedAt = loser.emailSuppressedAt;
         update.emailSuppressionReason = loser.emailSuppressionReason;
       }
+    }
+    // A BLOCK is the shop's decision about the person, so it survives on the
+    // record that survives: blocked-wins, from the earliest date. Dropping it
+    // would let the merge quietly unblock someone nobody chose to unblock.
+    if (
+      loser.bookingBlockedAt &&
+      (!winner.bookingBlockedAt || loser.bookingBlockedAt < winner.bookingBlockedAt)
+    ) {
+      update.bookingBlockedAt = loser.bookingBlockedAt;
     }
     if (!winner.lastName && loser.lastName) update.lastName = loser.lastName;
     // The handle is what tells two first-name-only records apart - keep it.

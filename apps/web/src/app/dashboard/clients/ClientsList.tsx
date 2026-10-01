@@ -26,6 +26,8 @@ export interface ClientRow {
   optedOut: boolean;
   smsConsent: boolean;
   archived?: boolean;
+  /** The shop blocked them from booking online. Optional: an older API sends none. */
+  bookingBlocked?: boolean;
   source: string;
   lastVisitAt: string | null;
   medianIntervalDays: number | null;
@@ -198,6 +200,7 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
                     c.optedOut ||
                     !c.smsConsent ||
                     c.archived ||
+                    c.bookingBlocked ||
                     c.loyaltyTier ||
                     c.frequencySegment) && (
                     <span className="mt-1 flex flex-wrap gap-1.5">
@@ -234,6 +237,14 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
                       {c.archived && (
                         <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted/80">
                           archived
+                        </span>
+                      )}
+                      {c.bookingBlocked && (
+                        <span
+                          className="rounded-full bg-danger-soft/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-danger-soft"
+                          title="Blocked from booking online - they can't book, join your waitlist or move a booking themselves"
+                        >
+                          blocked
                         </span>
                       )}
                       {c.source === "manual" && (

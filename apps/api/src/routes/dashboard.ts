@@ -424,6 +424,15 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
     res.status(404).json({ error: "not_found" });
     return;
   }
+  // A nudge says "time to book" - and this client is blocked from booking.
+  // The page greys the button out; this is the rule behind it.
+  if (client.bookingBlockedAt) {
+    res.status(409).json({
+      error: "cannot_nudge",
+      reason: "This client is blocked from booking. Unblock them first to send a nudge.",
+    });
+    return;
+  }
 
   const push = buildNudgePush({
     firstName: client.firstName,
@@ -656,6 +665,7 @@ function buildClientFilterSql(filter: string, tier: string): Prisma.Sql {
   if (filter === "optedOut") parts.push(Prisma.sql`AND "optedOut" = true`);
   if (filter === "active") parts.push(Prisma.sql`AND "optedOut" = false`);
   if (filter === "needsConsent") parts.push(Prisma.sql`AND "smsConsentAt" IS NULL`);
+  if (filter === "blocked") parts.push(Prisma.sql`AND "bookingBlockedAt" IS NOT NULL`);
   if ((LOYALTY_TIER_KEYS as readonly string[]).includes(tier)) {
     parts.push(Prisma.sql`AND "loyaltyTier" = ${tier}`);
   }
@@ -791,7 +801,7 @@ dashboardRouter.get("/clients", async (req, res) => {
   const shop = req.shop!;
   const q = String(req.query.q ?? "").trim();
   const sortKey = (String(req.query.sort ?? "recent") as keyof typeof SORTS);
-  const filter = String(req.query.filter ?? "all"); // all | optedOut | active | needsConsent | archived
+  const filter = String(req.query.filter ?? "all"); // all | optedOut | active | needsConsent | blocked | archived
   const page = intQuery(req.query.page, 1, 1, 100000);
   const pageSize = 50;
 
@@ -801,6 +811,8 @@ dashboardRouter.get("/clients", async (req, res) => {
   // Clients ChairBack can't text yet because no consent is on file - the set a
   // barber would bulk-attest or collect consent for.
   if (filter === "needsConsent") where.smsConsentAt = null;
+  // Everyone the shop blocked from booking, in one place to review.
+  if (filter === "blocked") where.bookingBlockedAt = { not: null };
   // Archived clients are hidden from every other view; only the explicit
   // "archived" filter surfaces them (so they can be restored). All non-archived
   // filters default to hiding archived rows.
@@ -913,6 +925,7 @@ dashboardRouter.get("/clients", async (req, res) => {
       optedOut: c.optedOut,
       smsConsent: c.smsConsentAt !== null,
       archived: c.archivedAt !== null,
+      bookingBlocked: c.bookingBlockedAt !== null,
       source: c.source,
       lastVisitAt: c.lastVisitAt?.toISOString() ?? null,
       medianIntervalDays: c.medianIntervalDays,
@@ -1352,6 +1365,44 @@ dashboardRouter.post("/clients/:clientId/opt", async (req, res) => {
     });
   }
   res.json({ ok: true, optedOut });
+});
+
+/**
+ * Block a client from booking online, or unblock them - an owner's or a
+ * manager's call, like everything on this router.
+ *
+ * This only records the decision. Every customer path enforces it through
+ * services/clientBookingBlock.ts (booking page, groups, waitlist, tier
+ * openings, manage-link moves, the text receptionist), and the marketing
+ * sends skip the record. The shop's own bookings are never refused. Upcoming
+ * appointments stay booked: cancelling them is a separate, visible choice.
+ */
+const bookingBlockSchema = z.object({ blocked: z.boolean() }).strict();
+
+dashboardRouter.post("/clients/:clientId/booking-block", async (req, res) => {
+  const shop = req.shop!;
+  const parsed = bookingBlockSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const db = forShop(shop.id);
+  const client = await db.client.findFirst({ where: { id: req.params.clientId } });
+  if (!client) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // Blocking twice keeps the first date; unblocking clears it.
+  const bookingBlockedAt = parsed.data.blocked ? (client.bookingBlockedAt ?? new Date()) : null;
+  if (bookingBlockedAt !== client.bookingBlockedAt) {
+    await db.client.update({ where: { id: client.id }, data: { bookingBlockedAt } });
+    // Ids only - never a name or a phone number in a log line.
+    logger.info(
+      { shopId: shop.id, clientId: client.id, userId: req.userId },
+      bookingBlockedAt ? "client blocked from booking" : "client unblocked from booking",
+    );
+  }
+  res.json({ ok: true, bookingBlockedAt: bookingBlockedAt?.toISOString() ?? null });
 });
 
 /**
@@ -1926,6 +1977,7 @@ dashboardRouter.post("/clients/bulk", smsLimiter, async (req, res) => {
       smsConsentAt: { not: null },
       phone: { not: null },
       archivedAt: null, // never bulk-text an archived (hidden) client
+      bookingBlockedAt: null, // nor tell a blocked one to come book
     },
   });
 
@@ -2417,6 +2469,8 @@ dashboardRouter.get("/clients/:clientId", async (req, res) => {
       email: client.email,
       optedOut: client.optedOut,
       archived: client.archivedAt !== null,
+      // When the shop blocked them from booking online, or null.
+      bookingBlockedAt: client.bookingBlockedAt?.toISOString() ?? null,
       smsConsent: client.smsConsentAt !== null,
       smsConsentSource: client.smsConsentSource,
       emailMarketing: emailMarketingView(client),
@@ -3204,6 +3258,7 @@ async function buildAtRiskRows(shopId: string, bufferDays: number, now: Date) {
         medianIntervalDays: { gt: 0 }, // gt also excludes legacy stored-0 rows (no real cadence)
         lastVisitAt: { not: null },
         archivedAt: null, // archived clients drop off the at-risk list
+        bookingBlockedAt: null, // and so do blocked ones - the sweep skips them too
       },
     });
     if (candidates.length === 0) return null;

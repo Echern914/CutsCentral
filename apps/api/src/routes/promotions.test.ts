@@ -266,6 +266,20 @@ describe("promotions", () => {
       }
     });
 
+    it("🔴 a client the shop blocked from booking is in neither the preview nor the send", async () => {
+      expect((await blast({ audience: "tiers", tiers: ["GOLD"], dryRun: true })).body.eligible).toBe(1);
+      await prisma.client.update({ where: { id: clientOne }, data: { bookingBlockedAt: new Date() } });
+      try {
+        expect((await blast({ audience: "tiers", tiers: ["GOLD"], dryRun: true })).body.eligible).toBe(0);
+        sentBodies.length = 0;
+        const res = await blast({ audience: "tiers", tiers: ["GOLD"], dryRun: false });
+        expect(res.body.sent).toBe(0);
+        expect(sentBodies).toHaveLength(0);
+      } finally {
+        await prisma.client.update({ where: { id: clientOne }, data: { bookingBlockedAt: null } });
+      }
+    });
+
     it("refuses 'only these tiers' with no tier picked", async () => {
       const empty = await blast({ audience: "tiers", tiers: [], dryRun: true });
       expect(empty.status).toBe(400);

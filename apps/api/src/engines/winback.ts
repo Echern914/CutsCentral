@@ -214,6 +214,8 @@ async function doSweepShopWinback(
       medianIntervalDays: { gt: 0 }, // gt also excludes legacy stored-0 rows (no real cadence)
       lastVisitAt: { not: null },
       archivedAt: null,
+      // The shop blocked them from booking: winning them back is the opposite.
+      bookingBlockedAt: null,
       OR: [
         { optedOut: false, smsConsentAt: { not: null }, phone: { not: null } },
         { pushSubscriptions: { some: {} } },

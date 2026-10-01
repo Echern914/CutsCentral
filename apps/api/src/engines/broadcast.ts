@@ -111,6 +111,7 @@ export const CLIENT_SELECT = {
   emailMarketingConsentAt: true,
   loyaltyTier: true,
   archivedAt: true,
+  bookingBlockedAt: true,
   firstName: true,
 } as const;
 
@@ -125,6 +126,7 @@ type ClientRow = {
   emailMarketingConsentAt: Date | null;
   loyaltyTier: LoyaltyTier | null;
   archivedAt: Date | null;
+  bookingBlockedAt: Date | null;
   firstName: string | null;
 };
 

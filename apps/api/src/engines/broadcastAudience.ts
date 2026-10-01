@@ -21,6 +21,8 @@ export interface AudienceClient {
   emailOptedOut: boolean;
   loyaltyTier: LoyaltyTier | null;
   archivedAt: Date | null;
+  /** The shop blocked this client from booking (Client.bookingBlockedAt). */
+  bookingBlockedAt: Date | null;
   /**
    * When the customer said yes to marketing email (Client.emailMarketingConsentAt).
    * null = never asked or never agreed - an address alone is not permission.
@@ -45,6 +47,7 @@ export interface AddressSuppressions {
 /** Why somebody on the list is not going to get it. */
 export type SkipReason =
   | "archived"
+  | "blocked"
   | "not_in_audience"
   | "no_email"
   | "unsubscribed"
@@ -62,6 +65,7 @@ export interface AudienceSplit {
 /** The sentence a barber reads next to each excluded group. */
 export const SKIP_REASON_LABEL: Record<SkipReason, string> = {
   archived: "Archived",
+  blocked: "Blocked from booking",
   not_in_audience: "Not in the group you picked",
   no_email: "No email address on file",
   unsubscribed: "Unsubscribed from your emails",
@@ -85,7 +89,8 @@ export const SKIP_REASON_LABEL: Record<SkipReason, string> = {
  * every shop's reachable list for a reason nobody could see.
  *
  * Archived clients are excluded everywhere: archiving is the barber saying
- * this person is not a client any more.
+ * this person is not a client any more. So are clients the shop blocked from
+ * booking - with their own reason, because a blocked client is still a client.
  *
  * 🔴 A PROVIDER SUPPRESSION IS NOT AN OPT-OUT EITHER. A hard bounce or a spam
  * complaint stops email exactly as an unsubscribe does, but it stays its own
@@ -134,6 +139,7 @@ export function splitAudience(
   const skipped: { client: AudienceClient; reason: SkipReason }[] = [];
   const reasonCounts: Record<SkipReason, number> = {
     archived: 0,
+    blocked: 0,
     not_in_audience: 0,
     no_email: 0,
     unsubscribed: 0,
@@ -149,6 +155,14 @@ export function splitAudience(
   for (const c of clients) {
     if (c.archivedAt !== null) {
       skip(c, "archived");
+      continue;
+    }
+    // Blocked from booking: an announcement or a deal is an invitation to
+    // book they cannot take. `!== null`, not truthy: a query that forgot to
+    // select the field (undefined) must close this gate, not open it - the
+    // same rule as not_permitted below, from the other side.
+    if (c.bookingBlockedAt !== null) {
+      skip(c, "blocked");
       continue;
     }
     // Empty = everyone. Otherwise only the tiers picked ("all the gold

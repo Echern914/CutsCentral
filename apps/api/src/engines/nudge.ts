@@ -210,6 +210,7 @@ async function doSweepShop(
       medianIntervalDays: { gt: 0 }, // gt also excludes legacy stored-0 rows (no real cadence)
       lastVisitAt: { not: null },
       archivedAt: null, // an archived (hidden) client is never swept/texted
+      bookingBlockedAt: null, // nor one the shop blocked: "time to book" they can't act on
       OR: [
         { optedOut: false, smsConsentAt: { not: null }, phone: { not: null } },
         { pushSubscriptions: { some: {} } },

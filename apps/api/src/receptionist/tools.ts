@@ -6,6 +6,7 @@ import { logger } from "../logger.js";
 import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
+import { bookingBlockedFor } from "../services/clientBookingBlock.js";
 import { cancellationFeeCents, cardOnFileFeeCents } from "@chairback/config";
 import {
   completeReschedule,
@@ -738,6 +739,19 @@ const DAY_FULL =
   "they take) - do not offer another time on that date, run check_availability " +
   "for a different day and offer those";
 
+// The shop blocked this client from booking online (services/clientBookingBlock.ts).
+// The model must not say so: the texter may not even be the person blocked.
+const CONTACT_SHOP =
+  "this client can't book, hold or move appointments by text - the shop arranges " +
+  "their bookings itself. Do NOT try again or offer other times, do NOT say why, " +
+  "and do not suggest booking online: politely say you can't set that up by text " +
+  "and the shop will need to arrange it with them directly";
+
+/** Has the shop blocked the person texting from booking? Their record or their number. */
+async function textingClientBlocked(ctx: ToolContext): Promise<boolean> {
+  return bookingBlockedFor(prisma, ctx.shopId, { clientId: ctx.clientId, phone: ctx.phone });
+}
+
 async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecutionResult> {
   const parsed = holdInput.safeParse(rawInput);
   if (!parsed.success) return fail("invalid input: slot_id required");
@@ -745,6 +759,7 @@ async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecut
   if (typeof slot === "string") return fail(slot);
   const identity = await loadBookingIdentity(ctx);
   if (!identity) return fail("no client record for this number - escalate_to_human");
+  if (await textingClientBlocked(ctx)) return fail(CONTACT_SHOP);
 
   // Hours/exceptions/bounds re-check (conflicts are the tx guard's job).
   const bookable = await isSlotBookable({
@@ -854,6 +869,7 @@ async function bookAppointment(
   if (typeof slot === "string") return fail(slot);
   const identity = await loadBookingIdentity(ctx);
   if (!identity) return fail("no client record for this number - escalate_to_human");
+  if (await textingClientBlocked(ctx)) return fail(CONTACT_SHOP);
   // Identity comes from the DB; the model may only FILL a missing first name.
   const firstName = identity.firstName ?? parsed.data.client_name ?? "Client";
   // An SMS walk-in gave their name for the first time: persist it to the
@@ -1139,6 +1155,8 @@ async function rescheduleTool(
   if (appt.status !== "BOOKED" || appt.startsAt.getTime() <= ctx.now.getTime()) {
     return fail("that appointment can't be moved (not an upcoming booked appointment)");
   }
+  // Same rule as the manage link: a blocked client may cancel, not move.
+  if (await textingClientBlocked(ctx)) return fail(CONTACT_SHOP);
 
   const slot = await loadSlotContext(ctx, parsed.data.new_slot_id);
   if (typeof slot === "string") return fail(slot);

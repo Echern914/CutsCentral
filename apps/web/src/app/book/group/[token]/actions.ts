@@ -59,7 +59,7 @@ export async function groupRescheduleAction(
   startsAt: string,
 ): Promise<
   | { ok: true; plan: GroupPlanResult }
-  | { ok: false; code: "slot_taken" | "canceled" | "slot" | "error" }
+  | { ok: false; code: "slot_taken" | "canceled" | "slot" | "contact_shop" | "error" }
 > {
   const res = await apiPublicSend<{ ok: boolean; plan: GroupPlanResult }>(
     "POST",
@@ -67,6 +67,8 @@ export async function groupRescheduleAction(
     { startsAt },
   );
   if (res.ok && res.data) return { ok: true, plan: res.data.plan };
+  // The shop arranges this booker's bookings itself; cancelling is still open.
+  if (res.error === "contact_shop") return { ok: false, code: "contact_shop" };
   if (res.error === "slot_taken" || res.error === "slot_unavailable_external") {
     return { ok: false, code: "slot_taken" };
   }

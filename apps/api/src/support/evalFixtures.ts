@@ -108,6 +108,10 @@ export const SUPPORT_FIXTURES: readonly SupportFixture[] = [
   { id: "acuity-blocks-delete", capabilityId: "acuity_blocked_times_why", actor: "manager", channels: BOTH, question: "can I delete the extra blocked time entries in acuity", probe: "paraphrase" },
   { id: "day-on-not-bookable", capabilityId: "weekday_enabled_not_bookable", actor: "owner", channels: BOTH, question: "i changed my availability to sunday on the app but when i go through the link its blocked off", probe: "frustrated" },
   { id: "day-on-terse", capabilityId: "weekday_enabled_not_bookable", actor: "owner", channels: BOTH, question: "turned sunday on still cant book", probe: "terse" },
+  // A shop's own words, the day client blocking was built.
+  { id: "block-client-asked", capabilityId: "block_client_from_booking", actor: "owner", channels: BOTH, question: "Can you block a client from booking", probe: "canonical" },
+  { id: "block-client-ban", capabilityId: "block_client_from_booking", actor: "manager", channels: BOTH, question: "how do i ban someone so they cant book me anymore", probe: "paraphrase" },
+  { id: "block-client-terse", capabilityId: "block_client_from_booking", actor: "owner", channels: BOTH, question: "block client", probe: "terse" },
 
   /* ──────── questions the corpus could not answer, found by audit ────────
    * Mined from our own incident notes rather than from a ticket queue: each

@@ -88,6 +88,16 @@ describe("a live hold", () => {
     expect(await screen.findByText(/needs a deposit/i)).toBeTruthy();
     expect(screen.getByText(/still on the\s+waitlist/i)).toBeTruthy();
   });
+
+  it("a client the shop takes bookings from itself is sent to the shop - never told why", async () => {
+    mockClaim.mockResolvedValueOnce({ ok: false, reason: "contact_shop" });
+    render(<ClaimOffer token="tok-6" offer={offer()} />);
+    fireEvent.click(screen.getByText("Book this time"));
+    expect(await screen.findByText(/please contact the shop/i)).toBeTruthy();
+    expect(screen.getByText(/contact .* directly to book/i)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/block/i);
+    expect(screen.queryByText("Book this time")).toBeNull();
+  });
 });
 
 describe("approval-mode shops", () => {
