@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-01-service-edits-save",
+    date: "2026-10-01",
+    kind: "fix",
+    title: "Editing a service tells you if it didn't save",
+    body:
+      "If a change to a service can't be saved, Edit service now says why, right above Save, instead of seeming to " +
+      "do nothing. And opening a service right after saving shows what you just saved, so saving again can't undo " +
+      "it.",
+  },
+  {
     id: "2026-10-01-targeted-slots-booking-rules",
     date: "2026-10-01",
     kind: "fix",

@@ -41,6 +41,7 @@ import { ConnectPlatforms } from "./ConnectPlatforms";
 import { AcuityCalendarMap } from "./AcuityCalendarMap";
 import { AcuityServiceImport } from "./AcuityServiceImport";
 import { Sheet } from "./AppointmentForm";
+import { useJustSaved } from "./justSaved";
 import { TimeSelect } from "@/components/ui/TimeSelect";
 import { ImageField } from "../site/ImageField";
 import { Segmented } from "@/components/ui/Segmented";
@@ -925,7 +926,7 @@ function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast }) {
 
 //  Services
 
-function ServicesTab({
+export function ServicesTab({
   initial,
   staff,
   initialServiceGroups,
@@ -961,6 +962,10 @@ function ServicesTab({
   const [staffIds, setStaffIds] = useState<string[]>([]);
   // Which service the pencil opened for editing (null = the edit Sheet is closed).
   const [editing, setEditing] = useState<ServiceRow | null>(null);
+  // A service's row as its last save wrote it, until the page's refresh lands -
+  // so neither the list nor a reopened editor shows the pre-save values (and
+  // a second save can't write them back). See justSaved.ts.
+  const justSaved = useJustSaved<ServiceRow>();
   const [pending, start] = useTransition();
   const activeStaff = staff.filter((s) => s.active);
 
@@ -1185,7 +1190,8 @@ function ServicesTab({
       </button>
 
       <ul className="mt-5 flex flex-col gap-2">
-        {initial.filter((s) => s.active).map((s) => {
+        {initial.filter((s) => s.active).map((listed) => {
+          const s = justSaved.current(listed);
           // Hours the ENGINE will use for this service (a group overrides it).
           // Restricted => ★ + the windows spelled out, so the barber can spot
           // his evening/weekend-only services without opening a single editor.
@@ -1279,6 +1285,7 @@ function ServicesTab({
           }
           toast={toast}
           onClose={() => setEditing(null)}
+          onSaved={(row) => justSaved.remember(initial.find((r) => r.id === row.id) ?? row, row)}
         />
       )}
 
@@ -1289,7 +1296,8 @@ function ServicesTab({
       <ServiceGroupsManager
         initial={initialServiceGroups}
         services={initial}
-        onEditService={setEditing}
+        // Through the same just-saved view as the list's own Edit button.
+        onEditService={(s) => setEditing(justSaved.current(s))}
         toast={toast}
         unsavedRef={groupUnsavedRef}
       />
@@ -1311,13 +1319,14 @@ function ServicesTab({
 //  the existing updateServiceAction (PATCH /services/:id). The list refreshes
 //  via revalidatePath on save, so no local list sync is needed.
 
-function ServiceEditForm({
+export function ServiceEditForm({
   service,
   services,
   staff,
   groupName,
   toast,
   onClose,
+  onSaved,
 }: {
   service: ServiceRow;
   /** The whole menu, for "Copy hours from" (retyping 7 days of custom windows
@@ -1329,6 +1338,8 @@ function ServiceEditForm({
   groupName: string | null;
   toast: Toast;
   onClose: () => void;
+  /** The row as it was just written - the list shows it until the page refresh lands. */
+  onSaved: (row: ServiceRow) => void;
 }) {
   const vocab = useVocab();
   const activeStaff = staff.filter((s) => s.active);
@@ -1499,9 +1510,17 @@ function ServiceEditForm({
     setHoursRows((cur) => cur.map((r) => ({ ...r, mode })));
   }
 
+  // 🔴 WHY A SAVE DIDN'T GO THROUGH IS SAID HERE, ABOVE SAVE - NEVER IN A
+  // TOAST. The toast layer draws beneath this sheet, so on a phone every
+  // refusal used to be invisible: Save looked dead, the barber closed the
+  // sheet, and his edit was gone ("I save things in the services and they
+  // don't save"). Success still toasts, because the sheet closes first.
+  const [error, setError] = useState<string | null>(null);
+
   function save() {
+    setError(null);
     if (!name.trim()) {
-      toast("Name is required", "error");
+      setError("Name is required");
       return;
     }
     // Length and price are both parsed by lib/serviceFields, the same code the
@@ -1512,13 +1531,13 @@ function ServiceEditForm({
       min: MIN_SERVICE_MINUTES,
     });
     if (!parsedDuration.ok) {
-      toast(parsedDuration.error, "error");
+      setError(parsedDuration.error);
       return;
     }
     // Price is optional - blank means "no set price" and must stay saveable.
     const parsedPrice = parsePrice(price);
     if (!parsedPrice.ok) {
-      toast(parsedPrice.error, "error");
+      setError(parsedPrice.error);
       return;
     }
     const priceNum = parsedPrice.value;
@@ -1527,53 +1546,85 @@ function ServiceEditForm({
     // Skipped when grouped: the group owns hours, so the editor is hidden and we
     // must not send its (now irrelevant) windows.
     if (hasInvalidHoursRow(hoursRows)) {
-      toast("Service hours: each window's end must be after its start", "error");
+      setError("Service hours: each window's end must be after its start");
       return;
     }
     // Time windows validated with a SPECIFIC message (end>start, price/minutes
     // present + valid, no overlaps) so a mistake doesn't surface as a bare 400.
     const timeErr = timeRowsError(timeRows);
     if (timeErr) {
-      toast(timeErr, "error");
+      setError(timeErr);
       return;
     }
     // If hand-picking, at least one barber must be selected (an empty pick that
     // isn't "all" would offer the service to nobody).
     if (!offeredByAll && staffIds.length === 0) {
-      toast(`Pick at least one ${vocab.providerNoun}, or choose All`, "error");
+      setError(`Pick at least one ${vocab.providerNoun}, or choose All`);
       return;
     }
+    const written = {
+      name: name.trim(),
+      // Send trimmed values (empty string clears the column server-side).
+      description: description.trim(),
+      imageUrl: imageUrl.trim(),
+      durationMin: parsedDuration.value ?? MIN_SERVICE_MINUTES,
+      price: priceNum,
+      // Always send the FULL maps (including {}) so clearing an override or a
+      // restriction actually persists - PATCH is partial, absent = unchanged.
+      dailyLimits: buildDailyLimits(dayLimits),
+      priceOverrides: buildPriceOverrides(dayPrices),
+      dateOverrides: buildDateOverrides(specialDates),
+      durationOverrides: buildDurationOverrides(dayDurations),
+      // Same rule for the time windows ([] clears them all).
+      timeOverrides: buildTimeOverrides(timeRows),
+      // Always sent now, grouped or not: the service owns its hours. This was
+      // omitted for a grouped service back when the group's windows overrode
+      // them - which meant the editor could show a grid that was impossible to
+      // save.
+      hoursWindows: buildHoursWindows(hoursRows),
+      color,
+      // offeredByAll wins server-side; send staffIds only for the hand-picked
+      // case so a later-added barber is auto-included when "all" is chosen.
+      offeredByAll,
+      staffIds: offeredByAll ? undefined : staffIds,
+    };
     start(async () => {
-      const r = await updateServiceAction(service.id, {
-        name: name.trim(),
-        // Send trimmed values (empty string clears the column server-side).
-        description: description.trim(),
-        imageUrl: imageUrl.trim(),
-        durationMin: parsedDuration.value ?? MIN_SERVICE_MINUTES,
-        price: priceNum,
-        // Always send the FULL maps (including {}) so clearing an override or a
-        // restriction actually persists - PATCH is partial, absent = unchanged.
-        dailyLimits: buildDailyLimits(dayLimits),
-        priceOverrides: buildPriceOverrides(dayPrices),
-        dateOverrides: buildDateOverrides(specialDates),
-        durationOverrides: buildDurationOverrides(dayDurations),
-        // Same rule for the time windows ([] clears them all).
-        timeOverrides: buildTimeOverrides(timeRows),
-        // Always sent now, grouped or not: the service owns its hours. This was
-        // omitted for a grouped service back when the group's windows overrode
-        // them - which meant the editor could show a grid that was impossible to
-        // save.
-        hoursWindows: buildHoursWindows(hoursRows),
-        color,
-        // offeredByAll wins server-side; send staffIds only for the hand-picked
-        // case so a later-added barber is auto-included when "all" is chosen.
-        offeredByAll,
-        staffIds: offeredByAll ? undefined : staffIds,
+      let r: Awaited<ReturnType<typeof updateServiceAction>>;
+      try {
+        r = await updateServiceAction(service.id, written);
+      } catch {
+        // The phone lost its connection before the server could answer.
+        r = { ok: false, error: "network_error" };
+      }
+      if (!r.ok) {
+        setError(serviceSaveRefusal(r));
+        return;
+      }
+      // What was just written, for the list and the next open of this editor
+      // until the page's refresh lands (see justSaved.ts).
+      onSaved({
+        ...service,
+        name: written.name,
+        description: written.description || null,
+        imageUrl: written.imageUrl || null,
+        durationMin: written.durationMin,
+        price: written.price,
+        dailyLimits: written.dailyLimits,
+        priceOverrides: written.priceOverrides,
+        dateOverrides: written.dateOverrides,
+        durationOverrides: written.durationOverrides,
+        timeOverrides: written.timeOverrides.map((w) => ({
+          ...w,
+          price: w.price ?? null,
+          durationMin: w.durationMin ?? null,
+        })),
+        hoursWindows: written.hoursWindows,
+        color: written.color,
+        offeredByAll: written.offeredByAll,
+        staffIds: written.offeredByAll ? activeStaff.map((s) => s.id) : staffIds,
       });
-      if (r.ok) {
-        toast("Service updated", "success");
-        onClose();
-      } else toast("Couldn't save", "error");
+      toast("Service updated", "success");
+      onClose();
     });
   }
 
@@ -1823,6 +1874,13 @@ function ServiceEditForm({
           . The limits above are the ones that actually stop a booking.
         </p>
 
+        {/* Directly above the button the barber just pressed - an error he has
+            to scroll back up to find is an error that goes unread. */}
+        {error && (
+          <p role="alert" className="text-sm text-danger-soft">
+            {error}
+          </p>
+        )}
         <button
           onClick={save}
           disabled={pending}
@@ -1833,6 +1891,36 @@ function ServiceEditForm({
       </div>
     </Sheet>
   );
+}
+
+/** Which part of the service a refused value was in, by the API's field name. */
+const SERVICE_FIELD_LABEL: Record<string, string> = {
+  name: "the name",
+  description: "the description",
+  imageUrl: "the photo",
+  durationMin: "the length",
+  price: "the price",
+  priceOverrides: "the prices by day",
+  dateOverrides: "the holiday prices",
+  durationOverrides: "the lengths by day",
+  dailyLimits: "the daily limits",
+  timeOverrides: "the time windows",
+  hoursWindows: "the hours",
+  color: "the color",
+  staffIds: "who offers it",
+  offeredByAll: "who offers it",
+};
+
+/** A refused save, in words the barber can act on. Nothing was changed in every case. */
+export function serviceSaveRefusal(r: { error?: string; field?: string }): string {
+  if (r.error === "network_error") {
+    return "Couldn't connect. Check your connection and tap Save again - nothing was changed.";
+  }
+  if (r.error === "not_found") return "This service was removed. Close this and refresh the page.";
+  const where = r.field ? SERVICE_FIELD_LABEL[r.field] : undefined;
+  return where
+    ? `Couldn't save - check ${where}. Nothing was changed.`
+    : "Couldn't save. Nothing was changed - tap Save again.";
 }
 
 //  Targeted slots (one-off special-priced bookable slots under a service)
