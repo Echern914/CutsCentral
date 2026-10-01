@@ -153,7 +153,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        48 and earlier never ask, so IOS_MINIMUM_BUILD can only ever stop
   //        49 and later. 48 was uploaded but never submitted, so the version
   //        string stays.
-  version: "1.1.4",
+  //
+  // 1.1.5 = build 50. The app changes merged since 49: a Book button on saved
+  //        shops and last names up front (#505), tapping an appointment alert
+  //        opens that appointment (#545), and the Rewards tab with the timer
+  //        and everything that left the shop page (#565). 1.1.4 (49) was
+  //        released 2026-09-26, so the version string moves.
+  version: "1.1.5",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
@@ -169,7 +175,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "49",
+    buildNumber: "50",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
