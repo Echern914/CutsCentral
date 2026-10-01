@@ -187,8 +187,13 @@ export async function updateServiceAction(
     offeredByAll?: boolean;
     staffIds?: string[];
   },
-): Promise<Result> {
-  return done(await apiSend("PATCH", `/api/booking/services/${id}`, input));
+): Promise<Result & { field?: string }> {
+  const res = await apiSend("PATCH", `/api/booking/services/${id}`, input);
+  // A refused value names the setting it was in (the first issue's top-level
+  // key, e.g. "timeOverrides"), so the edit sheet can say WHICH part to fix
+  // instead of a bare "Couldn't save".
+  const field = !res.ok && res.issues?.length ? String(res.issues[0]!.path[0] ?? "") || undefined : undefined;
+  return { ...done(res), ...(field ? { field } : {}) };
 }
 
 export async function deleteServiceAction(id: string): Promise<Result> {
