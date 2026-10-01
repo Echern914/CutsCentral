@@ -291,7 +291,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "targeted-slots",
     q: "Can I publish a one-off slot at a special price?",
-    a: "Yes — special-priced slots. Publish a specific time at its own price (a late-night cut, a model rate, a quiet-Tuesday special) and it shows up badged in the picker.\n\nYou can set them as a weekly schedule with start and end times, or as one-off dates, and edit either later.",
+    a: "Yes — special-priced slots. Publish a specific time at its own price (a late-night cut, a model rate, a quiet-Tuesday special) and it shows up badged in the picker.\n\nYou can set them as a weekly schedule with start and end times, or as one-off dates, and edit either later.\n\nThey can sit outside your regular hours, but your booking rules still apply: clients can't book one inside your minimum notice, or further ahead than you take bookings. You can still book a client into any of them yourself from New appointment.",
     keywords: ["special price", "targeted slot", "flash", "late night", "model rate", "discount slot", "one off", "deal slot"],
     category: "booking",
     action: { label: "Open services", featureId: "targeted-slots" },

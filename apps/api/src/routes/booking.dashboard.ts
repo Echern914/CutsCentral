@@ -3288,6 +3288,9 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       res.status(409).json({ error: "slot_taken" });
       return;
     }
+    // NOT held to the shop's booking rules (min notice, book up to), unlike
+    // the website's claim: those protect the barber from customers, and here
+    // he is the one booking (engines/bookingWindow.ts).
     if (
       await staffSpanBlocked({
         shopId,
@@ -3819,6 +3822,9 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
  * Same eligibility as the website: active, unbooked, not yet started, inside
  * the window, and through the SAME filter that takes a special off sale when
  * blocked time, a live appointment or a synced Acuity visit covers it.
+ * One deliberate difference: the shop's booking rules (min notice, book up to)
+ * hold customers to the website (engines/bookingWindow.ts), not the barber -
+ * he may book a client into his own special an hour out.
  * `staffId` omitted = every barber's, for a form where none is picked yet.
  */
 async function openSpecialsFor(input: {

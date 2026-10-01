@@ -603,7 +603,10 @@ function SettingsTab({
 
       {mode === "native" && (
         <Card className="p-5">
-          <CardHeader title="Booking rules" subtitle="How far out and how tight customers can book." />
+          <CardHeader
+            title="Booking rules"
+            subtitle="How far out and how tight customers can book - targeted slots included."
+          />
           <div className="mt-4 grid gap-4 sm:grid-cols-3">
             <label className="block">
               <span className={labelCls}>Min notice (hours)</span>
@@ -2241,7 +2244,7 @@ function TargetedSlotsManager({
     <Card className="p-5">
       <CardHeader
         title="Targeted slots"
-        subtitle="Publish specific one-off times at their own price - a late-night special, a model rate. They show under the service with a badge, can be booked exactly once, and block that time from normal booking."
+        subtitle="Publish specific one-off times at their own price - a late-night special, a model rate. They show under the service with a badge, can be booked exactly once, and block that time from normal booking. Your booking rules apply to them too: clients can't book one inside your min notice or further out than you take bookings."
       />
       {editingRule && (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gold/40 bg-gold/10 px-4 py-2.5 text-sm text-gold">
