@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-02-app-not-booked-yet",
+    date: "2026-10-02",
+    kind: "fix",
+    title: "The app tells clients a booking isn't finished",
+    body:
+      "If a client leaves before saving their card, the ChairBack app now says Not booked yet instead of Requested, " +
+      "with the time it's held until. Its Reschedule button takes them back to save the card before the time is " +
+      "released.",
+  },
+  {
     id: "2026-10-01-block-clients",
     date: "2026-10-01",
     kind: "feature",

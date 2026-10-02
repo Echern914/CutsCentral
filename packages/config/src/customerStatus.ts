@@ -149,6 +149,39 @@ export function requestedDetail(
 }
 
 /**
+ * What the app says about a time the customer is holding while they save a
+ * card or pay - a live `holdReason: "payment"` hold.
+ *
+ * 🔴 NOT "REQUESTED". Customers left the card step (the app's own Done, or a
+ * browser closed seconds after Confirm), opened the app, saw "Requested" and
+ * read it as booked: "Did I do this right?" Nothing is booked until the card
+ * is saved, so the label says so, the line gives the deadline, and the note
+ * names the one way to finish.
+ *
+ * `note` names "Reschedule" because that is the app's own button - it opens
+ * the appointment's manage page, which for a live hold is the card step and
+ * nothing else. A shipped build's buttons are fixed words; this sentence is
+ * how they point at the right one without an App Store update.
+ *
+ * `paymentsMode` picks the verb: a card on file is saved, never charged here;
+ * a deposit or an ahead payment is paid. `until` is already in the shop's own
+ * time ("10:21 PM"), when the caller has it.
+ */
+export function unfinishedHoldCopy(
+  paymentsMode: string | null,
+  until: string | null,
+): { label: string; detail: string; note: string } {
+  const act =
+    paymentsMode === "card_on_file" ? "save your card" : paymentsMode === "deposit" ? "pay the deposit" : "pay";
+  const Act = act[0]!.toUpperCase() + act.slice(1);
+  return {
+    label: "Not booked yet",
+    detail: until ? `${Act} by ${until} to book this time.` : `${Act} to book this time.`,
+    note: `To finish, tap Reschedule and ${act}.`,
+  };
+}
+
+/**
  * Whether a status still belongs in "Upcoming". A requested or booked visit in
  * the future is upcoming; everything else is history, whatever its date.
  */
