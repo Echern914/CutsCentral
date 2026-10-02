@@ -7,6 +7,7 @@ import {
   isUpcomingStatus,
   requestedDetail,
   requestedReason,
+  unfinishedHoldCopy,
   type AppointmentStatusValue,
   type VisitStatusValue,
 } from "./customerStatus.js";
@@ -92,5 +93,28 @@ describe("why a request is still a request", () => {
     const r = requestedReason({ holdReason: null, holdExpiresAt: null });
     expect(r).toBe("approval");
     expect(requestedDetail(r, "Drickcuttinup")).toBe("Waiting for Drickcuttinup to confirm");
+  });
+});
+
+describe("🔴 an unfinished checkout in the app is NOT a request", () => {
+  it("a card on file: not booked, save the card by the deadline, and which button finishes it", () => {
+    expect(unfinishedHoldCopy("card_on_file", "10:21 PM")).toEqual({
+      label: "Not booked yet",
+      detail: "Save your card by 10:21 PM to book this time.",
+      note: "To finish, tap Reschedule and save your card.",
+    });
+  });
+
+  it("a deposit or an ahead payment is paid, not saved", () => {
+    expect(unfinishedHoldCopy("deposit", "1:04 PM").detail).toBe("Pay the deposit by 1:04 PM to book this time.");
+    expect(unfinishedHoldCopy("deposit", "1:04 PM").note).toBe("To finish, tap Reschedule and pay the deposit.");
+    expect(unfinishedHoldCopy("ahead", "1:04 PM").detail).toBe("Pay by 1:04 PM to book this time.");
+    expect(unfinishedHoldCopy("ahead", "1:04 PM").note).toBe("To finish, tap Reschedule and pay.");
+  });
+
+  it("with no deadline it still says what to do, and never says Requested", () => {
+    const copy = unfinishedHoldCopy("card_on_file", null);
+    expect(copy.detail).toBe("Save your card to book this time.");
+    expect(Object.values(copy).join(" ")).not.toMatch(/requested/i);
   });
 });

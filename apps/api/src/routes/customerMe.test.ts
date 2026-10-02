@@ -397,16 +397,50 @@ describe("history - native and synced, one list", () => {
       holdExpiresAt: deadline,
     });
     const me = await account({ phone });
-    const { upcoming } = (await get("/api/me/appointments", me.token)).body;
-    const row = upcoming.find((a: { id: string }) => a.id === `a_${held.id}`);
     const shopTime = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
       hour: "numeric",
       minute: "2-digit",
     }).format(deadline);
-    // The app prints this line under the appointment. "Payment not finished"
-    // there read as booked; customers left, and the time went back on sale.
-    expect(row).toMatchObject({ statusLabel: "Requested", statusDetail: `Not booked yet: finish checkout by ${shopTime}` });
+    // A card-on-file shop: the customer left the card step and opened the
+    // app. "Requested" read as booked ("Did I do this right?"), and the app
+    // offered no way back to the card step.
+    await prisma.shop.update({ where: { id: shopA }, data: { paymentsMode: "card_on_file" } });
+    try {
+      const { upcoming } = (await get("/api/me/appointments", me.token)).body;
+      const row = upcoming.find((a: { id: string }) => a.id === `a_${held.id}`);
+      expect(row).toMatchObject({
+        status: "requested",
+        statusLabel: "Not booked yet",
+        statusDetail: `Save your card by ${shopTime} to book this time.`,
+        // The app's Reschedule button opens the manage page - for a live hold,
+        // the card step - and the note names that button.
+        canManage: true,
+        manageNote: "To finish, tap Reschedule and save your card.",
+      });
+      // The detail screen says the same, and its button leads to this
+      // appointment's own manage link.
+      const detail = (await get(`/api/me/appointments/a_${held.id}`, me.token)).body.appointment;
+      expect(detail).toMatchObject({ statusLabel: "Not booked yet", canManage: true });
+      const manage = await get(`/api/me/appointments/a_${held.id}/manage`, me.token);
+      expect(manage.status).toBe(200);
+      expect(manage.body.url).toBe(`${apiEnv().APP_BASE_URL.replace(/\/$/, "")}/book/manage/${held.manageToken}`);
+    } finally {
+      await prisma.shop.update({ where: { id: shopA }, data: { paymentsMode: "off" } });
+    }
+
+    // A shop that takes payment instead of keeping a card: the verb follows.
+    await prisma.shop.update({ where: { id: shopA }, data: { paymentsMode: "deposit" } });
+    try {
+      const { upcoming } = (await get("/api/me/appointments", me.token)).body;
+      const row = upcoming.find((a: { id: string }) => a.id === `a_${held.id}`);
+      expect(row).toMatchObject({
+        statusDetail: `Pay the deposit by ${shopTime} to book this time.`,
+        manageNote: "To finish, tap Reschedule and pay the deposit.",
+      });
+    } finally {
+      await prisma.shop.update({ where: { id: shopA }, data: { paymentsMode: "off" } });
+    }
   });
 
   it("a lapsed payment hold, and a request whose time passed unanswered, are not history", async () => {

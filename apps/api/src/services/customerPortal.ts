@@ -11,6 +11,7 @@ import {
   rebookCountdown,
   requestedDetail,
   requestedReason,
+  unfinishedHoldCopy,
   visibleRewardsSections,
   vocabularyForShop,
   type CustomerStatus,
@@ -183,6 +184,8 @@ interface ShopRow {
   tierPerks: unknown;
   rebookWindowDays: number;
   rewardsSections: string[];
+  /** Picks the words for an unfinished checkout: save a card, or pay. */
+  paymentsMode: string | null;
 }
 
 interface ClientRow {
@@ -309,6 +312,7 @@ export async function loadPortalView(accountId: string, now = new Date()): Promi
         tierPerks: true,
         rebookWindowDays: true,
         rewardsSections: true,
+        paymentsMode: true,
       },
     }),
   );
@@ -455,22 +459,27 @@ function normalizeEvents(
       if (a.endsAt.getTime() <= now.getTime()) continue;
     }
     const status = customerStatusForAppointment(a.status);
+    // A time held while the customer saves a card or pays - still live, a
+    // lapsed one was skipped above. NOT a request: it says "Not booked yet",
+    // gives the deadline, and opens the way to finish (config
+    // unfinishedHoldCopy). The app renders all three as-is, so a build already
+    // on phones tells the truth and offers the card step without an update.
+    const unfinished =
+      a.status === "PENDING" && a.holdReason === "payment"
+        ? unfinishedHoldCopy(shop.paymentsMode, shopClock(a.holdExpiresAt, shop.timezone))
+        : null;
     out.push({
       id: `a_${a.id}`,
       clientId: a.clientId,
       source: "chairback",
       status,
-      statusLabel: CUSTOMER_STATUS_LABEL[status],
-      // A payment hold says "Not booked yet: finish checkout by 1:04 PM" - the
-      // app renders this line as-is, so an app already on phones tells the
-      // truth without an update. It used to say "Payment not finished" under
-      // the appointment, which customers read as booked.
-      statusDetail:
-        status === "requested"
+      statusLabel: unfinished?.label ?? CUSTOMER_STATUS_LABEL[status],
+      statusDetail: unfinished
+        ? unfinished.detail
+        : status === "requested"
           ? requestedDetail(
               requestedReason({ holdReason: a.holdReason, holdExpiresAt: a.holdExpiresAt }),
               shop.name,
-              { until: a.holdReason === "payment" ? shopClock(a.holdExpiresAt, shop.timezone) : null },
             )
           : null,
       startsAt: a.startsAt.toISOString(),
@@ -480,9 +489,12 @@ function normalizeEvents(
       providerName: a.staff?.name ?? null,
       providerImageUrl: a.staff?.imageUrl ?? null,
       shop: ref,
-      // The same rule the manage page enforces for its buttons.
-      canManage: a.status === "BOOKED" && a.startsAt.getTime() > now.getTime(),
-      manageNote: null,
+      // The same rule the manage page enforces for its buttons - plus a live
+      // unfinished checkout, whose manage page IS its card step (web
+      // ManageClient FinishCheckout). The app's Reschedule button opens it;
+      // the note says which button that is.
+      canManage: (a.status === "BOOKED" || unfinished !== null) && a.startsAt.getTime() > now.getTime(),
+      manageNote: unfinished?.note ?? null,
       address,
       durationMin: a.service?.durationMin ?? null,
       priceCents: cents(a.priceAtBooking),
