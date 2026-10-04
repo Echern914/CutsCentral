@@ -3342,6 +3342,13 @@ model Appointment {
   // belongs to. Only ever set on a CANCELED/NO_SHOW row (the API refuses
   // anything else), and cleared again if the cancel is undone.
   dismissedAt        DateTime?
+  // The barber took this unfinished checkout off "Didn't finish booking"
+  // (services/unfinishedBookings.ts): a payment hold the client never finished.
+  // Presentation only, and a SEPARATE fact from dismissedAt above - that one
+  // clears a cancelled booking off the day view and is undone by a restore,
+  // this one answers "I've dealt with this person" and nothing undoes it. A
+  // later attempt is a new row, so it is listed again.
+  unfinishedDismissedAt DateTime?
   // Recurring series link. null = a one-off appointment (every row before this
   // feature). Each occurrence of a "every N weeks" booking is a normal
   // Appointment row so reminders/promotion/loyalty/slot-opened work unchanged;

@@ -34,6 +34,7 @@ import type {
   WaitlistRow,
 } from "./page";
 import { BookingCalendar } from "./BookingCalendar";
+import { UnfinishedBookings } from "./UnfinishedBookings";
 import { ConflictInbox, ConflictTabBadge, useUnresolvedConflictCount } from "./ConflictInbox";
 import { ShopQrCard } from "./ShopQrCard";
 import { HolidayPricing } from "./HolidayPricing";
@@ -399,22 +400,29 @@ export function BookingManager({
         />
       )}
       {tab === "Appointments" && (
-        <div data-tour="agenda">
-          <BookingCalendar
-            initial={initialAgenda}
-            initialWaitlist={initialWaitlist}
-            onOpenWaitlist={() => switchTab("Waitlist")}
-            isNative={shop.bookingMode === "native"}
-            staff={initialStaff}
-            services={initialServices}
-            addOns={initialAddOns}
-            toast={toast}
-            openAppointmentId={openAppointmentId}
-            openDay={openDay}
-            tierOpenings={shop.rewardsEnabled}
-            pendingWaitlistBooking={waitlistHandoff.pending}
-            onPendingWaitlistBookingTaken={waitlistHandoff.taken}
-          />
+        <div className="flex flex-col gap-4">
+          {/* Clients whose payment hold ran out before they finished: they may
+              think they're booked. Renders nothing when there is nobody. Mounted
+              here, not inside the calendar, so the calendar's tests (which mock
+              ./actions export by export) never meet it. */}
+          <UnfinishedBookings isNative={shop.bookingMode === "native"} toast={toast} />
+          <div data-tour="agenda">
+            <BookingCalendar
+              initial={initialAgenda}
+              initialWaitlist={initialWaitlist}
+              onOpenWaitlist={() => switchTab("Waitlist")}
+              isNative={shop.bookingMode === "native"}
+              staff={initialStaff}
+              services={initialServices}
+              addOns={initialAddOns}
+              toast={toast}
+              openAppointmentId={openAppointmentId}
+              openDay={openDay}
+              tierOpenings={shop.rewardsEnabled}
+              pendingWaitlistBooking={waitlistHandoff.pending}
+              onPendingWaitlistBookingTaken={waitlistHandoff.taken}
+            />
+          </div>
         </div>
       )}
     </div>
