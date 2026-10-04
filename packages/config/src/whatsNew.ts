@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-04-card-step-no-cashapp",
+    date: "2026-10-04",
+    kind: "fix",
+    title: "Clients save a card or Apple Pay to book",
+    body:
+      "If you keep a card on file, the card step now offers a card, Apple Pay or Link. Cash App is off that screen: " +
+      "about 1 in 3 clients who picked it never got approved, so their time was released while they thought they " +
+      "were booked.",
+  },
+  {
     id: "2026-10-02-app-not-booked-yet",
     date: "2026-10-02",
     kind: "fix",

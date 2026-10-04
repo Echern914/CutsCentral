@@ -35,7 +35,12 @@ type FakeSetupIntent = {
 
 const fake = vi.hoisted(() => {
   const setupIntents = new Map<string, FakeSetupIntent>();
-  const calls = { customers: [] as unknown[], setupIntents: [] as unknown[], detached: [] as string[] };
+  const calls = {
+    customers: [] as unknown[],
+    setupIntents: [] as unknown[],
+    setupKeys: [] as (string | undefined)[],
+    detached: [] as string[],
+  };
   let n = 0;
   return {
     setupIntents,
@@ -48,8 +53,12 @@ const fake = vi.hoisted(() => {
         }),
       },
       setupIntents: {
-        create: vi.fn(async (params: { customer: string; metadata: Record<string, string> }) => {
+        create: vi.fn(async (
+          params: { customer: string; metadata: Record<string, string> },
+          opts?: { idempotencyKey?: string },
+        ) => {
           calls.setupIntents.push(params);
+          calls.setupKeys.push(opts?.idempotencyKey);
           const id = `seti_fake_${++n}`;
           const si: FakeSetupIntent = {
             id,
@@ -246,6 +255,48 @@ describe("booking with a card on file", () => {
     expect((asked.metadata as Record<string, string>).appointmentId).toBe(appt!.id);
     // No Payment row: nothing moved.
     expect(await prisma.payment.findFirst({ where: { appointmentId: appt!.id } })).toBeNull();
+  });
+
+  it("🔴 offers card, Apple Pay and Link - never Cash App or Klarna, where card steps died", async () => {
+    await book(3, 15);
+    const asked = fake.calls.setupIntents.at(-1) as Record<string, unknown>;
+    // Automatic methods stay on: naming the types would switch Apple Pay off.
+    expect(asked.automatic_payment_methods).toEqual({ enabled: true });
+    expect(asked.payment_method_types).toBeUndefined();
+    const excluded = asked.excluded_payment_method_types as string[];
+    expect(excluded).toEqual(expect.arrayContaining(["cashapp", "klarna"]));
+    expect(excluded).not.toContain("card");
+    expect(excluded).not.toContain("link");
+  });
+
+  it("🔴 if Stripe refuses the exclusion list, the card step still opens - every method, its own key", async () => {
+    const before = fake.calls.setupIntents.length;
+    fake.client.setupIntents.create.mockImplementationOnce(async () => {
+      throw Object.assign(new Error("Invalid excluded_payment_method_types"), {
+        type: "StripeInvalidRequestError",
+        param: "excluded_payment_method_types[0]",
+      });
+    });
+    const body = await book(3, 16);
+    expect(body.payment?.kind).toBe("setup");
+    expect(body.payment?.clientSecret).toMatch(/^seti_fake_/);
+    // The refused call never reached the fake's recorder; the retry did.
+    const retried = fake.calls.setupIntents.slice(before);
+    expect(retried).toHaveLength(1);
+    expect((retried[0] as Record<string, unknown>).excluded_payment_method_types).toBeUndefined();
+    expect(fake.calls.setupKeys.at(-1)).toMatch(/^seti-create:.+:all-methods$/);
+    const appt = await apptByToken(body.manageToken);
+    expect(appt?.status).toBe("PENDING");
+  });
+
+  it("any other Stripe failure is not retried - the booking takes its usual pay-in-person path", async () => {
+    const before = fake.client.setupIntents.create.mock.calls.length;
+    fake.client.setupIntents.create.mockImplementationOnce(async () => {
+      throw Object.assign(new Error("Stripe is down"), { type: "StripeAPIError" });
+    });
+    const body = await book(8, 12);
+    expect(fake.client.setupIntents.create.mock.calls.length - before).toBe(1);
+    expect(body.payment).toBeNull();
   });
 
   it("🔴 becomes a booking only when Stripe confirms the card - our verify call, not the browser's word", async () => {
