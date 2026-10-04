@@ -326,6 +326,46 @@ describe("reschedule", () => {
     expect(slots.some((s) => s.startsAt.getTime() === T(20, 0).getTime())).toBe(true);
   });
 
+  /** Mark an appointment paid at booking: `paidCents` taken, booked at `bookedAt` dollars. */
+  async function payAtBooking(apptId: string, bookedAt: number, paidCents: number) {
+    await prisma.appointment.update({ where: { id: apptId }, data: { priceAtBooking: bookedAt } });
+    await prisma.payment.create({
+      data: {
+        shopId,
+        appointmentId: apptId,
+        purpose: "booking",
+        stripePaymentIntentId: `pi_tools_${randomToken(8)}`,
+        stripeConnectAccountId: "acct_tools",
+        mode: "ahead",
+        amount: paidCents,
+        capturedAmount: paidCents,
+        status: "succeeded",
+      },
+    });
+  }
+
+  it("🔴 moves a booking whose DEPOSIT was paid online - the rest is still paid at the shop", async () => {
+    const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));
+    const booked = await exec("book_appointment", { slot_id: slotIdAt(14, 0) });
+    const apptId = JSON.parse(booked.result).appointment_id as string;
+    await payAtBooking(apptId, 35, 1000);
+    const moved = await exec("reschedule", { appointment_id: apptId, new_slot_id: slotIdAt(14, 30) });
+    expect(moved.isError).toBe(false);
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id: apptId } });
+    expect(row.startsAt.getTime()).toBe(T(14, 30).getTime());
+  });
+
+  it("still hands a FULLY prepaid booking to the shop when the price differs", async () => {
+    const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));
+    const booked = await exec("book_appointment", { slot_id: slotIdAt(15, 0) });
+    const apptId = JSON.parse(booked.result).appointment_id as string;
+    // Paid $30 in full when booked at $30; every slot now costs $35.
+    await payAtBooking(apptId, 30, 3000);
+    const moved = await exec("reschedule", { appointment_id: apptId, new_slot_id: slotIdAt(15, 30) });
+    expect(moved.isError).toBe(true);
+    expect(moved.result).toContain("escalate_to_human");
+  });
+
   it("refuses to touch ANOTHER client's appointment no matter what id the model passes", async () => {
     const mine = makeToolExecutor(ctxFor(clientId, "+15551230001"));
     const booked = await mine("book_appointment", { slot_id: slotIdAt(22, 0) });

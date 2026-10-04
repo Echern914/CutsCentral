@@ -7,7 +7,42 @@ import {
   describeShopPolicy,
   type ShopPolicyInput,
   cardOnFileFeeCents,
+  paidBookingTakesPrice,
 } from "./shopPolicy.js";
+
+describe("paidBookingTakesPrice - may a booking paid at booking take a new price?", () => {
+  it("🔴 a DEPOSIT takes any new price that still covers it - the rest is paid at the shop", () => {
+    // $10 deposit on a $40 visit: same price, higher, lower - all fine.
+    expect(paidBookingTakesPrice({ paidCents: 1000, bookedPriceCents: 4000, newPriceCents: 4000 })).toBe(true);
+    expect(paidBookingTakesPrice({ paidCents: 1000, bookedPriceCents: 4000, newPriceCents: 5000 })).toBe(true);
+    expect(paidBookingTakesPrice({ paidCents: 1000, bookedPriceCents: 4000, newPriceCents: 1500 })).toBe(true);
+    expect(paidBookingTakesPrice({ paidCents: 1000, bookedPriceCents: 4000, newPriceCents: 1000 })).toBe(true);
+  });
+
+  it("a deposit is refused a price below it - the client would have overpaid", () => {
+    expect(paidBookingTakesPrice({ paidCents: 1000, bookedPriceCents: 4000, newPriceCents: 999 })).toBe(false);
+  });
+
+  it("🔴 a FULL prepayment must still match exactly", () => {
+    expect(paidBookingTakesPrice({ paidCents: 4000, bookedPriceCents: 4000, newPriceCents: 4000 })).toBe(true);
+    expect(paidBookingTakesPrice({ paidCents: 4000, bookedPriceCents: 4000, newPriceCents: 4500 })).toBe(false);
+    expect(paidBookingTakesPrice({ paidCents: 4000, bookedPriceCents: 4000, newPriceCents: 3500 })).toBe(false);
+  });
+
+  it("a deposit capped at the price paid the whole ticket, so it is a full prepayment", () => {
+    // A $20 deposit on a $15 visit charged $15 - nothing is left to pay at the shop.
+    expect(paidBookingTakesPrice({ paidCents: 1500, bookedPriceCents: 1500, newPriceCents: 2000 })).toBe(false);
+  });
+
+  it("with no booked price, a payment is treated as full - never guessed to be a deposit", () => {
+    expect(paidBookingTakesPrice({ paidCents: 1000, bookedPriceCents: null, newPriceCents: 4000 })).toBe(false);
+    expect(paidBookingTakesPrice({ paidCents: 1000, bookedPriceCents: null, newPriceCents: 1000 })).toBe(true);
+  });
+
+  it("an unpriced new time leaves nothing to reconcile", () => {
+    expect(paidBookingTakesPrice({ paidCents: 4000, bookedPriceCents: 4000, newPriceCents: null })).toBe(true);
+  });
+});
 
 const base: ShopPolicyInput = {
   paymentsMode: "off",

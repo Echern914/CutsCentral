@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-04-move-deposit-bookings",
+    date: "2026-10-04",
+    kind: "fix",
+    title: "Bookings with a deposit can be moved",
+    body:
+      "If you take deposits, clients can now move their booking from their link, and you can move it from your " +
+      "calendar, to any time whose price still covers the deposit. The deposit stays with the booking and the rest " +
+      "is paid at the shop. Before, every move was refused.",
+  },
+  {
     id: "2026-10-04-didnt-finish-booking",
     date: "2026-10-04",
     kind: "feature",

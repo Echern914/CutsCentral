@@ -1,6 +1,12 @@
 import { Router } from "express";
 import { z } from "zod";
-import { businessType, normalizeServiceName, randomToken, SERVICE_COLOR_KEYS } from "@chairback/config";
+import {
+  businessType,
+  normalizeServiceName,
+  paidBookingTakesPrice,
+  randomToken,
+  SERVICE_COLOR_KEYS,
+} from "@chairback/config";
 import { SERVICE_VISIBILITIES } from "@chairback/config/serviceVisibility";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
@@ -4353,6 +4359,8 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       // The BOOKING payment: this guard is about a prepaid booking whose price
       // would change on a new date.
       payments: { where: { purpose: "booking" }, select: { status: true, amount: true } },
+      // What it was booked at: a payment below this was a deposit.
+      priceAtBooking: true,
       service: {
         select: {
           durationMin: true,
@@ -4399,21 +4407,27 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
     },
   );
 
-  // A PAID booking moving to a differently-priced day can't be reconciled here
+  // A PAID booking moving to a price it can't take can't be reconciled here
   // (no partial capture or top-up on this path), so it's refused rather than
-  // silently leaving the customer over- or under-charged. Same rule the
-  // customer's own reschedule follows.
+  // silently leaving the customer over- or under-charged. A deposit only needs
+  // the new price to still cover it. Same rule the customer's own reschedule
+  // follows (paidBookingTakesPrice).
   const bookingPayment = appt.payments[0] ?? null;
-  if (bookingPayment && bookingPayment.status === "succeeded") {
-    const newCents = toCents(effectivePrice);
-    if (newCents !== null && newCents !== bookingPayment.amount) {
-      res.status(409).json({
-        error: "price_changed",
-        message:
-          "That day has a different price and this booking is already paid. Refund or take the difference in person, then move it.",
-      });
-      return;
-    }
+  if (
+    bookingPayment &&
+    bookingPayment.status === "succeeded" &&
+    !paidBookingTakesPrice({
+      paidCents: bookingPayment.amount,
+      bookedPriceCents: toCents(appt.priceAtBooking === null ? null : Number(appt.priceAtBooking)),
+      newPriceCents: toCents(effectivePrice),
+    })
+  ) {
+    res.status(409).json({
+      error: "price_changed",
+      message:
+        "That day has a different price and this booking is already paid. Refund or take the difference in person, then move it.",
+    });
+    return;
   }
 
   if (

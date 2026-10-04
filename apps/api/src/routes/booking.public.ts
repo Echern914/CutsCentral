@@ -23,6 +23,7 @@ import {
   formatShopAddress,
   localMinutesOfDay,
   mapsUrlFor,
+  paidBookingTakesPrice,
   randomToken,
   requestedReason,
   shopAddressLines,
@@ -3710,6 +3711,8 @@ bookingPublicRouter.post(
         email: true,
         // Booked into a special? Moving it gives the special back (below).
         bookedVia: true,
+        // What it was booked at: a payment below this was a deposit.
+        priceAtBooking: true,
         // The BOOKING payment: what the customer prepaid to hold this slot.
         // A balance collected at the chair belongs to a cut that already
         // happened and must not gate rescheduling a future one.
@@ -3804,19 +3807,23 @@ bookingPublicRouter.post(
       return;
     }
 
-    // If the booking is already PAID and the new date costs a different amount,
-    // a self-serve reschedule can't reconcile the captured charge in v1 (no
-    // partial capture/top-up here). Block it and point the customer at the shop,
-    // rather than silently leaving them over/under-charged.
+    // A booking PAID at booking can't be reconciled here (no top-up or partial
+    // refund on this path), so a new price it can't take is refused and the
+    // customer pointed at the shop, rather than silently left over/under-
+    // charged. A deposit only needs the new price to still cover it - the
+    // rest was always paid at the shop (paidBookingTakesPrice).
     const bookingPayment = appt.payments[0] ?? null;
-    const paidAmount =
-      bookingPayment && bookingPayment.status === "succeeded" ? bookingPayment.amount : null;
-    if (paidAmount !== null) {
-      const newCents = toCents(effectivePrice);
-      if (newCents !== null && newCents !== paidAmount) {
-        res.status(409).json({ error: "price_changed", message: "That day has a different price. Please contact the shop to move a paid booking." });
-        return;
-      }
+    if (
+      bookingPayment &&
+      bookingPayment.status === "succeeded" &&
+      !paidBookingTakesPrice({
+        paidCents: bookingPayment.amount,
+        bookedPriceCents: toCents(appt.priceAtBooking === null ? null : Number(appt.priceAtBooking)),
+        newPriceCents: toCents(effectivePrice),
+      })
+    ) {
+      res.status(409).json({ error: "price_changed", message: "That day has a different price. Please contact the shop to move a paid booking." });
+      return;
     }
 
     // Re-validate the new time against availability (excluding this appointment's
