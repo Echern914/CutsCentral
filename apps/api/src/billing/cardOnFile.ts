@@ -75,6 +75,44 @@ export interface CreateCardOnFileInput {
   saveForFuture?: boolean;
 }
 
+/**
+ * Payment methods the card step never offers - card, Apple Pay and Link stay.
+ *
+ * 🔴 CASH APP WAS WHERE CARD STEPS DIED. Read from Stripe for one shop's 176
+ * card steps (Sep 20 - Oct 4): card failed about 1 in 120, while 10 of 28
+ * Cash App tries never came back approved - the customer was sent to Cash App
+ * and the attempt expired. The time was released, and the customer, who had
+ * picked a time and pressed Confirm, believed they were booked. Klarna was
+ * offered here too: buy-now-pay-later on a screen that saves a card and
+ * charges nothing makes no sense, and its one try was declined. The rest are
+ * the same kinds of method (pay later, or a redirect to another app or bank),
+ * listed so switching one on in Stripe later cannot quietly put it back here.
+ *
+ * Excluded rather than allow-listed: naming `payment_method_types` turns off
+ * Apple Pay on this screen (see the note on `automatic_payment_methods`).
+ * Deposits and pay-ahead are untouched.
+ */
+export const CARD_STEP_EXCLUDED_METHODS = [
+  "cashapp",
+  "klarna",
+  "affirm",
+  "afterpay_clearpay",
+  "zip",
+  "paypal",
+  "amazon_pay",
+  "us_bank_account",
+] as const satisfies readonly Stripe.SetupIntentCreateParams.ExcludedPaymentMethodType[];
+
+/** Stripe rejected the request because of `excluded_payment_method_types` itself. */
+function refusedExclusions(err: unknown): boolean {
+  const e = (err ?? {}) as { type?: unknown; param?: unknown };
+  return (
+    e.type === "StripeInvalidRequestError" &&
+    typeof e.param === "string" &&
+    e.param.startsWith("excluded_payment_method_types")
+  );
+}
+
 export async function createCardOnFileSetupIntent(
   input: CreateCardOnFileInput,
 ): Promise<{ clientSecret: string; cardOnFileId: string } | null> {
@@ -102,41 +140,60 @@ export async function createCardOnFileSetupIntent(
       },
       { idempotencyKey: `cof-customer:${cardOnFileId}` },
     );
-    const intent = await stripeClient().setupIntents.create(
-      {
-        customer: customer.id,
-        usage: "off_session",
-        on_behalf_of: input.connectAccountId,
-        // 🔴 WAS `payment_method_types: ["card"]`, WHICH SILENTLY DISABLED
-        // APPLE PAY ON THIS SCREEN.
-        //
-        // Naming the types explicitly overrides the account's payment method
-        // configuration, so the Payment Element rendered card-only - even on an
-        // iPhone, even with the wallet domain registered at boot
-        // (billing/paymentMethodDomains.ts) and the CSP fixed for Stripe's
-        // wallet frames. Pay-ahead and deposit already used
-        // `automatic_payment_methods` (billing/payments.ts) and DID show Apple
-        // Pay; only card-on-file was left behind, so "Apple Pay is missing"
-        // was true or false depending on which payment mode a shop ran.
-        //
-        // With automatic methods Stripe offers only what is compatible with
-        // THIS intent - a SetupIntent with `usage: off_session` - so nothing
-        // that cannot be saved and reused off-session can appear here. An
-        // Apple Pay card saved this way yields an ordinary reusable payment
-        // method, which is what services/cardOnFileSettle.ts later charges
-        // under the shop's no-show policy. Nothing is charged today, and the
-        // screen already says so.
-        automatic_payment_methods: { enabled: true },
-        description: input.description,
-        metadata: {
-          shopId: input.shopId,
-          appointmentId: input.appointmentId,
-          cardOnFileId,
-          ...(input.seriesId ? { seriesId: input.seriesId } : {}),
-        },
+    const params: Stripe.SetupIntentCreateParams = {
+      customer: customer.id,
+      usage: "off_session",
+      on_behalf_of: input.connectAccountId,
+      // 🔴 WAS `payment_method_types: ["card"]`, WHICH SILENTLY DISABLED
+      // APPLE PAY ON THIS SCREEN.
+      //
+      // Naming the types explicitly overrides the account's payment method
+      // configuration, so the Payment Element rendered card-only - even on an
+      // iPhone, even with the wallet domain registered at boot
+      // (billing/paymentMethodDomains.ts) and the CSP fixed for Stripe's
+      // wallet frames. Pay-ahead and deposit already used
+      // `automatic_payment_methods` (billing/payments.ts) and DID show Apple
+      // Pay; only card-on-file was left behind, so "Apple Pay is missing"
+      // was true or false depending on which payment mode a shop ran.
+      //
+      // With automatic methods Stripe offers only what is compatible with
+      // THIS intent - a SetupIntent with `usage: off_session` - so nothing
+      // that cannot be saved and reused off-session can appear here, and
+      // CARD_STEP_EXCLUDED_METHODS (below, on the create) takes off the ones
+      // that can be saved but kept failing on this screen (Cash App). An
+      // Apple Pay card saved this way yields an ordinary reusable payment
+      // method, which is what services/cardOnFileSettle.ts later charges
+      // under the shop's no-show policy. Nothing is charged today, and the
+      // screen already says so.
+      automatic_payment_methods: { enabled: true },
+      description: input.description,
+      metadata: {
+        shopId: input.shopId,
+        appointmentId: input.appointmentId,
+        cardOnFileId,
+        ...(input.seriesId ? { seriesId: input.seriesId } : {}),
       },
-      { idempotencyKey: `seti-create:${cardOnFileId}` },
-    );
+    };
+    let intent: Stripe.SetupIntent;
+    try {
+      intent = await stripeClient().setupIntents.create(
+        { ...params, excluded_payment_method_types: [...CARD_STEP_EXCLUDED_METHODS] },
+        { idempotencyKey: `seti-create:${cardOnFileId}` },
+      );
+    } catch (err) {
+      // Stripe refused the exclusion list itself. Losing the card step would
+      // cost the customer their booking (the caller confirms pay-in-person),
+      // so offer every method instead - under its own key, since the request
+      // differs - and say so loudly.
+      if (!refusedExclusions(err)) throw err;
+      logger.error(
+        { appointmentId: input.appointmentId, ...stripeErrorFacts(err) },
+        "card on file: Stripe refused the method exclusions - offering every method rather than losing the card step",
+      );
+      intent = await stripeClient().setupIntents.create(params, {
+        idempotencyKey: `seti-create:${cardOnFileId}:all-methods`,
+      });
+    }
 
     await runWithShop(input.shopId, (tx) =>
       tx.cardOnFile.create({
