@@ -221,7 +221,7 @@ function fullName(first: string | null, last: string | null): string {
  * US number ("(201) 555-0134"), international for everything else. Falls back
  * to the stored string rather than dropping a number we DO have.
  */
-function phoneDisplay(e164: string | null): string | null {
+export function phoneDisplay(e164: string | null): string | null {
   if (!e164) return null;
   const parsed = parsePhoneNumberFromString(e164);
   if (!parsed) return e164;

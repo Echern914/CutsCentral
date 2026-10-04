@@ -47,6 +47,7 @@ import {
 } from "../services/blockOffDays.js";
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
+import { registerUnfinishedBookings } from "./booking.unfinished.js";
 import { stripeCollectedCents } from "../engines/appointmentPayment.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import {
@@ -4565,6 +4566,10 @@ registerAppointmentEdit(bookingDashboardRouter, noteAvailabilityChanged);
 // Read ONE booking in full, for the appointment sheet: contact, payment truth
 // and what may be edited (booking.appointmentDetail.ts).
 registerAppointmentDetail(bookingDashboardRouter);
+
+// "Didn't finish booking": clients whose payment hold ran out before they
+// finished, so they may think they are booked (booking.unfinished.ts).
+registerUnfinishedBookings(bookingDashboardRouter);
 
 bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   const shopId = req.shop!.id;

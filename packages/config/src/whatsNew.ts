@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-04-didnt-finish-booking",
+    date: "2026-10-04",
+    kind: "feature",
+    title: "See who didn't finish booking",
+    body:
+      "Your Appointments page now shows clients who picked a time but didn't finish checking out, so they aren't " +
+      "booked and may think they are. You'll see the time they wanted and if it's still open. Text or call them, " +
+      "book them into it, or take them off the list.",
+  },
+  {
     id: "2026-10-04-card-step-no-cashapp",
     date: "2026-10-04",
     kind: "fix",
