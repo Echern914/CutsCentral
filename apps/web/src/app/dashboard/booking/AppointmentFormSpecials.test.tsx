@@ -251,12 +251,12 @@ describe("booking one", () => {
     expect(sent().customTime).toBe(true);
   });
 
-  it("a special does not repeat - Weekly is replaced by a sentence, and nothing recurring is sent", async () => {
+  it("a special does not repeat - Repeat appointment is replaced by a sentence, and nothing recurring is sent", async () => {
     await open();
-    fireEvent.click(screen.getByRole("button", { name: "Weekly" }));
+    fireEvent.click(screen.getByRole("button", { name: "Repeat appointment" }));
     await tap(/8:00 PM/);
     expect(screen.getByText(/A special is a one-off time/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Weekly" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Repeat appointment" })).toBeNull();
     nameIt();
     schedule();
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));

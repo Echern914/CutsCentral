@@ -2479,10 +2479,10 @@ export function AppointmentBlock({
         </span>
         {isRecurring && (
           <span
-            title="Repeats weekly"
+            title="Repeat appointment"
             className="shrink-0 rounded-full bg-gold/15 px-1.5 py-0.5 text-[10px] font-medium text-gold"
           >
-            ↻ Weekly
+            ↻ Repeats
           </span>
         )}
         {/* Booked in Acuity/Square, mirrored here. Says both "this time is

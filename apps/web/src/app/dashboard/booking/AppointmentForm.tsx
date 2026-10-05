@@ -990,12 +990,15 @@ export function AppointmentForm({
               >
                 Does not repeat
               </button>
+              {/* Not "Weekly": it repeats every 1 to 8 weeks, and a shop
+                  booking a client every 3 weeks read "Weekly" as the wrong
+                  option and asked how to do it. */}
               <button
                 type="button"
                 onClick={() => setRepeat(true)}
                 className={chip(repeat, "flex-1")}
               >
-                Weekly
+                Repeat appointment
               </button>
             </div>
           )}
