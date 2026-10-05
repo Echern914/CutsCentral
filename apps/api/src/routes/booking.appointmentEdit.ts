@@ -1,6 +1,7 @@
 import type { Router } from "express";
 import { z } from "zod";
 import { Prisma, forShop, prisma, runWithShop } from "@chairback/db";
+import { paidBookingTakesPrice } from "@chairback/config";
 import { logger } from "../logger.js";
 import { isSlotBookable } from "../engines/slots.js";
 import {
@@ -289,11 +290,18 @@ export function registerAppointmentEdit(
       where: { appointmentId: appt.id, shopId, purpose: "booking" },
       select: { status: true, amount: true },
     });
+    // A deposit is part payment: the new price only has to still cover it, the
+    // rest is paid at the shop (paidBookingTakesPrice). A full prepayment must
+    // still match.
     if (
       payment?.status === "succeeded" &&
       d.price !== undefined &&
       d.price !== null &&
-      Math.round(d.price * 100) !== payment.amount
+      !paidBookingTakesPrice({
+        paidCents: payment.amount,
+        bookedPriceCents: decimalToCents(appt.priceAtBooking),
+        newPriceCents: Math.round(d.price * 100),
+      })
     ) {
       res.status(409).json({
         error: "price_change_on_paid",

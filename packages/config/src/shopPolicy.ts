@@ -231,6 +231,38 @@ export function cancellationFeeCents(input: {
 }
 
 /**
+ * May a booking PAID AT BOOKING take this price?
+ *
+ * Asked when a paid booking moves to a new time (whose price can differ by
+ * day or hour) or the shop edits its price. Nothing on those paths tops up or
+ * partly refunds the booking payment, so the answer depends on what was paid:
+ *  - a FULL prepayment covered the visit outright, so the new price must equal
+ *    it - anything else leaves the client over- or under-charged;
+ *  - a DEPOSIT is part payment with the rest paid at the shop, so a new price
+ *    only changes what is left to pay there. It may move freely as long as it
+ *    still covers the deposit already taken.
+ *
+ * 🔴 THE RULE USED TO BE "the new price must equal what was paid", on every
+ * path, which read every deposit as a full prepayment: a $10 deposit on a $35
+ * visit could never be moved online, not even to a time at the same price -
+ * the client was told "That day has a different price".
+ *
+ * Deposit or not is read from THIS booking - paid less than the price it was
+ * booked at - never from the shop's current mode. A deposit capped at the
+ * price paid the whole ticket, so it is a full prepayment here, as it was at
+ * the till. No new price (an unpriced service) leaves nothing to reconcile.
+ */
+export function paidBookingTakesPrice(input: {
+  paidCents: number;
+  bookedPriceCents: number | null;
+  newPriceCents: number | null;
+}): boolean {
+  if (input.newPriceCents === null) return true;
+  const deposit = input.bookedPriceCents !== null && input.paidCents < input.bookedPriceCents;
+  return deposit ? input.newPriceCents >= input.paidCents : input.newPriceCents === input.paidCents;
+}
+
+/**
  * What a no-show costs, on THIS channel.
  *
  * Nobody owned this sentence before, so the receptionist improvised whenever

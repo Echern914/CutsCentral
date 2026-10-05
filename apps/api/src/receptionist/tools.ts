@@ -7,7 +7,7 @@ import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { bookingBlockedFor } from "../services/clientBookingBlock.js";
-import { cancellationFeeCents, cardOnFileFeeCents } from "@chairback/config";
+import { cancellationFeeCents, cardOnFileFeeCents, paidBookingTakesPrice } from "@chairback/config";
 import {
   completeReschedule,
   dispatchAfterCommit,
@@ -1134,6 +1134,8 @@ async function loadOwnAppointment(ctx: ToolContext, appointmentId: string) {
         // price would change on a new date. A balance collected at the chair is
         // for a cut that already happened and has no bearing on rescheduling.
         payments: { where: { purpose: "booking" }, select: { status: true, amount: true } },
+        // What it was booked at: a payment below this was a deposit.
+        priceAtBooking: true,
       },
     }),
   );
@@ -1166,19 +1168,24 @@ async function rescheduleTool(
     );
   }
 
-  // Paid booking + different price on the new date: self-serve can't reconcile
-  // the captured charge (same rule as the public manage page) - hand off.
+  // Paid booking + a price on the new date it can't take: self-serve can't
+  // reconcile the captured charge (same rule as the public manage page) - hand
+  // off. A deposit only needs the new price to still cover it.
   const bookingPayment = appt.payments[0] ?? null;
-  const paidCents =
-    bookingPayment && bookingPayment.status === "succeeded" ? bookingPayment.amount : null;
-  if (paidCents !== null) {
-    const newCents = slot.price === null ? null : Math.round(slot.price * 100);
-    if (newCents !== null && newCents !== paidCents) {
-      return fail(
-        "this booking is already paid and the new date has a different price - " +
-          "escalate_to_human so the barber can move it",
-      );
-    }
+  if (
+    bookingPayment &&
+    bookingPayment.status === "succeeded" &&
+    !paidBookingTakesPrice({
+      paidCents: bookingPayment.amount,
+      bookedPriceCents:
+        appt.priceAtBooking === null ? null : Math.round(Number(appt.priceAtBooking) * 100),
+      newPriceCents: slot.price === null ? null : Math.round(slot.price * 100),
+    })
+  ) {
+    return fail(
+      "this booking is already paid and the new date has a different price - " +
+        "escalate_to_human so the barber can move it",
+    );
   }
 
   const bookable = await isSlotBookable({
