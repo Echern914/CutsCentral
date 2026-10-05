@@ -337,6 +337,18 @@ describe("a card shop books without a card - the default", () => {
     expect((await cardFor(appt.id)).status).toBe("released");
   });
 
+  it("a card saved after its booking ended some other way (no release ran) is let go, not kept", async () => {
+    const body = await book();
+    const appt = await apptByToken(body.manageToken);
+    const row = await cardFor(appt.id);
+    // Ended by a path that does not touch the card row (an external sync, say).
+    await prisma.appointment.update({ where: { id: appt.id }, data: { status: "CANCELED", canceledAt: new Date() } });
+    fake.succeed(row.stripeSetupIntentId);
+    await webhookSaved(fake.setupIntents.get(row.stripeSetupIntentId)!);
+    expect((await cardFor(appt.id)).status).toBe("released");
+    expect(fake.calls.detached).toContain(`pm_fake_${row.stripeSetupIntentId}`);
+  });
+
   it("🔴 race: the card saved at the same moment the booking is cancelled - released and detached, never kept", async () => {
     const body = await book();
     const appt = await apptByToken(body.manageToken);
