@@ -203,6 +203,9 @@ beforeEach(async () => {
 
 afterAll(async () => {
   __setSendEmailForTests(undefined);
+  // EmailIntent has no foreign key to its shop: a PENDING ask left behind
+  // would be a due row in the shared outbox for every later suite.
+  await prisma.emailIntent.deleteMany({ where: { shopId } });
   await prisma.shop.deleteMany({ where: { ownerId: userId } });
   await prisma.user.deleteMany({ where: { id: userId } });
   process.env.STRIPE_SECRET_KEY = savedEnv.key;

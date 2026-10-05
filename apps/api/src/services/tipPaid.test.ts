@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Prisma, prisma } from "@chairback/db";
 import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { raceBehindRowLock, winners } from "../testing/raceBarrier.js";
@@ -153,6 +153,15 @@ beforeEach(async () => {
     sent.push(input);
     return { id: `em_${randomToken(8)}`, status: "sent" };
   });
+});
+
+afterEach(async () => {
+  // 🔴 EmailIntent has no foreign key to its shop, so deleting the shop does
+  // NOT take these with it. A receipt left PENDING here is a due row in the
+  // ONE shared outbox, and another suite's unscoped runEmailOutbox() claims
+  // the oldest 25 first - enough of these starves that suite's own email.
+  await settleBackgroundWork();
+  await prisma.emailIntent.deleteMany({ where: { shopId } });
 });
 
 afterAll(async () => {
