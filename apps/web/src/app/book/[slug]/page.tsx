@@ -70,6 +70,8 @@ export interface BookShopData {
       collects: "payment" | "card" | null;
       mode: string;
       depositAmountCents: number | null;
+      /** The deposit is kept if they cancel. Optional = an older API. */
+      nonRefundable?: boolean;
       sentence: string;
       /** The cancellation rule, only when a payment is taken at booking. */
       cancellation?: string | null;

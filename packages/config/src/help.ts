@@ -1309,7 +1309,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "my-policy",
     q: "What is my cancellation policy set to?",
-    a: "Dashboard → Payments holds all of it: how customers pay, the free-cancel cutoff in hours, and the fee charged inside that cutoff.\n\nA cutoff of 0 means every cancellation is a full refund. A fee of 100% means no refund inside the cutoff.\n\nOne catch worth knowing: a cancellation fee can only actually be charged if you take payment through ChairBack. If you're set to pay-in-person, the fee sits there as a number and nothing collects it.\n\nYour own rules in your own words — lateness, what to bring — plus a checklist customers tick before booking are a separate card: Booking → Settings → Your policies.",
+    a: "Dashboard → Payments holds all of it: how customers pay, the free-cancel cutoff in hours, and the fee charged inside that cutoff.\n\nA cutoff of 0 means every cancellation is a full refund. A fee of 100% means no refund inside the cutoff.\n\nIf you take deposits, Deposit refunds lets you make them non-refundable: a client who cancels doesn't get the deposit back, whatever the cutoff. Bookings keep the terms they were made on, and if you cancel, the deposit is always refunded in full.\n\nOne catch worth knowing: a cancellation fee can only actually be charged if you take payment through ChairBack. If you're set to pay-in-person, the fee sits there as a number and nothing collects it.\n\nYour own rules in your own words — lateness, what to bring — plus a checklist customers tick before booking are a separate card: Booking → Settings → Your policies.",
     keywords: [
       "cancellation policy", "my policy", "cancel policy", "refund policy", "cutoff",
       "cancellation fee", "late cancel", "what is my policy", "policy set",
@@ -1513,7 +1513,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "take-a-deposit",
     q: "How do I charge a deposit?",
-    a: "Turn on deposit mode in Payments and set the amount. Clients pay that when they book and the rest in the chair, so a no-show has already left something behind.\n\nThe money goes into your own Stripe account, not ours. You can also take the full price up front instead, if that suits your shop better.",
+    a: "Turn on deposit mode in Payments and set the amount. Clients pay that when they book and the rest in the chair, so a no-show has already left something behind. Under Deposit refunds you choose what happens when a client cancels: your cancellation policy decides, or the deposit is non-refundable.\n\nThe money goes into your own Stripe account, not ours. You can also take the full price up front instead, if that suits your shop better.",
     keywords: [
       "deposit", "deposits", "upfront", "up front", "partial payment", "hold a slot",
       "secure the booking", "booking fee", "pay to book",

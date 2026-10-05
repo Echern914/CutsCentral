@@ -23,10 +23,11 @@ vi.mock("../../[slug]/actions", () => ({
 }));
 const stopServiceChargesAction = vi.fn();
 const removeSavedCardAction = vi.fn(async () => ({ ok: true }));
+const cancelBookingAction = vi.fn(async (..._a: unknown[]) => ({ ok: true }));
 vi.mock("./actions", () => ({
   stopServiceChargesAction: (...a: unknown[]) => stopServiceChargesAction(...a),
   removeSavedCardAction: (...a: unknown[]) => removeSavedCardAction(...(a as [])),
-  cancelBookingAction: vi.fn(),
+  cancelBookingAction: (...a: unknown[]) => cancelBookingAction(...a),
   checkInAction: vi.fn(),
   nudgeReplyAction: vi.fn(),
   rescheduleBookingAction: vi.fn(),
@@ -254,6 +255,70 @@ describe("a booking left at its card step, from its own link", () => {
   it("a real cancellation still reads 'Canceled'", () => {
     render(<ManageClient token="tok" data={data({ status: "CANCELED", neverBooked: false })} />);
     expect(screen.getByText("Canceled")).toBeTruthy();
+  });
+});
+
+describe("🔴 a non-refundable deposit, before Cancel", () => {
+  it("asks first, naming what stays - and Keep my appointment cancels nothing", async () => {
+    vi.useRealTimers();
+    cancelBookingAction.mockClear();
+    render(<ManageClient token="tok" data={data({ nonRefundable: { amountCents: 1000 } })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel appointment" }));
+    expect(cancelBookingAction).not.toHaveBeenCalled();
+    expect(screen.getByText("Your $10 deposit isn't refunded if you cancel. Cancel anyway?")).toBeTruthy();
+    // Focus moves into the question, onto the choice that costs nothing.
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep my appointment" }));
+    expect(screen.getByRole("alertdialog", { name: /deposit isn't refunded/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Keep my appointment" }));
+    expect(cancelBookingAction).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Cancel appointment" })).toBeTruthy();
+  });
+
+  it("cancels only on Cancel anyway", async () => {
+    vi.useRealTimers();
+    cancelBookingAction.mockClear();
+    render(<ManageClient token="tok" data={data({ nonRefundable: { amountCents: 1000 } })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel appointment" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel anyway" }));
+    });
+    expect(cancelBookingAction).toHaveBeenCalledTimes(1);
+    expect(cancelBookingAction).toHaveBeenCalledWith("tok", "this");
+  });
+
+  it("a refundable booking cancels on the first tap, as before", async () => {
+    vi.useRealTimers();
+    cancelBookingAction.mockClear();
+    render(<ManageClient token="tok" data={data({ nonRefundable: null })} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel appointment" }));
+    });
+    expect(cancelBookingAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("the reopened card step repeats the terms before they pay", () => {
+    render(
+      <ManageClient
+        token="tok"
+        data={data({
+          status: "PENDING",
+          requested: { reason: "payment" },
+          canCancel: false,
+          canReschedule: false,
+          finish: {
+            kind: "payment",
+            clientSecret: "pi_secret",
+            amountCents: 1000,
+            isDeposit: true,
+            balanceDueCents: 3000,
+            expiresAt: "2026-09-08T15:08:00Z",
+            serviceChargeConsent: false,
+            nonRefundable: true,
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText(/It isn't refunded if you cancel\./)).toBeTruthy();
   });
 });
 

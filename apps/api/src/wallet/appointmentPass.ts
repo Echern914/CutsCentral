@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { PKPass } from "passkit-generator";
 import { apiEnv } from "@chairback/config";
-import { describeCancellationPolicy } from "@chairback/config/shopPolicy";
+import { describeCancellationPolicy, KEPT_ON_CANCELLATION } from "@chairback/config/shopPolicy";
 import { formatShopAddress } from "@chairback/config/shopAddress";
 import { runAsOwner } from "@chairback/db";
 import { connectEnabled } from "../billing/stripe.js";
@@ -224,6 +224,12 @@ export interface AppointmentPassSource {
    * customer money.
    */
   paymentsLive: boolean;
+  /**
+   * THIS booking's refund terms (its booking payment's snapshot): what it
+   * paid at booking stays when the client cancels. Never the shop's switch
+   * today - a pass outlives a change of settings.
+   */
+  nonRefundable: boolean;
   id: string;
   status: string;
   startsAt: Date;
@@ -290,15 +296,22 @@ export function buildAppointmentPassJson(
   // confirmation email use. No channel override: this booking came through a
   // surface that does collect at booking when the shop is set up to, so
   // claiming otherwise would understate a fee the customer may really owe.
-  const cancellationPolicy = describeCancellationPolicy({
-    paymentsMode: appt.shop.paymentsMode,
-    cancelWindowHours: appt.shop.cancelWindowHours,
-    cancelFeeBps: appt.shop.cancelFeeBps,
-    depositAmountCents: appt.shop.depositAmountCents,
-    requiresApproval: appt.shop.requireBookingApproval,
-    chargeCardOnFileFees: appt.shop.chargeCardOnFileFees,
-    paymentsLive: appt.paymentsLive,
-  });
+  //
+  // A booking that PAID on non-refundable terms keeps them whatever the shop
+  // has switched to since (another mode, approval, Stripe disconnected) - the
+  // engine reads the same snapshot - so that sentence does not ask what the
+  // shop collects today.
+  const cancellationPolicy = appt.nonRefundable
+    ? KEPT_ON_CANCELLATION
+    : describeCancellationPolicy({
+        paymentsMode: appt.shop.paymentsMode,
+        cancelWindowHours: appt.shop.cancelWindowHours,
+        cancelFeeBps: appt.shop.cancelFeeBps,
+        depositAmountCents: appt.shop.depositAmountCents,
+        requiresApproval: appt.shop.requireBookingApproval,
+        chargeCardOnFileFees: appt.shop.chargeCardOnFileFees,
+        paymentsLive: appt.paymentsLive,
+      });
 
   return {
     formatVersion: 1,
@@ -403,6 +416,8 @@ export async function buildPassForAppointment(
         manageToken: true,
         service: { select: { name: true } },
         staff: { select: { name: true } },
+        // This booking's own refund terms, snapshotted when it was paid for.
+        payments: { where: { purpose: "booking" }, select: { nonRefundable: true, status: true } },
         shop: {
           select: {
             name: true,
@@ -443,10 +458,17 @@ export async function buildPassForAppointment(
     appt.shop.connectChargesEnabled &&
     Boolean(appt.shop.stripeConnectAccountId);
 
+  const { payments, ...rest } = appt;
+  // Only money actually in hand: a reservation whose charge never went
+  // through (the booking fell back to paying in person) keeps nothing.
+  const nonRefundable = payments.some(
+    (p) => p.nonRefundable && (p.status === "succeeded" || p.status === "partially_refunded"),
+  );
+
   const pass = new PKPass(
     {
       "pass.json": Buffer.from(
-        JSON.stringify(buildAppointmentPassJson({ ...appt, paymentsLive })),
+        JSON.stringify(buildAppointmentPassJson({ ...rest, paymentsLive, nonRefundable })),
       ),
       ...loadArt(),
     },

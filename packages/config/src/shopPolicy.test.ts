@@ -8,6 +8,8 @@ import {
   type ShopPolicyInput,
   cardOnFileFeeCents,
   paidBookingTakesPrice,
+  clientCancelKeptCents,
+  depositIsNonRefundable,
 } from "./shopPolicy.js";
 
 describe("paidBookingTakesPrice - may a booking paid at booking take a new price?", () => {
@@ -41,6 +43,67 @@ describe("paidBookingTakesPrice - may a booking paid at booking take a new price
 
   it("an unpriced new time leaves nothing to reconcile", () => {
     expect(paidBookingTakesPrice({ paidCents: 4000, bookedPriceCents: 4000, newPriceCents: null })).toBe(true);
+  });
+});
+
+describe("non-refundable deposits", () => {
+  const deposit: ShopPolicyInput = {
+    paymentsMode: "deposit",
+    cancelWindowHours: 24,
+    cancelFeeBps: 5000,
+    depositAmountCents: 1000,
+    nonRefundable: true,
+  };
+  const start = new Date("2026-10-10T15:00:00Z");
+
+  it("🔴 the switch counts only in deposit mode - pay-ahead is never made non-refundable by it", () => {
+    expect(depositIsNonRefundable({ paymentsMode: "deposit", depositNonRefundable: true })).toBe(true);
+    expect(depositIsNonRefundable({ paymentsMode: "deposit", depositNonRefundable: false })).toBe(false);
+    expect(depositIsNonRefundable({ paymentsMode: "ahead", depositNonRefundable: true })).toBe(false);
+    expect(depositIsNonRefundable({ paymentsMode: "card_on_file", depositNonRefundable: true })).toBe(false);
+    expect(depositIsNonRefundable({ paymentsMode: "deposit", depositNonRefundable: null })).toBe(false);
+  });
+
+  it("🔴 a client cancel keeps everything collected, early or late, cutoff or not", () => {
+    const early = new Date("2026-10-01T15:00:00Z");
+    const late = new Date("2026-10-10T14:00:00Z");
+    const base = { collectedCents: 1000, nonRefundable: true, startsAt: start };
+    expect(clientCancelKeptCents({ ...base, cancelWindowHours: 24, cancelFeeBps: 5000, now: early })).toBe(1000);
+    expect(clientCancelKeptCents({ ...base, cancelWindowHours: 24, cancelFeeBps: 5000, now: late })).toBe(1000);
+    expect(clientCancelKeptCents({ ...base, cancelWindowHours: 0, cancelFeeBps: 0, now: early })).toBe(1000);
+  });
+
+  it("refundable terms are exactly the cancellation fee, and nothing collected keeps nothing", () => {
+    const late = new Date("2026-10-10T14:00:00Z");
+    expect(
+      clientCancelKeptCents({ collectedCents: 1000, nonRefundable: false, cancelWindowHours: 24, cancelFeeBps: 5000, startsAt: start, now: late }),
+    ).toBe(cancellationFeeCents({ collectedCents: 1000, cancelWindowHours: 24, cancelFeeBps: 5000, startsAt: start, now: late }));
+    expect(
+      clientCancelKeptCents({ collectedCents: 0, nonRefundable: true, cancelWindowHours: 0, cancelFeeBps: 0, startsAt: start, now: late }),
+    ).toBe(0);
+  });
+
+  it("says so wherever the money is described", () => {
+    expect(describeDepositPolicy(deposit)).toContain("the deposit is non-refundable");
+    expect(describeCancellationPolicy(deposit)).toBe("what was paid at booking is not refunded on a cancellation");
+  });
+
+  it("🔴 by text (nothing taken here) it still warns that an online deposit isn't refunded", () => {
+    const sms = { collectsAtBooking: false };
+    expect(describeDepositPolicy(deposit, sms)).toContain("(non-refundable)");
+    expect(describeCancellationPolicy(deposit, sms)).toContain("a deposit paid online may be kept on a cancellation");
+    // Per booking: the receptionist is sent to that booking's own terms.
+    expect(describeCancellationPolicy(deposit, sms)).toContain("get_client_history");
+    // A shop that can't take money online has no online deposit to warn about.
+    expect(describeCancellationPolicy({ ...deposit, paymentsLive: false }, sms)).toBe(
+      "free cancellation any time before the appointment",
+    );
+  });
+
+  it("off, nothing changes - every pinned sentence stays as it was", () => {
+    const off = { ...deposit, nonRefundable: false };
+    expect(describeDepositPolicy(off)).not.toContain("non-refundable");
+    expect(describeCancellationPolicy(off)).toContain("free up to 24h before");
   });
 });
 

@@ -85,6 +85,11 @@ export function PaymentsManager({
   const [depositDollars, setDepositDollars] = useState(
     String((initial.depositAmountCents ?? 2000) / 100),
   );
+  // Deposit mode: is the deposit kept when a CLIENT cancels? Off by default -
+  // the cancellation policy below decides, as it always has.
+  const [depositNonRefundable, setDepositNonRefundable] = useState(
+    initial.depositNonRefundable ?? false,
+  );
 
   // Whether shown prices already include a tip. THREE states, not two: null
   // means the barber has not said, and the booking page then says nothing.
@@ -225,7 +230,7 @@ export function PaymentsManager({
         paymentsMode: mode,
         cancelWindowHours: hours,
         cancelFeeBps: Math.round(feePct * 100),
-        ...(mode === "deposit" ? { depositAmountCents: depositCents } : {}),
+        ...(mode === "deposit" ? { depositAmountCents: depositCents, depositNonRefundable } : {}),
         ...(mode === "card_on_file" ? { chargeCardOnFileFees: chargeFees } : {}),
         tipPolicy,
       });
@@ -581,7 +586,9 @@ export function PaymentsManager({
             <span className="mt-1 block text-[11px] text-muted">
               Charged when they book. If a service costs less than this, we
               charge the service price instead — never more. A no-show keeps it;
-              a cancellation follows your policy below.
+              {depositNonRefundable
+                ? " so does a client's cancellation (Deposit refunds, below)."
+                : " a cancellation follows your policy below."}
             </span>
           </label>
         )}
@@ -627,12 +634,58 @@ export function PaymentsManager({
         </p>
       </Card>
 
+      {/* Deposit refunds - deposit mode only, next to Tips as Eric asked. */}
+      {mode === "deposit" && (
+        <Card id="deposit-refunds" className="p-5">
+          <CardHeader
+            title="Deposit refunds"
+            subtitle="What happens to the deposit when a client cancels. If you cancel a booking, the deposit is always refunded in full."
+          />
+          <div className="mt-3 flex flex-wrap gap-2">
+            {(
+              [
+                { v: false, label: "Follow my cancellation policy", hint: "Refunded, less any fee below" },
+                { v: true, label: "Non-refundable", hint: "Kept when a client cancels" },
+              ] as const
+            ).map((o) => (
+              <button
+                key={String(o.v)}
+                type="button"
+                onClick={() => setDepositNonRefundable(o.v)}
+                aria-pressed={depositNonRefundable === o.v}
+                className={cn(
+                  "rounded-xl border px-3 py-2 text-left text-sm transition-colors",
+                  depositNonRefundable === o.v
+                    ? "border-gold/60 bg-gold/10 text-offwhite"
+                    : "border-subtle bg-charcoal-700 text-muted hover:text-offwhite",
+                )}
+              >
+                <span className="block font-medium">{o.label}</span>
+                <span className="block text-xs text-muted">{o.hint}</span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-muted">
+            Applies to bookings made after you save. Bookings already made keep the
+            terms they were booked on. Your booking page tells clients before they
+            pay. Saved with the button below.
+          </p>
+        </Card>
+      )}
+
       {/* Cancellation policy */}
       <Card className="p-5">
         <CardHeader
           title="Cancellation policy"
           subtitle="Customers can always cancel; you decide the cutoff + fee."
         />
+        {mode === "deposit" && depositNonRefundable && (
+          <p className="mt-3 text-xs text-gold">
+            Your deposit is non-refundable, so when a client cancels it is kept
+            whatever the cutoff. The cutoff and fee below apply to bookings made
+            before you switched it on.
+          </p>
+        )}
         <div className="mt-3 grid gap-4 sm:grid-cols-2">
           <label className="block">
             <span className={labelCls}>Free-cancel cutoff (hours before)</span>

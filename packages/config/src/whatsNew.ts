@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-04-nonrefundable-deposits",
+    date: "2026-10-04",
+    kind: "feature",
+    title: "Make your deposit non-refundable",
+    body:
+      "If you take deposits, Payments now has Deposit refunds: keep the deposit when a client cancels, or let " +
+      "your cancellation policy decide. Clients are told before they pay. If you cancel, they're refunded in full, " +
+      "and bookings already made keep their terms.",
+  },
+  {
     id: "2026-10-04-move-deposit-bookings",
     date: "2026-10-04",
     kind: "fix",

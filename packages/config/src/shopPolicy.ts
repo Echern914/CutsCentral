@@ -56,6 +56,34 @@ export interface ShopPolicyInput {
    * charge anyone, and the prose must not imply otherwise.
    */
   chargeCardOnFileFees?: boolean;
+  /**
+   * Is what is taken AT BOOKING kept when the client cancels? Already
+   * RESOLVED by the caller - never the raw shop switch:
+   *  - about a booking that EXISTS: that booking's own snapshot
+   *    (Payment.nonRefundable), so a booking keeps the terms it was made on;
+   *  - about bookings not made yet: `depositIsNonRefundable(shop)`.
+   * Default false. Only ever said where money is actually collected.
+   */
+  nonRefundable?: boolean;
+}
+
+/**
+ * Do NEW bookings at this shop take a non-refundable deposit?
+ *
+ * The shop's switch counts only in deposit mode. Under it, ANYTHING the
+ * deposit setting takes at booking is non-refundable - including a deposit
+ * capped at a cheaper service's price, which pays the whole ticket (Eric,
+ * 2026-10-04: "anything paid at booking"). Pay-ahead is not a deposit and is
+ * never made non-refundable by it.
+ *
+ * 🔴 THE ONE PLACE THIS IS DECIDED: the booking snapshot, the booking page,
+ * the receptionist and the settings all ask here, so none of them can drift.
+ */
+export function depositIsNonRefundable(shop: {
+  paymentsMode: string;
+  depositNonRefundable?: boolean | null;
+}): boolean {
+  return shop.paymentsMode === "deposit" && shop.depositNonRefundable === true;
 }
 
 /**
@@ -100,6 +128,14 @@ function dollarsFromCents(cents: number): string {
 }
 
 /**
+ * A booking whose money was taken on non-refundable terms, in words. Exported
+ * for a surface describing ONE booking that is known to have paid on them
+ * (its own snapshot, money in hand): that is true whatever the shop's mode or
+ * Stripe state is today, so it must not go through collectsMoney.
+ */
+export const KEPT_ON_CANCELLATION = "what was paid at booking is not refunded on a cancellation";
+
+/**
  * The cancellation rule as a sentence fragment.
  *
  * A fee needs BOTH a window and a rate to mean anything: either alone is
@@ -109,6 +145,23 @@ export function describeCancellationPolicy(
   shop: ShopPolicyInput,
   channel: PolicyChannel = {},
 ): string {
+  // Non-refundable: what was taken at booking stays, whenever they cancel. The
+  // window and fee have nothing left to decide. (A cancellation BY THE SHOP
+  // still refunds in full - this is about the client cancelling.)
+  if (shop.nonRefundable === true && collectsMoney(shop, channel)) {
+    return KEPT_ON_CANCELLATION;
+  }
+  // By text, nothing is taken - but a client who paid a non-refundable deposit
+  // online and cancels here still loses it, and must be told before, not after.
+  if (
+    shop.nonRefundable === true &&
+    channel.collectsAtBooking === false &&
+    collectsMoney(shop, {})
+  ) {
+    // Per booking, not shop-wide: a booking made before the shop switched this
+    // on keeps its refundable terms. get_client_history says what each keeps.
+    return "free cancellation any time for a booking made in this conversation; a deposit paid online may be kept on a cancellation - check that booking (get_client_history) and say what it keeps before cancelling";
+  }
   // A fee needs something to take it FROM. cancelAppointment computes it as a
   // share of what was COLLECTED, so with no payment row the fee is zero
   // however the settings read. Quoting a percentage to a customer whose money
@@ -147,6 +200,9 @@ export function describeDepositPolicy(
   // not. Say both halves: a customer who books by text and hears "collected
   // at booking" waits for a charge that never comes, and one who hears
   // nothing is surprised by the website taking a card.
+  // Said wherever the deposit is: it is the one fact about it a client most
+  // needs before paying.
+  const kept = shop.nonRefundable === true ? "; the deposit is non-refundable" : "";
   if (!collectsMoney(shop, channel)) {
     if (channel.collectsAtBooking === false) {
       const online =
@@ -155,7 +211,11 @@ export function describeDepositPolicy(
             ? `a ${dollarsFromCents(shop.depositAmountCents)} deposit`
             : "a deposit"
           : "full payment";
-      return `${online} is taken when booking online; booking through this conversation takes nothing up front - pay at the shop`;
+      const onlineKept =
+        shop.paymentsMode === "deposit" && collectsMoney(shop, {}) && shop.nonRefundable === true
+          ? " (non-refundable)"
+          : "";
+      return `${online}${onlineKept} is taken when booking online; booking through this conversation takes nothing up front - pay at the shop`;
     }
     return payAtShop;
   }
@@ -170,8 +230,8 @@ export function describeDepositPolicy(
       return shop.depositAmountCents && shop.depositAmountCents > 0
         ? `up to ${dollarsFromCents(
             shop.depositAmountCents,
-          )} taken as a deposit at booking (never more than the service price), the rest at the shop`
-        : "a deposit collected at booking, the rest at the shop";
+          )} taken as a deposit at booking (never more than the service price), the rest at the shop${kept}`
+        : `a deposit collected at booking, the rest at the shop${kept}`;
     case "hold":
       return "card authorized at booking, charged after the appointment";
     default:
@@ -260,6 +320,32 @@ export function paidBookingTakesPrice(input: {
   if (input.newPriceCents === null) return true;
   const deposit = input.bookedPriceCents !== null && input.paidCents < input.bookedPriceCents;
   return deposit ? input.newPriceCents >= input.paidCents : input.newPriceCents === input.paidCents;
+}
+
+/**
+ * What the shop KEEPS when the CLIENT cancels a booking they paid for at
+ * booking - the one rule the cancel engine charges with and the receptionist
+ * quotes with.
+ *
+ * Non-refundable (that booking's own snapshot): everything collected is kept,
+ * whenever they cancel - the window and fee have nothing left to decide.
+ * Otherwise the shop's cancellation fee (cancellationFeeCents).
+ *
+ * 🔴 CLIENT CANCELS ONLY. A cancellation by the shop refunds in full, and a
+ * hold that lapsed was never a booking - neither calls this. Keep it out of
+ * refundForCancellation, which those paths share.
+ */
+export function clientCancelKeptCents(input: {
+  collectedCents: number;
+  nonRefundable: boolean;
+  cancelWindowHours: number;
+  cancelFeeBps: number;
+  startsAt: Date;
+  now: Date;
+}): number {
+  if (input.collectedCents <= 0) return 0;
+  if (input.nonRefundable) return input.collectedCents;
+  return cancellationFeeCents(input);
 }
 
 /**

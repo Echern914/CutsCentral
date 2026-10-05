@@ -65,6 +65,7 @@ import {
   readBookingPolicy,
   useBookingPolicy,
 } from "./BookingPolicy";
+import { DEPOSIT_KEPT_LINE, DEPOSIT_TERMS_CHANGED_MESSAGE, readPaymentTerms } from "./depositTerms";
 import {
   agreedAtFor,
   contactIdentity,
@@ -496,7 +497,16 @@ export function BookingClient({
     expiresAt: string | null;
     /** "setup" = card on file: the card is kept and NOTHING is charged now. */
     kind: "payment" | "setup";
+    /** Taken on non-refundable terms: the card step says so before they pay. */
+    nonRefundable?: boolean;
   } | null>(null);
+  // The money terms THIS page shows - the page-load summary, replaced by the
+  // server's current one when it answers DEPOSIT_TERMS_CHANGED (the shop made
+  // its deposit non-refundable meanwhile). Every money line on the page reads
+  // it, so the warning and the "Before you book" lines never disagree, and
+  // Confirm sends back what it showed.
+  const [paymentTerms, setPaymentTerms] = useState(data.shop.payment ?? null);
+  const depositKept = paymentTerms?.nonRefundable === true;
   // The manage token of a booking awaiting payment (shown after the card clears).
   const [manageTokenPending, setManageTokenPending] = useState<string | null>(null);
   /**
@@ -1642,6 +1652,9 @@ export function BookingClient({
         // booking here. The API still checks the version; this makes the
         // record say they were not re-asked.
         policyAgreedAt: carriedPolicyAt ?? undefined,
+        // The refund terms this page showed. Proof of what they saw, never
+        // the terms themselves - the server decides those.
+        depositNonRefundable: depositKept ? true : undefined,
         // The client's saved card, when this device holds its key and they
         // left it chosen: the booking goes straight through, no card step.
         savedCardToken: payingWithSavedCard && deviceCard ? deviceCard.token : undefined,
@@ -1713,6 +1726,14 @@ export function BookingClient({
           const current = readBookingPolicy(res.policy);
           if (current) bookingPolicy.replace(current);
           setError(current ? POLICY_CHANGED_MESSAGE : POLICY_HINT);
+          return;
+        }
+        if (res.code === "DEPOSIT_TERMS_CHANGED") {
+          // The shop made its deposit non-refundable while this page was open.
+          // Nothing was booked or charged; show the new terms and ask again.
+          const current = readPaymentTerms(res.payment);
+          setPaymentTerms((shown) => current ?? (shown ? { ...shown, nonRefundable: true } : shown));
+          setError(DEPOSIT_TERMS_CHANGED_MESSAGE);
           return;
         }
         if (res.code === "RATE_LIMITED") {
@@ -1812,6 +1833,7 @@ export function BookingClient({
                 holdMinutes: res.paymentHoldMinutes ?? null,
                 expiresAt: res.paymentExpiresAt ?? null,
                 kind: res.paymentKind ?? "payment",
+                nonRefundable: res.paymentNonRefundable === true,
               }
             : null,
         );
@@ -1918,6 +1940,7 @@ export function BookingClient({
         holdMinutes: null,
         expiresAt: res.finish.expiresAt,
         kind: res.finish.kind,
+        nonRefundable: res.finish.nonRefundable === true,
       });
       setPaymentSecret(res.finish.clientSecret);
       return;
@@ -2188,11 +2211,13 @@ export function BookingClient({
                 ) : (
                   <> with {data.shop.name}.</>
                 )}
+                {payCharge.nonRefundable && <> {DEPOSIT_KEPT_LINE}</>}
               </>
             ) : (
               <>
                 Your time is held. Enter payment to lock in your appointment
                 with {data.shop.name}.
+                {payCharge?.nonRefundable && <> {DEPOSIT_KEPT_LINE}</>}
               </>
             )}
           </p>
@@ -3387,13 +3412,17 @@ export function BookingClient({
                   mention of a deposit or a saved card was the card screen that
                   appeared AFTER the booking had been written. Same sentence the
                   receptionist speaks, so no surface contradicts another. */}
-              {data.shop.payment?.collects && (
+              {paymentTerms?.collects && (
                 <p className="text-xs text-muted" data-qa="payment-terms">
-                  {data.shop.payment.collects === "card"
+                  {paymentTerms.collects === "card"
                     ? "You'll save a card to confirm — no charge today."
-                    : data.shop.payment.mode === "deposit" && data.shop.payment.depositAmountCents
-                      ? `A $${Math.round(data.shop.payment.depositAmountCents / 100)} deposit is taken when you book.`
+                    : paymentTerms.mode === "deposit" && paymentTerms.depositAmountCents
+                      ? `A $${Math.round(paymentTerms.depositAmountCents / 100)} deposit is taken when you book.`
                       : "Payment is taken when you book."}
+                  {/* Said BEFORE the time is held, not first on the card step. */}
+                  {paymentTerms.collects === "payment" && depositKept && (
+                    <> {DEPOSIT_KEPT_LINE}</>
+                  )}
                 </p>
               )}
             </div>
@@ -3795,14 +3824,14 @@ export function BookingClient({
                 <BookingPolicyAgreed
                   policy={bookingPolicy.policy}
                   agreedAt={carriedPolicyAt}
-                  moneyLines={moneyTermsLines(data.shop.payment)}
+                  moneyLines={moneyTermsLines(paymentTerms)}
                 />
               ) : (
                 <BookingPolicyPanel
                   policy={bookingPolicy.policy}
                   ticked={bookingPolicy.ticked}
                   onToggle={bookingPolicy.toggle}
-                  moneyLines={moneyTermsLines(data.shop.payment)}
+                  moneyLines={moneyTermsLines(paymentTerms)}
                   accent={accent}
                 />
               ))}

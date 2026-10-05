@@ -75,6 +75,12 @@ export interface ApiResult<T> {
    * caller checks its shape (book/[slug]/BookingPolicy.tsx readBookingPolicy).
    */
   policy?: unknown;
+  /**
+   * With DEPOSIT_TERMS_CHANGED: the shop's CURRENT money terms, so the booking
+   * page shows them everywhere. Untyped here - the caller checks its shape
+   * (book/[slug]/depositTerms.ts readPaymentTerms).
+   */
+  payment?: unknown;
 }
 
 function authHeader(): Record<string, string> {
@@ -227,6 +233,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let confirmation: string | undefined;
   let conflicts: string[] | undefined;
   let policy: unknown;
+  let payment: unknown;
   try {
     const json = (await res.json()) as T & { error?: string; issues?: unknown };
     if (res.ok) data = json;
@@ -246,6 +253,8 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
       if (typeof answer === "string") confirmation = answer;
       const current = (json as { policy?: unknown }).policy;
       if (current && typeof current === "object") policy = current;
+      const terms = (json as { payment?: unknown }).payment;
+      if (terms && typeof terms === "object") payment = terms;
       const listed = (json as { conflicts?: unknown }).conflicts;
       if (Array.isArray(listed)) {
         const lines = listed.filter((l): l is string => typeof l === "string");
@@ -280,6 +289,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
     ...(confirmation ? { confirmation } : {}),
     ...(conflicts ? { conflicts } : {}),
     ...(policy ? { policy } : {}),
+    ...(payment ? { payment } : {}),
   };
 }
 

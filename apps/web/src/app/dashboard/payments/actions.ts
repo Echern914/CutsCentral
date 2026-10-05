@@ -56,6 +56,8 @@ export async function savePaymentSettingsAction(input: {
   cancelFeeBps?: number;
   /** Deposit taken at booking, in CENTS (deposit mode only). */
   depositAmountCents?: number;
+  /** Deposit mode: kept when a CLIENT cancels. Applies to bookings made from now on. */
+  depositNonRefundable?: boolean;
   /**
    * Whether shown prices already include a tip. DISPLAY ONLY - it moves no
    * money. null clears it back to saying nothing.
@@ -105,6 +107,8 @@ export interface PaymentStatus {
   paymentsMode: "off" | "ahead" | "deposit" | "card_on_file" | "hold";
   /** Null until the shop picks one; the UI suggests $20. */
   depositAmountCents: number | null;
+  /** Deposit mode: kept when a client cancels (a shop cancel still refunds). */
+  depositNonRefundable?: boolean;
   /** card_on_file: whether the kept card may be charged for a no-show / late cancel. */
   chargeCardOnFileFees: boolean;
   /** null = the barber has not said, and the booking page then says nothing. */

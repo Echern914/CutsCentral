@@ -30,6 +30,8 @@ export interface ManageData {
     expiresAt: string;
     /** Card on file: they agreed the shop may charge it for the service. */
     serviceChargeConsent: boolean;
+    /** Taken on non-refundable terms. Optional = an older API. */
+    nonRefundable?: boolean;
   } | null;
   /** The card never arrived before the hold ran out: this was never a booking. */
   neverBooked?: boolean;
@@ -56,6 +58,11 @@ export interface ManageData {
   staff: { name: string };
   canCancel: boolean;
   canReschedule: boolean;
+  /**
+   * Non-null: cancelling keeps this much - a deposit taken on non-refundable
+   * terms. The page asks before it cancels. Optional = an older API.
+   */
+  nonRefundable?: { amountCents: number } | null;
   // A standing appointment: later visits still on the books (null = not a series).
   series: { remaining: number } | null;
   // Check-in ("On my way"). open is computed server-side (60 min before start

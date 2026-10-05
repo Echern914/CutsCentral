@@ -613,6 +613,12 @@ model Shop {
   // cancel? Default OFF - choosing the mode is never, by itself, a decision to
   // charge anyone. "unless the barber is set and it's on them" (Eric).
   chargeCardOnFileFees Boolean @default(false)
+  // Deposit mode: is the deposit kept when the CLIENT cancels? Default OFF
+  // (follow the cancellation policy). A cancellation by the shop still refunds
+  // in full. Read ONLY when a new booking is paid for - each booking snapshots
+  // it onto its own Payment.nonRefundable, so turning this on or off never
+  // changes the terms of a booking already made (Eric, 2026-10-04).
+  depositNonRefundable Boolean @default(false)
 
   // Does the price a customer sees already include a tip?
   //
@@ -3699,6 +3705,14 @@ model Payment {
   // only ever reads and repairs local state - it never moves money.
   ambiguousAt            DateTime?
   reconciledAt           DateTime?
+  // THE REFUND TERMS THIS BOOKING WAS PAID ON: true = what was taken at booking
+  // is kept when the CLIENT cancels (Shop.depositNonRefundable, in deposit
+  // mode). Snapshotted in the reservation insert, before Stripe is called, and
+  // never rewritten - a retry rebuilds from this row - so the shop changing
+  // its switch never changes a booking already made. Read only by a CLIENT
+  // cancel (config clientCancelKeptCents); a shop cancel and a lapsed hold
+  // still refund in full. CHECK-pinned to purpose = 'booking'.
+  nonRefundable          Boolean      @default(false)
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
 
