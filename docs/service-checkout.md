@@ -137,7 +137,8 @@ free the appointment if that fails.
 deposit could not also record the balance. It is now indexed, with a
 discriminator and a narrower unique:
 
-- `Payment.purpose` — `booking` | `fee` | `service_checkout` (CHECK-pinned).
+- `Payment.purpose` — `booking` | `fee` | `service_checkout` | `tip` (CHECK-pinned;
+  `tip` added 2026-10-05, at most one live tip per appointment).
 - `Payment_appointmentId_booking_key` — partial unique on `purpose='booking'`,
   which preserves the invariant that actually mattered (a deposit cannot be
   taken twice).
@@ -146,8 +147,14 @@ discriminator and a narrower unique:
 
 `Appointment.payments` is a list. Each read was given the filter that matches
 what it means — refunds, hold sweeps, reschedule price guards and the
-receptionist's fee quote want the **booking** payment; revenue and the agenda's
-collected figure **sum every row**.
+receptionist's fee quote want the **booking** payment; the balance and the
+appointment sheet read `SERVICE_PAYMENT_PURPOSES` (`booking`, `service_checkout`);
+revenue, the agenda's collected figure, the price-edit floor and the payments
+trend read `TAKINGS_PAYMENT_PURPOSES` (those plus `fee`). Both lists live in
+`engines/appointmentPayment.ts`, and both are **allow-lists**: a `tip` is in
+neither, and the next new purpose joins none until someone decides it should.
+(Until 2026-10-05 these reads were "not a fee" or unfiltered, which would have
+counted a tip as money toward the service.)
 
 `CheckoutAttempt` is the attempt ledger: appointment, shop, client, acting user,
 amount, currency, reason, method, payment-method reference and display-safe card,

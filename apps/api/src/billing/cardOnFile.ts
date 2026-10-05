@@ -7,6 +7,7 @@ import {
   serviceChargeWindowClosed,
 } from "@chairback/config";
 import { serviceCollectedCents } from "../engines/serviceCheckout.js";
+import { SERVICE_PAYMENT_PURPOSES } from "../engines/appointmentPayment.js";
 import { logger } from "../logger.js";
 import { detachSavedCardIfUnused, saveCardConsentForBooking, saveCardFromBooking } from "./savedCard.js";
 import { stripeClient } from "./stripe.js";
@@ -1044,11 +1045,12 @@ async function retainedForServiceCheckout(
     return false;
   }
 
-  // A balance must actually be outstanding. Fee rows are excluded: money taken
-  // for a MISSED cut does not pay for one that happened.
+  // A balance must actually be outstanding. Only service money counts: a fee
+  // is money for a MISSED cut, and a tip is the client's extra on top - read
+  // as payment, a tip would release a card the shop still needs.
   const payments = await runWithShop(params.shopId, (tx) =>
     tx.payment.findMany({
-      where: { appointmentId: params.appointmentId },
+      where: { appointmentId: params.appointmentId, purpose: { in: [...SERVICE_PAYMENT_PURPOSES] } },
       select: { purpose: true, status: true, amount: true, capturedAmount: true, refundedAmount: true },
     }),
   );

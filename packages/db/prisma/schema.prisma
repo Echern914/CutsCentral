@@ -3679,7 +3679,11 @@ model Payment {
   /// pay-ahead, hold) and still capped at ONE per appointment by a partial
   /// unique index, so every pre-existing read keeps its exact meaning.
   /// `fee` = a no-show or late-cancellation charge. `service_checkout` = the
-  /// balance collected after the cut. CHECK-pinned in SQL.
+  /// balance collected after the cut. `tip` = money the client left on top,
+  /// after the visit: at most ONE live per appointment (partial unique index),
+  /// mode `ahead`, and never money toward the service or the shop's revenue -
+  /// readers use the allow-lists in engines/appointmentPayment.ts.
+  /// CHECK-pinned in SQL.
   purpose                String       @default("booking")
   stripePaymentIntentId  String       @unique
   stripeChargeId         String?
@@ -3687,7 +3691,7 @@ model Payment {
   mode                   PaymentsMode // snapshot (ahead | hold)
   amount                 Int // cents, snapshot from Appointment.priceAtBooking
   currency               String       @default("usd")
-  applicationFeeAmount   Int          @default(0) // platform fee in cents (0 for v1)
+  applicationFeeAmount   Int          @default(0) // platform fee in cents (0 for v1); on a tip, Stripe's processing fee taken back
   // Mirrors the Stripe PaymentIntent status:
   // requires_payment_method | requires_action | requires_capture | processing |
   // succeeded | canceled | failed | refunded | partially_refunded

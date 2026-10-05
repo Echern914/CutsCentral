@@ -50,6 +50,11 @@ const WAVES = {
       // The key that makes one review produce at most one alert per recipient
       // per channel, however many times the enqueue runs.
       "ReviewNotification_reviewId_userId_channel_key",
+      // One live tip per visit (a refunded tip still counts; a dead one does
+      // not). Pinned by routes/tipRowsAreNotServiceMoney.test.ts.
+      "Payment_appointmentId_tip_live_key",
+      // One ledger row per Stripe refund, so two presses record one refund.
+      "PaymentRefund_stripeRefundId_key",
     ],
   },
 };

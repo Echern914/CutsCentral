@@ -189,7 +189,27 @@ export async function reconcileOne(row: Row, now: Date, dryRun: boolean): Promis
     if (found.length === 1) {
       const pi = found[0]!;
       if (dryRun) return "adopted";
-      await applyIntentSnapshot(pi, `reconcile:${pi.id}:${pi.status}`, { reconciled: true });
+      const adopted = await applyIntentSnapshot(pi, `reconcile:${pi.id}:${pi.status}`, { reconciled: true });
+      if (!adopted) {
+        // 🔴 AN EARLIER PASS DECLARED THIS RESERVATION DEAD, AND IT WAS NOT.
+        // Its search found nothing (Stripe's index can lag) and marked it
+        // failed; the intent has now turned up without having succeeded, so
+        // the dead row refused the snapshot (a succeeded one would have been
+        // written - money that moved always wins). Record the intent id, so
+        // the row stops being searched on every pass, and tell a person -
+        // rather than reporting "adopted" forever for a write that never
+        // happened.
+        await prisma.payment.updateMany({
+          where: { id: row.id, stripePaymentIntentId: row.stripePaymentIntentId },
+          data: { stripePaymentIntentId: pi.id, reconciledAt: now },
+        });
+        escalate("a reservation marked dead has an intent at Stripe", {
+          paymentId: row.id,
+          local: row.status,
+          stripe: pi.status,
+        });
+        return "escalated";
+      }
       await settleCardOnFile(row, pi);
       logger.warn(
         { paymentId: row.id, intent: pi.id, status: pi.status },

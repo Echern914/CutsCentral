@@ -89,18 +89,40 @@ async function makeHold(opts?: {
   return appt;
 }
 
-/** A parsed `payment_intent.succeeded` exactly as the webhook route hands it over. */
-function succeededEvent(appointmentId: string): Stripe.Event {
+/**
+ * A parsed `payment_intent.succeeded` exactly as the webhook route hands it
+ * over - for a booking payment as createAheadPaymentIntent makes it: the
+ * Payment row is written BEFORE Stripe is called, and the intent's metadata
+ * names that row. Hold promotion reads the row's purpose, so an event with no
+ * row of ours behind it promotes nothing.
+ */
+async function succeededEvent(appointmentId: string): Promise<Stripe.Event> {
+  const paymentId = `pay_${randomToken(12)}`;
+  const intentId = `pi_${randomToken(10)}`;
+  await prisma.payment.create({
+    data: {
+      id: paymentId,
+      shopId: ids.shop!,
+      appointmentId,
+      stripePaymentIntentId: intentId,
+      stripeConnectAccountId: "acct_hold_test",
+      mode: "ahead",
+      purpose: "booking",
+      amount: 2000,
+      currency: "usd",
+      status: "requires_payment_method",
+    },
+  });
   return {
     id: `evt_${randomToken(10)}`,
     type: "payment_intent.succeeded",
     data: {
       object: {
-        id: `pi_${randomToken(10)}`,
+        id: intentId,
         status: "succeeded",
         amount_received: 2000,
         latest_charge: null,
-        metadata: { appointmentId, shopId: ids.shop! },
+        metadata: { appointmentId, shopId: ids.shop!, paymentId },
       },
     },
   } as unknown as Stripe.Event;
@@ -189,7 +211,7 @@ describe("promotion when the money lands", () => {
 
   it("runs off the payment webhook, which is what actually fires in production", async () => {
     const appt = await makeHold();
-    await applyPaymentEvent(succeededEvent(appt.id));
+    await applyPaymentEvent(await succeededEvent(appt.id));
 
     const after = await prisma.appointment.findUniqueOrThrow({ where: { id: appt.id } });
     expect(after.status).toBe("BOOKED");

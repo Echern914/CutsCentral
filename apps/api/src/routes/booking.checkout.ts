@@ -15,6 +15,7 @@ import {
 import { connectEnabled } from "../billing/stripe.js";
 import { createServiceCheckoutTerminalIntent, terminalEnabled } from "../billing/terminal.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
+import { TAKINGS_PAYMENT_PURPOSES } from "../engines/appointmentPayment.js";
 import {
   checkoutAmountAllowed,
   serviceCheckoutState,
@@ -214,7 +215,10 @@ async function loadCheckout(
   const [payments, card, live, agreedCents] = await Promise.all([
     runWithShop(shopId, (tx) =>
       tx.payment.findMany({
-        where: { appointmentId: appt.id },
+        // The shop's takings rows, never a tip: a tip is not toward the balance
+        // (serviceCollectedCents) and must not make an external booking look
+        // like it carries ChairBack money (`external` below).
+        where: { appointmentId: appt.id, purpose: { in: [...TAKINGS_PAYMENT_PURPOSES] } },
         select: {
           purpose: true,
           status: true,

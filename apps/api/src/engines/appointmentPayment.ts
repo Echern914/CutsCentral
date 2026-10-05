@@ -42,6 +42,48 @@
  *     synthesize it from a description string or a raw provider payload.
  */
 
+/**
+ * WHICH PAYMENT ROWS ARE MONEY TOWARD THE SERVICE ITSELF: what was taken at
+ * booking (deposit, pay-ahead, hold) and any balance collected at checkout.
+ *
+ * 🔴 AN ALLOW-LIST, NOT "EVERYTHING BUT FEES". Two other kinds of row hang off
+ * an appointment and neither pays for the visit: a no-show or late-cancel FEE
+ * (money for a visit that did not happen) and a TIP (the client's extra, on
+ * top of the price). The readers that said `purpose !== "fee"` would have
+ * counted every NEW purpose as service money the day it appeared: a tip would
+ * have read as a deposit, lowered "still to collect" by its own amount, and
+ * let the chair collect the balance short. A new purpose now joins nothing
+ * until someone decides it should.
+ */
+export const SERVICE_PAYMENT_PURPOSES = ["booking", "service_checkout"] as const;
+
+/**
+ * Every row the shop's TAKINGS have always counted: the service money plus a
+ * card-on-file fee (a no-show fee is real income for a missed slot). The
+ * revenue, agenda, price-edit and trend readers use it, so their numbers are
+ * exactly what they were before tips existed.
+ *
+ * 🔴 A TIP IS NOT IN IT (Eric, 2026-10-05: a tip shows on the appointment but
+ * stays out of revenue). Left in, one $8 tip on a $40 cash cut that was never
+ * checked out would have turned that cut's revenue into $8: revenue trusts
+ * Stripe money over the ticket the moment any payment row exists
+ * (engines/insightsWindow.ts).
+ */
+export const TAKINGS_PAYMENT_PURPOSES = ["booking", "fee", "service_checkout"] as const;
+
+const SERVICE_PURPOSE_SET: ReadonlySet<string> = new Set(SERVICE_PAYMENT_PURPOSES);
+const TAKINGS_PURPOSE_SET: ReadonlySet<string> = new Set(TAKINGS_PAYMENT_PURPOSES);
+
+/** True for a row that is money toward the service - see SERVICE_PAYMENT_PURPOSES. */
+export function isServicePayment(row: { purpose: string }): boolean {
+  return SERVICE_PURPOSE_SET.has(row.purpose);
+}
+
+/** True for a row the shop's takings count - see TAKINGS_PAYMENT_PURPOSES. */
+export function isTakingsPayment(row: { purpose: string }): boolean {
+  return TAKINGS_PURPOSE_SET.has(row.purpose);
+}
+
 /** The Stripe intent statuses under which money has actually MOVED to the shop. */
 const STRIPE_COLLECTED_STATUSES = new Set([
   "succeeded",
@@ -73,10 +115,10 @@ export interface AppointmentPaymentInput {
    * 🔴 A LIST, AND NOT A FEE. An appointment can carry several rows since the
    * service-checkout release, and this used to take "the" row - the first the
    * database returned - so a sheet with a deposit AND a checkout balance showed
-   * only one of them and told the barber the cut still owed money. A no-show
-   * fee (`purpose: "fee"`) is left out by the caller, the same rule the
-   * checkout balance uses (engines/serviceCheckout.ts): it is money for a
-   * missed visit, not toward this one, and the card-on-file status says so.
+   * only one of them and told the barber the cut still owed money. The caller
+   * reads only SERVICE_PAYMENT_PURPOSES, the same rule the checkout balance
+   * uses (engines/serviceCheckout.ts): a no-show fee is money for a missed
+   * visit, not toward this one, and a tip is the client's extra on top.
    */
   payments: PaymentRowFacts[];
   /** Dollars collected at the chair (`Appointment.paidAmount`); null = not checked out. */

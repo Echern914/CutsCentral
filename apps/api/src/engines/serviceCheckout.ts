@@ -1,5 +1,5 @@
 import { serviceChargeAuthorized, serviceChargeWindowClosed } from "@chairback/config";
-import { stripeCollectedCents } from "./appointmentPayment.js";
+import { isServicePayment, isTakingsPayment, stripeCollectedCents } from "./appointmentPayment.js";
 
 /**
  * WHAT THE CUSTOMER STILL OWES FOR THE SERVICE, AND WHAT MAY BE DONE ABOUT IT.
@@ -54,7 +54,12 @@ export interface ServiceCheckoutInput {
   chairPaid: number | null;
   /** True once `Appointment.paidAt` is set - the chair moment is closed. */
   chairCheckedOut: boolean;
-  /** Every Payment row against this appointment, any purpose. */
+  /**
+   * Payment rows against this appointment. The balance reads only service
+   * money (isServicePayment) and the external rule below only takings rows,
+   * so a tip passed here changes neither - but the caller reads
+   * TAKINGS_PAYMENT_PURPOSES anyway.
+   */
   payments: CheckoutPaymentFacts[];
   /** The kept card, if this booking has one. */
   card: CheckoutCardFacts | null;
@@ -133,14 +138,17 @@ function dollarsToCents(dollars: number | null): number {
 
 /**
  * Cents already collected toward the SERVICE. A deposit counts. A balance
- * collected at a previous checkout counts. Cash counts. A no-show fee does not.
+ * collected at a previous checkout counts. Cash counts. A no-show fee does not,
+ * and neither does a tip: counted, an $8 tip on a $40 cut would leave $32 to
+ * collect and the shop $8 short. An allow-list (isServicePayment), so the next
+ * new purpose is not service money by default either.
  */
 export function serviceCollectedCents(
   payments: CheckoutPaymentFacts[],
   chairPaid: number | null,
 ): number {
   const stripe = payments
-    .filter((p) => p.purpose !== "fee")
+    .filter(isServicePayment)
     .reduce((sum, p) => sum + stripeCollectedCents(p), 0);
   return stripe + Math.max(0, dollarsToCents(chairPaid));
 }
@@ -210,8 +218,10 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
   }
 
   // An externally-owned booking has no ChairBack balance to speak of, so there
-  // is nothing to charge a card for either.
-  if (input.external && input.payments.length === 0) {
+  // is nothing to charge a card for either - unless ChairBack itself took
+  // money for it. A tip is not that: it is the client's extra, and counted
+  // here it would make an Acuity-owned booking look chargeable.
+  if (input.external && !input.payments.some(isTakingsPayment)) {
     blocker = blocker ?? "no_card";
   }
 

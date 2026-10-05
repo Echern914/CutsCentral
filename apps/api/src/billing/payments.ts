@@ -391,6 +391,23 @@ export async function applyPaymentEvent(event: Stripe.Event): Promise<boolean> {
     case "payment_intent.payment_failed":
     case "payment_intent.canceled":
     case "payment_intent.processing": {
+      // 🔴 THIS MUST BE A PLATFORM EVENT - the same rule as setup_intent below.
+      // Every PaymentIntent ChairBack creates is a destination charge made in
+      // PLATFORM context (`on_behalf_of` names the shop's account; nothing
+      // passes `stripeAccount`), so one of ours arrives with NO
+      // `event.account`. An event that carries one describes an intent created
+      // ON a connected account - the shop's own Stripe sales, or anything a
+      // connected account chooses to send - whose metadata that account
+      // controls. Acting on it, a copied `paymentId` or `appointmentId` could
+      // rewrite one of our payment rows or confirm a hold no money ever paid.
+      if (event.account) {
+        logger.warn(
+          { stripeEventId: event.id, account: event.account },
+          `${event.type} refused: connected-account context, platform expected`,
+        );
+        // Handled, so Stripe stops redelivering an event we will never act on.
+        return true;
+      }
       const pi = event.data.object as Stripe.PaymentIntent;
       await applyIntentSnapshot(pi, event.id);
       // 🔴 The webhook is what SETTLES a checkout, not the browser's reply to
@@ -489,11 +506,13 @@ export async function applyIntentSnapshot(
   pi: Pick<Stripe.PaymentIntent, "id" | "status" | "amount_received" | "latest_charge" | "metadata">,
   markerId: string,
   opts: { reconciled?: boolean } = {},
-): Promise<void> {
+): Promise<boolean> {
   const chargeId =
     typeof pi.latest_charge === "string" ? pi.latest_charge : pi.latest_charge?.id ?? null;
   const noDowngrade = pi.status !== "succeeded";
-  await reconcile(
+  // True when the row was written; false for a replay, a refused downgrade or
+  // a row that is not ours - so a caller can tell "adopted" from "refused".
+  return reconcile(
     markerId,
     { paymentId: pi.metadata?.paymentId, piId: pi.id },
     {
@@ -503,9 +522,43 @@ export async function applyIntentSnapshot(
       ...(pi.status === "succeeded" ? { capturedAmount: pi.amount_received } : {}),
       ...(opts.reconciled ? { ambiguousAt: null, reconciledAt: new Date() } : {}),
     },
-    noDowngrade ? ["succeeded", "refunded", "partially_refunded"] : undefined,
+    noDowngrade ? NON_SUCCESS_MAY_NOT_OVERWRITE : undefined,
   );
 }
+
+/**
+ * Statuses a NON-succeeded snapshot may never overwrite.
+ *
+ * Collected money (succeeded / refunded / partially_refunded): a stale
+ * processing or failed event arriving late must not hide money that moved.
+ *
+ * And the two DEAD states, canceled and failed. `canceled` is an intent Stripe
+ * can never collect. `failed` has two writers:
+ *  - billing/cardOnFile.ts, on a definitive OFF-SESSION decline (a no-show fee,
+ *    a saved-card checkout). Stripe still holds the declined intent in
+ *    requires_payment_method, but nothing ever confirms it again and its
+ *    client secret never leaves the server.
+ *  - billing/reconcile.ts, when its search finds nothing for a reservation -
+ *    a verdict that can be wrong if Stripe's search lagged (reconcileOne
+ *    handles the intent turning up later).
+ * A late non-succeeded snapshot - the decline's own payment_intent.payment_failed,
+ * a stray processing - used to rewrite such a row to that status: a zombie
+ * the reconciler re-read on every pass, and for a tip, whose one-live-tip
+ * index ignores dead rows, a second live row for the same visit. A SUCCEEDED
+ * snapshot still overwrites both: if money really moved, the row must say so.
+ *
+ * 🔴 For a payment the CLIENT confirms (a deposit, a tip): a decline must keep
+ * Stripe's own status (requires_payment_method), never `failed` - the client
+ * can retry the same intent with another card. Only an intent nobody can
+ * confirm any more may be marked dead.
+ */
+const NON_SUCCESS_MAY_NOT_OVERWRITE = [
+  "succeeded",
+  "refunded",
+  "partially_refunded",
+  "canceled",
+  "failed",
+];
 
 /**
  * The money landed: turn the payment hold into a real booking.
@@ -529,13 +582,23 @@ export async function applyIntentSnapshot(
 async function promoteHoldForPaidIntent(pi: Stripe.PaymentIntent): Promise<void> {
   const appointmentId = pi.metadata?.appointmentId;
   const shopId = pi.metadata?.shopId;
-  if (!appointmentId || !shopId) return; // not a booking payment (terminal, etc.)
-  // 🔴 A SERVICE CHECKOUT IS NOT A HOLD. It carries the same appointment and
-  // shop metadata, so without this it would enter the promotion path - and for
-  // an appointment cancelled between the charge and the webhook, `promotePaidHold`
-  // answers "lapsed" and `refundUnhonoredHold` would hand back money the barber
-  // earned for a cut they had already given.
-  if (pi.metadata?.purpose === "service_checkout") return;
+  if (!appointmentId || !shopId) return; // not tied to an appointment
+  // 🔴 ONLY MONEY TAKEN AT BOOKING CAN PAY FOR A HOLD - decided by the PAYMENT
+  // ROW's own purpose, not by the intent's label. Labels are not reliable: a
+  // booking intent carries none, and so do a no-show fee (chargeCardOnFile)
+  // and the older Tap to Pay intent (createTerminalPaymentIntent), whose row is
+  // a service checkout. Every other kind of payment hangs off the same
+  // appointment and shop, and for an appointment cancelled between the charge
+  // and the webhook `promotePaidHold` answers "lapsed" - `refundUnhonoredHold`
+  // would then hand back booking money for a visit already given, or promote a
+  // hold that no booking money ever paid for. Every creator writes its row
+  // BEFORE calling Stripe, so a paid intent of ours always has one; an intent
+  // with no row is not booking money we know of.
+  const row = await prisma.payment.findFirst({
+    where: pi.metadata?.paymentId ? { id: pi.metadata.paymentId } : { stripePaymentIntentId: pi.id },
+    select: { purpose: true },
+  });
+  if (row?.purpose !== "booking") return;
   try {
     const { promotePaidHold, refundUnhonoredHold } = await import(
       "../services/appointmentPaymentHold.js"
@@ -597,13 +660,13 @@ async function reconcile(
   data: Record<string, unknown>,
   noDowngradeFrom?: string[],
   extraWhere?: Record<string, unknown>,
-): Promise<void> {
+): Promise<boolean> {
   const where = key.paymentId
     ? { id: key.paymentId }
     : key.piId
       ? { stripePaymentIntentId: key.piId }
       : null;
-  if (!where) return;
+  if (!where) return false;
   // Replay guard: skip ONLY if we've already applied this exact event to this
   // row. Downgrade guard: skip if the row is already terminal/collected.
   //
@@ -635,6 +698,7 @@ async function reconcile(
       "payment webhook matched no row, was a replay, or was a refused downgrade",
     );
   }
+  return count > 0;
 }
 
 /** cuid-ish id without pulling a dep; matches the Payment.id shape closely enough. */

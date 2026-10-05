@@ -3,6 +3,7 @@ import parsePhoneNumberFromString from "libphonenumber-js";
 import { forShop, prisma, type Prisma } from "@chairback/db";
 import {
   appointmentPaymentSnapshot,
+  SERVICE_PAYMENT_PURPOSES,
   stripeCollectedCents,
   type AppointmentPaymentSnapshot,
 } from "../engines/appointmentPayment.js";
@@ -541,9 +542,10 @@ export function registerAppointmentDetail(router: Router): void {
     // balance collected at checkout are two rows, and reading one of them told
     // the barber a paid-in-full cut still owed. A no-show fee is not toward
     // the service (engines/serviceCheckout.ts) - the card-on-file status shows
-    // it was taken.
+    // it was taken - and neither is a tip. An allow-list: read as "not a fee",
+    // a tip would have shown as "Part paid" and lowered "still to collect".
     const payments = await prisma.payment.findMany({
-      where: { appointmentId: appt.id, shopId, purpose: { not: "fee" } },
+      where: { appointmentId: appt.id, shopId, purpose: { in: [...SERVICE_PAYMENT_PURPOSES] } },
       select: {
         purpose: true,
         status: true,
