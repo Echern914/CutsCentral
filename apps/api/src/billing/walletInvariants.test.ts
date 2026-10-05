@@ -44,7 +44,7 @@ describe("Apple Pay cannot be switched off by accident", () => {
     // set up. This is exactly how card-on-file lost Apple Pay while pay-ahead
     // kept it - the same product, two different answers depending on the shop's
     // payment mode.
-    for (const rel of ["billing/payments.ts", "billing/cardOnFile.ts"]) {
+    for (const rel of ["billing/payments.ts", "billing/cardOnFile.ts", "billing/tips.ts"]) {
       const src = await code(rel);
       expect(src, `${rel} must not pin payment_method_types`).not.toMatch(
         /payment_method_types:\s*\[\s*["']card["']/,

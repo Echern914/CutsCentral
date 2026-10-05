@@ -69,6 +69,17 @@ export async function savePaymentSettingsAction(input: {
   return res.ok ? { ok: true } : { ok: false, error: res.error ?? "failed" };
 }
 
+/**
+ * Let clients tip online after a finished visit - saved the moment it is
+ * switched, on its own route: the shared Save is refused whole when Stripe is
+ * not ready, and switching tips OFF must always work.
+ */
+export async function setOnlineTipsAction(enabled: boolean): Promise<Result> {
+  const res = await apiSend("PATCH", "/api/payments/tips", { enabled });
+  if (res.ok) revalidatePath("/dashboard/payments");
+  return res.ok ? { ok: true } : { ok: false, error: res.error ?? "failed" };
+}
+
 export interface PayDirectSettings {
   enabled: boolean;
   zelle: string | null;
@@ -113,6 +124,8 @@ export interface PaymentStatus {
   chargeCardOnFileFees: boolean;
   /** null = the barber has not said, and the booking page then says nothing. */
   tipPolicy: "included" | "not_included" | null;
+  /** Clients may tip online after a finished visit. Optional = an older API. */
+  onlineTipsEnabled?: boolean;
   platformFeeBps: number;
   cancelWindowHours: number;
   cancelFeeBps: number;

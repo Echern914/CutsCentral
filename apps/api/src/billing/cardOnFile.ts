@@ -105,7 +105,7 @@ export const CARD_STEP_EXCLUDED_METHODS = [
 ] as const satisfies readonly Stripe.SetupIntentCreateParams.ExcludedPaymentMethodType[];
 
 /** Stripe rejected the request because of `excluded_payment_method_types` itself. */
-function refusedExclusions(err: unknown): boolean {
+export function refusedExclusions(err: unknown): boolean {
   const e = (err ?? {}) as { type?: unknown; param?: unknown };
   return (
     e.type === "StripeInvalidRequestError" &&

@@ -156,6 +156,17 @@ describe("financial routes: the wrong person", () => {
       .send({ amountCents: 1000 });
     expect(depositRefund.status).toBe(403);
     expect(depositRefund.body.error).toBe("forbidden_role");
+    const tipRefund = await request(app)
+      .post(`/api/booking/appointments/${appointmentId}/tip-refund`)
+      .set("Cookie", barberCookie)
+      .send({ amountCents: 800 });
+    expect(tipRefund.status).toBe(403);
+    expect(tipRefund.body.error).toBe("forbidden_role");
+    const tipsSwitch = await request(app)
+      .patch("/api/payments/tips")
+      .set("Cookie", barberCookie)
+      .send({ enabled: true });
+    expect(tipsSwitch.status).toBe(403);
     // Nothing moved.
     const row = await prisma.appointment.findUnique({ where: { id: appointmentId } });
     expect(Number(row?.priceAtBooking)).toBe(40);
@@ -171,6 +182,10 @@ describe("financial routes: the wrong person", () => {
       .post(`/api/booking/appointments/${appointmentId}/deposit-refund`)
       .send({ amountCents: 1000 });
     expect(depositRefund.status).toBe(401);
+    const tipRefund = await request(app)
+      .post(`/api/booking/appointments/${appointmentId}/tip-refund`)
+      .send({ amountCents: 800 });
+    expect(tipRefund.status).toBe(401);
   });
 
   it("the operator portal does not exist for a shop owner who is not a platform admin", async () => {

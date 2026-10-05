@@ -28,6 +28,7 @@ import { expireStaleWalkIns } from "./engines/walkInExpiry.js";
 import { releaseAffiliateRewardHolds } from "./services/affiliateQualification.js";
 import { sweepExpiredHolds } from "./engines/holdSweep.js";
 import { sweepExpiredPaymentHolds } from "./services/appointmentPaymentHold.js";
+import { sweepAbandonedTipIntents } from "./billing/tips.js";
 import { expireDueOffers } from "./engines/waitlistOffer.js";
 import { expireDeadWaitlistEntries } from "./engines/waitlistExpiry.js";
 import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
@@ -368,6 +369,8 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       const results = await Promise.allSettled([
         sweepExpiredHolds(),
         sweepExpiredPaymentHolds(),
+        // Tip attempts nobody finished (billing/tips.ts) - same cadence, same lease.
+        sweepAbandonedTipIntents(),
       ]);
       for (const r of results) {
         if (r.status === "rejected") logger.error({ err: r.reason }, "hold sweep half failed");

@@ -54,7 +54,7 @@ import {
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
 import { registerUnfinishedBookings } from "./booking.unfinished.js";
-import { registerDepositRefund } from "./booking.depositRefund.js";
+import { registerDepositRefund, registerTipRefund } from "./booking.depositRefund.js";
 import { stripeCollectedCents, TAKINGS_PAYMENT_PURPOSES } from "../engines/appointmentPayment.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import {
@@ -81,6 +81,7 @@ import {
 import { toCents } from "../billing/payments.js";
 import { releaseCardOnFile } from "../billing/cardOnFile.js";
 import { attachClientSavedCard } from "../billing/savedCard.js";
+import { retireOpenTip, tipDescription } from "../billing/tips.js";
 import { createTerminalPaymentIntent, terminalEnabled } from "../billing/terminal.js";
 import {
   APPOINTMENT_NUDGE_KIND,
@@ -4049,6 +4050,49 @@ bookingDashboardRouter.get("/specials", async (req, res) => {
 });
 
 bookingDashboardRouter.post("/appointments/:id/cancel", async (req, res) => {
+  // 🔴 A TIPPED VISIT IS NOT CANCELLED WHILE THE TIP IS STILL TAKEN. This is
+  // the one route that can cancel a COMPLETED visit, and cancelling one claws
+  // back its loyalty, drops it from revenue and emails the client a
+  // cancellation - while the tip they left for it stays charged, because a
+  // cancel refunds only booking money. The shop refunds the tip first (the
+  // Refund tip button), then cancels.
+  //
+  // First, a tip the client could STILL pay: one they opened and have not
+  // finished. It is cancelled at Stripe before the visit is, so a press in a
+  // form still open on their phone cannot charge a cancelled visit; if Stripe
+  // says it was paid (or we cannot tell), the visit stays as it is.
+  const owned = await prisma.appointment.findFirst({
+    where: { id: req.params.id!, shopId: req.shop!.id },
+    select: { id: true, service: { select: { name: true } } },
+  });
+  if (
+    owned &&
+    !(await retireOpenTip({
+      shopId: req.shop!.id,
+      appointmentId: owned.id,
+      description: tipDescription(owned.service?.name),
+    }))
+  ) {
+    const settled = await prisma.payment.findFirst({
+      where: { appointmentId: owned.id, purpose: "tip", status: { in: ["succeeded", "processing"] } },
+      select: { id: true },
+    });
+    res.status(409).json({ error: settled ? "tip_paid" : "tip_in_progress" });
+    return;
+  }
+  const tip = await prisma.payment.findFirst({
+    where: {
+      appointmentId: req.params.id!,
+      shopId: req.shop!.id,
+      purpose: "tip",
+      status: { in: ["succeeded", "partially_refunded", "processing"] },
+    },
+    select: { status: true, amount: true, capturedAmount: true, refundedAmount: true },
+  });
+  if (tip && (tip.status === "processing" || stripeCollectedCents(tip) > 0)) {
+    res.status(409).json({ error: "tip_paid" });
+    return;
+  }
   const ok = await cancelAppointment(req.shop!.id, req.params.id!, "CANCELED");
   res.status(ok ? 200 : 404).json({ ok });
 });
@@ -4594,6 +4638,9 @@ registerUnfinishedBookings(bookingDashboardRouter);
 // "Refund deposit": give back what a cancelled or no-show booking kept from its
 // booking payment (booking.depositRefund.ts, billing/depositRefund.ts).
 registerDepositRefund(bookingDashboardRouter);
+
+// "Refund tip": give back a tip the client left online after the visit.
+registerTipRefund(bookingDashboardRouter);
 
 bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   const shopId = req.shop!.id;

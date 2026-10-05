@@ -66,7 +66,7 @@ export async function ourEarlierRefund(
   stripe: Stripe,
   chargeId: string,
   paymentId: string,
-  source: "chairback_checkout_refund" | "chairback_deposit_refund",
+  source: "chairback_checkout_refund" | "chairback_deposit_refund" | "chairback_tip_refund",
 ): Promise<Stripe.Refund | null> {
   try {
     const list = await stripe.refunds.list({ charge: chargeId, limit: 10 });

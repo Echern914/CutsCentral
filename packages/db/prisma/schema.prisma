@@ -632,6 +632,11 @@ model Shop {
   // money in their mouth that they never made. The line appears only once a
   // barber picks. "included" | "not_included" - CHECK-pinned in SQL, additive.
   tipPolicy          String?
+  // Clients may tip ONLINE after a finished visit, from their appointment page
+  // (Payments -> Tips). Off by default; turning it on needs a ready Stripe
+  // account. Never offered while tipPolicy says the price already includes a
+  // tip. The tip itself is a Payment row (purpose 'tip').
+  onlineTipsEnabled  Boolean      @default(false)
 
   // The shop's OWN policies, in its own words, shown on the booking page's
   // last step ("Before you book"). Limits live in config/bookingPolicy.ts.

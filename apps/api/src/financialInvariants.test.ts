@@ -64,6 +64,9 @@ const MONEY_MODULES = [
   "billing/depositRefund.ts",
   "billing/refundLedger.ts",
   "routes/booking.depositRefund.ts",
+  "billing/tips.ts",
+  "routes/booking.tips.ts",
+  "services/tips.ts",
 ];
 
 describe("financial invariants (source guards)", () => {

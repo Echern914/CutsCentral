@@ -1023,8 +1023,8 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "tips",
     q: "Do you take a cut of tips?",
-    a: "Never. Not a cent, same as bookings.\n\nCard payments land in your own Stripe account, and Zelle, Venmo, and Cash App are straight between you and the client. Whatever they add on top is yours.",
-    keywords: ["tip", "tips", "tipping", "gratuity", "cut of tips"],
+    a: "Never. Not a cent, same as bookings.\n\nTips at the shop - cash, card, Zelle, Venmo, Cash App - are straight between you and the client.\n\nIf you turn on online tips (Payments → Tips), clients can tip from their appointment page once a visit is done: 15, 20 or 25% or their own amount, into your own Stripe account. Stripe's card fee comes out of each online tip, as it would at any card reader. In Stripe it shows as an application fee to ChairBack - that pays Stripe, and ChairBack keeps none of it.",
+    keywords: ["tip", "tips", "tipping", "gratuity", "cut of tips", "online tips", "tip after visit", "leave a tip"],
     category: "money",
   },
   {
@@ -1356,7 +1356,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "record-payment",
     q: "How do I record what someone paid?",
-    a: "Open the appointment on the calendar and tap Start checkout. The amount due is already filled in — change it if they paid something different (a tip or a discount goes there), pick how they paid, and tap Mark paid. You record what they actually handed over — cash, card, whatever — and that's what feeds Insights.\n\nIt's deliberately what you TOOK, not what the service is priced at, so a discount or a friend rate doesn't quietly inflate your numbers.",
+    a: "Open the appointment on the calendar and tap Start checkout. The amount due is already filled in — change it if they paid something different (a tip handed over at the chair or a discount goes there - a tip they left online is already recorded, so don't add it again), pick how they paid, and tap Mark paid. You record what they actually handed over — cash, card, whatever — and that's what feeds Insights.\n\nIt's deliberately what you TOOK, not what the service is priced at, so a discount or a friend rate doesn't quietly inflate your numbers.",
     keywords: [
       "mark as paid", "record payment", "checkout", "check out", "cash", "took payment",
       "paid me", "how much they paid", "close out", "ring up", "settle up",

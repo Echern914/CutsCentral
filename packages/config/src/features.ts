@@ -689,8 +689,8 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     // card that says "mul-TIP-le" and nothing else.
     id: "tips",
     name: "Tips",
-    synonyms: ["tip", "tipping", "gratuity", "price includes tip", "tip included", "tips included"],
-    description: "Say whether the prices clients see already include a tip",
+    synonyms: ["tip", "tipping", "gratuity", "price includes tip", "tip included", "tips included", "online tips", "leave a tip"],
+    description: "Let clients tip online after a visit, and say whether prices include a tip",
     href: "/dashboard/payments#tips",
     category: "money",
     minRole: "OWNER",

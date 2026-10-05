@@ -187,6 +187,23 @@ export interface AppointmentDetail {
     nonRefundable: boolean;
   } | null;
   /**
+   * A TIP the client left online after the visit - kept apart from `payment`,
+   * which is money toward the service only. Null when there is none (an
+   * attempt the client never finished is not a tip).
+   */
+  tip: {
+    /** What the client paid. */
+    amountCents: number;
+    /** Stripe's fee, taken out of the tip (config/tips.ts). */
+    feeCents: number;
+    /** Given back so far. */
+    refundedCents: number;
+    /** What the Refund tip button would give back; 0 when nothing is left. */
+    refundableCents: number;
+    /** Stripe is still settling it (a bank debit). */
+    processing: boolean;
+  } | null;
+  /**
    * When the barber closed the chair moment (`Appointment.paidAt`). Null = the
    * cut has never been checked out, which is the ONLY state in which "Start
    * checkout" is a real action - the endpoint is idempotent and 409s a second
@@ -560,6 +577,22 @@ export function registerAppointmentDetail(router: Router): void {
       bookingPayment && CLOSED_BOOKING_STATUSES.has(appt.status)
         ? stripeCollectedCents(bookingPayment)
         : 0;
+    // The visit's tip, read on its own: never money toward the service.
+    const tipRow = await prisma.payment.findFirst({
+      where: {
+        appointmentId: appt.id,
+        shopId,
+        purpose: "tip",
+        status: { in: ["succeeded", "partially_refunded", "refunded", "processing"] },
+      },
+      select: {
+        status: true,
+        amount: true,
+        capturedAmount: true,
+        refundedAmount: true,
+        applicationFeeAmount: true,
+      },
+    });
 
     // 🔴 OWNERSHIP IS NOT "HAS A VISIT". Every COMPLETED native booking is
     // linked to a Visit by the completion promoter (its loyalty record), so
@@ -627,6 +660,15 @@ export function registerAppointmentDetail(router: Router): void {
         bookingPayment && keptCents > 0
           ? { amountCents: keptCents, nonRefundable: bookingPayment.nonRefundable }
           : null,
+      tip: tipRow
+        ? {
+            amountCents: tipRow.capturedAmount ?? tipRow.amount,
+            feeCents: tipRow.applicationFeeAmount,
+            refundedCents: tipRow.refundedAmount,
+            refundableCents: stripeCollectedCents(tipRow),
+            processing: tipRow.status === "processing",
+          }
+        : null,
       checkedOutAt: appt.paidAt ? appt.paidAt.toISOString() : null,
       serviceCheckoutEnabled: serviceCheckoutEnabled(shopId),
       editable,
@@ -750,6 +792,7 @@ export function registerAppointmentDetail(router: Router): void {
         external: true,
       }),
       keptDeposit: null,
+      tip: null,
       checkedOutAt: null,
       serviceCheckoutEnabled: serviceCheckoutEnabled(shopId),
       editable: false,
