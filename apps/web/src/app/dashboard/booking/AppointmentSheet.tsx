@@ -873,9 +873,13 @@ function Hero({
           >
             {sourceLabel}
           </span>
+          {/* "Repeats", not "Weekly": a series can be every 1 to 8 weeks. */}
           {row.seriesId && (
-            <span className="rounded-full bg-gold/15 px-2.5 py-1 text-[10px] font-medium text-gold">
-              ↻ Weekly
+            <span
+              title="Repeat appointment"
+              className="rounded-full bg-gold/15 px-2.5 py-1 text-[10px] font-medium text-gold"
+            >
+              ↻ Repeats
             </span>
           )}
           {row.special && <SpecialChip afterHours={row.afterHours} premium={row.premium} className="px-2.5 py-1" />}

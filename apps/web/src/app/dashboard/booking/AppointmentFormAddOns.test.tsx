@@ -233,10 +233,10 @@ describe("Schedule", () => {
   it("a visit with add-ons does not repeat - the Repeat card says so and no series is sent", async () => {
     await open();
     pickService("Haircut");
-    fireEvent.click(screen.getByRole("button", { name: "Weekly" }));
+    fireEvent.click(screen.getByRole("button", { name: "Repeat appointment" }));
     fireEvent.click(addOnButton("Beard trim"));
     expect(screen.getByText("Add-ons are for a single visit, so this one doesn't repeat.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Weekly" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Repeat appointment" })).toBeNull();
     expect(screen.queryByText("appointments total")).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));
     nameIt();

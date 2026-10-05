@@ -155,7 +155,7 @@ describe("Custom time takes his price", () => {
     await open();
     fireEvent.click(await bookTapped());
     fireEvent.change(price(), { target: { value: "60" } });
-    fireEvent.click(screen.getByRole("button", { name: "Weekly" }));
+    fireEvent.click(screen.getByRole("button", { name: "Repeat appointment" }));
     nameIt();
     schedule();
     expect(await screen.findByText(/A typed price is for one visit/)).toBeTruthy();

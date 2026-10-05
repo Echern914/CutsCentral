@@ -267,7 +267,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "recurring",
     q: "Can I set up a standing appointment?",
-    a: "Yes. Book a client's every-N-weeks slot once and the whole series goes on the calendar in one shot.\n\nYou can edit the series later, or change a single date in it without touching the rest.",
+    a: "Yes. On the calendar, tap the time (or New appointment), pick the client and service, then under Repeat choose Repeat appointment. Set how many weeks apart (every 1 to 8 weeks), then For a count (up to 52) or Until a date, and tap Schedule appointment. The whole series goes on the calendar in one shot.\n\nYou can edit the series later, or change a single date in it without touching the rest.",
     keywords: ["recurring", "repeat", "every 2 weeks", "standing", "regular", "series", "weekly", "biweekly"],
     category: "booking",
     action: { label: "Open booking", featureId: "online-booking" },
@@ -1765,7 +1765,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     // Not "How do I book…": the q text scores too, and that opening stole the
     // bare "How do I book?" from the booking how-to (support eval, book-howto).
     q: "Can I take a client after hours, at my after-hours price?",
-    a: "On the calendar, tap the hour you want — say 10 PM. If it isn't one of your open times, New appointment offers it anyway: under Time you'll see “10:00 PM · The time you tapped” with Book this time. Tap it, pick the client and schedule.\n\nAny other time works the same way from Custom time (top right of the Time card): pick the date and time yourself.\n\nCustom time also has a Price box. Leave it blank for the service's regular price, or type your after-hours rate — $60, say — and that's what the booking is for. Add-ons still add on top. A typed price is for one visit, so it can't be used with Weekly.\n\nIf something's already at that time, you're shown who and asked before it's booked (see Book anyway). Want customers to book late times themselves? Publish them as special-priced slots on the Services tab.",
+    a: "On the calendar, tap the hour you want — say 10 PM. If it isn't one of your open times, New appointment offers it anyway: under Time you'll see “10:00 PM · The time you tapped” with Book this time. Tap it, pick the client and schedule.\n\nAny other time works the same way from Custom time (top right of the Time card): pick the date and time yourself.\n\nCustom time also has a Price box. Leave it blank for the service's regular price, or type your after-hours rate — $60, say — and that's what the booking is for. Add-ons still add on top. A typed price is for one visit, so it can't be used with Repeat appointment.\n\nIf something's already at that time, you're shown who and asked before it's booked (see Book anyway). Want customers to book late times themselves? Publish them as special-priced slots on the Services tab.",
     keywords: [
       "book after hours", "book someone after hours", "after hours appointment",
       "can't book after hours", "can't book it after hours", "cant book after hours",
@@ -1840,7 +1840,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "addons-when-you-book",
     q: "Can I include extras when I book someone in myself?",
-    a: "Yes. In New appointment, pick the service and an Add-ons card appears with the extras that go with it, each with its price and time (“+$10 · +15 min”). Tick what they want and a Total shows the new length and price. The open times reload to fit the longer visit.\n\nOn the calendar the card then reads “Haircut + Hot towel”, and the length and price on it already include the extras. Add-ons customers pick on your booking page show the same way.\n\nThree things it won't do: a special has its own length and price, so add-ons don't apply to it; a weekly repeat can't carry add-ons (ticking one turns Weekly off); and you can't add or remove add-ons on a booking that's already made. Set up your add-ons under Booking → Services → Add-ons.",
+    a: "Yes. In New appointment, pick the service and an Add-ons card appears with the extras that go with it, each with its price and time (“+$10 · +15 min”). Tick what they want and a Total shows the new length and price. The open times reload to fit the longer visit.\n\nOn the calendar the card then reads “Haircut + Hot towel”, and the length and price on it already include the extras. Add-ons customers pick on your booking page show the same way.\n\nThree things it won't do: a special has its own length and price, so add-ons don't apply to it; a repeat appointment can't carry add-ons (ticking one turns Repeat appointment off); and you can't add or remove add-ons on a booking that's already made. Set up your add-ons under Booking → Services → Add-ons.",
     keywords: [
       "add-ons when i book", "add ons when i book", "add-on to an appointment",
       "add an add-on", "add extras when booking",       "add-ons on the calendar", "add ons on the calendar", "calendar card add-ons",

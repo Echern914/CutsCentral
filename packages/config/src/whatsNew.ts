@@ -36,6 +36,13 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-05-repeat-appointment",
+    date: "2026-10-05",
+    kind: "fix",
+    title: "Repeat appointment, every 1 to 8 weeks",
+    body: "Booking a client every few weeks? In New appointment, under Repeat, the option now reads Repeat appointment instead of Weekly. Pick it, set how many weeks apart, then how many times or until when. Repeating bookings show a Repeats tag on your calendar.",
+  },
+  {
     id: "2026-10-05-refund-kept-deposit",
     date: "2026-10-05",
     kind: "feature",
