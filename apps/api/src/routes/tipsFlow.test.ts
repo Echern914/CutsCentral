@@ -610,6 +610,23 @@ describe("paying a tip", () => {
 describe("the shop's side of a tip", () => {
   it("🔴 the appointment shows the tip on its own line; Refund tip gives the client everything back and leaves Stripe's fee with the shop", async () => {
     const appt = await visit();
+    // The visit was paid for at booking: that payment is never read as the
+    // tip, and the tip never adds to it.
+    await prisma.payment.create({
+      data: {
+        id: `pay_bk_${randomToken(10)}`,
+        shopId,
+        appointmentId: appt.id,
+        stripePaymentIntentId: `pi_${randomToken(14)}`,
+        stripeConnectAccountId: ACCT,
+        mode: "ahead",
+        purpose: "booking",
+        amount: 4000,
+        applicationFeeAmount: 0,
+        currency: "usd",
+        status: "succeeded",
+      },
+    });
     await startTip(appt.manageToken, { amountCents: 800 });
     const [row] = await liveTips(appt.id);
     fake.pay(row!.stripePaymentIntentId);
@@ -624,8 +641,8 @@ describe("the shop's side of a tip", () => {
       refundableCents: 800,
       processing: false,
     });
-    // Never money toward the service.
-    expect(detail.body.payment.collectedCents).toBe(0);
+    // Never money toward the service: the visit's $40, not $48.
+    expect(detail.body.payment.collectedCents).toBe(4000);
 
     const refund = await request(app)
       .post(`/api/booking/appointments/${appt.id}/tip-refund`)
