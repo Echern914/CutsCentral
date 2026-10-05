@@ -1036,6 +1036,21 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open payments", featureId: "pay-ahead" },
   },
   {
+    // A barber, 2026-10-05: clients who left the card step thought they were
+    // booked while their time went to someone else - "make it book the
+    // appointment regardless".
+    id: "card-on-file-skip",
+    q: "Is a client booked if they don't save a card?",
+    a: "Yes, by default. With Card on file, pressing Confirm books the client and sends their confirmation. The card step after it is optional, so nobody who skips it loses their time. Their appointment shows \"No card on file\", so you know a no-show fee can't be charged for that one.\n\nWould you rather hold the time until a card is saved? Turn on Payments → Card on file → Require a saved card to book. The time is then held for 10 minutes while they save a card and goes back on sale if they don't; those clients show up under Didn't finish booking.",
+    keywords: [
+      "skip the card", "skipped the card", "didnt save a card", "without a card", "booked without a card",
+      "require a card", "card required to book", "card to book", "not booked card", "requested not booked",
+      "no card on file",
+    ],
+    category: "money",
+    action: { label: "Open payments", featureId: "pay-ahead" },
+  },
+  {
     id: "texts-run-out",
     q: "What happens if I run out of texts?",
     a: "Sending stops at your monthly quota — that's a hard stop, so you never get a surprise bill for going over.\n\nThe quota resets at the start of each calendar month, and the dashboard shows a usage meter so it isn't a surprise either.",

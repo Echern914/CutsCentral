@@ -40,6 +40,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
       depositAmountCents: true,
       depositNonRefundable: true,
       chargeCardOnFileFees: true,
+      requireCardToBook: true,
       tipPolicy: true,
       onlineTipsEnabled: true,
       payDirectEnabled: true,
@@ -78,6 +79,8 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
     depositAmountCents: shop.depositAmountCents,
     depositNonRefundable: shop.depositNonRefundable,
     chargeCardOnFileFees: shop.chargeCardOnFileFees,
+    // Card on file: is a client who skips the card still booked? (false = yes)
+    requireCardToBook: shop.requireCardToBook,
     tipPolicy: shop.tipPolicy,
     // Clients may tip online after a finished visit (PATCH /tips below).
     onlineTipsEnabled: shop.onlineTipsEnabled,
@@ -174,6 +177,9 @@ const settingsSchema = z
     // A separate switch from the mode on purpose - "unless the barber is set
     // and it's on them" (Eric). Default false in the schema.
     chargeCardOnFileFees: z.boolean().optional(),
+    // Card on file: hold the time until a card is saved (true), or book the
+    // client at Confirm and make the card step optional (false, the default).
+    requireCardToBook: z.boolean().optional(),
     cancelWindowHours: z.number().int().min(0).max(720).optional(),
     cancelFeeBps: z.number().int().min(0).max(10000).optional(),
     // Deposit taken at booking, in CENTS. Floor of $1 so "deposit mode with a
@@ -228,6 +234,7 @@ paymentsDashboardRouter.patch("/settings", async (req, res) => {
       ...(d.cancelFeeBps !== undefined ? { cancelFeeBps: d.cancelFeeBps } : {}),
       ...(d.tipPolicy !== undefined ? { tipPolicy: d.tipPolicy ?? null } : {}),
       ...(d.chargeCardOnFileFees !== undefined ? { chargeCardOnFileFees: d.chargeCardOnFileFees } : {}),
+      ...(d.requireCardToBook !== undefined ? { requireCardToBook: d.requireCardToBook } : {}),
       ...(d.depositAmountCents !== undefined
         ? { depositAmountCents: d.depositAmountCents }
         : {}),

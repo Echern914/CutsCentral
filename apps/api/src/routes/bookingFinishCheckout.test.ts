@@ -142,7 +142,8 @@ beforeAll(async () => {
   const settings = await request(app)
     .patch("/api/payments/settings")
     .set("Cookie", cookie)
-    .send({ paymentsMode: "card_on_file" });
+    // Card-or-nothing: only a required card leaves a booking waiting on it.
+    .send({ paymentsMode: "card_on_file", requireCardToBook: true });
   expect(settings.status).toBe(200);
 });
 

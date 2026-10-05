@@ -121,6 +121,38 @@ export async function unfinishedCheckoutFor(
 }
 
 /**
+ * ADD A CARD TO A BOOKING THAT DOESN'T NEED ONE TO STAND.
+ *
+ * A card shop that books without a card (Shop.requireCardToBook off) confirms
+ * at Confirm and offers the card step after it, optional. A client who skipped
+ * it can add the card later from the booking's own link: the same SetupIntent,
+ * so a card saved here is filed exactly as it would have been on the booking
+ * page. Only for a booking still ahead, whose card never arrived.
+ */
+export async function optionalCardStepFor(
+  appt: { id: string; shopId: string; status: string; startsAt: Date },
+  now: Date,
+): Promise<{ clientSecret: string; serviceChargeConsent: boolean } | null> {
+  if (appt.status !== "BOOKED" || appt.startsAt.getTime() <= now.getTime()) return null;
+  try {
+    const card = await runWithShop(appt.shopId, (tx) =>
+      tx.cardOnFile.findUnique({
+        where: { appointmentId: appt.id },
+        select: { stripeSetupIntentId: true, status: true, serviceChargeConsentAt: true },
+      }),
+    );
+    if (!card || card.status !== "pending") return null;
+    const si = await stripeClient().setupIntents.retrieve(card.stripeSetupIntentId);
+    if (!si.client_secret || !AWAITING.has(si.status)) return null;
+    return { clientSecret: si.client_secret, serviceChargeConsent: card.serviceChargeConsentAt !== null };
+  } catch (err) {
+    // Stripe unreachable: the booking stands; the page just can't offer the card this time.
+    logger.warn({ err, appointmentId: appt.id }, "add a card: could not reopen the card step");
+    return null;
+  }
+}
+
+/**
  * A booking that was only ever a payment hold and never became one: the card
  * (or payment) did not arrive before the hold ran out, or a payment landed too
  * late and was refunded. A hold that turned into a booking loses its

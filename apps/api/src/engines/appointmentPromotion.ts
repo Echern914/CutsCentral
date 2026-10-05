@@ -385,6 +385,16 @@ export async function cancelAppointment(
       startsAt: result.startsAt,
       now,
     });
+  } else if (result.cardOnFile && result.cardOnFile.status === "pending") {
+    // A booking made WITHOUT a card (the card step is optional) whose card
+    // never arrived. Nothing to charge; let the unfinished card go, so a card
+    // form still open on the client's phone cannot file a card on a booking
+    // that no longer stands.
+    await releaseCardOnFile({
+      shopId,
+      appointmentId,
+      reason: outcome === "NO_SHOW" ? "no_show_no_card" : "canceled_no_card",
+    });
   }
 
   // A CANCELED future slot frees up: alert the barber + nudge matching

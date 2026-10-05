@@ -272,6 +272,8 @@ beforeAll(async () => {
       stripeConnectAccountId: ACCT,
       connectChargesEnabled: true,
       paymentsMode: "card_on_file",
+      // Card-or-nothing: the holds below exist only when the card is required.
+      requireCardToBook: true,
       requireBookingApproval: false,
     },
   });
@@ -866,5 +868,38 @@ describe("a standing appointment at a card-on-file shop", () => {
     const occ = await occurrencesOf(body.series!.id);
     expect(occ).toHaveLength(3);
     for (const a of occ) expect(a.status).toBe("BOOKED");
+  });
+});
+
+describe("a standing appointment at a card shop that books without a card (the default)", () => {
+  it("🔴 booked at Confirm - every visit, no hold - and a card saved later covers every visit", async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { requireCardToBook: false } });
+    try {
+      const body = await bookSeries(2, 14, 3);
+      // Booked now, all three, and the response says so: nothing is "held".
+      expect(body.series!.held).toBe(false);
+      expect(body.payment).toMatchObject({ kind: "setup", optional: true, holdMinutes: 0, expiresAt: null });
+      const occ = await occurrencesOf(body.series!.id);
+      expect(occ).toHaveLength(3);
+      for (const a of occ) {
+        expect(a.status).toBe("BOOKED");
+        expect(a.holdReason).toBeNull();
+        expect(a.holdExpiresAt).toBeNull();
+      }
+
+      // 🔴 Nothing was held, so the save promotes nothing - and must NOT read
+      // that as "the series failed to land" and let the card go.
+      const card = await cardFor(body.series!.id);
+      fake.succeed(card!.stripeSetupIntentId);
+      const saved = await request(app).post(`/api/book/manage/${body.manageToken}/card-saved`).send({});
+      expect(saved.body.status).toBe("BOOKED");
+      expect((await cardFor(body.series!.id))!.status).toBe("saved");
+      const covered = await prisma.cardOnFile.count({
+        where: { appointment: { seriesId: body.series!.id }, status: "saved" },
+      });
+      expect(covered).toBe(3);
+    } finally {
+      await prisma.shop.update({ where: { id: shopId }, data: { requireCardToBook: true } });
+    }
   });
 });

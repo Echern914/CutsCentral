@@ -1280,11 +1280,11 @@ export function buildCardChargedEmail(params: {
     subject: `${dollars} charged to your card - ${params.shopName}`,
     text:
       `Hi ${who}, ${dollars} was charged to ${card} because ${why}.\n\n` +
-      `This is the fee you agreed to when you saved a card to book. Questions? Contact ${params.shopName} directly.\n\n` +
+      `This is the fee you agreed to when you saved your card for this booking. Questions? Contact ${params.shopName} directly.\n\n` +
       `The appointment: ${manageUrl}`,
     html: appointmentEmailHtml({
       heading: `${dollars} charged`,
-      intro: `Hi ${who}, ${dollars} was charged to ${card} because ${why}. This is the fee you agreed to when you saved a card to book.`,
+      intro: `Hi ${who}, ${dollars} was charged to ${card} because ${why}. This is the fee you agreed to when you saved your card for this booking.`,
       shopName: params.shopName,
       serviceName: params.serviceName,
       when,

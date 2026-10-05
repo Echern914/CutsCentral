@@ -52,6 +52,8 @@ export async function savePaymentSettingsAction(input: {
   paymentsMode?: "off" | "ahead" | "deposit" | "card_on_file" | "hold";
   /** card_on_file: may the kept card be charged for a no-show / late cancel? */
   chargeCardOnFileFees?: boolean;
+  /** card_on_file: hold the time until a card is saved (true), or book them anyway (false). */
+  requireCardToBook?: boolean;
   cancelWindowHours?: number;
   cancelFeeBps?: number;
   /** Deposit taken at booking, in CENTS (deposit mode only). */
@@ -122,6 +124,11 @@ export interface PaymentStatus {
   depositNonRefundable?: boolean;
   /** card_on_file: whether the kept card may be charged for a no-show / late cancel. */
   chargeCardOnFileFees: boolean;
+  /**
+   * card_on_file: is a client who skips the card still booked? false (the
+   * default) = yes. Optional = an older API.
+   */
+  requireCardToBook?: boolean;
   /** null = the barber has not said, and the booking page then says nothing. */
   tipPolicy: "included" | "not_included" | null;
   /** Clients may tip online after a finished visit. Optional = an older API. */

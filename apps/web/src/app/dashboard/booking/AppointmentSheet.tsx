@@ -1465,6 +1465,11 @@ function PaymentCard({
               tone={fee === "failed" ? "bad" : undefined}
             />
           )}
+          {/* Asked for a card and booked without one (the card step is
+              optional): say so, because a no-show fee needs a card. */}
+          {fee === "pending" && !closed && (
+            <Line label="No card on file" value="Skipped at booking" />
+          )}
         </dl>
       )}
 

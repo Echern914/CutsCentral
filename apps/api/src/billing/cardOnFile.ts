@@ -275,7 +275,22 @@ export async function markCardSaved(
       },
     }),
   );
-  if (updated.count === 0) return "already";
+  if (updated.count === 0) {
+    // 🔴 THE SAVE LOST TO A RELEASE. The booking was cancelled (and its card
+    // row let go) while the client's card form was still open, and they saved
+    // a card into it anyway. Stripe now holds a card nothing here records or
+    // will ever let go of - so let go of it now. Only a row that was NEVER
+    // saved: a released row that had a card is a replayed event, and its card
+    // may be the client's own saved card, kept on purpose.
+    const current = await runWithShop(shopId, (tx) =>
+      tx.cardOnFile.findUnique({ where: { id: cardOnFileId }, select: { status: true, savedAt: true } }),
+    );
+    if (current?.status === "released" && current.savedAt === null && pmId) {
+      await detachMethod(pmId, cardOnFileId);
+      logger.info({ cardOnFileId }, "card on file: a card saved after its booking was let go - detached");
+    }
+    return "already";
+  }
 
   // 🔴 Is this one booking, or a standing appointment? Read it from OUR row,
   // never from the intent's metadata: metadata is a copy made at create time
@@ -295,7 +310,17 @@ export async function markCardSaved(
     // occurrence became a real booking the card is doing its job for that
     // booking, and detaching it would leave a confirmed appointment with the
     // no-show protection the shop asked for silently missing.
-    if (result.promoted === 0) {
+    //
+    // A series booked WITHOUT a card (an optional card step) has nothing held
+    // to promote - it is booked already - so "promoted nothing" is not "landed
+    // nothing". Count what is actually booked.
+    const alreadyBooked =
+      result.promoted === 0
+        ? await runWithShop(shopId, (tx) =>
+            tx.appointment.count({ where: { seriesId: row.seriesId!, shopId, status: "BOOKED" } }),
+          )
+        : 0;
+    if (result.promoted === 0 && alreadyBooked === 0) {
       await releaseCardOnFile({
         shopId,
         appointmentId,
@@ -316,6 +341,18 @@ export async function markCardSaved(
   if (outcome === "lapsed" || outcome === "slot_taken") {
     await releaseCardOnFile({ shopId, appointmentId, reason: outcome });
     return "saved";
+  }
+  if (outcome !== "promoted" && outcome !== "already_booked") {
+    // Not a hold, and not booked: a booking made WITHOUT a card (an optional
+    // card step) that was cancelled before the card arrived. A card on a
+    // cancelled booking protects nothing and must not sit attached forever.
+    const appt = await runWithShop(shopId, (tx) =>
+      tx.appointment.findFirst({ where: { id: appointmentId, shopId }, select: { status: true } }),
+    );
+    if (appt?.status !== "BOOKED") {
+      await releaseCardOnFile({ shopId, appointmentId, reason: "booking_not_live" });
+      return "saved";
+    }
   }
   // The booking stands. If the client asked to keep the card for next time,
   // keep it now - only a card whose booking went through is ever kept.
@@ -660,7 +697,14 @@ export async function releaseCardOnFile(params: {
   const row = await runWithShop(params.shopId, (tx) =>
     tx.cardOnFile.findUnique({
       where: { appointmentId: params.appointmentId },
-      select: { id: true, status: true, stripePaymentMethodId: true, seriesId: true, savedCardId: true },
+      select: {
+        id: true,
+        status: true,
+        stripePaymentMethodId: true,
+        stripeSetupIntentId: true,
+        seriesId: true,
+        savedCardId: true,
+      },
     }),
   );
   if (!row || row.status === "released" || row.status === "charged") return;
@@ -724,6 +768,36 @@ export async function releaseCardOnFile(params: {
       "card on file: left alone - a charge on it is still unresolved",
     );
     return;
+  }
+
+  // 🔴 WHAT TO LET GO OF IS READ AFTER THE RELEASE, NOT BEFORE. The read above
+  // can be stale: a card saved between it and the release (the client's card
+  // form finishing as the booking is cancelled) left this row "saved" with a
+  // payment method the earlier read never saw - and detaching that read's
+  // null would leave a real card attached at Stripe, recorded as released.
+  const settled = await runWithShop(params.shopId, (tx) =>
+    tx.cardOnFile.findUnique({
+      where: { id: row.id },
+      select: { stripePaymentMethodId: true, savedCardId: true },
+    }),
+  );
+  row.stripePaymentMethodId = settled?.stripePaymentMethodId ?? row.stripePaymentMethodId;
+  row.savedCardId = settled?.savedCardId ?? row.savedCardId;
+
+  // A card that was never saved: its form may still be open on the client's
+  // phone. Cancel it at Stripe so it cannot file a card on a booking that no
+  // longer stands. Best effort - a card saved anyway is detached when its
+  // event arrives (markCardSaved). One booking's own form only: a standing
+  // appointment's form serves its other visits too.
+  if (row.status === "pending" && !row.seriesId && !row.stripePaymentMethodId) {
+    try {
+      await stripeClient().setupIntents.cancel(row.stripeSetupIntentId);
+    } catch (err) {
+      logger.info(
+        { cardOnFileId: row.id, ...stripeErrorFacts(err) },
+        "card on file: the unfinished card form could not be cancelled (already done?)",
+      );
+    }
   }
 
   // 🔴 THE CLIENT'S SAVED CARD IS NOT THIS VISIT'S TO LET GO. They asked the

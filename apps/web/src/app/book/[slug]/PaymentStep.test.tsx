@@ -200,4 +200,44 @@ describe("PaymentStep in setup mode (card on file)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("We couldn't save that card");
     expect(onPaid).not.toHaveBeenCalled();
   });
+
+  it("🔴 an OPTIONAL card (already booked) only saves - never 'confirm' - and offers Skip", async () => {
+    const onSkip = vi.fn();
+    render(
+      <PaymentStep
+        clientSecret="seti_secret_123"
+        amountLabel={null}
+        accent="#c8a24a"
+        returnUrl="https://example.test/book/manage/tok_123"
+        onPaid={vi.fn()}
+        intent="setup"
+        onSkip={onSkip}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("element-ready"));
+    expect(screen.getByRole("button", { name: "Save card" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /confirm/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Skip, I’m booked" }));
+    expect(onSkip).toHaveBeenCalledTimes(1);
+  });
+
+  it("Skip can't abandon a card that is on its way", async () => {
+    let finish: (v: unknown) => void = () => {};
+    confirmSetup.mockImplementation(() => new Promise((r) => (finish = r)));
+    render(
+      <PaymentStep
+        clientSecret="seti_secret_123"
+        amountLabel={null}
+        accent="#c8a24a"
+        returnUrl="https://example.test/book/manage/tok_123"
+        onPaid={vi.fn()}
+        intent="setup"
+        onSkip={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("element-ready"));
+    fireEvent.click(screen.getByRole("button", { name: "Save card" }));
+    expect((screen.getByRole("button", { name: "Skip, I’m booked" }) as HTMLButtonElement).disabled).toBe(true);
+    finish({ setupIntent: { status: "succeeded" } });
+  });
 });

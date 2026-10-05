@@ -499,6 +499,11 @@ export function BookingClient({
     kind: "payment" | "setup";
     /** Taken on non-refundable terms: the card step says so before they pay. */
     nonRefundable?: boolean;
+    /**
+     * Card on file, OPTIONAL: they are booked already and nothing is held. The
+     * step says "You're booked" and offers Skip - never "Not booked yet".
+     */
+    optional?: boolean;
   } | null>(null);
   // The money terms THIS page shows - the page-load summary, replaced by the
   // server's current one when it answers DEPOSIT_TERMS_CHANGED (the shop made
@@ -1834,6 +1839,7 @@ export function BookingClient({
                 expiresAt: res.paymentExpiresAt ?? null,
                 kind: res.paymentKind ?? "payment",
                 nonRefundable: res.paymentNonRefundable === true,
+                optional: res.paymentOptional === true,
               }
             : null,
         );
@@ -2153,12 +2159,23 @@ export function BookingClient({
           {/* 🔴 SAID FIRST, BEFORE ANYTHING ELSE. Customers read "Your time is
               held" as "booked", left this screen, and the hold ran out ten
               minutes later with the time back on sale. */}
-          <p className="text-xs font-semibold uppercase tracking-wide text-gold" data-qa="not-booked-yet">
-            Not booked yet
-          </p>
+          {/* ...unless they ARE booked: a card shop that books without a card
+              confirmed them at Confirm, and this card is optional. Saying "Not
+              booked yet" there would be the opposite lie. */}
+          {payCharge?.optional ? (
+            <p className="text-xs font-semibold uppercase tracking-wide text-gold" data-qa="booked-card-optional">
+              You&rsquo;re booked
+            </p>
+          ) : (
+            <p className="text-xs font-semibold uppercase tracking-wide text-gold" data-qa="not-booked-yet">
+              Not booked yet
+            </p>
+          )}
           <h1 ref={paymentHeadingRef} tabIndex={-1} className="font-display text-2xl outline-none">
             {payCharge?.kind === "setup"
-              ? "Save a card to confirm"
+              ? payCharge.optional
+                ? "Add a card to keep on file"
+                : "Save a card to confirm"
               : payCharge?.isDeposit
                 ? "Deposit to confirm"
                 : "Pay to confirm"}
@@ -2171,8 +2188,10 @@ export function BookingClient({
           <p className="mt-1 mb-4 text-sm text-muted">
             {payCharge?.kind === "setup" ? (
               <>
-                Your time is held. {data.shop.name} keeps a card on file — you
-                are <strong className="text-offwhite">not charged today</strong>
+                {payCharge.optional
+                  ? `Your appointment is booked. ${data.shop.name} asks for a card to keep on file - you can skip this. You are `
+                  : `Your time is held. ${data.shop.name} keeps a card on file — you are `}
+                <strong className="text-offwhite">not charged today</strong>
                 , and you pay at your visit.
                 {/* 🔴 NEVER CONTRADICT THE BOX THEY JUST TICKED. A customer who
                     agreed to a service charge must not then be told the card
@@ -2255,15 +2274,19 @@ export function BookingClient({
           ) : null}
           {payConfirm === "checking" ? (
             <p role="status" className="py-6 text-center text-sm text-muted">
-              Payment received. Confirming your booking&hellip;
+              {payCharge?.optional
+                ? "Card received. Putting it on file…"
+                : "Payment received. Confirming your booking…"}
             </p>
           ) : payConfirm === "slow" ? (
             <div role="status" className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm">
-              <p className="font-medium">Your payment went through.</p>
+              <p className="font-medium">
+                {payCharge?.optional ? "You're booked, and your card went through." : "Your payment went through."}
+              </p>
               <p className="mt-1 text-muted">
-                We&rsquo;re still confirming with {data.shop.name} — this
-                usually takes a few seconds. Your confirmation will arrive by
-                email, and you can check this link any time.
+                {payCharge?.optional
+                  ? `${data.shop.name} is still putting the card on file - this usually takes a few seconds. You can check this link any time.`
+                  : `We're still confirming with ${data.shop.name} — this usually takes a few seconds. Your confirmation will arrive by email, and you can check this link any time.`}
               </p>
               {manageTokenPending && (
                 <Link
@@ -2318,6 +2341,14 @@ export function BookingClient({
                 if (manageTokenPending) void confirmAfterPayment(manageTokenPending);
                 else setPayConfirm("slow");
               }}
+              // Booked already (an optional card): Skip goes straight to the
+              // confirmation they already have. No server call - nothing waits
+              // on the card.
+              onSkip={
+                payCharge?.optional && manageTokenPending
+                  ? () => setConfirmedToken(manageTokenPending)
+                  : undefined
+              }
             />
           )}
           {payConfirm === "no" && (
@@ -3415,7 +3446,9 @@ export function BookingClient({
               {paymentTerms?.collects && (
                 <p className="text-xs text-muted" data-qa="payment-terms">
                   {paymentTerms.collects === "card"
-                    ? "You'll save a card to confirm — no charge today."
+                    ? paymentTerms.cardOptional
+                      ? "You'll be asked for a card to keep on file - no charge today. You're booked either way."
+                      : "You'll save a card to confirm — no charge today."
                     : paymentTerms.mode === "deposit" && paymentTerms.depositAmountCents
                       ? `A $${Math.round(paymentTerms.depositAmountCents / 100)} deposit is taken when you book.`
                       : "Payment is taken when you book."}

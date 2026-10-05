@@ -57,6 +57,7 @@ export function PaymentStep({
   returnUrl,
   onPaid,
   intent = "payment",
+  onSkip,
 }: {
   clientSecret: string;
   amountLabel: string | null;
@@ -76,12 +77,27 @@ export function PaymentStep({
    * Same Element, same wallets, same hand-off; only the Stripe call differs.
    */
   intent?: "payment" | "setup";
+  /**
+   * The card is OPTIONAL - they are booked already (a card shop that books
+   * without a card). Given, the step offers "Skip, I'm booked" and the button
+   * only saves the card; it never "confirms" anything.
+   */
+  onSkip?: () => void;
 }) {
   // A missing publishable key is a deployment fault, not a customer error, and
   // the old screen expressed it as an inert "Pay $20" button over a chair that
   // was already being held. Say what is true and give them the way out.
   if (!STRIPE_CONFIGURED) {
-    return (
+    return onSkip ? (
+      <div
+        role="alert"
+        className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-200"
+      >
+        <p className="font-medium">Card saving isn&rsquo;t available right now.</p>
+        <p className="mt-1 text-amber-200/80">You&rsquo;re still booked - nothing else to do.</p>
+        <SkipButton onSkip={onSkip} />
+      </div>
+    ) : (
       <div
         role="alert"
         className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-200"
@@ -107,8 +123,23 @@ export function PaymentStep({
         returnUrl={returnUrl}
         onPaid={onPaid}
         intent={intent}
+        onSkip={onSkip}
       />
     </Elements>
+  );
+}
+
+/** "Skip, I'm booked" - the way out of an optional card step. */
+function SkipButton({ onSkip, disabled = false }: { onSkip: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onSkip}
+      disabled={disabled}
+      className="mt-2 w-full rounded-xl border border-white/15 py-3 text-center text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-white/5 disabled:opacity-50"
+    >
+      Skip, I&rsquo;m booked
+    </button>
   );
 }
 
@@ -118,12 +149,14 @@ function PaymentForm({
   returnUrl,
   onPaid,
   intent = "payment",
+  onSkip,
 }: {
   amountLabel: string | null;
   accent: string;
   returnUrl: string;
   onPaid: () => void;
   intent?: "payment" | "setup";
+  onSkip?: () => void;
 }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -241,11 +274,17 @@ function PaymentForm({
         {paying
           ? "Processing…"
           : intent === "setup"
-            ? "Save card & confirm"
+            ? onSkip
+              ? "Save card"
+              : "Save card & confirm"
             : amountLabel
               ? `Pay ${amountLabel}`
               : "Pay & confirm"}
       </button>
+      {/* Booked already: leaving without a card is a real choice, so it is a
+          button, not a closed tab. Disabled mid-save so a card on its way is
+          not abandoned by a second tap. */}
+      {onSkip && <SkipButton onSkip={onSkip} disabled={paying} />}
     </div>
   );
 }

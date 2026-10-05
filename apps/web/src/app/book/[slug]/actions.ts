@@ -296,6 +296,11 @@ export async function bookAction(
    * lying to them ever since.
    */
   paymentExpiresAt?: string | null;
+  /**
+   * The card step is OPTIONAL: they are booked already, and the card only goes
+   * on file (a card shop that books without a card). Nothing is held.
+   */
+  paymentOptional?: boolean;
   // true = the shop requires approval; this is a REQUEST awaiting confirmation.
   pending?: boolean;
   /**
@@ -346,6 +351,8 @@ export async function bookAction(
       nonRefundable?: boolean;
       holdMinutes?: number;
       expiresAt?: string | null;
+      /** Booked already; the card only goes on file. */
+      optional?: boolean;
     } | null;
     pending?: boolean;
     series?: {
@@ -387,6 +394,7 @@ export async function bookAction(
     paymentNonRefundable: res.data.payment?.nonRefundable === true,
     paymentHoldMinutes: res.data.payment?.holdMinutes ?? null,
     paymentExpiresAt: res.data.payment?.expiresAt ?? null,
+    paymentOptional: res.data.payment?.optional === true,
     pending: Boolean(res.data.pending),
     ...(res.data.savedCard ? { savedCard: res.data.savedCard } : {}),
     ...(res.data.savedCardRefused ? { savedCardRefused: true } : {}),
