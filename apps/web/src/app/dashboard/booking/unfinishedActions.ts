@@ -62,6 +62,13 @@ export interface UnfinishedRow {
   targetedSlotId: string | null;
   repeating: boolean;
   otherTimes: { startsAt: string; serviceName: string }[];
+  /**
+   * "Email them to pick a new time" may be offered: someone else booked the
+   * time, and they can be emailed. Decided by the server. Optional = an older API.
+   */
+  canInvite?: boolean;
+  /** When they were emailed to pick another time. Optional = an older API. */
+  invitedAt?: string | null;
 }
 
 export interface UnfinishedList {
@@ -74,6 +81,27 @@ export async function listUnfinishedAction(): Promise<{ ok: boolean; data?: Unfi
   const res = await apiGet<UnfinishedList>("/api/booking/unfinished");
   if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
   return { ok: true, data: res.data };
+}
+
+/**
+ * Email a client whose time was taken to pick another time - once. Changes
+ * no booking. `error` is the API's reason: already_invited, no_email,
+ * unsubscribed, no_booking_page, email_unavailable, send_failed, ...
+ */
+export async function inviteUnfinishedAction(
+  id: string,
+): Promise<{ ok: boolean; invitedAt?: string | null; error?: string }> {
+  const res = await apiSend<{ ok: boolean; invitedAt?: string; error?: string }>(
+    "POST",
+    `/api/booking/unfinished/${encodeURIComponent(id)}/invite`,
+    {},
+  );
+  // already_invited: the row says so without a time; the list's next read
+  // carries when it went.
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  // 202: the send's answer was lost ("unknown").
+  if (res.data.ok === false) return { ok: false, error: res.data.error ?? "unknown" };
+  return { ok: true, invitedAt: res.data.invitedAt ?? null };
 }
 
 /** Take a person off the list. Changes no booking. */

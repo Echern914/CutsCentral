@@ -517,6 +517,11 @@ export interface CreateApptInput {
   staffId: string;
   serviceId: string;
   startsAt: string;
+  /**
+   * Email the client their confirmation (+ a push if they use the app). Only
+   * from "Didn't finish booking", whose clients tried to book online.
+   */
+  confirmClient?: true;
   clientId?: string;
   firstName?: string;
   lastName?: string;
@@ -601,12 +606,22 @@ export type CreateApptResult = Result & {
   forced?: boolean;
   /** For a forced booking: the Acuity block outcome (active | unknown | failed | skipped). */
   mirror?: string;
+  /**
+   * Booked with `confirmClient`: "email" when ChairBack is emailing the client
+   * their confirmation, "none" when it can't (no email on file, email off).
+   */
+  clientConfirmation?: "email" | "none";
 };
 
 export async function createAppointmentAction(
   input: CreateApptInput,
 ): Promise<CreateApptResult> {
-  const res = await apiSend<{ series?: SeriesSummary; forced?: boolean; mirror?: string }>(
+  const res = await apiSend<{
+    series?: SeriesSummary;
+    forced?: boolean;
+    mirror?: string;
+    clientConfirmation?: "email" | "none";
+  }>(
     "POST",
     "/api/booking/appointments",
     input,
@@ -627,6 +642,7 @@ export async function createAppointmentAction(
     ok: true,
     series: res.data?.series,
     ...(res.data?.forced ? { forced: true, mirror: res.data.mirror } : {}),
+    ...(res.data?.clientConfirmation ? { clientConfirmation: res.data.clientConfirmation } : {}),
   };
 }
 

@@ -3365,6 +3365,10 @@ model Appointment {
   // this one answers "I've dealt with this person" and nothing undoes it. A
   // later attempt is a new row, so it is listed again.
   unfinishedDismissedAt DateTime?
+  // When the barber emailed this client to pick another time (Didn't finish
+  // booking, a time someone else has since booked). The at-most-once claim:
+  // set before the send, cleared if the send fails, never set twice.
+  unfinishedInvitedAt DateTime?
   // Recurring series link. null = a one-off appointment (every row before this
   // feature). Each occurrence of a "every N weeks" booking is a normal
   // Appointment row so reminders/promotion/loyalty/slot-opened work unchanged;

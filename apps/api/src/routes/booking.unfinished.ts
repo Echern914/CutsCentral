@@ -5,6 +5,7 @@ import {
   listUnfinishedBookings,
 } from "../services/unfinishedBookings.js";
 import { phoneDisplay } from "./booking.appointmentDetail.js";
+import { inviteUnfinishedClient } from "../services/unfinishedInvite.js";
 
 /**
  * "Didn't finish booking" on the Appointments tab: the clients a payment hold
@@ -41,12 +42,53 @@ export function registerUnfinishedBookings(router: Router): void {
         endsAt: r.endsAt.toISOString(),
         triedAt: r.triedAt.toISOString(),
         heldUntil: r.heldUntil?.toISOString() ?? null,
+        invitedAt: r.invitedAt?.toISOString() ?? null,
         otherTimes: r.otherTimes.map((t) => ({
           startsAt: t.startsAt.toISOString(),
           serviceName: t.serviceName,
         })),
       })),
     });
+  });
+
+  // "Email them to pick a new time": one email to a client whose time was
+  // taken (services/unfinishedInvite.ts). At most once per attempt.
+  router.post("/unfinished/:id/invite", async (req, res) => {
+    const result = await inviteUnfinishedClient(req.shop!.id, req.params.id!, new Date());
+    switch (result.outcome) {
+      case "sent":
+        res.json({ ok: true, invitedAt: result.invitedAt.toISOString() });
+        return;
+      case "not_found":
+        res.status(404).json({ error: "not_found" });
+        return;
+      case "already_invited":
+        // When, if known, so the row can say it without inventing a time.
+        res.status(409).json({ error: "already_invited", invitedAt: result.invitedAt?.toISOString() ?? null });
+        return;
+      case "still_finishing":
+      case "stale":
+        res.status(409).json({ error: result.outcome });
+        return;
+      case "no_email":
+      case "unsubscribed":
+      case "blocked":
+      case "repeating":
+      case "paid":
+      case "no_booking_page":
+        res.status(422).json({ error: result.outcome });
+        return;
+      case "email_unavailable":
+        res.status(503).json({ error: result.outcome });
+        return;
+      case "send_failed":
+        res.status(502).json({ error: result.outcome });
+        return;
+      case "unknown":
+        // The answer was lost: it may have gone out, and it won't go twice.
+        res.status(202).json({ ok: false, error: "unknown" });
+        return;
+    }
   });
 
   router.post("/unfinished/:id/dismiss", async (req, res) => {

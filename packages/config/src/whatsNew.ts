@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-05-unfinished-confirm-and-invite",
+    date: "2026-10-05",
+    kind: "feature",
+    title: "Didn't finish booking now tells the client for you",
+    body:
+      "Book them now emails the client their confirmation (and pushes the app if they use it), so you don't " +
+      "have to text everyone. When their time was taken, Email them to pick a new time sends one email with " +
+      "your booking page.",
+  },
+  {
     id: "2026-10-05-book-without-card",
     date: "2026-10-05",
     kind: "fix",
