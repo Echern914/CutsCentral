@@ -125,6 +125,15 @@ purchases (the app sells nothing; App Review notes say so).
   its taken-back fee in [0, amount), and at most ONE live tip per appointment
   (partial unique index ignoring `failed`/`canceled`, so a refunded tip still
   counts - one tip per visit). (migration `20261046000000_payment_purpose_tip`)
+- **A tip can never land on a cancelled visit.** An unpaid tip is a payment
+  the client can confirm at Stripe at any moment, so cancelling a visit first
+  cancels its open tip AT STRIPE (`tip-cancel:<paymentId>`) and lets Stripe
+  settle the race; if Stripe says it was paid or is paying, or cannot be
+  asked, the visit is not cancelled (409 `tip_paid` / `tip_in_progress`). A
+  paid tip must be refunded before the visit can be. Changing the amount
+  follows the same rule: Stripe, never the row, says whether the first
+  attempt is still unpaid. (`billing/tips.ts` `retireOpenTip`, the cancel
+  route in `routes/booking.dashboard.ts`)
 - **Only money taken at booking can promote a hold.** The webhook enters hold
   promotion only when the intent's own `Payment` row has `purpose = booking`
   - read from the row, not the intent's metadata, because a booking intent, a

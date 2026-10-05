@@ -2,7 +2,7 @@ import type { Router } from "express";
 import { z } from "zod";
 import { prisma } from "@chairback/db";
 import { bookingWriteLimiter, rewardsLimiter } from "../middleware/rateLimit.js";
-import { createTipIntent, refreshTipFromStripe } from "../billing/tips.js";
+import { createTipIntent, refreshTipFromStripe, tipDescription } from "../billing/tips.js";
 import { liveTipWhere, TIP_SHOP_SELECT, tipClosedReason, tipViewFor } from "../services/tips.js";
 
 /**
@@ -72,7 +72,7 @@ export function registerTipRoutes(router: Router): void {
       appointmentId: appt.id,
       connectAccountId: shop.stripeConnectAccountId!,
       amountCents: parsed.data.amountCents,
-      description: `${appt.service?.name ?? "Visit"} - tip`,
+      description: tipDescription(appt.service?.name),
     });
     switch (result.outcome) {
       case "ready":

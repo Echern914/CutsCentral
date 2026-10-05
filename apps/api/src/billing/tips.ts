@@ -38,7 +38,8 @@ import { errorClassification, stripeErrorFacts } from "./stripeErrors.js";
 
 const COLLECTED = new Set(["succeeded", "partially_refunded", "refunded"]);
 /** A tip the client can still confirm (or is confirming). */
-const OPEN = new Set(["requires_payment_method", "requires_confirmation", "requires_action"]);
+export const OPEN_TIP_STATUSES = ["requires_payment_method", "requires_confirmation", "requires_action"] as const;
+const OPEN = new Set<string>(OPEN_TIP_STATUSES);
 
 export type CreateTipOutcome =
   | { outcome: "ready"; clientSecret: string; amountCents: number }
@@ -100,13 +101,15 @@ export async function createTipIntent(input: {
         if (COLLECTED.has(live.status)) return { outcome: "already_tipped" };
         if (!OPEN.has(live.status)) return { outcome: "in_progress" };
         if (live.amount === input.amountCents) return await resume(input, live);
-        // A different amount on an attempt the client is part-way through
-        // confirming (a 3-D Secure screen): let it finish rather than pull it
-        // from under them.
-        if (live.status !== "requires_payment_method") return { outcome: "in_progress" };
         // The client changed their mind before paying (15% -> 20%): retire
-        // that attempt, then make the one they chose.
-        if (!(await retire(input, live))) return { outcome: "in_progress" };
+        // that attempt, then make the one they chose. STRIPE decides whether
+        // it is still unpaid, never this row: the row rarely hears about a
+        // 3-D Secure screen, and an abandoned one would lock the client out
+        // for a day. A cancel Stripe refuses means paid or paying.
+        if (!(await retire(input, live))) {
+          const now = await liveTip(input.appointmentId);
+          return now && COLLECTED.has(now.status) ? { outcome: "already_tipped" } : { outcome: "in_progress" };
+        }
         continue;
       }
       const paymentId = `pay_${cryptoId()}`;
@@ -159,6 +162,42 @@ async function resume(
   }
   if (!pi.client_secret || pi.status === "canceled") return { outcome: "unavailable" };
   return { outcome: "ready", clientSecret: pi.client_secret, amountCents: row.amount };
+}
+
+/** The line the shop sees in Stripe. One spelling: a retry must rebuild the identical request. */
+export function tipDescription(serviceName: string | null | undefined): string {
+  return `${serviceName ?? "Visit"} - tip`;
+}
+
+/**
+ * Before a visit is cancelled: make sure no tip can still be paid on it.
+ *
+ * A client who opened the tip form holds a payment they can confirm at any
+ * moment - Stripe, not ChairBack, takes that press. So an unpaid attempt is
+ * cancelled AT STRIPE first, and Stripe settles the race: either the cancel
+ * lands and their press fails with nothing charged, or their payment landed
+ * first and the cancel is refused (and what it became is recorded here).
+ *
+ * True when nothing can be charged any more: there was no open attempt, or it
+ * was cancelled. False when it was paid, is being paid, or we could not tell -
+ * the visit must not be cancelled yet.
+ */
+export async function retireOpenTip(input: {
+  shopId: string;
+  appointmentId: string;
+  description: string;
+}): Promise<boolean> {
+  const live = await liveTip(input.appointmentId);
+  if (!live || !OPEN.has(live.status)) return true;
+  try {
+    return await retire(input, live);
+  } catch (err) {
+    logger.warn(
+      { appointmentId: input.appointmentId, errName: errorClassification(err) },
+      "tip: could not settle an open attempt before cancelling the visit",
+    );
+    return false;
+  }
 }
 
 /**
@@ -336,9 +375,17 @@ export async function sweepAbandonedTipIntents(now: Date = new Date()): Promise<
       });
       swept += count;
     } catch (err) {
-      // Not cancellable any more (paid, or paying): the webhook or the
-      // reconciler records what it became.
+      // Not cancellable any more - paid, or paying, with its webhook not yet
+      // applied. Record what it became, so it leaves this sweep and shows on
+      // the appointment (with its Refund tip button) rather than being
+      // retried here forever.
       logger.warn({ paymentId: row.id, ...stripeErrorFacts(err) }, "tip sweep: could not cancel an attempt");
+      try {
+        const pi = await stripeClient().paymentIntents.retrieve(row.stripePaymentIntentId);
+        await applyIntentSnapshot(pi, `tip-sweep:${pi.id}:${pi.status}`);
+      } catch {
+        // Unable to tell; the next sweep asks again.
+      }
     }
   }
   return swept;

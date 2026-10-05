@@ -507,16 +507,43 @@ describe("paying a tip", () => {
     ]);
   });
 
-  it("a different amount while the first is mid-3-D Secure is refused - it is left to finish", async () => {
+  it("an attempt left on a 3-D Secure screen does not lock them out: a different amount retires it", async () => {
     const appt = await visit();
     await startTip(appt.manageToken, { amountCents: 600 });
     const [row] = await liveTips(appt.id);
     fake.pay(row!.stripePaymentIntentId, "requires_action");
     await prisma.payment.update({ where: { id: row!.id }, data: { status: "requires_action" } });
     const res = await startTip(appt.manageToken, { amountCents: 1000 });
-    expect(res.status).toBe(409);
-    expect(res.body.error).toBe("tip_in_progress");
-    expect(fake.calls.cancels).toHaveLength(0);
+    expect(res.status).toBe(200);
+    expect(fake.calls.cancels.map((c) => c.id)).toEqual([row!.stripePaymentIntentId]);
+    expect((await allTips(appt.id)).map((r) => [r.amount, r.status])).toEqual([
+      [600, "canceled"],
+      [1000, "requires_payment_method"],
+    ]);
+  });
+
+  it("🔴 STRIPE decides whether the first attempt is unpaid: paid or paying, and nothing new is made", async () => {
+    // Paid a moment ago in another tab; its webhook has not landed, so the
+    // row still reads unpaid.
+    const paid = await visit();
+    await startTip(paid.manageToken, { amountCents: 600 });
+    const [paidRow] = await liveTips(paid.id);
+    fake.pay(paidRow!.stripePaymentIntentId);
+    const after = await startTip(paid.manageToken, { amountCents: 1000 });
+    expect(after.status).toBe(409);
+    expect(after.body.error).toBe("already_tipped");
+    expect((await allTips(paid.id)).map((r) => [r.amount, r.status])).toEqual([[600, "succeeded"]]);
+
+    // A bank debit still settling.
+    const paying = await visit();
+    await startTip(paying.manageToken, { amountCents: 600 });
+    const [payingRow] = await liveTips(paying.id);
+    fake.pay(payingRow!.stripePaymentIntentId, "processing");
+    const during = await startTip(paying.manageToken, { amountCents: 1000 });
+    expect(during.status).toBe(409);
+    expect(during.body.error).toBe("tip_in_progress");
+    expect((await allTips(paying.id)).map((r) => [r.amount, r.status])).toEqual([[600, "processing"]]);
+    expect(fake.calls.creates).toHaveLength(2);
   });
 
   it("🔴 one tip per visit: once paid, the page thanks them and no second tip can start", async () => {
@@ -711,6 +738,41 @@ describe("the shop's side of a tip", () => {
     expect(again.status).toBe(200);
   });
 
+  it("🔴 a tip form still open on their phone cannot charge a cancelled visit: it is cancelled at Stripe first", async () => {
+    const appt = await visit();
+    await startTip(appt.manageToken, { amountCents: 800 });
+    const [row] = await liveTips(appt.id);
+    const cancel = await request(app).post(`/api/booking/appointments/${appt.id}/cancel`).set("Cookie", cookie);
+    expect(cancel.status).toBe(200);
+    expect(fake.calls.cancels).toEqual([
+      { id: row!.stripePaymentIntentId, options: { idempotencyKey: `tip-cancel:${row!.id}` } },
+    ]);
+    expect(fake.intents.get(row!.stripePaymentIntentId)!.status).toBe("canceled");
+    expect((await prisma.payment.findUniqueOrThrow({ where: { id: row!.id } })).status).toBe("canceled");
+    expect((await prisma.appointment.findUniqueOrThrow({ where: { id: appt.id } })).status).toBe("CANCELED");
+  });
+
+  it("🔴 paid a moment ago, its webhook not yet in: the cancel is refused and the tip is recorded", async () => {
+    const appt = await visit();
+    await startTip(appt.manageToken, { amountCents: 800 });
+    const [row] = await liveTips(appt.id);
+    fake.pay(row!.stripePaymentIntentId);
+    const cancel = await request(app).post(`/api/booking/appointments/${appt.id}/cancel`).set("Cookie", cookie);
+    expect(cancel.status).toBe(409);
+    expect(cancel.body.error).toBe("tip_paid");
+    expect((await prisma.appointment.findUniqueOrThrow({ where: { id: appt.id } })).status).toBe("COMPLETED");
+    expect((await prisma.payment.findUniqueOrThrow({ where: { id: row!.id } })).status).toBe("succeeded");
+  });
+
+  it("another shop's visit: nothing of its tip is touched", async () => {
+    const appt = await visit();
+    await startTip(appt.manageToken, { amountCents: 800 });
+    const res = await request(app).post(`/api/booking/appointments/${appt.id}/cancel`).set("Cookie", otherCookie);
+    expect(res.status).toBe(404);
+    expect(fake.calls.cancels).toHaveLength(0);
+    expect(await liveTips(appt.id)).toHaveLength(1);
+  });
+
   it("attempts nobody finished are let go after a day; a paid tip and a fresh attempt are untouched", async () => {
     const { sweepAbandonedTipIntents } = await import("../billing/tips.js");
     const stale = await visit();
@@ -732,11 +794,26 @@ describe("the shop's side of a tip", () => {
       data: { createdAt: new Date(Date.now() - 25 * 60 * 60_000) },
     });
 
+    // Paid, but its webhook never came: the row still reads unpaid.
+    const missed = await visit();
+    await startTip(missed.manageToken, { amountCents: 800 });
+    const [missedRow] = await liveTips(missed.id);
+    fake.pay(missedRow!.stripePaymentIntentId);
+    await prisma.payment.update({
+      where: { id: missedRow!.id },
+      data: { createdAt: new Date(Date.now() - 25 * 60 * 60_000) },
+    });
+
     await sweepAbandonedTipIntents(new Date());
-    expect(fake.calls.cancels.map((c) => c.id)).toEqual([staleRow!.stripePaymentIntentId]);
+    expect(fake.calls.cancels.map((c) => c.id).sort()).toEqual(
+      [staleRow!.stripePaymentIntentId, missedRow!.stripePaymentIntentId].sort(),
+    );
     expect((await prisma.payment.findUniqueOrThrow({ where: { id: staleRow!.id } })).status).toBe("canceled");
     expect(await liveTips(fresh.id)).toHaveLength(1);
     expect((await prisma.payment.findUniqueOrThrow({ where: { id: paidRow!.id } })).status).toBe("succeeded");
+    // Stripe refused to cancel it: what it became is recorded, so it shows on
+    // the appointment and leaves the sweep.
+    expect((await prisma.payment.findUniqueOrThrow({ where: { id: missedRow!.id } })).status).toBe("succeeded");
   });
 
   it("the Tips switch: off by default, on only with Stripe ready, off always", async () => {

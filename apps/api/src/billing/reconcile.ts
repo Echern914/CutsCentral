@@ -6,6 +6,7 @@ import { captureError } from "../sentry.js";
 import { connectEnabled, stripeClient } from "./stripe.js";
 import { applyIntentSnapshot, isPendingIntentId } from "./payments.js";
 import { stripeErrorFacts } from "./stripeErrors.js";
+import { ABANDONED_TIP_MS, OPEN_TIP_STATUSES } from "./tips.js";
 
 /**
  * THE PAYMENTS RECONCILER. Every charge path writes its Payment row BEFORE it
@@ -117,7 +118,19 @@ export async function reconcilePayments(
         {
           status: { notIn: TERMINAL },
           updatedAt: { lt: new Date(now.getTime() - STALE_MS) },
-          NOT: { stripePaymentIntentId: { startsWith: "pending:" } },
+          NOT: [
+            { stripePaymentIntentId: { startsWith: "pending:" } },
+            // A tip form a client opened and left: nothing is unknown about
+            // it, it is simply unpaid, and a day of re-reading it every pass
+            // would push rows that ARE unknown out of the batch. The client's
+            // own page, the webhook and the abandoned-tip sweep (billing/tips.ts)
+            // own it until it is a day old.
+            {
+              purpose: "tip",
+              status: { in: [...OPEN_TIP_STATUSES] },
+              createdAt: { gte: new Date(now.getTime() - ABANDONED_TIP_MS) },
+            },
+          ],
         },
       ],
     },

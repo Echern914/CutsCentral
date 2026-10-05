@@ -264,6 +264,51 @@ describe("reconcilePayments", () => {
     expect(row?.ambiguousAt).not.toBeNull(); // still flagged for a person
   });
 
+  it("an unpaid tip form is not re-read for its first day - it is unpaid, not unknown - and is after", async () => {
+    async function openTip(ageHours: number): Promise<string> {
+      const endsAt = new Date(Date.now() - ageHours * 3_600_000 - (seq++ + 1) * 60_000);
+      const a = await prisma.appointment.create({
+        data: {
+          shopId,
+          staffId,
+          serviceId,
+          firstName: "Tip",
+          lastName: "Left",
+          status: "COMPLETED",
+          startsAt: new Date(endsAt.getTime() - 30 * 60_000),
+          endsAt,
+          priceAtBooking: 40,
+          manageToken: randomToken(),
+        },
+        select: { id: true },
+      });
+      const intentId = `pi_tip_${randomToken(8)}`;
+      const p = await prisma.payment.create({
+        data: {
+          shopId,
+          appointmentId: a.id,
+          stripePaymentIntentId: intentId,
+          stripeConnectAccountId: "acct_reconcile",
+          mode: "ahead",
+          purpose: "tip",
+          amount: 800,
+          applicationFeeAmount: 53,
+          status: "requires_payment_method",
+        },
+        select: { id: true },
+      });
+      await prisma.$executeRaw`UPDATE "Payment" SET "createdAt" = now() - make_interval(hours => ${ageHours}::int), "updatedAt" = now() - make_interval(hours => ${ageHours}::int) WHERE id = ${p.id}`;
+      return intentId;
+    }
+    const young = await openTip(2);
+    const old = await openTip(25);
+    retrieve.mockImplementation(async (id: string) => pi({ id, status: "requires_payment_method" }));
+    await reconcilePayments({ now: new Date(), dryRun: true });
+    const asked = retrieve.mock.calls.map((c) => c[0]);
+    expect(asked).not.toContain(young);
+    expect(asked).toContain(old);
+  });
+
   it("two overlapping runs racing one reservation adopt it once - the marker is a compare-and-set", async () => {
     const { appointmentId, paymentId } = await ambiguousCharge();
     searchAnswers({ [paymentId]: [pi({ id: "pi_race", status: "succeeded", paymentId })] });
