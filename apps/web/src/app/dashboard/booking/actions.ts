@@ -990,6 +990,31 @@ export async function refundDepositAction(
 }
 
 /**
+ * Give back a tip the client left online. Same answers and mapping as the
+ * deposit refund above; Stripe's fee stays with the shop (the API's
+ * billing/depositRefund.ts, TIP).
+ */
+export async function refundTipAction(
+  appointmentId: string,
+  input: { amountCents: number; note?: string },
+): Promise<RefundResult> {
+  const res = await apiSend<{
+    result?: RefundResult["result"];
+    amountCents?: number;
+    status?: RefundResult["status"];
+  }>("POST", `/api/booking/appointments/${encodeURIComponent(appointmentId)}/tip-refund`, input);
+  if (!res.ok) {
+    return { ok: false, error: res.error ?? "failed", reason: res.reason, code: res.code };
+  }
+  const body = res.data ?? {};
+  if (body.result === "unconfirmed") {
+    return { ok: false, result: "unconfirmed", error: "unconfirmed" };
+  }
+  revalidatePath("/dashboard/booking");
+  return { ok: true, result: body.result, amountCents: body.amountCents, status: body.status };
+}
+
+/**
  * What the checkout screen may offer for this cut.
  *
  * 🔴 Read fresh every time the screen opens. The amount and the methods are the
@@ -1739,6 +1764,19 @@ export interface AppointmentDetail {
    * API that predates it) when there is nothing to give back.
    */
   keptDeposit?: { amountCents: number; nonRefundable: boolean } | null;
+  /**
+   * A tip the client left online after the visit - never part of `payment`
+   * (money toward the service). Null or absent = none.
+   */
+  tip?: {
+    amountCents: number;
+    /** Stripe's fee, taken out of the tip. */
+    feeCents: number;
+    refundedCents: number;
+    /** What Refund tip would give back; 0 when nothing is left. */
+    refundableCents: number;
+    processing: boolean;
+  } | null;
   /**
    * When the barber closed the chair moment. Null = never checked out, which
    * is the ONLY state in which "Start checkout" is a real action - the endpoint

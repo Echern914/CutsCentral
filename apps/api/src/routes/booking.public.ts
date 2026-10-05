@@ -58,6 +58,8 @@ import {
   slotServiceIds,
 } from "../engines/targetedSlotServices.js";
 import { resolveAddOns } from "../engines/addOns.js";
+import { registerTipRoutes } from "./booking.tips.js";
+import { liveTipWhere, TIP_SHOP_SELECT, tipViewFor } from "../services/tips.js";
 import { filterBlockedTargeted } from "../engines/targetedSlotAvailability.js";
 import { bookableStartsAt, bookingWindow, insideBookingWindow } from "../engines/bookingWindow.js";
 import { TARGETED_SLOT_ORIGIN } from "../engines/specialBooking.js";
@@ -3011,6 +3013,9 @@ const MANAGE_SELECT = {
       clientId: true,
       phone: true,
       email: true,
+      // Whether a tip may be offered (services/tips.ts) - never sent as is.
+      groupId: true,
+      visit: { select: { acuityAppointmentId: true } },
       shop: {
         select: {
           name: true,
@@ -3108,6 +3113,23 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     bookingPayment && bookingPayment.nonRefundable && bookingPayment.status === "succeeded"
       ? { amountCents: bookingPayment.capturedAmount ?? bookingPayment.amount }
       : null;
+  // A tip after the visit: offered once it is COMPLETED, and a tip already
+  // given is always shown. The shop's facts are read on their own - the
+  // `shop` sent to the page below is spread from MANAGE_SELECT, and a Stripe
+  // account id must never ride along.
+  const tip =
+    appt.status === "COMPLETED"
+      ? await (async () => {
+          const [tipShop, tipRow] = await Promise.all([
+            prisma.shop.findUnique({ where: { id: appt.shopId }, select: TIP_SHOP_SELECT }),
+            prisma.payment.findFirst({
+              where: { appointmentId: appt.id, ...liveTipWhere() },
+              select: { status: true, amount: true, capturedAmount: true, refundedAmount: true },
+            }),
+          ]);
+          return tipShop ? tipViewFor(appt, tipShop, tipRow, now) : null;
+        })()
+      : null;
 
   res.json({
     status: appt.status,
@@ -3143,6 +3165,8 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     // Non-null: cancelling keeps this much (a non-refundable deposit). The page
     // says so and asks before it cancels.
     nonRefundable: keptOnCancel,
+    // The tip card after the visit (services/tips.ts TipView). Null = none.
+    tip,
     series: appt.seriesId ? { remaining: remainingInSeries } : null,
     // Check-in ("On my way"): the window is computed HERE so the client needs
     // no timezone math - it just renders the button when open is true. A
@@ -4026,3 +4050,7 @@ bookingPublicRouter.post(
     res.json({ ok: true, startsAt: startsAt.toISOString() });
   },
 );
+
+// A tip from the client's own appointment page, after the visit
+// (booking.tips.ts). On the same token as cancel and reschedule.
+registerTipRoutes(bookingPublicRouter);

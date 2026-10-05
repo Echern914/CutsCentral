@@ -7,6 +7,21 @@ import { GetTheApp } from "@/components/GetTheApp";
 import { appleItunesApp } from "@/lib/appBanner";
 import { ManageClient } from "./ManageClient";
 
+/** What the page shows about a tip - see ManageData.tip. */
+export type TipView =
+  | {
+      state: "open";
+      /** 15/20/25% of the visit's price in cents; [] for an unpriced visit. */
+      presets: { percent: number; cents: number }[];
+      minCents: number;
+      maxCents: number;
+      /** When tipping closes (ISO). */
+      closesAt: string;
+    }
+  | { state: "processing"; amountCents: number }
+  | { state: "paid"; amountCents: number }
+  | { state: "refunded"; amountCents: number };
+
 export interface ManageData {
   status: "BOOKED" | "CANCELED" | "COMPLETED" | "NO_SHOW" | "PENDING";
   /**
@@ -63,6 +78,12 @@ export interface ManageData {
    * terms. The page asks before it cancels. Optional = an older API.
    */
   nonRefundable?: { amountCents: number } | null;
+  /**
+   * A tip after the visit (the API's services/tips.ts TipView). Null or
+   * absent = no tip card: the visit is not finished, the shop does not take
+   * tips online, or an older API. The server decides; the page only renders.
+   */
+  tip?: TipView | null;
   // A standing appointment: later visits still on the books (null = not a series).
   series: { remaining: number } | null;
   // Check-in ("On my way"). open is computed server-side (60 min before start
@@ -111,21 +132,28 @@ async function getData(token: string): Promise<ManageData | null> {
 
 export default async function ManagePage({
   params,
+  searchParams,
 }: {
   params: { token: string };
+  searchParams?: { tip?: string };
 }) {
   const data = await getData(params.token);
   if (!data) notFound();
+  // While a tip is open, "Open in ChairBack" would move a browser user - who
+  // has Apple Pay here - into the app's WebView, which cannot show it.
+  const tipOpen = data.tip?.state === "open";
   return (
     <>
-      <ManageClient token={params.token} data={data} />
-      <div className="mx-auto w-full max-w-2xl px-4 pb-8">
-        {/* openPath makes this an OPEN action as well as an install one: the
-            manage token is the page's own authentication, so the in-app copy
-            of this page is the same page, and app/+native-intent.tsx sends it
-            to the signed-out link screen rather than asking for a login. */}
-        <GetTheApp surface="manage" openPath={`/book/manage/${params.token}`} />
-      </div>
+      <ManageClient token={params.token} data={data} focusTip={searchParams?.tip === "1"} />
+      {!tipOpen && (
+        <div className="mx-auto w-full max-w-2xl px-4 pb-8">
+          {/* openPath makes this an OPEN action as well as an install one: the
+              manage token is the page's own authentication, so the in-app copy
+              of this page is the same page, and app/+native-intent.tsx sends it
+              to the signed-out link screen rather than asking for a login. */}
+          <GetTheApp surface="manage" openPath={`/book/manage/${params.token}`} />
+        </div>
+      )}
     </>
   );
 }

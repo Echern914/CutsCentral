@@ -13,6 +13,7 @@ import {
   openStripeDashboardAction,
   savePaymentSettingsAction,
   savePayDirectAction,
+  setOnlineTipsAction,
   startStripeConnectHandoffAction,
 } from "./actions";
 
@@ -96,6 +97,38 @@ export function PaymentsManager({
   // There is no safe default here - claiming “included” wrongly costs their
   // staff money, and claiming “not included” invents a policy they never set.
   const [tipPolicy, setTipPolicy] = useState(initial.tipPolicy);
+  // Online tips after the visit: saved the moment it is switched (its own
+  // route), with the outcome said right here.
+  const [onlineTips, setOnlineTips] = useState(initial.onlineTipsEnabled ?? false);
+  const [tipsSaving, setTipsSaving] = useState(false);
+  const [tipsNotice, setTipsNotice] = useState<{ tone: "good" | "bad"; text: string } | null>(null);
+  async function switchOnlineTips(next: boolean) {
+    if (tipsSaving) return;
+    setTipsSaving(true);
+    setTipsNotice(null);
+    try {
+      const r = await setOnlineTipsAction(next).catch(() => ({ ok: false, error: "network_error" }));
+      if (r.ok) {
+        setOnlineTips(next);
+        setTipsNotice({
+          tone: "good",
+          text: next
+            ? "On. Clients can tip from their appointment page after a finished visit."
+            : "Off. Clients are no longer offered a tip.",
+        });
+      } else {
+        setTipsNotice({
+          tone: "bad",
+          text:
+            r.error === "connect_not_ready"
+              ? "Finish connecting Stripe first - tips need an account that can take payments."
+              : "Couldn't save. Nothing changed - try again.",
+        });
+      }
+    } finally {
+      setTipsSaving(false);
+    }
+  }
 
   // Fee-free pay-direct (Zelle/Venmo/Cash App) — independent of Stripe Connect.
   const [pd, setPd] = useState(initial.payDirect);
@@ -601,9 +634,58 @@ export function PaymentsManager({
       <Card id="tips" className="p-5">
         <CardHeader
           title="Tips"
-          subtitle="Tell customers whether the price they see already includes a tip. This is wording only — it never changes what you charge."
+          subtitle="Let clients tip online after a visit, and say whether your prices already include a tip."
         />
-        <div className="mt-3 flex flex-wrap gap-2">
+
+        {/* Online tips: a real money switch, saved the moment it is flipped. */}
+        <div className="mt-3 rounded-xl border border-subtle p-3" data-qa="online-tips">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-offwhite">Online tips after the visit</p>
+              <p className="mt-0.5 text-xs text-muted">
+                Once a visit is done, clients can leave 15, 20 or 25% or their own amount from their
+                appointment page. Stripe&rsquo;s card fee comes out of each tip, as at any card reader;
+                {" "}{APP_NAME} keeps none of it.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={onlineTips}
+              aria-label="Online tips after the visit"
+              // Turning tips OFF always works; ON needs a Stripe account that can take payments.
+              disabled={tipsSaving || (!onlineTips && !ready)}
+              onClick={() => void switchOnlineTips(!onlineTips)}
+              className={cn(
+                "shrink-0 rounded-full border px-4 py-2 text-xs font-semibold transition-colors disabled:opacity-50",
+                onlineTips
+                  ? "border-gold/60 bg-gold/15 text-offwhite"
+                  : "border-subtle bg-charcoal-700 text-muted hover:text-offwhite",
+              )}
+            >
+              {tipsSaving ? "Saving…" : onlineTips ? "On" : "Off"}
+            </button>
+          </div>
+          {!ready && !onlineTips && (
+            <p className="mt-2 text-xs text-muted">Connect Stripe first.</p>
+          )}
+          {onlineTips && tipPolicy === "included" && (
+            <p className="mt-2 text-xs text-muted">
+              Your prices say they include a tip, so clients aren&rsquo;t offered one.
+            </p>
+          )}
+          {tipsNotice && (
+            <p
+              role="status"
+              className={cn("mt-2 text-xs", tipsNotice.tone === "good" ? "text-emerald-soft" : "text-danger-soft")}
+            >
+              {tipsNotice.text}
+            </p>
+          )}
+        </div>
+
+        <p className="mt-4 text-xs font-medium text-offwhite">Do your prices include a tip?</p>
+        <div className="mt-2 flex flex-wrap gap-2">
           {(
             [
                 { v: null, label: "Don’t say", hint: "Nothing about tips appears" },
@@ -629,8 +711,9 @@ export function PaymentsManager({
           ))}
         </div>
         <p className="mt-3 text-xs text-muted">
-          Shown under the total on your booking page, and again on the payment
-          screen if you collect online. Saved with the button below.
+          Wording only - it never changes what you charge. Shown under the total
+          on your booking page, and again on the payment screen if you collect
+          online. Saved with the button below.
         </p>
       </Card>
 

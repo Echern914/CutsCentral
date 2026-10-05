@@ -18,6 +18,7 @@ import { useDemoTour } from "@/components/tour/state";
 import type { ManageData } from "./page";
 import { ClientNoteBlock } from "../../ClientNoteBlock";
 import { FinishCheckout } from "./FinishCheckout";
+import { TipCard } from "./TipCard";
 import { keptOnCancelQuestion } from "../../[slug]/depositTerms";
 import {
   cancelBookingAction,
@@ -39,9 +40,12 @@ import {
 export function ManageClient({
   token,
   data,
+  focusTip = false,
 }: {
   token: string;
   data: ManageData;
+  /** Arrived from a "Leave a tip" link (?tip=1): bring the tip card into view. */
+  focusTip?: boolean;
 }) {
   // Clear the native app's WebView spinner (reachable from a booking
   // confirmation link opened inside the app).
@@ -238,12 +242,19 @@ export function ManageClient({
             onBooked={() => router.refresh()}
           />
         ) : isDone ? (
-          <p className="mt-6 text-center text-sm text-muted">
-            {/* A no-show did not visit; thanking them for it read as a mistake. */}
-            {status === "no_show"
-              ? `${data.shop.name} marked this appointment as a no-show.`
-              : `Thanks for visiting ${data.shop.name}!`}
-          </p>
+          <>
+            <p className="mt-6 text-center text-sm text-muted">
+              {/* A no-show did not visit; thanking them for it read as a mistake. */}
+              {status === "no_show"
+                ? `${data.shop.name} marked this appointment as a no-show.`
+                : `Thanks for visiting ${data.shop.name}!`}
+            </p>
+            {/* A tip after the visit, when the shop takes tips online. The
+                server decides whether to offer it; the demo never does. */}
+            {data.tip && !demoTour && (
+              <TipCard token={token} tip={data.tip} shopName={data.shop.name} focus={focusTip} />
+            )}
+          </>
         ) : (
           <div className="mt-6 flex flex-col gap-2" data-tour="checkin">
             {nudges.length > 0 && (

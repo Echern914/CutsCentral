@@ -77,19 +77,85 @@ export type DepositRefundOutcome =
 /** The appointment statuses whose booking payment may be given back here. */
 export const CLOSED_BOOKING_STATUSES = new Set(["CANCELED", "NO_SHOW"]);
 
-export async function refundKeptDeposit(input: {
+/**
+ * WHAT DIFFERS between the two kinds of money this module gives back. Both
+ * are "refund what this one payment still holds", against the platform charge
+ * with the shop's share reversed - everything else (Stripe read first, the
+ * confirmed figure, the CAS, the ledger, the lost-answer and simultaneous-press
+ * recovery) is the same code, so a fix to one is a fix to both.
+ */
+interface RemainderKind {
+  /** The Payment row's purpose. One live row of each per appointment. */
+  purpose: "booking" | "tip";
+  /** Only a CANCELED / NO_SHOW appointment's money may be given back. */
+  closedOnly: boolean;
+  /** Our Stripe metadata tag, which also recognises our own earlier refund. */
+  source: "chairback_deposit_refund" | "chairback_tip_refund";
+  /** Idempotency key prefix - never another refund path's. */
+  keyPrefix: "deposit-refund" | "tip-refund";
+  /** Return ChairBack's application fee with the refund (see TIP below). */
+  returnApplicationFee: boolean;
+  /** For the logs. */
+  label: string;
+}
+
+const DEPOSIT: RemainderKind = {
+  purpose: "booking",
+  closedOnly: true,
+  source: "chairback_deposit_refund",
+  keyPrefix: "deposit-refund",
+  // The platform fee on booking money is 0 for every shop; when it is not,
+  // our share comes back with the client's money, as the cancellation refund
+  // already does.
+  returnApplicationFee: true,
+  label: "deposit refund",
+};
+
+/**
+ * A TIP. Refundable whatever the visit's status - the visit happened, the tip
+ * was the client's choice, and the shop may give it back.
+ *
+ * 🔴 ChairBack's application fee on a tip is NOT returned. That fee is exactly
+ * Stripe's processing fee (config/tips.ts), which ChairBack paid Stripe when
+ * the tip was charged and Stripe keeps on a refund. Returning it would have
+ * ChairBack pay Stripe's fee out of its own pocket; keeping it means the fee
+ * came out of the tip, as Eric chose - the client gets the whole tip back and
+ * the shop is short Stripe's fee, as at any card reader.
+ */
+const TIP: RemainderKind = {
+  purpose: "tip",
+  closedOnly: false,
+  source: "chairback_tip_refund",
+  keyPrefix: "tip-refund",
+  returnApplicationFee: false,
+  label: "tip refund",
+};
+
+interface RemainderRefundInput {
   shopId: string;
   appointmentId: string;
   /** The figure the manager confirmed. Checked, never trusted. */
   confirmedCents: number;
   actorUserId: string | null;
   note: string | null;
-}): Promise<DepositRefundOutcome> {
+}
+
+export function refundKeptDeposit(input: RemainderRefundInput): Promise<DepositRefundOutcome> {
+  return refundRemainder(DEPOSIT, input);
+}
+
+/** Give back a tip, in full or what is left of it. */
+export function refundTip(input: RemainderRefundInput): Promise<DepositRefundOutcome> {
+  return refundRemainder(TIP, input);
+}
+
+async function refundRemainder(kind: RemainderKind, input: RemainderRefundInput): Promise<DepositRefundOutcome> {
   const { shopId, appointmentId } = input;
 
-  // Scoped three ways: this shop, this appointment, and its BOOKING payment
-  // (one per appointment - a partial unique index). A checkout payment has its
-  // own button.
+  // Scoped three ways: this shop, this appointment, and its payment of THIS
+  // kind - the booking payment (one per appointment, a partial unique index)
+  // or the visit's live tip (dead attempts never count). A checkout payment
+  // has its own button.
   const found = await runWithShop(shopId, async (tx) => {
     const appt = await tx.appointment.findFirst({
       where: { id: appointmentId, shopId },
@@ -97,7 +163,12 @@ export async function refundKeptDeposit(input: {
     });
     if (!appt) return null;
     const payment = await tx.payment.findFirst({
-      where: { appointmentId, shopId, purpose: "booking" },
+      where: {
+        appointmentId,
+        shopId,
+        purpose: kind.purpose,
+        ...(kind.purpose === "tip" ? { status: { notIn: ["failed", "canceled"] } } : {}),
+      },
       select: {
         id: true,
         status: true,
@@ -113,14 +184,14 @@ export async function refundKeptDeposit(input: {
   });
   if (!found) return { outcome: "not_found" };
   const { appt, payment } = found;
-  if (!CLOSED_BOOKING_STATUSES.has(appt.status)) {
+  if (kind.closedOnly && !CLOSED_BOOKING_STATUSES.has(appt.status)) {
     return { outcome: "not_refundable", reason: "booking_open" };
   }
 
   const collected = payment.capturedAmount ?? payment.amount;
   const refundable = stripeCollectedCents(payment);
   const settle = (stripe: Stripe, charge: Stripe.Charge | null) =>
-    settleFromStripe({ shopId, appointmentId, payment, collected, stripe, charge, input });
+    settleFromStripe({ shopId, appointmentId, payment, collected, stripe, charge, input, source: kind.source });
 
   if (refundable <= 0) {
     // Never collected (a hold that was released, an intent that was voided) is
@@ -158,7 +229,7 @@ export async function refundKeptDeposit(input: {
   } catch (err) {
     logger.warn(
       { shopId, paymentId: payment.id, ...stripeErrorFacts(err) },
-      "deposit refund: could not read the charge from Stripe; nothing attempted",
+      `${kind.label}: could not read the charge from Stripe; nothing attempted`,
     );
     return { outcome: "stripe_unavailable" };
   }
@@ -221,11 +292,13 @@ export async function refundKeptDeposit(input: {
         amount: refundable,
         reason: "requested_by_customer",
         ...(transfer ? { reverse_transfer: reverseTransfer } : {}),
-        // Our fee comes back too, as the cancellation refund already does.
-        // No-op when there is no fee.
-        ...(reverseTransfer && payment.applicationFeeAmount > 0 ? { refund_application_fee: true } : {}),
+        // Our fee comes back too on booking money, as the cancellation refund
+        // already does (a no-op at a 0 fee) - but never on a tip (see TIP).
+        ...(reverseTransfer && payment.applicationFeeAmount > 0 && kind.returnApplicationFee
+          ? { refund_application_fee: true }
+          : {}),
         metadata: {
-          source: "chairback_deposit_refund",
+          source: kind.source,
           shopId,
           appointmentId,
           paymentId: payment.id,
@@ -235,7 +308,7 @@ export async function refundKeptDeposit(input: {
       // Derived from the payment and what it had refunded BEFORE this press
       // (already checked equal to Stripe's own figure), so a double tap, a lost
       // response or a retry after "unconfirmed" all name the same refund.
-      { idempotencyKey: `deposit-refund:${payment.id}:${payment.refundedAmount}` },
+      { idempotencyKey: `${kind.keyPrefix}:${payment.id}:${payment.refundedAmount}` },
     );
   } catch (err) {
     // 🔴 ANOTHER PRESS GOT THERE FIRST - not "Stripe refused". Two managers
@@ -252,7 +325,7 @@ export async function refundKeptDeposit(input: {
       } catch {
         // Fall through: we cannot tell yet, and pressing again is safe.
       }
-      logger.warn({ shopId, paymentId: payment.id }, "deposit refund: another press holds this refund");
+      logger.warn({ shopId, paymentId: payment.id }, `${kind.label}: another press holds this refund`);
       return { outcome: "unconfirmed" };
     }
     const facts = stripeErrorFacts(err);
@@ -263,14 +336,14 @@ export async function refundKeptDeposit(input: {
     });
     logger.error(
       { shopId, appointmentId, paymentId: payment.id, ...facts },
-      facts.definitive ? "deposit refund refused by Stripe" : "deposit refund outcome unknown",
+      facts.definitive ? `${kind.label} refused by Stripe` : `${kind.label} outcome unknown`,
     );
     return facts.definitive ? { outcome: "refused", code: facts.code } : { outcome: "unconfirmed" };
   }
 
   if (refund.status === "failed" || refund.status === "canceled") {
     await appendLedger(shopId, { ...ledgerBase, stripeRefundId: refund.id, outcome: "failed" });
-    logger.warn({ shopId, paymentId: payment.id, status: refund.status }, "deposit refund not made");
+    logger.warn({ shopId, paymentId: payment.id, status: refund.status }, `${kind.label} not made`);
     return { outcome: "refused", code: refund.failure_reason ?? null };
   }
 
@@ -300,7 +373,7 @@ export async function refundKeptDeposit(input: {
       status,
       actorUserId: input.actorUserId,
     },
-    "kept deposit refunded",
+    `${kind.label} made`,
   );
   return { outcome: "refunded", amountCents: refundedCents, status, reverseTransfer };
 }
@@ -345,6 +418,8 @@ async function settleFromStripe(ctx: {
   stripe: Stripe;
   charge: Stripe.Charge | null;
   input: { actorUserId: string | null; note: string | null };
+  /** Which of OUR refunds to recognise - the kind's own source tag. */
+  source: RemainderKind["source"];
 }): Promise<DepositRefundOutcome> {
   const { shopId, appointmentId, payment, collected, stripe, charge } = ctx;
   if (!charge) return { outcome: "nothing_to_refund" };
@@ -361,7 +436,7 @@ async function settleFromStripe(ctx: {
   if (stripeRefunded < collected) {
     return { outcome: "amount_changed", refundableCents: collected - stripeRefunded };
   }
-  const ours = await ourEarlierRefund(stripe, charge.id, payment.id, "chairback_deposit_refund");
+  const ours = await ourEarlierRefund(stripe, charge.id, payment.id, ctx.source);
   if (ours) {
     const status = ours.status === "succeeded" ? "succeeded" : "pending";
     await appendLedgerOnce(shopId, {

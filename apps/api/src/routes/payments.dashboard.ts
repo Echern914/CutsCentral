@@ -41,6 +41,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
       depositNonRefundable: true,
       chargeCardOnFileFees: true,
       tipPolicy: true,
+      onlineTipsEnabled: true,
       payDirectEnabled: true,
       payDirectZelle: true,
       payDirectVenmo: true,
@@ -78,6 +79,8 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
     depositNonRefundable: shop.depositNonRefundable,
     chargeCardOnFileFees: shop.chargeCardOnFileFees,
     tipPolicy: shop.tipPolicy,
+    // Clients may tip online after a finished visit (PATCH /tips below).
+    onlineTipsEnabled: shop.onlineTipsEnabled,
     // Fee-free pay-direct (Zelle/Venmo/Cash App) — display-only, no Stripe needed.
     payDirect: {
       enabled: shop.payDirectEnabled,
@@ -234,6 +237,47 @@ paymentsDashboardRouter.patch("/settings", async (req, res) => {
     },
   });
   res.json({ ok: true });
+});
+
+// PATCH /api/payments/tips - may clients tip online after a finished visit?
+//
+// Its own route, saved the moment it is switched, rather than riding the
+// shared settings Save: that Save always sends the payment mode, and a shop
+// whose Stripe account slipped is refused the whole save there - which would
+// leave it unable to switch tips OFF. Turning tips OFF is never refused.
+// Turning them ON checks Stripe live, as switching payments on does: a client
+// must never be sent to a tip form that cannot settle.
+const tipsSchema = z.object({ enabled: z.boolean() }).strict();
+
+paymentsDashboardRouter.patch("/tips", async (req, res) => {
+  const parsed = tipsSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  if (parsed.data.enabled) {
+    if (!connectEnabled()) {
+      res.status(503).json({ error: "connect_disabled" });
+      return;
+    }
+    const shop = await prisma.shop.findUnique({
+      where: { id: req.shop!.id },
+      select: { stripeConnectAccountId: true },
+    });
+    const status = await getConnectStatus({
+      id: req.shop!.id,
+      stripeConnectAccountId: shop?.stripeConnectAccountId ?? null,
+    });
+    if (!status.chargesEnabled) {
+      res.status(409).json({ error: "connect_not_ready" });
+      return;
+    }
+  }
+  await prisma.shop.update({
+    where: { id: req.shop!.id },
+    data: { onlineTipsEnabled: parsed.data.enabled },
+  });
+  res.json({ ok: true, onlineTipsEnabled: parsed.data.enabled });
 });
 
 // PATCH /api/payments/pay-direct - fee-free "pay the barber directly" handles

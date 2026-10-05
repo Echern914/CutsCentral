@@ -1,6 +1,7 @@
 "use server";
 
 import { apiPublicGet, apiPublicSend } from "@/lib/api";
+import type { TipView } from "./page";
 
 /**
  * Cancel a booking by its manage token (customer-initiated, no login).
@@ -121,4 +122,36 @@ export async function rescheduleBookingAction(
   );
   if (!res.ok) return { ok: false, error: res.error ?? "failed" };
   return { ok: true };
+}
+
+/**
+ * Start (or resume) a tip after the visit. The SERVER decides whether a tip
+ * may be taken and turns the amount into a payment; the page only gets the
+ * client secret for the card form. Fields mapped one by one: the API seam
+ * drops unknown fields from an error, and a 202 "unconfirmed" is HTTP-ok while
+ * the payment is not ready.
+ */
+export async function startTipAction(
+  token: string,
+  amountCents: number,
+): Promise<{ ok: boolean; clientSecret?: string; amountCents?: number; error?: string; reason?: string }> {
+  const res = await apiPublicSend<{ clientSecret?: string; amountCents?: number; result?: string }>(
+    "POST",
+    `/api/book/manage/${encodeURIComponent(token)}/tip`,
+    { amountCents },
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed", reason: res.reason };
+  if (!res.data?.clientSecret) return { ok: false, error: res.data?.result ?? "unconfirmed" };
+  return { ok: true, clientSecret: res.data.clientSecret, amountCents: res.data.amountCents };
+}
+
+/** Where the visit's tip stands - polled after paying, so "thank you" is true. */
+export async function tipStatusAction(
+  token: string,
+): Promise<{ ok: boolean; tip?: TipView | null }> {
+  const res = await apiPublicGet<{ tip: TipView | null }>(
+    `/api/book/manage/${encodeURIComponent(token)}/tip`,
+  );
+  if (!res.ok || !res.data) return { ok: false };
+  return { ok: true, tip: res.data.tip };
 }
