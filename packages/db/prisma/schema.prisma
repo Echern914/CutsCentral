@@ -613,6 +613,11 @@ model Shop {
   // cancel? Default OFF - choosing the mode is never, by itself, a decision to
   // charge anyone. "unless the barber is set and it's on them" (Eric).
   chargeCardOnFileFees Boolean @default(false)
+  // Card on file: is a client who does not save a card still booked? OFF (the
+  // default): Confirm books them and the card step after it is optional - a
+  // client who leaves it is still booked, never silently released. ON: the
+  // time is held while they save a card, and released if they don't.
+  requireCardToBook Boolean @default(false)
   // Deposit mode: is the deposit kept when the CLIENT cancels? Default OFF
   // (follow the cancellation policy). A cancellation by the shop still refunds
   // in full. Read ONLY when a new booking is paid for - each booking snapshots

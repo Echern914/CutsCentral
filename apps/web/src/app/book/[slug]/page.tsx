@@ -75,6 +75,11 @@ export interface BookShopData {
       sentence: string;
       /** The cancellation rule, only when a payment is taken at booking. */
       cancellation?: string | null;
+      /**
+       * A card shop that books without a card: Confirm books them, and the card
+       * step after it is optional. Optional = an older API (says the old line).
+       */
+      cardOptional?: boolean;
     } | null;
     /**
      * The shop's own policies + checklist ("Before you book"). Null = nothing

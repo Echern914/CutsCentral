@@ -224,7 +224,9 @@ beforeAll(async () => {
   const settings = await request(app)
     .patch("/api/payments/settings")
     .set("Cookie", cookie)
-    .send({ paymentsMode: "card_on_file" });
+    // Card-or-nothing: the list exists for clients whose hold ran out, which
+    // only happens when the card is required to book.
+    .send({ paymentsMode: "card_on_file", requireCardToBook: true });
   expect(settings.status).toBe(200);
 });
 

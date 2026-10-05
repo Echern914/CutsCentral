@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-05-book-without-card",
+    date: "2026-10-05",
+    kind: "fix",
+    title: "Clients are booked even if they skip the card",
+    body:
+      "With Card on file, pressing Confirm now books the client and sends their confirmation. Saving a card comes " +
+      "after and is optional, so nobody who skips it loses their time. Want card-or-nothing? Payments, Card on " +
+      "file, Require a saved card to book.",
+  },
+  {
     id: "2026-10-05-online-tips",
     date: "2026-10-05",
     kind: "feature",

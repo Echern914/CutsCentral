@@ -48,6 +48,17 @@ export interface ManageData {
     /** Taken on non-refundable terms. Optional = an older API. */
     nonRefundable?: boolean;
   } | null;
+  /**
+   * Booked, and the shop asks for a card to keep on file that never arrived
+   * (the card step was optional and they skipped it): offered again here,
+   * never required. Optional = an older API.
+   */
+  addCard?: {
+    clientSecret: string;
+    serviceChargeConsent: boolean;
+    /** The shop charges a saved card for a no-show or a late cancel. Optional = an older API. */
+    chargesFees?: boolean;
+  } | null;
   /** The card never arrived before the hold ran out: this was never a booking. */
   neverBooked?: boolean;
   /**

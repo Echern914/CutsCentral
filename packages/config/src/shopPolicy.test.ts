@@ -429,6 +429,20 @@ describe("card on file", () => {
     expect(describeNoShowPolicy(base)).toMatch(/no charge for a no-show/);
   });
 
+  it("🔴 a shop that books without a card never says the card is needed to book", () => {
+    const optional = { ...base, requireCardToBook: false };
+    const off = describeDepositPolicy(optional);
+    expect(off).toMatch(/you're booked with or without a card/);
+    expect(off).toMatch(/not charged unless/);
+    const withFees = describeDepositPolicy({ ...optional, chargeCardOnFileFees: true });
+    expect(withFees).toMatch(/you're booked with or without a card/);
+    // The fee condition is still said, in the same words the booking page reads.
+    expect(withFees).toMatch(/charged only for a no-show or a cancellation inside/);
+    // A card-or-nothing shop, and a caller that doesn't know, keep the old line.
+    expect(describeDepositPolicy({ ...base, requireCardToBook: true })).not.toMatch(/with or without/);
+    expect(describeDepositPolicy(base)).not.toMatch(/with or without/);
+  });
+
   it("names the one condition once the switch is on", () => {
     const on = { ...base, chargeCardOnFileFees: true };
     expect(describeDepositPolicy(on)).toMatch(/charged only for a no-show or a cancellation inside/);

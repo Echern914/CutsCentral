@@ -18,6 +18,7 @@ import { useDemoTour } from "@/components/tour/state";
 import type { ManageData } from "./page";
 import { ClientNoteBlock } from "../../ClientNoteBlock";
 import { FinishCheckout } from "./FinishCheckout";
+import { AddCard } from "./AddCard";
 import { TipCard } from "./TipCard";
 import { keptOnCancelQuestion } from "../../[slug]/depositTerms";
 import {
@@ -274,6 +275,17 @@ export function ManageClient({
               onStatus={setCheckinStatus}
               demoMode={demoTour}
             />
+            {/* Booked, and the shop asks for a card it never got (the card
+                step was optional and they skipped it). Never required here. */}
+            {data.addCard && !demoTour && (
+              <AddCard
+                token={token}
+                offer={data.addCard}
+                shopName={data.shop.name}
+                shopSlug={data.shop.slug}
+                onSaved={() => router.refresh()}
+              />
+            )}
             {/* The pass for THIS booking. The page it belongs on most and the
                 one it was missing from: the relay route has sat beside this
                 file since the pass shipped, with nothing linking to it.

@@ -213,12 +213,21 @@ describe("turning card on file on", () => {
     const res = await request(app)
       .patch("/api/payments/settings")
       .set("Cookie", cookie)
-      .send({ paymentsMode: "card_on_file", chargeCardOnFileFees: true, cancelWindowHours: 24, cancelFeeBps: 5000 });
+      .send({
+        paymentsMode: "card_on_file",
+        chargeCardOnFileFees: true,
+        cancelWindowHours: 24,
+        cancelFeeBps: 5000,
+        // Card-or-nothing: the hold this suite pins. A card shop's default
+        // books without a card (cardOptionalBooking.test.ts).
+        requireCardToBook: true,
+      });
     expect(res.status).toBe(200);
     const status = await request(app).get("/api/payments/status").set("Cookie", cookie);
     expect(status.status).toBe(200);
     expect(status.body.paymentsMode).toBe("card_on_file");
     expect(status.body.chargeCardOnFileFees).toBe(true);
+    expect(status.body.requireCardToBook).toBe(true);
   });
 
   it("🔴 the booking page says a card will be kept BEFORE the customer confirms", async () => {

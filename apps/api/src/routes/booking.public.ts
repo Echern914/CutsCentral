@@ -72,7 +72,7 @@ import { checkPolicyAcceptance, publicBookingPolicy } from "../engines/bookingPo
 import { normalizeClientNote } from "@chairback/config/clientNote";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { fillBlankClientFields } from "../services/clientFill.js";
-import { neverBooked, unfinishedCheckoutFor } from "../services/unfinishedCheckout.js";
+import { neverBooked, optionalCardStepFor, unfinishedCheckoutFor } from "../services/unfinishedCheckout.js";
 import {
   durationRangeForService,
   effectiveDurationAt,
@@ -178,6 +178,7 @@ function publicPaymentSummary(shop: {
   depositAmountCents: number | null;
   depositNonRefundable: boolean;
   chargeCardOnFileFees: boolean;
+  requireCardToBook: boolean;
   cancelWindowHours: number;
   cancelFeeBps: number;
   requireBookingApproval: boolean;
@@ -202,6 +203,12 @@ function publicPaymentSummary(shop: {
    * cancellation" beside a shop's own written policy that may say otherwise.
    */
   cancellation: string | null;
+  /**
+   * A card shop that books without a card: Confirm books them and the card
+   * step after it is optional. The page words the step from this, never from
+   * the sentence above.
+   */
+  cardOptional: boolean;
 } {
   const collects = collectsAtBooking({
     connectEnabled: connectEnabled(),
@@ -220,6 +227,7 @@ function publicPaymentSummary(shop: {
     cancelFeeBps: shop.cancelFeeBps,
     depositAmountCents: shop.depositAmountCents,
     chargeCardOnFileFees: shop.chargeCardOnFileFees,
+    requireCardToBook: shop.requireCardToBook,
     paymentsLive: collects !== null,
     requiresApproval: shop.requireBookingApproval,
     nonRefundable,
@@ -236,6 +244,7 @@ function publicPaymentSummary(shop: {
     nonRefundable,
     sentence,
     cancellation,
+    cardOptional: collects === "card" && !shop.requireCardToBook,
   };
 }
 
@@ -2154,8 +2163,12 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       // charged, every priced service would be.
       chargeCents: 1,
     });
+    // A card shop that books without a card (requireCardToBook off) writes the
+    // series BOOKED and offers the card step afterwards, optional - the same
+    // rule as a single booking below.
+    const seriesCardOptional = seriesCollection === "card" && !shop.requireCardToBook;
     const seriesHoldExpiresAt =
-      seriesCollection === "card" ? paymentHoldExpiry(now) : null;
+      seriesCollection === "card" && !seriesCardOptional ? paymentHoldExpiry(now) : null;
 
     const series = await materializeSeries({
       shopId: shop.id,
@@ -2215,9 +2228,11 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       balanceDueCents: number;
       holdMinutes: number;
       expiresAt: string | null;
+      /** Already booked; the card only goes on file. */
+      optional?: boolean;
     } | null = null;
 
-    if (seriesHoldExpiresAt && shop.stripeConnectAccountId) {
+    if (seriesCollection === "card" && shop.stripeConnectAccountId) {
       // ONE SetupIntent for the whole series, filed against the anchor and
       // tagged with the series id. Twelve intents for one decision would be
       // twelve ways to half-succeed.
@@ -2246,10 +2261,11 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           amountCents: 0,
           isDeposit: false,
           balanceDueCents: 0,
-          holdMinutes: PAYMENT_HOLD_MINUTES,
-          expiresAt: seriesHoldExpiresAt.toISOString(),
+          holdMinutes: seriesCardOptional ? 0 : PAYMENT_HOLD_MINUTES,
+          expiresAt: seriesHoldExpiresAt?.toISOString() ?? null,
+          ...(seriesCardOptional ? { optional: true } : {}),
         };
-      } else {
+      } else if (!seriesCardOptional) {
         // Stripe was unreachable. Same rule the single booking already
         // follows: a Stripe hiccup must never cost a customer their
         // appointments. Confirm the series; they pay at the chair.
@@ -2282,7 +2298,8 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     // WITHHELD while a card is outstanding: promoteSeriesHolds sends it when
     // the card actually clears. Telling someone they are booked and then
     // asking for a card is the order this whole file exists to prevent.
-    if (!seriesPayment) {
+    // (Unless the card is optional: then they ARE booked, and are told so now.)
+    if (!seriesPayment || seriesCardOptional) {
       void notifyAppointmentConfirmation({ shopId: shop.id, appointmentId: first.appointmentId });
       void notifyBarberBookingEvent({
         shopId: shop.id,
@@ -2310,7 +2327,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         // screen can word it honestly rather than promising twelve bookings
         // that do not exist yet.
         booked: series.booked.length,
-        held: Boolean(seriesPayment),
+        held: Boolean(seriesPayment) && !seriesCardOptional,
         total: d.recurrence.count,
         skipped: series.skipped.map((k) => ({
           startsAt: k.startsAt.toISOString(),
@@ -2369,7 +2386,15 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       ? savedCardFound
       : null;
   const savedCardRefused = savedCardWanted && savedCard === null;
-  const collectsUpFront = collection !== null && savedCard === null;
+  // 🔑 A CARD SHOP THAT BOOKS WITHOUT A CARD (requireCardToBook off, the
+  // default). Confirm books them, exactly as a pay-at-the-chair shop does, and
+  // the card step that follows is optional: a client who leaves it is still
+  // booked. Holding the time while they saved a card, and releasing it in
+  // silence when they didn't, left clients sure they were booked while someone
+  // else took their time. Money (ahead / deposit) is never optional.
+  const cardOptional = collection === "card" && !shop.requireCardToBook;
+  const collectsUpFront = collection !== null && savedCard === null && !cardOptional;
+  const wantsCardStep = collection === "card" && savedCard === null;
   const holdExpiresAt = collectsUpFront ? paymentHoldExpiry(now) : null;
 
   let appointmentId: string;
@@ -2725,12 +2750,18 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
      * they learn about the deadline is that their booking vanished.
      */
     expiresAt: string | null;
+    /**
+     * The card step is OPTIONAL: they are already booked, and saving a card
+     * only puts it on file. The page says "You're booked" and offers Skip.
+     */
+    optional?: boolean;
   } | null = null;
-  if (collection === "card" && !savedCard && shop.stripeConnectAccountId) {
-    // Card on file: save the card, charge nothing. The hold is promoted when
-    // the SetupIntent succeeds - by the webhook, or by the browser asking us to
+  if (wantsCardStep && shop.stripeConnectAccountId) {
+    // Card on file: save the card, charge nothing. A hold is promoted when the
+    // SetupIntent succeeds - by the webhook, or by the browser asking us to
     // verify (POST /manage/:token/card-saved) so a customer's confirmation never
-    // waits on a webhook subscription.
+    // waits on a webhook subscription. When the card is optional there is no
+    // hold: the booking already stands and the save only files the card.
     const created = await createCardOnFileSetupIntent({
       shopId: shop.id,
       appointmentId,
@@ -2754,12 +2785,14 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         amountCents: 0,
         isDeposit: false,
         balanceDueCents: fullCents ?? 0,
-        holdMinutes: PAYMENT_HOLD_MINUTES,
+        holdMinutes: cardOptional ? 0 : PAYMENT_HOLD_MINUTES,
         expiresAt: holdExpiresAt?.toISOString() ?? null,
+        ...(cardOptional ? { optional: true } : {}),
       };
-    } else {
+    } else if (!cardOptional) {
       // Same rule as the deposit fallback below: a Stripe hiccup must never
       // cost a customer their appointment. Confirm it; they pay at the shop.
+      // (An optional card step has no hold to confirm: the booking stands.)
       logger.warn(
         { shopId: shop.id, appointmentId },
         "card on file: no SetupIntent - confirming the booking for pay-in-person",
@@ -2979,7 +3012,13 @@ bookingPublicRouter.get("/manage/:token", rewardsLimiter, async (req, res) => {
   // was booked a moment later (a real client, 2026-09-30: page at 2:59:11,
   // card saved at 2:59:12). So ask Stripe now - the same server-side check
   // the booking page's card-saved call makes - and show what is true.
-  if (appt.status === "PENDING" && appt.holdReason === "payment") {
+  // The same for a booking that stands without its card (an optional card
+  // step): a card saved a moment ago is filed now, so the page doesn't offer
+  // "Add a card" for one they just added. Cheap with nothing pending.
+  if (
+    (appt.status === "PENDING" && appt.holdReason === "payment") ||
+    (appt.status === "BOOKED" && appt.startsAt.getTime() > Date.now())
+  ) {
     const settled = await verifyCardSaved({ shopId: appt.shopId, appointmentId: appt.id }).catch(
       (err: unknown) => {
         logger.warn({ err, appointmentId: appt!.id }, "manage page: could not check the card with Stripe");
@@ -3102,6 +3141,9 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
   // A booking still waiting on its card: the same card step, reopened, so the
   // customer who left it can finish instead of finding the time gone.
   const finish = await unfinishedCheckoutFor(appt, now);
+  // A booking that stands without its card (the card step was optional and
+  // they skipped it): offer it again, never required.
+  const addCard = finish ? null : await optionalCardStepFor(appt, now);
   // The card the client asked this shop to keep, if any: shown here with the
   // way to take it off, as the consent promised (brand and last four only).
   const savedCardOnFile = appt.clientId ? await liveSavedCardFor(appt.shopId, appt.clientId) : null;
@@ -3142,6 +3184,8 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
         ? { reason: requestedReason({ holdReason: appt.holdReason, holdExpiresAt: appt.holdExpiresAt }) }
         : null,
     finish,
+    // Booked already; a card can still be put on file (optional).
+    addCard,
     savedCard: savedCardOnFile ? { brand: savedCardOnFile.brand, last4: savedCardOnFile.last4 } : null,
     // Never a booking at all: the card never arrived before the hold ran out.
     // The page says "not booked", not "canceled" - the customer cancelled
@@ -3197,7 +3241,10 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     },
     // Brand and last four only - the same display-safe facts the booking page
     // already showed this customer. Null when they never gave the permission.
-    serviceCharge: serviceChargeCard
+    // Only once a card actually exists: a client who agreed to service
+    // charges and then skipped the card (a card shop that books without one)
+    // has no "saved card" to name or to stop. Add a card says the terms.
+    serviceCharge: serviceChargeCard && serviceChargeCard.cardSaved
       ? {
           card: { brand: serviceChargeCard.brand, last4: serviceChargeCard.last4 },
           withdrawnAt: serviceChargeCard.withdrawnAt?.toISOString() ?? null,
@@ -3515,6 +3562,13 @@ bookingPublicRouter.post(
     };
 
     if (appt.status === "BOOKED") {
+      // Booked already - but its card may still be on its way: a card shop
+      // that books without a card confirms at Confirm, and the card step
+      // after it is optional. File the card now rather than waiting on the
+      // webhook. Cheap when there is nothing pending (no Stripe call).
+      await verifyCardSaved({ shopId: appt.shopId, appointmentId: appt.id }).catch((err: unknown) => {
+        logger.warn({ err, appointmentId: appt.id }, "card-saved: could not check the card with Stripe");
+      });
       res.json({ ok: true, status: "BOOKED", ...(await seriesBooked()), ...(await firstDevice()) });
       return;
     }

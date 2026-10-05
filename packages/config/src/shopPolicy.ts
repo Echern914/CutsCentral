@@ -57,6 +57,13 @@ export interface ShopPolicyInput {
    */
   chargeCardOnFileFees?: boolean;
   /**
+   * card_on_file only: is the card a condition of the booking? `false` (the
+   * shop default) = the client is booked at Confirm and the card step after it
+   * is optional, so the prose must never say the card is needed to book.
+   * Undefined = not known here: the prose says neither.
+   */
+  requireCardToBook?: boolean;
+  /**
    * Is what is taken AT BOOKING kept when the client cancels? Already
    * RESOLVED by the caller - never the raw shop switch:
    *  - about a booking that EXISTS: that booking's own snapshot
@@ -190,6 +197,12 @@ export function describeDepositPolicy(
   if (shop.paymentsMode === "card_on_file") {
     if (channel.collectsAtBooking === false || shop.paymentsLive === false || shop.requiresApproval) {
       return "none up front - pay at the shop";
+    }
+    // Booked either way: the card is asked for, never a condition.
+    if (shop.requireCardToBook === false) {
+      return shop.chargeCardOnFileFees
+        ? "no charge at booking; you're booked with or without a card, and a card you save is kept on file and charged only for a no-show or a cancellation inside the cancellation window (see the cancellation policy)"
+        : "no charge at booking; you're booked with or without a card, and a card you save is kept on file and not charged unless the shop turns on no-show fees - pay at the shop";
     }
     return shop.chargeCardOnFileFees
       ? "no charge at booking; a card is kept on file and is charged only for a no-show or a cancellation inside the cancellation window (see the cancellation policy)"

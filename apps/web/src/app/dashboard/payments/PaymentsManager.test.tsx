@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import type { PaymentStatus } from "./actions";
 
@@ -51,6 +51,11 @@ function status(over: Partial<PaymentStatus> = {}): PaymentStatus {
   };
 }
 
+function cleanupAndRender(initial: PaymentStatus) {
+  cleanup();
+  render(<PaymentsManager initial={initial} apiBase="http://api.test" />);
+}
+
 beforeEach(() => {
   save.mockClear();
   setTips.mockReset();
@@ -89,6 +94,49 @@ describe("card on file in payment settings", () => {
       />,
     );
     expect(screen.getByRole("checkbox", { name: /Charge the card on file/ })).toBeChecked();
+  });
+
+  it("🔴 'Require a saved card to book' is OFF by default - clients who skip the card are still booked", async () => {
+    render(<PaymentsManager initial={status({ paymentsMode: "card_on_file" })} apiBase="http://api.test" />);
+    const box = screen.getByRole("checkbox", { name: "Require a saved card to book" });
+    expect(box).not.toBeChecked();
+    expect(screen.getByText(/nobody who skips it loses their time/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save payment settings" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toMatchObject({ paymentsMode: "card_on_file", requireCardToBook: false });
+  });
+
+  it("turned on, it saves with the mode, reads back, and is never sent for another mode", async () => {
+    const { unmount } = render(
+      <PaymentsManager initial={status({ paymentsMode: "card_on_file" })} apiBase="http://api.test" />,
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Require a saved card to book" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save payment settings" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toMatchObject({ requireCardToBook: true });
+    unmount();
+
+    render(
+      <PaymentsManager
+        initial={status({ paymentsMode: "card_on_file", requireCardToBook: true })}
+        apiBase="http://api.test"
+      />,
+    );
+    expect(screen.getByRole("checkbox", { name: "Require a saved card to book" })).toBeChecked();
+    cleanupAndRender(status({ paymentsMode: "ahead", requireCardToBook: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Save payment settings" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save.mock.calls[1]![0]).not.toHaveProperty("requireCardToBook");
+  });
+
+  it("with fees on and the card optional, says a card-less booking can't be charged a fee", () => {
+    render(
+      <PaymentsManager
+        initial={status({ paymentsMode: "card_on_file", chargeCardOnFileFees: true })}
+        apiBase="http://api.test"
+      />,
+    );
+    expect(screen.getByText(/A booking made without a card can't be charged a no-show fee\./)).toBeInTheDocument();
   });
 
   it("cannot be chosen before Stripe can take a charge - a kept card the shop could never charge protects nobody", () => {

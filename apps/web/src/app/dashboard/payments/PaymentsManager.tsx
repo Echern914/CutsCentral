@@ -70,6 +70,9 @@ export function PaymentsManager({
   // card_on_file: the fee switch. Separate from the mode on purpose - keeping
   // a card is not, by itself, a decision to charge anyone.
   const [chargeFees, setChargeFees] = useState(initial.chargeCardOnFileFees ?? false);
+  // card_on_file: is the card a condition of the booking? Off (the default):
+  // Confirm books them and the card step is optional.
+  const [requireCard, setRequireCard] = useState(initial.requireCardToBook ?? false);
   // Held as raw strings so the field can be empty while typing. A numeric state
   // defaulting to 0 rendered a literal "0" the barber couldn't delete (typing
   // "40" showed "040"); the string lets the input clear, and we coerce on save.
@@ -264,7 +267,7 @@ export function PaymentsManager({
         cancelWindowHours: hours,
         cancelFeeBps: Math.round(feePct * 100),
         ...(mode === "deposit" ? { depositAmountCents: depositCents, depositNonRefundable } : {}),
-        ...(mode === "card_on_file" ? { chargeCardOnFileFees: chargeFees } : {}),
+        ...(mode === "card_on_file" ? { chargeCardOnFileFees: chargeFees, requireCardToBook: requireCard } : {}),
         tipPolicy,
       });
       if (r.ok) toast("Payment settings saved", "success");
@@ -593,6 +596,24 @@ export function PaymentsManager({
                   no-show, or a customer cancels inside your free-cancel cutoff, the
                   fee below is charged to the card they saved. Nothing else is ever
                   charged to it.
+                </span>
+              </span>
+            </label>
+            <label className="mt-3 flex items-start gap-3 border-t border-subtle pt-3">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                checked={requireCard}
+                onChange={(e) => setRequireCard(e.target.checked)}
+                aria-label="Require a saved card to book"
+              />
+              <span>
+                <span className="block text-sm font-medium">Require a saved card to book</span>
+                <span className="mt-0.5 block text-[11px] text-muted">
+                  Off (recommended): Confirm books them, and the card step after it is optional, so
+                  nobody who skips it loses their time. On: the time is held for 10 minutes while they
+                  save a card, and goes back on sale if they don&rsquo;t.
+                  {chargeFees && !requireCard && " A booking made without a card can't be charged a no-show fee."}
                 </span>
               </span>
             </label>
