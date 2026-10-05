@@ -58,11 +58,11 @@ describe("the refund deposit button", () => {
     mount();
     fireEvent.click(screen.getByRole("button", { name: "Refund $10.00" }));
     expect(refundDepositAction).not.toHaveBeenCalled();
-    expect(screen.getByText("Refund $10.00 to the card they paid with?")).toBeTruthy();
+    expect(screen.getByText("Refund $10.00 to the client?")).toBeTruthy();
     expect(screen.getByText(/ChairBack doesn.t message them about it/)).toBeTruthy();
     // Keep it closes the confirm without a call.
     fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
-    expect(screen.queryByText("Refund $10.00 to the card they paid with?")).toBeNull();
+    expect(screen.queryByText("Refund $10.00 to the client?")).toBeNull();
     expect(refundDepositAction).not.toHaveBeenCalled();
   });
 
@@ -74,7 +74,7 @@ describe("the refund deposit button", () => {
       target: { value: "  was sick " },
     });
     fireEvent.click(screen.getByRole("button", { name: "Refund $10.00" }));
-    await waitFor(() => expect(onRefunded).toHaveBeenCalledWith("Refunded $10.00 to their card."));
+    await waitFor(() => expect(onRefunded).toHaveBeenCalledWith("Refunded $10.00 to the client."));
     expect(refundDepositAction).toHaveBeenCalledWith("appt_1", { amountCents: 1000, note: "was sick" });
   });
 
@@ -113,7 +113,7 @@ describe("the refund deposit button", () => {
     expect((await screen.findByRole("alert")).textContent).toMatch(/Pressing Refund again is safe/);
     expect(onRefunded).not.toHaveBeenCalled();
     // The confirm stays open so the second press is one tap away.
-    expect(screen.getByText("Refund $10.00 to the card they paid with?")).toBeTruthy();
+    expect(screen.getByText("Refund $10.00 to the client?")).toBeTruthy();
   });
 
   it("a figure that moved is re-read, and the shop is told to check it", async () => {
@@ -137,15 +137,55 @@ describe("the refund deposit button", () => {
     expect(onStale).not.toHaveBeenCalled();
   });
 
-  it("every refusal says nothing was refunded, or why there was nothing to refund", () => {
+  it("a refusal the server is sure of says nothing was refunded", () => {
     expect(explainDepositRefund("refund_refused", undefined)).toBe("Stripe refused the refund. Nothing was refunded.");
     expect(explainDepositRefund("stripe_unavailable", undefined)).toMatch(/Nothing was refunded - try again/);
-    expect(explainDepositRefund("network_error", undefined)).toMatch(/Nothing was refunded - try again/);
     expect(explainDepositRefund("nothing_to_refund", undefined)).toMatch(/already been refunded/);
     expect(explainDepositRefund("not_refundable", "booking_open")).toMatch(/cancelled or no-show/);
     expect(explainDepositRefund("not_refundable", "not_collected")).toMatch(/never collected/);
-    // The subscription wall and anything unforeseen: still no false success.
-    expect(explainDepositRefund("subscription_required", undefined)).toBe("That didn't work. Nothing was refunded.");
+    for (const before of ["subscription_required", "invalid_input", "not_found", "forbidden_role", "unauthorized"]) {
+      expect(explainDepositRefund(before, undefined), before).toBe("That didn't work. Nothing was refunded.");
+    }
+  });
+
+  it("🔴 an answer that never arrived is UNKNOWN, never 'nothing was refunded'", () => {
+    // A lost signal, a timeout, a 5xx on the way back: the refund may have
+    // been made before the answer was lost.
+    for (const lost of ["network_error", "internal", "http_502", "http_504", "something_new"]) {
+      const said = explainDepositRefund(lost, undefined);
+      expect(said, lost).toMatch(/Pressing Refund again is safe/);
+      expect(said, lost).not.toMatch(/Nothing was refunded/);
+    }
+  });
+
+  it("🔴 an action that throws (no signal) says pressing again is safe, and claims nothing", async () => {
+    refundDepositAction.mockRejectedValue(new Error("Failed to fetch"));
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Refund $10.00" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refund $10.00" }));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Pressing Refund again is safe/);
+    expect(onRefunded).not.toHaveBeenCalled();
+    // The button is usable again for that second press.
+    expect((screen.getByRole("button", { name: "Refund $10.00" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("'already refunded' is an outcome: it goes to the sheet's footer, and the panel stops offering", async () => {
+    refundDepositAction.mockResolvedValue({ ok: false, error: "nothing_to_refund" });
+    const { container } = mount();
+    fireEvent.click(screen.getByRole("button", { name: "Refund $10.00" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refund $10.00" }));
+    await waitFor(() => expect(onRefunded).toHaveBeenCalledWith("This deposit had already been refunded."));
+    expect(container.innerHTML).toBe("");
+    expect(onStale).not.toHaveBeenCalled();
+  });
+
+  it("🔴 once refunded the panel stops offering at once - it does not wait on the re-read", async () => {
+    refundDepositAction.mockResolvedValue({ ok: true, result: "refunded", amountCents: 1000, status: "succeeded" });
+    const { container } = mount();
+    fireEvent.click(screen.getByRole("button", { name: "Refund $10.00" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refund $10.00" }));
+    await waitFor(() => expect(onRefunded).toHaveBeenCalled());
+    expect(container.innerHTML).toBe("");
   });
 
   it("the confirm button is disabled while the refund is in flight", async () => {

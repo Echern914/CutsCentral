@@ -76,6 +76,23 @@ beforeAll(async () => {
     })
   ).id;
 
+  // A booking deposit on that appointment, so the deposit-refund route has
+  // something real to refuse: the owner's own press answers 409 (the booking
+  // is live), which is what makes another shop's 404 mean something.
+  await prisma.payment.create({
+    data: {
+      shopId,
+      appointmentId,
+      stripePaymentIntentId: `pi_authz_${randomToken(10)}`,
+      stripeConnectAccountId: `acct_authz_${randomToken(6)}`,
+      mode: "ahead",
+      purpose: "booking",
+      amount: 1000,
+      currency: "usd",
+      status: "succeeded",
+    },
+  });
+
   const barber = await signup("barber");
   barberCookie = barber.cookie;
   await prisma.shopMember.create({ data: { shopId, userId: barber.userId, role: "BARBER", staffId: staff.id } });
@@ -189,6 +206,14 @@ describe("financial routes: the wrong person", () => {
       .set("Cookie", otherCookie)
       .send({ amount: 1, method: "cash" });
     expect(checkout.status).toBe(404);
+    // Control: the shop's own owner reaches the booking (and is refused for a
+    // different reason), so the 404 below is the tenant scoping, not a miss.
+    const own = await request(app)
+      .post(`/api/booking/appointments/${appointmentId}/deposit-refund`)
+      .set("Cookie", ownerCookie)
+      .send({ amountCents: 1000 });
+    expect(own.status).toBe(409);
+    expect(own.body).toEqual({ error: "not_refundable", reason: "booking_open" });
     const depositRefund = await request(app)
       .post(`/api/booking/appointments/${appointmentId}/deposit-refund`)
       .set("Cookie", otherCookie)

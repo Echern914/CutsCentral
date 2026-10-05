@@ -119,14 +119,27 @@ export async function refundKeptDeposit(input: {
 
   const collected = payment.capturedAmount ?? payment.amount;
   const refundable = stripeCollectedCents(payment);
+  const settle = (stripe: Stripe, charge: Stripe.Charge | null) =>
+    settleFromStripe({ shopId, appointmentId, payment, collected, stripe, charge, input });
+
   if (refundable <= 0) {
     // Never collected (a hold that was released, an intent that was voided) is
     // a different answer from "it was all given back already".
-    return payment.status === "succeeded" ||
-      payment.status === "partially_refunded" ||
-      payment.status === "refunded"
-      ? { outcome: "nothing_to_refund" }
-      : { outcome: "not_refundable", reason: "not_collected" };
+    if (!COLLECTED.has(payment.status)) return { outcome: "not_refundable", reason: "not_collected" };
+    // 🔑 A press whose answer was lost, and whose total the charge.refunded
+    // webhook then landed, left only an "ambiguous" ledger row. The next press
+    // finds nothing left and would end there, so the audit would never say who
+    // gave the money back. Settle it from Stripe first - best effort.
+    if (await unresolvedPress(shopId, payment.id)) {
+      try {
+        const stripe = stripeClient();
+        const settled = await settle(stripe, await readCharge(stripe, payment));
+        if (settled.outcome === "refunded") return settled;
+      } catch {
+        // Unable to tell; "nothing left to refund" is still true.
+      }
+    }
+    return { outcome: "nothing_to_refund" };
   }
   if (input.confirmedCents !== refundable) {
     return { outcome: "amount_changed", refundableCents: refundable };
@@ -138,13 +151,9 @@ export async function refundKeptDeposit(input: {
   // Reads only: if Stripe cannot answer, nothing has been asked of it yet, so
   // "try again" is the whole truth and no ledger row is owed.
   try {
-    let chargeId = payment.stripeChargeId;
-    if (!chargeId) {
-      const pi = await stripe.paymentIntents.retrieve(payment.stripePaymentIntentId);
-      chargeId = typeof pi.latest_charge === "string" ? pi.latest_charge : pi.latest_charge?.id ?? null;
-    }
-    if (!chargeId) return { outcome: "not_refundable", reason: "not_collected" };
-    charge = await stripe.charges.retrieve(chargeId, { expand: ["transfer"] });
+    const read = await readCharge(stripe, payment);
+    if (!read) return { outcome: "not_refundable", reason: "not_collected" };
+    charge = read;
     transfer = await transferOf(stripe, charge);
   } catch (err) {
     logger.warn(
@@ -157,50 +166,17 @@ export async function refundKeptDeposit(input: {
   // 🔴 STRIPE IS THE AUTHORITY ON WHAT HAS ALREADY GONE BACK. Three ways it
   // can be ahead of this row: a cancellation refund whose answer was lost, a
   // refund made in the platform dashboard, or OUR OWN earlier press whose
-  // answer was lost. The row is brought forward - monotonically - and the
-  // shop is shown the true figure rather than refunded against a stale one.
+  // answer was lost. The row is brought forward and the shop is shown the
+  // true figure rather than refunded against a stale one.
   const stripeRefunded = charge.amount_refunded ?? 0;
-  if (stripeRefunded > payment.refundedAmount) {
-    await runWithShop(shopId, (tx) =>
-      tx.payment.updateMany({
-        where: { id: payment.id, refundedAmount: { lte: stripeRefunded } },
-        data: {
-          refundedAmount: stripeRefunded,
-          status: stripeRefunded >= collected ? "refunded" : "partially_refunded",
-        },
-      }),
-    );
-    if (stripeRefunded < collected) {
-      return { outcome: "amount_changed", refundableCents: collected - stripeRefunded };
-    }
-    // Everything is back. Was the last of it OURS? A press whose answer was
-    // lost after Stripe made the refund lands here on the next press, and it
-    // is recorded as the confirmed refund it is, with the actor who made it.
-    const ours = await ourEarlierRefund(stripe, charge.id, payment.id, "chairback_deposit_refund");
-    if (ours) {
-      const status = ours.status === "succeeded" ? "succeeded" : "pending";
-      await appendLedgerOnce(shopId, {
-        paymentId: payment.id,
-        appointmentId,
-        actorUserId: ours.metadata?.actorUserId ?? input.actorUserId,
-        amountCents: ours.amount,
-        reverseTransfer: Boolean(ours.transfer_reversal),
-        stripeRefundId: ours.id,
-        outcome: status,
-        note: input.note,
-      });
-      return {
-        outcome: "refunded",
-        amountCents: ours.amount,
-        status,
-        reverseTransfer: Boolean(ours.transfer_reversal),
-      };
-    }
-    return { outcome: "already_refunded", refundedCents: stripeRefunded };
-  }
-  // The row counts a refund Stripe does not show (a pending refund that later
-  // failed). Refunding "what is left" would then be computed from a wrong
-  // figure in one direction or the other; a person settles it.
+  if (stripeRefunded > payment.refundedAmount) return settle(stripe, charge);
+  // The row counts more refunded than Stripe shows. The one way that happens
+  // is a refund recorded on the way out that Stripe later failed, while the
+  // booking still kept something - a failed cancellation refund behind a kept
+  // late-cancel fee. Refunding "what is left" would be computed from a wrong
+  // figure, so a person settles it. (A failed refund that took the WHOLE
+  // remainder leaves the row at fully refunded, and nothing here can see it:
+  // no webhook reports a refund that failed after it was made.)
   if (stripeRefunded < payment.refundedAmount) {
     return { outcome: "needs_support", reason: "refund_not_at_stripe" };
   }
@@ -262,6 +238,23 @@ export async function refundKeptDeposit(input: {
       { idempotencyKey: `deposit-refund:${payment.id}:${payment.refundedAmount}` },
     );
   } catch (err) {
+    // 🔴 ANOTHER PRESS GOT THERE FIRST - not "Stripe refused". Two managers
+    // pressing at once send the same key with a different actor in the
+    // metadata, and a second tap while the first is still in flight sends it
+    // while Stripe is busy with it; either way Stripe refuses THIS request
+    // while the other one's refund goes through. Re-read and say what
+    // actually happened. This press made no refund of its own, so it writes
+    // no ledger row.
+    if (isIdempotencyConflict(err)) {
+      try {
+        const fresh = await stripe.charges.retrieve(charge.id);
+        if ((fresh.amount_refunded ?? 0) > payment.refundedAmount) return await settle(stripe, fresh);
+      } catch {
+        // Fall through: we cannot tell yet, and pressing again is safe.
+      }
+      logger.warn({ shopId, paymentId: payment.id }, "deposit refund: another press holds this refund");
+      return { outcome: "unconfirmed" };
+    }
     const facts = stripeErrorFacts(err);
     await appendLedger(shopId, {
       ...ledgerBase,
@@ -310,4 +303,112 @@ export async function refundKeptDeposit(input: {
     "kept deposit refunded",
   );
   return { outcome: "refunded", amountCents: refundedCents, status, reverseTransfer };
+}
+
+const COLLECTED = new Set(["succeeded", "partially_refunded", "refunded"]);
+
+interface BookingPaymentFacts {
+  id: string;
+  status: string;
+  amount: number;
+  capturedAmount: number | null;
+  refundedAmount: number;
+  stripePaymentIntentId: string;
+  stripeChargeId: string | null;
+}
+
+/** The payment's charge, with its transfer. Null when there is no charge. */
+async function readCharge(stripe: Stripe, payment: BookingPaymentFacts): Promise<Stripe.Charge | null> {
+  let chargeId = payment.stripeChargeId;
+  if (!chargeId) {
+    const pi = await stripe.paymentIntents.retrieve(payment.stripePaymentIntentId);
+    chargeId = typeof pi.latest_charge === "string" ? pi.latest_charge : pi.latest_charge?.id ?? null;
+  }
+  if (!chargeId) return null;
+  return stripe.charges.retrieve(chargeId, { expand: ["transfer"] });
+}
+
+/**
+ * Stripe has refunded more than this row knows. Bring the row forward - only
+ * ever upward - and say what that means for the shop:
+ *  - something is still kept: the figure moved, so the shop re-confirms it;
+ *  - everything is back, and the last of it was a refund THIS button made
+ *    (found by its source tag): it is recorded, with the manager who made it,
+ *    as the refund it is;
+ *  - everything is back by someone else's hand: already refunded.
+ */
+async function settleFromStripe(ctx: {
+  shopId: string;
+  appointmentId: string;
+  payment: BookingPaymentFacts;
+  collected: number;
+  stripe: Stripe;
+  charge: Stripe.Charge | null;
+  input: { actorUserId: string | null; note: string | null };
+}): Promise<DepositRefundOutcome> {
+  const { shopId, appointmentId, payment, collected, stripe, charge } = ctx;
+  if (!charge) return { outcome: "nothing_to_refund" };
+  const stripeRefunded = charge.amount_refunded ?? 0;
+  await runWithShop(shopId, (tx) =>
+    tx.payment.updateMany({
+      where: { id: payment.id, refundedAmount: { lte: stripeRefunded } },
+      data: {
+        refundedAmount: stripeRefunded,
+        status: stripeRefunded >= collected ? "refunded" : "partially_refunded",
+      },
+    }),
+  );
+  if (stripeRefunded < collected) {
+    return { outcome: "amount_changed", refundableCents: collected - stripeRefunded };
+  }
+  const ours = await ourEarlierRefund(stripe, charge.id, payment.id, "chairback_deposit_refund");
+  if (ours) {
+    const status = ours.status === "succeeded" ? "succeeded" : "pending";
+    await appendLedgerOnce(shopId, {
+      paymentId: payment.id,
+      appointmentId,
+      actorUserId: ours.metadata?.actorUserId ?? ctx.input.actorUserId,
+      amountCents: ours.amount,
+      reverseTransfer: Boolean(ours.transfer_reversal),
+      stripeRefundId: ours.id,
+      outcome: status,
+      note: ctx.input.note,
+    });
+    return {
+      outcome: "refunded",
+      amountCents: ours.amount,
+      status,
+      reverseTransfer: Boolean(ours.transfer_reversal),
+    };
+  }
+  return { outcome: "already_refunded", refundedCents: stripeRefunded };
+}
+
+/**
+ * A press that left only an "ambiguous" ledger row - Stripe's answer was lost -
+ * and no row naming a Stripe refund since. Read only; a failed read is "no".
+ */
+async function unresolvedPress(shopId: string, paymentId: string): Promise<boolean> {
+  return runWithShop(shopId, async (tx) => {
+    const lost = await tx.paymentRefund.findFirst({
+      where: { shopId, paymentId, outcome: "ambiguous" },
+      select: { id: true },
+    });
+    if (!lost) return false;
+    const named = await tx.paymentRefund.findFirst({
+      where: { shopId, paymentId, stripeRefundId: { not: null }, outcome: { in: ["succeeded", "pending"] } },
+      select: { id: true },
+    });
+    return !named;
+  }).catch(() => false);
+}
+
+/**
+ * Stripe refusing a request because ANOTHER request with the same key is in
+ * flight, or already ran with different parameters. Not an answer about the
+ * money: the other request's answer is the one that counts.
+ */
+function isIdempotencyConflict(err: unknown): boolean {
+  const e = (err ?? {}) as { type?: unknown; code?: unknown };
+  return e.type === "StripeIdempotencyError" || e.code === "idempotency_key_in_use";
 }

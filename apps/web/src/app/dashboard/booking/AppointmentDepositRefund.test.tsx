@@ -183,12 +183,71 @@ describe("a closed booking's money on the sheet", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refund $10.00" }));
 
     const status = await screen.findByRole("status");
-    expect(status.textContent).toBe("Refunded $10.00 to their card.");
+    expect(status.textContent).toBe("Refunded $10.00 to the client.");
     await waitFor(() => expect(screen.queryByRole("button", { name: /Refund \$/ })).toBeNull());
     // Still there once the panel has gone.
-    expect(screen.getByRole("status").textContent).toBe("Refunded $10.00 to their card.");
+    expect(screen.getByRole("status").textContent).toBe("Refunded $10.00 to the client.");
     expect(toast).not.toHaveBeenCalled();
     expect(onChanged).toHaveBeenCalled();
     expect(refundDeposit).toHaveBeenCalledWith("appt1", { amountCents: 1000 });
+  });
+
+  it("🔴 if the re-read after a refund fails, the sheet never offers the same refund again", async () => {
+    await open(detailFor());
+    refundDeposit.mockResolvedValue({ ok: true, result: "refunded", amountCents: 1000, status: "succeeded" });
+    getDetail.mockResolvedValue({ ok: false, error: "network_error" });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Refund $10.00" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refund $10.00" }));
+
+    expect((await screen.findByRole("status")).textContent).toBe("Refunded $10.00 to the client.");
+    await waitFor(() => expect(getDetail).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: /Refund \$/ })).toBeNull();
+  });
+
+  it("a figure that moved, then a re-read that fails: the stale figure is not left on offer", async () => {
+    await open(detailFor());
+    refundDeposit.mockResolvedValue({ ok: false, error: "amount_changed" });
+    getDetail.mockResolvedValue({ ok: false, error: "network_error" });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Refund $10.00" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refund $10.00" }));
+
+    await waitFor(() => expect(getDetail).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Refund \$/ })).toBeNull());
+    expect(screen.getByText(/Couldn.t load this booking/)).toBeTruthy();
+  });
+
+  it("🔴 a closed booking whose card-on-file fee was charged never reads 'Nothing paid'", async () => {
+    const unpaid = {
+      state: "unpaid",
+      totalCents: 4000,
+      collectedCents: 0,
+      onlineCents: 0,
+      inPersonCents: 0,
+      refundedCents: 0,
+      authorizedCents: 0,
+      remainingCents: 4000,
+      method: null,
+      // No brand/last-four was recorded (a wallet, or a failed card lookup).
+      card: null,
+      receiptUrl: null,
+      cardOnFile: { status: "charged" },
+    } as unknown as AppointmentDetail["payment"];
+    await open(detailFor({ status: "no_show", payment: unpaid, keptDeposit: null } as Partial<AppointmentDetail>));
+    expect(await screen.findByText("No-show")).toBeTruthy();
+    expect(screen.queryByText("Nothing paid")).toBeNull();
+    // The headline and the line under it both say the fee was taken.
+    expect(screen.getAllByText("Fee charged")).toHaveLength(2);
+
+    cleanup();
+    await open(
+      detailFor({
+        status: "no_show",
+        payment: { ...unpaid, cardOnFile: { status: "saved" } } as AppointmentDetail["payment"],
+        keptDeposit: null,
+      } as Partial<AppointmentDetail>),
+    );
+    expect(await screen.findByText("Nothing paid")).toBeTruthy();
   });
 });

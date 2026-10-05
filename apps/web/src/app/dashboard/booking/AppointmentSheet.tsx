@@ -604,7 +604,7 @@ function DetailView({
               payment. NOT behind the checkout flag: every deposit-mode shop
               takes money at booking. The server decides when there is
               anything to give back (`keptDeposit`); the panel only shows it. */}
-          {detail?.source === "appointment" && detail.keptDeposit && (
+          {!loadError && detail?.source === "appointment" && detail.keptDeposit && (
             <DepositRefund
               appointmentId={detail.id}
               status={detail.status}
@@ -1297,6 +1297,10 @@ function PaymentCard({
   // booking with a $10 deposit kept as "Part paid · $30.00 · still to
   // collect". Closed, the headline is what was paid and not given back.
   const closed = !external && (detail.status === "canceled" || detail.status === "no_show");
+  // A no-show or late-cancel fee taken from the card on file is its own
+  // payment, deliberately outside the service's money - so a closed booking
+  // with only that fee must not read "Nothing paid".
+  const fee = p.cardOnFile?.status ?? null;
 
   const eyebrow = external
     ? `Managed in ${detail.originLabel}`
@@ -1319,7 +1323,11 @@ function PaymentCard({
       : closed
         ? p.collectedCents > 0
           ? money(p.collectedCents)
-          : "Nothing paid"
+          : fee === "charged"
+            ? "Fee charged"
+            : fee === "charging"
+              ? "Fee being confirmed"
+              : "Nothing paid"
         : settled
           ? "Paid in full"
           : p.remainingCents === null
@@ -1414,6 +1422,16 @@ function PaymentCard({
               }
               value={`${p.card.brand} ···· ${p.card.last4}`}
               tone={p.cardOnFile?.status === "failed" ? "bad" : undefined}
+            />
+          )}
+          {/* The fee's outcome is a money fact even when no brand/last-four
+              was recorded (a wallet or a failed card lookup), so it still
+              says what happened - without inventing a card. */}
+          {!p.card && (fee === "charged" || fee === "failed") && (
+            <Line
+              label={fee === "charged" ? "Fee charged" : "Fee declined - collect at the next visit"}
+              value="Card on file"
+              tone={fee === "failed" ? "bad" : undefined}
             />
           )}
         </dl>

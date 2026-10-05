@@ -39,8 +39,9 @@ const fake = vi.hoisted(() => {
     refunds: [] as Array<{ params: Record<string, unknown>; options: { idempotencyKey?: string } }>,
     chargeReads: 0,
   };
+  const paramsByKey = new Map<string, string>();
   let n = 0;
-  let next: "ok" | "refuse" | "timeout" = "ok";
+  let next: "ok" | "refuse" | "timeout" | "conflict" = "ok";
   let readFails = false;
   return {
     charges,
@@ -56,6 +57,7 @@ const fake = vi.hoisted(() => {
       calls.refunds.length = 0;
       calls.chargeReads = 0;
       refundsByKey.clear();
+      paramsByKey.clear();
       next = "ok";
       readFails = false;
     },
@@ -93,6 +95,13 @@ const fake = vi.hoisted(() => {
           async (params: Record<string, unknown>, options: { idempotencyKey?: string } = {}) => {
             calls.refunds.push({ params, options });
             if (options.idempotencyKey && refundsByKey.has(options.idempotencyKey)) {
+              // Stripe's rule: the same key with DIFFERENT parameters is not a
+              // replay, it is refused - e.g. a second manager's actor id.
+              if (paramsByKey.get(options.idempotencyKey) !== JSON.stringify(params)) {
+                throw Object.assign(new Error("Keys for idempotent requests can only be used with the same parameters"), {
+                  type: "StripeIdempotencyError",
+                });
+              }
               return refundsByKey.get(options.idempotencyKey);
             }
             // One-shot: the scripted failure applies to THIS call only.
@@ -133,9 +142,20 @@ const fake = vi.hoisted(() => {
               metadata: (params.metadata ?? {}) as Record<string, string>,
               transfer_reversal: params.reverse_transfer === true ? `trr_${n}` : null,
             };
-            if (options.idempotencyKey) refundsByKey.set(options.idempotencyKey, refund);
+            if (options.idempotencyKey) {
+              refundsByKey.set(options.idempotencyKey, refund);
+              paramsByKey.set(options.idempotencyKey, JSON.stringify(params));
+            }
             // Stripe DID refund, and the reply was lost on the way back.
             if (mode === "timeout") throw new Error("socket hang up");
+            // ANOTHER request with this key was still in flight: Stripe made
+            // that one's refund and refused this one.
+            if (mode === "conflict") {
+              throw Object.assign(new Error("There is currently another in-progress request using this key"), {
+                type: "StripeIdempotencyError",
+                code: "idempotency_key_in_use",
+              });
+            }
             return refund;
           },
         ),
@@ -162,7 +182,10 @@ let otherCookie: string;
 let otherShopId: string;
 let staffId: string;
 let serviceId: string;
+let managerCookie: string;
+let managerUserId: string;
 const email = `deprefund-${randomToken(6)}@test.local`.toLowerCase();
+const managerEmail = `deprefund-mgr-${randomToken(6)}@test.local`.toLowerCase();
 const otherEmail = `deprefund2-${randomToken(6)}@test.local`.toLowerCase();
 const password = "supersecret123";
 const ACCT = `acct_test_${randomToken(6)}`;
@@ -319,13 +342,24 @@ beforeAll(async () => {
     .set("Cookie", cookie)
     .send({ name: "Haircut", durationMin: 30, price: 40, staffIds: [staffId] });
   serviceId = service.body.id;
+
+  // A second person who may refund: a MANAGER seat on the same shop.
+  const mgr = await request(app)
+    .post("/api/auth/signup")
+    .send({ email: managerEmail, password, name: "Manager", smsAttested: true });
+  expect(mgr.status).toBe(201);
+  managerCookie = (mgr.headers["set-cookie"] as unknown as string[])[0]!;
+  managerUserId = (await prisma.user.findUnique({ where: { email: managerEmail }, select: { id: true } }))!.id;
+  await prisma.shopMember.create({ data: { shopId, userId: managerUserId, role: "MANAGER" } });
 });
 
 beforeEach(() => fake.reset());
 
 afterAll(async () => {
   const ids = [shopId, otherShopId].filter(Boolean);
+  await prisma.shopMember.deleteMany({ where: { userId: managerUserId } }).catch(() => undefined);
   if (ids.length > 0) await prisma.shop.deleteMany({ where: { id: { in: ids } } });
+  await prisma.user.deleteMany({ where: { email: managerEmail } }).catch(() => undefined);
 });
 
 describe("what a closed booking kept, offered back", () => {
@@ -507,6 +541,59 @@ describe("every answer says what happened to the money", () => {
     expect(await paymentRow(paymentId)).toMatchObject({ status: "refunded", refundedAmount: 1000 });
   });
 
+  it("🔴 another press holding the same refund is NOT 'Stripe refused': the refund that went through is reported", async () => {
+    const { apptId, paymentId, chargeId } = await seedKept({ cents: 1000 });
+    // Stripe makes the other request's refund and refuses this one.
+    fake.setNext("conflict");
+    const res = await refundDeposit(apptId, { amountCents: 1000 }, managerCookie);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, result: "refunded", amountCents: 1000 });
+    expect(fake.charges.get(chargeId)!.amount_refunded).toBe(1000);
+    expect(await paymentRow(paymentId)).toMatchObject({ status: "refunded", refundedAmount: 1000 });
+    const rows = await ledger(paymentId);
+    expect(rows.map((r) => r.outcome)).toEqual(["succeeded"]);
+    expect(rows[0]!.actorUserId).toBe(managerUserId);
+  });
+
+  it("a second manager's press after a lost answer is told the money went back, by whom it was made", async () => {
+    const { apptId, paymentId } = await seedKept({ cents: 1000 });
+    fake.setNext("timeout");
+    expect((await refundDeposit(apptId, { amountCents: 1000 })).status).toBe(202);
+    const res = await refundDeposit(apptId, { amountCents: 1000 }, managerCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.result).toBe("refunded");
+    const rows = await ledger(paymentId);
+    expect(rows.map((r) => r.outcome)).toEqual(["ambiguous", "succeeded"]);
+    // The refund is the OWNER's - the press that made it - not the manager's.
+    expect(rows[1]!.actorUserId).toBe(userId);
+  });
+
+  it("🔴 a lost answer, then the webhook lands its total, then a press: the ledger still names the refund", async () => {
+    const { apptId, paymentId } = await seedKept({ cents: 1000 });
+    fake.setNext("timeout");
+    expect((await refundDeposit(apptId, { amountCents: 1000 })).status).toBe(202);
+    // charge.refunded arrives first and lands the total; it writes no ledger row.
+    await prisma.payment.update({ where: { id: paymentId }, data: { refundedAmount: 1000, status: "refunded" } });
+    const res = await refundDeposit(apptId, { amountCents: 1000 });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, result: "refunded", amountCents: 1000 });
+    expect(fake.calls.refunds).toHaveLength(1);
+    const rows = await ledger(paymentId);
+    expect(rows.map((r) => r.outcome)).toEqual(["ambiguous", "succeeded"]);
+    expect(rows[1]!.stripeRefundId).toMatch(/^re_dep_/);
+    // Settled once: the next press is simply "nothing left".
+    const again = await refundDeposit(apptId, { amountCents: 1000 });
+    expect(again.status).toBe(409);
+    expect(again.body).toEqual({ error: "nothing_to_refund" });
+  });
+
+  it("a large prepayment can be given back - the cap is a booking charge's own", async () => {
+    const { apptId, paymentId } = await seedKept({ cents: 1_500_000 });
+    const res = await refundDeposit(apptId, { amountCents: 1_500_000 });
+    expect(res.status).toBe(200);
+    expect(await paymentRow(paymentId)).toMatchObject({ refundedAmount: 1_500_000 });
+  });
+
   it("Stripe refuses: nothing refunded, a failed ledger row, the money still offered", async () => {
     const { apptId, paymentId } = await seedKept({ cents: 1000 });
     fake.setNext("refuse");
@@ -586,13 +673,15 @@ describe("whose money this button may touch", () => {
 });
 
 describe("two presses at once", () => {
-  it("🔴 a double press from two devices: ONE refund at Stripe, ONE ledger row, both told the truth", async () => {
+  it("🔴 the owner and a manager press at once: ONE refund at Stripe, ONE ledger row, both told the truth", async () => {
     const { apptId, paymentId, chargeId } = await seedKept({ cents: 1000 });
     // Both presses read "nothing refunded yet" and queue at their write to the
-    // payment row; only then is the row let go.
+    // payment row; only then is the row let go. Two different people, so the
+    // second request to reach Stripe carries a different actor under the same
+    // key - which Stripe refuses rather than replays.
     const { results, settledEarly } = await raceBehindRowLock("Payment", paymentId, [
       () => refundDeposit(apptId, { amountCents: 1000 }),
-      () => refundDeposit(apptId, { amountCents: 1000 }),
+      () => refundDeposit(apptId, { amountCents: 1000 }, managerCookie),
     ]);
     expect(settledEarly).toBe(0);
     const answers = winners(results);

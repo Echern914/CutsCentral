@@ -1528,7 +1528,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "refund-a-client",
     q: "How do I refund a client?",
-    a: "If they paid by card through ChairBack, open the appointment on your calendar. A deposit you kept when they cancelled or didn't show, and a card payment taken at checkout, are refunded from there, back to the card they used. Don't refund from your own Stripe account: that takes the money back from you, and the client gets nothing. For anything else paid online, contact ChairBack support.\n\nIf they paid you cash, or direct by Zelle, Venmo or Cash App, the money never touched us: hand it back and adjust what you recorded so your numbers match reality.",
+    a: "If they paid by card through ChairBack, open the appointment on your calendar. A deposit you kept when they cancelled or didn't show, and a card payment taken at checkout, are refunded from there, back to the card or account they paid with. Don't refund from your own Stripe account: that takes the money back from you, and the client gets nothing. For anything else paid online, contact ChairBack support.\n\nIf they paid you cash, or direct by Zelle, Venmo or Cash App, the money never touched us: hand it back and adjust what you recorded so your numbers match reality.",
     keywords: [
       "refund", "refund a client", "refunded", "pay them back", "reverse a charge",
       "return payment", "cancel a payment", "refund a customer", "money back",

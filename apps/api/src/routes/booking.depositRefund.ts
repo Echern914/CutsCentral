@@ -1,10 +1,15 @@
 import type { Router } from "express";
 import { z } from "zod";
+import { MAX_CHARGE_CENTS } from "../billing/payments.js";
 
 const depositRefundSchema = z
   .object({
-    /** The figure the manager confirmed. Must equal what the booking still holds. */
-    amountCents: z.number().int().positive().max(1_000_000),
+    /**
+     * The figure the manager confirmed. Must equal what the booking still
+     * holds. Capped at what a booking charge itself may be, so any deposit
+     * ChairBack could take can be given back.
+     */
+    amountCents: z.number().int().positive().max(MAX_CHARGE_CENTS),
     /** The shop's own reason, for its records. Never sent to the client. */
     note: z.string().trim().max(200).optional(),
   })

@@ -21,7 +21,8 @@ import { refundDepositAction } from "./actions";
  * 🔴 THE OUTCOME GOES TO THE SHEET'S FOOTER, NOT A TOAST. A toast draws beneath
  * the dialog, so on a phone it is invisible. And once the money is back the
  * server stops offering it, this panel disappears on the re-read, and a message
- * kept here would vanish with it. Refusals stay here, next to the button.
+ * kept here would vanish with it. "Already refunded" is an outcome too, and
+ * goes the same way. Refusals stay here, next to the button.
  */
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
@@ -43,13 +44,22 @@ export function explainDepositRefund(error: string | undefined, reason: string |
       return "Stripe's record of this payment doesn't match ChairBack's. Contact ChairBack support to finish this refund - refunding from your own Stripe account won't reach the client.";
     case "refund_refused":
       return "Stripe refused the refund. Nothing was refunded.";
+    // The server read Stripe, could not, and asked it for nothing.
     case "stripe_unavailable":
-    case "network_error":
       return "Couldn't reach Stripe. Nothing was refunded - try again.";
-    case "unconfirmed":
-      return "We couldn't confirm the refund yet. Pressing Refund again is safe - it can't refund twice.";
-    default:
+    // Refused before anything was asked of Stripe.
+    case "invalid_input":
+    case "not_found":
+    case "forbidden_role":
+    case "unauthorized":
+    case "subscription_required":
       return "That didn't work. Nothing was refunded.";
+    // 🔴 ANYTHING ELSE IS UNKNOWN, NOT "NOTHING HAPPENED": no answer reached
+    // this phone (lost signal, a timeout, a 5xx on the way back), and the
+    // refund may have been made before it was lost. Pressing again is safe -
+    // the same press names the same refund.
+    default:
+      return "We couldn't confirm the refund yet. Pressing Refund again is safe - it can't refund twice.";
   }
 }
 
@@ -75,38 +85,62 @@ export function DepositRefund({
   // A plain flag, not useTransition: the refund is one awaited call, and the
   // button must stay disabled for exactly as long as it is in flight.
   const [pending, setPending] = useState(false);
+  // Money is back. The panel stops offering it at once, rather than waiting on
+  // a re-read that may itself fail and leave a live button under a footer
+  // that says it was done.
+  const [done, setDone] = useState(false);
 
   const figure = money(kept.amountCents);
+
+  function finish(message: string) {
+    setConfirming(false);
+    setNote("");
+    setDone(true);
+    onRefunded(message);
+  }
 
   async function submit() {
     if (pending) return;
     setMessage(null);
     setPending(true);
     try {
-      const res = await refundDepositAction(appointmentId, {
-        amountCents: kept.amountCents,
-        ...(note.trim() ? { note: note.trim() } : {}),
-      });
+      let res: Awaited<ReturnType<typeof refundDepositAction>>;
+      try {
+        res = await refundDepositAction(appointmentId, {
+          amountCents: kept.amountCents,
+          ...(note.trim() ? { note: note.trim() } : {}),
+        });
+      } catch {
+        // No answer reached the phone at all (signal lost, app backgrounded).
+        // The refund may have landed; pressing again cannot make a second.
+        setMessage(explainDepositRefund("unconfirmed", undefined));
+        return;
+      }
       if (res.ok) {
-        setConfirming(false);
-        setNote("");
-        onRefunded(
+        finish(
           res.result === "already_refunded"
             ? "This deposit had already been refunded."
             : res.status === "pending"
               ? `Refund of ${money(res.amountCents ?? kept.amountCents)} sent. Stripe is still processing it.`
-              : `Refunded ${money(res.amountCents ?? kept.amountCents)} to their card.`,
+              : `Refunded ${money(res.amountCents ?? kept.amountCents)} to the client.`,
         );
         return;
       }
+      // Nothing left on the booking: that is an outcome, not a refusal, and it
+      // goes where the success would have - the footer outlives this panel.
+      if (res.error === "nothing_to_refund") {
+        finish("This deposit had already been refunded.");
+        return;
+      }
       setMessage(explainDepositRefund(res.error, res.reason));
-      // A figure that moved, or money already back, is re-read so the screen
-      // stops offering what the server refuses.
-      if (res.error === "amount_changed" || res.error === "nothing_to_refund") onStale();
+      // A figure that moved is re-read so the button shows the true one.
+      if (res.error === "amount_changed") onStale();
     } finally {
       setPending(false);
     }
   }
+
+  if (done) return null;
 
   return (
     <section
@@ -139,10 +173,10 @@ export function DepositRefund({
 
       {confirming && (
         <div className="mt-2.5 flex flex-col gap-2 rounded-xl border border-danger-soft/30 bg-danger-soft/5 p-3 text-xs">
-          <p className="text-sm text-offwhite">Refund {figure} to the card they paid with?</p>
+          <p className="text-sm text-offwhite">Refund {figure} to the client?</p>
           <p className="text-muted">
-            It goes back to their card. This can&apos;t be undone, and ChairBack doesn&apos;t
-            message them about it.
+            It goes back to the card or account they paid with. This can&apos;t be undone,
+            and ChairBack doesn&apos;t message them about it.
           </p>
           <input
             data-qa="deposit-refund-note"
