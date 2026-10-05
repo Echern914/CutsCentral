@@ -76,6 +76,23 @@ beforeAll(async () => {
     })
   ).id;
 
+  // A booking deposit on that appointment, so the deposit-refund route has
+  // something real to refuse: the owner's own press answers 409 (the booking
+  // is live), which is what makes another shop's 404 mean something.
+  await prisma.payment.create({
+    data: {
+      shopId,
+      appointmentId,
+      stripePaymentIntentId: `pi_authz_${randomToken(10)}`,
+      stripeConnectAccountId: `acct_authz_${randomToken(6)}`,
+      mode: "ahead",
+      purpose: "booking",
+      amount: 1000,
+      currency: "usd",
+      status: "succeeded",
+    },
+  });
+
   const barber = await signup("barber");
   barberCookie = barber.cookie;
   await prisma.shopMember.create({ data: { shopId, userId: barber.userId, role: "BARBER", staffId: staff.id } });
@@ -133,6 +150,12 @@ describe("financial routes: the wrong person", () => {
       .set("Cookie", barberCookie)
       .send({ amount: 99, method: "cash" });
     expect(checkout.status).toBe(403);
+    const depositRefund = await request(app)
+      .post(`/api/booking/appointments/${appointmentId}/deposit-refund`)
+      .set("Cookie", barberCookie)
+      .send({ amountCents: 1000 });
+    expect(depositRefund.status).toBe(403);
+    expect(depositRefund.body.error).toBe("forbidden_role");
     // Nothing moved.
     const row = await prisma.appointment.findUnique({ where: { id: appointmentId } });
     expect(Number(row?.priceAtBooking)).toBe(40);
@@ -144,6 +167,10 @@ describe("financial routes: the wrong person", () => {
       const res = await call(method, path, null, body);
       expect(res.status, `${method.toUpperCase()} ${path}`).toBe(401);
     }
+    const depositRefund = await request(app)
+      .post(`/api/booking/appointments/${appointmentId}/deposit-refund`)
+      .send({ amountCents: 1000 });
+    expect(depositRefund.status).toBe(401);
   });
 
   it("the operator portal does not exist for a shop owner who is not a platform admin", async () => {
@@ -179,6 +206,19 @@ describe("financial routes: the wrong person", () => {
       .set("Cookie", otherCookie)
       .send({ amount: 1, method: "cash" });
     expect(checkout.status).toBe(404);
+    // Control: the shop's own owner reaches the booking (and is refused for a
+    // different reason), so the 404 below is the tenant scoping, not a miss.
+    const own = await request(app)
+      .post(`/api/booking/appointments/${appointmentId}/deposit-refund`)
+      .set("Cookie", ownerCookie)
+      .send({ amountCents: 1000 });
+    expect(own.status).toBe(409);
+    expect(own.body).toEqual({ error: "not_refundable", reason: "booking_open" });
+    const depositRefund = await request(app)
+      .post(`/api/booking/appointments/${appointmentId}/deposit-refund`)
+      .set("Cookie", otherCookie)
+      .send({ amountCents: 1000 });
+    expect(depositRefund.status).toBe(404);
     expect(Number((await prisma.appointment.findUnique({ where: { id: appointmentId } }))?.priceAtBooking)).toBe(40);
   });
 });

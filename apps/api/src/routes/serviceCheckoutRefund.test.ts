@@ -113,7 +113,9 @@ const fake = vi.hoisted(() => {
             c.amount_refunded += amount;
             c.refunded = c.amount_refunded >= c.amount;
             const refund = {
-              id: `re_${++n}`,
+              // Unique across runs: the ledger holds one row per Stripe refund
+              // id, and an interrupted run leaves its rows behind.
+              id: `re_${++n}_${Math.random().toString(36).slice(2, 10)}`,
               object: "refund",
               amount,
               status: "succeeded",

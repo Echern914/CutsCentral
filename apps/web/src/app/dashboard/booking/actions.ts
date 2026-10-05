@@ -962,6 +962,34 @@ export async function refundCheckoutPaymentAction(
 }
 
 /**
+ * Give back what a cancelled or no-show booking kept from its booking payment.
+ *
+ * On the booking router, not /api/checkout: a deposit is taken at booking by
+ * every deposit-mode shop, and the checkout router answers only the shops its
+ * canary allows. Same answers and same mapping as the checkout refund above,
+ * plus `needs_support`. See the API's billing/depositRefund.ts.
+ */
+export async function refundDepositAction(
+  appointmentId: string,
+  input: { amountCents: number; note?: string },
+): Promise<RefundResult> {
+  const res = await apiSend<{
+    result?: RefundResult["result"];
+    amountCents?: number;
+    status?: RefundResult["status"];
+  }>("POST", `/api/booking/appointments/${encodeURIComponent(appointmentId)}/deposit-refund`, input);
+  if (!res.ok) {
+    return { ok: false, error: res.error ?? "failed", reason: res.reason, code: res.code };
+  }
+  const body = res.data ?? {};
+  if (body.result === "unconfirmed") {
+    return { ok: false, result: "unconfirmed", error: "unconfirmed" };
+  }
+  revalidatePath("/dashboard/booking");
+  return { ok: true, result: body.result, amountCents: body.amountCents, status: body.status };
+}
+
+/**
  * What the checkout screen may offer for this cut.
  *
  * 🔴 Read fresh every time the screen opens. The amount and the methods are the
@@ -1705,6 +1733,12 @@ export interface AppointmentDetail {
   /** The client's other bookings with this shop - 3 back, 3 forward. */
   history: { previous: DetailHistoryItem[]; upcoming: DetailHistoryItem[] };
   payment: DetailPayment;
+  /**
+   * What a cancelled or no-show booking still holds from its booking payment -
+   * the figure the Refund deposit button offers back. Null (or absent, from an
+   * API that predates it) when there is nothing to give back.
+   */
+  keptDeposit?: { amountCents: number; nonRefundable: boolean } | null;
   /**
    * When the barber closed the chair moment. Null = never checked out, which
    * is the ONLY state in which "Start checkout" is a real action - the endpoint

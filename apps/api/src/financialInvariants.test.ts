@@ -60,6 +60,10 @@ const MONEY_MODULES = [
   "billing/connect.ts",
   "routes/webhooks.stripe.ts",
   "routes/webhooks.connect.ts",
+  "billing/serviceRefund.ts",
+  "billing/depositRefund.ts",
+  "billing/refundLedger.ts",
+  "routes/booking.depositRefund.ts",
 ];
 
 describe("financial invariants (source guards)", () => {

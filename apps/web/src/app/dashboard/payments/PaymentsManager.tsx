@@ -668,7 +668,8 @@ export function PaymentsManager({
           <p className="mt-3 text-xs text-muted">
             Applies to bookings made after you save. Bookings already made keep the
             terms they were booked on. Your booking page tells clients before they
-            pay. Saved with the button below.
+            pay. You can still give a kept deposit back from that appointment on
+            your calendar. Saved with the button below.
           </p>
         </Card>
       )}

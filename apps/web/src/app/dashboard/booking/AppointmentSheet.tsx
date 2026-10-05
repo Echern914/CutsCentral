@@ -21,6 +21,7 @@ import {
 } from "./AppointmentEditForm";
 import { CheckoutFlow } from "./CheckoutFlow";
 import { CheckoutRefund } from "./CheckoutRefund";
+import { DepositRefund } from "./DepositRefund";
 import {
   cancelAppointmentAction,
   checkoutAppointmentAction,
@@ -485,6 +486,11 @@ export function AppointmentSheet({
             onChanged();
             load();
           }}
+          onDepositRefunded={(message) => {
+            setSavedNotice({ message, tone: "success" });
+            onChanged();
+            load();
+          }}
         />
       )}
     </Dialog>
@@ -514,6 +520,7 @@ function DetailView({
   onPriceSaved,
   showRefunds,
   onRefunded,
+  onDepositRefunded,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail | null;
@@ -542,6 +549,8 @@ function DetailView({
   showRefunds: boolean;
   /** Money went back to a customer: re-read the booking and the agenda. */
   onRefunded: () => void;
+  /** A kept deposit went back: say so in the footer, then re-read. */
+  onDepositRefunded: (message: string) => void;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -591,6 +600,19 @@ function DetailView({
             canCheckout={canCheckout}
             onCheckout={onCheckout}
           />
+          {/* What a cancelled or no-show booking kept from its booking
+              payment. NOT behind the checkout flag: every deposit-mode shop
+              takes money at booking. The server decides when there is
+              anything to give back (`keptDeposit`); the panel only shows it. */}
+          {!loadError && detail?.source === "appointment" && detail.keptDeposit && (
+            <DepositRefund
+              appointmentId={detail.id}
+              status={detail.status}
+              kept={detail.keptDeposit}
+              onRefunded={onDepositRefunded}
+              onStale={onRetry}
+            />
+          )}
           {/* Only where the new checkout is live, and only for a ChairBack
               booking - another platform's payments are refunded there. Renders
               nothing unless a card payment from this checkout exists. */}
@@ -1270,26 +1292,47 @@ function PaymentCard({
   const p = detail.payment;
   const external = p.state === "external";
   const settled = p.state === "paid";
+  // 🔴 A CANCELLED OR NO-SHOW BOOKING HAS NOTHING LEFT TO COLLECT. The summary
+  // does not know the booking's status, so on its own it read a cancelled $40
+  // booking with a $10 deposit kept as "Part paid · $30.00 · still to
+  // collect". Closed, the headline is what was paid and not given back.
+  const closed = !external && (detail.status === "canceled" || detail.status === "no_show");
+  // A no-show or late-cancel fee taken from the card on file is its own
+  // payment, deliberately outside the service's money - so a closed booking
+  // with only that fee must not read "Nothing paid".
+  const fee = p.cardOnFile?.status ?? null;
 
   const eyebrow = external
     ? `Managed in ${detail.originLabel}`
-    : p.state === "paid"
-      ? "Settled"
-      : p.state === "refunded"
-        ? "Refunded"
-        : p.state === "deposit"
-          ? "Part paid"
-          : "Ready for checkout";
+    : p.state === "refunded"
+      ? "Refunded"
+      : closed
+        ? detail.status === "no_show"
+          ? "No-show"
+          : "Cancelled"
+        : p.state === "paid"
+          ? "Settled"
+          : p.state === "deposit"
+            ? "Part paid"
+            : "Ready for checkout";
 
   const headline = external
     ? "Managed externally"
-    : settled
-      ? "Paid in full"
-      : p.state === "refunded"
-        ? money(p.refundedCents)
-        : p.remainingCents === null
-          ? "No price set"
-          : money(p.remainingCents);
+    : p.state === "refunded"
+      ? money(p.refundedCents)
+      : closed
+        ? p.collectedCents > 0
+          ? money(p.collectedCents)
+          : fee === "charged"
+            ? "Fee charged"
+            : fee === "charging"
+              ? "Fee being confirmed"
+              : "Nothing paid"
+        : settled
+          ? "Paid in full"
+          : p.remainingCents === null
+            ? "No price set"
+            : money(p.remainingCents);
 
   // A currency headline can carry the display face at full size; a SENTENCE
   // ("Managed externally") at 30px swallows the card, so it steps down.
@@ -1316,8 +1359,11 @@ function PaymentCard({
         >
           {headline}
         </p>
-        {!external && !settled && p.remainingCents !== null && p.remainingCents > 0 && (
+        {!external && !closed && !settled && p.remainingCents !== null && p.remainingCents > 0 && (
           <p className="mt-0.5 text-[11px] text-muted">still to collect</p>
+        )}
+        {closed && p.state !== "refunded" && p.collectedCents > 0 && (
+          <p className="mt-0.5 text-[11px] text-muted">paid and not refunded</p>
         )}
       </div>
 
@@ -1376,6 +1422,16 @@ function PaymentCard({
               }
               value={`${p.card.brand} ···· ${p.card.last4}`}
               tone={p.cardOnFile?.status === "failed" ? "bad" : undefined}
+            />
+          )}
+          {/* The fee's outcome is a money fact even when no brand/last-four
+              was recorded (a wallet or a failed card lookup), so it still
+              says what happened - without inventing a card. */}
+          {!p.card && (fee === "charged" || fee === "failed") && (
+            <Line
+              label={fee === "charged" ? "Fee charged" : "Fee declined - collect at the next visit"}
+              value="Card on file"
+              tone={fee === "failed" ? "bad" : undefined}
             />
           )}
         </dl>
@@ -2228,11 +2284,27 @@ function DetailFooter({
   // another system owns is changed there, and this card mirrors it.
   return (
     <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-      <p className="text-[11px] leading-relaxed text-muted">
-        {detail.readOnlyReason === "external"
-          ? `Booked in ${detail.originLabel}. Change or cancel it there — this sheet mirrors it so the time stays blocked here.`
-          : "This booking is closed, so it can no longer be edited."}
-      </p>
+      <div className="flex min-w-0 flex-col gap-1">
+        {/* A closed booking still has one money action - Refund deposit - and
+            its outcome lands here, where it outlives the panel it came from. */}
+        {notice && (
+          <p
+            role="status"
+            data-qa="sheet-notice"
+            className={cn(
+              "text-sm",
+              notice.tone === "success" ? "text-emerald-soft" : "text-amber-300",
+            )}
+          >
+            {notice.message}
+          </p>
+        )}
+        <p className="text-[11px] leading-relaxed text-muted">
+          {detail.readOnlyReason === "external"
+            ? `Booked in ${detail.originLabel}. Change or cancel it there — this sheet mirrors it so the time stays blocked here.`
+            : "This booking is closed, so it can no longer be edited."}
+        </p>
+      </div>
       {detail.externalManageUrl && (
         <a
           href={detail.externalManageUrl}

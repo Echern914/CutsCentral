@@ -1309,7 +1309,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "my-policy",
     q: "What is my cancellation policy set to?",
-    a: "Dashboard → Payments holds all of it: how customers pay, the free-cancel cutoff in hours, and the fee charged inside that cutoff.\n\nA cutoff of 0 means every cancellation is a full refund. A fee of 100% means no refund inside the cutoff.\n\nIf you take deposits, Deposit refunds lets you make them non-refundable: a client who cancels doesn't get the deposit back, whatever the cutoff. Bookings keep the terms they were made on, and if you cancel, the deposit is always refunded in full.\n\nOne catch worth knowing: a cancellation fee can only actually be charged if you take payment through ChairBack. If you're set to pay-in-person, the fee sits there as a number and nothing collects it.\n\nYour own rules in your own words — lateness, what to bring — plus a checklist customers tick before booking are a separate card: Booking → Settings → Your policies.",
+    a: "Dashboard → Payments holds all of it: how customers pay, the free-cancel cutoff in hours, and the fee charged inside that cutoff.\n\nA cutoff of 0 means every cancellation is a full refund. A fee of 100% means no refund inside the cutoff.\n\nIf you take deposits, Deposit refunds lets you make them non-refundable: a client who cancels doesn't get the deposit back, whatever the cutoff, unless you choose to refund it from that appointment. Bookings keep the terms they were made on, and if you cancel, the deposit is always refunded in full.\n\nOne catch worth knowing: a cancellation fee can only actually be charged if you take payment through ChairBack. If you're set to pay-in-person, the fee sits there as a number and nothing collects it.\n\nYour own rules in your own words — lateness, what to bring — plus a checklist customers tick before booking are a separate card: Booking → Settings → Your policies.",
     keywords: [
       "cancellation policy", "my policy", "cancel policy", "refund policy", "cutoff",
       "cancellation fee", "late cancel", "what is my policy", "policy set",
@@ -1528,13 +1528,13 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "refund-a-client",
     q: "How do I refund a client?",
-    a: "If they paid by card through ChairBack, refund it from that appointment's payment — it goes back to the card they used.\n\nIf they paid you cash, or direct by Zelle, Venmo or Cash App, the money never touched us: hand it back and adjust what you recorded so your numbers match reality.",
+    a: "If they paid by card through ChairBack, open the appointment on your calendar. A deposit you kept when they cancelled or didn't show, and a card payment taken at checkout, are refunded from there, back to the card or account they paid with. Don't refund from your own Stripe account: that takes the money back from you, and the client gets nothing. For anything else paid online, contact ChairBack support.\n\nIf they paid you cash, or direct by Zelle, Venmo or Cash App, the money never touched us: hand it back and adjust what you recorded so your numbers match reality.",
     keywords: [
       "refund", "refund a client", "refunded", "pay them back", "reverse a charge",
       "return payment", "cancel a payment", "refund a customer", "money back",
     ],
     category: "money",
-    action: { label: "Open payments", featureId: "pay-ahead" },
+    action: { label: "Open calendar", featureId: "appointments" },
   },
   {
     id: "payout-timing",
