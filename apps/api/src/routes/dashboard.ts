@@ -17,6 +17,7 @@ import {
   type LoyaltyTierKey,
 } from "@chairback/config";
 import { loadClientTierStats } from "../engines/tierStats.js";
+import { TAKINGS_PAYMENT_PURPOSES } from "../engines/appointmentPayment.js";
 import { clientTierView, setClientTierFloor } from "../services/clientTier.js";
 import {
   STAFF_YES_METHODS,
@@ -292,8 +293,14 @@ dashboardRouter.get("/trends", async (req, res) => {
       // Successful card payments per month. createdAt is the only reliably-written
       // Payment timestamp (capturedAt/authorizedAt are hold-mode-only, never set).
       // Empty for shops not on ChairBack payments (opt-in Stripe Connect feature).
+      // The shop's takings only: a tip stays out of every revenue figure.
       const payments = await tx.payment.findMany({
-        where: { shopId: shop.id, status: "succeeded", createdAt: { gte: earliest } },
+        where: {
+          shopId: shop.id,
+          status: "succeeded",
+          purpose: { in: [...TAKINGS_PAYMENT_PURPOSES] },
+          createdAt: { gte: earliest },
+        },
         select: { createdAt: true },
       });
       // Rebookings recovered per month: nudges that led to a booking, by the

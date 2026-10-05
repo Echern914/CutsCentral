@@ -1,5 +1,5 @@
 import { serviceChargeAuthorized, serviceChargeWindowClosed } from "@chairback/config";
-import { stripeCollectedCents } from "./appointmentPayment.js";
+import { isServicePayment, stripeCollectedCents } from "./appointmentPayment.js";
 
 /**
  * WHAT THE CUSTOMER STILL OWES FOR THE SERVICE, AND WHAT MAY BE DONE ABOUT IT.
@@ -133,14 +133,17 @@ function dollarsToCents(dollars: number | null): number {
 
 /**
  * Cents already collected toward the SERVICE. A deposit counts. A balance
- * collected at a previous checkout counts. Cash counts. A no-show fee does not.
+ * collected at a previous checkout counts. Cash counts. A no-show fee does not,
+ * and neither does a tip: counted, an $8 tip on a $40 cut would leave $32 to
+ * collect and the shop $8 short. An allow-list (isServicePayment), so the next
+ * new purpose is not service money by default either.
  */
 export function serviceCollectedCents(
   payments: CheckoutPaymentFacts[],
   chairPaid: number | null,
 ): number {
   const stripe = payments
-    .filter((p) => p.purpose !== "fee")
+    .filter(isServicePayment)
     .reduce((sum, p) => sum + stripeCollectedCents(p), 0);
   return stripe + Math.max(0, dollarsToCents(chairPaid));
 }

@@ -107,6 +107,28 @@ purchases (the app sells nothing; App Review notes say so).
   customer agreed to - so a raised ticket cannot raise a fee they consented to
   at the old one (`agreedPriceCents`). Revenue counts the chair figure once
   checked out, else the ticket (`insightsWindow.readChairEvents`).
+- **What a payment row counts toward is an allow-list of purposes**
+  (2026-10-05, before tips). `SERVICE_PAYMENT_PURPOSES` (`booking`,
+  `service_checkout`) is money toward the visit: the balance, the appointment
+  sheet, card retention. `TAKINGS_PAYMENT_PURPOSES` (those plus `fee`) is
+  revenue, the agenda's collected figure, the price-edit floor and the payments
+  trend. A `tip` is in neither: it never lowers what is owed, never counts as
+  revenue, and never becomes the floor a price must stay above. Pinned by
+  `routes/tipRowsAreNotServiceMoney.test.ts`. (`engines/appointmentPayment.ts`)
+- **A tip row is constrained in SQL**: purpose `tip` only with mode `ahead`,
+  its taken-back fee in [0, amount), and at most ONE live tip per appointment
+  (partial unique index ignoring `failed`/`canceled`, so a refunded tip still
+  counts - one tip per visit). (migration `20261046000000_payment_purpose_tip`)
+- **Only money taken at booking can promote a hold.** The webhook enters hold
+  promotion only for an intent with no `purpose` or `booking`; a checkout or a
+  tip intent never does. (`billing/payments.ts` `promoteHoldForPaidIntent`)
+- **Every `payment_intent.*` event must be a platform event.** ChairBack
+  creates every intent in platform context, so one carrying `event.account`
+  (created on a connected account, whose metadata that account controls) is
+  refused - the same rule `setup_intent.succeeded` already had.
+- **A dead payment stays dead.** A late non-succeeded snapshot can no longer
+  rewrite a `canceled` or `failed` row; a succeeded one still can, because if
+  money moved the row must say so. (`payments.ts` `NON_SUCCESS_MAY_NOT_OVERWRITE`)
 
 ## Addendum - PR #402 (2026-09-04)
 

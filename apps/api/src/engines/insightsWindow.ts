@@ -1,5 +1,6 @@
 import { runWithShop, type Prisma } from "@chairback/db";
 import { zonedWallTimeToUtc } from "@chairback/config";
+import { TAKINGS_PAYMENT_PURPOSES } from "./appointmentPayment.js";
 
 /**
  * ONE definition of "the window" and "a cut", shared by every card on Insights.
@@ -598,12 +599,19 @@ export async function readChairEvents(
         // every cash / pay-direct shop, which is why `earned` falls back to
         // the ticket rather than to zero.
         //
-        // Every purpose is summed on purpose. A booking deposit, a balance
-        // collected at checkout and a no-show fee are all money this shop
-        // actually took, and each one already accounts for its own refunds and
-        // partial captures. Filtering to one purpose here would have made a
+        // Every TAKINGS purpose is summed on purpose. A booking deposit, a
+        // balance collected at checkout and a no-show fee are all money this
+        // shop actually took, and each one already accounts for its own refunds
+        // and partial captures. Filtering to one purpose here would have made a
         // deposit-then-checkout cut report only the deposit.
+        //
+        // 🔴 NOT A TIP (Eric, 2026-10-05: tips stay out of revenue). Filtered
+        // HERE, in the query, not in the sum: `hasStripeMoney` below trusts
+        // Stripe over the ticket whenever any row exists, so a cash cut that
+        // was never checked out would have earned its $8 tip instead of its
+        // $40 ticket.
         payments: {
+          where: { purpose: { in: [...TAKINGS_PAYMENT_PURPOSES] } },
           select: {
             status: true,
             amount: true,

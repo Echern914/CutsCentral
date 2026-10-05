@@ -55,7 +55,7 @@ import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
 import { registerUnfinishedBookings } from "./booking.unfinished.js";
 import { registerDepositRefund } from "./booking.depositRefund.js";
-import { stripeCollectedCents } from "../engines/appointmentPayment.js";
+import { stripeCollectedCents, TAKINGS_PAYMENT_PURPOSES } from "../engines/appointmentPayment.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import {
   centsToDecimal,
@@ -2584,7 +2584,12 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         paidAmount: true,
         paidMethod: true,
         paidAt: true,
-        payments: { select: { status: true, amount: true, capturedAmount: true, refundedAmount: true } },
+        // The shop's takings rows only - never a tip, which would lower what
+        // the card says is still owed by the tip's own amount.
+        payments: {
+          where: { purpose: { in: [...TAKINGS_PAYMENT_PURPOSES] } },
+          select: { status: true, amount: true, capturedAmount: true, refundedAmount: true },
+        },
       },
     })) as unknown as ApptAgendaRow[];
     if (rows.length >= BOOKING_CAP) truncated = true;
@@ -6849,7 +6854,12 @@ bookingDashboardRouter.post("/appointments/:id/price", async (req, res) => {
       paidAmount: true,
       priceAtBooking: true,
       visit: { select: { acuityAppointmentId: true } },
-      payments: { select: { status: true, amount: true, capturedAmount: true, refundedAmount: true } },
+      // Not a tip: a tip is on top of the price, so it can never be the floor
+      // a corrected price has to stay above.
+      payments: {
+        where: { purpose: { in: [...TAKINGS_PAYMENT_PURPOSES] } },
+        select: { status: true, amount: true, capturedAmount: true, refundedAmount: true },
+      },
     },
   });
   if (!appt) {
