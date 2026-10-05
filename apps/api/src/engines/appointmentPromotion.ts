@@ -201,8 +201,9 @@ export async function cancelAppointment(
   // applyPolicyFee: a CUSTOMER cancel honors the shop's cancellation policy (a
   // fee may be kept if inside the window). A BARBER cancel (default) refunds in
   // full - the customer shouldn't be penalized for the shop canceling. NO_SHOW
-  // never auto-refunds here (an already-captured ahead payment stays; the barber
-  // can refund by hand, and uncaptured-hold release is a Phase-3 concern).
+  // never auto-refunds here (an already-captured ahead payment stays; the shop
+  // can give it back with Refund deposit - billing/depositRefund.ts - and
+  // uncaptured-hold release is a Phase-3 concern).
   // suppressSlotOpened: skip the per-occurrence "a slot opened" barber+waitlist
   // notify. Used by cancelSeries so canceling a 26-week series doesn't fire 26
   // barber pushes; the series path sends ONE coalesced alert instead.

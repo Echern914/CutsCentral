@@ -305,7 +305,8 @@ async function loadCheckout(
 /**
  * THE CARD PAYMENTS A CHECKOUT TOOK ON THIS APPOINTMENT, and whether each can be
  * refunded from ChairBack. Deposits are not listed: they follow the cancellation
- * rules. Cash is not listed: there is no card to put it back on, and it is
+ * rules, and what a cancelled or no-show booking kept has its own button on the
+ * booking router (booking.depositRefund.ts). Cash is not listed: there is no card to put it back on, and it is
  * handed back in person. `refundBlocker` is null only when the button would
  * actually work.
  *

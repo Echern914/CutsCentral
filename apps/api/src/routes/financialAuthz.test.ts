@@ -133,6 +133,12 @@ describe("financial routes: the wrong person", () => {
       .set("Cookie", barberCookie)
       .send({ amount: 99, method: "cash" });
     expect(checkout.status).toBe(403);
+    const depositRefund = await request(app)
+      .post(`/api/booking/appointments/${appointmentId}/deposit-refund`)
+      .set("Cookie", barberCookie)
+      .send({ amountCents: 1000 });
+    expect(depositRefund.status).toBe(403);
+    expect(depositRefund.body.error).toBe("forbidden_role");
     // Nothing moved.
     const row = await prisma.appointment.findUnique({ where: { id: appointmentId } });
     expect(Number(row?.priceAtBooking)).toBe(40);
@@ -144,6 +150,10 @@ describe("financial routes: the wrong person", () => {
       const res = await call(method, path, null, body);
       expect(res.status, `${method.toUpperCase()} ${path}`).toBe(401);
     }
+    const depositRefund = await request(app)
+      .post(`/api/booking/appointments/${appointmentId}/deposit-refund`)
+      .send({ amountCents: 1000 });
+    expect(depositRefund.status).toBe(401);
   });
 
   it("the operator portal does not exist for a shop owner who is not a platform admin", async () => {
@@ -179,6 +189,11 @@ describe("financial routes: the wrong person", () => {
       .set("Cookie", otherCookie)
       .send({ amount: 1, method: "cash" });
     expect(checkout.status).toBe(404);
+    const depositRefund = await request(app)
+      .post(`/api/booking/appointments/${appointmentId}/deposit-refund`)
+      .set("Cookie", otherCookie)
+      .send({ amountCents: 1000 });
+    expect(depositRefund.status).toBe(404);
     expect(Number((await prisma.appointment.findUnique({ where: { id: appointmentId } }))?.priceAtBooking)).toBe(40);
   });
 });

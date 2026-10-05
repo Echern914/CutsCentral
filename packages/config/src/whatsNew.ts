@@ -36,6 +36,13 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-05-refund-kept-deposit",
+    date: "2026-10-05",
+    kind: "feature",
+    title: "Give back a deposit you kept",
+    body: "When a client cancels or doesn't show and you keep their deposit, you can still give it back. Open the appointment on your calendar and tap Refund under its payment. It goes back to the card they paid with. A cancelled booking no longer says money is still to collect.",
+  },
+  {
     id: "2026-10-04-nonrefundable-deposits",
     date: "2026-10-04",
     kind: "feature",

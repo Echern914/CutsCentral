@@ -3,8 +3,10 @@ import parsePhoneNumberFromString from "libphonenumber-js";
 import { forShop, prisma, type Prisma } from "@chairback/db";
 import {
   appointmentPaymentSnapshot,
+  stripeCollectedCents,
   type AppointmentPaymentSnapshot,
 } from "../engines/appointmentPayment.js";
+import { CLOSED_BOOKING_STATUSES } from "../billing/depositRefund.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import { readIntakeSnapshot, type IntakeAnswer } from "../engines/bookingIntake.js";
 import { readPolicySnapshot } from "../engines/bookingPolicy.js";
@@ -170,6 +172,19 @@ export interface AppointmentDetail {
    */
   history: { previous: DetailHistoryItem[]; upcoming: DetailHistoryItem[] };
   payment: AppointmentPaymentSnapshot;
+  /**
+   * WHAT A CLOSED BOOKING STILL HOLDS FROM ITS BOOKING PAYMENT - the figure the
+   * Refund deposit button offers back. Null unless the booking is cancelled or
+   * a no-show AND its booking payment still has money on it (collected minus
+   * refunded, the same rule billing/depositRefund.ts refunds by). The payment
+   * summary above cannot stand in for it: it adds every payment toward the
+   * service, a checkout payment included.
+   */
+  keptDeposit: {
+    amountCents: number;
+    /** The booking was paid on non-refundable terms (its own snapshot). */
+    nonRefundable: boolean;
+  } | null;
   /**
    * When the barber closed the chair moment (`Appointment.paidAt`). Null = the
    * cut has never been checked out, which is the ONLY state in which "Start
@@ -530,12 +545,19 @@ export function registerAppointmentDetail(router: Router): void {
     const payments = await prisma.payment.findMany({
       where: { appointmentId: appt.id, shopId, purpose: { not: "fee" } },
       select: {
+        purpose: true,
         status: true,
         amount: true,
         capturedAmount: true,
         refundedAmount: true,
+        nonRefundable: true,
       },
     });
+    const bookingPayment = payments.find((p) => p.purpose === "booking") ?? null;
+    const keptCents =
+      bookingPayment && CLOSED_BOOKING_STATUSES.has(appt.status)
+        ? stripeCollectedCents(bookingPayment)
+        : 0;
 
     // 🔴 OWNERSHIP IS NOT "HAS A VISIT". Every COMPLETED native booking is
     // linked to a Visit by the completion promoter (its loyalty record), so
@@ -599,6 +621,10 @@ export function registerAppointmentDetail(router: Router): void {
         external,
         cardOnFile: appt.cardOnFile ?? null,
       }),
+      keptDeposit:
+        bookingPayment && keptCents > 0
+          ? { amountCents: keptCents, nonRefundable: bookingPayment.nonRefundable }
+          : null,
       checkedOutAt: appt.paidAt ? appt.paidAt.toISOString() : null,
       serviceCheckoutEnabled: serviceCheckoutEnabled(shopId),
       editable,
@@ -721,6 +747,7 @@ export function registerAppointmentDetail(router: Router): void {
         chairCheckedOut: false,
         external: true,
       }),
+      keptDeposit: null,
       checkedOutAt: null,
       serviceCheckoutEnabled: serviceCheckoutEnabled(shopId),
       editable: false,

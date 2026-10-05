@@ -5538,8 +5538,9 @@ model AppointmentOverride {
   @@index([shopId, createdAt])
 }
 
-/// A refund a shop issued from ChairBack against a post-service checkout
-/// payment, and who issued it. Append-only (a trigger refuses UPDATE), exactly
+/// A refund a shop issued from ChairBack - against a post-service checkout
+/// payment, or a booking payment a cancelled or no-show booking kept - and who
+/// issued it. Append-only (a trigger refuses UPDATE), exactly
 /// like AppointmentPriceChange: a refund is the most sensitive manual money
 /// action in the product, and "who gave this customer their money back, and
 /// why" must survive every later edit. paymentId/appointmentId are not FKs on
@@ -5555,7 +5556,9 @@ model PaymentRefund {
   /// Whether the refund also pulled the barber's share back (reverse_transfer).
   /// false only when that share had ALREADY been reversed outside ChairBack.
   reverseTransfer Boolean
-  stripeRefundId  String?
+  /// One row per Stripe refund (unique): two presses naming the same refund
+  /// record it once. Null when Stripe never answered with one.
+  stripeRefundId  String?  @unique
   /// succeeded | pending | failed | ambiguous (CHECK-pinned in SQL)
   outcome         String
   /// The barber's own words, if any. Never shown to the customer.

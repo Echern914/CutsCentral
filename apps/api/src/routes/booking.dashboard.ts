@@ -54,6 +54,7 @@ import {
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
 import { registerUnfinishedBookings } from "./booking.unfinished.js";
+import { registerDepositRefund } from "./booking.depositRefund.js";
 import { stripeCollectedCents } from "../engines/appointmentPayment.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import {
@@ -4584,6 +4585,10 @@ registerAppointmentDetail(bookingDashboardRouter);
 // "Didn't finish booking": clients whose payment hold ran out before they
 // finished, so they may think they are booked (booking.unfinished.ts).
 registerUnfinishedBookings(bookingDashboardRouter);
+
+// "Refund deposit": give back what a cancelled or no-show booking kept from its
+// booking payment (booking.depositRefund.ts, billing/depositRefund.ts).
+registerDepositRefund(bookingDashboardRouter);
 
 bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   const shopId = req.shop!.id;
