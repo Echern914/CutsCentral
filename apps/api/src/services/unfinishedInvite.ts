@@ -3,8 +3,9 @@ import { bookNowUrl } from "@chairback/config/bookingLinks";
 import { prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { hasActiveAccess } from "../billing/stripe.js";
-import { emailDispatchMode, sendEmail } from "../messaging/email.js";
+import { emailDispatchMode, ResendSendError, sendEmail } from "../messaging/email.js";
 import { buildPickAnotherTimeEmail } from "../messaging/templates.js";
+import { firstNameKey, takenByABooking } from "./unfinishedBookings.js";
 
 /**
  * "EMAIL THEM TO PICK A NEW TIME" - from "Didn't finish booking".
@@ -15,13 +16,18 @@ import { buildPickAnotherTimeEmail } from "../messaging/templates.js";
  * was taken, you're not booked, here is the booking page with your service
  * and staff already picked.
  *
- * 🔴 AT MOST ONCE PER ATTEMPT. `Appointment.unfinishedInvitedAt` is claimed
- * with a compare-and-set BEFORE the send, so two taps (two phones, a retry)
- * send one email; a send that fails clears the claim so it can be tried again.
+ * 🔴 EVERY WORD OF THAT EMAIL IS RE-CHECKED HERE, not trusted from a screen
+ * that may be minutes old: the time is still ahead and someone ELSE's booking
+ * holds it (not a card step in progress, not their own), they haven't booked
+ * since, the row wasn't dismissed. A repeating try, a client who paid, one the
+ * shop blocked, or one who unsubscribed is refused - each is a conversation,
+ * not this email.
  *
- * 🔴 IT ASKS SOMEONE TO BOOK, so unlike a confirmation it respects an email
- * unsubscribe (Client.emailOptedOut). And it is never claimed as sent when no
- * email can go out: under DRY_RUN or with email unconfigured it is refused.
+ * 🔴 AT MOST ONCE PER ATTEMPT. `Appointment.unfinishedInvitedAt` is claimed
+ * with a compare-and-set BEFORE the send, so two taps send one email. A send
+ * Resend definitely refused lets the claim go; one whose answer was lost keeps
+ * it (it may have gone out) and rides a stable Idempotency-Key, so even a
+ * retry inside Resend's window cannot become a second email.
  */
 
 export type InviteOutcome =
@@ -30,16 +36,28 @@ export type InviteOutcome =
   /** A live hold: they may still finish in a minute. */
   | { outcome: "still_finishing" }
   /** Invited already - once is the promise. */
-  | { outcome: "already_invited" }
+  | { outcome: "already_invited"; invitedAt: Date | null }
   | { outcome: "no_email" }
   /** They unsubscribed from this shop's emails. */
   | { outcome: "unsubscribed" }
+  /** The shop blocked them from booking. */
+  | { outcome: "blocked" }
+  /** A repeating booking: a conversation, not this email. */
+  | { outcome: "repeating" }
+  /** Their payment came in: a refund question, not an invitation. */
+  | { outcome: "paid" }
+  /** Nothing about the time is as the email would say any more. */
+  | { outcome: "stale" }
   /** No booking page to send them to (switched off, or no usable link). */
   | { outcome: "no_booking_page" }
   /** No email can go out right now (unconfigured, DRY_RUN, or the shop's access lapsed). */
   | { outcome: "email_unavailable" }
-  /** The send itself failed; the claim was let go, so trying again is safe. */
-  | { outcome: "send_failed" };
+  /** Resend refused it; the claim was let go, so trying again is safe. */
+  | { outcome: "send_failed" }
+  /** The answer was lost: it may have gone out. The claim stands. */
+  | { outcome: "unknown" };
+
+const PAID = new Set(["succeeded", "requires_capture", "processing", "refunded", "partially_refunded"]);
 
 function isValidEmail(email: string): boolean {
   const e = email.trim();
@@ -71,21 +89,32 @@ export async function inviteUnfinishedClient(shopId: string, id: string, now: Da
   const appt = await runWithShop(shopId, (tx) =>
     tx.appointment.findFirst({
       // Only an unfinished booking the list could show: a payment hold that
-      // never became a booking.
+      // never became a booking, still ahead, not dismissed.
       where: { id, shopId, holdReason: "payment", status: { in: ["PENDING", "CANCELED"] } },
       select: {
         id: true,
         status: true,
         holdExpiresAt: true,
         startsAt: true,
+        endsAt: true,
+        createdAt: true,
         firstName: true,
         email: true,
+        clientId: true,
         serviceId: true,
         staffId: true,
+        seriesId: true,
         unfinishedInvitedAt: true,
+        unfinishedDismissedAt: true,
         service: { select: { name: true } },
         staff: { select: { name: true } },
-        client: { select: { email: true, emailOptedOut: true, archivedAt: true } },
+        client: { select: { email: true, emailOptedOut: true, archivedAt: true, bookingBlockedAt: true } },
+        payments: {
+          where: { purpose: "booking" },
+          orderBy: { createdAt: "desc" },
+          select: { status: true },
+          take: 1,
+        },
       },
     }),
   );
@@ -93,11 +122,48 @@ export async function inviteUnfinishedClient(shopId: string, id: string, now: Da
   if (appt.status === "PENDING" && appt.holdExpiresAt !== null && appt.holdExpiresAt.getTime() > now.getTime()) {
     return { outcome: "still_finishing" };
   }
-  if (appt.unfinishedInvitedAt !== null) return { outcome: "already_invited" };
+  if (appt.unfinishedInvitedAt !== null) return { outcome: "already_invited", invitedAt: appt.unfinishedInvitedAt };
+  if (appt.startsAt.getTime() <= now.getTime() || appt.unfinishedDismissedAt !== null) return { outcome: "stale" };
+  if (appt.seriesId !== null) return { outcome: "repeating" };
+  if (appt.payments.some((p) => PAID.has(p.status))) return { outcome: "paid" };
+  if (appt.client?.bookingBlockedAt) return { outcome: "blocked" };
 
   const to = (appt.email ?? appt.client?.email ?? "").trim();
   if (!to || !isValidEmail(to) || appt.client?.archivedAt) return { outcome: "no_email" };
   if (appt.client?.emailOptedOut) return { outcome: "unsubscribed" };
+
+  // The facts the email states, as they stand NOW.
+  const stillTrue = await runWithShop(shopId, async (tx) => {
+    if (
+      !(await takenByABooking(tx, {
+        shopId,
+        staffId: appt.staffId,
+        start: appt.startsAt,
+        end: appt.endsAt,
+        now,
+        clientId: appt.clientId,
+      }))
+    ) {
+      return false;
+    }
+    // Booked since, by this same person (a family on one phone is not one person).
+    if (appt.clientId) {
+      const since = await tx.appointment.findMany({
+        where: {
+          shopId,
+          clientId: appt.clientId,
+          createdAt: { gt: appt.createdAt },
+          status: { in: ["BOOKED", "COMPLETED"] },
+        },
+        select: { firstName: true },
+      });
+      const who = firstNameKey(appt.firstName);
+      if (since.some((s) => firstNameKey(s.firstName) === who)) return false;
+    }
+    return true;
+  });
+  if (!stillTrue) return { outcome: "stale" };
+
   if (emailDispatchMode() !== "live" || !hasActiveAccess(shop, { now })) return { outcome: "email_unavailable" };
 
   const base = bookNowUrl(shop, apiEnv().APP_BASE_URL);
@@ -117,7 +183,7 @@ export async function inviteUnfinishedClient(shopId: string, id: string, now: Da
       data: { unfinishedInvitedAt: now },
     }),
   );
-  if (claimed.count === 0) return { outcome: "already_invited" };
+  if (claimed.count === 0) return { outcome: "already_invited", invitedAt: null };
 
   const email = buildPickAnotherTimeEmail({
     firstName: appt.firstName,
@@ -128,7 +194,13 @@ export async function inviteUnfinishedClient(shopId: string, id: string, now: Da
     timezone: shop.timezone,
     staffName: appt.staff?.name ?? null,
   });
-  let sent = false;
+  const release = () =>
+    runWithShop(shopId, (tx) =>
+      tx.appointment.updateMany({
+        where: { id: appt.id, shopId, unfinishedInvitedAt: now },
+        data: { unfinishedInvitedAt: null },
+      }),
+    );
   try {
     const result = await sendEmail({
       to,
@@ -137,22 +209,26 @@ export async function inviteUnfinishedClient(shopId: string, id: string, now: Da
       html: email.html,
       fromName: shop.name,
       stream: "transactional",
+      // One attempt, one email: Resend collapses a retry under the same key.
+      idempotencyKey: `unfinished-invite:${appt.id}`,
       meta: { shopId, kind: "unfinished_invite", appointmentId: appt.id },
     });
-    sent = result.status === "sent";
-  } catch {
+    if (result.status === "sent") return { outcome: "sent", invitedAt: now };
+    // Not sent, and nothing reached a provider (switched off since the check).
+    await release();
+    return { outcome: "email_unavailable" };
+  } catch (err) {
     // Fixed classification, no address: a provider error can echo the payload.
-    logger.error({ shopId, appointmentId: appt.id, reason: "email_send_failed" }, "pick-another-time email failed");
-  }
-  if (!sent) {
-    // Let the claim go so the barber can try again.
-    await runWithShop(shopId, (tx) =>
-      tx.appointment.updateMany({
-        where: { id: appt.id, shopId, unfinishedInvitedAt: now },
-        data: { unfinishedInvitedAt: null },
-      }),
+    logger.error(
+      { shopId, appointmentId: appt.id, reason: "email_send_failed", status: err instanceof ResendSendError ? err.status : null },
+      "pick-another-time email failed",
     );
-    return { outcome: "send_failed" };
+    // Resend definitely refused it (a 4xx): nothing went out - let the claim go.
+    if (err instanceof ResendSendError && err.status < 500) {
+      await release();
+      return { outcome: "send_failed" };
+    }
+    // A timeout, a reset, a 5xx: it may well have gone out. Keep the claim.
+    return { outcome: "unknown" };
   }
-  return { outcome: "sent", invitedAt: now };
 }

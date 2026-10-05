@@ -856,7 +856,7 @@ export function buildPickAnotherTimeEmail(params: {
   const contact = params.contactLine?.trim() || null;
 
   const textLines = [
-    `Hi ${who}, you started booking a ${params.serviceName} at ${params.shopName}${withWhom} on ${when}, but the booking wasn't finished, and that time has since been booked by someone else. You're not booked for it.`,
+    `Hi ${who}, you started booking ${params.serviceName} at ${params.shopName}${withWhom} for ${when}, but the booking wasn't finished, and that time has since been booked by someone else. You're not booked for it.`,
     ``,
     `Pick another time: ${params.bookUrl}`,
   ];

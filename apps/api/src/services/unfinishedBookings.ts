@@ -1,5 +1,38 @@
 import { runWithShop } from "@chairback/db";
+import type { Prisma } from "@chairback/db";
 import { findConflicts } from "../engines/bookingConflict.js";
+
+/**
+ * Is the time someone else's BOOKING - not just somebody's live card-step
+ * hold, and not this same client? "Time taken" on the list counts a live
+ * hold too (it does block the time); the "pick another time" email says
+ * "someone else has since booked that time", so it needs the stronger fact.
+ * A synced visit (another calendar's booking) counts as booked.
+ */
+export async function takenByABooking(
+  tx: Prisma.TransactionClient,
+  opts: { shopId: string; staffId: string; start: Date; end: Date; now: Date; clientId: string | null },
+): Promise<boolean> {
+  const conflicts = await findConflicts(tx, {
+    shopId: opts.shopId,
+    staffId: opts.staffId,
+    start: opts.start,
+    end: opts.end,
+    now: opts.now,
+  });
+  if (conflicts.some((c) => c.kind === "visit")) return true;
+  const ids = conflicts.filter((c) => c.kind === "appointment").map((c) => c.id);
+  if (ids.length === 0) return false;
+  const occupants = await tx.appointment.findMany({
+    where: { id: { in: ids }, shopId: opts.shopId },
+    select: { status: true, holdReason: true, clientId: true },
+  });
+  return occupants.some(
+    (o) =>
+      !(o.status === "PENDING" && o.holdReason === "payment") &&
+      (opts.clientId === null || o.clientId !== opts.clientId),
+  );
+}
 import { SLOT_SERVICES_SELECT, slotOffersService } from "../engines/targetedSlotServices.js";
 import { staffSpanBlocked } from "../engines/blockedTime.js";
 
@@ -129,10 +162,11 @@ export interface UnfinishedBooking {
   /** Other future times this person tried for and didn't finish. */
   otherTimes: UnfinishedOtherTime[];
   /**
-   * They have an email and haven't unsubscribed from this shop's emails: a
-   * "pick another time" email can be sent (services/unfinishedInvite.ts).
+   * A "pick another time" email may be offered (services/unfinishedInvite.ts):
+   * someone else's booking holds the time, they have an email, didn't
+   * unsubscribe and aren't blocked, a one-off try, and they didn't pay.
    */
-  canEmail: boolean;
+  canInvite: boolean;
   /** When the barber emailed them to pick another time - once is the promise. */
   invitedAt: Date | null;
 }
@@ -239,7 +273,14 @@ export async function listUnfinishedBookings(
         staff: { select: { name: true } },
         service: { select: { name: true } },
         client: {
-          select: { firstName: true, lastName: true, optedOut: true, optOutSource: true, emailOptedOut: true },
+          select: {
+            firstName: true,
+            lastName: true,
+            optedOut: true,
+            optOutSource: true,
+            emailOptedOut: true,
+            bookingBlockedAt: true,
+          },
         },
         cardOnFile: { select: { savedAt: true } },
         payments: {
@@ -406,7 +447,8 @@ export async function listUnfinishedBookings(
         targetedSlotId: null,
         repeating: rep.seriesId !== null,
         otherTimes,
-        canEmail: rep.email !== null && !(rep.client?.emailOptedOut ?? false),
+        // Decided below, once the time and the reason are known.
+        canInvite: false,
         invitedAt: rep.unfinishedInvitedAt,
       });
     }
@@ -441,6 +483,29 @@ export async function listUnfinishedBookings(
         now,
       });
       row.timeTaken = conflicts.length > 0;
+
+      // "Pick another time" is offered only where every word of that email is
+      // true, and only to someone it may go to (services/unfinishedInvite.ts
+      // re-checks all of it): someone ELSE's booking holds the time, not a
+      // card step in progress; they have an email and didn't unsubscribe or
+      // get blocked; a one-off try (a repeating one is a conversation); and
+      // they didn't pay (that is a refund question, not an invitation).
+      row.canInvite =
+        row.timeTaken &&
+        row.email !== null &&
+        !(rep.client?.emailOptedOut ?? false) &&
+        !rep.client?.bookingBlockedAt &&
+        rep.seriesId === null &&
+        row.reason !== "paid_late" &&
+        row.reason !== "paid_late_refunded" &&
+        (await takenByABooking(tx, {
+          shopId,
+          staffId: row.staffId,
+          start: row.startsAt,
+          end: row.endsAt,
+          now,
+          clientId: row.clientId,
+        }));
 
       // Anyone's payment hold at this exact chair and start that ran out and
       // is not swept yet: booking now would have the guard cancel it without

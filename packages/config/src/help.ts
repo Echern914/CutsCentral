@@ -299,7 +299,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "reminders",
     q: "Do clients get reminders?",
-    a: "Automatically. A confirmation email when they book online, then reminders 24 hours and 2 hours before the appointment. You don't do anything.\n\nA booking you make yourself (at the chair, by phone) sends no confirmation, only the reminders. The exception is Book them on Didn't finish booking: those clients tried to book online, so ChairBack emails them the confirmation, and pushes the app if they use it.\n\nReminders are the single biggest thing you can do about no-shows.",
+    a: "Automatically. A confirmation email when they book online, then a reminder email about a day before. If they use the ChairBack app they also get a push a day before and 2 hours before. You don't do anything.\n\nA booking you make yourself (at the chair, by phone) sends no confirmation, only the reminders. The exception is Book them on Didn't finish booking: those clients tried to book online, so ChairBack emails them the confirmation, and pushes the app if they use it.\n\nReminders are the single biggest thing you can do about no-shows.",
     keywords: ["reminder", "no show", "noshow", "confirmation", "notify", "forget", "24 hour", "text before"],
     category: "booking",
     action: { label: "Open booking settings", featureId: "reminders" },
@@ -1095,7 +1095,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "confirmation-text",
     q: "My client didn't get a confirmation TEXT when they booked",
-    a: "That one isn't a text. A booking confirmation goes out by email, and as a push notification if the client uses the app — the confirmation SMS is deliberately off, because a text per booking costs every shop money for something the email already does.\n\nThe texts clients do get are the reminders: 24 hours and 2 hours before the appointment.\n\nSo if they're waiting on a confirmation, check the email side — their address on the booking, and their spam folder. If a REMINDER didn't arrive, that's a different question with different causes.",
+    a: "That one isn't a text. A booking confirmation goes out by email — the confirmation SMS is deliberately off, because a text per booking costs every shop money for something the email already does.\n\nReminders are separate: an email about a day before, a push a day and 2 hours before if they use the app, and a text about a day before when your shop has texting on.\n\nSo if they're waiting on a confirmation, check the email side — their address on the booking, and their spam folder. If a REMINDER didn't arrive, that's a different question with different causes.",
     keywords: [
       "confirmation text", "confirmation sms", "no text when they booked",
       "booking text", "text after booking",

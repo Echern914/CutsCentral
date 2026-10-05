@@ -509,10 +509,12 @@ async function notifyAppointmentConfirmationImpl(params: {
  * they use the app. Every other dashboard booking (at the chair, by phone)
  * stays silent, as it always has.
  *
- * Answers what the barber may be told: "email" only when an email will really
- * go out - a live mailer, an address, a shop with access - never under DRY_RUN
- * or for a client with no address. The send itself runs in the background and
- * re-checks everything; a confirmation already sent is never sent twice.
+ * Answers what the barber may be told: "email" only when an email REALLY went
+ * out. The send is awaited (it is bounded by the mailer's timeout) and the
+ * answer is read from the durable stamp it writes - never predicted - so a
+ * provider refusal, DRY_RUN or a missing address all read "none", and the
+ * row tells the barber to text them. A confirmation already sent is never
+ * sent twice (the stamp).
  */
 export async function confirmBookedFromList(params: {
   shopId: string;
@@ -557,8 +559,23 @@ export async function confirmBookedFromList(params: {
     );
     return "none";
   }
-  void notifyAppointmentConfirmation({ shopId: params.shopId, appointmentId: params.appointmentId, now });
-  return willEmail ? "email" : "none";
+  if (!willEmail) {
+    // Still run it: a client with no email gets nothing, but the call is the
+    // one place the decision is logged.
+    void notifyAppointmentConfirmation({ shopId: params.shopId, appointmentId: params.appointmentId, now });
+    return "none";
+  }
+  // 🔴 SUCCESS IS READ FROM THE DURABLE STAMP, as the group confirmation does
+  // (appointmentGroupSettle.ts): a provider that refused the send leaves it
+  // null, and the barber must then be told to text them.
+  await notifyAppointmentConfirmation({ shopId: params.shopId, appointmentId: params.appointmentId, now });
+  const stamped = await runWithShop(params.shopId, (tx) =>
+    tx.appointment.findFirst({
+      where: { id: params.appointmentId, shopId: params.shopId },
+      select: { confirmationEmailSentAt: true },
+    }),
+  ).catch(() => null);
+  return stamped?.confirmationEmailSentAt ? "email" : "none";
 }
 
 /**

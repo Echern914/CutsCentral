@@ -64,7 +64,7 @@ const row = (over: Record<string, unknown> = {}) => ({
   targetedSlotId: null,
   repeating: false,
   otherTimes: [],
-  canEmail: true,
+  canInvite: false,
   invitedAt: null,
   ...over,
 });
@@ -511,7 +511,7 @@ describe("telling the client", () => {
     expect(within(li).getByRole("link", { name: "Text" })).toBeInTheDocument();
   });
 
-  it("an API that predates the confirmation still books them - the old way", async () => {
+  it("an API that predates the confirmation still books them - the old way, keeping the email they typed", async () => {
     createAppointmentAction
       .mockResolvedValueOnce({ ok: false, error: "invalid_input" })
       .mockResolvedValueOnce({ ok: false, error: "invalid_input" })
@@ -522,13 +522,36 @@ describe("telling the client", () => {
     fireEvent.click(within(li).getByRole("button", { name: "Book" }));
     await waitFor(() => expect(createAppointmentAction).toHaveBeenCalledTimes(3));
     expect(createAppointmentAction.mock.calls[2]![0]).not.toHaveProperty("confirmClient");
+    expect(createAppointmentAction.mock.calls[2]![0]).toMatchObject({ email: "lena@example.com" });
     await waitFor(() =>
       expect(li).toHaveTextContent("Booked for Fri, Oct 9, 4:30 PM. ChairBack doesn't send a confirmation"),
     );
   });
 
-  it("🔴 a time someone else took: 'Email them to pick a new time', once, and the row says when", async () => {
-    listUnfinishedAction.mockResolvedValue(listed([row({ timeTaken: true })]));
+  it("🔴 the confirmation outcome survives the card leaving the collapsed list and coming back", async () => {
+    createAppointmentAction.mockResolvedValue({ ok: true, clientConfirmation: "email" });
+    const rows = ["a", "b", "c"].map((k, i) =>
+      row({ id: `r${k}`, firstName: `P${k}`, lastName: "Row", startsAt: `2026-10-0${7 + i}T23:30:00.000Z` }),
+    );
+    // The read after booking brings a newer try that sorts ahead, pushing the
+    // booked card out of the first three.
+    listUnfinishedAction
+      .mockResolvedValueOnce(listed(rows))
+      .mockResolvedValue(
+        listed([row({ id: "r0", firstName: "Early", lastName: "Bird", startsAt: "2026-10-06T23:30:00.000Z" }), ...rows]),
+      );
+    await shown();
+    const li = card(/Pc Row/);
+    fireEvent.click(within(li).getByRole("button", { name: "Book them" }));
+    fireEvent.click(within(li).getByRole("button", { name: "Book" }));
+    await waitFor(() => expect(screen.getByText("Early Bird")).toBeInTheDocument());
+    expect(screen.queryByText("Pc Row")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Show all/ }));
+    expect(card(/Pc Row/)).toHaveTextContent("ChairBack emailed Pc a confirmation.");
+  });
+
+  it("🔴 a time someone else booked: 'Email them to pick a new time', once, and the row says when", async () => {
+    listUnfinishedAction.mockResolvedValue(listed([row({ timeTaken: true, canInvite: true })]));
     inviteUnfinishedAction.mockResolvedValue({ ok: true, invitedAt: "2026-10-05T18:00:00.000Z" });
     await shown();
     const li = card(/Lena Ortiz/);
@@ -538,23 +561,31 @@ describe("telling the client", () => {
     expect(within(li).queryByRole("button", { name: "Email them to pick a new time" })).toBeNull();
   });
 
-  it("no invite for a time still open, for someone who can't be emailed, or someone already invited", async () => {
+  it("🔴 never offered unless the server says so: a time only held, someone who can't be emailed, someone invited", async () => {
     listUnfinishedAction.mockResolvedValue(
       listed([
         row(),
-        row({ id: "a2", firstName: "Mia", lastName: "Park", timeTaken: true, canEmail: false }),
-        row({ id: "a3", firstName: "Noa", lastName: "Reed", timeTaken: true, invitedAt: "2026-10-05T18:00:00.000Z" }),
+        // Taken - but only by a card step in progress: the server says no.
+        row({ id: "a2", firstName: "Mia", lastName: "Park", timeTaken: true, canInvite: false }),
+        row({
+          id: "a3",
+          firstName: "Noa",
+          lastName: "Reed",
+          timeTaken: true,
+          canInvite: true,
+          invitedAt: "2026-10-05T18:00:00.000Z",
+        }),
       ]),
     );
     await shown();
     for (const name of [/Lena Ortiz/, /Mia Park/, /Noa Reed/]) {
       expect(within(card(name)).queryByRole("button", { name: "Email them to pick a new time" })).toBeNull();
     }
-    expect(card(/Noa Reed/)).toHaveTextContent("Emailed Noa to pick a new time");
+    expect(card(/Noa Reed/)).toHaveTextContent("Emailed Noa to pick a new time (Oct 5, 11:00 AM).");
   });
 
-  it("an invite that can't go out says why, and sends nothing", async () => {
-    listUnfinishedAction.mockResolvedValue(listed([row({ timeTaken: true })]));
+  it("an invite that can't go out says why", async () => {
+    listUnfinishedAction.mockResolvedValue(listed([row({ timeTaken: true, canInvite: true })]));
     inviteUnfinishedAction.mockResolvedValue({ ok: false, error: "unsubscribed" });
     await shown();
     const li = card(/Lena Ortiz/);
@@ -562,5 +593,27 @@ describe("telling the client", () => {
     await waitFor(() =>
       expect(li).toHaveTextContent("Lena unsubscribed from your emails. Text or call them instead."),
     );
+  });
+
+  it("already sent from another phone: says so, never invents a time", async () => {
+    listUnfinishedAction.mockResolvedValue(listed([row({ timeTaken: true, canInvite: true })]));
+    inviteUnfinishedAction.mockResolvedValue({ ok: false, error: "already_invited" });
+    await shown();
+    const li = card(/Lena Ortiz/);
+    fireEvent.click(within(li).getByRole("button", { name: "Email them to pick a new time" }));
+    await waitFor(() => expect(li).toHaveTextContent("Emailed Lena to pick a new time."));
+    expect(li).not.toHaveTextContent(/pick a new time \(/);
+    expect(within(li).queryByRole("button", { name: "Email them to pick a new time" })).toBeNull();
+  });
+
+  it("🔴 an answer that never came: may have gone out - not offered again, and never 'nothing was sent'", async () => {
+    listUnfinishedAction.mockResolvedValue(listed([row({ timeTaken: true, canInvite: true })]));
+    inviteUnfinishedAction.mockResolvedValue({ ok: false, error: "unknown" });
+    await shown();
+    const li = card(/Lena Ortiz/);
+    fireEvent.click(within(li).getByRole("button", { name: "Email them to pick a new time" }));
+    await waitFor(() => expect(li).toHaveTextContent(/It may have gone out/));
+    expect(li).not.toHaveTextContent(/Nothing was sent/);
+    expect(within(li).queryByRole("button", { name: "Email them to pick a new time" })).toBeNull();
   });
 });

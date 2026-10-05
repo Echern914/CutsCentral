@@ -724,25 +724,39 @@ describe("Book them", () => {
  * time" email. Every other dashboard booking stays silent.
  */
 describe("telling the client", () => {
-  type Sent = { to: string; subject: string; html: string; text: string; meta?: Record<string, unknown> };
+  type Sent = {
+    to: string;
+    subject: string;
+    html: string;
+    text: string;
+    idempotencyKey?: string;
+    meta?: Record<string, unknown>;
+  };
   let sent: Sent[] = [];
-  let failNext = false;
+  let attempts: Sent[] = [];
+  /** "reject" = Resend refused it (nothing went out); "lost" = the answer never came. */
+  let failNext: null | "reject" | "lost" = null;
 
   async function useMailer() {
-    const { __setSendEmailForTests } = await import("../messaging/email.js");
+    const { __setSendEmailForTests, ResendSendError } = await import("../messaging/email.js");
     const { armBackgroundWorkTracking } = await import("../backgroundWork.js");
     armBackgroundWorkTracking();
     sent = [];
-    failNext = false;
+    attempts = [];
+    failNext = null;
     __setSendEmailForTests(async (input) => {
-      if (failNext) {
-        failNext = false;
-        throw new Error("provider down");
-      }
+      attempts.push(input as Sent);
+      const mode = failNext;
+      failNext = null;
+      if (mode === "reject") throw new ResendSendError(422);
+      if (mode === "lost") throw new Error("The operation was aborted due to timeout");
       sent.push(input as Sent);
       return { id: `email_${sent.length}`, status: "sent" };
     });
   }
+  /** Someone else books `when` (a real booking, card saved). */
+  const takenBy = async (when: Date, first: string, last: string) =>
+    finish(await tryToBook(person(first, last), when));
   async function noMailer() {
     const { __setSendEmailForTests } = await import("../messaging/email.js");
     const { disarmBackgroundWorkTracking } = await import("../backgroundWork.js");
@@ -803,6 +817,22 @@ describe("telling the client", () => {
     }
   });
 
+  it("🔴 a provider that refuses the confirmation: 'none' - read from the stamp, never predicted", async () => {
+    await useMailer();
+    try {
+      const who = person("Bo", "Cruz");
+      await lapsed(who, at(12, 9));
+      const row = (await rowFor(who))!;
+      failNext = "reject";
+      const res = await bookFromList(row, { confirmClient: true });
+      expect(res.status).toBe(201);
+      expect(res.body.clientConfirmation).toBe("none");
+      expect(sent.filter((m) => m.to === who.email)).toHaveLength(0);
+    } finally {
+      await noMailer();
+    }
+  });
+
   it("never claims an email it can't send - email off says 'none'", async () => {
     const who = person("Eli", "Ford");
     await lapsed(who, at(8, 11));
@@ -848,15 +878,16 @@ describe("telling the client", () => {
       const who = person("Gus", "Hale");
       const when = at(8, 13);
       await lapsed(who, when);
-      await finish(await tryToBook(person("Hal", "Ives"), when));
+      await takenBy(when, "Hal", "Ives");
       const row = (await rowFor(who))!;
       expect(row.timeTaken).toBe(true);
-      expect((row as Row & { canEmail: boolean }).canEmail).toBe(true);
+      expect((row as Row & { canInvite: boolean }).canInvite).toBe(true);
 
       const first = await invite(row.id);
       expect(first.status).toBe(200);
       const mine = sent.filter((m) => m.to === who.email);
       expect(mine).toHaveLength(1);
+      expect(mine[0]!.idempotencyKey).toBe(`unfinished-invite:${row.id}`);
       expect(mine[0]!.subject).toBe("Pick another time at Unfinished Cuts");
       expect(mine[0]!.html).toContain(`/book/${slug}?service=${serviceId}&amp;staff=${staffId}`);
       expect(mine[0]!.text).toMatch(/You're not booked for it/);
@@ -879,7 +910,7 @@ describe("telling the client", () => {
       const who = person("Ida", "Jules");
       const when = at(8, 14);
       await lapsed(who, when);
-      await finish(await tryToBook(person("Jay", "Kent"), when));
+      await takenBy(when, "Jay", "Kent");
       const row = (await rowFor(who))!;
       const { raceBehindRowLock } = await import("../testing/raceBarrier.js");
       const { settledEarly, results } = await raceBehindRowLock("Appointment", row.id, [
@@ -895,15 +926,15 @@ describe("telling the client", () => {
     }
   });
 
-  it("a send that fails lets the claim go, so trying again works", async () => {
+  it("a send Resend refused lets the claim go, so trying again works", async () => {
     await useMailer();
     try {
       const who = person("Kit", "Lane");
       const when = at(8, 15);
       await lapsed(who, when);
-      await finish(await tryToBook(person("Lou", "Marsh"), when));
+      await takenBy(when, "Lou", "Marsh");
       const row = (await rowFor(who))!;
-      failNext = true;
+      failNext = "reject";
       const failed = await invite(row.id);
       expect(failed.status).toBe(502);
       expect(((await rowFor(who)) as Row & { invitedAt: string | null }).invitedAt).toBeNull();
@@ -915,15 +946,114 @@ describe("telling the client", () => {
     }
   });
 
+  it("🔴 a send whose answer was lost KEEPS the claim - it may have gone out - and is never sent again", async () => {
+    await useMailer();
+    try {
+      const who = person("Liv", "Moore");
+      const when = at(12, 10);
+      await lapsed(who, when);
+      await takenBy(when, "Max", "Nolan");
+      const row = (await rowFor(who))!;
+      failNext = "lost";
+      const lost = await invite(row.id);
+      expect(lost.status).toBe(202);
+      expect(lost.body.error).toBe("unknown");
+      const again = await invite(row.id);
+      expect(again.status).toBe(409);
+      expect(again.body.error).toBe("already_invited");
+      expect(attempts.filter((m) => m.to === who.email)).toHaveLength(1);
+    } finally {
+      await noMailer();
+    }
+  });
+
+  it("🔴 a time only HELD by someone on the card step is not 'booked by someone else': not offered, and refused", async () => {
+    await useMailer();
+    try {
+      const who = person("Nia", "Owen");
+      const when = at(9, 13);
+      await lapsed(who, when);
+      await tryToBook(person("Oz", "Pratt"), when); // still on the card step
+      const row = (await rowFor(who))!;
+      expect(row.timeTaken).toBe(true);
+      expect((row as Row & { canInvite: boolean }).canInvite).toBe(false);
+      const res = await invite(row.id);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("stale");
+      expect(sent).toHaveLength(0);
+    } finally {
+      await noMailer();
+    }
+  });
+
+  it("re-checked at send time: booked since, blocked or paid are refused", async () => {
+    await useMailer();
+    try {
+      // Booked since (another time), after the list was read.
+      const since = person("Pat", "Quill");
+      const t1 = at(9, 14);
+      await lapsed(since, t1);
+      await takenBy(t1, "Quin", "Ross");
+      const sinceRow = (await rowFor(since))!;
+      expect((sinceRow as Row & { canInvite: boolean }).canInvite).toBe(true);
+      await finish(await tryToBook(since, at(12, 11)));
+      const r1 = await invite(sinceRow.id);
+      expect(r1.status).toBe(409);
+      expect(r1.body.error).toBe("stale");
+
+      // Blocked from booking.
+      const blocked = person("Rae", "Stone");
+      const t2 = at(9, 15);
+      await lapsed(blocked, t2);
+      await takenBy(t2, "Sid", "Tate");
+      const blockedRow = (await rowFor(blocked))!;
+      await prisma.client.update({ where: { id: blockedRow.clientId! }, data: { bookingBlockedAt: new Date() } });
+      expect(((await rowFor(blocked)) as Row & { canInvite: boolean }).canInvite).toBe(false);
+      const r2 = await invite(blockedRow.id);
+      expect(r2.status).toBe(422);
+      expect(r2.body.error).toBe("blocked");
+
+      // Paid (late): a refund question, not an invitation.
+      const paid = person("Tia", "Upton");
+      const t3 = at(9, 16);
+      const paidAttempt = await lapsed(paid, t3);
+      await takenBy(t3, "Uma", "Vance");
+      await prisma.payment.create({
+        data: {
+          shopId,
+          appointmentId: paidAttempt.id,
+          stripePaymentIntentId: `pi_${randomToken(12)}`,
+          stripeConnectAccountId: "acct_unf_paid",
+          mode: "ahead",
+          purpose: "booking",
+          amount: 3500,
+          applicationFeeAmount: 0,
+          currency: "usd",
+          status: "succeeded",
+        },
+      });
+      const r3 = await invite(paidAttempt.id);
+      expect(r3.status).toBe(422);
+      expect(r3.body.error).toBe("paid");
+      // No invitation went to anyone (the bookings that took the times get
+      // their own ordinary confirmations).
+      expect(sent.filter((m) => m.subject.startsWith("Pick another time"))).toHaveLength(0);
+    } finally {
+      await noMailer();
+    }
+  });
+
   it("refuses what it shouldn't do: unsubscribed, still on the card step, or no email able to go out", async () => {
     await useMailer();
     try {
       // Unsubscribed from this shop's emails.
       const quiet = person("Mo", "Nash");
-      await lapsed(quiet, at(9, 9));
+      const tq = at(9, 9);
+      await lapsed(quiet, tq);
+      await takenBy(tq, "Moe", "Nye");
       const quietRow = (await rowFor(quiet))!;
       await prisma.client.update({ where: { id: quietRow.clientId! }, data: { emailOptedOut: true } });
-      expect(((await rowFor(quiet)) as Row & { canEmail: boolean }).canEmail).toBe(false);
+      expect(((await rowFor(quiet)) as Row & { canInvite: boolean }).canInvite).toBe(false);
       const r1 = await invite(quietRow.id);
       expect(r1.status).toBe(422);
       expect(r1.body.error).toBe("unsubscribed");
@@ -934,13 +1064,15 @@ describe("telling the client", () => {
       const r2 = await invite(attempt.id);
       expect(r2.status).toBe(409);
       expect(r2.body.error).toBe("still_finishing");
-      expect(sent).toHaveLength(0);
+      expect(sent.filter((m) => m.subject.startsWith("Pick another time"))).toHaveLength(0);
     } finally {
       await noMailer();
     }
     // No mailer at all: refused, and nothing stamped.
     const off = person("Oli", "Penn");
-    await lapsed(off, at(9, 11));
+    const to = at(9, 11);
+    await lapsed(off, to);
+    await takenBy(to, "Ora", "Pike");
     const offRow = (await rowFor(off))!;
     const r3 = await invite(offRow.id);
     expect(r3.status).toBe(503);

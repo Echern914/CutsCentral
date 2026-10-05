@@ -133,6 +133,10 @@ export function UnfinishedBookings({ isNative, toast }: { isNative: boolean; toa
   const [more, setMore] = useState(0);
   // Booked from here: kept on screen until "Done" (see the header).
   const [booked, setBooked] = useState<Map<string, UnfinishedRow>>(() => new Map());
+  // Whether each booking made here emailed the client its confirmation. Kept
+  // here, not in the card: a card that scrolls out of the collapsed list and
+  // back must still say what really happened.
+  const [told, setTold] = useState<Map<string, "email" | "none" | null>>(() => new Map());
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
   const [expanded, setExpanded] = useState(false);
   // Counts successful reads, so a card can tell "fresh data since my refusal".
@@ -215,8 +219,10 @@ export function UnfinishedBookings({ isNative, toast }: { isNative: boolean; toa
               fmt={fmt}
               isNative={isNative}
               booked={booked.has(row.id)}
+              told={told.get(row.id) ?? null}
               toast={toast}
-              onBooked={() => {
+              onBooked={(outcome) => {
+                setTold((prev) => new Map(prev).set(row.id, outcome));
                 setBooked((prev) => new Map(prev).set(row.id, row));
                 // Anyone else who wanted that same time has just lost it.
                 void load();
@@ -260,6 +266,7 @@ function UnfinishedCard({
   fmt,
   isNative,
   booked,
+  told,
   toast,
   onBooked,
   onDone,
@@ -271,8 +278,10 @@ function UnfinishedCard({
   fmt: Formatters;
   isNative: boolean;
   booked: boolean;
+  /** Booked here: whether ChairBack emailed them their confirmation. Null = an older API. */
+  told: "email" | "none" | null;
   toast: Toast;
-  onBooked: () => void;
+  onBooked: (told: "email" | "none" | null) => void;
   onDone: () => void;
   onDismiss: () => void;
 }) {
@@ -286,11 +295,15 @@ function UnfinishedCard({
   // can arrive while the booking request is out.
   const latestRead = useRef(readCount);
   latestRead.current = readCount;
-  // Booked here: whether ChairBack is emailing them their confirmation. Null =
-  // an older API that sends none.
-  const [told, setTold] = useState<"email" | "none" | null>(null);
-  // "Email them to pick a new time": sent (when), or the reason it couldn't be.
-  const [invitedAt, setInvitedAt] = useState<string | null>(row.invitedAt ?? null);
+  // "Email them to pick a new time": when it went - from this tap, or from the
+  // latest read (another phone may have sent it). `invitedKnown` is false when
+  // the server knows it went but not when.
+  const [invitedHere, setInvitedHere] = useState<string | null>(null);
+  const [invitedNoTime, setInvitedNoTime] = useState(false);
+  // The send's answer was lost: it may have gone out, so it isn't offered again.
+  const [inviteUnknown, setInviteUnknown] = useState(false);
+  const invitedAt = invitedHere ?? row.invitedAt ?? null;
+  const invited = invitedAt !== null || invitedNoTime;
   const [inviting, setInviting] = useState(false);
 
   const name = `${row.firstName} ${row.lastName ?? ""}`.trim() || cap(vocab.clientNoun);
@@ -336,27 +349,50 @@ function UnfinishedCard({
     if (inviting) return;
     setInviting(true);
     setNote(null);
-    const res = await inviteUnfinishedAction(row.id).catch(() => ({ ok: false, error: "network_error" }) as const);
+    const res: { ok: boolean; invitedAt?: string | null; error?: string } = await inviteUnfinishedAction(row.id).catch(
+      () => ({ ok: false, error: "network_error" }),
+    );
     setInviting(false);
-    if (res.ok && "invitedAt" in res && res.invitedAt) {
-      setInvitedAt(res.invitedAt);
+    if (res.ok && res.invitedAt) {
+      setInvitedHere(res.invitedAt);
       return;
     }
-    const error = "error" in res ? res.error : undefined;
+    const error = res.error;
+    if (error === "already_invited") {
+      // Sent before (another phone, an earlier tap): say when if the server knows.
+      if (res.invitedAt) setInvitedHere(res.invitedAt);
+      else setInvitedNoTime(true);
+      return;
+    }
+    if (error === "unknown" || error === "network_error") {
+      // The answer was lost: it may have gone out, and it can't go twice.
+      setInviteUnknown(error === "unknown");
+      setNote(
+        error === "unknown"
+          ? `We couldn't confirm the email reached ${first}. It may have gone out - check with them before sending anything else.`
+          : "Couldn't reach ChairBack. Try again - it won't send twice.",
+      );
+      return;
+    }
     setNote(
-      error === "already_invited"
-        ? `${first} was already emailed to pick a new time.`
-        : error === "unsubscribed"
-          ? `${first} unsubscribed from your emails. Text or call them instead.`
-          : error === "no_email"
-            ? `There's no email for ${first}. Text or call them instead.`
-            : error === "no_booking_page"
-              ? "Your booking page is off, so there's nowhere to send them."
-              : error === "email_unavailable"
-                ? "Email isn't available right now. Nothing was sent."
-                : "Couldn't send it. Try again.",
+      error === "unsubscribed"
+        ? `${first} unsubscribed from your emails. Text or call them instead.`
+        : error === "no_email"
+          ? `There's no email for ${first}. Text or call them instead.`
+          : error === "blocked"
+            ? `You've blocked ${first} from booking, so there's nothing to invite them to.`
+            : error === "paid"
+              ? `${first} paid. Text or call them about it rather than send this.`
+              : error === "repeating"
+                ? "They wanted a repeating booking. Text or call them to set that up."
+                : error === "stale"
+                  ? "That's changed since this list loaded. Nothing was sent."
+                  : error === "no_booking_page"
+                    ? "Your booking page is off, so there's nowhere to send them."
+                    : error === "email_unavailable"
+                      ? "Email isn't available right now. Nothing was sent."
+                      : "Couldn't send it. Nothing was sent - try again.",
     );
-    if (error === "already_invited") setInvitedAt(new Date().toISOString());
   }
 
   async function book(customTime: boolean) {
@@ -390,13 +426,14 @@ function UnfinishedCard({
     // (and the confirmation) then use the email on their profile.
     if (!res.ok && res.error === "invalid_input" && row.email) res = await send(false);
     // An API that predates the confirmation refuses the unknown field the same
-    // way; book them as before rather than not at all.
+    // way: book them as before rather than not at all - keeping what they
+    // typed, and dropping it only if that is refused too.
+    if (!res.ok && res.error === "invalid_input" && row.email) res = await send(true, false);
     if (!res.ok && res.error === "invalid_input") res = await send(false, false);
     if (res.ok) {
       setStep("idle");
-      setTold(res.clientConfirmation ?? null);
       toast(`Booked ${first}`, "success");
-      onBooked();
+      onBooked(res.clientConfirmation ?? null);
       return;
     }
     if (res.error === "invalid_slot" && !customTime && !row.targetedSlotId) {
@@ -509,9 +546,10 @@ function UnfinishedCard({
             {refused?.note ?? note}
           </p>
         )}
-        {invitedAt && !booked && (
+        {invited && !booked && (
           <p role="status" className="text-emerald-soft">
-            Emailed {first} to pick a new time ({fmt.tried.format(new Date(invitedAt))}).
+            Emailed {first} to pick a new time
+            {invitedAt ? ` (${fmt.tried.format(new Date(invitedAt))})` : ""}.
           </p>
         )}
       </div>
@@ -552,8 +590,9 @@ function UnfinishedCard({
               {step === "working" ? "Booking…" : "Book them"}
             </button>
           )}
-          {/* Their time was taken: one email with the booking page, once. */}
-          {taken && !booked && !live && row.canEmail && !invitedAt && (
+          {/* Someone else booked their time: one email with the booking page,
+              once. The server decides it may be offered (canInvite). */}
+          {!booked && !live && row.canInvite && !invited && !inviteUnknown && (
             <button
               type="button"
               onClick={() => void invite()}
