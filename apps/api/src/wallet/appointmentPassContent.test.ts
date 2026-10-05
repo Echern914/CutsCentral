@@ -41,6 +41,7 @@ const ENDS_AT = new Date("2026-03-14T18:30:00.000Z");
 function source(over: Partial<Source> = {}, shopOver: Partial<Source["shop"]> = {}): Source {
   return {
     paymentsLive: false,
+    nonRefundable: false,
     id: "cmapptxxxxxxxxxxxxCJ4K2P",
     status: "BOOKED",
     startsAt: STARTS_AT,
@@ -207,6 +208,30 @@ describe("the cancellation policy on the back", () => {
       ),
     );
     expect(f.policy).toBe("free cancellation any time before the appointment");
+  });
+
+  it("🔴 a booking paid on NON-REFUNDABLE terms says so - its own terms, not the shop's today", () => {
+    const deposit = { paymentsMode: "deposit" as const, cancelWindowHours: 24, cancelFeeBps: 5000, depositAmountCents: 2000 };
+    const kept = fields(buildAppointmentPassJson(source({ paymentsLive: true, nonRefundable: true }, deposit)));
+    expect(kept.policy).toBe("what was paid at booking is not refunded on a cancellation");
+    // Same shop, a booking made before the switch: still the fee policy it was booked on.
+    const before = fields(buildAppointmentPassJson(source({ paymentsLive: true, nonRefundable: false }, deposit)));
+    expect(before.policy).toContain("free up to 24h before");
+  });
+
+  it("🔴 still says so after the shop leaves deposit mode or Stripe - the engine keeps it either way", () => {
+    for (const shopNow of [
+      { paymentsMode: "off" as const },
+      { paymentsMode: "card_on_file" as const },
+      { paymentsMode: "deposit" as const, requireBookingApproval: true },
+    ]) {
+      const f = fields(buildAppointmentPassJson(source({ paymentsLive: true, nonRefundable: true }, shopNow)));
+      expect(f.policy).toBe("what was paid at booking is not refunded on a cancellation");
+    }
+    const disconnected = fields(
+      buildAppointmentPassJson(source({ paymentsLive: false, nonRefundable: true }, { paymentsMode: "deposit" })),
+    );
+    expect(disconnected.policy).toBe("what was paid at booking is not refunded on a cancellation");
   });
 });
 

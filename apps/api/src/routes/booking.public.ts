@@ -17,6 +17,7 @@ import {
   isLikelyEmail,
   type BookingErrorCode,
   type BookingErrorField,
+  depositIsNonRefundable,
   describeCancellationPolicy,
   describeDepositPolicy,
   type ShopPaymentsMode,
@@ -173,6 +174,7 @@ async function resolveNativeShop(slugRaw: string | undefined) {
 function publicPaymentSummary(shop: {
   paymentsMode: string;
   depositAmountCents: number | null;
+  depositNonRefundable: boolean;
   chargeCardOnFileFees: boolean;
   cancelWindowHours: number;
   cancelFeeBps: number;
@@ -183,6 +185,13 @@ function publicPaymentSummary(shop: {
   collects: "payment" | "card" | null;
   mode: string;
   depositAmountCents: number | null;
+  /**
+   * The deposit taken at booking is not refunded when they cancel. Only ever
+   * true when this page takes a payment. The page sends it back on Confirm
+   * (`depositNonRefundable`), so a booking is never paid on terms it did not
+   * show - see DEPOSIT_TERMS_CHANGED.
+   */
+  nonRefundable: boolean;
   sentence: string;
   /**
    * The cancellation rule in the same shared words, or null. Only said when
@@ -202,6 +211,7 @@ function publicPaymentSummary(shop: {
     // "nothing to charge" gate out of a question about the shop's INTENT.
     chargeCents: 1,
   });
+  const nonRefundable = collects === "payment" && depositIsNonRefundable(shop);
   const policyInput = {
     paymentsMode: shop.paymentsMode as ShopPaymentsMode,
     cancelWindowHours: shop.cancelWindowHours,
@@ -210,6 +220,7 @@ function publicPaymentSummary(shop: {
     chargeCardOnFileFees: shop.chargeCardOnFileFees,
     paymentsLive: collects !== null,
     requiresApproval: shop.requireBookingApproval,
+    nonRefundable,
   };
   const sentence = describeDepositPolicy(policyInput, { collectsAtBooking: true });
   const cancellation =
@@ -220,6 +231,7 @@ function publicPaymentSummary(shop: {
     collects,
     mode: shop.paymentsMode,
     depositAmountCents: shop.depositAmountCents,
+    nonRefundable,
     sentence,
     cancellation,
   };
@@ -1583,6 +1595,11 @@ const createSchema = z
     // Never a permission on its own - `policyVersion` is still required and
     // still checked - only a note so the record says they were not re-asked.
     policyAgreedAt: z.string().datetime({ offset: true }).optional(),
+    // The deposit refund terms the page SHOWED (shop.payment.nonRefundable),
+    // sent back on Confirm. Never the terms themselves - the server decides
+    // those from the shop - only proof of what the client saw, so a booking is
+    // never paid on non-refundable terms its page did not show.
+    depositNonRefundable: z.boolean().optional(),
     // Booking a barber-published TARGETED slot: its id fixes the time, length,
     // and price (validated server-side against the slot row; capacity 1).
     targetedSlotId: z.string().min(1).optional(),
@@ -1922,6 +1939,21 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
   });
   if (!policy.ok) {
     res.status(policy.status).json(policy.body);
+    return;
+  }
+
+  // 🔴 NEVER PAID ON REFUND TERMS THE PAGE DID NOT SHOW. If this booking's
+  // deposit will be non-refundable, the page must have said so - the shop may
+  // have switched it on after the page loaded. Refused before anything is
+  // written or charged, with the current terms for the page to show. (Switched
+  // OFF in between needs no check: refundable is never worse for the client.)
+  const terms = publicPaymentSummary(shop);
+  if (terms.nonRefundable && d.depositNonRefundable !== true) {
+    res.status(409).json({
+      error: "deposit_terms_changed",
+      code: "DEPOSIT_TERMS_CHANGED",
+      payment: terms,
+    });
     return;
   }
 
@@ -2680,6 +2712,8 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     amountCents: number;
     isDeposit: boolean;
     balanceDueCents: number;
+    /** A payment taken on non-refundable terms - the card step says so. */
+    nonRefundable?: boolean;
     /** Minutes the chair is held while they pay. */
     holdMinutes: number;
     /**
@@ -2750,6 +2784,10 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       description: isDeposit
         ? `Deposit for ${service.name} at ${shop.name}`
         : `${service.name} at ${shop.name}`,
+      // The refund terms this booking is paid on, from the SAME shop row the
+      // page's terms were checked against above - snapshotted onto the
+      // payment, never read live again.
+      nonRefundable: terms.nonRefundable,
     });
     if (created) {
       payment = {
@@ -2762,6 +2800,8 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         isDeposit,
         // What they still owe at the shop; 0 when the whole ticket is paid.
         balanceDueCents: Math.max(0, (fullCents ?? 0) - chargeCents),
+        // The terms this payment is being taken on - the card step says so.
+        nonRefundable: terms.nonRefundable,
         holdMinutes: PAYMENT_HOLD_MINUTES,
         expiresAt: holdExpiresAt?.toISOString() ?? null,
       };
@@ -2988,6 +3028,12 @@ const MANAGE_SELECT = {
       },
       service: { select: { name: true, durationMin: true } },
       staff: { select: { name: true } },
+      // What was paid AT BOOKING and on which refund terms - so a client is
+      // told, before they tap Cancel, that a non-refundable deposit stays.
+      payments: {
+        where: { purpose: "booking" },
+        select: { status: true, amount: true, capturedAmount: true, nonRefundable: true },
+      },
 } satisfies Prisma.AppointmentSelect;
 
 type ManageRow = Prisma.AppointmentGetPayload<{ select: typeof MANAGE_SELECT }>;
@@ -3054,6 +3100,14 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
   // The card the client asked this shop to keep, if any: shown here with the
   // way to take it off, as the consent promised (brand and last four only).
   const savedCardOnFile = appt.clientId ? await liveSavedCardFor(appt.shopId, appt.clientId) : null;
+  // A deposit (or payment) taken at booking that THIS booking's terms keep on
+  // a cancel - its own snapshot, never the shop's switch today. Only money
+  // actually in hand: an unfinished hold has nothing to keep.
+  const bookingPayment = appt.payments[0] ?? null;
+  const keptOnCancel =
+    bookingPayment && bookingPayment.nonRefundable && bookingPayment.status === "succeeded"
+      ? { amountCents: bookingPayment.capturedAmount ?? bookingPayment.amount }
+      : null;
 
   res.json({
     status: appt.status,
@@ -3086,6 +3140,9 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     staff: appt.staff,
     canCancel: canChange,
     canReschedule: canMove,
+    // Non-null: cancelling keeps this much (a non-refundable deposit). The page
+    // says so and asks before it cancels.
+    nonRefundable: keptOnCancel,
     series: appt.seriesId ? { remaining: remainingInSeries } : null,
     // Check-in ("On my way"): the window is computed HERE so the client needs
     // no timezone math - it just renders the button when open is true. A

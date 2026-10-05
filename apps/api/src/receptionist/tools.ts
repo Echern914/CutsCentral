@@ -7,7 +7,7 @@ import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { bookingBlockedFor } from "../services/clientBookingBlock.js";
-import { cancellationFeeCents, cardOnFileFeeCents, paidBookingTakesPrice } from "@chairback/config";
+import { cardOnFileFeeCents, clientCancelKeptCents, paidBookingTakesPrice } from "@chairback/config";
 import {
   completeReschedule,
   dispatchAfterCommit,
@@ -543,7 +543,7 @@ async function getClientHistory(ctx: ToolContext): Promise<ToolExecutionResult> 
 
   const shop = await prisma.shop.findUnique({
     where: { id: ctx.shopId },
-    select: { timezone: true },
+    select: { timezone: true, cancelWindowHours: true, cancelFeeBps: true },
   });
   const tz = shop?.timezone ?? "America/New_York";
 
@@ -576,6 +576,12 @@ async function getClientHistory(ctx: ToolContext): Promise<ToolExecutionResult> 
           startsAt: true,
           service: { select: { name: true } },
           staff: { select: { name: true } },
+          // What a cancel would keep, from THIS booking's own terms - so the
+          // client hears it BEFORE they say "cancel", not after.
+          payments: {
+            where: { purpose: "booking" },
+            select: { amount: true, capturedAmount: true, status: true, nonRefundable: true },
+          },
         },
       }),
     ),
@@ -608,13 +614,41 @@ async function getClientHistory(ctx: ToolContext): Promise<ToolExecutionResult> 
       when: formatApptTime(v.scheduledAt, tz),
       service: v.serviceName,
     })),
-    upcoming_appointments: upcoming.map((a) => ({
-      appointment_id: a.id,
-      status: a.status,
-      when: formatApptTime(a.startsAt, tz),
-      service: a.service.name,
-      barber: a.staff.name,
-    })),
+    upcoming_appointments: upcoming.map((a) => {
+      // The SAME rule and inputs the cancel tool quotes and the engine keeps.
+      const paid = a.payments[0] ?? null;
+      const collectedCents =
+        paid && paid.status === "succeeded" ? (paid.capturedAmount ?? paid.amount) : 0;
+      const keptCents = clientCancelKeptCents({
+        collectedCents,
+        nonRefundable: paid?.nonRefundable === true,
+        cancelWindowHours: shop?.cancelWindowHours ?? 0,
+        cancelFeeBps: shop?.cancelFeeBps ?? 0,
+        startsAt: a.startsAt,
+        now: ctx.now,
+      });
+      return {
+        appointment_id: a.id,
+        status: a.status,
+        when: formatApptTime(a.startsAt, tz),
+        service: a.service.name,
+        barber: a.staff.name,
+        // Paid online: what cancelling THIS one keeps. Say it before cancelling.
+        ...(collectedCents > 0
+          ? {
+              if_cancelled_kept_cents: keptCents,
+              ...(keptCents > 0
+                ? {
+                    if_cancelled_why:
+                      paid?.nonRefundable === true
+                        ? "its deposit is non-refundable"
+                        : "it is inside the cancellation window",
+                  }
+                : {}),
+            }
+          : {}),
+      };
+    }),
   });
 }
 
@@ -1320,14 +1354,18 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
   // after it happened cannot also be cancelled.
   const payment = await prisma.payment.findFirst({
     where: { appointmentId: appt.id, purpose: "booking" },
-    select: { amount: true, capturedAmount: true, status: true },
+    select: { amount: true, capturedAmount: true, status: true, nonRefundable: true },
   });
   const collectedCents =
     payment && payment.status === "succeeded"
       ? (payment.capturedAmount ?? payment.amount)
       : 0;
-  let feeCents = cancellationFeeCents({
+  // This booking's own refund terms (its payment's snapshot), as the engine
+  // reads them.
+  const nonRefundable = payment?.nonRefundable === true;
+  let feeCents = clientCancelKeptCents({
     collectedCents,
+    nonRefundable,
     cancelWindowHours: shop?.cancelWindowHours ?? 0,
     cancelFeeBps: shop?.cancelFeeBps ?? 0,
     startsAt: appt.startsAt,
@@ -1376,7 +1414,9 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
     fee_cents: feeCents,
     fee_note:
       feeCents > 0
-        ? `inside the cancellation window - $${(feeCents / 100).toFixed(2)} of what they paid stays with the shop; tell them plainly`
+        ? nonRefundable
+          ? `the deposit is non-refundable - the $${(feeCents / 100).toFixed(2)} they paid at booking stays with the shop; tell them plainly`
+          : `inside the cancellation window - $${(feeCents / 100).toFixed(2)} of what they paid stays with the shop; tell them plainly`
         : "no fee - nothing kept",
     note:
       feeCents > 0

@@ -245,6 +245,12 @@ export interface BookInput {
    */
   policyAgreedAt?: string;
   /**
+   * The page showed the deposit as non-refundable. Proof of what they saw -
+   * the API refuses a non-refundable booking whose page did not say so
+   * (DEPOSIT_TERMS_CHANGED).
+   */
+  depositNonRefundable?: boolean;
+  /**
    * 🔴 Only ever true from the customer's own tick: keep this card for their
    * future appointments at this shop (config SAVED_CARD_CONSENT).
    */
@@ -275,6 +281,8 @@ export async function bookAction(
   paymentIsDeposit?: boolean;
   /** Cents still due in person after this charge. */
   paymentBalanceDueCents?: number | null;
+  /** This payment is taken on non-refundable terms. */
+  paymentNonRefundable?: boolean;
   /**
    * How many minutes the chair is held while they pay. The appointment is a
    * HOLD until the payment lands, so this is a real deadline, not decoration -
@@ -315,6 +323,8 @@ export async function bookAction(
   message?: string;
   /** With POLICY_CHANGED: the shop's current policy, to show and ask again. */
   policy?: unknown;
+  /** With DEPOSIT_TERMS_CHANGED: the shop's current money terms, to show. */
+  payment?: unknown;
   /** Booked with the client's saved card: the brand and last four to name. */
   savedCard?: { brand: string | null; last4: string | null };
   /** The saved card this device offered can't be used - forget it here. */
@@ -332,6 +342,8 @@ export async function bookAction(
       amountCents: number;
       isDeposit: boolean;
       balanceDueCents: number;
+      /** Taken on non-refundable terms. */
+      nonRefundable?: boolean;
       holdMinutes?: number;
       expiresAt?: string | null;
     } | null;
@@ -354,6 +366,7 @@ export async function bookAction(
       ...(res.questionId ? { questionId: res.questionId } : {}),
       ...(res.message ? { message: res.message } : {}),
       ...(res.policy ? { policy: res.policy } : {}),
+      ...(res.payment ? { payment: res.payment } : {}),
     };
   }
   return {
@@ -371,6 +384,7 @@ export async function bookAction(
     paymentAmountCents: res.data.payment?.amountCents ?? null,
     paymentIsDeposit: res.data.payment?.isDeposit ?? false,
     paymentBalanceDueCents: res.data.payment?.balanceDueCents ?? null,
+    paymentNonRefundable: res.data.payment?.nonRefundable === true,
     paymentHoldMinutes: res.data.payment?.holdMinutes ?? null,
     paymentExpiresAt: res.data.payment?.expiresAt ?? null,
     pending: Boolean(res.data.pending),
@@ -456,6 +470,8 @@ export interface ReopenedCheckout {
   balanceDueCents: number;
   expiresAt: string;
   serviceChargeConsent: boolean;
+  /** Taken on non-refundable terms - said again on the resumed card step. */
+  nonRefundable?: boolean;
 }
 
 /**

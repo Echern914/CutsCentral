@@ -1,6 +1,6 @@
 import { releaseCardOnFile } from "../billing/cardOnFile.js";
 import { settleCardOnFile } from "../services/cardOnFileSettle.js";
-import { cancellationFeeCents } from "@chairback/config";
+import { clientCancelKeptCents } from "@chairback/config";
 import { prisma, runWithShop, type Prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
@@ -342,23 +342,27 @@ export async function cancelAppointment(
         where: { id: shopId },
         select: { cancelWindowHours: true, cancelFeeBps: true },
       });
-      if (shop && shop.cancelWindowHours > 0 && shop.cancelFeeBps > 0) {
-        const payment = await prisma.payment.findUnique({
-          where: { id: result.paymentId },
-          select: { amount: true, capturedAmount: true },
-        });
-        // 🔴 The SHARED formula (config/shopPolicy.ts), so what the
-        // receptionist tells a client a cancellation costs is computed by the
-        // same rule this line charges with. It used to be inline here, where
-        // nothing that speaks to customers could see it.
-        feeCents = cancellationFeeCents({
-          collectedCents: payment?.capturedAmount ?? payment?.amount ?? 0,
-          cancelWindowHours: shop.cancelWindowHours,
-          cancelFeeBps: shop.cancelFeeBps,
-          startsAt: result.startsAt,
-          now,
-        });
-      }
+      const payment = await prisma.payment.findUnique({
+        where: { id: result.paymentId },
+        select: { amount: true, capturedAmount: true, nonRefundable: true },
+      });
+      // 🔴 The SHARED rule (config/shopPolicy.ts), so what the receptionist
+      // tells a client a cancellation costs is computed by the same rule this
+      // line charges with. It used to be inline here, where nothing that speaks
+      // to customers could see it.
+      //
+      // 🔴 THE NON-REFUNDABLE TERMS ARE THIS BOOKING'S OWN (the snapshot on its
+      // payment), never the shop's switch today - and they are NOT behind the
+      // "window and fee both set" test the fee alone used to sit behind: a
+      // non-refundable deposit is kept at a shop with no window configured.
+      feeCents = clientCancelKeptCents({
+        collectedCents: payment?.capturedAmount ?? payment?.amount ?? 0,
+        nonRefundable: payment?.nonRefundable === true,
+        cancelWindowHours: shop?.cancelWindowHours ?? 0,
+        cancelFeeBps: shop?.cancelFeeBps ?? 0,
+        startsAt: result.startsAt,
+        now,
+      });
     }
     await refundForCancellation({ paymentId: result.paymentId, feeCents });
   }

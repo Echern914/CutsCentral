@@ -94,6 +94,12 @@ interface CreateIntentInput {
   currency?: string;
   /** A short label the customer sees on the Stripe sheet / statement. */
   description?: string;
+  /**
+   * The refund terms this booking is paid on: true = kept when the client
+   * cancels. Written into the reservation row and never rewritten - a retry
+   * keeps the FIRST row's terms, like its amount.
+   */
+  nonRefundable?: boolean;
 }
 
 /**
@@ -182,6 +188,7 @@ export async function createAheadPaymentIntent(
           currency,
           applicationFeeAmount: feeAmount,
           status: "requires_payment_method",
+          nonRefundable: input.nonRefundable === true,
         },
       });
     }

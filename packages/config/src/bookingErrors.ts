@@ -60,6 +60,13 @@ export const BOOKING_ERROR_CODES = [
    */
   "POLICY_CHANGED",
   /**
+   * The shop made its deposit non-refundable after this page showed it as
+   * refundable. Nothing was written and nothing was charged: a client is never
+   * held to refund terms the page did not show them. The page shows the
+   * current terms and asks them to confirm again.
+   */
+  "DEPOSIT_TERMS_CHANGED",
+  /**
    * The saved card this device offered belongs to a different client record
    * than the person now on the form. Nothing was written; the page forgets
    * the card and books with a card step instead.

@@ -97,3 +97,47 @@ describe("card on file in payment settings", () => {
     expect(btn).toHaveTextContent("Connect Stripe first.");
   });
 });
+
+describe("Deposit refunds - next to Tips, deposit mode only", () => {
+  it("is only there in deposit mode, and off by default", () => {
+    const { unmount } = render(<PaymentsManager initial={status()} apiBase="http://api.test" />);
+    expect(screen.queryByRole("heading", { name: "Deposit refunds" })).toBeNull();
+    unmount();
+    render(<PaymentsManager initial={status({ paymentsMode: "deposit", depositAmountCents: 1000 })} apiBase="http://api.test" />);
+    expect(screen.getByRole("heading", { name: "Deposit refunds" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Follow my cancellation policy/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /Non-refundable/ })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("🔴 saves the choice with the deposit, and says what it does", async () => {
+    render(<PaymentsManager initial={status({ paymentsMode: "deposit", depositAmountCents: 1000 })} apiBase="http://api.test" />);
+    fireEvent.click(screen.getByRole("button", { name: /Non-refundable/ }));
+    // The deposit hint and the cancellation card now say the deposit is kept.
+    expect(screen.getByText(/so does a client's cancellation/)).toBeInTheDocument();
+    expect(screen.getByText(/Your deposit is non-refundable, so when a client cancels it is kept/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save payment settings" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toMatchObject({
+      paymentsMode: "deposit",
+      depositAmountCents: 1000,
+      depositNonRefundable: true,
+    });
+  });
+
+  it("reads the saved choice back", () => {
+    render(
+      <PaymentsManager
+        initial={status({ paymentsMode: "deposit", depositAmountCents: 1000, depositNonRefundable: true })}
+        apiBase="http://api.test"
+      />,
+    );
+    expect(screen.getByRole("button", { name: /Non-refundable/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("is never sent for another mode", async () => {
+    render(<PaymentsManager initial={status({ paymentsMode: "ahead", depositNonRefundable: true })} apiBase="http://api.test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Save payment settings" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).not.toHaveProperty("depositNonRefundable");
+  });
+});

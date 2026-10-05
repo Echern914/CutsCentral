@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   apiEnv,
+  depositIsNonRefundable,
   describeCancellationPolicy,
   describeDepositPolicy,
   describeNoShowPolicy,
@@ -202,6 +203,9 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       cancelWindowHours: true,
       cancelFeeBps: true,
       depositAmountCents: true,
+      // A deposit paid online and kept on a cancel - the client must hear it
+      // BEFORE they text "cancel", not after.
+      depositNonRefundable: true,
       // CAPABILITY, not intent. paymentsMode says what the shop WANTS; these
       // say whether a card can actually be taken. A shop can sit in deposit
       // mode through all of Connect onboarding and collect nothing.
@@ -313,6 +317,9 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
     paymentsLive:
       connectEnabled() && shop.connectChargesEnabled && Boolean(shop.stripeConnectAccountId),
     requiresApproval: shop.requireBookingApproval,
+    // For bookings made from now on (the prompt is the shop's, not one
+    // booking's). The cancel tool reads each booking's own snapshot.
+    nonRefundable: depositIsNonRefundable(shop),
   };
   const channel = { collectsAtBooking: false } as const;
   const cancellation = describeCancellationPolicy(policyShop, channel);

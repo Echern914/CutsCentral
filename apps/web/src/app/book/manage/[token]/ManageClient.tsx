@@ -18,6 +18,7 @@ import { useDemoTour } from "@/components/tour/state";
 import type { ManageData } from "./page";
 import { ClientNoteBlock } from "../../ClientNoteBlock";
 import { FinishCheckout } from "./FinishCheckout";
+import { keptOnCancelQuestion } from "../../[slug]/depositTerms";
 import {
   cancelBookingAction,
   checkInAction,
@@ -99,8 +100,17 @@ export function ManageClient({
   }, []);
   const until = untilLabel(new Date(movedTo ?? data.startsAt), now, data.shop.timezone);
 
+  // A non-refundable deposit: the first tap asks, so nobody loses money to a
+  // stray tap or without being told. Null = not asking.
+  const [confirmKept, setConfirmKept] = useState<"this" | "future" | null>(null);
+
   function cancel(scope: "this" | "future") {
     setError(null);
+    if (data.nonRefundable && confirmKept !== scope) {
+      setConfirmKept(scope);
+      return;
+    }
+    setConfirmKept(null);
     startTransition(async () => {
       const res = await cancelBookingAction(token, scope);
       if (!res.ok) {
@@ -285,7 +295,40 @@ export function ManageClient({
                 To move this appointment, please contact the shop.
               </p>
             )}
-            {data.canCancel && !demoTour && (
+            {data.canCancel && !demoTour && data.nonRefundable && confirmKept !== null && (
+              <div
+                role="alertdialog"
+                aria-labelledby="kept-on-cancel"
+                className="flex flex-col gap-2 rounded-xl border border-red-500/40 bg-red-500/5 p-3"
+              >
+                <p id="kept-on-cancel" className="text-sm text-offwhite">
+                  {keptOnCancelQuestion(data.nonRefundable.amountCents)}
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => cancel(confirmKept)}
+                    disabled={pending}
+                    className="rounded-xl border border-red-500/40 py-2.5 text-center text-sm font-semibold text-red-400 disabled:opacity-50"
+                  >
+                    {pending ? "Canceling…" : "Cancel anyway"}
+                  </button>
+                  <button
+                    type="button"
+                    // The question replaces the button that was focused: move
+                    // focus into it - onto the choice that costs nothing - so
+                    // a keyboard or screen-reader user hears it at once.
+                    autoFocus
+                    onClick={() => setConfirmKept(null)}
+                    disabled={pending}
+                    className="rounded-xl border border-subtle py-2.5 text-center text-sm font-semibold text-offwhite disabled:opacity-50"
+                  >
+                    Keep my appointment
+                  </button>
+                </div>
+              </div>
+            )}
+            {data.canCancel && !demoTour && confirmKept === null && (
               <button
                 type="button"
                 onClick={() => cancel("this")}
@@ -295,7 +338,7 @@ export function ManageClient({
                 {pending ? "Canceling…" : laterVisits > 0 ? "Cancel just this visit" : "Cancel appointment"}
               </button>
             )}
-            {data.canCancel && !demoTour && laterVisits > 0 && (
+            {data.canCancel && !demoTour && laterVisits > 0 && confirmKept === null && (
               <button
                 type="button"
                 onClick={() => cancel("future")}

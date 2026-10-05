@@ -182,8 +182,16 @@ export async function promotePaidHold(params: {
     // and NOT an error.
     if (appt.status === "BOOKED") return "already_booked";
     // A pending APPROVAL request is not ours to promote; the barber decides.
+    //
+    // 🔴 "lapsed" ONLY FOR A HOLD THAT NEVER BECAME A BOOKING. Promotion clears
+    // holdReason; a lapse (and every other end of a hold) keeps it. A
+    // CANCELED row with holdReason null was a REAL booking that was then
+    // cancelled - its money was settled by that cancel (a kept deposit, a
+    // fee). Calling it "lapsed" sent a replayed payment_intent.succeeded into
+    // refundUnhonoredHold, which refunds in full and would hand back a deposit
+    // the client's own cancellation kept.
     if (appt.status !== "PENDING" || appt.holdReason !== "payment") {
-      return appt.status === "CANCELED" ? "lapsed" : "not_a_hold";
+      return appt.status === "CANCELED" && appt.holdReason === "payment" ? "lapsed" : "not_a_hold";
     }
 
     // The hold ran out before the money arrived. Deliberately NOT promoted

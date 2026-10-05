@@ -40,6 +40,11 @@ export interface UnfinishedCheckout {
    * someone who agreed to more.
    */
   serviceChargeConsent: boolean;
+  /**
+   * The payment is on non-refundable terms (its own snapshot): the resumed
+   * screen must say so, exactly as the first one did.
+   */
+  nonRefundable: boolean;
 }
 
 /** Intent states that still want the customer's card. */
@@ -80,12 +85,18 @@ export async function unfinishedCheckoutFor(
         balanceDueCents: fullCents,
         expiresAt,
         serviceChargeConsent: card.serviceChargeConsentAt !== null,
+        nonRefundable: false,
       };
     }
 
     const payment = await prisma.payment.findFirst({
       where: { appointmentId: appt.id, purpose: "booking" },
-      select: { stripePaymentIntentId: true, amount: true, shop: { select: { paymentsMode: true } } },
+      select: {
+        stripePaymentIntentId: true,
+        amount: true,
+        nonRefundable: true,
+        shop: { select: { paymentsMode: true } },
+      },
     });
     if (!payment || isPendingIntentId(payment.stripePaymentIntentId)) return null;
     const pi = await stripeClient().paymentIntents.retrieve(payment.stripePaymentIntentId);
@@ -99,6 +110,7 @@ export async function unfinishedCheckoutFor(
       balanceDueCents: Math.max(0, fullCents - payment.amount),
       expiresAt,
       serviceChargeConsent: false,
+      nonRefundable: payment.nonRefundable,
     };
   } catch (err) {
     // Stripe unreachable: the page says what is true (not booked yet) and

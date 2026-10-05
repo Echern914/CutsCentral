@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { PaymentStep } from "../../[slug]/PaymentStep";
 import { bookingStatusAction, cardSavedAction } from "../../[slug]/actions";
+import { DEPOSIT_KEPT_LINE } from "../../[slug]/depositTerms";
 import type { ManageData } from "./page";
 
 /**
@@ -122,6 +123,8 @@ export function FinishCheckout({
         ) : finish.isDeposit && finish.balanceDueCents > 0 ? (
           <> The remaining ${(finish.balanceDueCents / 100).toFixed(0)} is due at {shopName}.</>
         ) : null}
+        {/* The same terms the first card step said, before they pay. */}
+        {finish.kind === "payment" && finish.nonRefundable && <> {DEPOSIT_KEPT_LINE}</>}
       </p>
       <div className="mt-4">
         <PaymentStep
