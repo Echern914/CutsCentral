@@ -176,6 +176,8 @@ async function webhookSaved(si: FakeSetupIntent) {
 beforeAll(async () => {
   process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
   process.env.STRIPE_CONNECT_WEBHOOK_SECRET = "whsec_test_dummy";
+  // Standing appointments at a card shop are live in production.
+  process.env.SERIES_CARD_ON_FILE_ENABLED = "true";
   __resetEnvCacheForTests();
   // Resolved once, before any race: a mock is not shared until the module is.
   await import("./cardOnFile.js");
@@ -231,6 +233,7 @@ beforeEach(() => {
 afterAll(async () => {
   delete process.env.STRIPE_SECRET_KEY;
   delete process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
+  delete process.env.SERIES_CARD_ON_FILE_ENABLED;
   __resetEnvCacheForTests();
   const user = await prisma.user.findUnique({ where: { email } });
   if (user) {
@@ -365,6 +368,33 @@ describe("a card shop books without a card - the default", () => {
     expect((await apptByToken(body.manageToken)).status).toBe("CANCELED");
     expect((await cardFor(appt.id)).status).toBe("released");
     expect(fake.calls.detached).toContain(`pm_fake_${row.stripeSetupIntentId}`);
+  });
+
+  it("🔴 a standing appointment is booked at Confirm and confirmed ONCE, for the first visit", async () => {
+    const res = await request(app)
+      .post(`/api/book/${slug}`)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: futureAt(1, 9).toISOString(),
+        firstName: "Opt",
+        lastName: "Series",
+        phone: "(302) 555-0143",
+        email: `opts-${randomToken(4)}@example.com`,
+        recurrence: { interval: 1, count: 3 },
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.series.held).toBe(false);
+    expect(res.body.payment).toMatchObject({ kind: "setup", optional: true });
+    const occ = await prisma.appointment.findMany({
+      where: { seriesId: res.body.series.id },
+      select: { id: true, status: true },
+      orderBy: { startsAt: "asc" },
+    });
+    expect(occ.map((o) => o.status)).toEqual(["BOOKED", "BOOKED", "BOOKED"]);
+    expect(notify.confirmation).toHaveBeenCalledTimes(1);
+    expect(notify.confirmation).toHaveBeenCalledWith({ shopId, appointmentId: occ[0]!.id });
+    expect(notify.barber).toHaveBeenCalledWith({ shopId, appointmentId: occ[0]!.id, kind: "booked" });
   });
 
   it("a shop that wants card-or-nothing turns requireCardToBook on and gets the hold back", async () => {
