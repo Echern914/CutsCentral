@@ -36,6 +36,13 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-05-tip-ask-email",
+    date: "2026-10-05",
+    kind: "feature",
+    title: "Clients get a Leave a tip email after a visit",
+    body: "With Tips on, about an hour after a visit you finish (Done, checkout, or marked arrived) the client gets one email with a Leave a tip link. When they tip, they get a receipt and you get a push. A visit that only ended on the calendar is never asked.",
+  },
+  {
     id: "2026-10-05-unfinished-confirm-and-invite",
     date: "2026-10-05",
     kind: "feature",

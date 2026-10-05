@@ -14,6 +14,7 @@ import { runAppointmentReminders } from "./engines/appointmentReminders.js";
 import { runSyncedVisitReminders } from "./engines/syncedVisitReminders.js";
 import { runPushReminders } from "./engines/pushReminders.js";
 import { runRebookNudges } from "./engines/rebookNudges.js";
+import { repairUnannouncedTips, runTipRequestSweep } from "./engines/tipRequests.js";
 import { runBarberReminders } from "./engines/barberReminders.js";
 import { refreshExpiringSquareTokens } from "./engines/squareTokenRefresh.js";
 import { runSquareResync } from "./engines/squareResync.js";
@@ -181,11 +182,17 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
   // still holding the phone. Sweeps BOTH native Appointments and synced Visits
   // (an Acuity shop has no Appointment rows at all). Every 10 minutes, so the
   // worst case lands 40 min out; idempotent via rebookPromptSentAt.
+  //
+  // Riding the same lease (a new job needs a job_lease seed row or it never
+  // runs in production): the "Leave a tip" email about an hour after a visit
+  // the shop finished, and the self-heal for a paid tip whose receipt and push
+  // never went (engines/tipRequests.ts). Three steps, one after another, each
+  // reported on its own - one failing never skips the others.
   {
     cronExpr: "*/10 * * * *",
     name: "rebook-nudges",
     ttlMs: 5 * MINUTE,
-    run: () => runRebookNudges(),
+    run: () => runAfterVisitSteps(),
     failMsg: "rebook nudge job failed",
   },
   // The BARBER's own reminders: "next up: Sam - Fade at 2:30" before each
@@ -608,6 +615,26 @@ async function verifyLeaseRows(): Promise<void> {
     }
   } catch (err) {
     logger.error({ err }, "job_lease startup verification failed");
+  }
+}
+
+/**
+ * The rebook-nudges job's three steps. Production calls each with NO
+ * arguments: the sweeps' scope options exist for tests only.
+ */
+export async function runAfterVisitSteps(): Promise<void> {
+  const steps: [string, () => Promise<unknown>][] = [
+    ["rebook-nudges", () => runRebookNudges()],
+    ["tip-requests", () => runTipRequestSweep()],
+    ["tip-announce-repair", () => repairUnannouncedTips()],
+  ];
+  for (const [step, run] of steps) {
+    try {
+      await run();
+    } catch (err) {
+      logger.error({ step, errName: err instanceof Error ? err.name : "unknown" }, "after-visit step failed");
+      captureError(err, { job: "rebook-nudges", step });
+    }
   }
 }
 

@@ -54,6 +54,13 @@ export async function promoteOneAppointmentInTx(
   shop: PromoteShop,
   appt: PromoteAppt,
   now: Date,
+  /**
+   * `byShop`: someone at the shop finished this visit (Done, checkout, walk-in
+   * Complete) - false when the 15-minute sweep completed it on its own,
+   * which an unmarked no-show also does. Recorded as completedByShop; the tip
+   * ask goes only to visits the shop finished.
+   */
+  opts: { byShop?: boolean } = {},
 ): Promise<EarnResult> {
   // A walk-in queue entry riding this appointment goes terminal in the SAME
   // commit as the completion - and BEFORE the clientId guard, because the
@@ -103,7 +110,12 @@ export async function promoteOneAppointmentInTx(
 
   await tx.appointment.update({
     where: { id: appt.id },
-    data: { status: "COMPLETED", completedAt: now, visitId: visit.id },
+    data: {
+      status: "COMPLETED",
+      completedAt: now,
+      visitId: visit.id,
+      ...(opts.byShop ? { completedByShop: true } : {}),
+    },
   });
 
   return earn;

@@ -665,7 +665,8 @@ export function PaymentsManager({
               <p className="text-sm font-medium text-offwhite">Online tips after the visit</p>
               <p className="mt-0.5 text-xs text-muted">
                 Once a visit is done, clients can leave 15, 20 or 25% or their own amount from their
-                appointment page. Stripe&rsquo;s card fee comes out of each tip, as at any card reader;
+                appointment page, and about an hour after a visit you finish they get one email with a
+                Leave a tip link. Stripe&rsquo;s card fee comes out of each tip, as at any card reader;
                 {" "}{APP_NAME} keeps none of it.
               </p>
             </div>

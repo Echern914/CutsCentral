@@ -512,7 +512,7 @@ export async function applyIntentSnapshot(
   const noDowngrade = pi.status !== "succeeded";
   // True when the row was written; false for a replay, a refused downgrade or
   // a row that is not ours - so a caller can tell "adopted" from "refused".
-  return reconcile(
+  const wrote = await reconcile(
     markerId,
     { paymentId: pi.metadata?.paymentId, piId: pi.id },
     {
@@ -524,6 +524,28 @@ export async function applyIntentSnapshot(
     },
     noDowngrade ? NON_SUCCESS_MAY_NOT_OVERWRITE : undefined,
   );
+  // A TIP JUST PAID: the client's receipt and the staff member's push. Every
+  // path that can make a tip succeeded comes through here (the webhook, the
+  // page's refresh, resume, retire, the tip sweep, the reconciler), and the
+  // announcement claims itself once (Payment.tipAnnouncedAt) - so it runs on
+  // EVERY succeeded snapshot, written or a replay: a replay after a failed
+  // announcement is exactly when it matters. A no-op for anything not a tip.
+  if (pi.status === "succeeded") await announceAfterSnapshot(pi);
+  return wrote;
+}
+
+async function announceAfterSnapshot(pi: Pick<Stripe.PaymentIntent, "id" | "metadata">): Promise<void> {
+  try {
+    // Dynamic, like the hold promotion below: services/ must not be loaded
+    // into this module's import graph.
+    const { announceTipPaid } = await import("../services/tipPaid.js");
+    await announceTipPaid({ paymentId: pi.metadata?.paymentId, piId: pi.id });
+  } catch (err) {
+    logger.error(
+      { piId: pi.id, errName: err instanceof Error ? err.name : "unknown" },
+      "tip announcement could not run",
+    );
+  }
 }
 
 /**

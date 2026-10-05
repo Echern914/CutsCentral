@@ -157,3 +157,12 @@ export const TIP_SHOP_SELECT = {
 export function liveTipWhere(): { purpose: string; status: { notIn: string[] } } {
   return { purpose: "tip", status: { notIn: ["failed", "canceled"] } };
 }
+
+/**
+ * Prisma filter for a tip GIVEN or under way: a live row past an open attempt.
+ * An attempt the client opened and left (or whose card was declined) is still
+ * open - tipViewFor offers the card again - so it is not one of these.
+ */
+export function givenTipWhere(): { purpose: string; status: { notIn: string[] } } {
+  return { purpose: "tip", status: { notIn: ["failed", "canceled", ...OPEN_STATUSES] } };
+}

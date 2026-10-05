@@ -88,6 +88,14 @@ async function book(
 const status = async (id: string) =>
   (await prisma.appointment.findUnique({ where: { id }, select: { status: true } }))!
     .status;
+/**
+ * Whether the SHOP finished it - the "Leave a tip" email's signal. Pinned here
+ * because this file drives every completion path: the sweep also completes an
+ * unmarked no-show, so it must never set this.
+ */
+const byShop = async (id: string) =>
+  (await prisma.appointment.findUniqueOrThrow({ where: { id }, select: { completedByShop: true } }))
+    .completedByShop;
 
 beforeAll(async () => {
   const signup = await request(app)
@@ -133,6 +141,7 @@ describe("a completion pokes the Wallet pass", () => {
     await promoteFulfilledAppointments(new Date());
     expect(await status(id)).toBe("COMPLETED");
     expect(wallet.poke).toHaveBeenCalledWith(id);
+    expect(await byShop(id)).toBe(false);
   });
 
   it("🔴 Done (/appointments/:id/complete)", async () => {
@@ -143,6 +152,7 @@ describe("a completion pokes the Wallet pass", () => {
     expect(res.status).toBe(200);
     expect(await status(id)).toBe("COMPLETED");
     expect(wallet.poke).toHaveBeenCalledWith(id);
+    expect(await byShop(id)).toBe(true);
   });
 
   it("Done on an appointment that is not there pokes nothing", async () => {
@@ -162,6 +172,7 @@ describe("a completion pokes the Wallet pass", () => {
     expect(res.status).toBe(200);
     expect(await status(id)).toBe("COMPLETED");
     expect(wallet.poke).toHaveBeenCalledWith(id);
+    expect(await byShop(id)).toBe(true);
   });
 
   it("🔴 walk-in completion", async () => {
@@ -189,6 +200,31 @@ describe("a completion pokes the Wallet pass", () => {
     });
     expect(await status(started.appointmentId)).toBe("COMPLETED");
     expect(wallet.poke).toHaveBeenCalledWith(started.appointmentId);
+    expect(await byShop(started.appointmentId)).toBe(true);
+  });
+
+  it("🔴 walk-in completion for a known client (the punch path) marks it finished by the shop", async () => {
+    const manager = { kind: "manager" as const, userId, staffId: null };
+    const now = new Date(Date.now() - 3 * DAY_MS);
+    const entry = await createEntryByStaff({
+      shopId,
+      timezone: "UTC",
+      actor: manager,
+      input: { firstName: "Known", phone: "+12125557312", serviceIds: [serviceId] },
+      now,
+    });
+    const client = await prisma.client.create({
+      data: { shopId, acuityClientKey: `pp-${randomToken(8)}`, magicToken: randomToken(), firstName: "Known" },
+      select: { id: true },
+    });
+    await prisma.walkInEntry.update({ where: { id: entry.id }, data: { clientId: client.id } });
+    const started = await startEntry({ shopId, entryId: entry.id, actor: manager, staffId, now });
+    await completeEntry({ shopId, entryId: entry.id, actor: manager, now: new Date(now.getTime() + 30 * 60_000) });
+    const appt = await prisma.appointment.findUniqueOrThrow({
+      where: { id: started.appointmentId },
+      select: { status: true, clientId: true, completedByShop: true },
+    });
+    expect(appt).toEqual({ status: "COMPLETED", clientId: client.id, completedByShop: true });
   });
 });
 

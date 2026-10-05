@@ -55,6 +55,10 @@ const WAVES = {
       "Payment_appointmentId_tip_live_key",
       // One ledger row per Stripe refund, so two presses record one refund.
       "PaymentRefund_stripeRefundId_key",
+      // One outbox email per key: a receipt queued by the response, the
+      // webhook and the reconciler is ONE email (serviceChargeReceipt.ts,
+      // tipEmails.ts).
+      "EmailIntent_idempotencyKey_key",
     ],
   },
 };

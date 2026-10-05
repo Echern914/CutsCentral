@@ -397,6 +397,13 @@ describe("appointment promotion + loyalty", () => {
     expect(punch?.punchesEarned).toBe(1);
     // The earn text fired.
     expect(sent.some((s) => s.body.toLowerCase().includes("punch"))).toBe(true);
+    // 🔴 Completed by the SWEEP, not the shop: an unmarked no-show completes
+    // this way too, so it is never the "Leave a tip" email's signal.
+    const swept = await prisma.appointment.findUniqueOrThrow({
+      where: { id: appt!.id },
+      select: { status: true, completedByShop: true },
+    });
+    expect(swept).toEqual({ status: "COMPLETED", completedByShop: false });
 
     // Re-running is idempotent: no second visit, no second punch.
     //
