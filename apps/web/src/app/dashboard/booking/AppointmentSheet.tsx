@@ -22,6 +22,7 @@ import {
 import { CheckoutFlow } from "./CheckoutFlow";
 import { CheckoutRefund } from "./CheckoutRefund";
 import { DepositRefund } from "./DepositRefund";
+import { TipRefund } from "./TipRefund";
 import {
   cancelAppointmentAction,
   checkoutAppointmentAction,
@@ -609,6 +610,16 @@ function DetailView({
               appointmentId={detail.id}
               status={detail.status}
               kept={detail.keptDeposit}
+              onRefunded={onDepositRefunded}
+              onStale={onRetry}
+            />
+          )}
+          {/* A tip the client left online after the visit, while any of it
+              can still be given back. Managers only, like everything here. */}
+          {!loadError && detail?.source === "appointment" && detail.tip && detail.tip.refundableCents > 0 && (
+            <TipRefund
+              appointmentId={detail.id}
+              tip={detail.tip}
               onRefunded={onDepositRefunded}
               onStale={onRetry}
             />
@@ -1408,6 +1419,22 @@ function PaymentCard({
           {/* An authorization is a card being HELD, not money in the shop. */}
           {p.authorizedCents > 0 && (
             <Line label="Card held (not captured)" value={money(p.authorizedCents)} />
+          )}
+          {/* 🔴 A TIP IS ITS OWN LINE, never part of the figures above: it is
+              the client's extra on top of the price, so it never changes what
+              is paid or still to collect. Stripe's fee comes out of it. */}
+          {detail.tip && (
+            <>
+              <Line
+                label={detail.tip.processing ? "Tip · processing" : "Tip · paid online"}
+                value={money(detail.tip.amountCents)}
+                tone="good"
+              />
+              <Line label="Stripe's fee on the tip" value={`−${money(detail.tip.feeCents)}`} />
+              {detail.tip.refundedCents > 0 && (
+                <Line label="Tip refunded" value={`−${money(detail.tip.refundedCents)}`} tone="bad" />
+              )}
+            </>
           )}
           {/* ChairBack persists no card data, so this renders only if a
               verified brand/last-four ever reaches the payload. */}

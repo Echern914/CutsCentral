@@ -4,11 +4,15 @@ import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import type { PaymentStatus } from "./actions";
 
 const save = vi.hoisted(() => vi.fn(async (_input: unknown) => ({ ok: true })));
+const setTips = vi.hoisted(() =>
+  vi.fn(async (_enabled: boolean): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
+);
 vi.mock("./actions", () => ({
   disconnectStripeAction: vi.fn(),
   openStripeDashboardAction: vi.fn(),
   savePaymentSettingsAction: save,
   savePayDirectAction: vi.fn(),
+  setOnlineTipsAction: setTips,
   startStripeConnectHandoffAction: vi.fn(),
 }));
 vi.mock("@/components/VocabProvider", () => ({
@@ -47,7 +51,11 @@ function status(over: Partial<PaymentStatus> = {}): PaymentStatus {
   };
 }
 
-beforeEach(() => save.mockClear());
+beforeEach(() => {
+  save.mockClear();
+  setTips.mockReset();
+  setTips.mockResolvedValue({ ok: true });
+});
 
 describe("card on file in payment settings", () => {
   it("is offered as a fourth way to pay, with the fee switch hidden until chosen", () => {
@@ -139,5 +147,72 @@ describe("Deposit refunds - next to Tips, deposit mode only", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save payment settings" }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     expect(save.mock.calls[0]![0]).not.toHaveProperty("depositNonRefundable");
+  });
+});
+
+/**
+ * Online tips: a money switch, so it is saved the moment it is flipped (its
+ * own route, never folded into "Save payment settings"), off until the owner
+ * turns it on, and it says the outcome where they are looking.
+ */
+describe("Online tips after the visit", () => {
+  const tipsSwitch = () => screen.getByRole("switch", { name: "Online tips after the visit" });
+
+  it("🔴 is off by default, and says who keeps the fee", () => {
+    render(<PaymentsManager initial={status()} apiBase="http://api.test" />);
+    expect(tipsSwitch()).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(/Stripe.s card fee comes out of each tip/)).toBeInTheDocument();
+  });
+
+  it("turns on at once, on its own, and says so", async () => {
+    render(<PaymentsManager initial={status()} apiBase="http://api.test" />);
+    fireEvent.click(tipsSwitch());
+    await waitFor(() => expect(tipsSwitch()).toHaveAttribute("aria-checked", "true"));
+    expect(setTips).toHaveBeenCalledWith(true);
+    // Not bundled into the settings save.
+    expect(save).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "On. Clients can tip from their appointment page after a finished visit.",
+    );
+  });
+
+  it("a refused save leaves it as it was and says why", async () => {
+    setTips.mockResolvedValue({ ok: false, error: "connect_not_ready" });
+    render(<PaymentsManager initial={status()} apiBase="http://api.test" />);
+    fireEvent.click(tipsSwitch());
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Finish connecting Stripe first - tips need an account that can take payments.",
+      ),
+    );
+    expect(tipsSwitch()).toHaveAttribute("aria-checked", "false");
+
+    setTips.mockRejectedValue(new Error("Failed to fetch"));
+    fireEvent.click(tipsSwitch());
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Couldn't save. Nothing changed - try again."),
+    );
+    expect(tipsSwitch()).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("cannot be turned on before Stripe can take a payment, but can always be turned off", () => {
+    const notReady = { connected: false, chargesEnabled: false, payoutsEnabled: false, detailsSubmitted: false };
+    const { unmount } = render(
+      <PaymentsManager initial={status({ connect: notReady })} apiBase="http://api.test" />,
+    );
+    expect(tipsSwitch()).toBeDisabled();
+    unmount();
+    render(
+      <PaymentsManager initial={status({ connect: notReady, onlineTipsEnabled: true })} apiBase="http://api.test" />,
+    );
+    expect(tipsSwitch()).toBeEnabled();
+    expect(tipsSwitch()).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("says clients aren't offered a tip while prices include one", () => {
+    render(
+      <PaymentsManager initial={status({ onlineTipsEnabled: true, tipPolicy: "included" })} apiBase="http://api.test" />,
+    );
+    expect(screen.getByText(/Your prices say they include a tip, so clients aren.t offered one/)).toBeInTheDocument();
   });
 });

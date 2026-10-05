@@ -31,8 +31,9 @@ import {
  * stated on the printed page so nobody has to guess.
  *
  * WHAT IS DELIBERATELY ABSENT: any statistic ChairBack cannot stand behind.
- * Tips are not a column anywhere in the schema (`Shop.tipPolicy` is a sentence
- * shown to customers, not an amount), and no payment row records cash versus
+ * Tips are not part of revenue: a tip at the chair is inside what was
+ * collected, and an online tip (a `tip` Payment row) is kept out of revenue on
+ * purpose. And no payment row records cash versus
  * card at the chair. Those come back as `unavailable` entries with a reason,
  * and the report prints the reason. Guessing them would be the one failure a
  * document like this cannot survive.
@@ -536,7 +537,12 @@ export const UNAVAILABLE_METRICS: UnavailableMetric[] = [
   {
     key: "tips",
     label: "Tips",
-    reason: "ChairBack does not record tip amounts, so none can be reported.",
+    // Tips handed over at the chair are already inside "collected" (the
+    // checkout amount is what the client paid). Tips left online after a
+    // visit are recorded on the appointment, but - Eric, 2026-10-05 - kept
+    // out of revenue, so they are not in this report either.
+    reason:
+      "Tips paid at the chair are inside what you collected. Tips clients leave online after a visit are not included in this report.",
   },
   {
     key: "cardVsCash",

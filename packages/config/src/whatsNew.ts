@@ -36,6 +36,13 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-05-online-tips",
+    date: "2026-10-05",
+    kind: "feature",
+    title: "Clients can tip you online after a visit",
+    body: "Turn on Tips in Payments. Once a visit is done, clients can leave 15, 20 or 25% or their own amount from their appointment page. Stripe's card fee comes out of each tip, as at any card reader. Each tip shows on the appointment, with a Refund tip button.",
+  },
+  {
     id: "2026-10-05-repeat-appointment",
     date: "2026-10-05",
     kind: "fix",
