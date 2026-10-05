@@ -1,8 +1,18 @@
 import { randomToken } from "@chairback/config";
 import { Prisma, runAsOwner } from "@chairback/db";
 import { logger } from "../logger.js";
-import { deliverCancellationIntent } from "../services/appointmentCanceledNotify.js";
+import {
+  deliverCancellationIntent,
+  settle,
+  type IntentOutcome,
+} from "../services/appointmentCanceledNotify.js";
 import { deliverAffiliateIntent, isAffiliateEmailKind } from "../services/affiliateNotify.js";
+import {
+  deliverTipReceiptIntent,
+  deliverTipRequestIntent,
+  isTipReceiptKind,
+  isTipRequestKind,
+} from "../services/tipEmails.js";
 import {
   deliverGroupConfirmationIntent,
   isGroupConfirmationKind,
@@ -102,19 +112,20 @@ export async function runEmailOutbox(
   for (const row of claimed) {
     // Never throws: deliver* classifies every failure itself. A single bad
     // intent must not stop the batch.
-    // One outbox, two families of email. The kind on the row picks the
-    // deliverer; both share the claim/attempt/idempotency state machine.
-    // One outbox, now three families of email. The kind on the row picks the
+    // One outbox, several families of email. The kind on the row picks the
     // deliverer; all of them share the claim/attempt/idempotency state machine,
-    // which is the whole reason a group confirmation rides here rather than
-    // getting a delivery path of its own.
-    const deliver = isGroupConfirmationKind(row.kind)
-      ? deliverGroupConfirmationIntent
-      : isServiceChargeReceiptKind(row.kind)
-        ? deliverServiceChargeReceiptIntent
-        : isAffiliateEmailKind(row.kind)
-          ? deliverAffiliateIntent
-          : deliverCancellationIntent;
+    // which is the whole reason each new email rides here rather than getting
+    // a delivery path of its own.
+    const deliver = deliveryFor(row.kind);
+    if (!deliver) {
+      // 🔴 NEVER A SILENT FALLTHROUGH. An unrouted kind used to land on the
+      // cancellation deliverer, which settles anything not cancelled as
+      // SUPERSEDED - a new email that was never wired in vanished without a
+      // trace. Now it fails loudly, in the ledger and the log.
+      logger.error({ kind: row.kind, intentId: row.id }, "email outbox: no deliverer for this kind");
+      await settle(row.id, "FAILED", "unknown_kind");
+      continue;
+    }
     const outcome = await deliver({
       intentId: row.id,
       claimToken,
@@ -132,4 +143,17 @@ export async function runEmailOutbox(
     logger.info(result, "email outbox drained");
   }
   return result;
+}
+
+type Deliverer = (params: { intentId: string; claimToken: string; now?: Date }) => Promise<IntentOutcome>;
+
+/** The deliverer for one EmailIntent kind, or null for a kind nothing sends. */
+export function deliveryFor(kind: string): Deliverer | null {
+  if (kind === "appointment_canceled") return deliverCancellationIntent;
+  if (isGroupConfirmationKind(kind)) return deliverGroupConfirmationIntent;
+  if (isServiceChargeReceiptKind(kind)) return deliverServiceChargeReceiptIntent;
+  if (isAffiliateEmailKind(kind)) return deliverAffiliateIntent;
+  if (isTipRequestKind(kind)) return deliverTipRequestIntent;
+  if (isTipReceiptKind(kind)) return deliverTipReceiptIntent;
+  return null;
 }

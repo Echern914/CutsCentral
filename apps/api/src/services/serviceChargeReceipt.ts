@@ -256,7 +256,7 @@ export async function deliverServiceChargeReceiptIntent(params: {
 }
 
 /** The last eight characters of the Stripe id, upper-cased - never the full id. */
-function receiptReference(paymentIntentId: string | null, attemptId: string): string {
+export function receiptReference(paymentIntentId: string | null, attemptId: string): string {
   const source = paymentIntentId && !paymentIntentId.startsWith("pending:") ? paymentIntentId : attemptId;
   return source.slice(-8).toUpperCase();
 }

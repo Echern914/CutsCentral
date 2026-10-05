@@ -137,7 +137,7 @@ function emailSkipReason(
 }
 
 /** A pragmatic address check - one @, non-empty local + domain, a dot in domain. */
-function isValidEmail(email: string): boolean {
+export function isValidEmail(email: string): boolean {
   const e = email.trim();
   const at = e.indexOf("@");
   if (at <= 0 || at !== e.lastIndexOf("@")) return false;

@@ -6080,6 +6080,8 @@ bookingDashboardRouter.post("/appointments/:id/complete", async (req, res) => {
         serviceName: appt.service?.name ?? null,
       },
       now,
+      // The shop pressed Done: the visit happened (the tip ask's signal).
+      { byShop: true },
     );
     return { clientId: appt.clientId, earn };
   });
@@ -6300,6 +6302,8 @@ bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
           serviceName: appt.service?.name ?? null,
         },
         now,
+        // Checked out at the chair: the visit happened.
+        { byShop: true },
       );
     }
     return { kind: "ok" as const, clientId: appt.clientId, earn };

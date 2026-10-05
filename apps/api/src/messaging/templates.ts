@@ -891,6 +891,133 @@ export function buildPickAnotherTimeEmail(params: {
   };
 }
 
+/**
+ * The one-card shell the tip emails share: a heading, a line, the visit, and
+ * ONE action. Its own, rather than the appointment shell, because that shell's
+ * button is always "Reschedule or cancel" - the wrong verb for a visit that is
+ * over. Nothing here invites a reply: replies reach nobody (see above).
+ */
+function tipEmailHtml(params: {
+  marker: string;
+  shopName: string;
+  heading: string;
+  intro: string;
+  serviceName: string;
+  when: string;
+  staffName?: string | null;
+  /** A line under the visit, e.g. the amount and reference. Plain text. */
+  detail?: string | null;
+  actionLabel: string;
+  actionUrl: string;
+  note: string;
+}): string {
+  return `<!-- ${params.marker} -->
+<div style="background:#0f0f0f;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <div style="max-width:480px;margin:0 auto;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;overflow:hidden">
+    <div style="padding:28px 28px 8px">
+      <div style="color:#D4AF37;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase">${escapeHtml(params.shopName)}</div>
+      <h1 style="color:#fafafa;font-size:20px;font-weight:700;margin:10px 0 6px">${escapeHtml(params.heading)}</h1>
+      <p style="color:#a1a1aa;font-size:15px;line-height:1.5;margin:0">${escapeHtml(params.intro)}</p>
+    </div>
+    <div style="margin:16px 28px;padding:16px 18px;background:#0f0f0f;border:1px solid #2a2a2a;border-radius:12px">
+      <div style="color:#fafafa;font-size:16px;font-weight:600">${escapeHtml(params.serviceName)}</div>
+      ${params.staffName ? `<div style="color:#71717a;font-size:14px;margin-top:2px">with ${escapeHtml(params.staffName)}</div>` : ""}
+      <div style="color:#D4AF37;font-size:15px;font-weight:600;margin-top:8px">${escapeHtml(params.when)}</div>
+      ${params.detail ? `<div style="color:#a1a1aa;font-size:14px;margin-top:8px">${escapeHtml(params.detail)}</div>` : ""}
+    </div>
+    <div style="padding:4px 28px 28px">
+      <a href="${escapeAttr(params.actionUrl)}" style="display:inline-block;background:#D4AF37;color:#0f0f0f;font-size:15px;font-weight:700;text-decoration:none;padding:13px 22px;border-radius:10px">${escapeHtml(params.actionLabel)}</a>
+      <p style="color:#71717a;font-size:12px;line-height:1.5;margin:16px 0 0">${escapeHtml(params.note)}</p>
+    </div>
+  </div>
+</div>`;
+}
+
+/**
+ * "LEAVE A TIP" - one email about an hour after a visit the shop finished,
+ * when the shop takes tips online. Optional, said plainly; the link opens the
+ * client's own appointment page with the tip card in view (?tip=1).
+ */
+export function buildTipRequestEmail(params: {
+  firstName: string | null;
+  shopName: string;
+  serviceName: string;
+  startsAt: Date;
+  timezone: string;
+  staffName?: string | null;
+  manageToken: string;
+  /** When tipping closes (tipWindowClosesAt). */
+  closesAt: Date;
+}): EmailCopy {
+  const when = formatApptTime(params.startsAt, params.timezone);
+  const closes = formatApptTime(params.closesAt, params.timezone);
+  const who = params.firstName ?? "there";
+  const tipUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}?tip=1`;
+  return {
+    subject: `Thanks for visiting ${params.shopName}`,
+    text:
+      `Hi ${who}, thanks for your ${params.serviceName} at ${params.shopName} on ${when}.\n\n` +
+      `If you'd like to leave a tip, you can add one from your appointment page until ${closes}: ${tipUrl}\n\n` +
+      `Tipping is optional, and every tip goes to ${params.shopName}. Questions? Contact ${params.shopName} directly.`,
+    html: tipEmailHtml({
+      marker: "tip request email",
+      shopName: params.shopName,
+      heading: "Thanks for coming in",
+      intro: `Hi ${who}, thanks for your visit. If you'd like to leave a tip, you can add one here.`,
+      serviceName: params.serviceName,
+      when,
+      staffName: params.staffName,
+      actionLabel: "Leave a tip",
+      actionUrl: tipUrl,
+      note: `Optional. You can tip until ${closes}, and every tip goes to ${params.shopName}.`,
+    }),
+  };
+}
+
+/**
+ * THE TIP RECEIPT - once per paid tip. Names no card: a tip has no saved brand
+ * or last four, and it may have been Apple Pay or Link.
+ */
+export function buildTipReceiptEmail(params: {
+  firstName: string | null;
+  shopName: string;
+  serviceName: string;
+  startsAt: Date;
+  timezone: string;
+  staffName?: string | null;
+  /** "$8.00" - formatTipCents. */
+  amount: string;
+  paidAt: Date;
+  /** The tail of the Stripe id, upper-cased. */
+  reference: string;
+  manageToken: string;
+}): EmailCopy {
+  const when = formatApptTime(params.startsAt, params.timezone);
+  const paidWhen = formatApptTime(params.paidAt, params.timezone);
+  const who = params.firstName ?? "there";
+  const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
+  return {
+    subject: `Receipt: ${params.amount} tip to ${params.shopName}`,
+    text:
+      `Hi ${who}, thank you for your ${params.amount} tip to ${params.shopName} for your ${params.serviceName} on ${when}. ` +
+      `Paid ${paidWhen}. Reference: ${params.reference}.\n\n` +
+      `Questions? Contact ${params.shopName} directly. Your appointment page shows this tip: ${manageUrl}`,
+    html: tipEmailHtml({
+      marker: "tip receipt email",
+      shopName: params.shopName,
+      heading: `Thank you for the ${params.amount} tip`,
+      intro: `Hi ${who}, your tip went to ${params.shopName}.`,
+      serviceName: params.serviceName,
+      when,
+      staffName: params.staffName,
+      detail: `${params.amount} tip, paid ${paidWhen}. Reference ${params.reference}.`,
+      actionLabel: "View your visit",
+      actionUrl: manageUrl,
+      note: `Questions? Contact ${params.shopName} directly.`,
+    }),
+  };
+}
+
 /** "Appointment reminder" email - the email twin of buildAppointmentReminderBody. */
 export function buildAppointmentReminderEmail(params: {
   firstName: string | null;

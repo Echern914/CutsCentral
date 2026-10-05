@@ -1023,8 +1023,8 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "tips",
     q: "Do you take a cut of tips?",
-    a: "Never. Not a cent, same as bookings.\n\nTips at the shop - cash, card, Zelle, Venmo, Cash App - are straight between you and the client.\n\nIf you turn on online tips (Payments → Tips), clients can tip from their appointment page once a visit is done: 15, 20 or 25% or their own amount, into your own Stripe account. Stripe's card fee comes out of each online tip, as it would at any card reader. In Stripe it shows as an application fee to ChairBack - that pays Stripe, and ChairBack keeps none of it.",
-    keywords: ["tip", "tips", "tipping", "gratuity", "cut of tips", "online tips", "tip after visit", "leave a tip"],
+    a: "Never. Not a cent, same as bookings.\n\nTips at the shop - cash, card, Zelle, Venmo, Cash App - are straight between you and the client.\n\nIf you turn on online tips (Payments → Tips), clients can tip from their appointment page once a visit is done: 15, 20 or 25% or their own amount, into your own Stripe account. Stripe's card fee comes out of each online tip, as it would at any card reader. In Stripe it shows as an application fee to ChairBack - that pays Stripe, and ChairBack keeps none of it.\n\nAbout an hour after a visit you finished (you pressed Done, checked them out, or marked them arrived), the client gets one email with a Leave a tip link. A visit that only ended on the calendar is never asked. When a client tips, they get a receipt by email and you get a push.",
+    keywords: ["tip", "tips", "tipping", "gratuity", "cut of tips", "online tips", "tip after visit", "leave a tip", "tip email", "tip receipt"],
     category: "money",
   },
   {

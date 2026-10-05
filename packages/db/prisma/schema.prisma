@@ -3346,6 +3346,13 @@ model Appointment {
   reminder2hPushSentAt  DateTime?
   // "Book your next one?" push, fired ~30 min AFTER endsAt. At-most-once.
   rebookPromptSentAt    DateTime?
+  // "Leave a tip" email, ~1 hour after endsAt (engines/tipRequests.ts). The
+  // sweep's at-most-once claim, set in the same transaction that queues it.
+  tipRequestSentAt      DateTime?
+  // The SHOP finished this visit (Done, checkout, a walk-in started) - false
+  // when the 15-minute sweep completed it on its own, which an unmarked
+  // no-show also does. The tip ask goes only to visits the shop finished.
+  completedByShop       Boolean  @default(false)
   // BARBER-side "your next client" reminder (engines/barberReminders.ts). Its
   // own stamp because it is a different recipient on a different lead time -
   // the client tiers above must never suppress the barber's heads-up.
@@ -3723,6 +3730,9 @@ model Payment {
   // only ever reads and repairs local state - it never moves money.
   ambiguousAt            DateTime?
   reconciledAt           DateTime?
+  // A TIP's announcement - the client's receipt and the staff member's push -
+  // claimed here once, whichever path saw it succeed first (services/tipPaid.ts).
+  tipAnnouncedAt         DateTime?
   // THE REFUND TERMS THIS BOOKING WAS PAID ON: true = what was taken at booking
   // is kept when the CLIENT cancels (Shop.depositNonRefundable, in deposit
   // mode). Snapshotted in the reservation insert, before Stripe is called, and
@@ -5067,8 +5077,9 @@ model EmailAddressSuppression {
 model EmailIntent {
   id String @id @default(cuid())
 
-  // "appointment_canceled", the affiliate kinds, "group_confirmation" and
-  // "service_charge_receipt"; CHECK-pinned in the migration.
+  // "appointment_canceled", the affiliate kinds, "group_confirmation",
+  // "service_charge_receipt", "tip_request" and "tip_receipt"; CHECK-pinned in
+  // the migration.
   kind String
 
   // Stable per occurrence AND the provider Idempotency-Key. Unique, so two

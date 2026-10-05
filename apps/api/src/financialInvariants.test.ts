@@ -67,6 +67,9 @@ const MONEY_MODULES = [
   "billing/tips.ts",
   "routes/booking.tips.ts",
   "services/tips.ts",
+  "services/tipPaid.ts",
+  "services/tipEmails.ts",
+  "engines/tipRequests.ts",
 ];
 
 describe("financial invariants (source guards)", () => {

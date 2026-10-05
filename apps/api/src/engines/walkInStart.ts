@@ -377,6 +377,8 @@ export async function completeEntry(opts: {
           serviceName: appt.service?.name ?? null,
         },
         now,
+        // The shop started this walk-in: they are in the chair.
+        { byShop: true },
       );
       return { earn, clientId: appt.clientId, appointmentId: appt.id };
     }
@@ -385,7 +387,7 @@ export async function completeEntry(opts: {
     // status) and the entry through the shared flip.
     await tx.appointment.updateMany({
       where: { id: appt.id, shopId, status: { in: ["BOOKED"] } },
-      data: { status: "COMPLETED", completedAt: now },
+      data: { status: "COMPLETED", completedAt: now, completedByShop: true },
     });
     await completeWalkInEntryForAppointmentInTx(tx, shopId, appt.id, now);
     return { earn: null, clientId: null, appointmentId: appt.id };
