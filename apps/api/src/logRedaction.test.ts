@@ -152,6 +152,14 @@ describe("🔴 the unsubscribe link is a credential, not just a preference", () 
   });
 });
 
+describe("🔴 a tip is paid on the manage token: never logged", () => {
+  it("redacts the token and keeps the action", () => {
+    const out = redactUrl("/api/book/manage/SECRET_MANAGE_TOKEN/tip");
+    expect(out).toBe("/api/book/manage/[redacted]/tip");
+    expect(out).not.toContain("SECRET_MANAGE_TOKEN");
+  });
+});
+
 describe("🔴 every route whose path IS a credential is covered", () => {
   it("no route file has grown a secret path shape the redactor does not know", () => {
     // A structural guard, not a code review. Add `/api/foo/:token` and this
@@ -175,6 +183,8 @@ describe("🔴 every route whose path IS a credential is covered", () => {
       "booking.group.ts/group/",
       "booking.public.ts/manage/",
       "booking.public.ts/offer/",
+      // Leave a tip, on the same manage token (registered on the public router).
+      "booking.tips.ts/manage/",
       "rewards.ts/",
       "shops.ts/waitlist/cancel/",
       // The unsubscribe link in every broadcast email. A dedicated,
