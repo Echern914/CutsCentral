@@ -53,7 +53,12 @@ export interface ManageData {
    * (the card step was optional and they skipped it): offered again here,
    * never required. Optional = an older API.
    */
-  addCard?: { clientSecret: string; serviceChargeConsent: boolean } | null;
+  addCard?: {
+    clientSecret: string;
+    serviceChargeConsent: boolean;
+    /** The shop charges a saved card for a no-show or a late cancel. Optional = an older API. */
+    chargesFees?: boolean;
+  } | null;
   /** The card never arrived before the hold ran out: this was never a booking. */
   neverBooked?: boolean;
   /**

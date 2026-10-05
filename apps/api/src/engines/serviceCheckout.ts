@@ -167,7 +167,10 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
 
   const card = input.card;
   let blocker: SavedCardBlocker | null = null;
-  if (!card) {
+  if (!card || (card.status === "pending" && !card.stripePaymentMethodId)) {
+    // No row, or a card step the client never finished - at a card shop that
+    // books without a card, one they skipped. Either way there is no card:
+    // "the saved card is not usable" would tell the barber one exists.
     blocker = "no_card";
   } else if (card.status !== "saved" || !card.stripePaymentMethodId) {
     // `pending` never completed, `released` was let go, `charging` is mid-flight,

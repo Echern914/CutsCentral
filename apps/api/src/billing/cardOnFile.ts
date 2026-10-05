@@ -332,6 +332,16 @@ export async function markCardSaved(
     // the one saved card. Without this the no-show path could resolve a card
     // for the anchor and for nothing else.
     await fanOutSeriesCard({ shopId, seriesId: row.seriesId });
+    // The FIRST visit itself may have ended while the card was on its way (a
+    // series booked without a card keeps its unfinished card for the visits
+    // still standing - see releaseCardOnFile). Its own row lets go now; the
+    // card stays attached for the visits that hold it.
+    const anchorAppt = await runWithShop(shopId, (tx) =>
+      tx.appointment.findFirst({ where: { id: appointmentId, shopId }, select: { status: true } }),
+    );
+    if (anchorAppt && anchorAppt.status !== "BOOKED") {
+      await releaseCardOnFile({ shopId, appointmentId, reason: "series_anchor_ended" });
+    }
     return "saved";
   }
 
@@ -368,12 +378,26 @@ export async function verifyCardSaved(params: {
   shopId: string;
   appointmentId: string;
 }): Promise<"saved" | "already" | "pending" | "unknown"> {
-  const row = await runWithShop(params.shopId, (tx) =>
-    tx.cardOnFile.findUnique({
-      where: { appointmentId: params.appointmentId },
-      select: { stripeSetupIntentId: true, status: true },
-    }),
+  const select = { stripeSetupIntentId: true, status: true } as const;
+  // This visit's own row - or, for a later visit of a standing appointment,
+  // the series' one card, which lives on the first visit (a card can be added
+  // from any visit's link).
+  let row = await runWithShop(params.shopId, (tx) =>
+    tx.cardOnFile.findUnique({ where: { appointmentId: params.appointmentId }, select }),
   );
+  if (!row) {
+    const appt = await runWithShop(params.shopId, (tx) =>
+      tx.appointment.findFirst({
+        where: { id: params.appointmentId, shopId: params.shopId },
+        select: { seriesId: true },
+      }),
+    );
+    if (appt?.seriesId) {
+      row = await runWithShop(params.shopId, (tx) =>
+        tx.cardOnFile.findUnique({ where: { seriesId: appt.seriesId! }, select }),
+      );
+    }
+  }
   if (!row) return "unknown";
   if (row.status !== "pending") return "already";
   const si = await stripeClient().setupIntents.retrieve(row.stripeSetupIntentId);
@@ -600,14 +624,24 @@ export async function serviceChargeConsentFor(params: {
   shopId: string;
   appointmentId: string;
   seriesId: string | null;
-}): Promise<{ brand: string | null; last4: string | null; withdrawnAt: Date | null } | null> {
+}): Promise<{
+  brand: string | null;
+  last4: string | null;
+  withdrawnAt: Date | null;
+  /**
+   * A card was actually saved under this consent. False for a client who
+   * agreed and then skipped the card (a card shop that books without one):
+   * there is no "saved card" to name, though the consent can still be withdrawn.
+   */
+  cardSaved: boolean;
+} | null> {
   const rows = await runWithShop(params.shopId, (tx) =>
     tx.cardOnFile.findMany({
       where: {
         ...serviceConsentRowsWhere(params.appointmentId, params.seriesId),
         serviceChargeConsentAt: { not: null },
       },
-      select: { appointmentId: true, brand: true, last4: true, serviceChargeWithdrawnAt: true },
+      select: { appointmentId: true, brand: true, last4: true, serviceChargeWithdrawnAt: true, savedAt: true },
     }),
   );
   if (rows.length === 0) return null;
@@ -621,6 +655,7 @@ export async function serviceChargeConsentFor(params: {
     brand: row.brand,
     last4: row.last4,
     withdrawnAt: stillOn ? null : row.serviceChargeWithdrawnAt,
+    cardSaved: rows.some((r) => r.savedAt !== null),
   };
 }
 
@@ -728,6 +763,28 @@ export async function releaseCardOnFile(params: {
     return;
   }
 
+  // 🔴 A STANDING APPOINTMENT'S UNFINISHED CARD IS THE WHOLE SERIES' CARD. Its
+  // one row (and its one card form) sits on the first visit; when the series
+  // was booked without a card, the other visits stand on their own and are
+  // still waiting for it. Letting it go because the FIRST visit ended would
+  // throw away the card the client may still save for the rest - and tell
+  // them, as they save it, that nothing was booked. Kept while any other
+  // visit of the series is booked; markCardSaved files a later card on them.
+  if (row.status === "pending" && row.seriesId) {
+    const othersBooked = await runWithShop(params.shopId, (tx) =>
+      tx.appointment.count({
+        where: { seriesId: row.seriesId!, shopId: params.shopId, status: "BOOKED", id: { not: params.appointmentId } },
+      }),
+    );
+    if (othersBooked > 0) {
+      logger.info(
+        { cardOnFileId: row.id, othersBooked, reason: params.reason },
+        "card on file: the series' unfinished card is kept - later visits still stand",
+      );
+      return;
+    }
+  }
+
   // Which standing appointment, if any, this card belongs to. The ANCHOR row
   // says so directly; an occurrence row is linked through its appointment.
   const seriesId =
@@ -784,12 +841,18 @@ export async function releaseCardOnFile(params: {
   row.stripePaymentMethodId = settled?.stripePaymentMethodId ?? row.stripePaymentMethodId;
   row.savedCardId = settled?.savedCardId ?? row.savedCardId;
 
-  // A card that was never saved: its form may still be open on the client's
-  // phone. Cancel it at Stripe so it cannot file a card on a booking that no
-  // longer stands. Best effort - a card saved anyway is detached when its
-  // event arrives (markCardSaved). One booking's own form only: a standing
-  // appointment's form serves its other visits too.
-  if (row.status === "pending" && !row.seriesId && !row.stripePaymentMethodId) {
+  // A booking that stood without its card, now cancelled or a no-show: its
+  // card form may still be open on the client's phone. Cancel it at Stripe so
+  // it cannot file a card on a booking that no longer stands. Best effort - a
+  // card saved anyway is detached when its event arrives (markCardSaved). Not
+  // for a lapsed HOLD: that client may still press Pay, and the page tells
+  // them the time was released rather than showing Stripe's own refusal.
+  if (
+    row.status === "pending" &&
+    !row.seriesId &&
+    !row.stripePaymentMethodId &&
+    (params.reason === "canceled_no_card" || params.reason === "no_show_no_card")
+  ) {
     try {
       await stripeClient().setupIntents.cancel(row.stripeSetupIntentId);
     } catch (err) {

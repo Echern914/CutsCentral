@@ -1887,6 +1887,15 @@ export function BookingClient({
           prev ? { ...prev, booked: verified.series!.booked } : prev,
         );
       }
+      // Booked already (an optional card): nothing waited on this card, so
+      // there is nothing to poll for. Asking the first visit's status would
+      // read "released" for a standing appointment whose first visit was
+      // cancelled meanwhile - and tell them none of the rest were booked.
+      if (payCharge.optional) {
+        setPayConfirm("no");
+        setConfirmedToken(token);
+        return;
+      }
     }
 
     const deadline = Date.now() + 25_000;

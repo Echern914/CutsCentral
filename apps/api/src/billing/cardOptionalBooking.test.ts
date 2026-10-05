@@ -140,7 +140,7 @@ type Booked = {
 };
 
 /** A fresh time each call, so no test collides with another's booking. */
-async function book(): Promise<Booked> {
+async function book(extra: Record<string, unknown> = {}): Promise<Booked> {
   hour += 1;
   const res = await request(app)
     .post(`/api/book/${slug}`)
@@ -152,9 +152,34 @@ async function book(): Promise<Booked> {
       lastName: "Ional",
       phone: "(302) 555-0142",
       email: `opt-${randomToken(4)}@example.com`,
+      ...extra,
     });
   expect(res.status).toBe(201);
   return res.body as Booked;
+}
+
+/** A standing appointment of `count` weekly visits, on a day no single booking uses. */
+async function bookSeries(count = 3) {
+  hour += 1;
+  const res = await request(app)
+    .post(`/api/book/${slug}`)
+    .send({
+      staffId,
+      serviceId,
+      startsAt: futureAt(1, 9 + (hour % 8)).toISOString(),
+      firstName: "Opt",
+      lastName: "Series",
+      phone: "(302) 555-0143",
+      email: `opts-${randomToken(4)}@example.com`,
+      recurrence: { interval: 1, count },
+    });
+  expect(res.status).toBe(201);
+  const occ = await prisma.appointment.findMany({
+    where: { seriesId: res.body.series.id },
+    select: { id: true, status: true, manageToken: true },
+    orderBy: { startsAt: "asc" },
+  });
+  return { body: res.body, occ };
 }
 
 const apptByToken = (token: string) =>
@@ -306,7 +331,11 @@ describe("a card shop books without a card - the default", () => {
     const before = await request(app).get(`/api/book/manage/${body.manageToken}`);
     expect(before.body.status).toBe("BOOKED");
     expect(before.body.finish).toBeNull();
-    expect(before.body.addCard).toEqual({ clientSecret: `${row.stripeSetupIntentId}_secret`, serviceChargeConsent: false });
+    expect(before.body.addCard).toEqual({
+      clientSecret: `${row.stripeSetupIntentId}_secret`,
+      serviceChargeConsent: false,
+      chargesFees: false,
+    });
 
     fake.succeed(row.stripeSetupIntentId);
     const after = await request(app).get(`/api/book/manage/${body.manageToken}`);
@@ -359,7 +388,7 @@ describe("a card shop books without a card - the default", () => {
     fake.succeed(row.stripeSetupIntentId);
     const si = fake.setupIntents.get(row.stripeSetupIntentId)!;
     const { markCardSaved } = await import("./cardOnFile.js");
-    const { settledEarly, results } = await raceBehindRowLock("CardOnFile", row.id, [
+    const { settledEarly, results } = await raceBehindRowLock<unknown>("CardOnFile", row.id, [
       () => markCardSaved(si as unknown as Stripe.SetupIntent),
       () => request(app).post(`/api/book/manage/${body.manageToken}/cancel`).send({}),
     ]);
@@ -371,30 +400,93 @@ describe("a card shop books without a card - the default", () => {
   });
 
   it("🔴 a standing appointment is booked at Confirm and confirmed ONCE, for the first visit", async () => {
-    const res = await request(app)
-      .post(`/api/book/${slug}`)
-      .send({
-        staffId,
-        serviceId,
-        startsAt: futureAt(1, 9).toISOString(),
-        firstName: "Opt",
-        lastName: "Series",
-        phone: "(302) 555-0143",
-        email: `opts-${randomToken(4)}@example.com`,
-        recurrence: { interval: 1, count: 3 },
-      });
-    expect(res.status).toBe(201);
-    expect(res.body.series.held).toBe(false);
-    expect(res.body.payment).toMatchObject({ kind: "setup", optional: true });
-    const occ = await prisma.appointment.findMany({
-      where: { seriesId: res.body.series.id },
-      select: { id: true, status: true },
-      orderBy: { startsAt: "asc" },
-    });
+    const { body, occ } = await bookSeries(3);
+    expect(body.series.held).toBe(false);
+    expect(body.payment).toMatchObject({ kind: "setup", optional: true });
     expect(occ.map((o) => o.status)).toEqual(["BOOKED", "BOOKED", "BOOKED"]);
     expect(notify.confirmation).toHaveBeenCalledTimes(1);
     expect(notify.confirmation).toHaveBeenCalledWith({ shopId, appointmentId: occ[0]!.id });
     expect(notify.barber).toHaveBeenCalledWith({ shopId, appointmentId: occ[0]!.id, kind: "booked" });
+  });
+
+  it("🔴 the first visit of a standing appointment ending does not throw away the card the rest are waiting for", async () => {
+    const { occ } = await bookSeries(3);
+    const [first, second, third] = occ;
+    const anchor = await prisma.cardOnFile.findFirstOrThrow({ where: { appointmentId: first!.id } });
+    const cancel = await request(app).post(`/api/book/manage/${first!.manageToken}/cancel`).send({});
+    expect(cancel.status).toBe(200);
+    // Kept: the other two visits still stand and still want it.
+    expect((await cardFor(first!.id)).status).toBe("pending");
+    expect(fake.calls.canceled).not.toContain(anchor.stripeSetupIntentId);
+    // And a later visit's own link offers it.
+    const page = await request(app).get(`/api/book/manage/${second!.manageToken}`);
+    expect(page.body.addCard).toMatchObject({ clientSecret: `${anchor.stripeSetupIntentId}_secret` });
+
+    // The client saves it: filed on the visits still standing, let go on the one that ended.
+    fake.succeed(anchor.stripeSetupIntentId);
+    await webhookSaved(fake.setupIntents.get(anchor.stripeSetupIntentId)!);
+    expect((await cardFor(second!.id)).status).toBe("saved");
+    expect((await cardFor(third!.id)).status).toBe("saved");
+    expect((await cardFor(first!.id)).status).toBe("released");
+    // Still attached at Stripe: two visits hold it.
+    expect(fake.calls.detached).not.toContain(`pm_fake_${anchor.stripeSetupIntentId}`);
+  });
+
+  it("🔴 agreed to service charges, then skipped the card: no 'saved card' is named until one exists", async () => {
+    const body = await book({ serviceChargeConsent: true });
+    const appt = await apptByToken(body.manageToken);
+    const row = await cardFor(appt.id);
+    const before = await request(app).get(`/api/book/manage/${body.manageToken}`);
+    expect(before.body.serviceCharge).toBeNull();
+    expect(before.body.addCard).toMatchObject({ serviceChargeConsent: true, chargesFees: false });
+
+    fake.succeed(row.stripeSetupIntentId);
+    const after = await request(app).get(`/api/book/manage/${body.manageToken}`);
+    expect(after.body.addCard).toBeNull();
+    expect(after.body.serviceCharge).toMatchObject({ card: { last4: "4242" }, withdrawnAt: null });
+  });
+
+  it("Add a card says the shop's fee terms, and never repeats a consent they took back", async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { chargeCardOnFileFees: true } });
+    try {
+      const body = await book({ serviceChargeConsent: true });
+      const stop = await request(app).post(`/api/book/manage/${body.manageToken}/stop-service-charges`).send({});
+      expect(stop.status).toBe(200);
+      const page = await request(app).get(`/api/book/manage/${body.manageToken}`);
+      expect(page.body.addCard).toMatchObject({ serviceChargeConsent: false, chargesFees: true });
+    } finally {
+      await prisma.shop.update({ where: { id: shopId }, data: { chargeCardOnFileFees: false } });
+    }
+  });
+
+  it("checkout: a skipped card is 'no card' - never 'the saved card is not usable'", async () => {
+    const { serviceCheckoutState } = await import("../engines/serviceCheckout.js");
+    const state = serviceCheckoutState({
+      appointmentId: "appt_skip",
+      seriesId: null,
+      price: 40,
+      chairPaid: null,
+      chairCheckedOut: false,
+      payments: [],
+      card: {
+        appointmentId: "appt_skip",
+        seriesId: null,
+        status: "pending",
+        stripePaymentMethodId: null,
+        brand: null,
+        last4: null,
+        serviceChargeConsentVersion: null,
+        serviceChargeConsentAt: null,
+        serviceChargeConsentScope: null,
+        serviceChargeWithdrawnAt: null,
+      },
+      external: false,
+      status: "COMPLETED",
+      endsAt: new Date(),
+      agreedPriceCents: 4000,
+      now: new Date(),
+    } as unknown as Parameters<typeof serviceCheckoutState>[0]);
+    expect(state.savedCardBlocker).toBe("no_card");
   });
 
   it("a shop that wants card-or-nothing turns requireCardToBook on and gets the hold back", async () => {
@@ -413,6 +505,17 @@ describe("a card shop books without a card - the default", () => {
       expect(body.payment?.optional).toBeUndefined();
       expect(body.payment?.holdMinutes).toBe(10);
       expect(notify.confirmation).not.toHaveBeenCalled();
+
+      // The hold lapses as it always did - and its card form is NOT cancelled
+      // at Stripe: a client still pressing Pay is told the time was released,
+      // not shown Stripe's own refusal.
+      const row = await cardFor(appt.id);
+      await prisma.appointment.update({ where: { id: appt.id }, data: { holdExpiresAt: new Date(Date.now() - 60_000) } });
+      const { sweepExpiredPaymentHolds } = await import("../services/appointmentPaymentHold.js");
+      await sweepExpiredPaymentHolds(new Date());
+      expect((await apptByToken(body.manageToken)).status).toBe("CANCELED");
+      expect((await cardFor(appt.id)).status).toBe("released");
+      expect(fake.calls.canceled).not.toContain(row.stripeSetupIntentId);
     } finally {
       await request(app)
         .patch("/api/payments/settings")

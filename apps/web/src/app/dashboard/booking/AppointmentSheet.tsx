@@ -1466,8 +1466,9 @@ function PaymentCard({
             />
           )}
           {/* Asked for a card and booked without one (the card step is
-              optional): say so, because a no-show fee needs a card. */}
-          {fee === "pending" && !closed && (
+              optional): say so, because a no-show fee needs a card. Booked
+              only - a held request is still waiting on its card, not skipped. */}
+          {fee === "pending" && detail.status === "upcoming" && (
             <Line label="No card on file" value="Skipped at booking" />
           )}
         </dl>

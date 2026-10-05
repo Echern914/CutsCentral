@@ -3241,7 +3241,10 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     },
     // Brand and last four only - the same display-safe facts the booking page
     // already showed this customer. Null when they never gave the permission.
-    serviceCharge: serviceChargeCard
+    // Only once a card actually exists: a client who agreed to service
+    // charges and then skipped the card (a card shop that books without one)
+    // has no "saved card" to name or to stop. Add a card says the terms.
+    serviceCharge: serviceChargeCard && serviceChargeCard.cardSaved
       ? {
           card: { brand: serviceChargeCard.brand, last4: serviceChargeCard.last4 },
           withdrawnAt: serviceChargeCard.withdrawnAt?.toISOString() ?? null,

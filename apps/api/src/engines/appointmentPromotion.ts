@@ -390,10 +390,14 @@ export async function cancelAppointment(
     // never arrived. Nothing to charge; let the unfinished card go, so a card
     // form still open on the client's phone cannot file a card on a booking
     // that no longer stands.
+    // Never throws into the cancel, like the settlement above: the mark already
+    // stands, and the Acuity release and alerts below must still run.
     await releaseCardOnFile({
       shopId,
       appointmentId,
       reason: outcome === "NO_SHOW" ? "no_show_no_card" : "canceled_no_card",
+    }).catch((err: unknown) => {
+      logger.warn({ err, shopId, appointmentId }, "cancel: could not let go of the unfinished card");
     });
   }
 

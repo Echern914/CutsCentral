@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { PaymentStep } from "../../[slug]/PaymentStep";
 import { cardSavedAction } from "../../[slug]/actions";
+import { rememberDeviceSavedCard } from "../../[slug]/savedCardDevice";
 import type { ManageData } from "./page";
 
 /**
@@ -25,11 +26,14 @@ export function AddCard({
   token,
   offer,
   shopName,
+  shopSlug,
   onSaved,
 }: {
   token: string;
   offer: AddCardOffer;
   shopName: string;
+  /** Where this browser keeps the key to a card the client asked to keep. */
+  shopSlug: string | null;
   onSaved: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -38,7 +42,10 @@ export function AddCard({
   async function saved() {
     setState("saving");
     // The server checks with Stripe and files it; the browser's word is not enough.
-    await cardSavedAction(token).catch(() => null);
+    const res = await cardSavedAction(token).catch(() => null);
+    // They asked to keep this card for next time: this browser - the one it
+    // was just typed into - gets the key to use it again without typing it.
+    if (res?.ok && res.savedCard && shopSlug) rememberDeviceSavedCard(shopSlug, res.savedCard);
     setState("saved");
     onSaved();
   }
@@ -66,6 +73,10 @@ export function AddCard({
         {offer.serviceChargeConsent
           ? ", and as you agreed, it can be charged for your service once your appointment is finished."
           : ", and you pay at your visit."}
+        {/* The same fee terms the booking page's card step says. */}
+        {offer.chargesFees && (
+          <> It can also be charged for a no-show or a cancellation inside the shop&rsquo;s cancellation window.</>
+        )}
       </p>
       {open ? (
         <div className="mt-4">

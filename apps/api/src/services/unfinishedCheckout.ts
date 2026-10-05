@@ -130,21 +130,43 @@ export async function unfinishedCheckoutFor(
  * page. Only for a booking still ahead, whose card never arrived.
  */
 export async function optionalCardStepFor(
-  appt: { id: string; shopId: string; status: string; startsAt: Date },
+  appt: { id: string; shopId: string; status: string; startsAt: Date; seriesId: string | null },
   now: Date,
-): Promise<{ clientSecret: string; serviceChargeConsent: boolean } | null> {
+): Promise<{ clientSecret: string; serviceChargeConsent: boolean; chargesFees: boolean } | null> {
   if (appt.status !== "BOOKED" || appt.startsAt.getTime() <= now.getTime()) return null;
   try {
-    const card = await runWithShop(appt.shopId, (tx) =>
-      tx.cardOnFile.findUnique({
-        where: { appointmentId: appt.id },
-        select: { stripeSetupIntentId: true, status: true, serviceChargeConsentAt: true },
-      }),
-    );
+    const select = {
+      stripeSetupIntentId: true,
+      status: true,
+      serviceChargeConsentAt: true,
+      serviceChargeWithdrawnAt: true,
+    } as const;
+    // This visit's own card row - or, for a later visit of a standing
+    // appointment, the series' one card, which lives on the first visit.
+    const card =
+      (await runWithShop(appt.shopId, (tx) =>
+        tx.cardOnFile.findUnique({ where: { appointmentId: appt.id }, select }),
+      )) ??
+      (appt.seriesId
+        ? await runWithShop(appt.shopId, (tx) =>
+            tx.cardOnFile.findUnique({ where: { seriesId: appt.seriesId! }, select }),
+          )
+        : null);
     if (!card || card.status !== "pending") return null;
     const si = await stripeClient().setupIntents.retrieve(card.stripeSetupIntentId);
     if (!si.client_secret || !AWAITING.has(si.status)) return null;
-    return { clientSecret: si.client_secret, serviceChargeConsent: card.serviceChargeConsentAt !== null };
+    // Shop has RLS with no policy: read directly, never inside runWithShop.
+    const shop = await prisma.shop.findUnique({
+      where: { id: appt.shopId },
+      select: { chargeCardOnFileFees: true },
+    });
+    return {
+      clientSecret: si.client_secret,
+      // Taken back on the appointment page: the panel must not repeat it.
+      serviceChargeConsent: card.serviceChargeConsentAt !== null && card.serviceChargeWithdrawnAt === null,
+      // The same fee terms the booking page's card step states.
+      chargesFees: shop?.chargeCardOnFileFees === true,
+    };
   } catch (err) {
     // Stripe unreachable: the booking stands; the page just can't offer the card this time.
     logger.warn({ err, appointmentId: appt.id }, "add a card: could not reopen the card step");

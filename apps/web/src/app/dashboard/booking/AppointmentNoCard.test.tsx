@@ -126,5 +126,10 @@ describe("no card on file", () => {
     await open(detailFor({ status: "pending" }, "canceled"));
     await screen.findByText("Ticket total");
     expect(screen.queryByText("No card on file")).toBeNull();
+    // A held request (a shop that requires the card) is waiting on it, not skipping it.
+    cleanup();
+    await open(detailFor({ status: "pending" }, "pending"));
+    await screen.findByText("Ticket total");
+    expect(screen.queryByText("No card on file")).toBeNull();
   });
 });

@@ -282,6 +282,7 @@ export function ManageClient({
                 token={token}
                 offer={data.addCard}
                 shopName={data.shop.name}
+                shopSlug={data.shop.slug}
                 onSaved={() => router.refresh()}
               />
             )}

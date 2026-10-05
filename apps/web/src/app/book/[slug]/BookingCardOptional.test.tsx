@@ -198,15 +198,18 @@ describe("a card shop that books without a card", () => {
     expect(bookingStatus).not.toHaveBeenCalled();
   });
 
-  it("saving the card files it, then shows the confirmation", async () => {
+  it("🔴 saving the card files it, then shows the confirmation - never asking whether the booking survived", async () => {
     bookAction.mockResolvedValue(setupResponse(true));
     cardSaved.mockResolvedValue({ ok: true, status: "BOOKED" });
-    bookingStatus.mockResolvedValue({ ok: true, status: "BOOKED" });
+    // Were it asked, the first visit's status would read "released" (a
+    // standing appointment whose first visit was cancelled meanwhile).
+    bookingStatus.mockResolvedValue({ ok: true, status: "CANCELED" });
     const confirm = await reachLastStep(shopData(true));
     await act(async () => fireEvent.click(confirm));
     await act(async () => fireEvent.click(await screen.findByRole("button", { name: "stub save card" })));
     await waitFor(() => expect(cardSaved).toHaveBeenCalledWith("tok"));
     expect(await screen.findByText("You're booked!")).toBeTruthy();
+    expect(bookingStatus).not.toHaveBeenCalled();
   });
 });
 
