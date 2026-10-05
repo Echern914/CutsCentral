@@ -8,6 +8,7 @@ import { mailtoUri, smsUri, telUri } from "@/lib/contactUri";
 import { useVisiblePoll } from "@/lib/useVisiblePoll";
 import { BTN_BASE, NAME_WRAP_CLS } from "../_components/appointmentCardStyles";
 import { createAppointmentAction, type CreateApptResult } from "./actions";
+import { inviteUnfinishedAction } from "./unfinishedActions";
 import {
   dismissUnfinishedAction,
   listUnfinishedAction,
@@ -26,15 +27,18 @@ import {
  * or call them, book them into that time, or take them off the list.
  *
  * 🔴 BOOK THEM IS THE ORDINARY DASHBOARD BOOKING (createAppointmentAction),
- * with every guard it has. It asks first, because it creates a booking and
- * because a dashboard booking sends the client no confirmation (only the usual
- * reminders, later) - the shop has to tell them.
- * It never forces anything: outside the open hours it asks again, and a time
- * someone else has taken is refused, never booked over.
+ * with every guard it has, plus `confirmClient`: unlike a booking made at the
+ * chair, ChairBack emails these clients their confirmation (and pushes the app),
+ * because they tried to book online and the barber can't text everyone. The
+ * row then says whether an email really went out. It asks first, because it
+ * creates a booking. It never forces anything: outside the open hours it asks
+ * again, and a time someone else has taken is refused, never booked over.
  *
- * 🔴 A BOOKING MADE HERE STAYS ON SCREEN until "Done". The next read no longer
- * lists them (they are booked), and the one thing left to do - text them that
- * it's set - needs the row and its Text button.
+ * A TIME SOMEONE ELSE TOOK can't be booked; "Email them to pick a new time"
+ * sends that client one email (once) with the booking page.
+ *
+ * 🔴 A BOOKING MADE HERE STAYS ON SCREEN until "Done": when no email could go
+ * out, the one thing left to do - text them that it's set - needs the row.
  */
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
@@ -282,6 +286,12 @@ function UnfinishedCard({
   // can arrive while the booking request is out.
   const latestRead = useRef(readCount);
   latestRead.current = readCount;
+  // Booked here: whether ChairBack is emailing them their confirmation. Null =
+  // an older API that sends none.
+  const [told, setTold] = useState<"email" | "none" | null>(null);
+  // "Email them to pick a new time": sent (when), or the reason it couldn't be.
+  const [invitedAt, setInvitedAt] = useState<string | null>(row.invitedAt ?? null);
+  const [inviting, setInviting] = useState(false);
 
   const name = `${row.firstName} ${row.lastName ?? ""}`.trim() || cap(vocab.clientNoun);
   const first = row.firstName.trim() || name;
@@ -322,16 +332,45 @@ function UnfinishedCard({
           ? { label: "Blocked", cls: "bg-charcoal-700 text-muted" }
           : { label: "Time open", cls: "bg-emerald-soft/15 text-emerald-soft" };
 
+  async function invite() {
+    if (inviting) return;
+    setInviting(true);
+    setNote(null);
+    const res = await inviteUnfinishedAction(row.id).catch(() => ({ ok: false, error: "network_error" }) as const);
+    setInviting(false);
+    if (res.ok && "invitedAt" in res && res.invitedAt) {
+      setInvitedAt(res.invitedAt);
+      return;
+    }
+    const error = "error" in res ? res.error : undefined;
+    setNote(
+      error === "already_invited"
+        ? `${first} was already emailed to pick a new time.`
+        : error === "unsubscribed"
+          ? `${first} unsubscribed from your emails. Text or call them instead.`
+          : error === "no_email"
+            ? `There's no email for ${first}. Text or call them instead.`
+            : error === "no_booking_page"
+              ? "Your booking page is off, so there's nowhere to send them."
+              : error === "email_unavailable"
+                ? "Email isn't available right now. Nothing was sent."
+                : "Couldn't send it. Try again.",
+    );
+    if (error === "already_invited") setInvitedAt(new Date().toISOString());
+  }
+
   async function book(customTime: boolean) {
     setStep("working");
     setNote(null);
     setRefusal(null);
-    const send = (withEmail: boolean) =>
+    const send = (withEmail: boolean, confirm = true) =>
       createAppointmentAction({
         staffId: row.staffId,
         serviceId: row.serviceId,
         startsAt: row.startsAt,
         clientId: row.clientId!,
+        // They tried to book online and may think they are: tell them.
+        ...(confirm ? { confirmClient: true as const } : {}),
         // What THEY typed, so the booking reaches them, not whatever the
         // profile holds.
         ...(row.phone ? { phone: row.phone } : {}),
@@ -348,10 +387,14 @@ function UnfinishedCard({
     let res: CreateApptResult = await send(true);
     // The booking page accepts some addresses the dashboard's stricter check
     // refuses. A 400 books nothing, so try once more without it: reminders
-    // then use the email on their profile.
+    // (and the confirmation) then use the email on their profile.
     if (!res.ok && res.error === "invalid_input" && row.email) res = await send(false);
+    // An API that predates the confirmation refuses the unknown field the same
+    // way; book them as before rather than not at all.
+    if (!res.ok && res.error === "invalid_input") res = await send(false, false);
     if (res.ok) {
       setStep("idle");
+      setTold(res.clientConfirmation ?? null);
       toast(`Booked ${first}`, "success");
       onBooked();
       return;
@@ -399,8 +442,12 @@ function UnfinishedCard({
           {row.staffName}
         </p>
         {booked ? (
-          <p className="text-gold">
-            Booked for {when}. ChairBack doesn&apos;t send a confirmation, so text them it&apos;s set.
+          <p className="text-gold" role="status">
+            {told === "email"
+              ? `Booked for ${when}. ChairBack emailed ${first} a confirmation.`
+              : told === "none"
+                ? `Booked for ${when}. ChairBack couldn't email ${first} a confirmation, so text them it's set.`
+                : `Booked for ${when}. ChairBack doesn't send a confirmation, so text them it's set.`}
           </p>
         ) : live ? (
           <p>
@@ -462,13 +509,18 @@ function UnfinishedCard({
             {refused?.note ?? note}
           </p>
         )}
+        {invitedAt && !booked && (
+          <p role="status" className="text-emerald-soft">
+            Emailed {first} to pick a new time ({fmt.tried.format(new Date(invitedAt))}).
+          </p>
+        )}
       </div>
 
       {step === "confirm" || step === "outside_hours" ? (
         <div className="mt-3 flex flex-col gap-2 rounded-lg border border-gold/30 bg-gold/5 p-3">
           <p className="text-xs text-offwhite">
             {step === "confirm"
-              ? `Book ${first} for ${when}? ChairBack won't send them a confirmation, so let them know.`
+              ? `Book ${first} for ${when}? ChairBack emails them a confirmation if it has an email for them.`
               : "That time isn't open on your calendar now (for example it's outside your hours, blocked off, too soon, or the day is full). Book it anyway?"}
           </p>
           <div className="grid grid-cols-2 gap-2">
@@ -498,6 +550,20 @@ function UnfinishedCard({
               className={cn(BTN_BASE, "bg-gold font-semibold text-charcoal-900 hover:bg-gold/90")}
             >
               {step === "working" ? "Booking…" : "Book them"}
+            </button>
+          )}
+          {/* Their time was taken: one email with the booking page, once. */}
+          {taken && !booked && !live && row.canEmail && !invitedAt && (
+            <button
+              type="button"
+              onClick={() => void invite()}
+              disabled={inviting}
+              className={cn(
+                BTN_BASE,
+                "col-span-2 border border-gold/50 font-semibold text-gold hover:bg-gold/10",
+              )}
+            >
+              {inviting ? "Sending…" : "Email them to pick a new time"}
             </button>
           )}
           {sms && (

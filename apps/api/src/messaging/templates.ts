@@ -829,6 +829,68 @@ export function buildAppointmentCanceledEmail(params: {
   };
 }
 
+/**
+ * "PICK ANOTHER TIME" - to a client who started booking, didn't finish, and
+ * whose time someone else has since booked. Sent once, when the barber asks
+ * (Didn't finish booking -> "Email them to pick a new time"). Many of these
+ * clients believe they are booked; this says plainly that they are not, and
+ * hands them the shop's booking page with their service and staff picked.
+ *
+ * Carries no manage token: there is no appointment of theirs to manage.
+ */
+export function buildPickAnotherTimeEmail(params: {
+  firstName: string | null;
+  shopName: string;
+  /** The booking page, with the service and staff they wanted picked. */
+  bookUrl: string;
+  serviceName: string;
+  startsAt: Date;
+  timezone: string;
+  staffName?: string | null;
+  /** Shown only when the shop has published one. */
+  contactLine?: string | null;
+}): EmailCopy {
+  const when = formatApptTime(params.startsAt, params.timezone);
+  const who = params.firstName ?? "there";
+  const withWhom = params.staffName ? ` with ${params.staffName}` : "";
+  const contact = params.contactLine?.trim() || null;
+
+  const textLines = [
+    `Hi ${who}, you started booking a ${params.serviceName} at ${params.shopName}${withWhom} on ${when}, but the booking wasn't finished, and that time has since been booked by someone else. You're not booked for it.`,
+    ``,
+    `Pick another time: ${params.bookUrl}`,
+  ];
+  if (contact) textLines.push(``, contact);
+
+  const contactHtml = contact
+    ? `<p style="color:#71717a;font-size:12px;line-height:1.5;margin:16px 0 0">${escapeHtml(contact)}</p>`
+    : "";
+
+  return {
+    subject: `Pick another time at ${params.shopName}`,
+    text: textLines.join("\n"),
+    html: `<!-- pick another time email -->
+<div style="background:#0f0f0f;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <div style="max-width:480px;margin:0 auto;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;overflow:hidden">
+    <div style="padding:28px 28px 8px">
+      <div style="color:#D4AF37;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase">${escapeHtml(params.shopName)}</div>
+      <h1 style="color:#fafafa;font-size:20px;font-weight:700;margin:10px 0 6px">That time was taken</h1>
+      <p style="color:#a1a1aa;font-size:15px;line-height:1.5;margin:0">Hi ${escapeHtml(who)}, you started booking this but didn't finish, and someone else has since booked that time. You're not booked for it.</p>
+    </div>
+    <div style="margin:16px 28px;padding:16px 18px;background:#0f0f0f;border:1px solid #2a2a2a;border-radius:12px">
+      <div style="color:#71717a;font-size:16px;font-weight:600">${escapeHtml(params.serviceName)}</div>
+      ${params.staffName ? `<div style="color:#71717a;font-size:14px;margin-top:2px">with ${escapeHtml(params.staffName)}</div>` : ""}
+      <div style="color:#71717a;font-size:15px;font-weight:600;margin-top:8px">${escapeHtml(when)}</div>
+    </div>
+    <div style="padding:4px 28px 28px">
+      <a href="${escapeAttr(params.bookUrl)}" style="display:inline-block;background:#D4AF37;color:#0f0f0f;font-size:15px;font-weight:700;text-decoration:none;padding:13px 22px;border-radius:10px">Pick another time</a>
+      ${contactHtml}
+    </div>
+  </div>
+</div>`,
+  };
+}
+
 /** "Appointment reminder" email - the email twin of buildAppointmentReminderBody. */
 export function buildAppointmentReminderEmail(params: {
   firstName: string | null;

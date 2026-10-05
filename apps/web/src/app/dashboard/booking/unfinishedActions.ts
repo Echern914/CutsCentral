@@ -62,6 +62,10 @@ export interface UnfinishedRow {
   targetedSlotId: string | null;
   repeating: boolean;
   otherTimes: { startsAt: string; serviceName: string }[];
+  /** An email to send to, and they haven't unsubscribed. Optional = an older API. */
+  canEmail?: boolean;
+  /** When they were emailed to pick another time. Optional = an older API. */
+  invitedAt?: string | null;
 }
 
 export interface UnfinishedList {
@@ -74,6 +78,23 @@ export async function listUnfinishedAction(): Promise<{ ok: boolean; data?: Unfi
   const res = await apiGet<UnfinishedList>("/api/booking/unfinished");
   if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
   return { ok: true, data: res.data };
+}
+
+/**
+ * Email a client whose time was taken to pick another time - once. Changes
+ * no booking. `error` is the API's reason: already_invited, no_email,
+ * unsubscribed, no_booking_page, email_unavailable, send_failed, ...
+ */
+export async function inviteUnfinishedAction(
+  id: string,
+): Promise<{ ok: boolean; invitedAt?: string; error?: string }> {
+  const res = await apiSend<{ ok: boolean; invitedAt: string }>(
+    "POST",
+    `/api/booking/unfinished/${encodeURIComponent(id)}/invite`,
+    {},
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, invitedAt: res.data.invitedAt };
 }
 
 /** Take a person off the list. Changes no booking. */

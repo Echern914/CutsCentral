@@ -18,8 +18,9 @@ import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
  */
 const listUnfinishedAction = vi.hoisted(() => vi.fn());
 const dismissUnfinishedAction = vi.hoisted(() => vi.fn());
+const inviteUnfinishedAction = vi.hoisted(() => vi.fn());
 const createAppointmentAction = vi.hoisted(() => vi.fn());
-vi.mock("./unfinishedActions", () => ({ listUnfinishedAction, dismissUnfinishedAction }));
+vi.mock("./unfinishedActions", () => ({ listUnfinishedAction, dismissUnfinishedAction, inviteUnfinishedAction }));
 vi.mock("./actions", () => ({ createAppointmentAction }));
 vi.mock("@/components/VocabProvider", () => ({
   useVocab: () => NEUTRAL_VOCABULARY,
@@ -63,6 +64,8 @@ const row = (over: Record<string, unknown> = {}) => ({
   targetedSlotId: null,
   repeating: false,
   otherTimes: [],
+  canEmail: true,
+  invitedAt: null,
   ...over,
 });
 
@@ -73,6 +76,7 @@ let toast: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   listUnfinishedAction.mockReset();
   dismissUnfinishedAction.mockReset();
+  inviteUnfinishedAction.mockReset();
   createAppointmentAction.mockReset();
   listUnfinishedAction.mockResolvedValue(listed([row()]));
   dismissUnfinishedAction.mockResolvedValue({ ok: true });
@@ -257,13 +261,16 @@ describe("what a row says", () => {
 
 describe("Book them", () => {
   it("🔴 asks first, then books exactly that time for that client - and nothing forced", async () => {
+    createAppointmentAction.mockResolvedValue({ ok: true, clientConfirmation: "email" });
     await shown();
     // The re-read after booking no longer lists them: they're booked.
     listUnfinishedAction.mockResolvedValue(listed([]));
     const li = card(/Lena Ortiz/);
     fireEvent.click(within(li).getByRole("button", { name: "Book them" }));
     expect(createAppointmentAction).not.toHaveBeenCalled();
-    expect(li).toHaveTextContent("Book Lena for Fri, Oct 9, 4:30 PM? ChairBack won't send them a confirmation");
+    expect(li).toHaveTextContent(
+      "Book Lena for Fri, Oct 9, 4:30 PM? ChairBack emails them a confirmation if it has an email for them.",
+    );
     fireEvent.click(within(li).getByRole("button", { name: "Book" }));
     await waitFor(() => expect(createAppointmentAction).toHaveBeenCalledTimes(1));
     expect(createAppointmentAction).toHaveBeenCalledWith({
@@ -271,11 +278,15 @@ describe("Book them", () => {
       serviceId: "svc1",
       startsAt: "2026-10-09T23:30:00.000Z",
       clientId: "c1",
+      // 🔴 They tried to book online and may think they are: tell them.
+      confirmClient: true,
       // What they typed, so the reminders reach them.
       phone: "+13025550110",
       email: "lena@example.com",
     });
-    await waitFor(() => expect(li).toHaveTextContent("Booked for Fri, Oct 9, 4:30 PM."));
+    await waitFor(() =>
+      expect(li).toHaveTextContent("Booked for Fri, Oct 9, 4:30 PM. ChairBack emailed Lena a confirmation."),
+    );
     expect(toast).toHaveBeenCalledWith("Booked Lena", "success");
     await waitFor(() => expect(listUnfinishedAction).toHaveBeenCalledTimes(2));
     // Still here after that re-read, with the button the client needs next.
@@ -475,5 +486,81 @@ describe("Dismiss", () => {
     fireEvent.click(within(card(/Lena Ortiz/)).getByRole("button", { name: "Dismiss" }));
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't take them off the list", "error"));
     expect(screen.getByText("Lena Ortiz")).toBeInTheDocument();
+  });
+});
+
+/**
+ * TELLING THEM. The barber can't text everyone; these clients may think
+ * they're booked. Booking one emails them the confirmation and the row says
+ * whether it really went; a time someone else took offers one email to pick
+ * another time.
+ */
+describe("telling the client", () => {
+  it("🔴 no email could go out: it says so, and the Text button is the way", async () => {
+    createAppointmentAction.mockResolvedValue({ ok: true, clientConfirmation: "none" });
+    await shown();
+    listUnfinishedAction.mockResolvedValue(listed([]));
+    const li = card(/Lena Ortiz/);
+    fireEvent.click(within(li).getByRole("button", { name: "Book them" }));
+    fireEvent.click(within(li).getByRole("button", { name: "Book" }));
+    await waitFor(() =>
+      expect(li).toHaveTextContent(
+        "Booked for Fri, Oct 9, 4:30 PM. ChairBack couldn't email Lena a confirmation, so text them it's set.",
+      ),
+    );
+    expect(within(li).getByRole("link", { name: "Text" })).toBeInTheDocument();
+  });
+
+  it("an API that predates the confirmation still books them - the old way", async () => {
+    createAppointmentAction
+      .mockResolvedValueOnce({ ok: false, error: "invalid_input" })
+      .mockResolvedValueOnce({ ok: false, error: "invalid_input" })
+      .mockResolvedValueOnce({ ok: true });
+    await shown();
+    const li = card(/Lena Ortiz/);
+    fireEvent.click(within(li).getByRole("button", { name: "Book them" }));
+    fireEvent.click(within(li).getByRole("button", { name: "Book" }));
+    await waitFor(() => expect(createAppointmentAction).toHaveBeenCalledTimes(3));
+    expect(createAppointmentAction.mock.calls[2]![0]).not.toHaveProperty("confirmClient");
+    await waitFor(() =>
+      expect(li).toHaveTextContent("Booked for Fri, Oct 9, 4:30 PM. ChairBack doesn't send a confirmation"),
+    );
+  });
+
+  it("🔴 a time someone else took: 'Email them to pick a new time', once, and the row says when", async () => {
+    listUnfinishedAction.mockResolvedValue(listed([row({ timeTaken: true })]));
+    inviteUnfinishedAction.mockResolvedValue({ ok: true, invitedAt: "2026-10-05T18:00:00.000Z" });
+    await shown();
+    const li = card(/Lena Ortiz/);
+    fireEvent.click(within(li).getByRole("button", { name: "Email them to pick a new time" }));
+    await waitFor(() => expect(inviteUnfinishedAction).toHaveBeenCalledWith("a1"));
+    await waitFor(() => expect(li).toHaveTextContent("Emailed Lena to pick a new time (Oct 5, 11:00 AM)."));
+    expect(within(li).queryByRole("button", { name: "Email them to pick a new time" })).toBeNull();
+  });
+
+  it("no invite for a time still open, for someone who can't be emailed, or someone already invited", async () => {
+    listUnfinishedAction.mockResolvedValue(
+      listed([
+        row(),
+        row({ id: "a2", firstName: "Mia", lastName: "Park", timeTaken: true, canEmail: false }),
+        row({ id: "a3", firstName: "Noa", lastName: "Reed", timeTaken: true, invitedAt: "2026-10-05T18:00:00.000Z" }),
+      ]),
+    );
+    await shown();
+    for (const name of [/Lena Ortiz/, /Mia Park/, /Noa Reed/]) {
+      expect(within(card(name)).queryByRole("button", { name: "Email them to pick a new time" })).toBeNull();
+    }
+    expect(card(/Noa Reed/)).toHaveTextContent("Emailed Noa to pick a new time");
+  });
+
+  it("an invite that can't go out says why, and sends nothing", async () => {
+    listUnfinishedAction.mockResolvedValue(listed([row({ timeTaken: true })]));
+    inviteUnfinishedAction.mockResolvedValue({ ok: false, error: "unsubscribed" });
+    await shown();
+    const li = card(/Lena Ortiz/);
+    fireEvent.click(within(li).getByRole("button", { name: "Email them to pick a new time" }));
+    await waitFor(() =>
+      expect(li).toHaveTextContent("Lena unsubscribed from your emails. Text or call them instead."),
+    );
   });
 });

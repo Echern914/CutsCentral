@@ -20,7 +20,7 @@ import {
 import { recomputeCadence } from "../engines/cadence.js";
 import { collapseExternalBlocks } from "../engines/externalBlockCollapse.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
-import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
+import { confirmBookedFromList, notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
@@ -71,6 +71,7 @@ import {
   recordMirrorIntent,
   releaseForAppointment,
   swapForReschedule,
+  type DispatchOutcome,
 } from "../engines/acuityMirror.js";
 import {
   auditCoverage,
@@ -3031,6 +3032,14 @@ const createApptSchema = z
     // website stops offering it the instant this lands. A special is one
     // physical time, so it never combines with a recurrence.
     targetedSlotId: z.string().trim().min(1).max(60).optional(),
+    /**
+     * Tell the client they're booked - the same confirmation email a client who
+     * books themselves gets, plus a push if they use the app. Sent ONLY when the
+     * barber books from "Didn't finish booking": those clients tried to book
+     * online and may think they already are. A booking made at the chair or by
+     * phone stays silent, as it always has. Single bookings only.
+     */
+    confirmClient: z.literal(true).optional(),
     // Optional "repeats every N weeks" rule. When present, the appointment above
     // is occurrence 0 (its startsAt sets the weekday + time-of-day), and N-1 more
     // are generated. Exactly one of count / until. Capped so a bad rule can't
@@ -3052,6 +3061,12 @@ const createApptSchema = z
   .refine((d) => Boolean(d.clientId) || Boolean(d.firstName?.trim()), {
     message: "Pick a client or enter a name.",
     path: ["clientId"],
+  })
+  // The confirmation is for one booking a client tried to make; a series is
+  // a decision the barber makes with them.
+  .refine((d) => !(d.confirmClient && d.recurrence), {
+    message: "A confirmation is sent for a single booking only.",
+    path: ["confirmClient"],
   });
 
 /**
@@ -3189,6 +3204,23 @@ async function undoUnmirroredForcedBooking(input: {
     "acuity mirror: forced dashboard booking REFUSED by Acuity - undone, barber told",
   );
   return true;
+}
+
+/**
+ * Booked from "Didn't finish booking": tell the client (confirmBookedFromList).
+ * Only once the time is truly theirs - an Acuity block that landed, or none
+ * needed. An ambiguous mirror may still be refused, and the public page keeps
+ * the same silence in that case. Answers what the barber may be told.
+ */
+async function confirmIfAsked(
+  asked: true | undefined,
+  mirror: DispatchOutcome,
+  shopId: string,
+  appointmentId: string,
+): Promise<"email" | "none" | undefined> {
+  if (!asked) return undefined;
+  if (mirror !== "active" && mirror !== "skipped" && mirror !== "observed") return "none";
+  return confirmBookedFromList({ shopId, appointmentId });
 }
 
 bookingDashboardRouter.post("/appointments", async (req, res) => {
@@ -3739,13 +3771,15 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         "dashboard booking made OVER a conflict (Book anyway)",
       );
       await attachClientSavedCard({ shopId, appointmentId: result.id, clientId: result.clientId });
-      res.status(201).json({ ok: true, id: result.id, forced: true, mirror });
+      const clientConfirmation = await confirmIfAsked(d.confirmClient, mirror, shopId, result.id);
+      res.status(201).json({ ok: true, id: result.id, forced: true, mirror, clientConfirmation });
       return;
     }
     // The client saved a card here: this booking carries it too, so a no-show
     // on a booking made by phone is covered like one they made themselves.
     await attachClientSavedCard({ shopId, appointmentId: result.id, clientId: result.clientId });
-    res.status(201).json({ ok: true, id: result.id });
+    const clientConfirmation = await confirmIfAsked(d.confirmClient, mirror, shopId, result.id);
+    res.status(201).json({ ok: true, id: result.id, clientConfirmation });
   } catch (err) {
     // The one refusal that must be SHOWN, not just returned: which block, when,
     // and why - so the barber decides with the facts, then confirms.

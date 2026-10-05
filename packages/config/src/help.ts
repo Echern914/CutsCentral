@@ -299,7 +299,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "reminders",
     q: "Do clients get reminders?",
-    a: "Automatically. A confirmation when they book — by email, and as a push if they use the app — then reminders 24 hours and 2 hours before the appointment. You don't do anything.\n\nThat pair is the single biggest thing you can do about no-shows.",
+    a: "Automatically. A confirmation email when they book online, then reminders 24 hours and 2 hours before the appointment. You don't do anything.\n\nA booking you make yourself (at the chair, by phone) sends no confirmation, only the reminders. The exception is Book them on Didn't finish booking: those clients tried to book online, so ChairBack emails them the confirmation, and pushes the app if they use it.\n\nReminders are the single biggest thing you can do about no-shows.",
     keywords: ["reminder", "no show", "noshow", "confirmation", "notify", "forget", "24 hour", "text before"],
     category: "booking",
     action: { label: "Open booking settings", featureId: "reminders" },

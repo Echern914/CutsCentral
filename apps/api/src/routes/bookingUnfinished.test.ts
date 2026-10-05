@@ -717,6 +717,231 @@ describe("Book them", () => {
   });
 });
 
+/**
+ * TELLING THEM. A barber can't text everyone (texting is off), and these
+ * clients may think they're booked. Booking from the list emails them the
+ * ordinary confirmation; a time someone else took gets one "pick another
+ * time" email. Every other dashboard booking stays silent.
+ */
+describe("telling the client", () => {
+  type Sent = { to: string; subject: string; html: string; text: string; meta?: Record<string, unknown> };
+  let sent: Sent[] = [];
+  let failNext = false;
+
+  async function useMailer() {
+    const { __setSendEmailForTests } = await import("../messaging/email.js");
+    const { armBackgroundWorkTracking } = await import("../backgroundWork.js");
+    armBackgroundWorkTracking();
+    sent = [];
+    failNext = false;
+    __setSendEmailForTests(async (input) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error("provider down");
+      }
+      sent.push(input as Sent);
+      return { id: `email_${sent.length}`, status: "sent" };
+    });
+  }
+  async function noMailer() {
+    const { __setSendEmailForTests } = await import("../messaging/email.js");
+    const { disarmBackgroundWorkTracking } = await import("../backgroundWork.js");
+    __setSendEmailForTests(undefined);
+    disarmBackgroundWorkTracking();
+  }
+  async function settle() {
+    const { settleBackgroundWork } = await import("../backgroundWork.js");
+    await settleBackgroundWork();
+  }
+  const bookFromList = (row: Row, extra: Record<string, unknown> = {}) =>
+    request(app)
+      .post("/api/booking/appointments")
+      .set("Cookie", cookie)
+      .send({
+        staffId: row.staffId,
+        serviceId: row.serviceId,
+        startsAt: row.startsAt,
+        clientId: row.clientId,
+        ...(row.phone ? { phone: row.phone } : {}),
+        ...(row.email ? { email: row.email } : {}),
+        ...extra,
+      });
+  const invite = (id: string) =>
+    request(app).post(`/api/booking/unfinished/${id}/invite`).set("Cookie", cookie).send({});
+
+  it("🔴 Book them from the list emails them the ordinary confirmation, and says so", async () => {
+    await useMailer();
+    try {
+      const who = person("Cal", "Moss");
+      await lapsed(who, at(8, 9));
+      const row = (await rowFor(who))!;
+      const res = await bookFromList(row, { confirmClient: true });
+      expect(res.status).toBe(201);
+      expect(res.body.clientConfirmation).toBe("email");
+      await settle();
+      const mine = sent.filter((m) => m.to === who.email);
+      expect(mine).toHaveLength(1);
+      expect(mine[0]!.subject).toBe("Booking confirmed: Haircut at Unfinished Cuts");
+    } finally {
+      await noMailer();
+    }
+  });
+
+  it("🔴 any other dashboard booking still sends nothing", async () => {
+    await useMailer();
+    try {
+      const who = person("Dee", "Lyle");
+      await lapsed(who, at(8, 10));
+      const row = (await rowFor(who))!;
+      const res = await bookFromList(row);
+      expect(res.status).toBe(201);
+      expect(res.body.clientConfirmation).toBeUndefined();
+      await settle();
+      expect(sent.filter((m) => m.to === who.email)).toHaveLength(0);
+    } finally {
+      await noMailer();
+    }
+  });
+
+  it("never claims an email it can't send - email off says 'none'", async () => {
+    const who = person("Eli", "Ford");
+    await lapsed(who, at(8, 11));
+    const row = (await rowFor(who))!;
+    const res = await bookFromList(row, { confirmClient: true });
+    expect(res.status).toBe(201);
+    expect(res.body.clientConfirmation).toBe("none");
+  });
+
+  it("a confirmation is for one booking, never a repeating one", async () => {
+    const who = person("Fay", "Gray");
+    await lapsed(who, at(8, 12));
+    const row = (await rowFor(who))!;
+    const res = await bookFromList(row, { confirmClient: true, recurrence: { interval: 1, count: 2 } });
+    expect(res.status).toBe(400);
+  });
+
+  it("🔴 a time someone else took: one 'pick another time' email, with their service and staff picked - once", async () => {
+    await useMailer();
+    try {
+      const who = person("Gus", "Hale");
+      const when = at(8, 13);
+      await lapsed(who, when);
+      await finish(await tryToBook(person("Hal", "Ives"), when));
+      const row = (await rowFor(who))!;
+      expect(row.timeTaken).toBe(true);
+      expect((row as Row & { canEmail: boolean }).canEmail).toBe(true);
+
+      const first = await invite(row.id);
+      expect(first.status).toBe(200);
+      const mine = sent.filter((m) => m.to === who.email);
+      expect(mine).toHaveLength(1);
+      expect(mine[0]!.subject).toBe("Pick another time at Unfinished Cuts");
+      expect(mine[0]!.html).toContain(`/book/${slug}?service=${serviceId}&amp;staff=${staffId}`);
+      expect(mine[0]!.text).toMatch(/You're not booked for it/);
+      expect(mine[0]!.html).not.toMatch(/cancel/i);
+      expect(mine[0]!.html).not.toContain("/book/manage/");
+
+      const again = await invite(row.id);
+      expect(again.status).toBe(409);
+      expect(again.body.error).toBe("already_invited");
+      expect(sent.filter((m) => m.to === who.email)).toHaveLength(1);
+      expect(((await rowFor(who)) as Row & { invitedAt: string | null }).invitedAt).toBe(first.body.invitedAt);
+    } finally {
+      await noMailer();
+    }
+  });
+
+  it("🔴 race: two taps at once send ONE email", async () => {
+    await useMailer();
+    try {
+      const who = person("Ida", "Jules");
+      const when = at(8, 14);
+      await lapsed(who, when);
+      await finish(await tryToBook(person("Jay", "Kent"), when));
+      const row = (await rowFor(who))!;
+      const { raceBehindRowLock } = await import("../testing/raceBarrier.js");
+      const { settledEarly, results } = await raceBehindRowLock("Appointment", row.id, [
+        () => invite(row.id),
+        () => invite(row.id),
+      ]);
+      expect(settledEarly).toBe(0);
+      const statuses = results.map((r) => (r.status === "fulfilled" ? r.value.status : 0)).sort();
+      expect(statuses).toEqual([200, 409]);
+      expect(sent.filter((m) => m.to === who.email)).toHaveLength(1);
+    } finally {
+      await noMailer();
+    }
+  });
+
+  it("a send that fails lets the claim go, so trying again works", async () => {
+    await useMailer();
+    try {
+      const who = person("Kit", "Lane");
+      const when = at(8, 15);
+      await lapsed(who, when);
+      await finish(await tryToBook(person("Lou", "Marsh"), when));
+      const row = (await rowFor(who))!;
+      failNext = true;
+      const failed = await invite(row.id);
+      expect(failed.status).toBe(502);
+      expect(((await rowFor(who)) as Row & { invitedAt: string | null }).invitedAt).toBeNull();
+      const retried = await invite(row.id);
+      expect(retried.status).toBe(200);
+      expect(sent.filter((m) => m.to === who.email)).toHaveLength(1);
+    } finally {
+      await noMailer();
+    }
+  });
+
+  it("refuses what it shouldn't do: unsubscribed, still on the card step, or no email able to go out", async () => {
+    await useMailer();
+    try {
+      // Unsubscribed from this shop's emails.
+      const quiet = person("Mo", "Nash");
+      await lapsed(quiet, at(9, 9));
+      const quietRow = (await rowFor(quiet))!;
+      await prisma.client.update({ where: { id: quietRow.clientId! }, data: { emailOptedOut: true } });
+      expect(((await rowFor(quiet)) as Row & { canEmail: boolean }).canEmail).toBe(false);
+      const r1 = await invite(quietRow.id);
+      expect(r1.status).toBe(422);
+      expect(r1.body.error).toBe("unsubscribed");
+
+      // Still on the card step.
+      const live = person("Ned", "Oak");
+      const attempt = await tryToBook(live, at(9, 10));
+      const r2 = await invite(attempt.id);
+      expect(r2.status).toBe(409);
+      expect(r2.body.error).toBe("still_finishing");
+      expect(sent).toHaveLength(0);
+    } finally {
+      await noMailer();
+    }
+    // No mailer at all: refused, and nothing stamped.
+    const off = person("Oli", "Penn");
+    await lapsed(off, at(9, 11));
+    const offRow = (await rowFor(off))!;
+    const r3 = await invite(offRow.id);
+    expect(r3.status).toBe(503);
+    expect(((await rowFor(off)) as Row & { invitedAt: string | null }).invitedAt).toBeNull();
+  });
+
+  it("another shop can't invite this shop's clients", async () => {
+    const who = person("Pia", "Quinn");
+    await lapsed(who, at(9, 12));
+    const row = (await rowFor(who))!;
+    const other = await signup("invite-other");
+    await request(app)
+      .post("/api/shops")
+      .set("Cookie", other.cookie)
+      .send({ name: "Other Cuts", bookingUrl: "https://other.test", smsAttested: true });
+    const res = await request(app)
+      .post(`/api/booking/unfinished/${row.id}/invite`)
+      .set("Cookie", other.cookie)
+      .send({});
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("Dismiss", () => {
   it("🔴 takes the person off - every try of theirs - and a later try lists them again", async () => {
     const who = person("Bea", "Frost");

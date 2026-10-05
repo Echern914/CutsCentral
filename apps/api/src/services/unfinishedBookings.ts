@@ -128,6 +128,13 @@ export interface UnfinishedBooking {
   repeating: boolean;
   /** Other future times this person tried for and didn't finish. */
   otherTimes: UnfinishedOtherTime[];
+  /**
+   * They have an email and haven't unsubscribed from this shop's emails: a
+   * "pick another time" email can be sent (services/unfinishedInvite.ts).
+   */
+  canEmail: boolean;
+  /** When the barber emailed them to pick another time - once is the promise. */
+  invitedAt: Date | null;
 }
 
 export interface UnfinishedList {
@@ -228,10 +235,11 @@ export async function listUnfinishedBookings(
         seriesId: true,
         bookedVia: true,
         addOns: true,
+        unfinishedInvitedAt: true,
         staff: { select: { name: true } },
         service: { select: { name: true } },
         client: {
-          select: { firstName: true, lastName: true, optedOut: true, optOutSource: true },
+          select: { firstName: true, lastName: true, optedOut: true, optOutSource: true, emailOptedOut: true },
         },
         cardOnFile: { select: { savedAt: true } },
         payments: {
@@ -398,6 +406,8 @@ export async function listUnfinishedBookings(
         targetedSlotId: null,
         repeating: rep.seriesId !== null,
         otherTimes,
+        canEmail: rep.email !== null && !(rep.client?.emailOptedOut ?? false),
+        invitedAt: rep.unfinishedInvitedAt,
       });
     }
 

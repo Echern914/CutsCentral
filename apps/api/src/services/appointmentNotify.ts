@@ -13,9 +13,9 @@ import {
   formatApptTime,
 } from "../messaging/templates.js";
 import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
-import { emailEnabled, sendEmail } from "../messaging/email.js";
+import { emailDispatchMode, emailEnabled, sendEmail } from "../messaging/email.js";
 import { appointmentDeepLink, resolveNotifyPrefs, sendToBarber } from "./barberNotify.js";
-import { sendPushToUser } from "../messaging/push.js";
+import { sendPushToClient, sendPushToUser } from "../messaging/push.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { trackBackgroundWork } from "../backgroundWork.js";
@@ -497,6 +497,68 @@ async function notifyAppointmentConfirmationImpl(params: {
       "notifyAppointmentConfirmation failed",
     );
   }
+}
+
+/**
+ * TELL A CLIENT THE SHOP BOOKED THEM - from "Didn't finish booking".
+ *
+ * Those clients tried to book online and left the card step; many believe they
+ * are booked already, and with texting off the barber had no way to reach them
+ * all ("I can't text everyone"). So booking one from that list sends them the
+ * same confirmation email a client who books themselves gets, plus a push if
+ * they use the app. Every other dashboard booking (at the chair, by phone)
+ * stays silent, as it always has.
+ *
+ * Answers what the barber may be told: "email" only when an email will really
+ * go out - a live mailer, an address, a shop with access - never under DRY_RUN
+ * or for a client with no address. The send itself runs in the background and
+ * re-checks everything; a confirmation already sent is never sent twice.
+ */
+export async function confirmBookedFromList(params: {
+  shopId: string;
+  appointmentId: string;
+  now?: Date;
+}): Promise<"email" | "none"> {
+  const now = params.now ?? new Date();
+  let willEmail = false;
+  try {
+    const loaded = await loadAppointment(params.shopId, params.appointmentId);
+    if (!loaded || loaded.appt.status !== "BOOKED") return "none";
+    const { shop, appt } = loaded;
+    const emailTo = appt.email ?? appt.client?.email ?? null;
+    willEmail =
+      appt.confirmationEmailSentAt === null &&
+      appt.client !== null &&
+      emailSkipReason(shop, appt.client, emailTo, now) === null &&
+      emailDispatchMode() === "live";
+    if (appt.client) {
+      void trackBackgroundWork(
+        sendPushToClient({
+          shopId: shop.id,
+          clientId: appt.client.id,
+          kind: "appointment",
+          payload: {
+            title: shop.name,
+            body: `You're booked: ${appt.service.name}, ${formatApptTime(appt.startsAt, shop.timezone)}.`,
+            url: `${apiEnv().APP_BASE_URL}/book/manage/${appt.manageToken}`,
+            tag: `booked-${appt.id}`,
+          },
+        })
+          .then(() => undefined)
+          .catch((err: unknown) => {
+            logger.warn({ err, shopId: shop.id, appointmentId: appt.id }, "booked-from-list push failed");
+          }),
+      );
+    }
+  } catch (err) {
+    logger.error(
+      { err, shopId: params.shopId, appointmentId: params.appointmentId },
+      "confirmBookedFromList: could not read the booking",
+    );
+    return "none";
+  }
+  void notifyAppointmentConfirmation({ shopId: params.shopId, appointmentId: params.appointmentId, now });
+  return willEmail ? "email" : "none";
 }
 
 /**
