@@ -32,12 +32,17 @@ import {
 const fake = vi.hoisted(() => {
   const refunds: Array<Record<string, unknown>> = [];
   const detached: string[] = [];
+  let searchResult: Array<Record<string, unknown>> = [];
   return {
     refunds,
     detached,
+    setSearch(found: Array<Record<string, unknown>>) {
+      searchResult = found;
+    },
     reset() {
       refunds.length = 0;
       detached.length = 0;
+      searchResult = [];
     },
     client: {
       accounts: {
@@ -52,6 +57,8 @@ const fake = vi.hoisted(() => {
       paymentIntents: {
         cancel: vi.fn(async (id: string) => ({ id, status: "canceled" })),
         retrieve: vi.fn(async (id: string) => ({ id, status: "succeeded", latest_charge: `ch_${id}` })),
+        // What the reconciler's metadata search finds; set per test.
+        search: vi.fn(async () => ({ data: searchResult })),
       },
       paymentMethods: {
         detach: vi.fn(async (id: string) => {
@@ -418,6 +425,40 @@ describe("a tip is never money toward the service, nor revenue", () => {
     expect(fake.detached).toHaveLength(0);
   });
 
+  it("an Acuity-owned booking with only a tip is still not chargeable here", async () => {
+    const { serviceCheckoutState } = await import("../engines/serviceCheckout.js");
+    const now = new Date();
+    const state = serviceCheckoutState({
+      appointmentId: "appt_ext",
+      seriesId: null,
+      price: 40,
+      chairPaid: null,
+      chairCheckedOut: false,
+      payments: [{ purpose: "tip", status: "succeeded", amount: 800, capturedAmount: null, refundedAmount: 0 }],
+      // A card that would otherwise be eligible, so the external rule is the
+      // only thing that can say no.
+      card: {
+        appointmentId: "appt_ext",
+        seriesId: null,
+        status: "saved",
+        stripePaymentMethodId: "pm_ext",
+        brand: "visa",
+        last4: "4242",
+        serviceChargeConsentVersion: SERVICE_CHARGE_CONSENT_VERSION,
+        serviceChargeConsentAt: now,
+        serviceChargeConsentScope: "single",
+        serviceChargeWithdrawnAt: null,
+      },
+      external: true,
+      endsAt: new Date(now.getTime() - 60 * 60_000),
+      status: "COMPLETED",
+      agreedPriceCents: 4000,
+      now,
+    });
+    expect(state.savedCardBlocker).toBe("no_card");
+    expect(state.savedCardEligible).toBe(false);
+  });
+
   it("the balance arithmetic itself counts only service money", async () => {
     const { serviceCollectedCents } = await import("../engines/serviceCheckout.js");
     const row = (purpose: string, cents: number) => ({
@@ -473,6 +514,117 @@ describe("the webhook never mistakes a tip for booking money", () => {
     );
     expect(fake.refunds).toHaveLength(0);
     expect((await rowOf(deposit.id)).refundedAmount).toBe(0);
+  });
+
+  it("🔴 the ROW decides, not the intent's label: a no-show fee or a Tap to Pay charge with no purpose label never touches a hold", async () => {
+    const { applyPaymentEvent } = await import("../billing/payments.js");
+    // A lapsed hold that still holds its deposit: a "lapsed" answer would
+    // refund that deposit in full.
+    const lapsed = await makeAppt({
+      status: "CANCELED",
+      priceDollars: 40,
+      holdReason: "payment",
+      holdExpiresAt: new Date(Date.now() - 60_000),
+    });
+    const deposit = await addPayment(lapsed.id, { purpose: "booking", status: "succeeded", cents: 1000 });
+    const fee = await addPayment(lapsed.id, { purpose: "fee", status: "requires_payment_method", cents: 2000 });
+    // A no-show fee intent carries no purpose in its metadata.
+    await applyPaymentEvent(intentEvent("payment_intent.succeeded", fee, { appointmentId: lapsed.id, shopId }));
+    expect(fake.refunds).toHaveLength(0);
+    expect((await rowOf(deposit.id)).refundedAmount).toBe(0);
+
+    // The older Tap to Pay intent: a service-checkout row, no purpose label.
+    const pending = await makeAppt({
+      status: "PENDING",
+      priceDollars: 40,
+      startsAt: new Date(Date.now() + 7 * 24 * 60 * 60_000),
+      holdReason: "payment",
+      holdExpiresAt: new Date(Date.now() + 10 * 60_000),
+    });
+    await addPayment(pending.id, { purpose: "booking", status: "requires_payment_method", cents: 1000 });
+    const tap = await addPayment(pending.id, {
+      purpose: "service_checkout",
+      status: "requires_payment_method",
+      cents: 4000,
+      mode: "terminal",
+    });
+    await applyPaymentEvent(intentEvent("payment_intent.succeeded", tap, { appointmentId: pending.id, shopId }));
+    const after = await prisma.appointment.findUniqueOrThrow({ where: { id: pending.id }, select: { status: true } });
+    expect(after.status).toBe("PENDING");
+  });
+
+  it("an intent with no payment row of ours promotes nothing", async () => {
+    const { applyPaymentEvent } = await import("../billing/payments.js");
+    const appt = await makeAppt({
+      status: "PENDING",
+      priceDollars: 40,
+      startsAt: new Date(Date.now() + 8 * 24 * 60 * 60_000),
+      holdReason: "payment",
+      holdExpiresAt: new Date(Date.now() + 10 * 60_000),
+    });
+    await applyPaymentEvent(
+      intentEvent(
+        "payment_intent.succeeded",
+        { id: `pay_${randomToken(12)}`, stripePaymentIntentId: `pi_${randomToken(14)}`, amount: 1000 },
+        { appointmentId: appt.id, shopId },
+      ),
+    );
+    const after = await prisma.appointment.findUniqueOrThrow({ where: { id: appt.id }, select: { status: true } });
+    expect(after.status).toBe("PENDING");
+  });
+
+  it("🔴 a reservation wrongly declared dead: the reconciler records the intent it later finds and escalates, never 'adopted'", async () => {
+    const { reconcileOne } = await import("../billing/reconcile.js");
+    const appt = await makeAppt({ status: "COMPLETED", priceDollars: 40 });
+    const paymentId = `pay_${randomToken(12)}`;
+    const pendingId = `pending:${paymentId}`;
+    await prisma.payment.create({
+      data: {
+        id: paymentId,
+        shopId,
+        appointmentId: appt.id,
+        stripePaymentIntentId: pendingId,
+        stripeConnectAccountId: ACCT,
+        mode: "ahead",
+        purpose: "booking",
+        amount: 1000,
+        currency: "usd",
+        // An earlier pass searched, found nothing, and declared it dead.
+        status: "failed",
+      },
+    });
+    const realId = `pi_${randomToken(14)}`;
+    fake.setSearch([
+      {
+        id: realId,
+        status: "requires_payment_method",
+        amount_received: 0,
+        latest_charge: null,
+        metadata: { paymentId, appointmentId: appt.id, shopId },
+      },
+    ]);
+    const row = await prisma.payment.findUniqueOrThrow({
+      where: { id: paymentId },
+      select: {
+        id: true,
+        shopId: true,
+        appointmentId: true,
+        stripePaymentIntentId: true,
+        status: true,
+        amount: true,
+        mode: true,
+        purpose: true,
+        ambiguousAt: true,
+      },
+    });
+    const outcome = await reconcileOne(row, new Date(), false);
+    expect(outcome).toBe("escalated");
+    const after = await prisma.payment.findUniqueOrThrow({
+      where: { id: paymentId },
+      select: { status: true, stripePaymentIntentId: true },
+    });
+    // Dead stays dead; the intent is recorded so it is not searched forever.
+    expect(after).toEqual({ status: "failed", stripePaymentIntentId: realId });
   });
 
   it("a booking intent still promotes its hold (no purpose, or purpose booking)", async () => {

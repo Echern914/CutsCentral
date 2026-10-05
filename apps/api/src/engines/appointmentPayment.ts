@@ -72,10 +72,16 @@ export const SERVICE_PAYMENT_PURPOSES = ["booking", "service_checkout"] as const
 export const TAKINGS_PAYMENT_PURPOSES = ["booking", "fee", "service_checkout"] as const;
 
 const SERVICE_PURPOSE_SET: ReadonlySet<string> = new Set(SERVICE_PAYMENT_PURPOSES);
+const TAKINGS_PURPOSE_SET: ReadonlySet<string> = new Set(TAKINGS_PAYMENT_PURPOSES);
 
 /** True for a row that is money toward the service - see SERVICE_PAYMENT_PURPOSES. */
 export function isServicePayment(row: { purpose: string }): boolean {
   return SERVICE_PURPOSE_SET.has(row.purpose);
+}
+
+/** True for a row the shop's takings count - see TAKINGS_PAYMENT_PURPOSES. */
+export function isTakingsPayment(row: { purpose: string }): boolean {
+  return TAKINGS_PURPOSE_SET.has(row.purpose);
 }
 
 /** The Stripe intent statuses under which money has actually MOVED to the shop. */
