@@ -3349,9 +3349,10 @@ model Appointment {
   // "Leave a tip" email, ~1 hour after endsAt (engines/tipRequests.ts). The
   // sweep's at-most-once claim, set in the same transaction that queues it.
   tipRequestSentAt      DateTime?
-  // The SHOP finished this visit (Done, checkout, a walk-in started) - false
+  // The SHOP completed this visit (Done, checkout, walk-in Complete) - false
   // when the 15-minute sweep completed it on its own, which an unmarked
-  // no-show also does. The tip ask goes only to visits the shop finished.
+  // no-show also does. The tip ask goes only to visits the shop finished
+  // (this, paidAt, arrived, or a started walk-in: tipEmails.finishedByShop).
   completedByShop       Boolean  @default(false)
   // BARBER-side "your next client" reminder (engines/barberReminders.ts). Its
   // own stamp because it is a different recipient on a different lead time -
@@ -3732,6 +3733,7 @@ model Payment {
   reconciledAt           DateTime?
   // A TIP's announcement - the client's receipt and the staff member's push -
   // claimed here once, whichever path saw it succeed first (services/tipPaid.ts).
+  // Set once and never moved, it is also the "paid" time the receipt prints.
   tipAnnouncedAt         DateTime?
   // THE REFUND TERMS THIS BOOKING WAS PAID ON: true = what was taken at booking
   // is kept when the CLIENT cancels (Shop.depositNonRefundable, in deposit

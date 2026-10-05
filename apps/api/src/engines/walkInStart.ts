@@ -377,7 +377,7 @@ export async function completeEntry(opts: {
           serviceName: appt.service?.name ?? null,
         },
         now,
-        // The shop started this walk-in: they are in the chair.
+        // The shop completed this walk-in: they were in the chair.
         { byShop: true },
       );
       return { earn, clientId: appt.clientId, appointmentId: appt.id };

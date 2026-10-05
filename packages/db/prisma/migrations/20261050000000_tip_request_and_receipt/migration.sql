@@ -3,7 +3,7 @@
 -- One "Leave a tip" email per visit: the sweep's claim.
 ALTER TABLE "Appointment" ADD COLUMN IF NOT EXISTS "tipRequestSentAt" TIMESTAMP(3);
 
--- The SHOP finished the visit (Done, checkout, a walk-in started), as opposed
+-- The SHOP completed the visit (Done, checkout, walk-in Complete), as opposed
 -- to the 15-minute sweep completing it on its own - which an unmarked no-show
 -- also does. Only a visit the shop finished is asked for a tip. Visits that
 -- completed before this deploy stay false; the ask only looks back hours.

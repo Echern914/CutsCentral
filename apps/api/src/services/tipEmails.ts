@@ -14,6 +14,7 @@ import {
   type IntentOutcome,
 } from "./appointmentCanceledNotify.js";
 import { isValidEmail } from "./appointmentNotify.js";
+import { recordDispatchInTx } from "./emailDelivery.js";
 import { receiptReference } from "./serviceChargeReceipt.js";
 import {
   liveTipWhere,
@@ -60,16 +61,28 @@ export function isTipReceiptKind(kind: string): boolean {
  * DID THE SHOP FINISH THIS VISIT? Eric, 2026-10-05: ask only visits the shop
  * finished. The 15-minute sweep completes every unmarked visit on its own -
  * an unmarked no-show included, and it can't be marked one afterwards - so a
- * visit only the sweep completed is never asked. Done, a checkout, a walk-in
- * started, or the shop marking them arrived all prove they were in the chair.
+ * visit only the sweep completed is never asked. Done, a checkout, or the shop
+ * marking them arrived all prove they were in the chair - and so does a
+ * walk-in's own origin: its appointment is created only when the shop starts
+ * serving them (engines/walkInStart.ts), so one that overran and was then
+ * completed by the sweep was still never a no-show.
  */
 export function finishedByShop(appt: {
   completedByShop: boolean;
   paidAt: Date | null;
   checkInStatus: string | null;
+  bookedVia: string | null;
 }): boolean {
-  return appt.completedByShop || appt.paidAt !== null || appt.checkInStatus === "arrived";
+  return (
+    appt.completedByShop ||
+    appt.paidAt !== null ||
+    appt.checkInStatus === "arrived" ||
+    appt.bookedVia === WALK_IN_STARTED
+  );
 }
+
+/** Appointment.bookedVia of a walk-in the shop started (engines/walkInStart.ts). */
+export const WALK_IN_STARTED = "walk_in_queue";
 
 /** Why a visit is not asked for a tip, or null when it may be. */
 export type TipAskBlocked =
@@ -88,6 +101,7 @@ export interface TipAskFacts {
     completedByShop: boolean;
     paidAt: Date | null;
     checkInStatus: string | null;
+    bookedVia: string | null;
     email: string | null;
   };
   shop: TipShopFacts;
@@ -141,6 +155,7 @@ export const TIP_ASK_APPT_SELECT = {
   completedByShop: true,
   paidAt: true,
   checkInStatus: true,
+  bookedVia: true,
   email: true,
   firstName: true,
   manageToken: true,
@@ -215,6 +230,8 @@ async function sendAndRecord(p: {
   claimToken: string;
   now: Date;
   appointmentId: string;
+  /** Who it is for, so a bounce or spam complaint on it suppresses them. */
+  clientId: string | null;
   to: string;
   shopName: string;
   kind: typeof TIP_REQUEST_KIND | typeof TIP_RECEIPT_KIND;
@@ -232,7 +249,12 @@ async function sendAndRecord(p: {
       fromName: p.shopName,
       stream: "transactional",
       idempotencyKey: p.intent.idempotencyKey,
-      meta: { shopId: p.intent.shopId, appointmentId: p.appointmentId, kind: p.kind },
+      meta: {
+        shopId: p.intent.shopId,
+        appointmentId: p.appointmentId,
+        kind: p.kind,
+        ...(p.clientId ? { clientId: p.clientId } : {}),
+      },
     });
     if (result.status !== "sent" || !result.id || result.id === "unknown") {
       return ambiguous(p.intent.id, attemptNo, p.now, "no_message_id");
@@ -251,17 +273,21 @@ async function sendAndRecord(p: {
           lastAttemptAmbiguous: false,
         },
       });
-      await tx.emailDelivery.upsert({
-        where: { messageId: result.id },
-        create: {
+      // The one place a dispatch is correlated: with the clientId on the row,
+      // a bounce or complaint on this email suppresses the client - including
+      // one that reached us before this write did.
+      await recordDispatchInTx(
+        tx,
+        {
           messageId: result.id,
           kind: p.kind,
           shopId: p.intent.shopId,
           appointmentId: p.appointmentId,
-          status: "sent",
+          clientId: p.clientId,
+          recipient: p.to,
         },
-        update: { kind: p.kind, shopId: p.intent.shopId, appointmentId: p.appointmentId, awaitingDispatchMeta: false },
-      });
+        p.now,
+      );
     });
     return "sent";
   } catch (err) {
@@ -327,6 +353,7 @@ export async function deliverTipRequestIntent(params: {
     claimToken: params.claimToken,
     now,
     appointmentId,
+    clientId: facts.appt.clientId,
     to,
     shopName: facts.shop.name,
     kind: TIP_REQUEST_KIND,
@@ -364,7 +391,7 @@ export async function deliverTipReceiptIntent(params: {
         amount: true,
         capturedAmount: true,
         refundedAmount: true,
-        capturedAt: true,
+        tipAnnouncedAt: true,
         updatedAt: true,
         stripePaymentIntentId: true,
         appointmentId: true,
@@ -384,6 +411,7 @@ export async function deliverTipReceiptIntent(params: {
         email: true,
         startsAt: true,
         manageToken: true,
+        clientId: true,
         client: { select: { email: true, firstName: true } },
         service: { select: { name: true } },
         staff: { select: { name: true } },
@@ -415,7 +443,11 @@ export async function deliverTipReceiptIntent(params: {
     timezone: appt.shop.timezone,
     staffName: appt.staff?.name ?? null,
     amount: formatTipCents(payment.capturedAmount ?? payment.amount),
-    paidAt: payment.capturedAt ?? payment.updatedAt,
+    // When it was seen paid - stamped once, by the claim that queued this
+    // receipt. Never `updatedAt`: every later write (a refund, a replayed
+    // event) moves that, and a retry must render the very same email under
+    // the same Idempotency-Key. capturedAt is never written for a tip.
+    paidAt: payment.tipAnnouncedAt ?? payment.updatedAt,
     reference: receiptReference(payment.stripePaymentIntentId, paymentId),
     manageToken: appt.manageToken,
   });
@@ -424,6 +456,7 @@ export async function deliverTipReceiptIntent(params: {
     claimToken: params.claimToken,
     now,
     appointmentId: appt.id,
+    clientId: appt.clientId,
     to,
     shopName: appt.shop.name,
     kind: TIP_RECEIPT_KIND,

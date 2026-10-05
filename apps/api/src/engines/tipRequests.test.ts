@@ -86,6 +86,7 @@ async function seedVisit(over: Partial<{
   checkInStatus: string;
   groupId: string;
   visitSourceId: string;
+  bookedVia: string;
 }> = {}): Promise<string> {
   seq += 1;
   const endsAt = new Date(NOW.getTime() - (over.endedMinAgo ?? 61) * MIN + seq * 1000);
@@ -125,6 +126,7 @@ async function seedVisit(over: Partial<{
       checkInStatus: over.checkInStatus ?? null,
       groupId: over.groupId ?? null,
       visitId,
+      bookedVia: over.bookedVia ?? null,
     },
     select: { id: true },
   });
@@ -232,12 +234,27 @@ describe("who is asked", () => {
     expect(await stamp(id)).toBeNull();
   });
 
-  it("finished by the shop means Done, a checkout, a walk-in start, or marked arrived", async () => {
+  it("finished by the shop means Done, a checkout, marked arrived, or a walk-in the shop started", async () => {
     const paid = await seedVisit({ completedByShop: false, paidAt: NOW });
     const arrived = await seedVisit({ completedByShop: false, checkInStatus: "arrived" });
+    // A walk-in that ran past its estimate, so the 15-minute sweep completed
+    // it before anyone pressed Complete: the shop still started it, so the
+    // client was in the chair.
+    const walkIn = await seedVisit({ completedByShop: false, bookedVia: "walk_in_queue" });
     await sweep();
     expect(await asks(paid)).toHaveLength(1);
     expect(await asks(arrived)).toHaveLength(1);
+    expect(await asks(walkIn)).toHaveLength(1);
+  });
+
+  it("a tip they started and left (or whose card was declined) is no reason not to ask", async () => {
+    // The tip card is still on offer for it, so the ask still points somewhere.
+    const id = await seedVisit();
+    await tipRow(id, "requires_payment_method");
+    await sweep();
+    expect(await asks(id)).toHaveLength(1);
+    const { outcome } = await deliverOwn(id);
+    expect(outcome).toBe("sent");
   });
 
   it("a shop with no tip policy saved yet IS asked (a NULL is not 'included')", async () => {
@@ -354,7 +371,12 @@ describe("who is asked", () => {
 describe("the gate, on its own", () => {
   // The sweep's query filters these too; the gate is what delivery re-reads,
   // so each layer is pinned by itself.
-  const facts = (over: { completedByShop?: boolean; paidAt?: Date | null; checkInStatus?: string | null }) => ({
+  const facts = (over: {
+    completedByShop?: boolean;
+    paidAt?: Date | null;
+    checkInStatus?: string | null;
+    bookedVia?: string | null;
+  }) => ({
     appt: {
       status: "COMPLETED",
       endsAt: new Date(NOW.getTime() - 61 * MIN),
@@ -365,6 +387,7 @@ describe("the gate, on its own", () => {
       completedByShop: over.completedByShop ?? false,
       paidAt: over.paidAt ?? null,
       checkInStatus: over.checkInStatus ?? null,
+      bookedVia: over.bookedVia ?? null,
       email: "a@test.local",
     },
     shop: { ...TIP_READY, subscriptionStatus: "active", trialEndsAt: null },
@@ -379,6 +402,8 @@ describe("the gate, on its own", () => {
     expect(tipAskBlockedReason(facts({ paidAt: NOW }), NOW)).toBeNull();
     expect(tipAskBlockedReason(facts({ checkInStatus: "arrived" }), NOW)).toBeNull();
     expect(tipAskBlockedReason(facts({ checkInStatus: "en_route" }), NOW)).toBe("not_by_shop");
+    expect(tipAskBlockedReason(facts({ bookedVia: "walk_in_queue" }), NOW)).toBeNull();
+    expect(tipAskBlockedReason(facts({ bookedVia: "online" }), NOW)).toBe("not_by_shop");
   });
 });
 
@@ -407,6 +432,31 @@ describe("the email", () => {
     // em dash, and none of the trade words the copy rules ban.
     for (const body of [mail.subject, mail.text, mail.html!]) {
       expect(body).not.toMatch(/Reschedule|reply|—|\b(barbers?|cuts?|haircuts?|chairs?)\b/i);
+    }
+  });
+
+  it("🔴 a bounce on the ask suppresses the client - even one that reached us before our own write", async () => {
+    const id = await seedVisit();
+    await sweep();
+    const messageId = `em_bounced_${randomToken(8)}`;
+    // The provider's bounce webhook beat us: the row exists, bounced, with nobody on it.
+    await prisma.emailDelivery.create({
+      data: { messageId, kind: "unknown", status: "bounced", awaitingDispatchMeta: true },
+    });
+    __setSendEmailForTests(async (input) => {
+      sent.push(input);
+      return { id: messageId, status: "sent" };
+    });
+    try {
+      const { outcome } = await deliverOwn(id);
+      expect(outcome).toBe("sent");
+      const appt = await prisma.appointment.findUniqueOrThrow({ where: { id } });
+      const row = await prisma.emailDelivery.findUniqueOrThrow({ where: { messageId } });
+      expect(row.clientId).toBe(appt.clientId);
+      const client = await prisma.client.findUniqueOrThrow({ where: { id: appt.clientId! } });
+      expect(client.emailSuppressedAt).not.toBeNull();
+    } finally {
+      await prisma.emailDelivery.deleteMany({ where: { messageId } });
     }
   });
 

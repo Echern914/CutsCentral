@@ -4,6 +4,8 @@ import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { raceBehindRowLock, winners } from "../testing/raceBarrier.js";
 import { armBackgroundWorkTracking, settleBackgroundWork } from "../backgroundWork.js";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
+import { formatApptTime } from "../messaging/templates.js";
+import { __setMessageProviderForTests } from "../messaging/twilio.js";
 
 /**
  * A TIP JUST PAID: the client's receipt and ONE push to whoever did the visit.
@@ -181,6 +183,25 @@ describe("announced once, whichever path sees it first", () => {
     expect(row.tipAnnouncedAt).not.toBeNull();
   });
 
+  it("🔴 a redelivered event still announces a tip whose first announcement was lost", async () => {
+    // The hook runs on every succeeded snapshot, written or a replay: when
+    // the first announcement threw (caught, logged), Stripe's redelivery of
+    // the SAME event is exactly what must still announce it.
+    const appt = await visit();
+    const p = await tip(appt.id);
+    const pi = succeeded(p);
+    await applyIntentSnapshot(pi, "evt_replay_A");
+    await settleBackgroundWork();
+    await prisma.payment.update({ where: { id: p.id }, data: { tipAnnouncedAt: null } });
+    await prisma.emailIntent.deleteMany({ where: { idempotencyKey: tipReceiptKey(p.id) } });
+    pushes.length = 0;
+
+    expect(await applyIntentSnapshot(pi, "evt_replay_A")).toBe(false); // the row write is a replay
+    await settleBackgroundWork();
+    expect(await receipts(p.id)).toHaveLength(1);
+    expect(pushes).toHaveLength(1);
+  });
+
   it("🔴 two at once announce ONCE (the claim is the guard)", async () => {
     const appt = await visit();
     const p = await tip(appt.id);
@@ -245,6 +266,7 @@ describe("announced once, whichever path sees it first", () => {
     const appt = await visit();
     const p = await tip(appt.id);
     await prisma.payment.update({ where: { id: p.id }, data: { status: "succeeded", capturedAmount: 800 } });
+    const wentPaid = (await prisma.payment.findUniqueOrThrow({ where: { id: p.id } })).updatedAt;
     // Not yet: the live path may still be on its way.
     expect(await repairUnannouncedTips(new Date(), { shopIds: [shopId] })).toBe(0);
     const later = new Date(Date.now() + 11 * 60_000);
@@ -253,6 +275,9 @@ describe("announced once, whichever path sees it first", () => {
     await settleBackgroundWork();
     expect(pushes).toHaveLength(1);
     expect(await receipts(p.id)).toHaveLength(1);
+    // The receipt will say when it went paid, not when the repair ran.
+    const row = await prisma.payment.findUniqueOrThrow({ where: { id: p.id } });
+    expect(row.tipAnnouncedAt).toEqual(wentPaid);
   });
 });
 
@@ -274,6 +299,22 @@ describe("the receipt", () => {
     for (const body of [mail.subject, mail.text, mail.html!]) {
       expect(body).not.toMatch(/Visa|Mastercard|ending in|Reschedule|reply|—|\b(barbers?|cuts?|haircuts?|chairs?)\b/i);
     }
+  });
+
+  it("🔴 the paid time is when it was seen paid - a later write never moves it", async () => {
+    const appt = await visit();
+    const p = await tip(appt.id);
+    await applyIntentSnapshot(succeeded(p), `evt_${randomToken(6)}`);
+    const seen = new Date(NOW.getTime() - 3 * 24 * 3600_000 + 7 * 60_000);
+    // A partial refund after the claim: the row's updatedAt moves, the paid time must not.
+    await prisma.payment.update({
+      where: { id: p.id },
+      data: { tipAnnouncedAt: seen, status: "partially_refunded", capturedAmount: 800, refundedAmount: 100 },
+    });
+    const { outcome } = await deliverReceipt(p.id);
+    expect(outcome).toBe("sent");
+    const { timezone } = await prisma.shop.findUniqueOrThrow({ where: { id: shopId }, select: { timezone: true } });
+    expect(sent[0]!.text).toContain(`Paid ${formatApptTime(seen, timezone)}.`);
   });
 
   it("refunded in full between queueing and sending: no receipt goes", async () => {
@@ -365,18 +406,36 @@ describe("the push", () => {
     }
   });
 
-  it("🔴 a push and nothing else: no email reaches the shop, texting on or off", async () => {
+  it("🔴 a push and nothing else: no text and no email reach the shop, texting on or off", async () => {
+    // Every other channel is set up to fire if anything tried it: a phone on
+    // the shop and on the owner's settings, email alerts on, a recording text
+    // provider. The barber-alert helper would text or email here (it emails
+    // when texting is off), which is why the tip push does not use it.
     const before = process.env.SMS_ENABLED;
+    const texts: unknown[] = [];
+    __setMessageProviderForTests({
+      channel: "SMS",
+      send: async (input) => {
+        texts.push(input);
+        return { sid: `SM${texts.length}`, status: "sent" };
+      },
+    });
+    await prisma.shop.update({ where: { id: shopId }, data: { notifyPhone: "+12125550188" } });
+    await prisma.barberNotifyPref.create({
+      data: { shopId, userId: ownerId, pushEnabled: true, smsEnabled: true, emailEnabled: true, notifyPhone: "+12125550189" },
+    });
     try {
       for (const sms of ["true", "false"]) {
         process.env.SMS_ENABLED = sms;
         __resetEnvCacheForTests();
         pushes.length = 0;
+        sent.length = 0;
         const appt = await visit();
         const p = await tip(appt.id);
         await applyIntentSnapshot(succeeded(p), `evt_${randomToken(6)}`);
         await settleBackgroundWork();
         expect(pushes, sms).toHaveLength(1);
+        expect(texts, sms).toHaveLength(0);
         // The only email this produced is the client's receipt, still queued.
         expect(sent, sms).toHaveLength(0);
         const intents = await prisma.emailIntent.findMany({ where: { shopId, appointmentId: appt.id } });
@@ -384,7 +443,11 @@ describe("the push", () => {
       }
     } finally {
       process.env.SMS_ENABLED = before;
+      if (before === undefined) delete process.env.SMS_ENABLED;
       __resetEnvCacheForTests();
+      __setMessageProviderForTests(undefined);
+      await prisma.barberNotifyPref.deleteMany({ where: { shopId, userId: ownerId } });
+      await prisma.shop.update({ where: { id: shopId }, data: { notifyPhone: null } });
     }
   });
 });

@@ -55,8 +55,8 @@ export async function promoteOneAppointmentInTx(
   appt: PromoteAppt,
   now: Date,
   /**
-   * `byShop`: someone at the shop finished this visit (Done, checkout, a
-   * walk-in started) - false when the 15-minute sweep completed it on its own,
+   * `byShop`: someone at the shop finished this visit (Done, checkout, walk-in
+   * Complete) - false when the 15-minute sweep completed it on its own,
    * which an unmarked no-show also does. Recorded as completedByShop; the tip
    * ask goes only to visits the shop finished.
    */

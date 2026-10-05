@@ -25,6 +25,13 @@ import { TIP_RECEIPT_KIND, tipReceiptKey } from "./tipEmails.js";
 export async function announceTipPaid(
   key: { paymentId?: string; piId?: string },
   now: Date = new Date(),
+  /**
+   * When the tip went paid, if the caller knows better than "now". The live
+   * paths call this the moment they see it succeed; the self-heal, minutes
+   * later, passes the row's last write instead. Stamped as tipAnnouncedAt,
+   * which the receipt prints as the paid time.
+   */
+  opts: { seenPaidAt?: Date } = {},
 ): Promise<boolean> {
   const where = key.paymentId
     ? { id: key.paymentId }
@@ -57,7 +64,7 @@ export async function announceTipPaid(
     const claimed = await runAsOwner(async (tx) => {
       const r = await tx.payment.updateMany({
         where: { id: row.id, purpose: "tip", tipAnnouncedAt: null },
-        data: { tipAnnouncedAt: now },
+        data: { tipAnnouncedAt: opts.seenPaidAt ?? now },
       });
       if (r.count === 0) return false;
       // Always queued, address or not: the deliverer records "no_address" in

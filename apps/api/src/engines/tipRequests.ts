@@ -7,9 +7,10 @@ import {
   TIP_REQUEST_KIND,
   tipAskBlockedReason,
   tipRequestKey,
+  WALK_IN_STARTED,
 } from "../services/tipEmails.js";
 import { announceTipPaid } from "../services/tipPaid.js";
-import { liveTipWhere, TIP_SHOP_SELECT, type TipShopFacts } from "../services/tips.js";
+import { givenTipWhere, liveTipWhere, TIP_SHOP_SELECT, type TipShopFacts } from "../services/tips.js";
 
 /**
  * THE "LEAVE A TIP" SWEEP: one email, about an hour after a visit the shop
@@ -70,13 +71,22 @@ export async function runTipRequestSweep(
       shop: { onlineTipsEnabled: true, connectChargesEnabled: true, stripeConnectAccountId: { not: null } },
       ...(opts.shopIds ? { shopId: { in: opts.shopIds } } : {}),
       AND: [
-        // Finished by the shop, never only by the 15-minute sweep.
-        { OR: [{ completedByShop: true }, { paidAt: { not: null } }, { checkInStatus: "arrived" }] },
+        // Finished by the shop, never only by the 15-minute sweep (the same
+        // four signs as finishedByShop).
+        {
+          OR: [
+            { completedByShop: true },
+            { paidAt: { not: null } },
+            { checkInStatus: "arrived" },
+            { bookedVia: WALK_IN_STARTED },
+          ],
+        },
         // Somewhere to send it.
         { OR: [{ email: { not: null } }, { client: { email: { not: null } } }] },
       ],
-      // A tip already given (or under way) is nothing to ask for.
-      payments: { none: liveTipWhere() },
+      // A tip already given (or under way) is nothing to ask for. An attempt
+      // they opened and left is not that: the card is still on offer.
+      payments: { none: givenTipWhere() },
     },
     orderBy: { endsAt: "asc" },
     take: opts.take ?? 200,
@@ -168,11 +178,13 @@ export async function repairUnannouncedTips(
     },
     orderBy: { updatedAt: "asc" },
     take: opts.take ?? 50,
-    select: { id: true },
+    select: { id: true, updatedAt: true },
   });
   let announced = 0;
   for (const row of rows) {
-    if (await announceTipPaid({ paymentId: row.id }, now)) announced++;
+    // Its last write is when it went paid, as near as the row knows - the
+    // receipt says that, not the time this repair happened to run.
+    if (await announceTipPaid({ paymentId: row.id }, now, { seenPaidAt: row.updatedAt })) announced++;
   }
   if (announced > 0) logger.warn({ announced }, "unannounced tips repaired");
   return announced;
