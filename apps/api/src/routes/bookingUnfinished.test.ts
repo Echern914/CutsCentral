@@ -812,6 +812,28 @@ describe("telling the client", () => {
     expect(res.body.clientConfirmation).toBe("none");
   });
 
+  it("🔴 DRY_RUN: email looks configured but nothing goes out - so it says 'none', never 'email'", async () => {
+    const saved = { key: process.env.RESEND_API_KEY, from: process.env.EMAIL_FROM, dry: process.env.DRY_RUN };
+    process.env.RESEND_API_KEY = "re_test_dummy";
+    process.env.EMAIL_FROM = "ChairBack <hello@example.com>";
+    process.env.DRY_RUN = "true";
+    __resetEnvCacheForTests();
+    try {
+      const who = person("Gio", "Hart");
+      await lapsed(who, at(8, 16));
+      const row = (await rowFor(who))!;
+      const res = await bookFromList(row, { confirmClient: true });
+      expect(res.status).toBe(201);
+      expect(res.body.clientConfirmation).toBe("none");
+    } finally {
+      for (const [k, v] of [["RESEND_API_KEY", saved.key], ["EMAIL_FROM", saved.from], ["DRY_RUN", saved.dry]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      __resetEnvCacheForTests();
+    }
+  });
+
   it("a confirmation is for one booking, never a repeating one", async () => {
     const who = person("Fay", "Gray");
     await lapsed(who, at(8, 12));
