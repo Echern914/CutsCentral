@@ -447,6 +447,40 @@ describe("the customer's booking", () => {
     });
   });
 
+  it("🔴 a standing appointment carries the answers on EVERY visit, not just the first", async () => {
+    // The series engine wrote no answers at all: a weekly mobile job lost its
+    // service address on every visit.
+    const { byLabel } = await seed();
+    const res = await request(app)
+      .post(`/api/book/${slug}`)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: futureAtHour(2, 13).toISOString(),
+        firstName: "Casey",
+        lastName: "Tester",
+        email: "casey@example.com",
+        recurrence: { interval: 1, count: 3 },
+        intake: [
+          { questionId: byLabel.get("Service address")!, value: "12 Main St, Newark NJ 07102" },
+          { questionId: byLabel.get("Vehicle year")!, value: "2014" },
+          { questionId: byLabel.get("Make")!, value: "Honda" },
+          { questionId: byLabel.get("Model")!, value: "Accord" },
+          { questionId: byLabel.get("What's it doing?")!, value: "Oil change" },
+        ],
+      });
+    expect(res.status).toBe(201);
+    const visits = await prisma.appointment.findMany({
+      where: { shopId, seriesId: { not: null } },
+      select: { intake: true },
+    });
+    expect(visits).toHaveLength(3);
+    for (const v of visits) {
+      const answers = v.intake as unknown as { label: string; value: string }[];
+      expect(answers.find((a) => a.label === "Service address")?.value).toBe("12 Main St, Newark NJ 07102");
+    }
+  });
+
   it("🔴 renaming a question afterwards never rewrites what was answered", async () => {
     const { byLabel } = await seed();
     const addressId = byLabel.get("Service address")!;

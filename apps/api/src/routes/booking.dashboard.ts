@@ -3419,6 +3419,9 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       serviceId: d.serviceId,
       startsAt,
       extraDurationMin: addOns.extraDurationMin,
+      // A repeat's first visit is judged like the rest of it (below): the
+      // online horizon does not bind the barber's own repeat.
+      ignoreHorizon: Boolean(d.recurrence),
     }))
   ) {
     // Refused - but WHY matters. If time he blocked off in Acuity is the only
@@ -3494,6 +3497,8 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         bookingBufferMin: shop.bookingBufferMin,
         // customTime bypasses the per-occurrence availability gate (barber force).
         checkAvailability: !d.customTime,
+        // The barber's own repeat: never cut short by the ONLINE horizon.
+        ignoreHorizon: true,
         pattern,
         anchor: startsAt,
         // Every visit in the repeat carries the note typed for it.

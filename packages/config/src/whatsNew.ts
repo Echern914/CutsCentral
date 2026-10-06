@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-06-repeats-every-visit",
+    date: "2026-10-06",
+    kind: "fix",
+    title: "Repeats book every visit and skip your days off",
+    body:
+      "A repeat on your open times now books every visit you asked for, instead of stopping about 60 days out. " +
+      "A Custom time repeat now skips the days you blocked off. Standing appointments booked online keep the " +
+      "client's answers to your booking questions on every visit.",
+  },
+  {
     id: "2026-10-06-held-times-need-a-card",
     date: "2026-10-06",
     kind: "fix",

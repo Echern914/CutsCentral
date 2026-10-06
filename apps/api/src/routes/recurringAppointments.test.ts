@@ -233,6 +233,137 @@ describe("recurring appointment create", () => {
   });
 });
 
+/**
+ * 🔴 THE BARBER'S REPEAT IS NOT BOUND BY THE ONLINE BOOKING RULES, BUT IS BY
+ * THEIR DAYS OFF.
+ *
+ * A repeat booked on the open times (not Custom time) was clipped at the
+ * shop's ONLINE horizon - 60 days by default - so weekly x 12 booked about
+ * eight visits and skipped the rest as "not bookable", without saying why.
+ * A Custom-time repeat skipped nothing at all, so it landed on every day the
+ * barber had blocked off.
+ */
+describe("what a barber's repeat honours", () => {
+  async function testShopId(): Promise<string> {
+    return (await prisma.staff.findUniqueOrThrow({ where: { id: staffId }, select: { shopId: true } }))
+      .shopId;
+  }
+
+  /** A Tuesday at least two weeks out, at `hour` o'clock SHOP-LOCAL. */
+  function futureTuesdayLocal(hour: number): string {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: SHOP_TZ,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      })
+        .formatToParts(new Date(futureTuesdayAt(16)))
+        .map((p) => [p.type, p.value]),
+    );
+    return zonedWallTimeToUtc(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      hour * 60,
+      SHOP_TZ,
+    ).toISOString();
+  }
+
+  it("🔴 a repeat on the open times books past the 60-day online horizon", async () => {
+    // Open every day, all day: the HORIZON is the only thing in the way.
+    const hours = await request(app)
+      .put(`/api/booking/staff/${staffId}/availability`)
+      .set("Cookie", cookie)
+      .send({ rules: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, startMin: 0, endMin: 1440 })) });
+    expect(hours.status).toBe(200);
+    const res = await createRecurring({
+      staffId,
+      serviceId,
+      startsAt: futureTuesdayAt(13),
+      firstName: "Far Ahead",
+      recurrence: { interval: 1, count: 12 },
+    });
+    expect(res.status).toBe(201);
+    // Weeks 2 to 13 from now: the later visits are past 60 days.
+    expect(res.body.series.skipped).toEqual([]);
+    expect(res.body.series.booked).toBe(12);
+  });
+
+  it("and can START past it - the first visit is judged like the rest", async () => {
+    // Ten weeks past a date already two weeks out: day 84 or later.
+    const res = await createRecurring({
+      staffId,
+      serviceId,
+      startsAt: sameShopTimeWeeksLater(futureTuesdayAt(19), 10),
+      firstName: "Next Season",
+      recurrence: { interval: 2, count: 2 },
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.series.booked).toBe(2);
+  });
+
+  it("🔴 a Custom-time repeat skips a day the barber blocked off, and says so", async () => {
+    const startsAt = futureTuesdayAt(14);
+    const shopId = await testShopId();
+    const week2 = new Date(sameShopTimeWeeksLater(startsAt, 1));
+    const block = await prisma.availabilityException.create({
+      data: {
+        shopId,
+        staffId,
+        isBlock: true,
+        startsAt: new Date(week2.getTime() - 60 * 60_000),
+        endsAt: new Date(week2.getTime() + 2 * 60 * 60_000),
+      },
+      select: { id: true },
+    });
+    try {
+      const res = await createRecurring({
+        staffId,
+        serviceId,
+        startsAt,
+        firstName: "Vacation Week",
+        customTime: true,
+        recurrence: { interval: 1, count: 4 },
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.series.booked).toBe(3);
+      expect(res.body.series.skipped).toEqual([{ startsAt: week2.toISOString(), reason: "blocked" }]);
+    } finally {
+      await prisma.availabilityException.delete({ where: { id: block.id } });
+    }
+  });
+
+  it("skips a standing weekly break too, but keeps the time the barber typed", async () => {
+    const startsAt = futureTuesdayLocal(12); // noon, inside the lunch break
+    const shopId = await testShopId();
+    const lunch = await prisma.recurringBlock.create({
+      data: { shopId, staffId, weekday: 2, startMin: 12 * 60, endMin: 13 * 60, reason: "Lunch" },
+      select: { id: true },
+    });
+    try {
+      const res = await createRecurring({
+        staffId,
+        serviceId,
+        startsAt,
+        firstName: "Lunch Hour",
+        customTime: true,
+        recurrence: { interval: 1, count: 3 },
+      });
+      expect(res.status).toBe(201);
+      // Visit 1 is the time the barber chose, exactly as a single Custom-time
+      // booking would be. The two the repeat generated land on the break.
+      expect(res.body.series.booked).toBe(1);
+      expect(res.body.series.skipped).toEqual([
+        { startsAt: sameShopTimeWeeksLater(startsAt, 1), reason: "blocked" },
+        { startsAt: sameShopTimeWeeksLater(startsAt, 2), reason: "blocked" },
+      ]);
+    } finally {
+      await prisma.recurringBlock.delete({ where: { id: lunch.id } });
+    }
+  });
+});
+
 describe("recurring series cancel", () => {
   async function makeSeries(hourUtc: number) {
     const res = await createRecurring({

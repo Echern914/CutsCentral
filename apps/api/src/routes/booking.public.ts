@@ -2242,6 +2242,8 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       // One tick covers the series the customer asked for: every occurrence
       // carries the same frozen agreement.
       policy: policy.record,
+      // And the same answers to the shop's booking questions.
+      intake: intake.snapshot as unknown as Prisma.InputJsonValue,
     });
 
     const first = series.booked[0];
