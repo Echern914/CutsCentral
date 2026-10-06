@@ -499,10 +499,14 @@ describe("a moved booking and the client", () => {
     expect(sent).toHaveLength(0);
   });
 
-  it("an edit that doesn't move the time sends nothing", async () => {
-    const a = await emailedAppt({ confirmation: true });
-    await patch(a.id, { notes: "bring the clippers" });
-    await settleBackgroundWork();
+  it("an edit that doesn't move the time sends nothing - whichever email they had", async () => {
+    // The reminder-only case is the one that matters: with no confirmation
+    // stamp, the confirmation sender's own guard would not stop a send.
+    for (const stamps of [{ confirmation: true }, { reminder: true }]) {
+      const a = await emailedAppt(stamps);
+      await patch(a.id, { notes: "bring the clippers" });
+      await settleBackgroundWork();
+    }
     expect(sent).toHaveLength(0);
   });
 
