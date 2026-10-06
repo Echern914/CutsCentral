@@ -1011,7 +1011,16 @@ describe("attempt reservation is atomic and claim-bound", () => {
     expect(calls).toBe(MAX_ATTEMPTS);
     const [after] = await intentsFor(id);
     expect(after!.attempts).toBe(MAX_ATTEMPTS); // every dispatch got its own number
-    expect(after!.status).toBe("FAILED"); // definitive rejections, so not ABANDONED
+    // TERMINAL, either way. Which word depends on interleaving, and both are
+    // honest: a racer refused for budget while another holder of the SAME
+    // claim is still mid-request sees `lastAttemptAmbiguous` (written BEFORE
+    // every request) and settles ABANDONED; if the fifth attempt settles last,
+    // FAILED. It failed CI that way, on a fresh database. In production one
+    // claim token belongs to one worker, which attempts a row once per pass,
+    // so this interleaving cannot arise there. "Definitive rejections end
+    // FAILED" is pinned without the race by "permits exactly MAX_ATTEMPTS real
+    // dispatches, then stops" above.
+    expect(["FAILED", "ABANDONED"]).toContain(after!.status);
   });
 
   it("the provider request is bounded well inside the claim TTL", () => {
