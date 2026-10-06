@@ -1273,7 +1273,8 @@ export function buildWaitlistOfferCustomerEmail(params: {
       `Hi ${who} — you're up. A ${svc} slot opened at ${params.shopName} on ${params.when}` +
       `${params.staffName ? ` with ${params.staffName}` : ""}, and it's being held just for you ` +
       `until ${params.holdUntil}. ${act} ` +
-      `If the time doesn't work, do nothing — the hold lapses on its own and the next person gets a turn.`,
+      `If the time doesn't work, open the same link and tap "Pass it to the next person" so they get it sooner, ` +
+      `or "Take me off the waitlist" to stop these. Or do nothing, and the hold lapses on its own.`,
     html: appointmentEmailHtml({
       heading: "This spot is being held for you",
       intro,

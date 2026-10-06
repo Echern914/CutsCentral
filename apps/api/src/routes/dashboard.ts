@@ -87,6 +87,12 @@ import { addDaysToDateKey } from "../engines/waitlistMatch.js";
 import { joinFingerprint, mintCancelToken } from "../engines/waitlistJoin.js";
 import { resolveWaitlistClient } from "../engines/waitlistClientLink.js";
 import { recordWaitlistEvent } from "../engines/waitlistAudit.js";
+import {
+  advanceEach,
+  releaseLiveOffersForEntry,
+  releaseRacedOffers,
+  type OfferSpan,
+} from "../engines/waitlistOffer.js";
 import { sendReceptionistSms } from "../receptionist/outbound.js";
 import { appendMessage } from "../receptionist/conversation.js";
 import { logger } from "../logger.js";
@@ -3144,43 +3150,88 @@ dashboardRouter.post("/waitlist/:id", async (req, res) => {
     userId: req.userId ?? null,
     staffId: req.shopStaffId ?? null,
   };
+  // 🔴 An entry the barber takes off the list (removed, booked elsewhere,
+  // expired) lets go of the time held for it, and that time goes to the next
+  // person. It used to stay held - hidden from everyone for up to half an
+  // hour, still bookable from the link.
+  const ending =
+    parsed.data.status === "REMOVED" ||
+    parsed.data.status === "BOOKED" ||
+    parsed.data.status === "EXPIRED";
+  let ended: OfferSpan[] = [];
   // Read, write and audit in ONE tenant transaction, so `fromStatus` is the
   // status this update actually replaced and not one that moved in between.
-  const found = await runWithShop(shopId, async (tx) => {
-    const existing = await tx.waitlistEntry.findFirst({
-      where: { id: req.params.id, shopId },
-      select: { id: true, status: true, bookedAppointmentId: true },
+  let found: boolean;
+  try {
+    found = await runWithShop(shopId, async (tx) => {
+      ended = [];
+      const existing = await tx.waitlistEntry.findFirst({
+        where: { id: req.params.id, shopId },
+        select: { id: true, status: true, bookedAppointmentId: true },
+      });
+      if (!existing) return false;
+      // Hold rows FIRST, then the entry: the order claimOffer takes them in.
+      if (ending) {
+        ended = await releaseLiveOffersForEntry(tx, {
+          shopId,
+          entryId: existing.id,
+          code: parsed.data.status.toLowerCase(),
+          via: "dashboard",
+          actor,
+        });
+      }
+      await tx.waitlistEntry.update({
+        where: { id: existing.id },
+        data: { status: parsed.data.status },
+      });
+      // 🔑 "Booked externally" is its own event, not a status change dressed up
+      // as one. This route NEVER links an appointment (booking inside ChairBack
+      // links atomically in the create transaction), so a BOOKED landing here
+      // with no existing link is by definition a booking made outside the app -
+      // and the trail has to say so, or a later reader cannot tell the two
+      // apart any better than the barber could before #265.
+      const externallyBooked =
+        parsed.data.status === "BOOKED" && existing.bookedAppointmentId === null;
+      await recordWaitlistEvent(tx, {
+        shopId,
+        entryId: existing.id,
+        type: externallyBooked ? "entry.booked_externally" : "entry.status_changed",
+        actor,
+        metadata: {
+          source: "dashboard",
+          fromStatus: existing.status,
+          toStatus: parsed.data.status,
+          ...(externallyBooked ? { linked: false } : {}),
+        },
+      });
+      return true;
     });
-    if (!existing) return false;
-    await tx.waitlistEntry.update({
-      where: { id: existing.id },
-      data: { status: parsed.data.status },
-    });
-    // 🔑 "Booked externally" is its own event, not a status change dressed up
-    // as one. This route NEVER links an appointment (booking inside ChairBack
-    // links atomically in the create transaction), so a BOOKED landing here
-    // with no existing link is by definition a booking made outside the app -
-    // and the trail has to say so, or a later reader cannot tell the two
-    // apart any better than the barber could before #265.
-    const externallyBooked =
-      parsed.data.status === "BOOKED" && existing.bookedAppointmentId === null;
-    await recordWaitlistEvent(tx, {
-      shopId,
-      entryId: existing.id,
-      type: externallyBooked ? "entry.booked_externally" : "entry.status_changed",
-      actor,
-      metadata: {
-        source: "dashboard",
-        fromStatus: existing.status,
-        toStatus: parsed.data.status,
-        ...(externallyBooked ? { linked: false } : {}),
-      },
-    });
-    return true;
-  });
+  } catch (err) {
+    // Putting an entry back on the list while the same person has since
+    // rejoined for the same thing collides with the one-active-request index.
+    // That is a fact about the list, not a server fault.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      res.status(409).json({ error: "already_waiting" });
+      return;
+    }
+    throw err;
+  }
   if (!found) {
     res.status(404).json({ error: "not_found" });
     return;
+  }
+  if (ending) {
+    const raced = await releaseRacedOffers({
+      shopId,
+      entryId: req.params.id,
+      code: parsed.data.status.toLowerCase(),
+      via: "dashboard",
+      actor,
+    }).catch((err) => {
+      logger.error({ err, shopId }, "waitlist status: raced-offer pass failed");
+      return [] as OfferSpan[];
+    });
+    await advanceEach([...(ended as OfferSpan[]), ...raced], new Date());
   }
   res.json({ ok: true, status: parsed.data.status });
 });

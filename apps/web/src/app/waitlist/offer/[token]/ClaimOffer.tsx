@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { claimOfferAction } from "./actions";
+import { claimOfferAction, declineOfferAction } from "./actions";
 
 export interface OfferView {
   shopName: string;
@@ -36,6 +36,8 @@ export function ClaimOffer({
     | { phase: "gone" }
     | { phase: "deposit" }
     | { phase: "contact_shop" }
+    /** They passed it on; `left` = and came off the waitlist. */
+    | { phase: "declined"; left: boolean }
     | { phase: "error" }
   >({ phase: "idle" });
   const [email, setEmail] = useState(offer?.email ?? "");
@@ -130,6 +132,21 @@ export function ClaimOffer({
     );
   }
 
+  if (state.phase === "declined") {
+    return (
+      <div role="status" className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+        <h1 className="font-display text-2xl">
+          {state.left ? "You're off the waitlist" : "Passed on, thanks"}
+        </h1>
+        <p className="mt-2 text-sm text-muted">
+          {state.left
+            ? `${offer.shopName} won't send you any more openings. You're welcome to book through their page any time.`
+            : `${when} goes to the next person in line. You're still on the waitlist for the next opening.`}
+        </p>
+      </div>
+    );
+  }
+
   if (state.phase === "gone") {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
@@ -209,6 +226,36 @@ export function ClaimOffer({
             ? "Request this time"
             : "Book this time"}
       </button>
+      {/* Can't make it: pass the time on now instead of making the next
+          person wait out the hold. The second one is the only way off the
+          list most of them have - the offer email is their one message. */}
+      <div className="mt-4 flex flex-col items-center gap-2 text-xs">
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => decline(false)}
+          className="text-muted underline-offset-2 hover:text-offwhite hover:underline disabled:opacity-50"
+        >
+          Can&rsquo;t make it? Pass it to the next person
+        </button>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => decline(true)}
+          className="text-muted underline-offset-2 hover:text-offwhite hover:underline disabled:opacity-50"
+        >
+          Take me off the waitlist
+        </button>
+      </div>
     </div>
   );
+
+  function decline(leave: boolean) {
+    start(async () => {
+      const res = await declineOfferAction(token, leave);
+      if (res.ok) setState({ phase: "declined", left: res.left || leave });
+      else if (res.reason === "expired") setState({ phase: "expired" });
+      else setState({ phase: "error" });
+    });
+  }
 }

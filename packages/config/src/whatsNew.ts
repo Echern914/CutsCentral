@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-06-waitlist-frees-held-time",
+    date: "2026-10-06",
+    kind: "fix",
+    title: "A waitlist time goes to the next person right away",
+    body:
+      "When someone leaves your waitlist, taps the new No thanks on an offer, or you remove them, the time " +
+      "held for them now goes straight to the next person. Before, it stayed held for up to half an hour. " +
+      "A hold also never runs past the start of the time it holds.",
+  },
+  {
     id: "2026-10-06-unfinished-compact",
     date: "2026-10-06",
     kind: "fix",

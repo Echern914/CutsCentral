@@ -51,3 +51,28 @@ export async function claimOfferAction(
   }
   return { ok: false, reason: "error" };
 }
+
+export type DeclineActionResult =
+  /** left = they are also off the waitlist now. */
+  | { ok: true; left: boolean }
+  /** Already ended (lapsed, used, released): nothing left to pass on. */
+  | { ok: false; reason: "expired" }
+  | { ok: false; reason: "error" };
+
+/**
+ * "No thanks": let the held time go to the next person now. With `leave`,
+ * also come off the waitlist. The server decides everything from the token.
+ */
+export async function declineOfferAction(
+  token: string,
+  leave: boolean,
+): Promise<DeclineActionResult> {
+  const res = await apiPublicSend<{ ok: boolean; left: boolean }>(
+    "POST",
+    `/api/book/offer/${encodeURIComponent(token)}/decline`,
+    { leave },
+  );
+  if (res.ok && res.data) return { ok: true, left: Boolean(res.data.left) };
+  if (res.status === 410 || res.status === 404) return { ok: false, reason: "expired" };
+  return { ok: false, reason: "error" };
+}
