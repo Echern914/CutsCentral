@@ -139,6 +139,9 @@ export function UnfinishedBookings({ isNative, toast }: { isNative: boolean; toa
   // back must still say what really happened.
   const [told, setTold] = useState<Map<string, "email" | "none" | null>>(() => new Map());
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+  // Rows the barber opened. Kept here, not in the card, for the same reason
+  // as `told`: a poll can re-sort a row out of the first three and back.
+  const [opened, setOpened] = useState<Set<string>>(() => new Set());
   const [expanded, setExpanded] = useState(false);
   // Counts successful reads, so a card can tell "fresh data since my refusal".
   const [readCount, setReadCount] = useState(0);
@@ -221,6 +224,14 @@ export function UnfinishedBookings({ isNative, toast }: { isNative: boolean; toa
               isNative={isNative}
               booked={booked.has(row.id)}
               told={told.get(row.id) ?? null}
+              open={opened.has(row.id)}
+              onToggle={() =>
+                setOpened((prev) => {
+                  const next = new Set(prev);
+                  if (!next.delete(row.id)) next.add(row.id);
+                  return next;
+                })
+              }
               toast={toast}
               onBooked={(outcome) => {
                 setTold((prev) => new Map(prev).set(row.id, outcome));
@@ -268,6 +279,8 @@ function UnfinishedCard({
   isNative,
   booked,
   told,
+  open,
+  onToggle,
   toast,
   onBooked,
   onDone,
@@ -281,6 +294,9 @@ function UnfinishedCard({
   booked: boolean;
   /** Booked here: whether ChairBack emailed them their confirmation. Null = an older API. */
   told: "email" | "none" | null;
+  /** The barber opened this row (kept by the list, see `opened`). */
+  open: boolean;
+  onToggle: () => void;
   toast: Toast;
   onBooked: (told: "email" | "none" | null) => void;
   onDone: () => void;
@@ -308,7 +324,6 @@ function UnfinishedCard({
   const [inviting, setInviting] = useState(false);
   // Collapsed until tapped. A row with something to say stays open: a booking
   // that still needs "Done", a question it asked, or why a tap was refused.
-  const [open, setOpen] = useState(false);
   const panelId = useId();
 
   const name =`${row.firstName} ${row.lastName ?? ""}`.trim() || cap(vocab.clientNoun);
@@ -477,7 +492,7 @@ function UnfinishedCard({
           above the calendar on a phone. Everything else is one tap away. */}
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={onToggle}
         aria-expanded={isOpen}
         aria-controls={panelId}
         className="flex w-full min-w-0 flex-col gap-0.5 px-3.5 py-2.5 text-left"

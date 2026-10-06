@@ -349,6 +349,28 @@ describe("compact rows", () => {
     expect(within(lena).getByText("That time was just taken. Text them to pick another.")).toBeInTheDocument();
   });
 
+  it("🔴 a row the barber opened is still open after a fresh read moves it out of the first three and back", async () => {
+    const rows = ["a", "b", "c"].map((k, i) =>
+      row({ id: `r${k}`, firstName: `P${k}`, lastName: "Row", clientId: `c${k}`, startsAt: `2026-10-0${7 + i}T23:30:00.000Z` }),
+    );
+    listUnfinishedAction
+      .mockResolvedValueOnce(listed(rows))
+      .mockResolvedValue(
+        listed([row({ id: "r0", firstName: "Early", lastName: "Bird", startsAt: "2026-10-06T23:30:00.000Z" }), ...rows]),
+      );
+    await shown();
+    fireEvent.click(toggleOf(row$(/Pc Row/)));
+    // Booking another row re-reads the list; a newer try sorts ahead of Pc.
+    const pa = card(/Pa Row/);
+    fireEvent.click(within(pa).getByRole("button", { name: "Book them" }));
+    fireEvent.click(within(pa).getByRole("button", { name: "Book" }));
+    await waitFor(() => expect(screen.getByText("Early Bird")).toBeInTheDocument());
+    expect(screen.queryByText("Pc Row")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Show all/ }));
+    expect(toggleOf(row$(/Pc Row/))).toHaveAttribute("aria-expanded", "true");
+    expect(toggleOf(row$(/Pb Row/))).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("an open row's buttons: Text, Call and Dismiss share one row on a phone; Book them gets its own", async () => {
     await shown();
     const li = card(/Lena Ortiz/);
