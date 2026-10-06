@@ -213,6 +213,7 @@ export async function notifySlotOpened(params: {
     await notifyOffer({
       shop: { id: shop.id, name: shop.name, slug: shop.slug, timezone: shop.timezone },
       offer: {
+        offerId: offered.offerId,
         entryId: offered.entryId,
         startsAt: appt.startsAt,
         expiresAt: offered.expiresAt,

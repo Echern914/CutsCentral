@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ClaimOffer, type OfferView } from "./ClaimOffer";
-import { claimOfferAction } from "./actions";
+import { claimOfferAction, declineOfferAction } from "./actions";
 
 vi.mock("./actions", () => ({
   claimOfferAction: vi.fn(async () => ({
@@ -10,6 +10,7 @@ vi.mock("./actions", () => ({
     shopSlug: "cuts",
     pending: false,
   })),
+  declineOfferAction: vi.fn(async (_token: string, leave: boolean) => ({ ok: true, left: leave })),
 }));
 
 /**
@@ -19,7 +20,11 @@ vi.mock("./actions", () => ({
  */
 
 const mockClaim = vi.mocked(claimOfferAction);
-beforeEach(() => mockClaim.mockClear());
+const mockDecline = vi.mocked(declineOfferAction);
+beforeEach(() => {
+  mockClaim.mockClear();
+  mockDecline.mockClear();
+});
 
 const offer = (over: Partial<OfferView> = {}): OfferView => ({
   shopName: "Fade Lab",
@@ -97,6 +102,55 @@ describe("a live hold", () => {
     expect(screen.getByText(/contact .* directly to book/i)).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/block/i);
     expect(screen.queryByText("Book this time")).toBeNull();
+  });
+});
+
+/**
+ * CAN'T MAKE IT. The offer email is the only message most waitlisters get,
+ * and it had no way to pass the time on or leave the list: the next person
+ * waited out the whole hold, and the only exit was a link from a different
+ * email.
+ */
+describe("passing it on", () => {
+  it("🔴 Pass it to the next person: books nothing, says it went on, and that they're still on the list", async () => {
+    render(<ClaimOffer token="tok-7" offer={offer()} />);
+    fireEvent.click(screen.getByRole("button", { name: /pass it to the next person/i }));
+    expect(await screen.findByRole("status")).toBeTruthy();
+    expect(screen.getByText(/passed on/i)).toBeTruthy();
+    expect(screen.getByText(/still on the waitlist/i)).toBeTruthy();
+    expect(mockDecline).toHaveBeenCalledWith("tok-7", false);
+    expect(mockClaim).not.toHaveBeenCalled();
+  });
+
+  it("Take me off this waitlist: passes it on and leaves THIS request - never promises more than that", async () => {
+    render(<ClaimOffer token="tok-8" offer={offer()} />);
+    fireEvent.click(screen.getByRole("button", { name: /take me off this waitlist/i }));
+    expect(await screen.findByText(/you're off this waitlist/i)).toBeTruthy();
+    expect(screen.getByText(/won't get openings for this request at Fade Lab/i)).toBeTruthy();
+    expect(mockDecline).toHaveBeenCalledWith("tok-8", true);
+  });
+
+  it("🔴 a hold that already ended still lets them leave - with one answer whatever the server says", async () => {
+    for (const [token, offerView, answer] of [
+      ["tok-10", offer({ expiresAt: new Date(Date.now() - 1000).toISOString() }), { ok: true, left: true }],
+      // A link that never was: the card and the answer must not differ.
+      ["tok-11", null, { ok: false, reason: "expired" }],
+    ] as const) {
+      mockDecline.mockResolvedValueOnce(answer as never);
+      const view = render(<ClaimOffer token={token} offer={offerView} />);
+      expect(screen.getByText(/this hold has ended/i)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: /take me off this waitlist/i }));
+      expect(await screen.findByText(/if you were on this waitlist, you.re off it now/i)).toBeTruthy();
+      expect(mockDecline).toHaveBeenLastCalledWith(token, true);
+      view.unmount();
+    }
+  });
+
+  it("a hold that already ended collapses to the same generic ending", async () => {
+    mockDecline.mockResolvedValueOnce({ ok: false, reason: "expired" });
+    render(<ClaimOffer token="tok-9" offer={offer()} />);
+    fireEvent.click(screen.getByRole("button", { name: /pass it to the next person/i }));
+    expect(await screen.findByText(/this hold has ended/i)).toBeTruthy();
   });
 });
 

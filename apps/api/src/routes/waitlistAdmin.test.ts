@@ -4,6 +4,7 @@ import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 import { ANY_DATE_HORIZON_DAYS, addDays, shopLocalDate } from "../engines/waitlistWindows.js";
+import { __setAdvanceForTests, offerFreedSlot } from "../engines/waitlistOffer.js";
 
 /**
  * Waitlist phase E: the admin surface.
@@ -32,6 +33,8 @@ let otherCookie: string;
 let otherShopId: string;
 let otherUserId: string;
 let otherEntryId: string;
+/** Shops a single test signs up for itself, cleaned up with the rest. */
+const extraShops: { shopId: string; userId: string }[] = [];
 
 async function signUpShop(name: string) {
   const email = `wl-e-${randomToken(6).toLowerCase()}@test.local`;
@@ -106,7 +109,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  for (const s of [shopId, otherShopId]) {
+  for (const s of [shopId, otherShopId, ...extraShops.map((x) => x.shopId)]) {
+    await prisma.waitlistOffer.deleteMany({ where: { shopId: s } });
+    await prisma.availabilityRule.deleteMany({ where: { shopId: s } });
+    await prisma.serviceStaff.deleteMany({ where: { shopId: s } });
     await prisma.waitlistWindow.deleteMany({ where: { shopId: s } });
     await prisma.waitlistEntry.deleteMany({ where: { shopId: s } });
     await prisma.appointment.deleteMany({ where: { shopId: s } });
@@ -115,7 +121,9 @@ afterAll(async () => {
     await prisma.staff.deleteMany({ where: { shopId: s } });
     await prisma.shop.deleteMany({ where: { id: s } });
   }
-  await prisma.user.deleteMany({ where: { id: { in: [userId, otherUserId] } } });
+  await prisma.user.deleteMany({
+    where: { id: { in: [userId, otherUserId, ...extraShops.map((x) => x.userId)] } },
+  });
   await prisma.$disconnect();
 });
 
@@ -351,6 +359,117 @@ describe("status updates", () => {
     // The UI reads exactly this to say "Booked externally" rather than
     // implying a ChairBack appointment that does not exist.
     expect(row.bookedAppointmentId).toBeNull();
+  });
+
+  /**
+   * A shop of its own with one live hold for `first` and `second` next in
+   * line. Its own shop because the offer engine picks the earliest WAITING
+   * entry, and the shared shop above is full of them.
+   */
+  async function shopWithAHold(name: string) {
+    const own = await signUpShop(name);
+    extraShops.push(own);
+    await prisma.shop.update({
+      where: { id: own.shopId },
+      data: {
+        bookingMode: "native",
+        waitlistEnabled: true,
+        slotOpenedTextsEnabled: true,
+        bookingLeadHours: 0,
+        bookingBufferMin: 0,
+      },
+    });
+    const sam = await prisma.staff.create({ data: { shopId: own.shopId, name: "Sam" } });
+    const svc = await prisma.service.create({
+      data: { shopId: own.shopId, name: "Fade", durationMin: 30 },
+      select: { id: true },
+    });
+    await prisma.serviceStaff.create({ data: { shopId: own.shopId, serviceId: svc.id, staffId: sam.id } });
+    await prisma.availabilityRule.createMany({
+      data: Array.from({ length: 7 }, (_, weekday) => ({
+        shopId: own.shopId,
+        staffId: sam.id,
+        weekday,
+        startMin: 0,
+        endMin: 1440,
+      })),
+    });
+    const entry = (label: string) =>
+      prisma.waitlistEntry.create({
+        data: { shopId: own.shopId, firstName: label, email: `${label}-${randomToken(4)}@test.local` },
+        select: { id: true },
+      });
+    const first = await entry("first");
+    const second = await entry("second");
+    const startsAt = new Date(Math.ceil((Date.now() + 72 * 3600_000) / 1800_000) * 1800_000);
+    const held = await offerFreedSlot(
+      {
+        shopId: own.shopId,
+        staffId: sam.id,
+        serviceId: svc.id,
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+        timezone: TZ,
+        bufferMin: 0,
+      },
+      new Date(),
+    );
+    expect(held.outcome === "offered" && held.entryId).toBe(first.id);
+    const liveHolds = () =>
+      prisma.waitlistOffer.findMany({
+        where: { shopId: own.shopId, status: "OFFERED" },
+        select: { entryId: true, startsAt: true },
+      });
+    return { own, staffId: sam.id, serviceId: svc.id, first, second, startsAt, liveHolds };
+  }
+
+  it("🔴 Remove lets go of the time held for them, and it goes to the next person", async () => {
+    __setAdvanceForTests(true);
+    try {
+      const s = await shopWithAHold("Remove Cuts");
+      const res = await setStatus(s.first.id, "REMOVED", s.own.cookie);
+      expect(res.status).toBe(200);
+      expect(await s.liveHolds()).toEqual([{ entryId: s.second.id, startsAt: s.startsAt }]);
+    } finally {
+      __setAdvanceForTests(undefined);
+    }
+  });
+
+  it("🔴 booking them from the board at ANOTHER time lets go of their hold too", async () => {
+    __setAdvanceForTests(true);
+    try {
+      const s = await shopWithAHold("Board Book Cuts");
+      // The barber calls them and books a different day, straight from the board.
+      const otherDay = new Date(s.startsAt.getTime() + 24 * 3600_000);
+      const res = await request(app)
+        .post("/api/booking/appointments")
+        .set("Cookie", s.own.cookie)
+        .send({
+          staffId: s.staffId,
+          serviceId: s.serviceId,
+          startsAt: otherDay.toISOString(),
+          firstName: "First",
+          customTime: true,
+          waitlistEntryId: s.first.id,
+        });
+      expect(res.status).toBe(201);
+      expect((await prisma.waitlistEntry.findUniqueOrThrow({ where: { id: s.first.id } })).status).toBe(
+        "BOOKED",
+      );
+      // Their old hold is gone, and the time went to the next person.
+      expect(await s.liveHolds()).toEqual([{ entryId: s.second.id, startsAt: s.startsAt }]);
+    } finally {
+      __setAdvanceForTests(undefined);
+    }
+  });
+
+  it("putting an entry back while they have rejoined for the same thing is a 409, not a 500", async () => {
+    const key = `dup-${randomToken(6)}`;
+    const old = await seed({ status: "REMOVED", dedupeKey: key });
+    await seed({ status: "WAITING", dedupeKey: key });
+    const res = await setStatus(old, "WAITING");
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "already_waiting" });
   });
 });
 

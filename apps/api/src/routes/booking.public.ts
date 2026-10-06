@@ -125,7 +125,7 @@ import {
 } from "../services/appointmentNotify.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { cancelAppointment, cancelSeries } from "../engines/appointmentPromotion.js";
-import { claimOffer } from "../engines/waitlistOffer.js";
+import { claimOffer, declineOffer } from "../engines/waitlistOffer.js";
 import { sha256Hex } from "../engines/waitlistJoin.js";
 import {
   rewardsLimiter,
@@ -431,6 +431,49 @@ bookingPublicRouter.post(
         logger.error(
           { outcome: (unhandled as { outcome?: string })?.outcome ?? "unknown" },
           "waitlist claim: unhandled ClaimResult outcome",
+        );
+        res.status(500).json({ error: "internal" });
+        return;
+      }
+    }
+  },
+);
+
+const declineSchema = z.object({ leave: z.boolean().optional() }).strict();
+
+// POST /api/book/offer/:token/decline - "No thanks": pass the held time to the
+// next person now, and optionally leave the waitlist. Same generic answers as
+// the claim for a dead token (404 unknown, 410 lapsed/used).
+bookingPublicRouter.post(
+  "/offer/:token/decline",
+  bookingWriteLimiter,
+  async (req, res) => {
+    const parsed = declineSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+      return;
+    }
+    const result = await declineOffer({
+      token: String(req.params.token),
+      leave: parsed.data.leave === true,
+    });
+    switch (result.outcome) {
+      case "declined":
+        res.json({ ok: true, left: result.left });
+        return;
+      case "invalid":
+        res.status(404).json({ error: "not_found" });
+        return;
+      case "expired":
+        res.status(410).json({ error: "offer_expired" });
+        return;
+      default: {
+        // Same exhaustiveness rule as the claim above: a new outcome is a
+        // build failure, never a request that hangs.
+        const unhandled: never = result;
+        logger.error(
+          { outcome: (unhandled as { outcome?: string })?.outcome ?? "unknown" },
+          "waitlist decline: unhandled DeclineResult outcome",
         );
         res.status(500).json({ error: "internal" });
         return;

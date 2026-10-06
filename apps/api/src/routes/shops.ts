@@ -95,6 +95,7 @@ import {
   sha256Hex,
 } from "../engines/waitlistJoin.js";
 import { resolveWaitlistClient } from "../engines/waitlistClientLink.js";
+import { leaveWaitlistEntry } from "../engines/waitlistOffer.js";
 import { sendWaitlistConfirmation } from "../messaging/waitlistEmail.js";
 import {
   CUSTOMER_ACTOR,
@@ -1661,41 +1662,17 @@ publicPageRouter.post("/waitlist/cancel/:token", waitlistLimiter, async (req, re
     res.json({ ok: true });
     return;
   }
-  // 🔑 The update alone cannot be audited: it matches on a global token hash
-  // and updateMany returns only a count, so it never learns WHICH shop or
-  // entry it just changed. One indexed read on the same hash supplies both,
-  // inside the transaction so the row cannot move underneath us.
-  const hash = sha256Hex(token);
-  const { count, audited } = await prisma.$transaction(async (tx) => {
-    const target = await tx.waitlistEntry.findFirst({
-      where: { cancelTokenHash: hash, status: { in: [...ACTIVE_WAITLIST_STATUSES] } },
-      select: { id: true, shopId: true, status: true },
-    });
-    const res = await tx.waitlistEntry.updateMany({
-      where: {
-        cancelTokenHash: hash,
-        status: { in: [...ACTIVE_WAITLIST_STATUSES] },
-      },
-      // dedupeKey is cleared so the same person can rejoin for the same thing.
-      // The partial index only covers active rows, but clearing it also stops a
-      // cancelled row colliding if it is ever reactivated by hand.
-      data: { status: "REMOVED", dedupeKey: null },
-    });
-    if (target && res.count > 0) {
-      await recordWaitlistEvent(tx, {
-        shopId: target.shopId,
-        entryId: target.id,
-        type: "entry.cancelled_by_customer",
-        actor: CUSTOMER_ACTOR,
-        metadata: { source: "cancel_link", fromStatus: target.status, toStatus: "REMOVED" },
-      });
-    }
-    return { count: res.count, audited: Boolean(target) };
+  // 🔴 LEAVING FREES THE TIME. The entry's live hold, if it has one, is let
+  // go in the same transaction and offered to the next person once it
+  // commits (engines/waitlistOffer.ts leaveWaitlistEntry). It used to stay
+  // live for up to half an hour, still bookable by someone who had left.
+  const { left, advanced } = await leaveWaitlistEntry({
+    where: { cancelTokenHash: sha256Hex(token) },
+    source: "cancel_link",
   });
   // Still no shop id in the log line - an unauthenticated endpoint holding a
-  // bearer secret stays a constant, and `audited` says only whether we found
-  // a row to attribute, which the count already implies.
-  logger.info({ cancelled: count, audited }, "waitlist self-cancel");
+  // bearer secret stays a constant.
+  logger.info({ cancelled: left ? 1 : 0, advanced }, "waitlist self-cancel");
   res.json({ ok: true });
 });
 

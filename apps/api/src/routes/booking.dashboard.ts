@@ -120,6 +120,7 @@ import {
 import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairback/config";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { logger } from "../logger.js";
+import { advanceEach, releaseRacedOffers, type OfferSpan } from "../engines/waitlistOffer.js";
 import {
   isMirrorNotConfigured,
   mirrorNotConfiguredSource,
@@ -3728,6 +3729,24 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       return { id: appt.id, forced, clientId };
     });
     const forced = result.forced;
+    // 🔴 A waitlist entry booked from the board lets go of any time still held
+    // for it, and that time goes to the next person. Otherwise the held time
+    // stayed hidden for up to half an hour, and the customer could still book
+    // it from the email - a second appointment. After commit: the entry is
+    // BOOKED by now, so only holds of an entry that left the list are touched.
+    if (d.waitlistEntryId) {
+      const ended = await releaseRacedOffers({
+        shopId,
+        entryId: d.waitlistEntryId,
+        code: "booked",
+        via: "dashboard_book",
+        actor: { type: "staff", userId: req.userId ?? null, staffId: req.shopStaffId ?? null },
+      }).catch((err) => {
+        logger.error({ err, shopId }, "waitlist: release after a board booking failed");
+        return [] as OfferSpan[];
+      });
+      await advanceEach(ended, new Date());
+    }
     // After commit: place the block. Best-effort by design - the barber is
     // looking at their own calendar, and the reconciler owns any row that
     // does not land now.
