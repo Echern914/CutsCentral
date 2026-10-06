@@ -241,7 +241,10 @@ export async function createTierOpening(params: {
         select: { id: true },
       });
       await tx.tierOpeningRecipient.createMany({
-        data: people.map((p) => ({ openingId: opening.id, accountId: p.accountId, clientId: p.clientId })),
+        // createdAt from the engine's clock, not the database's DEFAULT now():
+        // the resend window is measured against this `now`, and Postgres and
+        // the API are different clocks.
+        data: people.map((p) => ({ openingId: opening.id, accountId: p.accountId, clientId: p.clientId, createdAt: now })),
       });
       return { id: opening.id, recipients: people.length };
     });
@@ -263,11 +266,37 @@ export async function createTierOpening(params: {
   return { outcome: "held", openingId: created.id, heldUntil, recipients: created.recipients };
 }
 
+/** Re-read the opening after this many sends, and stop if it has ended. */
+const RECHECK_EVERY = 10;
+
+/** Is this hold still one a member could book? The same test every reader uses. */
+function holdIsLive(o: { status: string; heldUntil: Date }, now: Date): boolean {
+  return o.status === "HELD" && o.heldUntil.getTime() > now.getTime();
+}
+
 /**
- * Tell each invited member. After commit, never inside the hold's transaction:
- * a push provider being slow must not hold the barber's calendar lock.
+ * Tell each invited member who has not been told yet. After commit, never
+ * inside the hold's transaction: a push provider being slow must not hold the
+ * barber's calendar lock.
+ *
+ * 🔴 AT MOST ONE PUSH PER INVITATION, EVER. Each send is CLAIMED first - a
+ * compare-and-set from notifiedAt NULL to now - and only the caller that wins
+ * it sends. So the first send and the resend sweep (resendUnnotifiedOpenings)
+ * can overlap without anyone hearing twice. A process that dies between the
+ * claim and the send loses that one push rather than risking two; the claim is
+ * the promise kept.
+ *
+ * 🔴 IT STOPS WHEN THE OPENING ENDS. A member books it, or the barber lets it
+ * go, and the people not yet reached are not told about a time that is gone.
+ * The opening is re-read before the first send and every RECHECK_EVERY sends.
+ *
+ * `now` is for tests; a live send reads the clock as it goes.
  */
-export async function notifyInvitees(openingId: string): Promise<{ delivered: number; recipients: number }> {
+export async function notifyInvitees(
+  openingId: string,
+  opts: { now?: Date } = {},
+): Promise<{ recipients: number; sent: number; delivered: number; stoppedEarly: boolean }> {
+  const clock = () => opts.now ?? new Date();
   const opening = await prisma.tierOpening.findUnique({
     where: { id: openingId },
     select: {
@@ -277,16 +306,19 @@ export async function notifyInvitees(openingId: string): Promise<{ delivered: nu
       serviceId: true,
       startsAt: true,
       heldUntil: true,
+      status: true,
       minTier: true,
+      source: true,
       shop: { select: { name: true, timezone: true, requireBookingApproval: true } },
     },
   });
-  if (!opening) return { delivered: 0, recipients: 0 };
-  const [recipients, names] = await Promise.all([
+  if (!opening) return { recipients: 0, sent: 0, delivered: 0, stoppedEarly: false };
+  const [invited, names] = await Promise.all([
     runAsOwner((tx) =>
       tx.tierOpeningRecipient.findMany({
         where: { openingId },
-        select: { clientId: true, client: { select: { magicToken: true } } },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        select: { id: true, clientId: true, notifiedAt: true, client: { select: { magicToken: true } } },
       }),
     ),
     runWithShop(opening.shopId, async (tx) => ({
@@ -297,31 +329,108 @@ export async function notifyInvitees(openingId: string): Promise<{ delivered: nu
       }),
     })),
   ]);
+  const unsent = invited.filter((r) => r.notifiedAt === null);
 
   const tz = opening.shop.timezone;
   const label = LOYALTY_TIERS[opening.minTier].label;
   const what = [names.service?.name, names.staff?.name ? `with ${names.staff.name}` : null].filter(Boolean).join(" ");
   const verb = opening.shop.requireBookingApproval ? "request" : "book";
   const base = apiEnv().APP_BASE_URL.replace(/\/$/, "");
+  // An Auto-fill opening is not marketing and its only action is in the app
+  // (messaging/push.ts `ledger` and `appOnly`). A manual one keeps the
+  // behaviour it shipped with.
+  const auto = opening.source === "auto";
+
+  let sent = 0;
   let delivered = 0;
-  for (const r of recipients) {
+  let live: { status: string; heldUntil: Date } | null = { status: opening.status, heldUntil: opening.heldUntil };
+  for (const [i, r] of unsent.entries()) {
+    if (i > 0 && i % RECHECK_EVERY === 0) {
+      live = await prisma.tierOpening.findUnique({
+        where: { id: openingId },
+        select: { status: true, heldUntil: true },
+      });
+    }
+    if (!live || !holdIsLive(live, clock())) {
+      logger.info(
+        { shopId: opening.shopId, openingId, sent, left: unsent.length - i },
+        "tier opening ended; remaining invitations not sent",
+      );
+      return { recipients: invited.length, sent, delivered, stoppedEarly: true };
+    }
+    const claimedAt = clock();
+    const claimed = await runAsOwner((tx) =>
+      tx.tierOpeningRecipient.updateMany({
+        where: { id: r.id, notifiedAt: null },
+        data: { notifiedAt: claimedAt },
+      }),
+    );
+    if (claimed.count === 0) continue; // someone else is telling them
     const result = await sendPushToClient({
       shopId: opening.shopId,
       clientId: r.clientId,
       kind: "promo",
+      ...(auto ? { ledger: false, appOnly: true } : {}),
       payload: {
         title: `${opening.shop.name}: an opening for ${label}${opening.minTier === "GOLD" ? "" : " and up"}`,
-        body: `${formatApptTime(opening.startsAt, tz)}${what ? ` · ${what}` : ""}. Yours to ${verb} in the app until ${timeOnly(opening.heldUntil, tz)}.`,
+        body: `${formatApptTime(opening.startsAt, tz)}${what ? ` · ${what}` : ""}. Yours to ${verb} in the app until ${timeOnly(live.heldUntil, tz)}.`,
         // The web rewards page for a browser subscription; the app reads the
         // `opening` parameter and opens Profile, where the opening is.
         url: `${base}/r/${r.client.magicToken}?opening=${encodeURIComponent(opening.id)}`,
         tag: `tier-opening-${opening.id}`,
       },
     });
+    sent += 1;
     if (result.anyDelivered) delivered += 1;
+    await runAsOwner((tx) =>
+      tx.tierOpeningRecipient.update({ where: { id: r.id }, data: { delivered: result.anyDelivered } }),
+    ).catch((err: unknown) => {
+      // The push already went out (or didn't); a stamp failure must not throw.
+      logger.error({ err, shopId: opening.shopId, openingId }, "tier opening delivery stamp failed");
+    });
   }
-  logger.info({ shopId: opening.shopId, openingId, recipients: recipients.length, delivered }, "tier opening notified");
-  return { delivered, recipients: recipients.length };
+  logger.info(
+    { shopId: opening.shopId, openingId, recipients: invited.length, sent, delivered },
+    "tier opening notified",
+  );
+  return { recipients: invited.length, sent, delivered, stoppedEarly: false };
+}
+
+/**
+ * Pick up invitations a restart lost. The first send runs after the hold's
+ * transaction commits, fire-and-forget; a deploy at that moment left a member
+ * invited and never told, with the time held for them. This finds invitations
+ * at least a minute old (so it does not race a send in flight - the claim makes
+ * that harmless anyway) and at most fifteen (an invitation older than that has
+ * had its chance; telling someone late about a short hold is worse than not),
+ * on openings still live, and sends them.
+ *
+ * Rides the waitlist sweep's lease (scheduler.ts). Never throws per opening.
+ */
+export async function resendUnnotifiedOpenings(now: Date = new Date()): Promise<number> {
+  const stale = await runAsOwner((tx) =>
+    tx.tierOpeningRecipient.findMany({
+      where: {
+        notifiedAt: null,
+        createdAt: { gte: new Date(now.getTime() - 15 * 60_000), lte: new Date(now.getTime() - 60_000) },
+        opening: { status: "HELD", heldUntil: { gt: now } },
+      },
+      distinct: ["openingId"],
+      select: { openingId: true },
+      take: 50,
+    }),
+  );
+  let resent = 0;
+  for (const { openingId } of stale) {
+    try {
+      const r = await notifyInvitees(openingId);
+      resent += r.sent;
+    } catch (err) {
+      logger.error({ err, openingId }, "tier opening resend failed");
+    }
+  }
+  if (resent > 0) logger.info({ openings: stale.length, resent }, "tier opening invitations resent");
+  return resent;
 }
 
 export type TierOpeningState = "held" | "claimed" | "released" | "open";

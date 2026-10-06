@@ -452,6 +452,11 @@ model Shop {
   // on; this toggle controls the CUSTOMER-facing blast (outbound to leads), so
   // it's off by default and separate from waitlistEnabled. See engines/slotOpened.
   slotOpenedTextsEnabled Boolean @default(false)
+  // AUTO-FILL (engines/autoFill.ts): when a CLIENT cancels, the freed time is
+  // offered in the app to Gold members, then Silver, then the waitlist, then
+  // anyone. Off for every shop, and no screen turns it on until the app build
+  // that lets a member switch these pushes off ships.
+  autoFillEnabled Boolean @default(false)
   // Automatic appointment reminder PUSHES (24h + 2h before start), per tier.
   // Deliberately default TRUE (unlike every other toggle): reminders are
   // expected table-stakes behavior, push is free/uncapped, and the column
@@ -701,6 +706,7 @@ model Shop {
   waitlistOffers      WaitlistOffer[]
   waitlistEvents      WaitlistEvent[]
   tierOpenings        TierOpening[]
+  autoFillRuns        AutoFillRun[]
   reviews             Review[]
   reviewNotifications ReviewNotification[]
   receptionistConversations ReceptionistConversation[]
@@ -1744,11 +1750,14 @@ model TierOpening {
 
   createdByUserId String?
   recipientCount  Int     @default(0)
+  // manual | auto - the barber held it, or Auto-fill did for a cancellation.
+  source          String  @default("manual")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  recipients TierOpeningRecipient[]
+  recipients  TierOpeningRecipient[]
+  autoFillRun AutoFillRun?
 
   // The guard and the grid ask "is a live hold on this barber in this span".
   @@index([shopId, staffId, status, heldUntil])
@@ -1769,9 +1778,51 @@ model TierOpeningRecipient {
   clientId  String
   client    Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
   createdAt DateTime        @default(now())
+  // gold | silver: the Auto-fill stage that invited them. Null on a manual opening.
+  wave       String?
+  // When a send was CLAIMED for this person - at most one push each, ever.
+  // Null = not sent yet (the resend sweep looks for these).
+  notifiedAt DateTime?
+  // Whether any of their devices accepted it. Null until sent.
+  delivered  Boolean?
 
   @@unique([openingId, accountId])
   @@index([accountId, createdAt])
+}
+
+// One cancellation Auto-fill is working on (engines/autoFill.ts). Written in the
+// SAME transaction as the cancellation, so a restart cannot lose it; the
+// waitlist sweep moves it through its stages.
+//
+// 🔴 triggerKey = cancel:{appointmentId}:r{cancellationRevision}: one run per
+// cancellation, and a cancel, undo, cancel again is a second cancellation.
+// state queued -> gold -> silver -> closed; nextAt is when the sweep next acts
+// (null exactly when closed), outcome says how it ended (set exactly when
+// closed). Both pairings are CHECKs in the migration.
+model AutoFillRun {
+  id            String       @id @default(cuid())
+  shopId        String
+  shop          Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  appointmentId String
+  appointment   Appointment  @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  triggerKey    String       @unique
+  // The freed span, copied when the run was queued.
+  staffId       String
+  serviceId     String
+  startsAt      DateTime
+  endsAt        DateTime
+  state         String       @default("queued")
+  nextAt        DateTime?
+  // The last moment anything is held for anyone: start - minimum notice - 30 min.
+  deadline      DateTime?
+  openingId     String?      @unique
+  opening       TierOpening? @relation(fields: [openingId], references: [id], onDelete: SetNull)
+  outcome       String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([shopId, createdAt])
+  @@index([appointmentId])
 }
 
 // APPEND-ONLY history of every waitlist lifecycle mutation: who did what to
@@ -3464,6 +3515,8 @@ model Appointment {
   waitlistOffer WaitlistOffer? @relation("WaitlistOfferClaim")
   // Set when this appointment was a tier member claiming an opening held for them.
   tierOpening   TierOpening?   @relation("TierOpeningClaim")
+  // Auto-fill runs started by cancelling this appointment.
+  autoFillRuns  AutoFillRun[]
   // Set when this appointment was created by starting a walk-in queue entry.
   walkInEntry   WalkInEntry?   @relation("WalkInStarted")
 

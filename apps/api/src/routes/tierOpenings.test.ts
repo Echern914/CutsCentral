@@ -4,10 +4,15 @@ import { prisma } from "@chairback/db";
 import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 import { mintCustomerSession } from "../auth/customerSession.js";
-import { __setExpoSenderForTests, type PushPayload } from "../messaging/push.js";
+import { __setExpoSenderForTests, __setPushSenderForTests, type PushPayload } from "../messaging/push.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { computeOpenSlots } from "../engines/slots.js";
-import { claimTierOpening, createTierOpening, notifyInvitees } from "../engines/tierOpenings.js";
+import {
+  claimTierOpening,
+  createTierOpening,
+  notifyInvitees,
+  resendUnnotifiedOpenings,
+} from "../engines/tierOpenings.js";
 import { raceBehindRowLock, winners } from "../testing/raceBarrier.js";
 
 /**
@@ -145,6 +150,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   __setExpoSenderForTests(undefined);
+  __setPushSenderForTests(undefined);
 });
 
 afterAll(async () => {
@@ -212,11 +218,212 @@ describe("holding a slot for a tier", () => {
     expect(forThis()[0]!.payload.title).toBe("Held Cuts: an opening for Gold");
     expect(forThis()[0]!.payload.body).toMatch(/Cut with Sam\. Yours to book in the app until /);
 
-    // Sending again reaches the same one person - the list is the invitation, not the tier.
+    // The list is the invitation, not the tier - and each person on it is told
+    // once. Sending again reaches nobody.
     sent.length = 0;
     const again = await notifyInvitees(created.openingId);
     expect(again.recipients).toBe(2);
-    expect(forThis().map((s) => s.to)).toEqual([tokens.gold]);
+    expect(again.sent).toBe(0);
+    expect(forThis()).toEqual([]);
+  });
+});
+
+/**
+ * 🔴 TELLING THE INVITED MEMBERS: at most once each, never about a time that is
+ * gone, and never lost to a restart.
+ *
+ * The first send runs after the hold commits, fire-and-forget. Before: it read
+ * the list once and pushed to everyone on it, so a second call pushed everyone
+ * again, a member who booked it mid-loop did not stop the rest being told, and
+ * a deploy at the wrong moment left people invited and never told, with the
+ * time held for them.
+ */
+describe("telling the invited members", () => {
+  let goldToken = "";
+
+  beforeAll(async () => {
+    goldToken = `ExponentPushToken[${randomToken(12)}]`;
+    await request(app).post("/api/me/devices").set(asCustomer(gold)).send({ expoPushToken: goldToken, platform: "ios" });
+  });
+
+  /** People with an invitation and no app link: a send to them reaches nobody. */
+  async function bareInvitee(i: number) {
+    const phone = randomPhone();
+    const client = await prisma.client.create({
+      data: { shopId, acuityClientKey: `tel:${phone}`, magicToken: randomToken(), firstName: `Extra${i}`, phone, source: "manual" },
+      select: { id: true },
+    });
+    const account = await prisma.customerAccount.create({
+      data: { firstName: `Extra${i}`, phoneE164: phone, phoneVerifiedAt: new Date() },
+      select: { id: true },
+    });
+    accountIds.push(account.id);
+    return { accountId: account.id, clientId: client.id };
+  }
+
+  /**
+   * An opening written straight to the database: createTierOpening sends on its
+   * own, after commit, and that send would race whatever the test does next.
+   */
+  async function rawOpening(
+    invited: { accountId: string; clientId: string; createdAt?: Date }[],
+    opts: { source?: "manual" | "auto"; heldUntil?: Date } = {},
+  ): Promise<string> {
+    const at = freshStart();
+    const opening = await prisma.tierOpening.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        startsAt: at,
+        endsAt: new Date(at.getTime() + 30 * 60_000),
+        minTier: "GOLD",
+        heldUntil: opts.heldUntil ?? new Date(Date.now() + 60 * 60_000),
+        source: opts.source ?? "manual",
+        recipientCount: invited.length,
+      },
+      select: { id: true },
+    });
+    const base = Date.now() - 1_000;
+    await prisma.tierOpeningRecipient.createMany({
+      data: invited.map((p, i) => ({
+        openingId: opening.id,
+        accountId: p.accountId,
+        clientId: p.clientId,
+        createdAt: p.createdAt ?? new Date(base + i),
+      })),
+    });
+    return opening.id;
+  }
+
+  /** Every push to gold's phone for one opening. */
+  function capture(openingId: string, onSend?: () => Promise<void>) {
+    const pushes: PushPayload[] = [];
+    __setExpoSenderForTests({
+      send: async (to, payload) => {
+        if (to !== goldToken || !payload.url.includes(`opening=${openingId}`)) return;
+        pushes.push(payload);
+        await onSend?.();
+      },
+    });
+    return pushes;
+  }
+
+  it("🔴 tells each person once - a second send reaches nobody, and the send is recorded", async () => {
+    const openingId = await rawOpening([gold]);
+    const pushes = capture(openingId);
+
+    const first = await notifyInvitees(openingId);
+    expect(first).toEqual({ recipients: 1, sent: 1, delivered: 1, stoppedEarly: false });
+    expect(pushes).toHaveLength(1);
+
+    const second = await notifyInvitees(openingId);
+    expect(second.sent).toBe(0);
+    expect(pushes).toHaveLength(1);
+
+    const row = await prisma.tierOpeningRecipient.findFirstOrThrow({ where: { openingId } });
+    expect(row.notifiedAt).not.toBeNull();
+    expect(row.delivered).toBe(true);
+  });
+
+  it("🔴 two senders at once: exactly one push", async () => {
+    const openingId = await rawOpening([gold]);
+    const pushes = capture(openingId);
+    const invite = await prisma.tierOpeningRecipient.findFirstOrThrow({ where: { openingId }, select: { id: true } });
+
+    // Both read the invitation as unsent, then queue at the claim.
+    const { results, settledEarly } = await raceBehindRowLock("TierOpeningRecipient", invite.id, [
+      () => notifyInvitees(openingId),
+      () => notifyInvitees(openingId),
+    ]);
+    expect(settledEarly).toBe(0);
+    expect(winners(results).map((r) => r.sent).sort()).toEqual([0, 1]);
+    expect(pushes).toHaveLength(1);
+  });
+
+  it("🔴 stops when the opening ends part way down the list", async () => {
+    const extras = await Promise.all(Array.from({ length: 11 }, (_, i) => bareInvitee(i)));
+    // Gold first in line; the other eleven after.
+    const openingId = await rawOpening([gold, ...extras]);
+    // Gold books it the moment their phone buzzes.
+    capture(openingId, async () => {
+      await prisma.tierOpening.update({ where: { id: openingId }, data: { status: "CLAIMED" } });
+    });
+
+    const result = await notifyInvitees(openingId);
+    // The opening is re-read every ten sends: the ten already under way go
+    // out, and nobody after that is told about a time that is gone.
+    expect(result.stoppedEarly).toBe(true);
+    expect(result.sent).toBe(10);
+    expect(await prisma.tierOpeningRecipient.count({ where: { openingId, notifiedAt: null } })).toBe(2);
+  });
+
+  it("an opening that has already ended tells nobody", async () => {
+    const released = await rawOpening([gold]);
+    await prisma.tierOpening.update({ where: { id: released }, data: { status: "RELEASED" } });
+    const lapsed = await rawOpening([gold], { heldUntil: new Date(Date.now() - 60_000) });
+    const urls: string[] = [];
+    __setExpoSenderForTests({ send: async (_to, payload) => void urls.push(payload.url) });
+    for (const id of [released, lapsed]) {
+      const r = await notifyInvitees(id);
+      expect(r).toMatchObject({ sent: 0, stoppedEarly: true });
+    }
+    expect(urls.filter((u) => u.includes(`opening=${released}`) || u.includes(`opening=${lapsed}`))).toEqual([]);
+  });
+
+  it("🔴 a send a restart lost is picked up by the sweep, once", async () => {
+    // Invited five minutes ago; the process died before anyone was told.
+    const openingId = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 5 * 60_000) }]);
+    const pushes = capture(openingId);
+
+    await resendUnnotifiedOpenings();
+    expect(pushes).toHaveLength(1);
+    await resendUnnotifiedOpenings();
+    expect(pushes).toHaveLength(1);
+  });
+
+  it("the sweep leaves alone an invitation too old to be worth sending, or on an opening that is over", async () => {
+    const stale = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 20 * 60_000) }]);
+    const over = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 5 * 60_000) }]);
+    await prisma.tierOpening.update({ where: { id: over }, data: { status: "RELEASED" } });
+    const sent: string[] = [];
+    __setExpoSenderForTests({ send: async (_to, payload) => void sent.push(payload.url) });
+
+    await resendUnnotifiedOpenings();
+    expect(sent.filter((u) => u.includes(`opening=${stale}`) || u.includes(`opening=${over}`))).toEqual([]);
+    expect(await prisma.tierOpeningRecipient.count({ where: { openingId: { in: [stale, over] }, notifiedAt: null } })).toBe(2);
+  });
+
+  it("🔴 an Auto-fill opening goes to the app only, and never onto the marketing ledger", async () => {
+    // Gold also subscribed in a browser - a manual opening reaches it.
+    const browser = await prisma.pushSubscription.create({
+      data: { shopId, clientId: gold.clientId, kind: "web", endpoint: `https://push.test/${randomToken(10)}`, p256dh: "k", auth: "a" },
+      select: { id: true },
+    });
+    try {
+      const web: string[] = [];
+      __setPushSenderForTests({ send: async (_sub, payload) => void web.push(payload) });
+      const nudges = () => prisma.nudge.count({ where: { clientId: gold.clientId } });
+
+      const auto = await rawOpening([gold], { source: "auto" });
+      const autoPushes = capture(auto);
+      const before = await nudges();
+      await notifyInvitees(auto);
+      expect(autoPushes).toHaveLength(1);
+      expect(web.filter((p) => p.includes(`opening=${auto}`))).toEqual([]);
+      // Not marketing: no Nudge row, so attribution, the dashboard counts and
+      // the 21-day nudge rule never see it.
+      expect(await nudges()).toBe(before);
+
+      // A manual opening behaves exactly as it shipped.
+      const manual = await rawOpening([gold]);
+      capture(manual);
+      await notifyInvitees(manual);
+      expect(web.filter((p) => p.includes(`opening=${manual}`))).toHaveLength(1);
+      expect(await nudges()).toBe(before + 1);
+    } finally {
+      await prisma.pushSubscription.deleteMany({ where: { id: browser.id } });
+    }
   });
 });
 
