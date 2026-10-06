@@ -13,9 +13,17 @@ import { raceBehindRowLock } from "../testing/raceBarrier.js";
  *     charge as a "repair"
  *   - a reconciler that marks a young reservation failed: a request still in
  *     flight declared dead
- *   - a reconciler that writes in dry-run: the kill switch is decoration
+ *   - a reconciler that writes money or status in dry-run: the kill switch is
+ *     decoration (it may only write its memory of what it has raised)
  *   - two overlapping runs both adopting: the compare-and-set marker
+ *   - one contradiction raised on every pass: ~384 alerts a day (#464)
  */
+
+const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
+vi.mock("../sentry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sentry.js")>()),
+  captureError: sentry.captureError,
+}));
 
 const create = vi.fn();
 const retrieve = vi.fn();
@@ -33,7 +41,7 @@ process.env.STRIPE_CONNECT_WEBHOOK_SECRET = "whsec_reconcile";
 __resetEnvCacheForTests();
 
 const { chargeCardOnFile } = await import("./cardOnFile.js");
-const { reconcilePayments, PENDING_GRACE_MS } = await import("./reconcile.js");
+const { reconcilePayments, reconcileOne, PENDING_GRACE_MS, RECONCILE_ROW_SELECT } = await import("./reconcile.js");
 const { pendingIntentId } = await import("./payments.js");
 
 let shopId: string;
@@ -312,6 +320,7 @@ describe("reconcilePayments", () => {
   it("two overlapping runs racing one reservation adopt it once - the marker is a compare-and-set", async () => {
     const { appointmentId, paymentId } = await ambiguousCharge();
     searchAnswers({ [paymentId]: [pi({ id: "pi_race", status: "succeeded", paymentId })] });
+    sentry.captureError.mockClear();
     const { results, settledEarly } = await raceBehindRowLock("Payment", paymentId, [
       () => reconcilePayments({ now: later(), dryRun: false }),
       () => reconcilePayments({ now: later(), dryRun: false }),
@@ -324,5 +333,128 @@ describe("reconcilePayments", () => {
     expect(row?.status).toBe("succeeded");
     expect((await cofStatus(appointmentId))?.status).toBe("charged");
     expect(create).toHaveBeenCalledTimes(1);
+    // The loser's snapshot was a replay of the winner's, which is not a dead
+    // reservation: it must not raise "a reservation marked dead has an intent".
+    const deadAlarms = sentry.captureError.mock.calls.filter(
+      (c) =>
+        (c[1] as { paymentId?: string } | undefined)?.paymentId === paymentId &&
+        String((c[0] as Error).message).includes("reservation marked dead"),
+    );
+    expect(deadAlarms).toEqual([]);
+  });
+});
+
+describe("🔴 an escalation is raised once, not every pass (#464)", () => {
+  /**
+   * Four June rows whose intents Stripe cannot find were raised as an error
+   * and a Sentry event on every pass - ~384 a day - burying any real one.
+   * These drive reconcileOne on THIS file's rows only (a full pass also scans
+   * every other suite's leftovers), read with the reconciler's own select.
+   */
+  const readRow = (id: string) =>
+    prisma.payment.findUniqueOrThrow({ where: { id }, select: RECONCILE_ROW_SELECT });
+  const alertsFor = (paymentId: string, what?: string) =>
+    sentry.captureError.mock.calls.filter(
+      (c) => (c[1] as { paymentId?: string } | undefined)?.paymentId === paymentId &&
+        (!what || String((c[0] as Error).message).includes(what)),
+    ).length;
+  const notFound = () =>
+    Object.assign(new Error("No such payment_intent"), {
+      type: "StripeInvalidRequestError",
+      code: "resource_missing",
+      statusCode: 404,
+    });
+
+  /** A stale, non-terminal row whose intent Stripe will say does not exist. */
+  async function missingIntentRow(over: { status?: string; ambiguous?: boolean } = {}) {
+    const { appointmentId } = await savedCard();
+    const p = await prisma.payment.create({
+      data: {
+        shopId,
+        appointmentId,
+        stripePaymentIntentId: `pi_gone_${randomToken(8)}`,
+        stripeConnectAccountId: "acct_reconcile",
+        mode: "ahead",
+        amount: 4500,
+        status: over.status ?? "requires_payment_method",
+        ...(over.status === "succeeded" ? { capturedAmount: 4500 } : {}),
+        ...(over.ambiguous ? { ambiguousAt: new Date() } : {}),
+      },
+      select: { id: true, stripePaymentIntentId: true },
+    });
+    await prisma.$executeRaw`UPDATE "Payment" SET "updatedAt" = now() - interval '2 hours' WHERE id = ${p.id}`;
+    return p;
+  }
+
+  beforeEach(() => sentry.captureError.mockClear());
+
+  it("🔴 a recorded intent Stripe cannot find is raised ONCE across passes (dry run, production's mode)", async () => {
+    const p = await missingIntentRow();
+    retrieve.mockRejectedValue(notFound());
+    for (let i = 0; i < 3; i++) {
+      expect(await reconcileOne(await readRow(p.id), later(), true)).toBe("escalated");
+    }
+    expect(alertsFor(p.id)).toBe(1);
+    expect((await readRow(p.id)).reconcileEscalation).toBe("intent_missing");
+  });
+
+  it("remembering it changes nothing else about the row - not even updatedAt", async () => {
+    const p = await missingIntentRow();
+    retrieve.mockRejectedValue(notFound());
+    const before = await prisma.payment.findUniqueOrThrow({ where: { id: p.id } });
+    await reconcileOne(await readRow(p.id), later(), true);
+    const after = await prisma.payment.findUniqueOrThrow({ where: { id: p.id } });
+    const withoutMemory = (r: object) =>
+      Object.fromEntries(
+        Object.entries(r).filter(([k]) => k !== "reconcileEscalation" && k !== "reconcileEscalatedVersion"),
+      );
+    expect(withoutMemory(after)).toEqual(withoutMemory(before));
+    expect(after.reconcileEscalatedVersion).toEqual(before.updatedAt);
+  });
+
+  it("a DIFFERENT contradiction on the same row is raised again", async () => {
+    const p = await missingIntentRow({ status: "succeeded", ambiguous: true });
+    retrieve.mockRejectedValueOnce(notFound());
+    await reconcileOne(await readRow(p.id), later(), true);
+    retrieve.mockResolvedValueOnce(pi({ id: p.stripePaymentIntentId, status: "canceled" }));
+    await reconcileOne(await readRow(p.id), later(), true);
+    expect(alertsFor(p.id)).toBe(2);
+    const row = await readRow(p.id);
+    expect(row.reconcileEscalation).toBe("collected_not_collected");
+    expect(row.status).toBe("succeeded"); // still left for a person
+  });
+
+  it("a clean read forgets it, so when it comes back it is raised again", async () => {
+    const p = await missingIntentRow();
+    retrieve.mockRejectedValueOnce(notFound());
+    await reconcileOne(await readRow(p.id), later(), true);
+    retrieve.mockResolvedValueOnce(pi({ id: p.stripePaymentIntentId, status: "requires_payment_method" }));
+    expect(await reconcileOne(await readRow(p.id), later(), true)).toBe("unchanged");
+    expect((await readRow(p.id)).reconcileEscalation).toBeNull();
+    retrieve.mockRejectedValueOnce(notFound());
+    await reconcileOne(await readRow(p.id), later(), true);
+    expect(alertsFor(p.id)).toBe(2);
+  });
+
+  it("any other write to the row since re-arms it", async () => {
+    const p = await missingIntentRow();
+    retrieve.mockRejectedValue(notFound());
+    await reconcileOne(await readRow(p.id), later(), true);
+    // A webhook (or a refund, or an ambiguity mark) writes the row through Prisma.
+    await prisma.payment.update({ where: { id: p.id }, data: { lastWebhookEventId: `evt_${randomToken(6)}` } });
+    await reconcileOne(await readRow(p.id), later(), true);
+    expect(alertsFor(p.id)).toBe(2);
+  });
+
+  it("Stripe unreachable neither raises nor forgets", async () => {
+    const p = await missingIntentRow();
+    retrieve.mockRejectedValueOnce(notFound());
+    await reconcileOne(await readRow(p.id), later(), true);
+    retrieve.mockRejectedValueOnce(new Error("socket hang up"));
+    expect(await reconcileOne(await readRow(p.id), later(), true)).toBe("unresolved");
+    expect((await readRow(p.id)).reconcileEscalation).toBe("intent_missing");
+    retrieve.mockRejectedValueOnce(notFound());
+    await reconcileOne(await readRow(p.id), later(), true);
+    expect(alertsFor(p.id)).toBe(1);
   });
 });

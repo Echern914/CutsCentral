@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import { apiEnv } from "@chairback/config";
-import { prisma, runWithShop } from "@chairback/db";
+import { Prisma, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { captureError } from "../sentry.js";
 import { connectEnabled, stripeClient } from "./stripe.js";
@@ -35,7 +35,22 @@ import { ABANDONED_TIP_MS, OPEN_TIP_STATUSES } from "./tips.js";
  * Safe under overlapping runs: the scheduler lease keeps replicas apart, and
  * every write here is a compare-and-set on the state the row was read in, so a
  * second pass over the same row is a no-op. OFF (the default) means DRY RUN:
- * it reads Stripe, counts what it would do, writes nothing.
+ * it reads Stripe, counts what it would do, and writes no money and no status.
+ * The one thing it does write, in either mode, is its own memory of which
+ * contradictions it has already raised (see escalateOnce).
+ *
+ * 🔴 AN ESCALATION IS RAISED ONCE, NOT EVERY PASS (#464). A contradiction is
+ * left exactly as it is for a person, so the row comes back on every pass -
+ * and four June rows whose intents Stripe cannot find were raised as an error
+ * and a Sentry event every fifteen minutes, ~384 a day, burying any real one.
+ * The three escalations that recur (several intents, intent missing, collected
+ * row not collected) now remember what they raised on the row itself:
+ * `reconcileEscalation` (which contradiction) and `reconcileEscalatedVersion`
+ * (the row's `updatedAt` when it was raised). Raised again only when the
+ * contradiction changes, or something else has written the row since. A
+ * clean read clears the memory, so a contradiction that comes back is raised
+ * again. The other three escalations cannot recur (their row leaves every
+ * selection arm) and stay loud every time.
  */
 
 export const PAYMENTS_RECONCILE_JOB = "payments-reconcile";
@@ -64,11 +79,15 @@ export interface ReconcileResult {
   adopted: number;
   nothingLanded: number;
   repaired: number;
+  /** Rows in an escalated state this pass - raised now or raised before. */
   escalated: number;
   unresolved: number;
   /** Cents on rows adopted or repaired - amounts only, never who. */
   cents: number;
 }
+
+/** The contradictions that recur pass after pass, so are raised once (escalateOnce). */
+export type RecurringEscalation = "several_intents" | "intent_missing" | "collected_not_collected";
 
 type Row = {
   id: string;
@@ -80,7 +99,28 @@ type Row = {
   mode: string;
   purpose: string;
   ambiguousAt: Date | null;
+  // The alert memory (escalateOnce). Optional so a hand-built row (a test)
+  // reads as "never raised" and is raised.
+  updatedAt?: Date;
+  reconcileEscalation?: string | null;
+  reconcileEscalatedVersion?: Date | null;
 };
+
+/** What a pass reads per row. Exported for tests that drive reconcileOne directly. */
+export const RECONCILE_ROW_SELECT = {
+  id: true,
+  shopId: true,
+  appointmentId: true,
+  stripePaymentIntentId: true,
+  status: true,
+  amount: true,
+  mode: true,
+  purpose: true,
+  ambiguousAt: true,
+  updatedAt: true,
+  reconcileEscalation: true,
+  reconcileEscalatedVersion: true,
+} as const;
 
 export async function reconcilePayments(
   opts: { now?: Date; dryRun?: boolean } = {},
@@ -134,17 +174,7 @@ export async function reconcilePayments(
         },
       ],
     },
-    select: {
-      id: true,
-      shopId: true,
-      appointmentId: true,
-      stripePaymentIntentId: true,
-      status: true,
-      amount: true,
-      mode: true,
-      purpose: true,
-      ambiguousAt: true,
-    },
+    select: RECONCILE_ROW_SELECT,
     orderBy: { updatedAt: "asc" },
     take: BATCH,
   });
@@ -179,6 +209,15 @@ export async function reconcilePayments(
 }
 
 export async function reconcileOne(row: Row, now: Date, dryRun: boolean): Promise<RowOutcome> {
+  const outcome = await reconcileRow(row, now, dryRun);
+  // A clean read: whatever was raised about this row before no longer holds,
+  // so forget it - if it comes back, it is raised again. Not on "unresolved"
+  // (Stripe could not be read: nothing was learned) or "escalated".
+  if (outcome !== "escalated" && outcome !== "unresolved") await forgetEscalation(row);
+  return outcome;
+}
+
+async function reconcileRow(row: Row, now: Date, dryRun: boolean): Promise<RowOutcome> {
   if (isPendingIntentId(row.stripePaymentIntentId)) {
     // Never re-issue the create from here: FIND what landed, by our metadata.
     let found: Stripe.PaymentIntent[];
@@ -196,7 +235,10 @@ export async function reconcileOne(row: Row, now: Date, dryRun: boolean): Promis
       return "unresolved";
     }
     if (found.length > 1) {
-      escalate("two or more intents carry one reservation id", { paymentId: row.id, intents: found.length });
+      await escalateOnce(row, "several_intents", "two or more intents carry one reservation id", {
+        paymentId: row.id,
+        intents: found.length,
+      });
       return "escalated";
     }
     if (found.length === 1) {
@@ -212,10 +254,14 @@ export async function reconcileOne(row: Row, now: Date, dryRun: boolean): Promis
         // the row stops being searched on every pass, and tell a person -
         // rather than reporting "adopted" forever for a write that never
         // happened.
-        await prisma.payment.updateMany({
+        const { count } = await prisma.payment.updateMany({
           where: { id: row.id, stripePaymentIntentId: row.stripePaymentIntentId },
           data: { stripePaymentIntentId: pi.id, reconciledAt: now },
         });
+        // Nothing to record: another pass (or the webhook) already wrote this
+        // intent onto the row - its snapshot was the one that landed, and ours
+        // was a replay of it. Not a dead reservation, so nothing to raise.
+        if (count === 0) return "unchanged";
         escalate("a reservation marked dead has an intent at Stripe", {
           paymentId: row.id,
           local: row.status,
@@ -268,7 +314,7 @@ export async function reconcileOne(row: Row, now: Date, dryRun: boolean): Promis
   } catch (err) {
     const facts = stripeErrorFacts(err);
     if (facts.statusCode === 404) {
-      escalate("a recorded intent does not exist at Stripe", { paymentId: row.id });
+      await escalateOnce(row, "intent_missing", "a recorded intent does not exist at Stripe", { paymentId: row.id });
       return "escalated";
     }
     logger.warn({ paymentId: row.id, ...facts }, "reconcile: could not retrieve an intent");
@@ -280,7 +326,7 @@ export async function reconcileOne(row: Row, now: Date, dryRun: boolean): Promis
     (row.status === "succeeded" || row.status === "refunded" || row.status === "partially_refunded") &&
     (pi.status === "canceled" || pi.status === "requires_payment_method")
   ) {
-    escalate("a collected payment's intent is not collected at Stripe", {
+    await escalateOnce(row, "collected_not_collected", "a collected payment's intent is not collected at Stripe", {
       paymentId: row.id,
       local: row.status,
       stripe: pi.status,
@@ -353,4 +399,65 @@ async function settleCardOnFile(row: Row, pi: Stripe.PaymentIntent): Promise<voi
 function escalate(what: string, ids: Record<string, string | number>): void {
   logger.error({ ...ids, what }, `reconcile: ${what}`);
   captureError(new Error(`payments reconcile: ${what}`), { ...ids, what: "payments_reconcile" });
+}
+
+/**
+ * Raise a RECURRING contradiction once per (row, contradiction, row version).
+ *
+ * Quiet only when this exact contradiction was already raised for this exact
+ * version of the row; a different contradiction, or any write to the row
+ * since (a webhook, a refund, an ambiguity mark all move `updatedAt`), raises
+ * it again.
+ *
+ * RAISE FIRST, REMEMBER AFTER: a pass that dies between the two raises it
+ * again next time - at least once, never not at all. The memory is written
+ * with raw SQL so `updatedAt` does not move: the memory is not a change to
+ * the payment, and must not look like one to the version check, the stale
+ * clock that selects rows, or anything else that reads `updatedAt`.
+ */
+async function escalateOnce(
+  row: Row,
+  code: RecurringEscalation,
+  what: string,
+  ids: Record<string, string | number>,
+): Promise<void> {
+  const raisedBefore =
+    row.reconcileEscalation === code &&
+    row.updatedAt !== undefined &&
+    row.reconcileEscalatedVersion?.getTime() === row.updatedAt.getTime();
+  if (raisedBefore) {
+    logger.debug({ ...ids, what }, `reconcile: still unresolved - ${what}`);
+    return;
+  }
+  escalate(what, ids);
+  const version = row.updatedAt
+    ? Prisma.sql`${row.updatedAt.toISOString()}::timestamp`
+    : Prisma.sql`"updatedAt"`;
+  try {
+    await prisma.$executeRaw`
+      UPDATE "Payment"
+         SET "reconcileEscalation" = ${code}, "reconcileEscalatedVersion" = ${version}
+       WHERE "id" = ${row.id}`;
+  } catch (err) {
+    logger.warn(
+      { paymentId: row.id, errName: err instanceof Error ? err.name : "unknown" },
+      "reconcile: could not remember an escalation - it will be raised again next pass",
+    );
+  }
+}
+
+/** Forget what was raised about a row, after a clean read. Never throws. */
+async function forgetEscalation(row: Row): Promise<void> {
+  if (row.reconcileEscalation === null) return; // known: nothing to forget
+  try {
+    await prisma.$executeRaw`
+      UPDATE "Payment"
+         SET "reconcileEscalation" = NULL, "reconcileEscalatedVersion" = NULL
+       WHERE "id" = ${row.id} AND "reconcileEscalation" IS NOT NULL`;
+  } catch (err) {
+    logger.warn(
+      { paymentId: row.id, errName: err instanceof Error ? err.name : "unknown" },
+      "reconcile: could not clear an escalation",
+    );
+  }
 }

@@ -408,8 +408,9 @@ const apiSchema = z.object({
   // The payments reconciler (billing/reconcile.ts): compares Payment rows
   // whose Stripe outcome is unknown or stale against Stripe's own state and
   // repairs LOCAL rows only - it never creates a charge, refund or credit.
-  // OFF (the default) means DRY RUN: it reads Stripe, reports counts, writes
-  // nothing. Same contract as the affiliate execution flag.
+  // OFF (the default) means DRY RUN: it reads Stripe, reports counts, and
+  // writes no money and no status - only its memory of which contradictions
+  // it has already raised, so each is raised once, not every pass (#464).
   PAYMENTS_RECONCILE_ENABLED: boolish.default("false"),
   // Post-service checkout (collect the balance after the cut). OFF by default:
   // while false the entire /api/checkout surface answers 404 as if it does not

@@ -73,7 +73,9 @@ purchases (the app sells nothing; App Review notes say so).
   is told "declined". (`billing/stripeErrors.ts`)
 - **The reconciler reads, repairs local state, never moves money.** Search by
   our metadata for a reservation; retrieve by id for a known intent; escalate
-  contradictions; dry-run unless `PAYMENTS_RECONCILE_ENABLED=true`.
+  contradictions, each ONCE per row and row version (#464); dry-run unless
+  `PAYMENTS_RECONCILE_ENABLED=true`, and dry run writes no money or status -
+  only `Payment.reconcileEscalation*`, its memory of what it has raised.
   (`billing/reconcile.ts`, job `payments-reconcile` every 15 min, leased)
 - **One receipt per Stripe event id, on both endpoints.** Processed = duplicate
   (200, not re-applied); failed = re-applied on redelivery; in-flight = 503.
@@ -222,7 +224,7 @@ gates should be re-run.
 | `AFFILIATE_PUBLIC_APPLICATIONS_ENABLED` | false | the application door is closed |
 | `AFFILIATE_QUALIFICATION_ENABLED` | false | qualification worker dry-runs |
 | `AFFILIATE_CREDIT_EXECUTION_ENABLED` | false | credit job dry-runs, no Stripe call |
-| `PAYMENTS_RECONCILE_ENABLED` (new) | false | reconciler reads Stripe, writes nothing |
+| `PAYMENTS_RECONCILE_ENABLED` (new) | false | reconciler reads Stripe, writes no money or status (only its escalation memory) |
 | `DRY_RUN` | true | no SMS leaves the building |
 | `REWARDS_ROTATE_ALL_ENABLED` | false | the corpus rotation cannot start |
 
@@ -284,5 +286,12 @@ Turn on `PAYMENTS_RECONCILE_ENABLED=true` in Railway after watching a few
 dry-run passes in the logs (`payments reconcile pass` with counts). It never
 creates money movement; the worst it does is mark a reservation `failed` when
 Stripe holds nothing for it after ten minutes. Escalations (`reconcile: …`
-error lines + Sentry) name ids only and repeat every pass until a person
-resolves the row - by design.
+error lines + Sentry) name ids only. The three that recur - several intents
+for one reservation, an intent Stripe cannot find, a collected row Stripe says
+is not collected - are raised ONCE per row (#464): they used to repeat every
+pass, ~384 a day for four old rows, and bury anything new. The row remembers
+it (`reconcileEscalation`, `reconcileEscalatedVersion`); a different
+contradiction, or any write to the row since, raises it again, and a clean read
+forgets it. Rows still in a contradiction:
+`SELECT id, "reconcileEscalation" FROM "Payment" WHERE "reconcileEscalation" IS NOT NULL`.
+The pass line still counts them under `escalated` every time.
