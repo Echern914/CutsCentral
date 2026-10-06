@@ -119,7 +119,7 @@ describe("approval", () => {
     expect(intents[0]!.shopId).toBe(shopId);
 
     sent.length = 0;
-    await runEmailOutbox({ batch: 100 });
+    await runEmailOutbox({ batch: 100, shopId });
     const mine = affiliateSends().filter((s) => s.idempotencyKey === key);
     expect(mine).toHaveLength(1);
     expect(mine[0]!.to).toBe(o.email);
@@ -138,7 +138,7 @@ describe("approval", () => {
 
     // A second pass has nothing left to send for this key.
     sent.length = 0;
-    await runEmailOutbox({ batch: 100 });
+    await runEmailOutbox({ batch: 100, shopId });
     expect(affiliateSends().filter((s) => s.idempotencyKey === key)).toHaveLength(0);
   });
 });
@@ -156,7 +156,7 @@ describe("rejection", () => {
     expect(res.ok).toBe(true);
 
     sent.length = 0;
-    await runEmailOutbox({ batch: 100 });
+    await runEmailOutbox({ batch: 100, shopId });
     const key = affiliateEmailKey("affiliate_rejected", appId);
     const mine = affiliateSends().filter((s) => s.idempotencyKey === key);
     expect(mine).toHaveLength(1);
@@ -237,7 +237,7 @@ describe("rewards", () => {
       return { accountId: account.id, rewardId: reward.id };
     });
     accountIds.push(accountId);
-    return { ownerEmail: o.email, accountId, rewardId, referredShopId, referredName };
+    return { shopId, ownerEmail: o.email, accountId, rewardId, referredShopId, referredName };
   }
 
   it("🔴 'your month off is ready' names the business only by its mask, never by name", async () => {
@@ -250,7 +250,7 @@ describe("rewards", () => {
       }),
     );
     sent.length = 0;
-    await runEmailOutbox({ batch: 100 });
+    await runEmailOutbox({ batch: 100, shopId: f.shopId });
     const key = affiliateEmailKey("affiliate_reward_available", f.rewardId);
     const mine = affiliateSends().filter((s) => s.idempotencyKey === key);
     expect(mine).toHaveLength(1);
@@ -276,7 +276,7 @@ describe("rewards", () => {
       });
     });
     sent.length = 0;
-    await runEmailOutbox({ batch: 100 });
+    await runEmailOutbox({ batch: 100, shopId: f.shopId });
     const key = affiliateEmailKey("affiliate_reward_available", f.rewardId);
     expect(affiliateSends().filter((s) => s.idempotencyKey === key)).toHaveLength(0);
     const row = await runAsOwner((tx) => tx.emailIntent.findUnique({ where: { idempotencyKey: key } }));
@@ -295,7 +295,7 @@ describe("rewards", () => {
     __setSendEmailForTests(undefined); // no stub => "unconfigured" in the test env
     try {
       sent.length = 0;
-      await runEmailOutbox({ batch: 100 });
+      await runEmailOutbox({ batch: 100, shopId: f.shopId });
     } finally {
       __setSendEmailForTests(async (input) => {
         sent.push(input);
