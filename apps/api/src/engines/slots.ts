@@ -188,6 +188,8 @@ export interface ComputeSlotsInput {
    * can fit service + add-ons (and the write-path check validates the same).
    */
   extraDurationMin?: number;
+  /** See FreeRangesInput.ignoreHorizon - the barber's own repeat only. */
+  ignoreHorizon?: boolean;
 }
 
 /** The slice of Service the grid walk consumes (per-candidate resolution). */
@@ -242,6 +244,15 @@ export interface FreeRangesInput {
    * false, so every existing caller keeps the online-booking behavior.
    */
   ignoreLeadTime?: boolean;
+  /**
+   * Skip the shop's bookingMaxDays ceiling. Like the lead time, the horizon is
+   * an ONLINE-booking rule (how far ahead a customer may book), and a barber
+   * booking a client every week for a year is not bound by it. Without this a
+   * barber's weekly x 52 repeat silently stopped at the 60-day default: about
+   * nine visits booked, the rest skipped as "not bookable". Default false; only
+   * the barber's own repeat sets it, never a customer-facing read.
+   */
+  ignoreHorizon?: boolean;
 }
 
 /** Everything computeOpenSlots' grid walk needs, plus the free ranges. */
@@ -296,7 +307,9 @@ export async function computeFreeRanges(
   const earliest =
     now.getTime() +
     (input.ignoreLeadTime ? 0 : shop.bookingLeadHours * 60 * MS_PER_MIN);
-  const maxHorizon = addDays(now, shop.bookingMaxDays).getTime();
+  const maxHorizon = input.ignoreHorizon
+    ? Number.POSITIVE_INFINITY
+    : addDays(now, shop.bookingMaxDays).getTime();
   const rangeStart = Math.max(input.fromDate.getTime(), now.getTime());
   const rangeEnd = Math.min(input.toDate.getTime(), maxHorizon);
   if (rangeEnd <= earliest) return null;
@@ -876,6 +889,7 @@ export async function computeOpenSlots(
     excludeAppointmentId: input.excludeAppointmentId,
     ignoreBooked: input.ignoreBooked,
     ignoreExternalBlocks: input.ignoreExternalBlocks,
+    ignoreHorizon: input.ignoreHorizon,
   });
   if (!ctx || !ctx.service) return [];
   const service = ctx.service;
@@ -1046,6 +1060,8 @@ export async function isSlotBookable(input: {
   extraDurationMin?: number;
   /** See ComputeSlotsInput.ignoreExternalBlocks - dashboard refusal wording only. */
   ignoreExternalBlocks?: boolean;
+  /** See FreeRangesInput.ignoreHorizon - the barber's own repeat only. */
+  ignoreHorizon?: boolean;
 }): Promise<boolean> {
   const target = input.startsAt.getTime();
   // A tight window bracketing the requested start keeps the computation cheap
@@ -1060,6 +1076,7 @@ export async function isSlotBookable(input: {
     excludeAppointmentId: input.excludeAppointmentId,
     extraDurationMin: input.extraDurationMin,
     ignoreExternalBlocks: input.ignoreExternalBlocks,
+    ignoreHorizon: input.ignoreHorizon,
   };
 
   // PASS 1 - ignoreBooked: validates HOURS/EXCEPTIONS/BOUNDS only. Whether the

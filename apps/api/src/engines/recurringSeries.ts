@@ -7,6 +7,7 @@ import { prisma, Prisma, runWithShop } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { isSlotBookable } from "./slots.js";
+import { blockedRangesByStaff, spanIsBlocked } from "./blockedTime.js";
 import { lockStaffAndAssertSlotFree } from "./bookingWrite.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { dispatchAfterCommit, recordMirrorIntent } from "./acuityMirror.js";
@@ -104,6 +105,15 @@ export type SkipReason =
    * occurrence will carry the same reason, which reads as the real diagnosis.
    */
   | "unavailable_external"
+  /**
+   * A CUSTOM-time occurrence on time the barber blocked off (a day off, a
+   * standing break, a block on the other calendar). Custom time lets a barber
+   * book outside their hours; it never meant "book through my vacation week".
+   * A weekly x 52 repeat used to land on every blocked day without a word.
+   * Occurrence 0 is exempt: the barber typed that time, exactly as a single
+   * Custom-time booking, which no native block refuses.
+   */
+  | "blocked"
   | "error";
 
 export interface SeriesResult {
@@ -136,10 +146,21 @@ export interface MaterializeInput {
   timezone: string;
   bookingBufferMin: number;
   // Gate each occurrence on isSlotBookable (hours/exceptions). false = barber
-  // customTime force (overlap is ALWAYS enforced regardless). Matches the
-  // single-create dashboard path, which only checks isSlotBookable when not
-  // customTime and never enforces lead/max bounds for the barber.
+  // customTime force (overlap is ALWAYS enforced regardless), which still
+  // skips time the barber BLOCKED OFF (reason "blocked").
   checkAvailability: boolean;
+  /**
+   * The barber's own repeat: the shop's online booking horizon
+   * (bookingMaxDays) does not cut it short. Never set by the public route.
+   */
+  ignoreHorizon?: boolean;
+  /**
+   * The customer's answers to the shop's booking questions, frozen onto every
+   * occurrence, as the single booking writes them. They were dropped: a
+   * standing appointment at a mobile business lost its service address on
+   * every visit.
+   */
+  intake?: Prisma.InputJsonValue;
   pattern: RecurrencePattern;
   anchor: Date; // occurrence 0's instant
   now?: Date;
@@ -214,6 +235,23 @@ export async function materializeSeries(
   const booked: SeriesResult["booked"] = [];
   const skipped: SeriesResult["skipped"] = [];
 
+  // Custom time skips the hours grid, but a generated date never lands on the
+  // barber's blocked-off time: read once for the whole span of the series
+  // (blockedTime.ts, the same rule that keeps specials off a vacation week).
+  const lastStart = occurrences[occurrences.length - 1]?.startsAt;
+  const blocked =
+    !input.checkAvailability && lastStart
+      ? (
+          await blockedRangesByStaff({
+            shopId: input.shopId,
+            staffIds: [input.staffId],
+            fromMs: input.anchor.getTime(),
+            toMs: lastStart.getTime() + 24 * 60 * MS_PER_MIN,
+            timezone: input.timezone,
+          })
+        ).get(input.staffId)
+      : undefined;
+
   for (const occ of occurrences) {
     const startsAt = occ.startsAt;
     // Each occurrence measures by ITS OWN slot's duration (a weekly-on-Friday
@@ -245,11 +283,16 @@ export async function materializeSeries(
         serviceId: input.serviceId,
         startsAt,
         now,
+        ignoreHorizon: input.ignoreHorizon,
       });
       if (!bookable) {
         skipped.push({ index: occ.index, startsAt, reason: "not_bookable" });
         continue;
       }
+    } else if (occ.index > 0 && spanIsBlocked(blocked, startsAt.getTime(), endsAt.getTime())) {
+      // A date the repeat GENERATED. The one the barber picked is theirs to keep.
+      skipped.push({ index: occ.index, startsAt, reason: "blocked" });
+      continue;
     }
 
     const price = effectivePriceAt(input.basePrice, {
@@ -297,6 +340,7 @@ export async function materializeSeries(
             endsAt,
             priceAtBooking: price ?? undefined,
             notes: input.notes ?? null,
+            ...(input.intake !== undefined ? { intake: input.intake } : {}),
             manageToken: randomToken(),
             seriesId: series.id,
             seriesOccurrenceIndex: occ.index,
