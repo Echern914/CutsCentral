@@ -122,12 +122,28 @@ describe("passing it on", () => {
     expect(mockClaim).not.toHaveBeenCalled();
   });
 
-  it("Take me off the waitlist: passes it on and leaves the list", async () => {
+  it("Take me off this waitlist: passes it on and leaves THIS request - never promises more than that", async () => {
     render(<ClaimOffer token="tok-8" offer={offer()} />);
-    fireEvent.click(screen.getByRole("button", { name: /take me off the waitlist/i }));
-    expect(await screen.findByText(/you're off the waitlist/i)).toBeTruthy();
-    expect(screen.getByText(/won't send you any more openings/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /take me off this waitlist/i }));
+    expect(await screen.findByText(/you're off this waitlist/i)).toBeTruthy();
+    expect(screen.getByText(/won't get openings for this request at Fade Lab/i)).toBeTruthy();
     expect(mockDecline).toHaveBeenCalledWith("tok-8", true);
+  });
+
+  it("🔴 a hold that already ended still lets them leave - with one answer whatever the server says", async () => {
+    for (const [token, offerView, answer] of [
+      ["tok-10", offer({ expiresAt: new Date(Date.now() - 1000).toISOString() }), { ok: true, left: true }],
+      // A link that never was: the card and the answer must not differ.
+      ["tok-11", null, { ok: false, reason: "expired" }],
+    ] as const) {
+      mockDecline.mockResolvedValueOnce(answer as never);
+      const view = render(<ClaimOffer token={token} offer={offerView} />);
+      expect(screen.getByText(/this hold has ended/i)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: /take me off this waitlist/i }));
+      expect(await screen.findByText(/if you were on this waitlist, you.re off it now/i)).toBeTruthy();
+      expect(mockDecline).toHaveBeenLastCalledWith(token, true);
+      view.unmount();
+    }
   });
 
   it("a hold that already ended collapses to the same generic ending", async () => {

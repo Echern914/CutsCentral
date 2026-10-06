@@ -315,43 +315,55 @@ export async function offerFreedSlot(
         Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${offerLockKey(slot.shopId)}))`,
       );
 
-      // 🔴 Lock the chosen entry and re-read it. The scan saw it WAITING, but
-      // the customer may be leaving at this moment (leaveWaitlistEntry), and
-      // a hold minted for someone who just left keeps the time from everyone
-      // for half an hour. FOR SHARE waits out a leave in flight, so the status
-      // read here is the committed one. A leave that starts after this point
-      // waits for our commit and then releases what we made
-      // (releaseRacedOffers). Nothing is waited on after this lock.
+      // 🔴 INSERT THE HOLD, THEN LOCK AND RE-READ THE ENTRY. The scan saw the
+      // entry WAITING, but the customer may be leaving at this moment
+      // (leaveWaitlistEntry, or the barber's Remove), and a hold minted for
+      // someone who just left keeps the time from everyone for half an hour.
+      // FOR SHARE waits out a leave in flight, so the status read is the
+      // committed one; anything not WAITING gets its hold deleted and the next
+      // person is tried. A leave that starts after this lock waits for our
+      // commit and then releases what we made (releaseRacedOffers).
+      //
+      // The ORDER is load-bearing. Locking the entry BEFORE the insert can
+      // deadlock: a leave that has just released an overlapping lapsed hold
+      // waits on our entry lock, while our insert's overlap check waits on
+      // that leave. Inserted first, we hold nothing a leave needs (advisory
+      // locks it never takes, a row it cannot see, and the foreign key's KEY
+      // SHARE, which its update does not conflict with).
       const skipped = new Set<string>();
-      let candidate: Awaited<ReturnType<typeof pickCandidate>> = null;
-      for (let attempt = 0; attempt < 5; attempt++) {
+      let made: {
+        offer: { id: string };
+        candidate: NonNullable<Awaited<ReturnType<typeof pickCandidate>>>;
+      } | null = null;
+      for (let attempt = 0; attempt < 5 && !made; attempt++) {
         const pick = await pickCandidate(tx, slot, now, skipped);
         if (!pick) break;
+        const offer = await tx.waitlistOffer.create({
+          data: {
+            shopId: slot.shopId,
+            entryId: pick.id,
+            staffId: slot.staffId,
+            serviceId: slot.serviceId,
+            startsAt: slot.startsAt,
+            endsAt: slot.endsAt,
+            tokenHash: hash,
+            status: "OFFERED",
+            expiresAt,
+          },
+          select: { id: true },
+        });
         const [row] = await tx.$queryRaw<{ status: string }[]>(
           Prisma.sql`SELECT status FROM "WaitlistEntry" WHERE id = ${pick.id} FOR SHARE`,
         );
         if (row?.status === "WAITING") {
-          candidate = pick;
-          break;
+          made = { offer, candidate: pick };
+        } else {
+          await tx.waitlistOffer.delete({ where: { id: offer.id } });
+          skipped.add(pick.id);
         }
-        skipped.add(pick.id);
       }
-      if (!candidate) return null;
-
-      const offer = await tx.waitlistOffer.create({
-        data: {
-          shopId: slot.shopId,
-          entryId: candidate.id,
-          staffId: slot.staffId,
-          serviceId: slot.serviceId,
-          startsAt: slot.startsAt,
-          endsAt: slot.endsAt,
-          tokenHash: hash,
-          status: "OFFERED",
-          expiresAt,
-        },
-        select: { id: true },
-      });
+      if (!made) return null;
+      const { offer, candidate } = made;
       // Same transaction as the hold itself: a slot held for someone with no
       // record of why is exactly the state F1 exists to prevent.
       await recordWaitlistEvent(tx, {
@@ -361,7 +373,8 @@ export async function offerFreedSlot(
         type: "offer.created",
         actor: SYSTEM_ACTOR,
         metadata: {
-          holdMinutes: HOLD_MINUTES,
+          // The REAL length: a hold is capped at the slot's start.
+          holdMinutes: Math.round((expiresAt.getTime() - now.getTime()) / 60_000),
           scanned: __lastScanStatsForTests.scanned,
           pages: __lastScanStatsForTests.pages,
         },
@@ -454,6 +467,23 @@ async function pickCandidate(
   // would refuse them, and a hold nobody can take is the next person's time
   // lost for the length of the hold. Loaded once for the whole walk.
   const blocks = await loadBookingBlocks(tx, slot.shopId);
+
+  // 🔴 "NEVER THIS EXACT SLOT AGAIN" IS PER PERSON, not only per entry. One
+  // person can hold two requests at a shop (Saturday, and also Tuesday), and
+  // the per-entry rule alone handed a time they had just passed on, or let
+  // lapse, straight to their OTHER request seconds later. Matched on email and
+  // the linked client only - never a phone alone, because a shared phone is
+  // not the same person.
+  const prior = await tx.waitlistOffer.findMany({
+    where: { shopId: slot.shopId, staffId: slot.staffId, startsAt: slot.startsAt },
+    select: { entry: { select: { email: true, clientId: true } } },
+  });
+  const priorEmails = new Set(
+    prior.map((p) => p.entry.email?.trim().toLowerCase()).filter((e): e is string => Boolean(e)),
+  );
+  const priorClients = new Set(
+    prior.map((p) => p.entry.clientId).filter((c): c is string => Boolean(c)),
+  );
 
   for (;;) {
     const and: Prisma.WaitlistEntryWhereInput[] = [
@@ -565,6 +595,16 @@ async function pickCandidate(
           );
           continue;
         }
+        if (
+          (c.email && priorEmails.has(c.email.trim().toLowerCase())) ||
+          (c.clientId && priorClients.has(c.clientId))
+        ) {
+          logger.debug(
+            { shopId: slot.shopId, entryId: c.id, code: "same_person_same_slot" },
+            "waitlist match: candidate skipped",
+          );
+          continue;
+        }
         const verdict = entryPrefsMatchSlot(c, slot, {
           shopTimezone: slot.timezone,
           now,
@@ -640,6 +680,11 @@ export interface OfferNotifyShop {
 export async function notifyOffer(params: {
   shop: OfferNotifyShop;
   offer: {
+    /**
+     * When given, the send first checks the hold is still live and its entry
+     * still on the list. Production callers always pass it.
+     */
+    offerId?: string;
     entryId: string;
     startsAt: Date;
     expiresAt: Date;
@@ -654,6 +699,23 @@ export async function notifyOffer(params: {
 }): Promise<void> {
   const { shop, offer, entry } = params;
   const now = params.now ?? new Date();
+  // 🔴 A hold minted in the same instant its person LEFT is let go right
+  // after (releaseRacedOffers) - but the caller of offerFreedSlot was already
+  // on its way here. Without this check the person who had just left was
+  // told "this spot is being held for you", and their link said expired.
+  if (offer.offerId) {
+    const live = await prisma.waitlistOffer.findFirst({
+      where: { id: offer.offerId, shopId: shop.id, status: "OFFERED" },
+      select: { entry: { select: { status: true } } },
+    });
+    if (!live || !(ACTIVE_WAITLIST_STATUSES as readonly string[]).includes(live.entry.status)) {
+      logger.info(
+        { shopId: shop.id, offerId: offer.offerId, code: "hold_gone_before_send" },
+        "waitlist offer not sent: the hold ended before it could be announced",
+      );
+      return;
+    }
+  }
   // No DRY_RUN check HERE on purpose: dry-run environments never CREATE an
   // offer in the first place (the slotOpened wiring and the worker's advance
   // are both gated), so by the time this runs the offer is real and the
@@ -675,7 +737,8 @@ export async function notifyOffer(params: {
       firstName: entry.firstName,
       shopName: shop.name,
       when,
-      holdMinutes: HOLD_MINUTES,
+      // The REAL hold: capped at the slot's start, so it can be under 30.
+      holdMinutes: Math.max(1, Math.round((offer.expiresAt.getTime() - now.getTime()) / 60_000)),
       approvalRequired: offer.approvalRequired,
     });
     const res = await sendPushToClient({
@@ -1386,6 +1449,7 @@ export async function advanceFreedSlot(
   await notifyOffer({
     shop: { id: shop.id, name: shop.name, slug: shop.slug, timezone: shop.timezone },
     offer: {
+      offerId: next.offerId,
       entryId: next.entryId,
       startsAt: offer.startsAt,
       expiresAt: next.expiresAt,
@@ -1624,52 +1688,59 @@ export async function declineOffer(params: {
       },
     });
     if (!offer) return { outcome: "invalid" };
-    if (offer.status !== "OFFERED") return { outcome: "expired" };
 
-    if (offer.expiresAt.getTime() <= now.getTime()) {
-      // Too late to pass on - it already lapsed. Record it as the lapse it
-      // is, and still hand it onward (the sweep would have; it won't now).
-      await tx.waitlistOffer.update({ where: { id: offer.id }, data: { status: "EXPIRED" } });
-      await recordWaitlistEvent(tx, {
-        shopId: offer.shopId,
-        entryId: offer.entryId,
-        offerId: offer.id,
-        type: "offer.expired",
-        actor: CUSTOMER_ACTOR,
-        metadata: { at: "decline" },
-      });
+    // Pass the hold on, if it is still one.
+    let passed = false;
+    if (offer.status === "OFFERED") {
+      if (offer.expiresAt.getTime() <= now.getTime()) {
+        // Too late to pass on - it already lapsed. Record it as the lapse it
+        // is, and still hand it onward (the sweep would have; it won't now).
+        await tx.waitlistOffer.update({ where: { id: offer.id }, data: { status: "EXPIRED" } });
+        await recordWaitlistEvent(tx, {
+          shopId: offer.shopId,
+          entryId: offer.entryId,
+          offerId: offer.id,
+          type: "offer.expired",
+          actor: CUSTOMER_ACTOR,
+          metadata: { at: "decline" },
+        });
+      } else {
+        await tx.waitlistOffer.update({ where: { id: offer.id }, data: { status: "RELEASED" } });
+        await recordWaitlistEvent(tx, {
+          shopId: offer.shopId,
+          entryId: offer.entryId,
+          offerId: offer.id,
+          type: "offer.released",
+          actor: CUSTOMER_ACTOR,
+          metadata: { code: "declined", via: "offer_page" },
+        });
+        passed = true;
+      }
       ended = spanOf(offer);
-      return { outcome: "expired" };
     }
 
-    await tx.waitlistOffer.update({ where: { id: offer.id }, data: { status: "RELEASED" } });
-    await recordWaitlistEvent(tx, {
-      shopId: offer.shopId,
-      entryId: offer.entryId,
-      offerId: offer.id,
-      type: "offer.released",
-      actor: CUSTOMER_ACTOR,
-      metadata: { code: "declined", via: "offer_page" },
-    });
-    ended = spanOf(offer);
-
-    if (!params.leave) return { outcome: "declined", left: false };
-    // Offer row first, entry second: claimOffer's order.
-    const cas = await tx.waitlistEntry.updateMany({
-      where: { id: offer.entryId, status: { in: [...ACTIVE_WAITLIST_STATUSES] } },
-      data: { status: "REMOVED", dedupeKey: null },
-    });
-    if (cas.count > 0) {
-      await recordWaitlistEvent(tx, {
-        shopId: offer.shopId,
-        entryId: offer.entryId,
-        type: "entry.cancelled_by_customer",
-        actor: CUSTOMER_ACTOR,
-        metadata: { source: "offer_page", fromStatus: offer.entry.status, toStatus: "REMOVED" },
+    // 🔴 LEAVING WORKS FROM ANY OFFER LINK, live or not. The offer email is
+    // the only message most waitlisters have, and most of them read it after
+    // the hold has lapsed; the token is the same proof of who they are either
+    // way. Offer row first, entry second: claimOffer's order.
+    if (params.leave) {
+      const cas = await tx.waitlistEntry.updateMany({
+        where: { id: offer.entryId, status: { in: [...ACTIVE_WAITLIST_STATUSES] } },
+        data: { status: "REMOVED", dedupeKey: null },
       });
-      leftEntry = { shopId: offer.shopId, entryId: offer.entryId };
+      if (cas.count > 0) {
+        await recordWaitlistEvent(tx, {
+          shopId: offer.shopId,
+          entryId: offer.entryId,
+          type: "entry.cancelled_by_customer",
+          actor: CUSTOMER_ACTOR,
+          metadata: { source: "offer_page", fromStatus: offer.entry.status, toStatus: "REMOVED" },
+        });
+        leftEntry = { shopId: offer.shopId, entryId: offer.entryId };
+        return { outcome: "declined", left: true };
+      }
     }
-    return { outcome: "declined", left: cas.count > 0 };
+    return passed ? { outcome: "declined", left: false } : { outcome: "expired" };
   });
 
   // (Assigned inside the transaction callback, which TS cannot follow.)
@@ -1682,7 +1753,10 @@ export async function declineOffer(params: {
       code: "left",
       via: "offer_page",
       actor: CUSTOMER_ACTOR,
-    }).catch(() => [] as OfferSpan[]);
+    }).catch((err) => {
+      logger.error({ err, shopId: left.shopId }, "waitlist decline: raced-offer pass failed");
+      return [] as OfferSpan[];
+    });
     spans.push(...raced);
   }
   await advanceEach(spans, now);

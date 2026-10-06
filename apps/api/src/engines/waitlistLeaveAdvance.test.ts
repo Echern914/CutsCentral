@@ -9,6 +9,7 @@ import {
   declineOffer,
   HOLD_MS,
   leaveWaitlistEntry,
+  notifyOffer,
   offerFreedSlot,
   offerLockKey,
   type FreedSlot,
@@ -348,7 +349,7 @@ describe("a claim that ends a hold moves it on", () => {
 });
 
 describe("holds", () => {
-  it("🔴 never outlive the time they hold", async () => {
+  it("🔴 never outlive the time they hold, and say their real length", async () => {
     await makeEntry();
     // A grid slot, offered 20 minutes before it starts (the clock is injected).
     const slot = freshSlot();
@@ -356,6 +357,106 @@ describe("holds", () => {
     const held = await offerTo(slot, now);
     expect(held.expiresAt.getTime()).toBe(slot.startsAt.getTime());
     expect(held.expiresAt.getTime()).toBeLessThan(now.getTime() + HOLD_MS);
+    const created = await prisma.waitlistEvent.findFirstOrThrow({
+      where: { offerId: held.offerId, type: "offer.created" },
+    });
+    expect((created.metadata as { holdMinutes: number }).holdMinutes).toBe(20);
+  });
+});
+
+describe("the same person never gets the same time twice", () => {
+  it("🔴 a time someone passed on does not bounce to their other request", async () => {
+    const shared = `twice-${randomToken(5)}@test.local`;
+    const first = await makeEntry({ email: shared });
+    const second = await makeEntry({ email: shared.toUpperCase(), serviceId: null }); // their other request
+    const someoneElse = await makeEntry();
+    const held = await offerTo(freshSlot());
+    expect(held.entryId).toBe(first.id);
+
+    await declineOffer({ token: held.token, leave: false });
+    expect(await liveOffersFor(second.id)).toHaveLength(0);
+    expect(await liveOffersFor(someoneElse.id)).toHaveLength(1);
+  });
+});
+
+describe("the announcement checks the hold is still there", () => {
+  it("🔴 a hold that ended before it was announced is never announced", async () => {
+    captureEmails();
+    const entry = await makeEntry();
+    const held = await offerTo(freshSlot());
+    await prisma.waitlistOffer.update({ where: { id: held.offerId }, data: { status: "RELEASED" } });
+    await notifyOffer({
+      shop: { id: shopId, name: "Leave Cuts", slug: null, timezone: TZ },
+      offer: {
+        offerId: held.offerId,
+        entryId: entry.id,
+        startsAt: new Date(),
+        expiresAt: held.expiresAt,
+        serviceName: null,
+        staffName: null,
+        approvalRequired: false,
+      },
+      entry: { firstName: "Leave", email: entry.email, clientId: null },
+      token: held.token,
+    });
+    expect(sent).toHaveLength(0);
+    expect((await prisma.waitlistEntry.findUniqueOrThrow({ where: { id: entry.id } })).notifiedAt).toBeNull();
+  });
+
+  it("🔴 nor is one whose person has left the list", async () => {
+    captureEmails();
+    const entry = await makeEntry();
+    const held = await offerTo(freshSlot());
+    await prisma.waitlistEntry.update({ where: { id: entry.id }, data: { status: "REMOVED" } });
+    await notifyOffer({
+      shop: { id: shopId, name: "Leave Cuts", slug: null, timezone: TZ },
+      offer: {
+        offerId: held.offerId,
+        entryId: entry.id,
+        startsAt: new Date(),
+        expiresAt: held.expiresAt,
+        serviceName: null,
+        staffName: null,
+        approvalRequired: false,
+      },
+      entry: { firstName: "Leave", email: entry.email, clientId: null },
+      token: held.token,
+    });
+    expect(sent).toHaveLength(0);
+  });
+});
+
+describe("leaving from an offer link that is no longer live", () => {
+  it("🔴 works after the hold was let go (most people read the email late)", async () => {
+    const entry = await makeEntry();
+    const held = await offerTo(freshSlot());
+    await prisma.waitlistOffer.update({ where: { id: held.offerId }, data: { status: "EXPIRED" } });
+    const res = await declineOffer({ token: held.token, leave: true });
+    expect(res).toEqual({ outcome: "declined", left: true });
+    expect(await statusOf(entry.id)).toBe("REMOVED");
+  });
+
+  it("works on a hold that lapsed a moment ago, and still moves that time on", async () => {
+    const entry = await makeEntry();
+    const next = await makeEntry();
+    const held = await offerTo(freshSlot());
+    const res = await declineOffer({
+      token: held.token,
+      leave: true,
+      now: new Date(held.expiresAt.getTime() + 1000),
+    });
+    expect(res).toEqual({ outcome: "declined", left: true });
+    expect(await statusOf(entry.id)).toBe("REMOVED");
+    expect(await liveOffersFor(next.id)).toHaveLength(1);
+  });
+
+  it("a hold they already booked leaves the booking alone", async () => {
+    const entry = await makeEntry();
+    const held = await offerTo(freshSlot());
+    expect((await claimOffer({ token: held.token })).outcome).toBe("claimed");
+    const res = await declineOffer({ token: held.token, leave: true });
+    expect(res).toEqual({ outcome: "expired" });
+    expect(await statusOf(entry.id)).toBe("BOOKED");
   });
 });
 

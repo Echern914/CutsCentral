@@ -361,10 +361,13 @@ describe("status updates", () => {
     expect(row.bookedAppointmentId).toBeNull();
   });
 
-  it("🔴 Remove lets go of the time held for them, and it goes to the next person", async () => {
-    // Its own shop: the offer engine picks the earliest WAITING entry, and the
-    // shared shop above is full of them.
-    const own = await signUpShop("Remove Cuts");
+  /**
+   * A shop of its own with one live hold for `first` and `second` next in
+   * line. Its own shop because the offer engine picks the earliest WAITING
+   * entry, and the shared shop above is full of them.
+   */
+  async function shopWithAHold(name: string) {
+    const own = await signUpShop(name);
     extraShops.push(own);
     await prisma.shop.update({
       where: { id: own.shopId },
@@ -391,38 +394,70 @@ describe("status updates", () => {
         endMin: 1440,
       })),
     });
-    const entry = (shopIdFor: string, name: string) =>
+    const entry = (label: string) =>
       prisma.waitlistEntry.create({
-        data: { shopId: shopIdFor, firstName: name, email: `${name}-${randomToken(4)}@test.local` },
+        data: { shopId: own.shopId, firstName: label, email: `${label}-${randomToken(4)}@test.local` },
         select: { id: true },
       });
-    const removed = await entry(own.shopId, "first");
-    const next = await entry(own.shopId, "second");
+    const first = await entry("first");
+    const second = await entry("second");
     const startsAt = new Date(Math.ceil((Date.now() + 72 * 3600_000) / 1800_000) * 1800_000);
-
-    __setAdvanceForTests(true);
-    try {
-      const held = await offerFreedSlot(
-        {
-          shopId: own.shopId,
-          staffId: sam.id,
-          serviceId: svc.id,
-          startsAt,
-          endsAt: new Date(startsAt.getTime() + 30 * 60_000),
-          timezone: TZ,
-          bufferMin: 0,
-        },
-        new Date(),
-      );
-      expect(held.outcome === "offered" && held.entryId).toBe(removed.id);
-
-      const res = await setStatus(removed.id, "REMOVED", own.cookie);
-      expect(res.status).toBe(200);
-      const live = await prisma.waitlistOffer.findMany({
+    const held = await offerFreedSlot(
+      {
+        shopId: own.shopId,
+        staffId: sam.id,
+        serviceId: svc.id,
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+        timezone: TZ,
+        bufferMin: 0,
+      },
+      new Date(),
+    );
+    expect(held.outcome === "offered" && held.entryId).toBe(first.id);
+    const liveHolds = () =>
+      prisma.waitlistOffer.findMany({
         where: { shopId: own.shopId, status: "OFFERED" },
         select: { entryId: true, startsAt: true },
       });
-      expect(live).toEqual([{ entryId: next.id, startsAt }]);
+    return { own, staffId: sam.id, serviceId: svc.id, first, second, startsAt, liveHolds };
+  }
+
+  it("🔴 Remove lets go of the time held for them, and it goes to the next person", async () => {
+    __setAdvanceForTests(true);
+    try {
+      const s = await shopWithAHold("Remove Cuts");
+      const res = await setStatus(s.first.id, "REMOVED", s.own.cookie);
+      expect(res.status).toBe(200);
+      expect(await s.liveHolds()).toEqual([{ entryId: s.second.id, startsAt: s.startsAt }]);
+    } finally {
+      __setAdvanceForTests(undefined);
+    }
+  });
+
+  it("🔴 booking them from the board at ANOTHER time lets go of their hold too", async () => {
+    __setAdvanceForTests(true);
+    try {
+      const s = await shopWithAHold("Board Book Cuts");
+      // The barber calls them and books a different day, straight from the board.
+      const otherDay = new Date(s.startsAt.getTime() + 24 * 3600_000);
+      const res = await request(app)
+        .post("/api/booking/appointments")
+        .set("Cookie", s.own.cookie)
+        .send({
+          staffId: s.staffId,
+          serviceId: s.serviceId,
+          startsAt: otherDay.toISOString(),
+          firstName: "First",
+          customTime: true,
+          waitlistEntryId: s.first.id,
+        });
+      expect(res.status).toBe(201);
+      expect((await prisma.waitlistEntry.findUniqueOrThrow({ where: { id: s.first.id } })).status).toBe(
+        "BOOKED",
+      );
+      // Their old hold is gone, and the time went to the next person.
+      expect(await s.liveHolds()).toEqual([{ entryId: s.second.id, startsAt: s.startsAt }]);
     } finally {
       __setAdvanceForTests(undefined);
     }

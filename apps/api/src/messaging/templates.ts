@@ -1274,7 +1274,7 @@ export function buildWaitlistOfferCustomerEmail(params: {
       `${params.staffName ? ` with ${params.staffName}` : ""}, and it's being held just for you ` +
       `until ${params.holdUntil}. ${act} ` +
       `If the time doesn't work, open the same link and tap "Pass it to the next person" so they get it sooner, ` +
-      `or "Take me off the waitlist" to stop these. Or do nothing, and the hold lapses on its own.`,
+      `or "Take me off this waitlist" to stop offers for this request. Or do nothing, and the hold lapses on its own.`,
     html: appointmentEmailHtml({
       heading: "This spot is being held for you",
       intro,

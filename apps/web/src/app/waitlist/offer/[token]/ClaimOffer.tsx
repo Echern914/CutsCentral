@@ -38,6 +38,8 @@ export function ClaimOffer({
     | { phase: "contact_shop" }
     /** They passed it on; `left` = and came off the waitlist. */
     | { phase: "declined"; left: boolean }
+    /** Asked to leave from a dead link: one neutral answer, whatever happened. */
+    | { phase: "left_quietly" }
     | { phase: "error" }
   >({ phase: "idle" });
   const [email, setEmail] = useState(offer?.email ?? "");
@@ -69,15 +71,44 @@ export function ClaimOffer({
     }).format(new Date(offer.startsAt));
   }, [offer]);
 
+  if (state.phase === "left_quietly") {
+    return (
+      <div role="status" className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+        <h1 className="font-display text-2xl">Done</h1>
+        <p className="mt-2 text-sm text-muted">
+          If you were on this waitlist, you&rsquo;re off it now and won&rsquo;t
+          get openings for it any more.
+        </p>
+      </div>
+    );
+  }
+
   if (!offer || state.phase === "expired" || (state.phase === "idle" && msLeft <= 0)) {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
         <h1 className="font-display text-2xl">This hold has ended</h1>
         <p className="mt-2 text-sm text-muted">
-          Held spots are only saved for 30 minutes, so this link is no longer
+          Held spots are only saved for a short time, so this link is no longer
           active — the time may have been offered to the next person in line.
-          You&rsquo;re welcome to book normally or rejoin the waitlist.
+          You&rsquo;re welcome to book normally.
         </p>
+        {/* Most people read the offer email after its hold has lapsed, and it
+            is their only message - so leaving still works from here. The
+            answer is the same whatever the server says, so this card never
+            reveals whether a link was ever valid. */}
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() =>
+            start(async () => {
+              await declineOfferAction(token, true);
+              setState({ phase: "left_quietly" });
+            })
+          }
+          className="mt-4 text-xs text-muted underline-offset-2 hover:text-offwhite hover:underline disabled:opacity-50"
+        >
+          Take me off this waitlist
+        </button>
       </div>
     );
   }
@@ -136,12 +167,12 @@ export function ClaimOffer({
     return (
       <div role="status" className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
         <h1 className="font-display text-2xl">
-          {state.left ? "You're off the waitlist" : "Passed on, thanks"}
+          {state.left ? "You're off this waitlist" : "Passed on, thanks"}
         </h1>
         <p className="mt-2 text-sm text-muted">
           {state.left
-            ? `${offer.shopName} won't send you any more openings. You're welcome to book through their page any time.`
-            : `${when} goes to the next person in line. You're still on the waitlist for the next opening.`}
+            ? `You won't get openings for this request at ${offer.shopName} any more. You're welcome to book through their page any time.`
+            : `${when} goes to the next person in line. You're still on the waitlist.`}
         </p>
       </div>
     );
@@ -244,7 +275,7 @@ export function ClaimOffer({
           onClick={() => decline(true)}
           className="text-muted underline-offset-2 hover:text-offwhite hover:underline disabled:opacity-50"
         >
-          Take me off the waitlist
+          Take me off this waitlist
         </button>
       </div>
     </div>
