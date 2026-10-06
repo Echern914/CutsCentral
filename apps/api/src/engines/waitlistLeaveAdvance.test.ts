@@ -5,6 +5,7 @@ import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 import {
   __setAdvanceForTests,
+  __setConnectEnabledForTests,
   claimOffer,
   declineOffer,
   HOLD_MS,
@@ -14,7 +15,7 @@ import {
   offerLockKey,
   type FreedSlot,
 } from "./waitlistOffer.js";
-import { lockStaffAndAssertSlotFree } from "./bookingWrite.js";
+import { lockStaffAndAssertSlotFree, SlotTakenError } from "./bookingWrite.js";
 import { sha256Hex } from "./waitlistJoin.js";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 import {
@@ -514,6 +515,146 @@ describe("races", () => {
     expect(await liveOffersFor(leaver.id)).toHaveLength(0);
     // Whichever order it ran in, the time ends up with the next person.
     expect(await liveOffersFor(next.id)).toHaveLength(1);
+  });
+});
+
+/**
+ * 🔴 A CLAIM AND A BARBER'S BOOKING OVER THE HOLD NEVER DEADLOCK. The claim
+ * used to lock its offer row first and ask for the barber's lock after; the
+ * barber's write takes the barber's lock and then releases that row.
+ */
+describe("a claim against a barber writing over the hold", () => {
+  it("🔴 queue instead of deadlocking: one booking, no 500", async () => {
+    await makeEntry();
+    const slot = freshSlot();
+    const held = await offerTo(slot);
+    const barber = () =>
+      prisma.$transaction(async (tx) => {
+        await lockStaffAndAssertSlotFree(tx, {
+          staffId,
+          shopId,
+          startsAt: slot.startsAt,
+          endsAt: slot.endsAt,
+          bufferMin: 0,
+          serviceDayLimit: null,
+          walkInCapacity: "ignore",
+          overrideWaitlistHolds: true,
+          now: new Date(),
+        });
+        return tx.appointment.create({
+          data: {
+            shopId,
+            staffId,
+            serviceId,
+            firstName: "Booked by the barber",
+            status: "BOOKED",
+            startsAt: slot.startsAt,
+            endsAt: slot.endsAt,
+            manageToken: randomToken(),
+          },
+          select: { id: true },
+        });
+      });
+
+    const { results, settledEarly } = await raceBehindRowLock<unknown>("WaitlistOffer", held.offerId, [
+      () => claimOffer({ token: held.token }),
+      barber,
+    ]);
+    expect(settledEarly).toBe(0);
+    expect(JSON.stringify(results)).not.toMatch(/40P01|deadlock/i);
+    for (const r of results) {
+      if (r.status === "rejected") expect(r.reason).toBeInstanceOf(SlotTakenError);
+    }
+    const booked = await prisma.appointment.count({
+      where: { shopId, staffId, startsAt: slot.startsAt, status: { in: ["BOOKED", "PENDING"] } },
+    });
+    expect(booked).toBe(1);
+  });
+
+  it("a second tap of the same link, queued behind the first, says the hold is over - not 'taken'", async () => {
+    await makeEntry();
+    const held = await offerTo(freshSlot());
+    const { results, settledEarly } = await raceBehindRowLock("WaitlistOffer", held.offerId, [
+      () => claimOffer({ token: held.token }),
+      () => claimOffer({ token: held.token }),
+    ]);
+    expect(settledEarly).toBe(0);
+    const outcomes = results.map((r) => (r.status === "fulfilled" ? r.value.outcome : "rejected")).sort();
+    expect(outcomes).toEqual(["claimed", "expired"]);
+  });
+});
+
+/**
+ * 🔴 NOTHING IS OFFERED THAT THE BOOKING PAGE WOULD HOLD FOR MONEY OR A CARD.
+ * The gate knew only pay-ahead and deposit, and read the service's BASE price:
+ * a shop requiring a saved card got waitlist bookings with no card, and a
+ * service priced only by a weekday override was free here and paid there.
+ */
+describe("the money gate", () => {
+  async function withShop(data: Record<string, unknown>, run: () => Promise<void>) {
+    const before = await prisma.shop.findUniqueOrThrow({
+      where: { id: shopId },
+      select: {
+        paymentsMode: true,
+        connectChargesEnabled: true,
+        stripeConnectAccountId: true,
+        requireCardToBook: true,
+        depositAmountCents: true,
+      },
+    });
+    __setConnectEnabledForTests(true);
+    await prisma.shop.update({ where: { id: shopId }, data });
+    try {
+      await run();
+    } finally {
+      __setConnectEnabledForTests(undefined);
+      await prisma.shop.update({ where: { id: shopId }, data: before });
+    }
+  }
+  const connected = { connectChargesEnabled: true, stripeConnectAccountId: "acct_test_gate" };
+
+  it("🔴 a shop that requires a saved card gets no waitlist offer", async () => {
+    await makeEntry();
+    await withShop({ ...connected, paymentsMode: "card_on_file", requireCardToBook: true }, async () => {
+      expect((await offerFreedSlot(freshSlot(), new Date())).outcome).toBe("requires_deposit");
+    });
+  });
+
+  it("a card shop with the card optional still offers - the claim books like Confirm does", async () => {
+    await makeEntry();
+    await withShop({ ...connected, paymentsMode: "card_on_file", requireCardToBook: false }, async () => {
+      expect((await offerFreedSlot(freshSlot(), new Date())).outcome).toBe("offered");
+    });
+  });
+
+  it("🔴 a deposit service priced only by a weekday override is not offered as if free", async () => {
+    await makeEntry({ serviceId: null });
+    const override = await prisma.service.create({
+      data: {
+        shopId,
+        name: "Override",
+        durationMin: 30,
+        price: null,
+        priceOverrides: Object.fromEntries(Array.from({ length: 7 }, (_, d) => [String(d), 40])),
+      },
+      select: { id: true },
+    });
+    await prisma.serviceStaff.create({ data: { shopId, serviceId: override.id, staffId } });
+    await withShop({ ...connected, paymentsMode: "deposit", depositAmountCents: 1000 }, async () => {
+      const res = await offerFreedSlot(freshSlot({ serviceId: override.id }), new Date());
+      expect(res.outcome).toBe("requires_deposit");
+    });
+  });
+
+  it("a claim at a shop that turned on Require a card mid-hold is refused and lets the time go", async () => {
+    await makeEntry();
+    const held = await offerTo(freshSlot());
+    await withShop({ ...connected, paymentsMode: "card_on_file", requireCardToBook: true }, async () => {
+      expect((await claimOffer({ token: held.token })).outcome).toBe("deposit_required");
+    });
+    expect((await prisma.waitlistOffer.findUniqueOrThrow({ where: { id: held.offerId } })).status).toBe(
+      "RELEASED",
+    );
   });
 });
 

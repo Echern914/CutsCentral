@@ -276,6 +276,68 @@ describe("booking it", () => {
   });
 });
 
+/**
+ * 🔴 A CLAIM AND A BARBER'S BOOKING OVER THE HOLD NEVER DEADLOCK.
+ *
+ * The claim used to lock the opening row FIRST and ask for the barber's lock
+ * after; a barber writing over the hold (a booking, or Undo on the cancel that
+ * freed it) takes the barber's lock and THEN releases that row. Opposite
+ * orders: Postgres killed one of them (40P01) and it surfaced as a 500.
+ * The barrier holds the row so both are mid-flight before either finishes.
+ */
+describe("a claim against a barber writing over the hold", () => {
+  const barberBooks = (startsAt: Date) =>
+    prisma.$transaction(async (tx) => {
+      await lockStaffAndAssertSlotFree(tx, {
+        staffId,
+        shopId,
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+        bufferMin: 0,
+        serviceDayLimit: null,
+        walkInCapacity: "ignore",
+        overrideWaitlistHolds: true,
+        now: new Date(),
+      });
+      return tx.appointment.create({
+        data: {
+          shopId,
+          staffId,
+          serviceId,
+          firstName: "Booked by the barber",
+          status: "BOOKED",
+          startsAt,
+          endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+          manageToken: randomToken(),
+        },
+        select: { id: true },
+      });
+    });
+
+  it("🔴 queue instead of deadlocking: one booking, no 500", async () => {
+    const startsAt = freshStart();
+    const held = await hold(startsAt);
+    expect(held.status).toBe(201);
+    const openingId = held.body.openingId as string;
+
+    const { results, settledEarly } = await raceBehindRowLock<unknown>("TierOpening", openingId, [
+      () => claimTierOpening({ accountId: gold.accountId, openingId }),
+      () => barberBooks(startsAt),
+    ]);
+    expect(settledEarly).toBe(0);
+    // Nothing died of a deadlock. The barber may lose to an appointment the
+    // claim already made (that is the guard, not a deadlock) - nothing else.
+    for (const r of results) {
+      if (r.status === "rejected") expect(r.reason).toBeInstanceOf(SlotTakenError);
+    }
+    expect(JSON.stringify(results)).not.toMatch(/40P01|deadlock/i);
+    const booked = await prisma.appointment.count({
+      where: { shopId, staffId, startsAt, status: { in: ["BOOKED", "PENDING"] } },
+    });
+    expect(booked).toBe(1);
+  });
+});
+
 describe("then anyone", () => {
   it("🔴 when the hold lapses the slot is simply bookable again - nothing has to run", async () => {
     const at = freshStart();

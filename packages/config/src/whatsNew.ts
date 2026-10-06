@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-06-held-times-need-a-card",
+    date: "2026-10-06",
+    kind: "fix",
+    title: "Waitlist and tier offers respect Require a card",
+    body:
+      "If you require a saved card to book, a waitlist offer or a time held for a tier could be booked without " +
+      "one. Those times now stay on your booking page instead, where the card step runs. Prices set by day or " +
+      "date now count too.",
+  },
+  {
     id: "2026-10-06-add-in-a-busy-hour",
     date: "2026-10-06",
     kind: "feature",
