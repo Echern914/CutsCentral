@@ -66,7 +66,11 @@ wall-clock timestamps long ago and now run ahead of the real calendar — e.g.
 rule is that a new migration must sort **after every migration that already
 exists**, so take the highest prefix on `main` and add one step. Naming a new
 migration with today's real date would sort it *before* a dozen already-applied
-migrations, which is the reordering hazard rather than the fix for it.
+migrations, which is the reordering hazard rather than the fix for it. In the
+same PR, set `packages/db/prisma/MIGRATION_HEAD` to the new folder's name: two
+PRs adding migrations in parallel then conflict there instead of shipping a
+duplicate number, which can never be renamed once applied (#456; enforced by
+`packages/config/src/migrationPrefixes.test.ts`).
 
 🔴 **Migrations read `DIRECT_URL`, not `DATABASE_URL`.** The datasource sets
 `directUrl = env("DIRECT_URL")`, so overriding only `DATABASE_URL` on a
@@ -82,7 +86,8 @@ before believing it migrated the test database.
 
 ## Gates
 
-CI runs Vercel builds only, so the local suites ARE the merge gate:
+CI (`.github/workflows/test.yml`) runs these on every PR, but a red run costs
+about half an hour, so run them locally before pushing:
 
 ```bash
 pnpm --filter @chairback/api test        # the big one; run it alone
