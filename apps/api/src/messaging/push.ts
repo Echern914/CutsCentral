@@ -309,6 +309,21 @@ export async function sendPushToClient(params: {
    * result it flips to FAILED so the audit trail shows the attempt.
    */
   auditNudgeId?: string;
+  /**
+   * false = write NO Nudge row. The Nudge ledger is the shop's MARKETING
+   * record: attribution credits the next booking to any nudge, and the
+   * dashboard and the R4 suppression count every row. A notification that is
+   * not marketing (an Auto-fill opening) must not show up as a "recovered"
+   * regular or quiet the next real nudge. Its own audit trail is elsewhere.
+   * Default true.
+   */
+  ledger?: boolean;
+  /**
+   * true = phones running the app only, never a browser subscription. For a
+   * notification whose only action lives in the app: a browser has nowhere to
+   * take it, so counting it as delivered would be a lie. Default false.
+   */
+  appOnly?: boolean;
 }): Promise<PushSendResult> {
   const empty: PushSendResult = { sent: 0, pruned: 0, failed: 0, anyDelivered: false };
   const db = forShop(params.shopId);
@@ -316,7 +331,7 @@ export async function sendPushToClient(params: {
   let subs: DeliverableSub[];
   try {
     subs = await db.pushSubscription.findMany({
-      where: { clientId: params.clientId },
+      where: { clientId: params.clientId, ...(params.appOnly ? { kind: "expo" } : {}) },
       select: SUB_SELECT,
     });
   } catch (err) {
@@ -352,7 +367,9 @@ export async function sendPushToClient(params: {
 
   // Audit: one WEB_PUSH Nudge per delivered send, sharing the ledger with SMS so
   // attribution + history treat push as a first-class outbound message.
-  if (params.auditNudgeId) {
+  if (params.ledger === false) {
+    // Not marketing: kept off the ledger entirely (see `ledger` above).
+  } else if (params.auditNudgeId) {
     // Caller pre-created the row (in its own tx) - resolve it either way.
     await db.nudge
       .update({

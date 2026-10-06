@@ -31,6 +31,7 @@ import { sweepExpiredHolds } from "./engines/holdSweep.js";
 import { sweepExpiredPaymentHolds } from "./services/appointmentPaymentHold.js";
 import { sweepAbandonedTipIntents } from "./billing/tips.js";
 import { expireDueOffers } from "./engines/waitlistOffer.js";
+import { resendUnnotifiedOpenings } from "./engines/tierOpenings.js";
 import { expireDeadWaitlistEntries } from "./engines/waitlistExpiry.js";
 import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
 import { runDemoReset } from "./engines/demoReset.js";
@@ -336,11 +337,26 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
   // grid/guards already exclude expired holds - the cadence only decides how
   // fast the next person hears about the slot. Advancement respects DRY_RUN,
   // billing gates and the per-shop toggle inside the engine.
+  //
+  // The same lease tells tier-opening members a restart left untold
+  // (resendUnnotifiedOpenings) - same cadence, and a new cron with no job_lease
+  // seed row would never run in production. Each half runs even if the other
+  // throws, and each failure is REPORTED, not only logged: settling both means
+  // nothing reaches the job-level catch below, which is a cron job's only
+  // route to Sentry.
   {
     cronExpr: "*/2 * * * *",
     name: "waitlist-offer-expiry",
     ttlMs: 4 * MINUTE,
-    run: () => expireDueOffers(),
+    run: async () => {
+      const halves = ["expire-due-offers", "resend-unnotified-openings"] as const;
+      const results = await Promise.allSettled([expireDueOffers(), resendUnnotifiedOpenings()]);
+      results.forEach((r, i) => {
+        if (r.status !== "rejected") return;
+        logger.error({ err: r.reason, step: halves[i] }, "waitlist sweep half failed");
+        captureError(r.reason, { job: "waitlist-offer-expiry", step: halves[i] });
+      });
+    },
     failMsg: "waitlist offer expiry sweep failed",
   },
   // Waitlist: retire entries whose every preference window has passed, hourly
