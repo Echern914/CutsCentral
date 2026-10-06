@@ -3735,6 +3735,12 @@ model Payment {
   // claimed here once, whichever path saw it succeed first (services/tipPaid.ts).
   // Set once and never moved, it is also the "paid" time the receipt prints.
   tipAnnouncedAt         DateTime?
+  // The payments reconciler's memory of a contradiction it has already raised
+  // for this row (#464): which one, and the row's updatedAt when it was. Only
+  // billing/reconcile.ts writes these, with raw SQL so updatedAt never moves.
+  // Not money, not status - so the reconciler writes them even in dry run.
+  reconcileEscalation       String?
+  reconcileEscalatedVersion DateTime?
   // THE REFUND TERMS THIS BOOKING WAS PAID ON: true = what was taken at booking
   // is kept when the CLIENT cancels (Shop.depositNonRefundable, in deposit
   // mode). Snapshotted in the reservation insert, before Stripe is called, and
