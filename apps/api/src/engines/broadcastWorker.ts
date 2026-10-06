@@ -94,11 +94,10 @@ function backoffFor(attempts: number): number {
  * inlining it justified has been removed.
  *
  * PostgreSQL supports a parameterized LIMIT, including inside a subquery with
- * FOR UPDATE SKIP LOCKED. Measured against this exact query shape: eight due
- * rows, `LIMIT $n` bound to 1 claims one row, bound to 3 claims three. The
- * original diagnosis - a test asking for one row and being handed four - was
- * real, but the parameter was not the cause, and inlining is what actually
- * changed nothing while removing the driver's escaping.
+ * FOR UPDATE SKIP LOCKED. The original symptom - a test asking for one row
+ * and being handed four - was real, but the parameter was not the cause, and
+ * inlining changed nothing while removing the driver's escaping. The cause
+ * was the query SHAPE, under one plan: see claimDueSends (#445).
  *
  * So the value is bound again. This function stays because a cap derived from
  * our own constants is worth keeping on its own merits: it stops a caller
@@ -187,17 +186,63 @@ export function __setBroadcastSettlementFaultForTests(fn: (() => void) | undefin
 }
 
 /**
+ * Claim up to `batch` due recipients under one claim token, in ONE statement.
+ *
+ * 🔴 THE LOCKED SUB-SELECT RUNS EXACTLY ONCE (#445). It used to be
+ * `UPDATE ... WHERE "id" IN (SELECT ... LIMIT n FOR UPDATE SKIP LOCKED)`.
+ * PostgreSQL may plan that IN as a nested-loop semi-join that re-runs the
+ * sub-select for every row of the outer scan, and on each re-run the row lock
+ * skips the rows this same UPDATE has already changed - so LIMIT 1 hands back
+ * the next row, then the next: a pass asking for one recipient claimed all of
+ * them. Reproduced against Postgres 17 (four due rows, LIMIT 1, four claimed,
+ * the plan showing `Limit ... loops=4`). Which plan the planner picks depends
+ * on table statistics, which is why it came and went with the state of the
+ * test database. A MATERIALIZED CTE is computed once and only read after, so
+ * the LIMIT holds under any plan. claimShape.test.ts keeps the old shape out
+ * of every claim in this codebase.
+ */
+export function claimDueSends(
+  tx: Prisma.TransactionClient,
+  p: { now: Date; staleBefore: Date; batch: number; claimToken: string; shopId?: string },
+) {
+  return tx.$queryRaw<{ id: string; broadcastId: string; shopId: string; clientId: string }[]>(Prisma.sql`
+    WITH due AS MATERIALIZED (
+      SELECT s."id"
+        FROM "BroadcastSend" s
+        JOIN "Broadcast" b ON b."id" = s."broadcastId"
+       WHERE s."status" = 'PENDING'
+         AND b."status" IN ('QUEUED', 'SENDING')
+         ${p.shopId ? Prisma.sql`AND s."shopId" = ${p.shopId}` : Prisma.empty}
+         AND (s."nextAttemptAt" IS NULL
+              OR s."nextAttemptAt" <= ${p.now.toISOString()}::timestamp)
+         AND (s."claimedAt" IS NULL
+              OR s."claimedAt" < ${p.staleBefore.toISOString()}::timestamp)
+       ORDER BY s."nextAttemptAt" NULLS FIRST, s."createdAt"
+       LIMIT ${p.batch}
+       FOR UPDATE OF s SKIP LOCKED
+    )
+    UPDATE "BroadcastSend" t
+       SET "claimedAt" = ${p.now.toISOString()}::timestamp,
+           "claimToken" = ${p.claimToken},
+           "updatedAt" = now()
+      FROM due
+     WHERE t."id" = due."id"
+    RETURNING t."id", t."broadcastId", t."shopId", t."clientId"`);
+}
+
+/**
  * One pass. Claim what is due, attempt each, then finalise whatever finished.
  *
  * `now` is a parameter throughout so a test can age a claim or cross the
  * provider's idempotency window without sleeping for a day.
  *
- * `shopId` is for TESTS ONLY. It narrows the claim to one shop, so test files
- * running side by side cannot take each other's rows - under full-suite load
- * the global claim let broadcastWorker.test.ts and broadcasts.test.ts each
- * drain the other's broadcasts, and both went red at random. The scheduler
- * calls this with NO arguments, and scheduler.broadcastWorkerScope.test.ts pins
- * that: production always drains every shop.
+ * `shopId` is for TESTS ONLY. It narrows the claim to one shop, so a test
+ * counts only its own rows. (It was added in the belief that two test files
+ * were draining each other's rows; they cannot - API test files run one at a
+ * time - and the real cause of those flakes was the claim over-taking its
+ * LIMIT, fixed in claimDueSends.) The scheduler calls this with NO arguments,
+ * and scheduler.broadcastWorkerScope.test.ts pins that: production always
+ * drains every shop.
  */
 export async function runBroadcastWorker(
   opts: { now?: Date; batch?: number; shopId?: string } = {},
@@ -230,27 +275,7 @@ export async function runBroadcastWorker(
   // times before dispatching would exhaust a recipient's budget without the
   // provider ever having been contacted.
   const claimed = await runAsOwner((tx) =>
-    tx.$queryRaw<{ id: string; broadcastId: string; shopId: string; clientId: string }[]>(Prisma.sql`
-      UPDATE "BroadcastSend"
-         SET "claimedAt" = ${now.toISOString()}::timestamp,
-             "claimToken" = ${claimToken},
-             "updatedAt" = now()
-       WHERE "id" IN (
-         SELECT s."id"
-           FROM "BroadcastSend" s
-           JOIN "Broadcast" b ON b."id" = s."broadcastId"
-          WHERE s."status" = 'PENDING'
-            AND b."status" IN ('QUEUED', 'SENDING')
-            ${opts.shopId ? Prisma.sql`AND s."shopId" = ${opts.shopId}` : Prisma.empty}
-            AND (s."nextAttemptAt" IS NULL
-                 OR s."nextAttemptAt" <= ${now.toISOString()}::timestamp)
-            AND (s."claimedAt" IS NULL
-                 OR s."claimedAt" < ${staleBefore.toISOString()}::timestamp)
-          ORDER BY s."nextAttemptAt" NULLS FIRST, s."createdAt"
-          LIMIT ${batch}
-          FOR UPDATE OF s SKIP LOCKED
-       )
-      RETURNING "id", "broadcastId", "shopId", "clientId"`),
+    claimDueSends(tx, { now, staleBefore, batch, claimToken, shopId: opts.shopId }),
   );
 
   const result: BroadcastWorkerResult = {

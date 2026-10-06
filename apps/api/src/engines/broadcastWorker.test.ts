@@ -420,10 +420,14 @@ describe("🔴 a pass claims only what it asked for", () => {
      * binding the size as a query PARAMETER meant the limit was never applied,
      * and the fix inlined the number into the SQL. PostgreSQL does support a
      * parameterized LIMIT, including inside a subquery with FOR UPDATE SKIP
-     * LOCKED - measured against this very query shape, `LIMIT $n` bound to 1
-     * claims one row of eight and bound to 3 claims three. The binding is
-     * restored; this test goes on proving the behaviour either way, which is
-     * the point of testing the behaviour rather than the mechanism.
+     * LOCKED. The binding is restored.
+     *
+     * 🔴 THE REAL CAUSE (#445): the claim was `WHERE "id" IN (SELECT ...
+     * LIMIT n FOR UPDATE SKIP LOCKED)`, which a nested-loop plan re-runs per
+     * row, claiming past its LIMIT. The plan depends on table statistics, so
+     * this test failed only sometimes, only on a long-lived test database.
+     * The claim is now a CTE that runs once; claimLimit.test.ts forces that
+     * plan to prove it, and claimShape.test.ts keeps the shape out.
      */
     for (let i = 0; i < 4; i++) await makeClient();
     const id = await queued("email");
@@ -445,8 +449,8 @@ describe("🔴 a pass claims only what it asked for", () => {
   });
 
   it("refuses a nonsensical batch", async () => {
-    // boundedBatch is a CAP, not the thing that makes the SQL safe - the
-    // parameter binding does that. It still earns its place: it stops a caller
+    // boundedBatch is a CAP, not the thing that makes the claim safe - the
+    // claim's shape does that (#445). It still earns its place: it stops a caller
     // asking for a batch big enough to hold thousands of rows under one claim
     // token for the length of a pass.
     await makeClient();
@@ -456,11 +460,11 @@ describe("🔴 a pass claims only what it asked for", () => {
     expect(row!.status).toBe("SENT");
   });
 
-  // 🔴 THE SCOPE IS WHAT KEEPS TEST FILES FROM DRAINING EACH OTHER. Unscoped, a
-  // pass in this file claimed broadcasts.test.ts's rows under full-suite load
-  // ("expected 4 to be 1"), and that file watched its own send finish before it
-  // could read the progress. Production never passes a shop; that is pinned by
-  // scheduler.broadcastWorkerScope.test.ts.
+  // THE SCOPE KEEPS A TEST COUNTING ONLY ITS OWN ROWS. (It was added believing
+  // two test files drained each other's rows; they cannot - API test files run
+  // one at a time - and the "expected 4 to be 1" it was blamed for was the
+  // claim over-taking its LIMIT, #445.) Production never passes a shop; that is
+  // pinned by scheduler.broadcastWorkerScope.test.ts.
   it("a pass scoped to one shop leaves another shop's due rows alone", async () => {
     const otherOwner = await prisma.user.create({
       data: { email: `bw2-${randomToken(6)}@test.local`.toLowerCase(), passwordHash: password, name: "O" },

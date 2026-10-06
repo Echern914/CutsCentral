@@ -142,6 +142,17 @@ afterAll(async () => {
   delete process.env.CUSTOMER_ACCOUNTS_ENABLED;
   __resetEnvCacheForTests();
   if (accountIds.size) await prisma.customerAccount.deleteMany({ where: { id: { in: [...accountIds] } } });
+  // Both shops go too: one holds a QUEUED broadcast with a permanently due
+  // PENDING recipient, which every later full run would otherwise carry
+  // (broadcast rows cascade with their shop). EmailIntent has no shop FK, so
+  // its rows are removed by shop id first.
+  const shopIds = [shop?.id, otherShop?.id].filter((id): id is string => Boolean(id));
+  if (shopIds.length) {
+    const owners = await prisma.shop.findMany({ where: { id: { in: shopIds } }, select: { ownerId: true } });
+    await prisma.emailIntent.deleteMany({ where: { shopId: { in: shopIds } } });
+    await prisma.shop.deleteMany({ where: { id: { in: shopIds } } });
+    await prisma.user.deleteMany({ where: { id: { in: owners.map((o) => o.ownerId) } } });
+  }
   await prisma.$disconnect();
 });
 

@@ -57,9 +57,15 @@ export interface OutboxResult {
  *
  * `now` is a parameter everywhere so a test can age a claim or cross the
  * provider idempotency window without sleeping.
+ *
+ * `shopId` is for TESTS ONLY. EmailIntent has no foreign key to Shop, so a
+ * PENDING intent another suite left behind outlives its shop, and an unscoped
+ * test drain spends its batch on those leftovers before reaching its own row.
+ * The scheduler calls this with NO arguments (scheduler.emailOutboxScope.test.ts
+ * pins it): production always drains every shop.
  */
 export async function runEmailOutbox(
-  opts: { now?: Date; batch?: number } = {},
+  opts: { now?: Date; batch?: number; shopId?: string } = {},
 ): Promise<OutboxResult> {
   const now = opts.now ?? new Date();
   const batch = opts.batch ?? BATCH;
@@ -80,23 +86,31 @@ export async function runEmailOutbox(
   //
   // `nextAttemptAt` is the backoff gate: a row rejected with a 429 or a 5xx
   // comes back due later rather than being hammered every minute.
+  //
+  // 🔴 The locked sub-select is a MATERIALIZED CTE so it runs exactly once:
+  // as `WHERE "id" IN (... LIMIT n FOR UPDATE SKIP LOCKED)` a nested-loop plan
+  // re-runs it per row and claims past its LIMIT (#445, broadcastWorker.ts
+  // claimDueSends). claimShape.test.ts keeps that shape out.
   const claimed = await runAsOwner((tx) =>
     tx.$queryRaw<{ id: string; kind: string }[]>(Prisma.sql`
-      UPDATE "EmailIntent"
+      WITH due AS MATERIALIZED (
+        SELECT "id" FROM "EmailIntent"
+         WHERE "status" = 'PENDING'
+           ${opts.shopId ? Prisma.sql`AND "shopId" = ${opts.shopId}` : Prisma.empty}
+           AND ("nextAttemptAt" IS NULL
+                OR "nextAttemptAt" <= ${now.toISOString()}::timestamp)
+           AND ("claimedAt" IS NULL OR "claimedAt" < ${staleBefore.toISOString()}::timestamp)
+         ORDER BY "nextAttemptAt" NULLS FIRST, "createdAt"
+         LIMIT ${batch}
+         FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "EmailIntent" t
          SET "claimedAt" = ${now.toISOString()}::timestamp,
              "claimToken" = ${claimToken},
              "updatedAt" = now()
-       WHERE "id" IN (
-         SELECT "id" FROM "EmailIntent"
-          WHERE "status" = 'PENDING'
-            AND ("nextAttemptAt" IS NULL
-                 OR "nextAttemptAt" <= ${now.toISOString()}::timestamp)
-            AND ("claimedAt" IS NULL OR "claimedAt" < ${staleBefore.toISOString()}::timestamp)
-          ORDER BY "nextAttemptAt" NULLS FIRST, "createdAt"
-          LIMIT ${batch}
-          FOR UPDATE SKIP LOCKED
-       )
-      RETURNING "id", "kind"`),
+        FROM due
+       WHERE t."id" = due."id"
+      RETURNING t."id", t."kind"`),
   );
 
   const result: OutboxResult = {
