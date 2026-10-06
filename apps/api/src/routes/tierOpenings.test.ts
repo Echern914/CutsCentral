@@ -218,6 +218,17 @@ describe("holding a slot for a tier", () => {
     expect(forThis()[0]!.payload.title).toBe("Held Cuts: an opening for Gold");
     expect(forThis()[0]!.payload.body).toMatch(/Cut with Sam\. Yours to book in the app until /);
 
+    // The first send runs in the background and has a second invitation to
+    // get through after gold's push: wait until it has claimed and stamped
+    // both, or the call below can win the second claim and read as a resend.
+    await vi.waitFor(
+      async () =>
+        expect(
+          await prisma.tierOpeningRecipient.count({ where: { openingId: created.openingId, delivered: null } }),
+        ).toBe(0),
+      { timeout: 5_000 },
+    );
+
     // The list is the invitation, not the tier - and each person on it is told
     // once. Sending again reaches nobody.
     sent.length = 0;
@@ -371,9 +382,9 @@ describe("telling the invited members", () => {
     expect(urls.filter((u) => u.includes(`opening=${released}`) || u.includes(`opening=${lapsed}`))).toEqual([]);
   });
 
-  it("🔴 a send a restart lost is picked up by the sweep, once", async () => {
+  it("🔴 an Auto-fill send a restart lost is picked up by the sweep, once", async () => {
     // Invited five minutes ago; the process died before anyone was told.
-    const openingId = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 5 * 60_000) }]);
+    const openingId = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 5 * 60_000) }], { source: "auto" });
     const pushes = capture(openingId);
 
     await resendUnnotifiedOpenings();
@@ -382,9 +393,18 @@ describe("telling the invited members", () => {
     expect(pushes).toHaveLength(1);
   });
 
+  it("🔴 the sweep never resends a MANUAL opening - a build from before send stamps already told everyone", async () => {
+    // What a manual opening made by the previous build looks like here during
+    // a deploy: sent to everyone, and nothing recorded.
+    const openingId = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 5 * 60_000) }]);
+    const pushes = capture(openingId);
+    await resendUnnotifiedOpenings();
+    expect(pushes).toEqual([]);
+  });
+
   it("the sweep leaves alone an invitation too old to be worth sending, or on an opening that is over", async () => {
-    const stale = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 20 * 60_000) }]);
-    const over = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 5 * 60_000) }]);
+    const stale = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 20 * 60_000) }], { source: "auto" });
+    const over = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 5 * 60_000) }], { source: "auto" });
     await prisma.tierOpening.update({ where: { id: over }, data: { status: "RELEASED" } });
     const sent: string[] = [];
     __setExpoSenderForTests({ send: async (_to, payload) => void sent.push(payload.url) });

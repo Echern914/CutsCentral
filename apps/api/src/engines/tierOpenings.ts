@@ -405,6 +405,13 @@ export async function notifyInvitees(
  * had its chance; telling someone late about a short hold is worse than not),
  * on openings still live, and sends them.
  *
+ * 🔴 AUTO-FILL OPENINGS ONLY. A build from before send stamps existed sends to
+ * everyone and records nothing, so an opening it makes - while it is still
+ * serving during a deploy, after the migration has run - looks entirely unsent.
+ * Resending those would push every member a second time. That build never
+ * makes an Auto-fill opening, so the resend is safe there; a manual opening
+ * keeps the one send it always had.
+ *
  * Rides the waitlist sweep's lease (scheduler.ts). Never throws per opening.
  */
 export async function resendUnnotifiedOpenings(now: Date = new Date()): Promise<number> {
@@ -413,7 +420,7 @@ export async function resendUnnotifiedOpenings(now: Date = new Date()): Promise<
       where: {
         notifiedAt: null,
         createdAt: { gte: new Date(now.getTime() - 15 * 60_000), lte: new Date(now.getTime() - 60_000) },
-        opening: { status: "HELD", heldUntil: { gt: now } },
+        opening: { source: "auto", status: "HELD", heldUntil: { gt: now } },
       },
       distinct: ["openingId"],
       select: { openingId: true },

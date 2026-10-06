@@ -341,16 +341,21 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
   // The same lease tells tier-opening members a restart left untold
   // (resendUnnotifiedOpenings) - same cadence, and a new cron with no job_lease
   // seed row would never run in production. Each half runs even if the other
-  // throws.
+  // throws, and each failure is REPORTED, not only logged: settling both means
+  // nothing reaches the job-level catch below, which is a cron job's only
+  // route to Sentry.
   {
     cronExpr: "*/2 * * * *",
     name: "waitlist-offer-expiry",
     ttlMs: 4 * MINUTE,
     run: async () => {
+      const halves = ["expire-due-offers", "resend-unnotified-openings"] as const;
       const results = await Promise.allSettled([expireDueOffers(), resendUnnotifiedOpenings()]);
-      for (const r of results) {
-        if (r.status === "rejected") logger.error({ err: r.reason }, "waitlist sweep half failed");
-      }
+      results.forEach((r, i) => {
+        if (r.status !== "rejected") return;
+        logger.error({ err: r.reason, step: halves[i] }, "waitlist sweep half failed");
+        captureError(r.reason, { job: "waitlist-offer-expiry", step: halves[i] });
+      });
     },
     failMsg: "waitlist offer expiry sweep failed",
   },
