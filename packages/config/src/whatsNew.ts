@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-06-unfinished-compact",
+    date: "2026-10-06",
+    kind: "fix",
+    title: "Didn't finish booking takes far less room",
+    body:
+      "Each person on the list is now one short row: who, the time they wanted, and whether it's still open. " +
+      "Tap a row to see why they didn't finish and to text, call, book or dismiss them.",
+  },
+  {
     id: "2026-10-05-tip-ask-email",
     date: "2026-10-05",
     kind: "feature",

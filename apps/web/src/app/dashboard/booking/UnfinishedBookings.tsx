@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { cap, useVocab } from "@/components/VocabProvider";
 import { Card } from "@/components/ui/Card";
 import { cn } from "@/lib/cn";
@@ -8,6 +8,7 @@ import { mailtoUri, smsUri, telUri } from "@/lib/contactUri";
 import { useVisiblePoll } from "@/lib/useVisiblePoll";
 import { BTN_BASE, NAME_WRAP_CLS } from "../_components/appointmentCardStyles";
 import { createAppointmentAction, type CreateApptResult } from "./actions";
+import { Chevron } from "./TargetedSlotCard";
 import { inviteUnfinishedAction } from "./unfinishedActions";
 import {
   dismissUnfinishedAction,
@@ -210,7 +211,7 @@ export function UnfinishedBookings({ isNative, toast }: { isNative: boolean; toa
         <p className="text-xs text-muted">
           They picked a time but didn&apos;t finish, so they aren&apos;t booked. They may think they are.
         </p>
-        <ul className="flex flex-col gap-3">
+        <ul className="flex flex-col gap-2">
           {visible.map((row) => (
             <UnfinishedCard
               key={row.id}
@@ -305,12 +306,17 @@ function UnfinishedCard({
   const invitedAt = invitedHere ?? row.invitedAt ?? null;
   const invited = invitedAt !== null || invitedNoTime;
   const [inviting, setInviting] = useState(false);
+  // Collapsed until tapped. A row with something to say stays open: a booking
+  // that still needs "Done", a question it asked, or why a tap was refused.
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
 
-  const name = `${row.firstName} ${row.lastName ?? ""}`.trim() || cap(vocab.clientNoun);
+  const name =`${row.firstName} ${row.lastName ?? ""}`.trim() || cap(vocab.clientNoun);
   const first = row.firstName.trim() || name;
   const when = fmt.when.format(new Date(row.startsAt));
   const live = row.state === "live";
   const refused = refusal !== null && (refusal.sticky || refusal.readCount === readCount) ? refusal : null;
+  const isOpen = open || booked || step !== "idle" || refused !== null || note !== null;
   const taken = row.timeTaken || refused?.chip === "taken";
   const blocked = !taken && (row.blockedElsewhere || refused?.chip === "blocked");
   // They wanted a special that isn't on offer now: a plain booking would be
@@ -461,182 +467,206 @@ function UnfinishedCard({
   }
 
   return (
-    <li className="min-w-0 rounded-xl border border-subtle bg-charcoal-800/60 px-4 py-3.5">
-      <div className="flex min-w-0 items-start justify-between gap-2">
-        <p className={cn(NAME_WRAP_CLS, "text-[17px]")}>{name}</p>
-        <span className={cn("shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-semibold", chip.cls)}>
-          {chip.label}
+    <li
+      className={cn(
+        "min-w-0 rounded-xl border bg-charcoal-800/60",
+        isOpen ? "border-gold/40" : "border-subtle",
+      )}
+    >
+      {/* Collapsed, a row is who and when - two lines, so a list of five fits
+          above the calendar on a phone. Everything else is one tap away. */}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={isOpen}
+        aria-controls={panelId}
+        className="flex w-full min-w-0 flex-col gap-0.5 px-3.5 py-2.5 text-left"
+      >
+        {/* The chip and arrow ride on the NAME line, so the time line below
+            gets the full width and stays one line on a phone. */}
+        <span className="flex min-w-0 items-start gap-2">
+          <span className={cn(NAME_WRAP_CLS, "flex-1 text-[15px]")}>{name}</span>
+          <span className={cn("mt-0.5 shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-semibold", chip.cls)}>
+            {chip.label}
+          </span>
+          <Chevron open={isOpen} />
         </span>
-      </div>
-
-      <div className="mt-1.5 flex min-w-0 flex-col gap-1 text-xs text-muted">
-        <p className="[overflow-wrap:anywhere]">
+        <span className="text-xs text-muted [overflow-wrap:anywhere]">
           <span className="font-medium text-offwhite/90">Wanted {when}</span>
           {" · "}
           {row.serviceName}
           {row.addOns.length > 0 && ` + ${row.addOns.map((a) => a.name).join(", ")}`}
           {" · "}
           {row.staffName}
-        </p>
-        {booked ? (
-          <p className="text-gold" role="status">
-            {told === "email"
-              ? `Booked for ${when}. ChairBack emailed ${first} a confirmation.`
-              : told === "none"
-                ? `Booked for ${when}. ChairBack couldn't email ${first} a confirmation, so text them it's set.`
-                : `Booked for ${when}. ChairBack doesn't send a confirmation, so text them it's set.`}
-          </p>
-        ) : live ? (
-          <p>
-            On the card step now. Held until {fmt.clock.format(new Date(row.heldUntil ?? row.startsAt))}.
-          </p>
-        ) : (
-          <p>
-            {row.reason ? REASON[row.reason] : "Didn't finish"}. Tried {fmt.tried.format(new Date(row.triedAt))}
-            {row.attempts > 1 ? ` · ${row.attempts} tries` : ""}.
-          </p>
-        )}
-        {row.otherTimes.length > 0 && !booked && (
-          <p className="[overflow-wrap:anywhere]">
-            Also tried: {row.otherTimes.map((t) => fmt.when.format(new Date(t.startsAt))).join("; ")}
-          </p>
-        )}
-        {row.releasing && !booked && (
-          <p>Their hold just ran out. You can book them here in a few minutes.</p>
-        )}
-        {row.repeating && !booked && (
-          <p>Wanted it as a repeating booking. Set that up from New appointment.</p>
-        )}
-        {specialGone && !taken && !blocked && !row.releasing && !booked && (
-          <p>They wanted one of your specials, which isn&apos;t on offer at that time now.</p>
-        )}
-        {row.blockedElsewhere && !taken && !booked && !refused && (
-          <p>That time is blocked on your other calendar.</p>
-        )}
-        {row.profileName && !booked && (
-          <p className="[overflow-wrap:anywhere]">
-            Uses the same number or email as {row.profileName}, so booking them here would put it
-            under {row.profileName}&apos;s name. If it&apos;s the same person, book them from New
-            appointment.
-          </p>
-        )}
-        {(row.phone || row.email) && (
-          <p className="break-words">
-            {row.phone &&
-              (sms ? (
-                <a href={sms} className="text-gold hover:underline">
-                  {row.phoneDisplay ?? row.phone}
-                </a>
-              ) : (
-                <span className="text-offwhite/75">{row.phoneDisplay ?? row.phone}</span>
-              ))}
-            {row.phone && row.email && <span> · </span>}
-            {row.email &&
-              (mail ? (
-                <a href={mail} className="text-gold hover:underline [overflow-wrap:anywhere]">
-                  {row.email}
-                </a>
-              ) : (
-                <span className="text-offwhite/75 [overflow-wrap:anywhere]">{row.email}</span>
-              ))}
-          </p>
-        )}
-        {(refused?.note ?? note) && (
-          <p role="status" className="text-amber-300">
-            {refused?.note ?? note}
-          </p>
-        )}
-        {invited && !booked && (
-          <p role="status" className="text-emerald-soft">
-            Emailed {first} to pick a new time
-            {invitedAt ? ` (${fmt.tried.format(new Date(invitedAt))})` : ""}.
-          </p>
-        )}
-      </div>
+        </span>
+      </button>
 
-      {step === "confirm" || step === "outside_hours" ? (
-        <div className="mt-3 flex flex-col gap-2 rounded-lg border border-gold/30 bg-gold/5 p-3">
-          <p className="text-xs text-offwhite">
-            {step === "confirm"
-              ? `Book ${first} for ${when}? ChairBack emails them a confirmation if it has an email for them.`
-              : "That time isn't open on your calendar now (for example it's outside your hours, blocked off, too soon, or the day is full). Book it anyway?"}
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => void book(step === "outside_hours")}
-              className={cn(BTN_BASE, "bg-gold font-semibold text-charcoal-900 hover:bg-gold/90")}
-            >
-              {step === "confirm" ? "Book" : "Book anyway"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setStep("idle")}
-              className={cn(BTN_BASE, "border border-subtle text-muted hover:text-offwhite")}
-            >
-              Cancel
-            </button>
+      {isOpen && (
+        <div id={panelId} className="min-w-0 px-3.5 pb-3">
+          <div className="flex min-w-0 flex-col gap-1 text-xs text-muted">
+            {booked ? (
+              <p className="text-gold" role="status">
+                {told === "email"
+                  ? `Booked for ${when}. ChairBack emailed ${first} a confirmation.`
+                  : told === "none"
+                    ? `Booked for ${when}. ChairBack couldn't email ${first} a confirmation, so text them it's set.`
+                    : `Booked for ${when}. ChairBack doesn't send a confirmation, so text them it's set.`}
+              </p>
+            ) : live ? (
+              <p>
+                On the card step now. Held until {fmt.clock.format(new Date(row.heldUntil ?? row.startsAt))}.
+              </p>
+            ) : (
+              <p>
+                {row.reason ? REASON[row.reason] : "Didn't finish"}. Tried {fmt.tried.format(new Date(row.triedAt))}
+                {row.attempts > 1 ? ` · ${row.attempts} tries` : ""}.
+              </p>
+            )}
+            {row.otherTimes.length > 0 && !booked && (
+              <p className="[overflow-wrap:anywhere]">
+                Also tried: {row.otherTimes.map((t) => fmt.when.format(new Date(t.startsAt))).join("; ")}
+              </p>
+            )}
+            {row.releasing && !booked && (
+              <p>Their hold just ran out. You can book them here in a few minutes.</p>
+            )}
+            {row.repeating && !booked && (
+              <p>Wanted it as a repeating booking. Set that up from New appointment.</p>
+            )}
+            {specialGone && !taken && !blocked && !row.releasing && !booked && (
+              <p>They wanted one of your specials, which isn&apos;t on offer at that time now.</p>
+            )}
+            {row.blockedElsewhere && !taken && !booked && !refused && (
+              <p>That time is blocked on your other calendar.</p>
+            )}
+            {row.profileName && !booked && (
+              <p className="[overflow-wrap:anywhere]">
+                Uses the same number or email as {row.profileName}, so booking them here would put it
+                under {row.profileName}&apos;s name. If it&apos;s the same person, book them from New
+                appointment.
+              </p>
+            )}
+            {(row.phone || row.email) && (
+              <p className="break-words">
+                {row.phone &&
+                  (sms ? (
+                    <a href={sms} className="text-gold hover:underline">
+                      {row.phoneDisplay ?? row.phone}
+                    </a>
+                  ) : (
+                    <span className="text-offwhite/75">{row.phoneDisplay ?? row.phone}</span>
+                  ))}
+                {row.phone && row.email && <span> · </span>}
+                {row.email &&
+                  (mail ? (
+                    <a href={mail} className="text-gold hover:underline [overflow-wrap:anywhere]">
+                      {row.email}
+                    </a>
+                  ) : (
+                    <span className="text-offwhite/75 [overflow-wrap:anywhere]">{row.email}</span>
+                  ))}
+              </p>
+            )}
+            {(refused?.note ?? note) && (
+              <p role="status" className="text-amber-300">
+                {refused?.note ?? note}
+              </p>
+            )}
+            {invited && !booked && (
+              <p role="status" className="text-emerald-soft">
+                Emailed {first} to pick a new time
+                {invitedAt ? ` (${fmt.tried.format(new Date(invitedAt))})` : ""}.
+              </p>
+            )}
           </div>
-        </div>
-      ) : (
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {canBook && (
-            <button
-              type="button"
-              onClick={() => setStep("confirm")}
-              disabled={step === "working"}
-              className={cn(BTN_BASE, "bg-gold font-semibold text-charcoal-900 hover:bg-gold/90")}
-            >
-              {step === "working" ? "Booking…" : "Book them"}
-            </button>
-          )}
-          {/* Someone else booked their time: one email with the booking page,
-              once. The server decides it may be offered (canInvite). */}
-          {!booked && !live && row.canInvite && !invited && !inviteUnknown && (
-            <button
-              type="button"
-              onClick={() => void invite()}
-              disabled={inviting}
-              className={cn(
-                BTN_BASE,
-                "col-span-2 border border-gold/50 font-semibold text-gold hover:bg-gold/10",
-              )}
-            >
-              {inviting ? "Sending…" : "Email them to pick a new time"}
-            </button>
-          )}
-          {sms && (
-            <a
-              href={sms}
-              className={cn(BTN_BASE, "border border-gold/50 font-semibold text-gold hover:bg-gold/10")}
-            >
-              Text
-            </a>
-          )}
-          {tel && (
-            <a href={tel} className={cn(BTN_BASE, "border border-subtle text-offwhite/90 hover:bg-charcoal-700")}>
-              Call
-            </a>
-          )}
-          {booked ? (
-            <button
-              type="button"
-              onClick={onDone}
-              className={cn(BTN_BASE, "border border-subtle text-muted hover:text-offwhite")}
-            >
-              Done
-            </button>
+
+          {step === "confirm" || step === "outside_hours" ? (
+            <div className="mt-3 flex flex-col gap-2 rounded-lg border border-gold/30 bg-gold/5 p-3">
+              <p className="text-xs text-offwhite">
+                {step === "confirm"
+                  ? `Book ${first} for ${when}? ChairBack emails them a confirmation if it has an email for them.`
+                  : "That time isn't open on your calendar now (for example it's outside your hours, blocked off, too soon, or the day is full). Book it anyway?"}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => void book(step === "outside_hours")}
+                  className={cn(BTN_BASE, "bg-gold font-semibold text-charcoal-900 hover:bg-gold/90")}
+                >
+                  {step === "confirm" ? "Book" : "Book anyway"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStep("idle")}
+                  className={cn(BTN_BASE, "border border-subtle text-muted hover:text-offwhite")}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           ) : (
-            !live && (
-              <button
-                type="button"
-                onClick={onDismiss}
-                disabled={step === "working"}
-                className={cn(BTN_BASE, "border border-subtle text-muted hover:text-offwhite")}
-              >
-                Dismiss
-              </button>
-            )
+            // Text, Call and Dismiss share ONE row on a phone; the action that
+            // books or emails gets a row of its own above them.
+            <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">
+              {canBook && (
+                <button
+                  type="button"
+                  onClick={() => setStep("confirm")}
+                  disabled={step === "working"}
+                  className={cn(BTN_BASE, "col-span-3 bg-gold font-semibold text-charcoal-900 hover:bg-gold/90 sm:col-span-1")}
+                >
+                  {step === "working" ? "Booking…" : "Book them"}
+                </button>
+              )}
+              {/* Someone else booked their time: one email with the booking page,
+                  once. The server decides it may be offered (canInvite). */}
+              {!booked && !live && row.canInvite && !invited && !inviteUnknown && (
+                <button
+                  type="button"
+                  onClick={() => void invite()}
+                  disabled={inviting}
+                  className={cn(
+                    BTN_BASE,
+                    "col-span-3 border border-gold/50 font-semibold text-gold hover:bg-gold/10 sm:col-span-2",
+                  )}
+                >
+                  {inviting ? "Sending…" : "Email them to pick a new time"}
+                </button>
+              )}
+              {sms && (
+                <a
+                  href={sms}
+                  className={cn(BTN_BASE, "border border-gold/50 font-semibold text-gold hover:bg-gold/10")}
+                >
+                  Text
+                </a>
+              )}
+              {tel && (
+                <a href={tel} className={cn(BTN_BASE, "border border-subtle text-offwhite/90 hover:bg-charcoal-700")}>
+                  Call
+                </a>
+              )}
+              {booked ? (
+                <button
+                  type="button"
+                  onClick={onDone}
+                  className={cn(BTN_BASE, "border border-subtle text-muted hover:text-offwhite")}
+                >
+                  Done
+                </button>
+              ) : (
+                !live && (
+                  <button
+                    type="button"
+                    onClick={onDismiss}
+                    disabled={step === "working"}
+                    className={cn(BTN_BASE, "border border-subtle text-muted hover:text-offwhite")}
+                  >
+                    Dismiss
+                  </button>
+                )
+              )}
+            </div>
           )}
         </div>
       )}
