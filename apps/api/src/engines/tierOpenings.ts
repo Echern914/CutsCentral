@@ -9,10 +9,9 @@ import { formatApptTime } from "../messaging/templates.js";
 import { dispatchAfterCommit, recordMirrorIntent } from "./acuityMirror.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "./bookingWrite.js";
 import { isMirrorNotConfigured } from "./mirrorNotConfigured.js";
-import { effectivePriceAt } from "./pricing.js";
 import { ServiceDayFullError } from "./serviceDailyLimit.js";
 import { computeOpenSlots } from "./slots.js";
-import { claimWouldRequirePayment } from "./waitlistOffer.js";
+import { claimWouldRequirePayment, slotPrice } from "./waitlistOffer.js";
 
 /**
  * OPENINGS HELD FOR A LOYALTY TIER.
@@ -170,6 +169,7 @@ export async function createTierOpening(params: {
       connectChargesEnabled: true,
       stripeConnectAccountId: true,
       depositAmountCents: true,
+      requireCardToBook: true,
     },
   });
   if (!shop) return { outcome: "unavailable" };
@@ -194,9 +194,9 @@ export async function createTierOpening(params: {
 
   const service = await prisma.service.findFirst({
     where: { id: params.serviceId, shopId: shop.id },
-    select: { price: true },
+    select: { price: true, priceOverrides: true, dateOverrides: true, timeOverrides: true },
   });
-  if (claimWouldRequirePayment(shop, service?.price == null ? null : Number(service.price))) {
+  if (claimWouldRequirePayment(shop, slotPrice(service, slot.startsAt, shop.timezone))) {
     return { outcome: "requires_payment" };
   }
 
@@ -511,10 +511,12 @@ export type ClaimTierOpeningResult =
  * Book an opening as one of its invited members - revalidated and written
  * ATOMICALLY.
  *
- * The opening row is locked FOR UPDATE first, so two members tapping Book at
- * the same moment serialise on it: the first books, the second finds CLAIMED.
- * The slot is then re-asserted under the same guard as every appointment, with
- * this opening's own hold excluded.
+ * The slot is re-asserted under the same guard as every appointment (this
+ * opening's own hold excluded), and THEN the opening row is locked FOR UPDATE
+ * and re-checked - the order every barber write takes them in, so the two
+ * queue instead of deadlocking. Two members tapping Book at the same moment
+ * serialise on the barber's lock and the row: the first books, the second
+ * finds it ended.
  */
 export async function claimTierOpening(params: {
   accountId: string;
@@ -527,10 +529,18 @@ export async function claimTierOpening(params: {
 
   try {
     result = await runAsOwner(async (tx): Promise<ClaimTierOpeningResult> => {
-      const locked = await tx.$queryRaw<{ id: string }[]>(
-        Prisma.sql`SELECT id FROM "TierOpening" WHERE id = ${params.openingId} FOR UPDATE`,
-      );
-      if (locked.length === 0) return { outcome: "not_found" };
+      // 🔴 LOCK ORDER: the barber's STAFF lock before this opening's ROW (the
+      // order every booking write takes them in - bookingWrite.ts header).
+      // Locking the row first deadlocked against a barber booking over the
+      // hold, or tapping Undo on the cancel that freed it: that write holds the
+      // staff lock and then releases this row. So: read unlocked, guard, then
+      // lock the row and re-check it.
+      const lockRow = async () => {
+        const [row] = await tx.$queryRaw<{ status: string; heldUntil: Date }[]>(
+          Prisma.sql`SELECT status, "heldUntil" FROM "TierOpening" WHERE id = ${params.openingId} FOR UPDATE`,
+        );
+        return row?.status === "HELD" && row.heldUntil.getTime() > now.getTime() ? row : null;
+      };
 
       const invite = await tx.tierOpeningRecipient.findUnique({
         where: { openingId_accountId: { openingId: params.openingId, accountId: params.accountId } },
@@ -563,6 +573,7 @@ export async function claimTierOpening(params: {
             connectChargesEnabled: true,
             stripeConnectAccountId: true,
             depositAmountCents: true,
+            requireCardToBook: true,
           },
         }),
         tx.service.findFirst({
@@ -588,9 +599,13 @@ export async function claimTierOpening(params: {
         return { outcome: "contact_shop" };
       }
 
-      // The shop turned deposits on mid-hold: never an unpaid booking. The hold
-      // goes back to the pool so the slot is not lost to everyone.
-      if (claimWouldRequirePayment(shop, service?.price == null ? null : Number(service.price))) {
+      // The shop turned on deposits (or a required card) mid-hold: never an
+      // unpaid or card-less booking. The hold goes back to the pool so the
+      // slot is not lost to everyone. Only the row is taken, like any other
+      // write that just ends a hold.
+      const priceAtBooking = slotPrice(service, opening.startsAt, shop.timezone);
+      if (claimWouldRequirePayment(shop, priceAtBooking)) {
+        if (!(await lockRow())) return { outcome: "ended" };
         await tx.tierOpening.update({ where: { id: opening.id }, data: { status: "RELEASED" } });
         return { outcome: "deposit_required" };
       }
@@ -606,16 +621,10 @@ export async function claimTierOpening(params: {
         walkInCapacity: "enforce",
         now,
       });
-
-      const priceAtBooking = service
-        ? effectivePriceAt(service.price === null ? null : Number(service.price), {
-            at: opening.startsAt,
-            timezone: shop.timezone,
-            weekdayOverrides: service.priceOverrides,
-            dateOverrides: service.dateOverrides,
-            timeWindows: service.timeOverrides,
-          })
-        : null;
+      // Now the row: two members tapping Book serialise here (and on the
+      // barber's lock above); the second finds it CLAIMED. A barber who booked
+      // over it or ended it meanwhile has RELEASED it.
+      if (!(await lockRow())) return { outcome: "ended" };
       const status = shop.requireBookingApproval ? "PENDING" : "BOOKED";
       const appt = await tx.appointment.create({
         data: {
@@ -669,7 +678,15 @@ export async function claimTierOpening(params: {
   } catch (err) {
     if (err instanceof ServiceDayFullError) return { outcome: "day_full" };
     if (isMirrorNotConfigured(err)) return { outcome: "unavailable_external" };
-    if (err instanceof SlotTakenError) return { outcome: "slot_taken" };
+    if (err instanceof SlotTakenError) {
+      // The guard runs before the row is locked, so a second member who
+      // queued behind the first's booking lands here. For them the opening
+      // has simply ended - it is not a time someone else took.
+      const after = await runAsOwner((tx) =>
+        tx.tierOpening.findUnique({ where: { id: params.openingId }, select: { status: true } }),
+      ).catch(() => null);
+      return after && after.status !== "HELD" ? { outcome: "ended" } : { outcome: "slot_taken" };
+    }
     throw err;
   }
 

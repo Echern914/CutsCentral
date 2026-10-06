@@ -27,6 +27,16 @@ import { loadWalkInReservationPlan } from "./walkInCapacity.js";
  *     final backstop - which is also why this guard clears expired holds at
  *     the exact target start (see the flip at the bottom).
  *
+ * 🔴 ONE LOCK ORDER, for every writer that touches a booking or a hold:
+ *    service-day lock -> staff lock (`appt:<staffId>`) -> `wloffer:<shopId>`
+ *    -> TierOpening / WaitlistOffer rows -> WaitlistEntry rows.
+ * Never the reverse. Barber writes take the staff lock here and then RELEASE
+ * overlapping hold rows (below), so a claim that locked its hold row FIRST and
+ * then asked for the staff lock deadlocked against them; claimOffer and
+ * claimTierOpening now read unlocked, guard, and only then lock their row. A
+ * write that only ENDS a hold (leave, decline, the expiry sweep) takes the row
+ * alone and never a staff lock after it.
+ *
  * Timestamps go over as UTC ISO text + ::timestamp casts, NEVER raw JS Dates:
  * $queryRaw serializes a Date in the PROCESS timezone, silently shifting the
  * comparison against the naive-UTC column on any non-UTC machine (PR #70).
@@ -567,9 +577,12 @@ export async function lockStaffAndAssertSlotFree(
   const tierIgnoreFragment = opts.tierOpeningIdToIgnore
     ? Prisma.sql`AND "id" <> ${opts.tierOpeningIdToIgnore}`
     : Prisma.empty;
+  // shopId first: the (shopId, staffId, status, heldUntil) index only serves a
+  // query that names the shop, and this runs on every booking write.
   const tierHoldOverlap = await tx.$queryRaw<{ id: string }[]>(
     Prisma.sql`SELECT id FROM "TierOpening"
-               WHERE "staffId" = ${opts.staffId}
+               WHERE "shopId" = ${opts.shopId}
+                 AND "staffId" = ${opts.staffId}
                  AND "status" = 'HELD'
                  AND "heldUntil" > ${now.toISOString()}::timestamp
                  ${tierIgnoreFragment}

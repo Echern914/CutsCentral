@@ -30,6 +30,7 @@ import { deriveAcuityClientKey } from "../acuity/clientKey.js";
 import { connectEnabled } from "../billing/stripe.js";
 import { hasPremiumAccess } from "../billing/entitlements.js";
 import { depositChargeCents, toCents } from "../billing/payments.js";
+import { collectsAtBooking } from "../services/appointmentPaymentHold.js";
 import {
   buildWaitlistOfferCustomerEmail,
   buildWaitlistOfferCustomerPush,
@@ -174,20 +175,62 @@ export function claimWouldRequirePayment(
     connectChargesEnabled: boolean;
     stripeConnectAccountId: string | null;
     depositAmountCents: number | null;
+    requireCardToBook: boolean;
   },
+  /**
+   * The price the booking page would show for THIS slot - effectivePriceAt,
+   * not the service's base price. A service with no base price and a
+   * weekday or holiday override is paid on the page and was free here.
+   */
   price: number | null,
 ): boolean {
-  if (shop.requireBookingApproval) return false;
-  if (shop.paymentsMode !== "ahead" && shop.paymentsMode !== "deposit") return false;
-  if (!connectOn() || !shop.connectChargesEnabled || !shop.stripeConnectAccountId) {
-    return false;
-  }
   const fullCents = toCents(price);
   const chargeCents =
     shop.paymentsMode === "deposit"
       ? depositChargeCents(shop.depositAmountCents, fullCents)
       : fullCents;
-  return chargeCents !== null && chargeCents > 0;
+  // The public create's own question (services/appointmentPaymentHold.ts),
+  // so a claim never books what the booking page would hold for money.
+  const collects = collectsAtBooking({
+    connectEnabled: connectOn(),
+    paymentsMode: shop.paymentsMode,
+    requireBookingApproval: shop.requireBookingApproval,
+    connectChargesEnabled: shop.connectChargesEnabled,
+    stripeConnectAccountId: shop.stripeConnectAccountId,
+    chargeCents,
+  });
+  if (collects === "payment") return chargeCents !== null && chargeCents > 0;
+  // 🔴 A shop that REQUIRES a saved card books nobody without one, and a
+  // claim has no card step: it booked them card-less, which is exactly what
+  // the setting exists to stop. (A card shop with the card optional books
+  // claims as it books Confirm on the page.)
+  if (collects === "card") return shop.requireCardToBook;
+  return false;
+}
+
+/**
+ * What the booking page charges for this service at this instant: the base
+ * price through its weekday, holiday and time-of-day overrides. The money
+ * gate must read this, never the base price alone.
+ */
+export function slotPrice(
+  service: {
+    price: Prisma.Decimal | number | null;
+    priceOverrides: Prisma.JsonValue;
+    dateOverrides: Prisma.JsonValue;
+    timeOverrides: Prisma.JsonValue;
+  } | null,
+  at: Date,
+  timezone: string,
+): number | null {
+  if (!service) return null;
+  return effectivePriceAt(service.price === null ? null : Number(service.price), {
+    at,
+    timezone,
+    weekdayOverrides: service.priceOverrides,
+    dateOverrides: service.dateOverrides,
+    timeWindows: service.timeOverrides,
+  });
 }
 
 export function mintClaimToken(): { token: string; hash: string } {
@@ -269,20 +312,16 @@ export async function offerFreedSlot(
         connectChargesEnabled: true,
         stripeConnectAccountId: true,
         depositAmountCents: true,
+        requireCardToBook: true,
       },
     }),
     prisma.service.findFirst({
       where: { id: slot.serviceId, shopId: slot.shopId },
-      select: { price: true },
+      select: { price: true, priceOverrides: true, dateOverrides: true, timeOverrides: true },
     }),
   ]);
   if (!policyShop) return { outcome: "unavailable" };
-  if (
-    claimWouldRequirePayment(
-      policyShop,
-      policyService?.price == null ? null : Number(policyService.price),
-    )
-  ) {
+  if (claimWouldRequirePayment(policyShop, slotPrice(policyService, slot.startsAt, slot.timezone))) {
     logger.info(
       { shopId: slot.shopId, serviceId: slot.serviceId },
       "waitlist offer skipped: service requires a deposit; entries stay WAITING for manual handling",
@@ -866,12 +905,13 @@ export type ClaimResult =
 /**
  * Redeem a claim token: revalidate and book ATOMICALLY.
  *
- * The offer row is read FOR UPDATE, so a concurrent claim of the same token,
- * the expiry worker's compare-and-set, and an admin release all serialize on
- * the row: exactly one of them decides the offer's fate. The slot itself is
- * then re-asserted under the SAME advisory-lock protocol as every other
- * Appointment write - with this offer's own hold excluded so it cannot block
- * its own redemption.
+ * The slot is re-asserted under the SAME advisory-lock protocol as every other
+ * Appointment write (this offer's own hold excluded so it cannot block its own
+ * redemption), and THEN the offer row is locked FOR UPDATE - the order every
+ * barber write takes them in, so the two queue instead of deadlocking. A
+ * concurrent claim of the same token, the expiry worker's compare-and-set, a
+ * leave and an admin release all serialize on the row: exactly one of them
+ * decides the offer's fate.
  */
 export async function claimOffer(params: {
   token: string;
@@ -898,14 +938,14 @@ export async function claimOffer(params: {
   try {
     const claimResult = await prisma.$transaction(async (tx) => {
       endedHold = null;
-      // Row lock FIRST: whoever holds it decides this offer's fate.
-      const locked = await tx.$queryRaw<{ id: string }[]>(
-        Prisma.sql`SELECT id FROM "WaitlistOffer" WHERE "tokenHash" = ${hash} FOR UPDATE`,
-      );
-      if (locked.length === 0) return { outcome: "invalid" as const };
-
+      // 🔴 LOCK ORDER: the barber's STAFF lock before this offer's ROW (the
+      // order every booking write takes them in - bookingWrite.ts header).
+      // Locking the row first deadlocked against a barber booking over the
+      // hold: it holds the staff lock and then releases this row, while this
+      // claim held the row and waited for the staff lock. Postgres killed one
+      // of them and the loser got a 500. So: read unlocked, guard, then lock.
       const offer = await tx.waitlistOffer.findUnique({
-        where: { id: locked[0]!.id },
+        where: { tokenHash: hash },
         include: {
           entry: {
             select: {
@@ -922,7 +962,17 @@ export async function claimOffer(params: {
       });
       if (!offer) return { outcome: "invalid" as const };
       if (offer.status !== "OFFERED") return { outcome: "expired" as const };
+      // Whoever holds the row decides this offer's fate. Branches that only
+      // END the hold take the row alone (no staff lock, like a leave); the
+      // booking branch takes it after the guard.
+      const lockRow = async () => {
+        const [row] = await tx.$queryRaw<{ status: string; expiresAt: Date }[]>(
+          Prisma.sql`SELECT status, "expiresAt" FROM "WaitlistOffer" WHERE id = ${offer.id} FOR UPDATE`,
+        );
+        return row?.status === "OFFERED" ? row : null;
+      };
       if (offer.expiresAt.getTime() <= now.getTime()) {
+        if (!(await lockRow())) return { outcome: "expired" as const };
         // Enforce the boundary here, not in the sweep: flip so the state is
         // honest even if the worker is behind.
         await tx.waitlistOffer.update({
@@ -958,6 +1008,7 @@ export async function claimOffer(params: {
             connectChargesEnabled: true,
             stripeConnectAccountId: true,
             depositAmountCents: true,
+            requireCardToBook: true,
           },
         }),
         tx.service.findFirst({
@@ -973,16 +1024,12 @@ export async function claimOffer(params: {
       ]);
       if (!shop) return { outcome: "invalid" as const };
 
-      // Deposit re-check at REDEMPTION: offers are never created for paid
-      // services, but the shop can flip deposits on mid-hold. Refuse rather
-      // than mint an unpaid appointment; release the hold (we own the row
-      // lock) so the slot returns to the pool and the entry stays WAITING.
-      if (
-        claimWouldRequirePayment(
-          shop,
-          service?.price == null ? null : Number(service.price),
-        )
-      ) {
+      // Money re-check at REDEMPTION: offers are never created for paid (or
+      // card-required) services, but the shop can change that mid-hold.
+      // Refuse rather than mint an unpaid or card-less appointment; release
+      // the hold so the slot returns to the pool and the entry stays WAITING.
+      if (claimWouldRequirePayment(shop, slotPrice(service, offer.startsAt, shop.timezone))) {
+        if (!(await lockRow())) return { outcome: "expired" as const };
         await tx.waitlistOffer.update({
           where: { id: offer.id },
           data: { status: "RELEASED" },
@@ -1012,6 +1059,7 @@ export async function claimOffer(params: {
         blocks.covers({ phone: offer.entry.phone, email: offer.entry.email }) ||
         blocks.covers({ phone, email })
       ) {
+        if (!(await lockRow())) return { outcome: "expired" as const };
         await tx.waitlistOffer.update({
           where: { id: offer.id },
           data: { status: "RELEASED" },
@@ -1040,6 +1088,23 @@ export async function claimOffer(params: {
         serviceDayLimit: { serviceId: offer.serviceId, timezone: shop.timezone },
         now,
       });
+      // Now the row: a leave, a decline, the sweep or a barber may have ended
+      // the hold while this claim waited for the barber's lock.
+      const live = await lockRow();
+      if (!live) return { outcome: "expired" as const };
+      if (live.expiresAt.getTime() <= now.getTime()) {
+        await tx.waitlistOffer.update({ where: { id: offer.id }, data: { status: "EXPIRED" } });
+        await recordWaitlistEvent(tx, {
+          shopId: offer.shopId,
+          entryId: offer.entryId,
+          offerId: offer.id,
+          type: "offer.expired",
+          actor: CUSTOMER_ACTOR,
+          metadata: { at: "claim" },
+        });
+        endedHold = spanOf(offer);
+        return { outcome: "expired" as const };
+      }
       // The handle the customer gave when they joined. The claim itself asks
       // for nothing new: a held slot is never refused over a name, and entries
       // from before the last-name-or-Instagram rule simply carry neither.
@@ -1225,13 +1290,22 @@ export async function claimOffer(params: {
       // the two cannot disagree - but the whole thing is swallowed, because
       // the customer is already being told slot_taken and a failure here must
       // not turn that into a 500.
+      //
+      // The guard now runs BEFORE the offer row is locked, so a second tap of
+      // the same link that queued behind the first lands here (the first one's
+      // appointment is in the way). That is not "taken by someone else": the
+      // hold is simply over, and it says so.
+      let holdStillLive = true;
       await prisma
         .$transaction(async (tx) => {
           const released = await tx.waitlistOffer.findFirst({
             where: { tokenHash: hash, status: "OFFERED" },
             select: { id: true, shopId: true, entryId: true },
           });
-          if (!released) return;
+          if (!released) {
+            holdStillLive = false;
+            return;
+          }
           await tx.waitlistOffer.updateMany({
             where: { id: released.id, status: "OFFERED" },
             data: { status: "RELEASED" },
@@ -1246,7 +1320,8 @@ export async function claimOffer(params: {
           });
         })
         .catch(() => undefined);
-      return { outcome: "slot_taken" };
+      // (Assigned inside the transaction callback, which TS cannot follow.)
+      return (holdStillLive as boolean) ? { outcome: "slot_taken" } : { outcome: "expired" };
     }
     throw err;
   }
