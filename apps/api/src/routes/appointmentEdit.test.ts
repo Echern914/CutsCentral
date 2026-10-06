@@ -3,6 +3,12 @@ import request from "supertest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
+import {
+  armBackgroundWorkTracking,
+  disarmBackgroundWorkTracking,
+  settleBackgroundWork,
+} from "../backgroundWork.js";
+import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 
 /**
  * Editing an appointment must reuse the booking engine, not become a second
@@ -406,6 +412,154 @@ describe("fields and side effects", () => {
     expect(res.status).toBe(200);
     // Shop is OFF, so nothing was mirrored - and the response says so.
     expect(res.body.mirror).toBe("skipped");
+  });
+});
+
+/**
+ * TELLING THE CLIENT. Moving a booking from the Edit sheet told the client
+ * nothing and left both EMAIL stamps set - so with texts off, a client whose
+ * day-before email had gone out got no reminder for the new time, and kept
+ * believing the old one. The rule now: if ChairBack emailed them the old
+ * time, it emails them the new one; the reminder for the new time always
+ * goes out.
+ */
+describe("a moved booking and the client", () => {
+  let sent: SendEmailInput[] = [];
+  const EMAIL = "moved@test.local";
+
+  beforeAll(() => {
+    armBackgroundWorkTracking();
+    __setSendEmailForTests(async (input) => {
+      sent.push(input);
+      return { id: "TEST", status: "sent" as const };
+    });
+  });
+  afterAll(() => {
+    __setSendEmailForTests(undefined);
+    disarmBackgroundWorkTracking();
+  });
+  beforeEach(() => {
+    sent = [];
+  });
+
+  async function emailedAppt(
+    stamps: { confirmation?: boolean; reminder?: boolean },
+    status: "BOOKED" | "PENDING" = "BOOKED",
+    startsAt?: Date,
+  ) {
+    const a = await makeAppt({ status, ...(startsAt ? { startsAt } : {}) });
+    await prisma.appointment.update({
+      where: { id: a.id },
+      data: {
+        email: EMAIL,
+        confirmationEmailSentAt: stamps.confirmation ? new Date() : null,
+        reminderEmailSentAt: stamps.reminder ? new Date() : null,
+      },
+    });
+    return a;
+  }
+
+  const confirmations = () => sent.filter((s) => s.to === EMAIL && s.meta?.kind === "confirmation");
+
+  it("🔴 a client we emailed about the old time is emailed the new one", async () => {
+    const a = await emailedAppt({ confirmation: true });
+    const res = await patch(a.id, { startsAt: slotAt(17).toISOString() });
+    expect(res.status).toBe(200);
+    await settleBackgroundWork();
+    expect(confirmations()).toHaveLength(1);
+    // And the stamp now records THIS send, for the new time.
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id: a.id } });
+    expect(row.confirmationEmailSentAt).not.toBeNull();
+  });
+
+  it("🔴 a reminder for the old time counts as telling them, too", async () => {
+    const a = await emailedAppt({ reminder: true });
+    await patch(a.id, { startsAt: slotAt(17).toISOString() });
+    await settleBackgroundWork();
+    expect(confirmations()).toHaveLength(1);
+    // The reminder stamp is cleared, so the new time gets its own reminder.
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id: a.id } });
+    expect(row.reminderEmailSentAt).toBeNull();
+  });
+
+  it("🔴 a move resets BOTH email stamps, even when nothing is sent", async () => {
+    const a = await makeAppt();
+    await prisma.appointment.update({
+      where: { id: a.id },
+      // No address: the confirmation can't go, so nothing re-stamps.
+      data: { confirmationEmailSentAt: new Date(), reminderEmailSentAt: new Date() },
+    });
+    await patch(a.id, { startsAt: slotAt(17).toISOString() });
+    await settleBackgroundWork();
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id: a.id } });
+    expect(row.confirmationEmailSentAt).toBeNull();
+    expect(row.reminderEmailSentAt).toBeNull();
+  });
+
+  it("a booking ChairBack never emailed about stays quiet when it moves", async () => {
+    const a = await emailedAppt({});
+    await patch(a.id, { startsAt: slotAt(17).toISOString() });
+    await settleBackgroundWork();
+    expect(sent).toHaveLength(0);
+  });
+
+  it("an edit that doesn't move the time sends nothing - whichever email they had", async () => {
+    // The reminder-only case is the one that matters: with no confirmation
+    // stamp, the confirmation sender's own guard would not stop a send.
+    for (const [i, stamps] of [{ confirmation: true }, { reminder: true }].entries()) {
+      const a = await emailedAppt(stamps, "BOOKED", slotAt(15 + i * 3));
+      await patch(a.id, { notes: "bring the clippers" });
+      await settleBackgroundWork();
+    }
+    expect(sent).toHaveLength(0);
+  });
+
+  it("🔴 a longer or shorter booking at the same time sends nothing and keeps the reminder", async () => {
+    // The emails show the start, never the length: re-sending would be the
+    // same email twice, and a cleared reminder stamp a second reminder.
+    // Its own day: earlier tests in this file leave synced visits next week.
+    const a = await emailedAppt({ confirmation: true, reminder: true }, "BOOKED", slotAt(15, 11));
+    expect((await patch(a.id, { durationMin: 45 })).status).toBe(200);
+    await settleBackgroundWork();
+    expect(sent).toHaveLength(0);
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id: a.id } });
+    expect(row.confirmationEmailSentAt).not.toBeNull();
+    expect(row.reminderEmailSentAt).not.toBeNull();
+  });
+
+  it("🔴 a moved visit of a repeat is told about THAT visit - no 'the others were taken' summary", async () => {
+    const a = await emailedAppt({ confirmation: true });
+    // Six asked for, one still booked: the others finished or were cancelled,
+    // which the first-booking summary would misreport as "already taken".
+    const series = await prisma.recurringSeries.create({
+      data: {
+        shopId,
+        staffId: staffA,
+        serviceId: svcShort,
+        clientId,
+        firstName: "Sam",
+        interval: 1,
+        weekday: 3,
+        startMin: 15 * 60,
+        count: 6,
+        manageToken: randomToken(),
+      },
+    });
+    await prisma.appointment.update({
+      where: { id: a.id },
+      data: { seriesId: series.id, seriesOccurrenceIndex: 3 },
+    });
+    await patch(a.id, { startsAt: slotAt(17).toISOString() });
+    await settleBackgroundWork();
+    expect(confirmations()).toHaveLength(1);
+    expect(confirmations()[0]!.text).not.toMatch(/visits you asked for|already taken/i);
+  });
+
+  it("a pending request isn't 'confirmed' by being moved - approval does that", async () => {
+    const a = await emailedAppt({ confirmation: true }, "PENDING");
+    await patch(a.id, { startsAt: slotAt(17).toISOString() });
+    await settleBackgroundWork();
+    expect(confirmations()).toHaveLength(0);
   });
 });
 

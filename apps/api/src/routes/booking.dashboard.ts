@@ -3496,6 +3496,8 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         checkAvailability: !d.customTime,
         pattern,
         anchor: startsAt,
+        // Every visit in the repeat carries the note typed for it.
+        notes: d.note || null,
       });
       res.status(201).json({
         ok: true,
@@ -3628,6 +3630,10 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
           endsAt,
           priceAtBooking: effectivePrice ?? undefined,
           addOns: addOns.snapshot as unknown as Prisma.InputJsonValue,
+          // The barber's own note from New appointment. It was accepted and
+          // then dropped, so a note typed at booking simply vanished. Private
+          // to the shop: no client-facing read selects Appointment.notes.
+          notes: d.note || null,
           manageToken: randomToken(),
           bookedVia: targeted ? "targeted_slot" : undefined,
           // A deliberate double is recorded as one: who confirmed it, and when.
@@ -4668,7 +4674,7 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
 
   // The customer is told their time moved. No barber alert here, unlike the
   // customer-initiated path - the barber is the one who just did it.
-  void notifyAppointmentConfirmation({ shopId, appointmentId: appt.id });
+  void notifyAppointmentConfirmation({ shopId, appointmentId: appt.id, moved: true });
   // Devices holding this appointment's Wallet pass re-fetch the NEW time.
   // Fire-and-forget: a wallet problem must never affect the reschedule.
   void pokeAppointmentPass(appt.id);

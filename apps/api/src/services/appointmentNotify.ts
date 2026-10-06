@@ -339,6 +339,14 @@ export function notifyAppointmentConfirmation(params: {
   shopId: string;
   appointmentId: string;
   now?: Date;
+  /**
+   * A notice that ONE visit moved, not the original booking. The series
+   * ("3 of 6 booked - the others were taken") and party summaries describe
+   * the first booking and are wrong later: a finished or cancelled visit is
+   * not a time that "was already taken", and one moved member breaks a
+   * back-to-back party's single start time. Left out when set.
+   */
+  moved?: boolean;
 }): Promise<void> {
   return trackBackgroundWork(notifyAppointmentConfirmationImpl(params));
 }
@@ -347,6 +355,7 @@ async function notifyAppointmentConfirmationImpl(params: {
   shopId: string;
   appointmentId: string;
   now?: Date;
+  moved?: boolean;
 }): Promise<void> {
   const now = params.now ?? new Date();
   try {
@@ -407,7 +416,7 @@ async function notifyAppointmentConfirmationImpl(params: {
       } else {
         // 🔴 COUNTED FROM THE ROWS, NEVER FROM WHAT WAS REQUESTED OR HELD.
         // A customer who asked for twelve and got one must read "1 of 12".
-        const series = appt.seriesId
+        const series = appt.seriesId && !params.moved
           ? await runWithShop(shop.id, async (tx) => {
               const row = await tx.recurringSeries.findFirst({
                 where: { id: appt.seriesId as string, shopId: shop.id },
@@ -433,7 +442,7 @@ async function notifyAppointmentConfirmationImpl(params: {
         // Only members still BOOKED are listed: a cancelled attendee is not
         // part of the visit any more, and printing them would have the barber
         // expecting somebody who is not coming.
-        const group = appt.groupId
+        const group = appt.groupId && !params.moved
           ? await runWithShop(shop.id, async (tx) => {
               const members = await tx.appointment.findMany({
                 where: { groupId: appt.groupId as string, shopId: shop.id, status: "BOOKED" },

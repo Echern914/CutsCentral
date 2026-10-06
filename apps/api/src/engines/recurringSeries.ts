@@ -143,6 +143,8 @@ export interface MaterializeInput {
   pattern: RecurrencePattern;
   anchor: Date; // occurrence 0's instant
   now?: Date;
+  /** The barber's private note, written on every occurrence. */
+  notes?: string | null;
   /**
    * Write every occurrence as a PAYMENT HOLD instead of a confirmed booking.
    *
@@ -294,6 +296,7 @@ export async function materializeSeries(
             startsAt,
             endsAt,
             priceAtBooking: price ?? undefined,
+            notes: input.notes ?? null,
             manageToken: randomToken(),
             seriesId: series.id,
             seriesOccurrenceIndex: occ.index,
