@@ -22,6 +22,7 @@ import {
 import { completeReschedule, swapForReschedule } from "../engines/acuityMirror.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
+import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { editClient } from "../services/client.js";
 import { decimalToCents, recordPriceChange } from "../services/appointmentPriceLedger.js";
@@ -179,6 +180,10 @@ export function registerAppointmentEdit(
         visit: { select: { acuityAppointmentId: true } },
         clientId: true,
         priceAtBooking: true,
+        // Whether ChairBack ever emailed this client the CURRENT time - the
+        // test for telling them the new one (after commit, below).
+        confirmationEmailSentAt: true,
+        reminderEmailSentAt: true,
       },
     });
     if (!appt) {
@@ -411,6 +416,13 @@ export function registerAppointmentEdit(
               ? {
                   confirmationSentAt: null,
                   reminderSentAt: null,
+                  // 🔴 The EMAIL stamps move with the time too. Email is the
+                  // only channel a client hears on while texts are off, and
+                  // each stamp gates its own send: left set, a client whose
+                  // day-before email already went out got NO reminder for the
+                  // new time. Same rule as the reschedule route.
+                  confirmationEmailSentAt: null,
+                  reminderEmailSentAt: null,
                   reminder24hPushSentAt: null,
                   reminder2hPushSentAt: null,
                   checkInStatus: null,
@@ -588,6 +600,24 @@ export function registerAppointmentEdit(
     // (time or service changed). Fire-and-forget: a wallet problem must never
     // affect the edit.
     if (timeMoved) void pokeAppointmentPass(appt.id);
+
+    // 🔴 IF WE TOLD THEM THE OLD TIME, WE TELL THEM THE NEW ONE. A client who
+    // got a confirmation or a reminder email for the old time otherwise keeps
+    // believing it - this route sent nothing. A booking ChairBack never
+    // emailed about (made at the chair, arranged by the barber in person)
+    // stays quiet, exactly as it was created: no client is surprised by mail
+    // about an appointment they never heard of from us. A pending request is
+    // confirmed when it is approved, and a time already past needs no notice.
+    const emailedOldTime =
+      appt.confirmationEmailSentAt !== null || appt.reminderEmailSentAt !== null;
+    if (
+      timeMoved &&
+      appt.status === "BOOKED" &&
+      emailedOldTime &&
+      startsAt.getTime() > now.getTime()
+    ) {
+      void notifyAppointmentConfirmation({ shopId, appointmentId: appt.id });
+    }
 
     invalidateAvailability(shopId);
     res.json({ ok: true, id: appt.id, status: appt.status, mirror });

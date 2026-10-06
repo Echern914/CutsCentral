@@ -3496,6 +3496,8 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         checkAvailability: !d.customTime,
         pattern,
         anchor: startsAt,
+        // Every visit in the repeat carries the note typed for it.
+        notes: d.note || null,
       });
       res.status(201).json({
         ok: true,
@@ -3628,6 +3630,10 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
           endsAt,
           priceAtBooking: effectivePrice ?? undefined,
           addOns: addOns.snapshot as unknown as Prisma.InputJsonValue,
+          // The barber's own note from New appointment. It was accepted and
+          // then dropped, so a note typed at booking simply vanished. Private
+          // to the shop: no client-facing read selects Appointment.notes.
+          notes: d.note || null,
           manageToken: randomToken(),
           bookedVia: targeted ? "targeted_slot" : undefined,
           // A deliberate double is recorded as one: who confirmed it, and when.

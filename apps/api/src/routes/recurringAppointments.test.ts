@@ -134,6 +134,47 @@ describe("recurring appointment create", () => {
     );
   });
 
+  it("🔴 the note typed in New appointment is saved - on a single booking and on every visit of a repeat", async () => {
+    // It was accepted by the route and then dropped on both paths.
+    const single = await createRecurring({
+      staffId,
+      serviceId,
+      startsAt: futureTuesdayAt(4),
+      firstName: "Noted",
+      customTime: true,
+      note: "prefers a #2 on the sides",
+    });
+    expect(single.status).toBe(201);
+    const one = await prisma.appointment.findUniqueOrThrow({ where: { id: single.body.id } });
+    expect(one.notes).toBe("prefers a #2 on the sides");
+
+    const repeat = await createRecurring({
+      staffId,
+      serviceId,
+      startsAt: futureTuesdayAt(5),
+      firstName: "Noted",
+      customTime: true,
+      note: "standing Tuesday",
+      recurrence: { interval: 1, count: 3 },
+    });
+    expect(repeat.status).toBe(201);
+    const rows = await prisma.appointment.findMany({ where: { seriesId: repeat.body.series.id } });
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.notes === "standing Tuesday")).toBe(true);
+
+    // No note typed: nothing stored, not an empty string.
+    const bare = await createRecurring({
+      staffId,
+      serviceId,
+      startsAt: futureTuesdayAt(6),
+      firstName: "Bare",
+      customTime: true,
+      note: "",
+    });
+    const none = await prisma.appointment.findUniqueOrThrow({ where: { id: bare.body.id } });
+    expect(none.notes).toBeNull();
+  });
+
   it("skips an occurrence that collides with an existing booking (not fatal)", async () => {
     const startsAt = futureTuesdayAt(18);
     // Pre-book occurrence 2's slot (2 weeks after anchor, same shop-local
