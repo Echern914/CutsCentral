@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-06-add-in-a-busy-hour",
+    date: "2026-10-06",
+    kind: "feature",
+    title: "Add an appointment in the gap of a busy hour",
+    body:
+      "On your day, an hour that already has bookings now shows Add at, with the first open time in it - say " +
+      "Add at 6:30 PM under a 6:20 booking. Tap it and New appointment opens on that time.",
+  },
+  {
     id: "2026-10-06-edit-move-tells-client",
     date: "2026-10-06",
     kind: "fix",

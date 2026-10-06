@@ -63,6 +63,7 @@ import { agendaWindowOf, mergeAgendaWindow } from "./agendaMerge";
 import { swipeAllowedFrom, swipeIntent } from "./daySwipe";
 import { dayTotals, type DayTotals } from "./dayTotals";
 import { nowAnchorHour } from "./nowAnchor";
+import { clockLabel, firstOpenMinute, type BusySpan } from "./dayGaps";
 import { AppointmentForm } from "./AppointmentForm";
 import {
   WAITLIST_BOOK_EVENT,
@@ -683,8 +684,8 @@ export function BookingCalendar({
             toast={toast}
             isNative={isNative}
             staff={staff}
-            onAddAt={(hour, tapped) => {
-              setAddAt(isoForDayHour(shownDay, hour, tz));
+            onAddAt={(hour, tapped, minute) => {
+              setAddAt(isoForDayHour(shownDay, hour, tz, minute));
               setAddTapped(tapped === true);
             }}
             onBlock={() => setBlockDay({ dayKey: shownDay, hour: 12 })}
@@ -797,8 +798,8 @@ export function BookingCalendar({
               toast={toast}
               isNative={isNative}
               staff={staff}
-              onAddAt={(hour, tapped) => {
-                setAddAt(isoForDayHour(selectedDay, hour, tz));
+              onAddAt={(hour, tapped, minute) => {
+                setAddAt(isoForDayHour(selectedDay, hour, tz, minute));
                 setAddTapped(tapped === true);
               }}
               onBlock={() => setBlockDay({ dayKey: selectedDay, hour: 12 })}
@@ -917,9 +918,9 @@ export function BookingCalendar({
  * the tapped day/hour even when the device is in another zone. The appointment
  * form then fetches the REAL open slots for that day - this is only an anchor.
  */
-function isoForDayHour(dayKey: string, hour: number, tz: string): string {
+function isoForDayHour(dayKey: string, hour: number, tz: string, minute = 0): string {
   const [y, m, d] = dayKey.split("-").map(Number);
-  return zonedWallTimeToUtc(y!, m! - 1, d!, hour * 60, tz).toISOString();
+  return zonedWallTimeToUtc(y!, m! - 1, d!, hour * 60 + minute, tz).toISOString();
 }
 
 /**
@@ -1555,8 +1556,11 @@ function DayPlanner({
   isNative: boolean;
   /** Active barbers - the walk-in bar asks whose chair when there's a choice. */
   staff: StaffRow[];
-  /** `tapped`: the barber tapped THIS hour's row, so it is the time he means. */
-  onAddAt: (hour: number, tapped?: boolean) => void;
+  /**
+   * `tapped`: the barber tapped THIS hour's row, so it is the time he means.
+   * `minute`: past the hour - the open stretch inside a busy hour (dayGaps.ts).
+   */
+  onAddAt: (hour: number, tapped?: boolean, minute?: number) => void;
   onBlock: () => void;
   /** "Offer to a tier" - absent when the shop has no tiers (rewards off). */
   onOfferToTier?: () => void;
@@ -1650,6 +1654,23 @@ function DayPlanner({
     });
   const blockCovering = (h: number) =>
     blockIntervals.find((iv) => iv.startMin <= h * 60 && iv.endMin >= (h + 1) * 60) ?? null;
+
+  // Room left INSIDE an hour that already holds bookings (dayGaps.ts), per
+  // chair. Every row counts, whatever the category filter shows: open time is
+  // a fact about the calendar, not about the chip that is selected. A
+  // cancelled booking holds nothing; a row with no end (or a zero-length one,
+  // as some synced visits arrive) is taken as half an hour.
+  const chairIds = staff.map((s) => s.id);
+  const busy: BusySpan[] = rows
+    .filter((r) => r.status !== "canceled")
+    .map((r) => {
+      const startMin = minuteOf(r.start);
+      const hasEnd = !!r.end && r.end !== r.start;
+      const rawEnd = hasEnd ? minuteOf(r.end!) : startMin + 30;
+      // Past midnight it ends on a later day: on THIS day it runs to 24:00.
+      const endMin = hasEnd && rawEnd <= startMin ? 24 * 60 : rawEnd;
+      return { staffId: r.staffId ?? null, startMin, endMin };
+    });
 
   // Collapse each RUN of covered, empty hours into one band. Printing the strip
   // per hour meant a day off rendered as fifteen identical "blocked until 11:00
@@ -1865,6 +1886,9 @@ function DayPlanner({
           }
           const h = item.hour;
           const slot = (byHour.get(h) ?? []).sort((a, b) => a.start.localeCompare(b.start));
+          // An empty hour already offers its "+"; a busy one offers the room
+          // it has left, at the minute that room starts.
+          const openAt = isNative && slot.length > 0 ? firstOpenMinute(busy, h, chairIds) : null;
           return (
             <motion.div
               key={h}
@@ -1918,6 +1942,20 @@ function DayPlanner({
                         onChanged={onChanged}
                       />
                     ))}
+                    {openAt !== null && (
+                      <button
+                        type="button"
+                        onClick={() => onAddAt(h, true, openAt - h * 60)}
+                        className="group flex w-full items-center gap-2 py-1 text-xs text-muted transition-colors hover:text-gold"
+                      >
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full border border-subtle text-muted transition-colors group-hover:border-gold/50 group-hover:text-gold">
+                          +
+                        </span>
+                        {/* Said out loud, not on hover: a phone has no hover,
+                            and the time is what makes the gap worth tapping. */}
+                        <span>Add at {clockLabel(openAt)}</span>
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
