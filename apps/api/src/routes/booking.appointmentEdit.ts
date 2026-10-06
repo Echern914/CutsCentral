@@ -285,6 +285,12 @@ export function registerAppointmentEdit(
       startsAt.getTime() !== appt.startsAt.getTime() ||
       endsAt.getTime() !== appt.endsAt.getTime() ||
       staffId !== appt.staffId;
+    // What the CLIENT can see changed: the start, or who they're seeing. A
+    // longer or shorter booking at the same time is the shop's business - the
+    // confirmation and reminder emails show neither the length nor the end,
+    // so re-sending them would be the same email twice.
+    const clientVisibleMove =
+      startsAt.getTime() !== appt.startsAt.getTime() || staffId !== appt.staffId;
 
     // Money never moves as a side effect of an edit. Read separately: the
     // forShop() tenant wrapper erases nested-relation types.
@@ -412,17 +418,18 @@ export function registerAppointmentEdit(
             ...(d.notes !== undefined ? { notes: d.notes } : {}),
             // Send-state resets only when the TIME actually moved: fixing a
             // spelling must not re-text the customer a fresh confirmation.
+            // 🔴 The EMAIL stamps move with a change the client can see. Email
+            // is the only channel a client hears on while texts are off, and
+            // each stamp gates its own send: left set, a client whose
+            // day-before email already went out got NO reminder for the new
+            // time. Same rule as the reschedule route.
+            ...(clientVisibleMove
+              ? { confirmationEmailSentAt: null, reminderEmailSentAt: null }
+              : {}),
             ...(timeMoved
               ? {
                   confirmationSentAt: null,
                   reminderSentAt: null,
-                  // 🔴 The EMAIL stamps move with the time too. Email is the
-                  // only channel a client hears on while texts are off, and
-                  // each stamp gates its own send: left set, a client whose
-                  // day-before email already went out got NO reminder for the
-                  // new time. Same rule as the reschedule route.
-                  confirmationEmailSentAt: null,
-                  reminderEmailSentAt: null,
                   reminder24hPushSentAt: null,
                   reminder2hPushSentAt: null,
                   checkInStatus: null,
@@ -611,12 +618,14 @@ export function registerAppointmentEdit(
     const emailedOldTime =
       appt.confirmationEmailSentAt !== null || appt.reminderEmailSentAt !== null;
     if (
-      timeMoved &&
+      clientVisibleMove &&
       appt.status === "BOOKED" &&
       emailedOldTime &&
       startsAt.getTime() > now.getTime()
     ) {
-      void notifyAppointmentConfirmation({ shopId, appointmentId: appt.id });
+      // `moved`: this is a notice about ONE visit, not the original booking,
+      // so no series or party summary rides along (see the notifier).
+      void notifyAppointmentConfirmation({ shopId, appointmentId: appt.id, moved: true });
     }
 
     invalidateAvailability(shopId);

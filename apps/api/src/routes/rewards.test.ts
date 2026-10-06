@@ -224,7 +224,7 @@ describe("POST /api/rewards/:magicToken/delete", () => {
     // runAsOwner (RLS off) - with a visit, a push device, a wallet pass, and a
     // nudge whose body carries the first name (the off-row PII we must scrub).
     const delToken = randomToken();
-    const { clientId, visitId, nudgeId, convoId, entryId } = await runAsOwner(async (tx) => {
+    const { clientId, visitId, nudgeId, convoId, entryId, apptId } = await runAsOwner(async (tx) => {
       const client = await tx.client.create({
         data: {
           shopId,
@@ -289,12 +289,32 @@ describe("POST /api/rewards/:magicToken/delete", () => {
           smsConsentPhone: "+13025550000",
         },
       });
+      // A booking carrying free text about the person: the shop's note (now
+      // saved from New appointment) and their answers to booking questions.
+      const staff = await tx.staff.create({ data: { shopId, name: "Del Staff" } });
+      const service = await tx.service.create({ data: { shopId, name: "Del Svc", durationMin: 30 } });
+      const appt = await tx.appointment.create({
+        data: {
+          shopId,
+          staffId: staff.id,
+          serviceId: service.id,
+          clientId: client.id,
+          firstName: "Deletes",
+          status: "BOOKED",
+          startsAt: new Date("2026-12-01T15:00:00Z"),
+          endsAt: new Date("2026-12-01T15:30:00Z"),
+          manageToken: randomToken(),
+          notes: "Deletes is nervous about clippers",
+          intake: [{ question: "Address", answer: "12 Herself Lane" }],
+        },
+      });
       return {
         clientId: client.id,
         visitId: visit.id,
         nudgeId: nudge.id,
         convoId: convo.id,
         entryId: entry.id,
+        apptId: appt.id,
       };
     });
 
@@ -346,5 +366,9 @@ describe("POST /api/rewards/:magicToken/delete", () => {
     });
     const keptVisit = await prisma.visit.findUnique({ where: { id: visitId } });
     expect(keptVisit).not.toBeNull();
+    // 🔴 Their bookings keep the row (the shop's history) but no free text
+    // about them: not the shop's note, not their own booking answers.
+    const appt = await prisma.appointment.findUniqueOrThrow({ where: { id: apptId } });
+    expect(appt).toMatchObject({ firstName: "Deleted", notes: null, intake: [] });
   });
 });

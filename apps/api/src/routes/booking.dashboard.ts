@@ -4674,7 +4674,7 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
 
   // The customer is told their time moved. No barber alert here, unlike the
   // customer-initiated path - the barber is the one who just did it.
-  void notifyAppointmentConfirmation({ shopId, appointmentId: appt.id });
+  void notifyAppointmentConfirmation({ shopId, appointmentId: appt.id, moved: true });
   // Devices holding this appointment's Wallet pass re-fetch the NEW time.
   // Fire-and-forget: a wallet problem must never affect the reschedule.
   void pokeAppointmentPass(appt.id);

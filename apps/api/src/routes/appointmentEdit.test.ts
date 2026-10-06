@@ -442,8 +442,12 @@ describe("a moved booking and the client", () => {
     sent = [];
   });
 
-  async function emailedAppt(stamps: { confirmation?: boolean; reminder?: boolean }, status: "BOOKED" | "PENDING" = "BOOKED") {
-    const a = await makeAppt({ status });
+  async function emailedAppt(
+    stamps: { confirmation?: boolean; reminder?: boolean },
+    status: "BOOKED" | "PENDING" = "BOOKED",
+    startsAt?: Date,
+  ) {
+    const a = await makeAppt({ status, ...(startsAt ? { startsAt } : {}) });
     await prisma.appointment.update({
       where: { id: a.id },
       data: {
@@ -502,12 +506,53 @@ describe("a moved booking and the client", () => {
   it("an edit that doesn't move the time sends nothing - whichever email they had", async () => {
     // The reminder-only case is the one that matters: with no confirmation
     // stamp, the confirmation sender's own guard would not stop a send.
-    for (const stamps of [{ confirmation: true }, { reminder: true }]) {
-      const a = await emailedAppt(stamps);
+    for (const [i, stamps] of [{ confirmation: true }, { reminder: true }].entries()) {
+      const a = await emailedAppt(stamps, "BOOKED", slotAt(15 + i * 3));
       await patch(a.id, { notes: "bring the clippers" });
       await settleBackgroundWork();
     }
     expect(sent).toHaveLength(0);
+  });
+
+  it("🔴 a longer or shorter booking at the same time sends nothing and keeps the reminder", async () => {
+    // The emails show the start, never the length: re-sending would be the
+    // same email twice, and a cleared reminder stamp a second reminder.
+    // Its own day: earlier tests in this file leave synced visits next week.
+    const a = await emailedAppt({ confirmation: true, reminder: true }, "BOOKED", slotAt(15, 11));
+    expect((await patch(a.id, { durationMin: 45 })).status).toBe(200);
+    await settleBackgroundWork();
+    expect(sent).toHaveLength(0);
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id: a.id } });
+    expect(row.confirmationEmailSentAt).not.toBeNull();
+    expect(row.reminderEmailSentAt).not.toBeNull();
+  });
+
+  it("🔴 a moved visit of a repeat is told about THAT visit - no 'the others were taken' summary", async () => {
+    const a = await emailedAppt({ confirmation: true });
+    // Six asked for, one still booked: the others finished or were cancelled,
+    // which the first-booking summary would misreport as "already taken".
+    const series = await prisma.recurringSeries.create({
+      data: {
+        shopId,
+        staffId: staffA,
+        serviceId: svcShort,
+        clientId,
+        firstName: "Sam",
+        interval: 1,
+        weekday: 3,
+        startMin: 15 * 60,
+        count: 6,
+        manageToken: randomToken(),
+      },
+    });
+    await prisma.appointment.update({
+      where: { id: a.id },
+      data: { seriesId: series.id, seriesOccurrenceIndex: 3 },
+    });
+    await patch(a.id, { startsAt: slotAt(17).toISOString() });
+    await settleBackgroundWork();
+    expect(confirmations()).toHaveLength(1);
+    expect(confirmations()[0]!.text).not.toMatch(/visits you asked for|already taken/i);
   });
 
   it("a pending request isn't 'confirmed' by being moved - approval does that", async () => {

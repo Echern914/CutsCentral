@@ -726,7 +726,16 @@ rewardsRouter.post("/:magicToken/delete", async (req, res) => {
     });
     await tx.appointment.updateMany({
       where: { clientId: client.id },
-      data: { firstName: "Deleted", lastName: null, phone: null, email: null },
+      data: {
+        firstName: "Deleted",
+        lastName: null,
+        phone: null,
+        email: null,
+        // Free text about the person: the shop's note on the booking, and
+        // their own answers to the shop's booking questions.
+        notes: null,
+        intake: [],
+      },
     });
     await tx.recurringSeries.updateMany({
       where: { clientId: client.id },

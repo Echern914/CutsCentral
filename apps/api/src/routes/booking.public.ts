@@ -4136,6 +4136,8 @@ bookingPublicRouter.post(
     void notifyAppointmentConfirmation({
       shopId: appt.shopId,
       appointmentId: appt.id,
+      // A notice about this one visit: no series or party summary.
+      moved: true,
     });
     // The barber's day just changed under them - mirror alert (push + SMS).
     void notifyBarberBookingEvent({
