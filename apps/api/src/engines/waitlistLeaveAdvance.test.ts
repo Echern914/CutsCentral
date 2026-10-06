@@ -381,7 +381,7 @@ describe("races", () => {
   it("🔴 leaving and claiming the same hold at once: exactly one of them happens", async () => {
     const entry = await makeEntry();
     const held = await offerTo(freshSlot());
-    const { results, settledEarly } = await raceBehindRowLock("WaitlistOffer", held.offerId, [
+    const { results, settledEarly } = await raceBehindRowLock<unknown>("WaitlistOffer", held.offerId, [
       () => leaveWaitlistEntry({ where: { id: entry.id, shopId }, source: "cancel_link" }),
       () => claimOffer({ token: held.token }),
     ]);
@@ -403,7 +403,7 @@ describe("races", () => {
     // Both the offer (re-reading the chosen entry) and the leave (changing it)
     // must queue on the entry row.
     const barrier = await holdRowLock("WaitlistEntry", leaver.id);
-    const { results, settledEarly } = await raceBehindBarrier(barrier, [
+    const { results, settledEarly } = await raceBehindBarrier<unknown>(barrier, [
       () => offerFreedSlot(slot, new Date()),
       () => leaveWaitlistEntry({ where: { id: leaver.id, shopId }, source: "cancel_link" }),
     ]);
