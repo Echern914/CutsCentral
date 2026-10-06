@@ -109,7 +109,7 @@ export function TargetedSlotCard({
 }
 
 /** A gold caret that points down when closed and up when open. */
-function Chevron({ open }: { open: boolean }) {
+export function Chevron({ open }: { open: boolean }) {
   return (
     <svg
       aria-hidden="true"

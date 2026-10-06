@@ -90,7 +90,15 @@ async function shown(isNative = true) {
   return view;
 }
 
-const card = (name: RegExp) => screen.getByText(name).closest("li") as HTMLElement;
+const row$ = (name: RegExp) => screen.getByText(name).closest("li") as HTMLElement;
+const toggleOf = (li: HTMLElement) => li.querySelector("button[aria-expanded]") as HTMLButtonElement;
+
+/** The row, opened: what most tests act on. A collapsed row is pinned below. */
+const card = (name: RegExp) => {
+  const li = row$(name);
+  if (toggleOf(li).getAttribute("aria-expanded") === "false") fireEvent.click(toggleOf(li));
+  return li;
+};
 
 describe("when it shows", () => {
   it("renders nothing when nobody is on the list", async () => {
@@ -256,6 +264,122 @@ describe("what a row says", () => {
     const li = card(/Lena Ortiz/);
     expect(li.className).toContain("min-w-0");
     expect(screen.getByText("Lena Ortiz").className).toContain("[overflow-wrap:anywhere]");
+  });
+});
+
+/**
+ * COMPACT UNTIL TAPPED. Eric, 2026-10-06, from a phone: every row showed its
+ * reason, its number, its email and two rows of buttons, so three people
+ * filled the screen. Collapsed, a row is who, when, what and with whom, plus
+ * the chip; one tap opens the rest.
+ */
+describe("compact rows", () => {
+  it("🔴 collapsed: who, when, the service and provider, and the chip - nothing else", async () => {
+    listUnfinishedAction.mockResolvedValue(listed([row({ timeTaken: true })]));
+    await shown();
+    const li = row$(/Lena Ortiz/);
+    expect(toggleOf(li)).toHaveAttribute("aria-expanded", "false");
+    expect(within(li).getByText(/Wanted Fri, Oct 9, 4:30 PM/)).toBeInTheDocument();
+    expect(li).toHaveTextContent("Haircut");
+    expect(li).toHaveTextContent("Sam");
+    expect(within(li).getByText("Time taken")).toBeInTheDocument();
+    expect(li).not.toHaveTextContent("Didn't save a card");
+    expect(li).not.toHaveTextContent("(302) 555-0110");
+    expect(li).not.toHaveTextContent("lena@example.com");
+    expect(within(li).queryByRole("link", { name: "Text" })).toBeNull();
+    expect(within(li).queryByRole("button", { name: "Dismiss" })).toBeNull();
+  });
+
+  it("a tap opens the rest, and a second tap closes it", async () => {
+    await shown();
+    const li = row$(/Lena Ortiz/);
+    fireEvent.click(toggleOf(li));
+    expect(toggleOf(li)).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById(toggleOf(li).getAttribute("aria-controls")!)).not.toBeNull();
+    expect(li).toHaveTextContent("Didn't save a card. Tried Oct 4, 11:29 AM.");
+    expect(within(li).getByRole("link", { name: "Text" })).toBeInTheDocument();
+    expect(within(li).getByRole("button", { name: "Book them" })).toBeInTheDocument();
+    fireEvent.click(toggleOf(li));
+    expect(toggleOf(li)).toHaveAttribute("aria-expanded", "false");
+    expect(within(li).queryByRole("link", { name: "Text" })).toBeNull();
+  });
+
+  it("each row opens on its own", async () => {
+    listUnfinishedAction.mockResolvedValue(
+      listed([row(), row({ id: "a2", firstName: "Omar", lastName: "Said", clientId: "c2" })]),
+    );
+    await shown();
+    fireEvent.click(toggleOf(row$(/Lena Ortiz/)));
+    expect(toggleOf(row$(/Omar Said/))).toHaveAttribute("aria-expanded", "false");
+    expect(within(row$(/Omar Said/)).queryByRole("link", { name: "Text" })).toBeNull();
+  });
+
+  it("🔴 a row with something to say can't be closed over it: a booking that still needs Done", async () => {
+    createAppointmentAction.mockResolvedValue({ ok: true, clientConfirmation: "none" });
+    await shown();
+    listUnfinishedAction.mockResolvedValue(listed([]));
+    const li = card(/Lena Ortiz/);
+    fireEvent.click(within(li).getByRole("button", { name: "Book them" }));
+    fireEvent.click(within(li).getByRole("button", { name: "Book" }));
+    await waitFor(() => expect(li).toHaveTextContent("ChairBack couldn't email Lena a confirmation"));
+    fireEvent.click(toggleOf(li));
+    expect(toggleOf(li)).toHaveAttribute("aria-expanded", "true");
+    expect(li).toHaveTextContent("ChairBack couldn't email Lena a confirmation");
+    expect(within(li).getByRole("link", { name: "Text" })).toBeInTheDocument();
+    expect(within(li).getByRole("button", { name: "Done" })).toBeInTheDocument();
+  });
+
+  it("🔴 a refused booking stays open with why, after a fresh read too", async () => {
+    createAppointmentAction.mockResolvedValueOnce({ ok: false, error: "slot_taken", code: "OVERLAP", confirmation: "d" });
+    listUnfinishedAction.mockResolvedValue(
+      listed([row(), row({ id: "a2", firstName: "Omar", lastName: "Said", clientId: "c2" })]),
+    );
+    await shown();
+    const lena = card(/Lena Ortiz/);
+    fireEvent.click(within(lena).getByRole("button", { name: "Book them" }));
+    fireEvent.click(within(lena).getByRole("button", { name: "Book" }));
+    await within(lena).findByText("That time was just taken. Text them to pick another.");
+    fireEvent.click(toggleOf(lena));
+    expect(within(lena).getByText("That time was just taken. Text them to pick another.")).toBeInTheDocument();
+    // A fresh read (booking Omar re-reads the list) doesn't fold it away.
+    const omar = card(/Omar Said/);
+    fireEvent.click(within(omar).getByRole("button", { name: "Book them" }));
+    fireEvent.click(within(omar).getByRole("button", { name: "Book" }));
+    await waitFor(() => expect(listUnfinishedAction).toHaveBeenCalledTimes(2));
+    expect(within(lena).getByText("That time was just taken. Text them to pick another.")).toBeInTheDocument();
+  });
+
+  it("🔴 a row the barber opened is still open after a fresh read moves it out of the first three and back", async () => {
+    const rows = ["a", "b", "c"].map((k, i) =>
+      row({ id: `r${k}`, firstName: `P${k}`, lastName: "Row", clientId: `c${k}`, startsAt: `2026-10-0${7 + i}T23:30:00.000Z` }),
+    );
+    listUnfinishedAction
+      .mockResolvedValueOnce(listed(rows))
+      .mockResolvedValue(
+        listed([row({ id: "r0", firstName: "Early", lastName: "Bird", startsAt: "2026-10-06T23:30:00.000Z" }), ...rows]),
+      );
+    await shown();
+    fireEvent.click(toggleOf(row$(/Pc Row/)));
+    // Booking another row re-reads the list; a newer try sorts ahead of Pc.
+    const pa = card(/Pa Row/);
+    fireEvent.click(within(pa).getByRole("button", { name: "Book them" }));
+    fireEvent.click(within(pa).getByRole("button", { name: "Book" }));
+    await waitFor(() => expect(screen.getByText("Early Bird")).toBeInTheDocument());
+    expect(screen.queryByText("Pc Row")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Show all/ }));
+    expect(toggleOf(row$(/Pc Row/))).toHaveAttribute("aria-expanded", "true");
+    expect(toggleOf(row$(/Pb Row/))).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("an open row's buttons: Text, Call and Dismiss share one row on a phone; Book them gets its own", async () => {
+    await shown();
+    const li = card(/Lena Ortiz/);
+    const grid = within(li).getByRole("button", { name: "Dismiss" }).parentElement!;
+    expect(grid.className).toContain("grid-cols-3");
+    expect(within(li).getByRole("button", { name: "Book them" }).className).toContain("col-span-3");
+    for (const name of ["Text", "Call"]) {
+      expect(within(li).getByRole("link", { name }).className).not.toContain("col-span");
+    }
   });
 });
 
