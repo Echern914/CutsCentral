@@ -37,6 +37,23 @@ bookingConflictsRouter.use(requireUser, requireShop, requireManager);
 /** Never more than this in one page, whatever the client asks for. */
 const MAX_LIMIT = 50;
 
+/**
+ * NOW, ON THE DATABASE'S CLOCK - the one `detectedAt` is stamped by
+ * (`DEFAULT now()`), and so the one every bound compared with it must use.
+ *
+ * 🔴 The API host and the database are different machines, and their clocks
+ * differ by milliseconds. With `asOf` taken from the API's clock, a conflict
+ * detected inside that gap just before the list was read was SHOWN on the
+ * list, then left open by "resolve all" (it read as detected after `asOf`).
+ * Rounded to the millisecond the way a stored timestamp(3) is, so a row
+ * stamped in this same millisecond compares equal, never one ahead.
+ * `resolvedAt` is stamped from here too: "delete resolved" bounds it by `asOf`.
+ */
+async function dbNow(): Promise<Date> {
+  const [row] = await prisma.$queryRaw<{ t: Date }[]>`SELECT clock_timestamp()::timestamptz(3) AS t`;
+  return row!.t;
+}
+
 const listSchema = z.object({
   /** Default "open": the inbox is a to-do list, not an archive. */
   status: z.enum(["open", "resolved", "all"]).default("open"),
@@ -213,8 +230,9 @@ async function loadContext(
 bookingConflictsRouter.get("/", async (req, res) => {
   const shopId = req.shop!.id;
   // Taken BEFORE the read, so everything detected up to it had its chance to
-  // be counted. Handed back for "resolve all" to bound itself by.
-  const asOf = new Date();
+  // be counted. Handed back for "resolve all" to bound itself by - on the
+  // database's clock, the one `detectedAt` is stamped by (see dbNow).
+  const asOf = await dbNow();
   const parsed = listSchema.safeParse(req.query ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
@@ -381,7 +399,7 @@ bookingConflictsRouter.post("/delete-resolved", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const now = new Date();
+  const now = await dbNow();
   const asOf = new Date(Math.min(new Date(parsed.data.asOf).getTime(), now.getTime()));
 
   let deleted: number;
@@ -440,7 +458,7 @@ bookingConflictsRouter.post("/resolve-all", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const now = new Date();
+  const now = await dbNow();
   // Never later than now: a client clock running ahead must not widen it.
   const asOf = new Date(Math.min(new Date(parsed.data.asOf).getTime(), now.getTime()));
   const note = parsed.data.note?.length ? parsed.data.note : null;
@@ -497,6 +515,8 @@ bookingConflictsRouter.post("/:id/resolve", async (req, res) => {
     return;
   }
   const note = parsed.data.note?.length ? parsed.data.note : null;
+  // Read before the transaction opens, so it holds no second connection.
+  const resolvedAt = await dbNow();
 
   const outcome = await runWithShop(shopId, async (tx) => {
     const existing = await tx.bookingConflict.findFirst({
@@ -509,7 +529,7 @@ bookingConflictsRouter.post("/:id/resolve", async (req, res) => {
     // part of the statement: count 0 means somebody else got there first.
     const { count } = await tx.bookingConflict.updateMany({
       where: { id: conflictId, shopId, resolvedAt: null },
-      data: { resolvedAt: new Date(), resolvedByUserId: userId, resolutionNote: note },
+      data: { resolvedAt, resolvedByUserId: userId, resolutionNote: note },
     });
     if (count === 0) {
       return { kind: "already" as const, row: existing };

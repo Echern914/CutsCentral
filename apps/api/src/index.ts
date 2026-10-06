@@ -13,7 +13,7 @@ import { pushEnabled } from "./messaging/push.js";
 import { walletEnabled } from "./wallet/pass.js";
 import { squareEnabled } from "./square/client.js";
 import { receptionistConfigured } from "./receptionist/config.js";
-import { captureError, initSentry } from "./sentry.js";
+import { captureError, flushSentry, initSentry } from "./sentry.js";
 import { reportAppVersionConfig } from "./routes/appVersion.js";
 
 const env = apiEnv();
@@ -117,6 +117,9 @@ async function shutdown(signal: string) {
   logger.info({ signal }, "shutting down");
   server.close();
   await prisma.$disconnect();
+  // Every deploy ends here (SIGTERM): send any error raised in the last
+  // moments, or it is lost with the process.
+  await flushSentry();
   process.exit(0);
 }
 
@@ -132,5 +135,7 @@ process.on("unhandledRejection", (reason) => {
 process.on("uncaughtException", (err) => {
   logger.fatal({ err }, "uncaught exception");
   captureError(err);
-  process.exit(1);
+  // Exiting at once dropped exactly this event - the one that matters most.
+  // Bounded, so a broken process cannot linger.
+  void flushSentry().finally(() => process.exit(1));
 });
