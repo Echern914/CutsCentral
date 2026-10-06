@@ -26,7 +26,9 @@ import { cancelAppointment } from "../engines/appointmentPromotion.js";
  */
 
 /** Drain the outbox the way the scheduled job does. */
-const drain = (now?: Date) => runEmailOutbox(now ? { now } : {});
+// Scoped to this file's shop: EmailIntent has no FK to Shop, so another
+// suite's leftover PENDING rows would otherwise fill the batch first.
+const drain = (now?: Date) => runEmailOutbox({ shopId, ...(now ? { now } : {}) });
 
 const intentsFor = (appointmentId: string) =>
   prisma.emailIntent.findMany({ where: { appointmentId } });

@@ -144,30 +144,37 @@ export async function runCustomerSignInOutbox(
   opts: { now?: Date; batch?: number } = {},
 ): Promise<SignInOutboxResult> {
   const now = opts.now ?? new Date();
-  // Inlined as a validated integer, never a bound parameter: PR #413 found a
-  // LIMIT that bound as a parameter and was then not applied at all.
+  // Inlined as a validated integer. (PR #413 blamed a bound LIMIT parameter
+  // for a claim that took more rows than its LIMIT; the real cause was the
+  // query shape, fixed below - see #445.)
   const batch = Math.max(1, Math.min(Math.trunc(opts.batch ?? BATCH), 200));
   const staleBefore = new Date(now.getTime() - CLAIM_TTL_MS);
   const claimToken = randomToken(16);
 
+  // The locked sub-select runs exactly once (MATERIALIZED): as
+  // `WHERE "id" IN (... LIMIT n FOR UPDATE SKIP LOCKED)` a nested-loop plan
+  // re-runs it per row and claims past its LIMIT (#445, see
+  // broadcastWorker.ts claimDueSends; claimShape.test.ts keeps it out).
   const claimed = await runAsOwner((tx) =>
     tx.$queryRaw<{ id: string }[]>(Prisma.sql`
-      UPDATE "CustomerSignInDelivery"
+      WITH due AS MATERIALIZED (
+        SELECT "id" FROM "CustomerSignInDelivery"
+         WHERE "status" = 'pending'
+           AND ("nextAttemptAt" IS NULL
+                OR "nextAttemptAt" <= ${now.toISOString()}::timestamp)
+           AND ("claimedAt" IS NULL
+                OR "claimedAt" < ${staleBefore.toISOString()}::timestamp)
+         ORDER BY "nextAttemptAt" NULLS FIRST, "createdAt"
+         LIMIT ${Prisma.raw(String(batch))}
+         FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "CustomerSignInDelivery" t
          SET "claimedAt" = ${now.toISOString()}::timestamp,
              "claimToken" = ${claimToken},
              "updatedAt" = now()
-       WHERE "id" IN (
-         SELECT "id" FROM "CustomerSignInDelivery"
-          WHERE "status" = 'pending'
-            AND ("nextAttemptAt" IS NULL
-                 OR "nextAttemptAt" <= ${now.toISOString()}::timestamp)
-            AND ("claimedAt" IS NULL
-                 OR "claimedAt" < ${staleBefore.toISOString()}::timestamp)
-          ORDER BY "nextAttemptAt" NULLS FIRST, "createdAt"
-          LIMIT ${Prisma.raw(String(batch))}
-          FOR UPDATE SKIP LOCKED
-       )
-      RETURNING "id"`),
+        FROM due
+       WHERE t."id" = due."id"
+      RETURNING t."id"`),
   );
 
   const result: SignInOutboxResult = { ...EMPTY, claimed: claimed.length };

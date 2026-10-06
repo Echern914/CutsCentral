@@ -172,23 +172,29 @@ export async function executeAffiliateCredits(opts: {
   const batch = opts.batch ?? BATCH;
   const staleBefore = new Date(now.getTime() - CLAIM_TTL_MS);
   const claimToken = randomToken(16);
+  // The locked sub-select runs exactly once (MATERIALIZED): as
+  // `WHERE "id" IN (... LIMIT n FOR UPDATE SKIP LOCKED)` a nested-loop plan
+  // re-runs it per row and claims past its LIMIT (#445, see
+  // broadcastWorker.ts claimDueSends; claimShape.test.ts keeps it out).
   const claimed = await runAsOwner((tx) =>
     tx.$queryRaw<{ id: string }[]>(Prisma.sql`
-      UPDATE "AffiliateCreditOperation"
+      WITH due AS MATERIALIZED (
+        SELECT "id" FROM "AffiliateCreditOperation"
+         WHERE "status" = 'PENDING'
+           AND ("nextAttemptAt" IS NULL
+                OR "nextAttemptAt" <= ${now.toISOString()}::timestamp)
+           AND ("claimedAt" IS NULL OR "claimedAt" < ${staleBefore.toISOString()}::timestamp)
+         ORDER BY "nextAttemptAt" NULLS FIRST, "createdAt"
+         LIMIT ${batch}
+         FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "AffiliateCreditOperation" t
          SET "claimedAt" = ${now.toISOString()}::timestamp,
              "claimToken" = ${claimToken},
              "updatedAt" = now()
-       WHERE "id" IN (
-         SELECT "id" FROM "AffiliateCreditOperation"
-          WHERE "status" = 'PENDING'
-            AND ("nextAttemptAt" IS NULL
-                 OR "nextAttemptAt" <= ${now.toISOString()}::timestamp)
-            AND ("claimedAt" IS NULL OR "claimedAt" < ${staleBefore.toISOString()}::timestamp)
-          ORDER BY "nextAttemptAt" NULLS FIRST, "createdAt"
-          LIMIT ${batch}
-          FOR UPDATE SKIP LOCKED
-       )
-      RETURNING "id"`),
+        FROM due
+       WHERE t."id" = due."id"
+      RETURNING t."id"`),
   );
   const result: ExecuteResult = {
     claimed: claimed.length,

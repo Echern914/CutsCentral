@@ -186,7 +186,7 @@ describe("the worker delivers it", () => {
       await markDelivered();
     });
 
-    const res = await runEmailOutbox();
+    const res = await runEmailOutbox({ shopId });
 
     expect(res.sent).toBeGreaterThanOrEqual(1);
     expect(notifyMock.notifyAppointmentConfirmation).toHaveBeenCalledTimes(1);
@@ -204,7 +204,7 @@ describe("the worker delivers it", () => {
     notifyMock.notifyAppointmentConfirmation.mockImplementation(async () => {
       await markDelivered();
     });
-    await runEmailOutbox();
+    await runEmailOutbox({ shopId });
 
     expect((await intents())[0]!.status).toBe("SENT");
     expect(notifyMock.notifyAppointmentConfirmation).toHaveBeenCalledTimes(1);
@@ -216,7 +216,7 @@ describe("the worker delivers it", () => {
 
     // The durable stamp is the second idempotency layer: the deliverer sees
     // the send already happened and settles without touching a provider.
-    const res = await runEmailOutbox();
+    const res = await runEmailOutbox({ shopId });
 
     expect(notifyMock.notifyAppointmentConfirmation).not.toHaveBeenCalled();
     expect((await intents())[0]!.status).toBe("SENT");
@@ -226,7 +226,7 @@ describe("the worker delivers it", () => {
   it("retries when the send did not confirm, rather than giving up", async () => {
     await sendGroupConfirmationOnce(shopId, groupId);
     // Notifier runs but never stamps - the send did not land.
-    await runEmailOutbox();
+    await runEmailOutbox({ shopId });
 
     const row = (await intents())[0]!;
     expect(row.status).toBe("PENDING");
@@ -240,7 +240,7 @@ describe("the worker delivers it", () => {
       data: { status: "CANCELED" },
     });
 
-    await runEmailOutbox();
+    await runEmailOutbox({ shopId });
 
     // SUPERSEDED, not FAILED: there is no longer a booking to confirm, and
     // that is not a delivery failure.
@@ -255,7 +255,7 @@ describe("the worker delivers it", () => {
     });
     await sendGroupConfirmationOnce(shopId, groupId);
 
-    await runEmailOutbox();
+    await runEmailOutbox({ shopId });
 
     const row = (await intents())[0]!;
     expect(row.status).toBe("SUPPRESSED");
@@ -274,7 +274,7 @@ describe("one delivery path, not two", () => {
       await markDelivered();
     });
 
-    const res = await runEmailOutbox();
+    const res = await runEmailOutbox({ shopId });
 
     expect(res.claimed).toBeGreaterThanOrEqual(1);
     expect((await intents())[0]!.status).toBe("SENT");
