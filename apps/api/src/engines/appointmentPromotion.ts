@@ -13,6 +13,8 @@ import { recomputeCadence } from "./cadence.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { refundForCancellation } from "../billing/payments.js";
 import { notifySlotOpened } from "./slotOpened.js";
+import { autoFillShouldQueue, queueAutoFillRun } from "./autoFill.js";
+import { trackBackgroundWork } from "../backgroundWork.js";
 import { enqueueCancellationEmail } from "../services/appointmentCanceledNotify.js";
 import { releaseForAppointment } from "./acuityMirror.js";
 import { completeWalkInEntryForAppointmentInTx } from "./walkInComplete.js";
@@ -219,8 +221,22 @@ export async function cancelAppointment(
   // suppressSlotOpened: skip the per-occurrence "a slot opened" barber+waitlist
   // notify. Used by cancelSeries so canceling a 26-week series doesn't fire 26
   // barber pushes; the series path sends ONE coalesced alert instead.
-  opts: { applyPolicyFee?: boolean; suppressSlotOpened?: boolean } = {},
+  // initiator: who cancelled. Only a CLIENT's own cancellation starts
+  // Auto-fill (engines/autoFill.ts): a barber clearing a sick afternoon must
+  // not have their best clients booked into time they will not be there. Default
+  // "barber", so only the call sites that know better say otherwise.
+  opts: { applyPolicyFee?: boolean; suppressSlotOpened?: boolean; initiator?: "customer" | "barber" } = {},
 ): Promise<boolean> {
+  // Shop is owner-only, so this is read before the tenant transaction; the
+  // run itself is written inside it, behind the CAS.
+  const autoFill =
+    outcome === "CANCELED" &&
+    opts.initiator === "customer" &&
+    (await autoFillShouldQueue(shopId, now).catch((err: unknown) => {
+      // Never the reason a cancellation fails: it just goes the ordinary way.
+      logger.error({ err, shopId, appointmentId }, "cancel: auto-fill check failed");
+      return false;
+    }));
   const result = await runWithShop(shopId, async (tx) => {
     const appt = await tx.appointment.findFirst({
       where: { id: appointmentId, shopId },
@@ -230,6 +246,9 @@ export async function cancelAppointment(
         visitId: true,
         status: true,
         startsAt: true,
+        endsAt: true,
+        staffId: true,
+        serviceId: true,
         priceAtBooking: true,
         service: { select: { name: true } },
         // The BOOKING payment: the one promotion may capture or refund. A
@@ -327,6 +346,17 @@ export async function cancelAppointment(
         appointmentId: appt.id,
         cancellationRevision: current?.cancellationRevision ?? 1,
       });
+      // 🔴 AUTO-FILL'S RUN COMMITS WITH THE CANCELLATION, keyed on the same
+      // revision: it exists exactly when this cancellation does, once, and a
+      // restart one instruction later cannot lose it.
+      if (autoFill) {
+        await queueAutoFillRun(tx, {
+          shopId,
+          appointment: appt,
+          cancellationRevision: current?.cancellationRevision ?? 1,
+          now,
+        });
+      }
     }
 
     return {
@@ -419,7 +449,9 @@ export async function cancelAppointment(
   // (that slot's time has already passed). Covers BOTH the barber-dashboard
   // cancel and the customer manage-page cancel, since both route through here.
   if (outcome === "CANCELED" && !opts.suppressSlotOpened) {
-    void notifySlotOpened({ shopId, appointmentId, now });
+    // Tracked (backgroundWork.ts) so a test can know it has finished; inert
+    // in production.
+    void trackBackgroundWork(notifySlotOpened({ shopId, appointmentId, now }));
   }
 
   // Release the Acuity block this appointment was holding. ChairBack is

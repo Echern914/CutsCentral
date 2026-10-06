@@ -1,6 +1,7 @@
-import { Prisma, prisma } from "@chairback/db";
+import { Prisma, prisma, runAsOwner } from "@chairback/db";
 import { apiEnv, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
+import { AUTO_FILL_MIN_WAITLIST_HOLD_MS, AUTO_FILL_STAGE_MS, autoFillDeadline } from "./autoFillRules.js";
 import { ACTIVE_WAITLIST_STATUSES, sha256Hex } from "./waitlistJoin.js";
 import { entryPrefsMatchSlot } from "./waitlistMatch.js";
 import {
@@ -273,7 +274,12 @@ export type OfferResult =
    * The service collects a deposit/pay-ahead at booking and phase C carries
    * no checkout: never auto-offered. Entries stay WAITING for manual work.
    */
-  | { outcome: "requires_deposit" };
+  | { outcome: "requires_deposit" }
+  /**
+   * An Auto-fill shop, and the hold that would be left before its deadline
+   * (start - minimum notice - margin) is too short for anyone to act on.
+   */
+  | { outcome: "too_soon" };
 
 /**
  * Hold a freed slot for the earliest eligible WAITING entry.
@@ -313,6 +319,8 @@ export async function offerFreedSlot(
         stripeConnectAccountId: true,
         depositAmountCents: true,
         requireCardToBook: true,
+        autoFillEnabled: true,
+        bookingLeadHours: true,
       },
     }),
     prisma.service.findFirst({
@@ -331,7 +339,18 @@ export async function offerFreedSlot(
 
   // Never held past its own start: a hold that outlives the time it holds
   // tells the customer they have until a moment the slot no longer exists.
-  const expiresAt = new Date(Math.min(now.getTime() + HOLD_MS, slot.startsAt.getTime()));
+  let expiresAt = new Date(Math.min(now.getTime() + HOLD_MS, slot.startsAt.getTime()));
+  // 🔴 AN AUTO-FILL SHOP KEEPS THE LINE MOVING: 15 minutes each, the same as
+  // its Gold and Silver stages, and never past its deadline - so a claim never
+  // lands inside the minimum notice the shop asks of everyone else, and the
+  // booking page gets the time back while it can still be booked. Every
+  // advance comes through here, so each next person gets the same rule.
+  if (policyShop.autoFillEnabled) {
+    const deadline = autoFillDeadline(slot.startsAt, policyShop.bookingLeadHours);
+    expiresAt = new Date(Math.min(now.getTime() + AUTO_FILL_STAGE_MS, deadline.getTime(), expiresAt.getTime()));
+    if (expiresAt.getTime() - now.getTime() < AUTO_FILL_MIN_WAITLIST_HOLD_MS) return { outcome: "too_soon" };
+  }
+  const outsiders = await sameSlotOutsiders(slot);
   const { token, hash } = mintClaimToken();
 
   try {
@@ -375,7 +394,7 @@ export async function offerFreedSlot(
         candidate: NonNullable<Awaited<ReturnType<typeof pickCandidate>>>;
       } | null = null;
       for (let attempt = 0; attempt < 5 && !made; attempt++) {
-        const pick = await pickCandidate(tx, slot, now, skipped);
+        const pick = await pickCandidate(tx, slot, now, skipped, outsiders);
         if (!pick) break;
         const offer = await tx.waitlistOffer.create({
           data: {
@@ -464,6 +483,49 @@ export async function offerFreedSlot(
   }
 }
 
+export interface SlotOutsiders {
+  clientIds: Set<string>;
+  /** Lowercased. */
+  emails: Set<string>;
+}
+
+/**
+ * The people the waitlist must NOT be offered this exact time:
+ *
+ *   - whoever just cancelled it. They gave it up; handing it back to their
+ *     own waitlist request a minute later is noise, and after a client cancel
+ *     at an Auto-fill shop it would undo the reason the time is free;
+ *   - the members Auto-fill already offered it to in the app. They saw it and
+ *     let it pass; the waitlist stage is for the next people in line.
+ *
+ * Matched by record and by email, never by a phone alone (a shared phone is
+ * not the same person) - the same rule as the per-person same-slot check.
+ * Read before the hold's transaction, on the owner connection: the
+ * invitations are platform-owned.
+ */
+async function sameSlotOutsiders(slot: FreedSlot): Promise<SlotOutsiders> {
+  const out: SlotOutsiders = { clientIds: new Set(), emails: new Set() };
+  const add = (clientId: string | null, ...emails: (string | null | undefined)[]) => {
+    if (clientId) out.clientIds.add(clientId);
+    for (const e of emails) if (e?.trim()) out.emails.add(e.trim().toLowerCase());
+  };
+  await runAsOwner(async (tx) => {
+    const [cancelled, invited] = await Promise.all([
+      tx.appointment.findMany({
+        where: { shopId: slot.shopId, staffId: slot.staffId, startsAt: slot.startsAt, status: "CANCELED" },
+        select: { clientId: true, email: true, client: { select: { email: true } } },
+      }),
+      tx.tierOpeningRecipient.findMany({
+        where: { opening: { shopId: slot.shopId, staffId: slot.staffId, startsAt: slot.startsAt, source: "auto" } },
+        select: { clientId: true, client: { select: { email: true } } },
+      }),
+    ]);
+    for (const c of cancelled) add(c.clientId, c.email, c.client?.email);
+    for (const i of invited) add(i.clientId, i.client.email);
+  });
+  return out;
+}
+
 /**
  * Phase D matching: everything phase C filtered, PLUS the entry's own
  * preference windows, timezone and minimum notice (engines/waitlistMatch.ts).
@@ -488,6 +550,8 @@ async function pickCandidate(
   now: Date,
   /** Entries already found to have left between the scan and their lock. */
   exclude: ReadonlySet<string> = new Set(),
+  /** People who must not be offered this time at all (sameSlotOutsiders). */
+  outsiders: SlotOutsiders = { clientIds: new Set(), emails: new Set() },
 ): Promise<{ id: string; firstName: string; email: string | null; clientId: string | null } | null> {
   // Phase D: what the DATABASE can filter, it filters (status, shop, service,
   // staff, live-offer, same-slot, cooldown); what only the calendar can
@@ -640,6 +704,16 @@ async function pickCandidate(
         ) {
           logger.debug(
             { shopId: slot.shopId, entryId: c.id, code: "same_person_same_slot" },
+            "waitlist match: candidate skipped",
+          );
+          continue;
+        }
+        if (
+          (c.email && outsiders.emails.has(c.email.trim().toLowerCase())) ||
+          (c.clientId && outsiders.clientIds.has(c.clientId))
+        ) {
+          logger.debug(
+            { shopId: slot.shopId, entryId: c.id, code: "already_had_it" },
             "waitlist match: candidate skipped",
           );
           continue;
@@ -1445,14 +1519,51 @@ export async function advanceFreedSlot(
   // rather than double-booking it, which is why it went unnoticed.
   await noteAvailabilityChanged(offer.shopId);
 
+  const next = await offerFreedSlotToWaitlist(offer, now, opts);
+  if (!next) return false;
+  // Best-effort: offerFreedSlot has already committed the new hold and
+  // audited it as offer.created. This row only records that the new hold came
+  // from an ended one, so the chain reads end to end.
+  await recordWaitlistEventBestEffort({
+    shopId: offer.shopId,
+    entryId: next.entryId,
+    offerId: next.offerId,
+    type: "offer.advanced",
+    actor: SYSTEM_ACTOR,
+    metadata: { previousOfferId: offer.id },
+  });
+  return true;
+}
+
+/** A freed span on one barber, for one service. */
+export interface FreedSpan {
+  shopId: string;
+  staffId: string;
+  serviceId: string;
+  startsAt: Date;
+  endsAt: Date;
+}
+
+/**
+ * Offer a freed span to the next person on the waitlist, through every gate
+ * the waitlist has - DRY_RUN, a native calendar, the waitlist and its offers
+ * switched on, the plan, a time still ahead - and tell them. The one way in
+ * for anything that ends a hold: an ended waitlist hold (advanceFreedSlot),
+ * and Auto-fill handing on after the tiers (engines/autoFill.ts).
+ *
+ * Returns the new offer, or null when nobody was offered it.
+ */
+export async function offerFreedSlotToWaitlist(
+  span: FreedSpan,
+  now: Date,
+  opts?: { forceAdvance?: boolean },
+): Promise<{ offerId: string; entryId: string } | null> {
   const advance = opts?.forceAdvance ?? advanceOverride ?? !apiEnv().DRY_RUN;
   if (!advance) {
-    logger.info(
-      { shopId: offer.shopId, offerId: offer.id },
-      "[dry-run] offer ended; advancement suppressed",
-    );
-    return false;
+    logger.info({ shopId: span.shopId }, "[dry-run] freed time not offered to the waitlist");
+    return null;
   }
+  const offer = span;
 
   const shop = await prisma.shop.findUnique({
     where: { id: offer.shopId },
@@ -1482,9 +1593,9 @@ export async function advanceFreedSlot(
     !shop.slotOpenedTextsEnabled ||
     !hasPremiumAccess(shop, { now })
   ) {
-    return false;
+    return null;
   }
-  if (offer.startsAt.getTime() <= now.getTime()) return false; // slot in the past
+  if (offer.startsAt.getTime() <= now.getTime()) return null; // slot in the past
 
   const next = await offerFreedSlot(
     {
@@ -1498,18 +1609,7 @@ export async function advanceFreedSlot(
     },
     now,
   );
-  if (next.outcome !== "offered") return false;
-  // Best-effort: offerFreedSlot has already committed the new hold and
-  // audited it as offer.created. This row only records that the new hold came
-  // from an ended one, so the chain reads end to end.
-  await recordWaitlistEventBestEffort({
-    shopId: offer.shopId,
-    entryId: next.entryId,
-    offerId: next.offerId,
-    type: "offer.advanced",
-    actor: SYSTEM_ACTOR,
-    metadata: { previousOfferId: offer.id },
-  });
+  if (next.outcome !== "offered") return null;
 
   const [service, staff] = await Promise.all([
     prisma.service.findFirst({
@@ -1536,7 +1636,7 @@ export async function advanceFreedSlot(
     token: next.token,
     now,
   });
-  return true;
+  return { offerId: next.offerId, entryId: next.entryId };
 }
 
 /** Advance each ended hold in turn; one failure never stops the rest. */
