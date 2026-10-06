@@ -141,6 +141,13 @@ describe("sendPushToClient", () => {
     const client = await makeClient(shop.id);
     await addSub(shop.id, client.id, "https://push.example/a");
     await addSub(shop.id, client.id, "https://push.example/b");
+    // Seen a day ago, so a refresh is visible. (Comparing with createdAt
+    // proved nothing - both default to the database's now(), so it held with
+    // no refresh at all - and it failed whenever this process's clock
+    // trailed the database's by a millisecond.)
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60_000);
+    await prisma.pushSubscription.updateMany({ where: { clientId: client.id }, data: { lastSeenAt: dayAgo } });
+    const sentFrom = Date.now();
 
     const res = await sendPushToClient({
       shopId: shop.id,
@@ -161,9 +168,11 @@ describe("sendPushToClient", () => {
     expect(nudges[0]!.kind).toBe("loyalty");
     expect(nudges[0]!.status).toBe("SENT");
 
-    // lastSeenAt refreshed past its creation time on a successful send.
+    // lastSeenAt refreshed by the successful send. push.ts stamps it with this
+    // process's clock, so it is compared with this process's clock.
     const subs = await prisma.pushSubscription.findMany({ where: { clientId: client.id } });
-    for (const s of subs) expect(s.lastSeenAt.getTime()).toBeGreaterThanOrEqual(s.createdAt.getTime());
+    expect(subs).toHaveLength(2);
+    for (const s of subs) expect(s.lastSeenAt.getTime()).toBeGreaterThanOrEqual(sentFrom);
   });
 
   it("PRUNES a subscription the push service reports gone (410)", async () => {

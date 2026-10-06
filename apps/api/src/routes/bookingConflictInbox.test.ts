@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
@@ -521,8 +521,29 @@ describe("9. resolve all", () => {
     const before = Date.now();
     const r = await list(A);
     const asOf = new Date(r.body.asOf).getTime();
+    // On the DATABASE's clock, which may run a little ahead of or behind this
+    // process's - a second either way is "when it was read".
     expect(asOf).toBeGreaterThanOrEqual(before - 1000);
-    expect(asOf).toBeLessThanOrEqual(Date.now());
+    expect(asOf).toBeLessThanOrEqual(Date.now() + 1000);
+  });
+
+  it("🔴 the API's clock running BEHIND the database's cannot leave a shown conflict open", async () => {
+    // detectedAt is stamped by Postgres. The API host is another machine; its
+    // clock can trail the database's. Simulate 5 seconds of that: a conflict
+    // the manager is shown must still be resolved by "resolve all".
+    const row = await conflict(A);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() - 5_000);
+    try {
+      const view = await shown(A);
+      expect(view.expected).toBe(1);
+      const res = await resolveAll(A, view);
+      expect(res.status).toBe(200);
+      expect(res.body.resolved).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect((await prisma.bookingConflict.findUniqueOrThrow({ where: { id: row.id } })).resolvedAt).not.toBeNull();
   });
 
   it("resolves every open one, recording who, when and the note", async () => {

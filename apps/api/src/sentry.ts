@@ -94,3 +94,21 @@ export function captureError(err: unknown, extra?: Record<string, unknown>): voi
   if (!enabled) return;
   Sentry.captureException(err, extra ? { extra } : undefined);
 }
+
+/**
+ * Send whatever is still queued, bounded, before the process exits.
+ *
+ * Events are sent in the background, so an exit right after one is raised
+ * can lose it - and Railway sends SIGTERM on every deploy. The reconciler now
+ * raises each contradiction ONCE (#464), so a lost event is no longer
+ * repeated on the next pass; the last alert before a deploy must arrive.
+ * Never throws: false when Sentry is off, on a timeout, or on any error.
+ */
+export async function flushSentry(timeoutMs = 2000): Promise<boolean> {
+  if (!enabled) return false;
+  try {
+    return await Sentry.flush(timeoutMs);
+  } catch {
+    return false;
+  }
+}
