@@ -439,14 +439,51 @@ describe("who is never asked", () => {
 });
 
 describe("when it holds nothing", () => {
-  it("🔴 too close to the start: no hold, and the waitlist gets it as before", async () => {
+  it("🔴 too close to the start: held for nobody - the booking page has it", async () => {
     await prisma.waitlistEntry.create({ data: { shopId, firstName: "Patient", email: `p-${randomToken(4)}@t.local` } });
-    // 40 minutes out: the deadline is 10 minutes away.
+    // 40 minutes out: the deadline is 10 minutes away. At an Auto-fill shop
+    // nothing is held inside it, the waitlist included, so anyone can book
+    // it while they still can.
     const appt = await clientCancels({ startOffsetMs: 40 * MIN });
     await sweep(started);
     expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "too_soon" });
     expect(await prisma.tierOpening.count({ where: { shopId } })).toBe(0);
+    expect(await prisma.waitlistOffer.count({ where: { shopId } })).toBe(0);
     expect(pushes).toEqual([]);
+  });
+
+  it("🔴 a Silver stage that falls after 21:00 invites nobody; Gold keeps the rest of its hold", async () => {
+    const p = zonedDateParts(NOW, TZ);
+    // Cancelled 20:34: Gold alone until 20:50, held until 21:05.
+    const evening = zonedWallTimeToUtc(p.year, p.month0, p.day, 20 * 60 + 34, TZ);
+    const night = zonedWallTimeToUtc(p.year, p.month0, p.day, 21 * 60 + 1, TZ);
+    const nextMorning = zonedWallTimeToUtc(p.year, p.month0, p.day + 1, 11 * 60, TZ);
+    const appt = await clientCancels({ startOffsetMs: nextMorning.getTime() - NOW.getTime(), cancelAt: evening });
+    await sweep(new Date(evening.getTime() + AUTO_FILL_START_DELAY_MS + 1_000));
+    const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId } });
+    expect(await runFor(appt.id)).toMatchObject({ state: "gold" });
+    expect(opening.heldUntil.getTime()).toBeGreaterThan(night.getTime());
+
+    // The sweep that should have widened at 20:50 runs late, at 21:01.
+    await sweep(night);
+    expect(await prisma.tierOpeningRecipient.count({ where: { openingId: opening.id, wave: "silver" } })).toBe(0);
+    expect(await runFor(appt.id)).toMatchObject({ state: "silver", nextAt: opening.heldUntil });
+    expect(pushedTo(silver1)).toEqual([]);
+  });
+
+  it("🔴 the service hidden during the Gold stage: Silver is never pushed, and the waitlist gets it", async () => {
+    await prisma.waitlistEntry.create({ data: { shopId, firstName: "Patient", email: `p-${randomToken(4)}@t.local` } });
+    const appt = await clientCancels();
+    await sweep(started);
+    await prisma.service.update({ where: { id: serviceId }, data: { visibility: "hidden" } });
+    try {
+      await sweep(at(AUTO_FILL_START_DELAY_MS + 1_000 + 15 * MIN + 1_000));
+      expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "service_hidden" });
+      expect(pushedTo(silver1)).toEqual([]);
+      expect(await prisma.waitlistOffer.count({ where: { shopId, startsAt: appt.startsAt } })).toBe(1);
+    } finally {
+      await prisma.service.update({ where: { id: serviceId }, data: { visibility: "public" } });
+    }
   });
 
   it("🔴 at night it waits for 08:00, then runs", async () => {

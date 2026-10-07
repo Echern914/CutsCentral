@@ -65,6 +65,8 @@ const CAP_PER_DAY = 2;
 const CAP_PER_WEEK = 4;
 /** Runs read per sweep tick. */
 const BATCH = 25;
+/** How late the every-2-minutes sweep can run a stage, for planning around quiet hours. */
+const SWEEP_SLACK_MS = 5 * 60_000;
 
 export type AutoFillOutcome =
   /** A member booked it. */
@@ -294,24 +296,50 @@ async function handToWaitlist(run: RunRow, now: Date): Promise<void> {
 
 /**
  * A stage threw. Fail OPEN: end the hold, so the time is back on the booking
- * page now rather than when the hold would have run out, and close the run so
- * the sweep stops retrying it. The opening row is taken before the run row,
- * the order every other path takes them in.
+ * page now rather than when the hold would have run out, close the run so the
+ * sweep stops retrying it, and give the waitlist its turn.
+ *
+ * 🔴 The run is RE-READ, never trusted from the sweep's copy: a stage can
+ * commit its hold and then throw, and the copy read while it was queued has no
+ * openingId - so the hold it had just made was left standing with nothing
+ * behind it to widen or finish it. It closes only from the state it read, so
+ * it never closes a run another sweep has since moved on. The read is unlocked
+ * (openingId is written once, under the queued lock), so the opening row is
+ * still taken before the run row.
  */
 async function failRun(run: RunRow, now: Date): Promise<void> {
-  await runAsOwner(async (tx) => {
-    if (run.openingId) {
+  const closed = await runAsOwner(async (tx) => {
+    const fresh = await tx.autoFillRun.findUnique({
+      where: { id: run.id },
+      select: { openingId: true, state: true },
+    });
+    if (!fresh || fresh.state === "closed") return null;
+    if (fresh.openingId) {
       await tx.tierOpening.updateMany({
-        where: { id: run.openingId, status: "HELD", heldUntil: { gt: now } },
+        where: { id: fresh.openingId, status: "HELD", heldUntil: { gt: now } },
         data: { heldUntil: now },
       });
     }
-    await tx.autoFillRun.updateMany({
-      where: { id: run.id, state: { not: "closed" } },
+    const done = await tx.autoFillRun.updateMany({
+      where: { id: run.id, state: fresh.state },
       data: { state: "closed", nextAt: null, outcome: "error" },
     });
+    return done.count === 1 ? { ...run, openingId: fresh.openingId } : null;
   });
+  if (!closed) return;
   await noteAvailabilityChanged(run.shopId);
+  await handToWaitlist(closed, now);
+}
+
+/**
+ * Tell the invited members, after the stage has committed. A push failing is
+ * not the stage failing: the hold and the run's next step already stand, and
+ * anyone not told is picked up by the resend sweep.
+ */
+async function pushInvitations(run: RunRow, openingId: string, now: Date): Promise<void> {
+  await notifyInvitees(openingId, { now }).catch((err: unknown) => {
+    logger.error({ err, shopId: run.shopId, runId: run.id, openingId }, "auto-fill: push failed; the resend sweep retries");
+  });
 }
 
 /** The next 08:00 (the end of quiet hours) in the shop's zone, after `now`. */
@@ -438,18 +466,19 @@ async function startRun(run: RunRow, now: Date): Promise<void> {
       const gold = people.filter((p) => p.tier === "GOLD");
       const silver = people.filter((p) => p.tier === "SILVER");
       if (people.length === 0) {
-        await closeRun(tx, run, "queued", "no_members");
-        return { kind: "nobody" };
+        // Only the sweep that really closes it hands the time on - never two.
+        return (await closeRun(tx, run, "queued", "no_members")) ? { kind: "nobody" } : { kind: "gone" };
       }
 
       // Two stages need half an hour before the deadline, someone in each
-      // tier, and the second stage's push to land before quiet hours.
-      // Otherwise both tiers are offered it at once, for one stage.
+      // tier, and the second stage's push to land before quiet hours - with
+      // room for the sweep that runs it being a tick or two late (the widen
+      // refuses at night anyway). Otherwise both tiers get it at once.
       const twoStages =
         windowMs >= 2 * AUTO_FILL_STAGE_MS &&
         gold.length > 0 &&
         silver.length > 0 &&
-        !inQuietHours(shop.timezone, new Date(now.getTime() + AUTO_FILL_STAGE_MS));
+        !inQuietHours(shop.timezone, new Date(now.getTime() + AUTO_FILL_STAGE_MS + SWEEP_SLACK_MS));
       const heldUntil = new Date(
         Math.min(now.getTime() + (twoStages ? 2 : 1) * AUTO_FILL_STAGE_MS, deadline.getTime()),
       );
@@ -507,7 +536,7 @@ async function startRun(run: RunRow, now: Date): Promise<void> {
   if (plan.kind === "held") {
     await noteAvailabilityChanged(run.shopId);
     logger.info({ shopId: run.shopId, runId: run.id, openingId: plan.openingId }, "auto-fill: opening held");
-    await notifyInvitees(plan.openingId, { now });
+    await pushInvitations(run, plan.openingId, now);
   }
 }
 
@@ -521,7 +550,22 @@ async function widenToSilver(run: RunRow, now: Date): Promise<void> {
     return;
   }
   const shop = await loadShop(run.shopId);
-  const stillRuns = shopRunsAutoFill(shop, now);
+  // 🔴 Everything startRun checked, asked again: a service hidden, a deposit
+  // switched on or the other calendar unprotected since the Gold stage would
+  // otherwise be pushed to Silver - and the first Silver tap refused, with the
+  // hold released and nobody on the waitlist told.
+  let stop: AutoFillOutcome | null = null;
+  if (!shopRunsAutoFill(shop, now)) stop = "gates";
+  else {
+    const service = await prisma.service.findFirst({
+      where: { id: run.serviceId, shopId: run.shopId, ...PUBLIC_SERVICE },
+      select: { price: true, priceOverrides: true, dateOverrides: true, timeOverrides: true },
+    });
+    if (!service) stop = "service_hidden";
+    else if (claimWouldRequirePayment(shop, slotPrice(service, run.startsAt, shop.timezone))) stop = "requires_payment";
+    else if (await staffMirrorBlocked(run.shopId, run.staffId)) stop = "mirror_blocked";
+  }
+  const night = shop ? inQuietHours(shop.timezone, now) : false;
   const appt = await runAsOwner((tx) =>
     tx.appointment.findUnique({ where: { id: run.appointmentId }, select: { clientId: true, email: true } }),
   );
@@ -550,11 +594,17 @@ async function widenToSilver(run: RunRow, now: Date): Promise<void> {
       await closeRun(tx, run, "gold", "lapsed");
       return { kind: "handoff" as const };
     }
-    if (!stillRuns) {
-      // The shop switched it off (or lost the plan) mid-run: end the hold now.
+    if (stop) {
+      // The shop or the service changed mid-run: end the hold now.
       await tx.tierOpening.update({ where: { id: run.openingId! }, data: { heldUntil: now } });
-      await closeRun(tx, run, "gold", "gates");
+      await closeRun(tx, run, "gold", stop);
       return { kind: "handoff" as const };
+    }
+    if (night) {
+      // 🔴 Nobody is invited at night - the sweep ran this stage late, past
+      // 21:00. Gold keeps the rest of its hold; the lapse hands it on as usual.
+      await tx.autoFillRun.update({ where: { id: run.id }, data: { state: "silver", nextAt: opening.heldUntil } });
+      return { kind: "done" as const };
     }
 
     // Everyone now eligible who is not already invited: Silver members, and a
@@ -593,7 +643,7 @@ async function widenToSilver(run: RunRow, now: Date): Promise<void> {
     await noteAvailabilityChanged(run.shopId);
     await handToWaitlist(run, now);
   } else if (step.kind === "widened") {
-    await notifyInvitees(run.openingId, { now });
+    await pushInvitations(run, run.openingId, now);
   }
 }
 

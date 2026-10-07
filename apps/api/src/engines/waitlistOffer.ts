@@ -490,11 +490,15 @@ export interface SlotOutsiders {
 }
 
 /**
- * The people the waitlist must NOT be offered this exact time:
+ * The people the waitlist must NOT be offered this exact time, when Auto-fill
+ * is working on it:
  *
- *   - whoever just cancelled it. They gave it up; handing it back to their
- *     own waitlist request a minute later is noise, and after a client cancel
- *     at an Auto-fill shop it would undo the reason the time is free;
+ *   - the client whose own cancellation started the Auto-fill run. They gave
+ *     it up; handing it back to their waitlist request is noise. ONLY that
+ *     cancellation - read from the run, not from every cancelled booking at
+ *     this time - so a client the barber cancelled, an old cancellation, or a
+ *     lapsed hold never costs anyone their place, and a shop without Auto-fill
+ *     is unchanged;
  *   - the members Auto-fill already offered it to in the app. They saw it and
  *     let it pass; the waitlist stage is for the next people in line.
  *
@@ -510,17 +514,17 @@ async function sameSlotOutsiders(slot: FreedSlot): Promise<SlotOutsiders> {
     for (const e of emails) if (e?.trim()) out.emails.add(e.trim().toLowerCase());
   };
   await runAsOwner(async (tx) => {
-    const [cancelled, invited] = await Promise.all([
-      tx.appointment.findMany({
-        where: { shopId: slot.shopId, staffId: slot.staffId, startsAt: slot.startsAt, status: "CANCELED" },
-        select: { clientId: true, email: true, client: { select: { email: true } } },
+    const [runs, invited] = await Promise.all([
+      tx.autoFillRun.findMany({
+        where: { shopId: slot.shopId, staffId: slot.staffId, startsAt: slot.startsAt },
+        select: { appointment: { select: { clientId: true, email: true, client: { select: { email: true } } } } },
       }),
       tx.tierOpeningRecipient.findMany({
         where: { opening: { shopId: slot.shopId, staffId: slot.staffId, startsAt: slot.startsAt, source: "auto" } },
         select: { clientId: true, client: { select: { email: true } } },
       }),
     ]);
-    for (const c of cancelled) add(c.clientId, c.email, c.client?.email);
+    for (const { appointment: c } of runs) add(c.clientId, c.email, c.client?.email);
     for (const i of invited) add(i.clientId, i.client.email);
   });
   return out;
