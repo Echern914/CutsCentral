@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-06-repeat-numbers-type",
+    date: "2026-10-06",
+    kind: "fix",
+    title: "Type any number in a repeat",
+    body:
+      "In New appointment, the Every weeks and appointments total boxes now take the number you type. " +
+      "Before, clearing a box jumped it to another number, so every 8 weeks was often the only choice. " +
+      "A number outside the range is shown in red and is never swapped for another one.",
+  },
+  {
     id: "2026-10-06-repeats-every-visit",
     date: "2026-10-06",
     kind: "fix",

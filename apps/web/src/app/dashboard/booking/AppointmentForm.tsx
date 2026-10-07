@@ -144,6 +144,8 @@ export function AppointmentForm({
   // the pattern). See engines/recurringSeries.ts.
   const [repeat, setRepeat] = useState(false);
   const [everyWeeks, setEveryWeeks] = useState(1);
+  // What each repeat box says is wrong with what is typed in it right now.
+  const [repeatProblems, setRepeatProblems] = useState<{ weeks?: string | null; count?: string | null }>({});
   const [endMode, setEndMode] = useState<"count" | "until">("count");
   const [count, setCount] = useState(4);
   const [until, setUntil] = useState("");
@@ -401,6 +403,11 @@ export function AppointmentForm({
     if (!startsAt) return setError("Pick a time.");
     if (!clientId && !newName.trim()) return setError("Pick a client or enter a name.");
     if (repeat && endMode === "until" && !until) return setError("Pick an end date.");
+    // A repeat box holding a number it cannot use: refuse, never guess.
+    const badRepeat = repeat
+      ? (repeatProblems.weeks ?? (endMode === "count" ? repeatProblems.count : null))
+      : null;
+    if (badRepeat) return setError(badRepeat);
     if (typedPrice && !typedPrice.ok) return setError(typedPrice.error);
     if (customPrice !== null && customPrice > 10_000) return setError("Enter a price under $10,000.");
     if (customPrice !== null && repeat) {
@@ -1005,20 +1012,17 @@ export function AppointmentForm({
 
           {repeat && (
             <div className="flex flex-col gap-3 rounded-xl border border-subtle bg-charcoal-900/50 p-3">
-              <label className="flex items-center gap-2 text-sm text-offwhite">
-                Every
-                <input
-                  type="number"
-                  min={1}
-                  max={8}
-                  value={everyWeeks}
-                  onChange={(e) =>
-                    setEveryWeeks(Math.min(8, Math.max(1, Number(e.target.value) || 1)))
-                  }
-                  className={cn(INPUT, "w-20 px-2 text-center")}
-                />
-                {everyWeeks === 1 ? "week" : "weeks"}
-              </label>
+              <RepeatNumber
+                label="Repeat every how many weeks"
+                value={everyWeeks}
+                min={1}
+                max={8}
+                onChange={setEveryWeeks}
+                onProblem={(p) => setRepeatProblems((s) => ({ ...s, weeks: p }))}
+                before="Every"
+                after={everyWeeks === 1 ? "week" : "weeks"}
+                rangeHint="A repeat can be every 1 to 8 weeks."
+              />
 
               <div className="flex flex-col gap-2">
                 <div className="flex gap-1.5">
@@ -1038,19 +1042,16 @@ export function AppointmentForm({
                   </button>
                 </div>
                 {endMode === "count" ? (
-                  <label className="flex items-center gap-2 text-sm text-offwhite">
-                    <input
-                      type="number"
-                      min={2}
-                      max={52}
-                      value={count}
-                      onChange={(e) =>
-                        setCount(Math.min(52, Math.max(2, Number(e.target.value) || 2)))
-                      }
-                      className={cn(INPUT, "w-20 px-2 text-center")}
-                    />
-                    appointments total
-                  </label>
+                  <RepeatNumber
+                    label="How many appointments in total"
+                    value={count}
+                    min={2}
+                    max={52}
+                    onChange={setCount}
+                    onProblem={(p) => setRepeatProblems((s) => ({ ...s, count: p }))}
+                    after="appointments total"
+                    rangeHint="A repeat can be 2 to 52 appointments."
+                  />
                 ) : (
                   <input
                     type="date"
@@ -1066,6 +1067,73 @@ export function AppointmentForm({
         </Group>
       </div>
     </Dialog>
+  );
+}
+
+/**
+ * A whole number the barber TYPES, kept as typed while they type.
+ *
+ * 🔴 The repeat boxes used to clamp on every keystroke, which made them
+ * impossible to change on a phone: clearing "8" snapped straight to 1, and
+ * typing 3 after it read "13" and snapped back to 8 - so "every 8 weeks" was
+ * the only number a barber could get (reported from a phone, 2026-10-06). Now
+ * the box shows exactly what is typed, and the form takes the number the
+ * moment it is a valid one. A box left blank goes back to the last good
+ * number. One over the limit is NEVER changed into another number behind the
+ * barber's back: it stays, says the range, and reports itself (onProblem) so
+ * Schedule refuses rather than booking a number nobody typed.
+ */
+export function RepeatNumber(props: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (n: number) => void;
+  onProblem: (problem: string | null) => void;
+  before?: string;
+  after: string;
+  rangeHint: string;
+}) {
+  const { value, min, max, onChange, onProblem } = props;
+  const [draft, setDraft] = useState(String(value));
+  // Follow the form's number when it changes from outside (not mid-typing).
+  const [seen, setSeen] = useState(value);
+  if (seen !== value) {
+    setSeen(value);
+    if (Number(draft) !== value) setDraft(String(value));
+  }
+  const n = draft === "" ? NaN : Number(draft);
+  const outOfRange = draft !== "" && (!Number.isInteger(n) || n < min || n > max);
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="flex items-center gap-2 text-sm text-offwhite">
+        {props.before}
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          aria-label={props.label}
+          aria-invalid={outOfRange || undefined}
+          value={draft}
+          onChange={(e) => {
+            const typed = e.target.value.replace(/[^0-9]/g, "").slice(0, 3);
+            setDraft(typed);
+            const v = Number(typed);
+            const ok = typed !== "" && v >= min && v <= max;
+            if (ok) onChange(v);
+            // Blank is not a problem yet - they are mid-edit, and leaving the
+            // box restores the last good number.
+            onProblem(typed === "" || ok ? null : props.rangeHint);
+          }}
+          onBlur={() => {
+            if (draft === "") setDraft(String(value));
+          }}
+          className={cn(INPUT, "w-20 px-2 text-center", outOfRange && "border-danger")}
+        />
+        {props.after}
+      </label>
+      {outOfRange && <p className="text-xs text-danger-soft">{props.rangeHint}</p>}
+    </div>
   );
 }
 
