@@ -2,10 +2,12 @@ import { apiEnv } from "@chairback/config";
 import { forShop, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import {
+  buildAutoFillBarberPush,
   buildSlotOpenedBarberBody,
   buildSlotOpenedBarberPush,
   formatApptTime,
 } from "../messaging/templates.js";
+import { autoFillTriggerKey } from "./autoFill.js";
 import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { isSlotBookable } from "./slots.js";
@@ -79,13 +81,6 @@ export async function notifySlotOpened(params: {
     });
     if (!shop) return;
     if (shop.bookingMode !== "native") return; // no native slots/waitlist
-    // The AI receptionist fills gaps even for shops with the waitlist off
-    // (its candidate pool starts with loyalty/overdue clients, not the list).
-    const receptionistOn =
-      receptionistConfigured() && receptionistEnabledForShop(shop, { now });
-    if (!shop.waitlistEnabled && !receptionistOn) return;
-    // "A slot just opened" texts are a Premium feature (Starter has none).
-    if (!hasPremiumAccess(shop, { now })) return;
 
     // The freed appointment (narrowed relation select via runWithShop).
     const appt = await runWithShop(params.shopId, (tx) =>
@@ -97,6 +92,7 @@ export async function notifySlotOpened(params: {
           serviceId: true,
           startsAt: true,
           endsAt: true,
+          cancellationRevision: true,
           service: { select: { name: true } },
           staff: { select: { name: true } },
         },
@@ -104,6 +100,38 @@ export async function notifySlotOpened(params: {
     );
     if (!appt) return;
     if (appt.startsAt.getTime() <= now.getTime()) return; // slot already passed
+
+    // 🔴 AUTO-FILL OWNS THIS TIME when it queued a run for this very
+    // cancellation (engines/autoFill.ts): its members get first pick, and the
+    // waitlist gets its turn through the run, after them. Offering the
+    // waitlist now would put the waitlist ahead of Gold. The barber is still
+    // told - whether or not their waitlist is on.
+    const run = await runWithShop(params.shopId, (tx) =>
+      tx.autoFillRun.findUnique({
+        where: { triggerKey: autoFillTriggerKey(appt.id, appt.cancellationRevision) },
+        select: { id: true },
+      }),
+    );
+    if (run) {
+      const push = buildAutoFillBarberPush({
+        serviceName: appt.service?.name ?? null,
+        when: formatApptTime(appt.startsAt, shop.timezone),
+      });
+      await sendPushToUser({
+        userId: shop.ownerId,
+        shopId: shop.id,
+        payload: { title: push.title, body: push.body, url: `${apiEnv().APP_BASE_URL}/dashboard/booking`, tag: "slot-opened" },
+      }).catch((err) => logger.error({ err, shopId: shop.id }, "auto-fill barber push failed"));
+      return;
+    }
+
+    // The AI receptionist fills gaps even for shops with the waitlist off
+    // (its candidate pool starts with loyalty/overdue clients, not the list).
+    const receptionistOn =
+      receptionistConfigured() && receptionistEnabledForShop(shop, { now });
+    if (!shop.waitlistEnabled && !receptionistOn) return;
+    // "A slot just opened" texts are a Premium feature (Starter has none).
+    if (!hasPremiumAccess(shop, { now })) return;
 
     // Confirm the freed time is actually bookable now (hours/exceptions/bounds
     // may have changed since it was booked). If it isn't, there's no slot to

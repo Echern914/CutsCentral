@@ -1404,6 +1404,7 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
   // which is exactly what feeds the gap-filler.
   const okCancel = await cancelAppointment(ctx.shopId, appt.id, "CANCELED", ctx.now, {
     applyPolicyFee: true,
+    initiator: "customer",
   });
   if (!okCancel) return fail("cancel failed - escalate_to_human");
 

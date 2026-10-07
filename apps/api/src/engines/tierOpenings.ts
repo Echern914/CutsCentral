@@ -9,9 +9,11 @@ import { formatApptTime } from "../messaging/templates.js";
 import { dispatchAfterCommit, recordMirrorIntent } from "./acuityMirror.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "./bookingWrite.js";
 import { isMirrorNotConfigured } from "./mirrorNotConfigured.js";
+import { inQuietHours } from "./quietHours.js";
 import { ServiceDayFullError } from "./serviceDailyLimit.js";
+import { PUBLIC_SERVICE } from "./serviceVisibility.js";
 import { computeOpenSlots } from "./slots.js";
-import { claimWouldRequirePayment, slotPrice } from "./waitlistOffer.js";
+import { claimWouldRequirePayment, offerLockKey, slotPrice } from "./waitlistOffer.js";
 
 /**
  * OPENINGS HELD FOR A LOYALTY TIER.
@@ -222,6 +224,9 @@ export async function createTierOpening(params: {
         walkInCapacity: "enforce",
         now,
       });
+      // Every invitation at this shop is written under this lock, so the
+      // per-member cap Auto-fill reads (engines/autoFill.ts) counts this one.
+      await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${offerLockKey(shop.id)}))`);
 
       const people = await invitees(tx, shop.id, params.minTier);
       if (people.length === 0) return null;
@@ -340,6 +345,18 @@ export async function notifyInvitees(
   // (messaging/push.ts `ledger` and `appOnly`). A manual one keeps the
   // behaviour it shipped with.
   const auto = opening.source === "auto";
+  // 🔴 Nobody chose to send an Auto-fill push at this hour, so none is sent
+  // in quiet hours (a barber holding a slot by hand chose to). The invitation
+  // stands - it is in the app - it just does not wake anyone.
+  if (auto && unsent.length > 0 && inQuietHours(tz, clock())) {
+    logger.info({ shopId: opening.shopId, openingId, left: unsent.length }, "tier opening: quiet hours, not pushed");
+    return { recipients: invited.length, sent: 0, delivered: 0, stoppedEarly: false };
+  }
+  const title = auto
+    ? opening.minTier === "GOLD"
+      ? `${opening.shop.name}: first pick for Gold members`
+      : `${opening.shop.name}: an opening for Silver and Gold members`
+    : `${opening.shop.name}: an opening for ${label}${opening.minTier === "GOLD" ? "" : " and up"}`;
 
   let sent = 0;
   let delivered = 0;
@@ -372,7 +389,7 @@ export async function notifyInvitees(
       kind: "promo",
       ...(auto ? { ledger: false, appOnly: true } : {}),
       payload: {
-        title: `${opening.shop.name}: an opening for ${label}${opening.minTier === "GOLD" ? "" : " and up"}`,
+        title,
         body: `${formatApptTime(opening.startsAt, tz)}${what ? ` · ${what}` : ""}. Yours to ${verb} in the app until ${timeOnly(live.heldUntil, tz)}.`,
         // The web rewards page for a browser subscription; the app reads the
         // `opening` parameter and opens Profile, where the opening is.
@@ -430,7 +447,7 @@ export async function resendUnnotifiedOpenings(now: Date = new Date()): Promise<
   let resent = 0;
   for (const { openingId } of stale) {
     try {
-      const r = await notifyInvitees(openingId);
+      const r = await notifyInvitees(openingId, { now });
       resent += r.sent;
     } catch (err) {
       logger.error({ err, openingId }, "tier opening resend failed");
@@ -677,6 +694,23 @@ export async function claimTierOpening(params: {
         select: { id: true },
       });
       if (!link) return { outcome: "not_linked" };
+
+      // 🔴 An Auto-fill opening re-offers whatever was cancelled, and nobody
+      // chose the service by hand: if the barber has since hidden or retired
+      // it, nobody books it through the app. The hold goes, so the time is
+      // not lost to everyone. (A manual opening is the barber's own choice.)
+      if (
+        opening.source === "auto" &&
+        !(await tx.service.findFirst({
+          where: { id: opening.serviceId, shopId: opening.shopId, ...PUBLIC_SERVICE },
+          select: { id: true },
+        }))
+      ) {
+        if (await lockRow()) {
+          await tx.tierOpening.update({ where: { id: opening.id }, data: { status: "RELEASED" } });
+        }
+        return { outcome: "not_found" };
+      }
 
       const [shop, service, client] = await Promise.all([
         tx.shop.findUnique({

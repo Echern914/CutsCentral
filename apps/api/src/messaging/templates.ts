@@ -1180,6 +1180,18 @@ export function buildSlotOpenedBarberPush(params: {
   };
 }
 
+/**
+ * BARBER push when a client's cancellation went to Auto-fill: the time is not
+ * the barber's to work by hand right now, it is already being offered.
+ */
+export function buildAutoFillBarberPush(params: { serviceName: string | null; when: string }): PushCopy {
+  const svc = params.serviceName ? `${params.serviceName} ` : "";
+  return {
+    title: "A client cancelled",
+    body: `${svc}${params.when} opened. Auto-fill is offering it to your members first.`,
+  };
+}
+
 /** CUSTOMER push twin of buildSlotOpenedCustomerEmail (short, link in the tap). */
 export function buildSlotOpenedCustomerPush(params: {
   firstName: string | null;

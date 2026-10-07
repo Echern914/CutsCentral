@@ -29,7 +29,7 @@ import { loadWalkInReservationPlan } from "./walkInCapacity.js";
  *
  * 🔴 ONE LOCK ORDER, for every writer that touches a booking or a hold:
  *    service-day lock -> staff lock (`appt:<staffId>`) -> `wloffer:<shopId>`
- *    -> TierOpening / WaitlistOffer rows -> WaitlistEntry rows.
+ *    -> TierOpening / WaitlistOffer rows -> WaitlistEntry rows -> AutoFillRun rows.
  * Never the reverse. Barber writes take the staff lock here and then RELEASE
  * overlapping hold rows (below), so a claim that locked its hold row FIRST and
  * then asked for the staff lock deadlocked against them; claimOffer and

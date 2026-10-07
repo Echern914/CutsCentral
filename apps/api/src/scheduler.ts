@@ -32,6 +32,7 @@ import { sweepExpiredPaymentHolds } from "./services/appointmentPaymentHold.js";
 import { sweepAbandonedTipIntents } from "./billing/tips.js";
 import { expireDueOffers } from "./engines/waitlistOffer.js";
 import { resendUnnotifiedOpenings } from "./engines/tierOpenings.js";
+import { advanceAutoFill } from "./engines/autoFill.js";
 import { expireDeadWaitlistEntries } from "./engines/waitlistExpiry.js";
 import { sweepExpiredRateCounters } from "./middleware/pgRateStore.js";
 import { runDemoReset } from "./engines/demoReset.js";
@@ -338,19 +339,19 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
   // fast the next person hears about the slot. Advancement respects DRY_RUN,
   // billing gates and the per-shop toggle inside the engine.
   //
-  // The same lease tells tier-opening members a restart left untold
-  // (resendUnnotifiedOpenings) - same cadence, and a new cron with no job_lease
-  // seed row would never run in production. Each half runs even if the other
-  // throws, and each failure is REPORTED, not only logged: settling both means
-  // nothing reaches the job-level catch below, which is a cron job's only
-  // route to Sentry.
+  // The same lease moves Auto-fill through its stages (advanceAutoFill) and
+  // tells tier-opening members a restart left untold (resendUnnotifiedOpenings)
+  // - same cadence, and a new cron with no job_lease seed row would never run
+  // in production. Each part runs even if another throws, and each failure is
+  // REPORTED, not only logged: settling them all means nothing reaches the
+  // job-level catch below, which is a cron job's only route to Sentry.
   {
     cronExpr: "*/2 * * * *",
     name: "waitlist-offer-expiry",
     ttlMs: 4 * MINUTE,
     run: async () => {
-      const halves = ["expire-due-offers", "resend-unnotified-openings"] as const;
-      const results = await Promise.allSettled([expireDueOffers(), resendUnnotifiedOpenings()]);
+      const halves = ["expire-due-offers", "advance-auto-fill", "resend-unnotified-openings"] as const;
+      const results = await Promise.allSettled([expireDueOffers(), advanceAutoFill(), resendUnnotifiedOpenings()]);
       results.forEach((r, i) => {
         if (r.status !== "rejected") return;
         logger.error({ err: r.reason, step: halves[i] }, "waitlist sweep half failed");

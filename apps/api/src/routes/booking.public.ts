@@ -3782,8 +3782,10 @@ bookingPublicRouter.post(
     }
     // Customer-initiated: honor the shop's cancellation policy (a fee may apply
     // if they cancel inside the window). A paid booking is refunded accordingly.
+    // The client's own cancel is the one that starts Auto-fill.
     await cancelAppointment(appt.shopId, appt.id, "CANCELED", new Date(), {
       applyPolicyFee: true,
+      initiator: "customer",
     });
     // Freed-up time is actionable (rebook it) - alert the barber (push + SMS).
     void notifyBarberBookingEvent({

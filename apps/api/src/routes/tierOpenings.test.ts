@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
-import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
+import { __resetEnvCacheForTests, randomToken, zonedDateParts, zonedWallTimeToUtc } from "@chairback/config";
 import { createApp } from "../app.js";
 import { mintCustomerSession } from "../auth/customerSession.js";
 import { __setExpoSenderForTests, __setPushSenderForTests, type PushPayload } from "../messaging/push.js";
@@ -252,6 +252,19 @@ describe("holding a slot for a tier", () => {
 describe("telling the invited members", () => {
   let goldToken = "";
 
+  /**
+   * The next 12:00 in the shop's zone. An Auto-fill opening is never pushed
+   * in quiet hours, so its tests run at a midday they choose rather than
+   * whenever this file happens to run.
+   */
+  const NOON = (() => {
+    const real = new Date();
+    const p = zonedDateParts(real, TZ);
+    const today = zonedWallTimeToUtc(p.year, p.month0, p.day, 12 * 60, TZ);
+    return today.getTime() > real.getTime() ? today : zonedWallTimeToUtc(p.year, p.month0, p.day + 1, 12 * 60, TZ);
+  })();
+  const beforeNoon = (ms: number) => new Date(NOON.getTime() - ms);
+
   beforeAll(async () => {
     goldToken = `ExponentPushToken[${randomToken(12)}]`;
     await request(app).post("/api/me/devices").set(asCustomer(gold)).send({ expoPushToken: goldToken, platform: "ios" });
@@ -289,7 +302,8 @@ describe("telling the invited members", () => {
         startsAt: at,
         endsAt: new Date(at.getTime() + 30 * 60_000),
         minTier: "GOLD",
-        heldUntil: opts.heldUntil ?? new Date(Date.now() + 60 * 60_000),
+        // Held until just before it starts (days away) unless a test says otherwise.
+        heldUntil: opts.heldUntil ?? new Date(at.getTime() - 60_000),
         source: opts.source ?? "manual",
         recipientCount: invited.length,
       },
@@ -384,32 +398,42 @@ describe("telling the invited members", () => {
 
   it("🔴 an Auto-fill send a restart lost is picked up by the sweep, once", async () => {
     // Invited five minutes ago; the process died before anyone was told.
-    const openingId = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 5 * 60_000) }], { source: "auto" });
+    const openingId = await rawOpening([{ ...gold, createdAt: beforeNoon(5 * 60_000) }], { source: "auto" });
     const pushes = capture(openingId);
 
-    await resendUnnotifiedOpenings();
+    await resendUnnotifiedOpenings(NOON);
     expect(pushes).toHaveLength(1);
-    await resendUnnotifiedOpenings();
+    await resendUnnotifiedOpenings(NOON);
     expect(pushes).toHaveLength(1);
   });
 
   it("🔴 the sweep never resends a MANUAL opening - a build from before send stamps already told everyone", async () => {
     // What a manual opening made by the previous build looks like here during
     // a deploy: sent to everyone, and nothing recorded.
-    const openingId = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 5 * 60_000) }]);
+    const openingId = await rawOpening([{ ...gold, createdAt: beforeNoon(5 * 60_000) }]);
     const pushes = capture(openingId);
-    await resendUnnotifiedOpenings();
+    await resendUnnotifiedOpenings(NOON);
     expect(pushes).toEqual([]);
   });
 
+  it("🔴 an Auto-fill opening wakes nobody: in quiet hours the invitation waits in the app", async () => {
+    const p = zonedDateParts(NOON, TZ);
+    const night = zonedWallTimeToUtc(p.year, p.month0, p.day, 23 * 60, TZ);
+    const openingId = await rawOpening([gold], { source: "auto" });
+    const pushes = capture(openingId);
+    expect(await notifyInvitees(openingId, { now: night })).toMatchObject({ sent: 0 });
+    expect(pushes).toEqual([]);
+    expect(await prisma.tierOpeningRecipient.count({ where: { openingId, notifiedAt: null } })).toBe(1);
+  });
+
   it("the sweep leaves alone an invitation too old to be worth sending, or on an opening that is over", async () => {
-    const stale = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 20 * 60_000) }], { source: "auto" });
-    const over = await rawOpening([{ ...gold, createdAt: new Date(Date.now() - 5 * 60_000) }], { source: "auto" });
+    const stale = await rawOpening([{ ...gold, createdAt: beforeNoon(20 * 60_000) }], { source: "auto" });
+    const over = await rawOpening([{ ...gold, createdAt: beforeNoon(5 * 60_000) }], { source: "auto" });
     await prisma.tierOpening.update({ where: { id: over }, data: { status: "RELEASED" } });
     const sent: string[] = [];
     __setExpoSenderForTests({ send: async (_to, payload) => void sent.push(payload.url) });
 
-    await resendUnnotifiedOpenings();
+    await resendUnnotifiedOpenings(NOON);
     expect(sent.filter((u) => u.includes(`opening=${stale}`) || u.includes(`opening=${over}`))).toEqual([]);
     expect(await prisma.tierOpeningRecipient.count({ where: { openingId: { in: [stale, over] }, notifiedAt: null } })).toBe(2);
   });
@@ -428,7 +452,7 @@ describe("telling the invited members", () => {
       const auto = await rawOpening([gold], { source: "auto" });
       const autoPushes = capture(auto);
       const before = await nudges();
-      await notifyInvitees(auto);
+      await notifyInvitees(auto, { now: NOON });
       expect(autoPushes).toHaveLength(1);
       expect(web.filter((p) => p.includes(`opening=${auto}`))).toEqual([]);
       // Not marketing: no Nudge row, so attribution, the dashboard counts and
