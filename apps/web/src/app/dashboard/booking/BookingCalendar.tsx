@@ -6,8 +6,12 @@
 import { cap, useVocab } from "@/components/VocabProvider";
 import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import {
+  type ReactNode,
   type TouchEvent as ReactTouchEvent,
+  createContext,
+  Fragment,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -51,6 +55,7 @@ import {
   declineAppointmentAction,
   dismissAppointmentAction,
   getAgendaAction,
+  getAppointmentDetailAction,
   getWaitlistAction,
   markArrivedAction,
   noShowAppointmentAction,
@@ -603,7 +608,60 @@ export function BookingCalendar({
     ? (agenda.find((r) => r.id === deepLinkId && r.source === "appointment") ?? null)
     : null;
 
+  // The one appointment sheet a card opened - see SheetHost. It shows the
+  // booking's row as the agenda has it NOW, so a save that moves it to 3:00 PM
+  // re-renders the same open sheet instead of closing it.
+  const [hosted, setHosted] = useState<HostedSheet | null>(null);
+  const hostedLive = hosted
+    ? agenda.find((r) => r.id === hosted.row.id && r.source === hosted.row.source)
+    : undefined;
+  // 🔴 A save that moves the booking beyond the loaded weeks (next month, say)
+  // drops its row from the agenda, and a sheet left holding the old row would
+  // start its next Edit from the OLD date - one time change away from moving
+  // it back. So fetch the weeks around where the booking is now; the row
+  // arrives and the sheet follows it again. If it can't be found there, the
+  // sheet closes, as it always did when its booking left the calendar.
+  const hostedId = hosted?.row.id ?? null;
+  const hostedSource = hosted?.row.source ?? null;
+  const hostedGone = hosted !== null && hostedLive === undefined;
+  useEffect(() => {
+    if (!hostedGone || !hostedId) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const found = await getAppointmentDetailAction(
+          hostedId,
+          hostedSource === "visit" ? "visit" : "appointment",
+        );
+        if (!alive) return;
+        if (found.ok && found.data) {
+          const at = Date.parse(found.data.startsAt);
+          const from = new Date(at - 7 * 24 * 60 * 60 * 1000).toISOString();
+          const to = new Date(at + 7 * 24 * 60 * 60 * 1000).toISOString();
+          const res = await getAgendaAction(from, to);
+          if (!alive) return;
+          if (res.ok && res.data && res.data.agenda.some((r) => r.id === hostedId)) {
+            const win = agendaWindowOf(res.data, from, to);
+            setAgenda((prev) => mergeAgendaWindow(prev, res.data!.agenda, win));
+            return;
+          }
+        }
+      } catch {
+        if (!alive) return;
+      }
+      setHosted(null);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [hostedGone, hostedId, hostedSource]);
+  const openHostedSheet = useCallback<SheetOpener>(
+    (row, view, render) => setHosted({ row, view, render }),
+    [],
+  );
+
   return (
+    <SheetHost.Provider value={openHostedSheet}>
     <div className="flex flex-col gap-4">
       {/* Waitlist dropdown sits ABOVE the calendar. */}
       <WaitlistPanel initial={initialWaitlist} onOpenTab={onOpenWaitlist} />
@@ -916,9 +974,39 @@ export function BookingCalendar({
           onChanged={refreshAgenda}
         />
       )}
+
+      {hosted && (
+        <Fragment key={`${hosted.row.source}:${hosted.row.id}`}>
+          {hosted.render(hosted.view, hostedLive ?? hosted.row, () => setHosted(null))}
+        </Fragment>
+      )}
     </div>
+    </SheetHost.Provider>
   );
 }
+
+/**
+ * 🔴 WHERE A CARD'S APPOINTMENT SHEET IS MOUNTED.
+ *
+ * It used to be mounted inside its calendar card, and the cards are grouped by
+ * HOUR. So anything that moved the booking - the barber's own edit to 3:00 PM,
+ * the 20 s poll, a server re-render - remounted the card in its new hour and
+ * closed the sheet along with whatever it was saying: "Saved — still
+ * confirming the time on Acuity" was gone 300 ms after Save, on a production
+ * build. The calendar now mounts the sheet, keyed by the booking, and the card
+ * only asks. The card still decides WHAT the sheet is (its props live in the
+ * card's `renderSheet`); the calendar decides how long it lives.
+ *
+ * Without a provider (a card rendered on its own, as the card tests do) the
+ * card falls back to mounting the sheet itself.
+ */
+type SheetOpener = (
+  row: AgendaRow,
+  view: SheetView,
+  render: (view: SheetView, row: AgendaRow, close: () => void) => ReactNode,
+) => void;
+type HostedSheet = { row: AgendaRow; view: SheetView; render: Parameters<SheetOpener>[2] };
+const SheetHost = createContext<SheetOpener | null>(null);
 
 /**
  * Build an ISO instant for a (YYYY-MM-DD day, hour) as a prefill. Converts in
@@ -2239,7 +2327,20 @@ export function AppointmentBlock({
   const [seriesMenu, setSeriesMenu] = useState(false);
   const [nudgeMenu, setNudgeMenu] = useState(false);
   // ONE sheet for this row. The value is which view it opens on; null = closed.
+  // Opened through the calendar's SheetHost when there is one, so the sheet
+  // outlives this card being remounted in another hour.
   const [sheet, setSheet] = useState<SheetView | null>(null);
+  const host = useContext(SheetHost);
+  const renderSheet = (view: SheetView, live: AgendaRow, close: () => void) => (
+    <AppointmentSheet
+      row={live}
+      toast={toast}
+      initialView={view}
+      onClose={close}
+      onChanged={onChanged}
+    />
+  );
+  const openSheet = (view: SheetView) => (host ? host(row, view, renderSheet) : setSheet(view));
   /**
    * COLLAPSED BY DEFAULT. A day with eight cuts used to be eight full cards of
    * service lines and button rows, which is a lot of scrolling to answer "who
@@ -2801,7 +2902,7 @@ export function AppointmentBlock({
               🔴 Checkout does NOT complete the appointment - Done still does,
               and Done is still where the loyalty punch is earned. */}
           <button
-            onClick={() => setSheet("charges")}
+            onClick={() => openSheet("charges")}
             disabled={pending}
             className={cn(
               BTN_BASE,
@@ -2871,7 +2972,7 @@ export function AppointmentBlock({
               Checkout is the card's one primary action and a second bright
               button would compete with the money moment. */}
           <button
-            onClick={() => setSheet("edit")}
+            onClick={() => openSheet("edit")}
             disabled={pending}
             aria-label={`Edit appointment for ${row.clientName}`}
             className={cn(BTN_BASE, "gap-1.5 border border-subtle text-muted hover:text-offwhite")}
@@ -2887,7 +2988,7 @@ export function AppointmentBlock({
           card's own actions are the common case and this is the deep one. */}
       <button
         type="button"
-        onClick={() => setSheet("detail")}
+        onClick={() => openSheet("detail")}
         aria-label={`Open appointment details for ${row.clientName || "this client"}`}
         className="mt-2 flex h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-subtle text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:h-9"
       >
@@ -2897,18 +2998,11 @@ export function AppointmentBlock({
       )}
 
       {/* The appointment sheet: contact, payment truth, editing and the
-          chair-side checkout, all behind one dialog. Mounted from the row so it
-          always carries THAT booking's live figures; onChanged refreshes the
+          chair-side checkout, all behind one dialog. Normally the calendar
+          mounts it (SheetHost) with the booking's live row; this is the
+          fallback for a card rendered on its own. onChanged refreshes the
           agenda, which is what flips the button to "Paid ✓". */}
-      {sheet && (
-        <AppointmentSheet
-          row={row}
-          toast={toast}
-          initialView={sheet}
-          onClose={() => setSheet(null)}
-          onChanged={onChanged}
-        />
-      )}
+      {sheet && renderSheet(sheet, row, () => setSheet(null))}
     </div>
   );
 }
