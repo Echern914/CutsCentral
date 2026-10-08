@@ -618,8 +618,10 @@ export function BookingCalendar({
           onChange={switchView}
           ariaLabel="Calendar view"
         />
-        {/* Only offered once it does something - on today it's a no-op button. */}
-        {shownDay !== todayKey && (
+        {/* Only offered once it does something - on today it's a no-op button.
+            Paging months clears the selected day, so the month counts too: it
+            used to vanish the moment the barber paged away. */}
+        {(shownDay !== todayKey || viewYear !== todayParts.y || viewMonth !== todayParts.m) && (
           <button
             type="button"
             onClick={gotoToday}
@@ -845,7 +847,13 @@ export function BookingCalendar({
           services={services}
           addOns={addOns}
           timezone={tz}
-          prefillISO={new Date().toISOString()}
+          // The day they asked for, when it has not passed - the form shows
+          // ONE day's times, and "now" pinned every waitlist booking to today.
+          prefillISO={
+            waitlistBooking.dayKey && waitlistBooking.dayKey > todayKey
+              ? isoForDayHour(waitlistBooking.dayKey, 12, tz)
+              : new Date().toISOString()
+          }
           waitlist={{
             entryId: waitlistBooking.entryId,
             name: `${waitlistBooking.firstName} ${waitlistBooking.lastName ?? ""}`.trim(),
@@ -918,6 +926,13 @@ export function BookingCalendar({
  * the tapped day/hour even when the device is in another zone. The appointment
  * form then fetches the REAL open slots for that day - this is only an anchor.
  */
+/** A refused calendar action, in words - the codes the approve route sends. */
+const ACT_REFUSAL: Record<string, string> = {
+  slot_taken: "That time is booked now. Decline the request or offer another time.",
+  external_block: "That time is blocked in Acuity. Decline the request, or clear the block there first.",
+  not_found: "That request is gone. It may have been approved or cancelled elsewhere.",
+};
+
 function isoForDayHour(dayKey: string, hour: number, tz: string, minute = 0): string {
   const [y, m, d] = dayKey.split("-").map(Number);
   return zonedWallTimeToUtc(y!, m! - 1, d!, hour * 60 + minute, tz).toISOString();
@@ -1650,17 +1665,36 @@ function DayPlanner({
       const startMin = minuteOf(r.start);
       const rawEnd = minuteOf(r.end!);
       const endMin = rawEnd <= startMin ? 24 * 60 : rawEnd;
-      return { startMin, endMin, endIso: r.end!, allDay: startMin === 0 && endMin === 24 * 60 };
+      return {
+        staffId: r.staffId ?? null,
+        startMin,
+        endMin,
+        endIso: r.end!,
+        allDay: startMin === 0 && endMin === 24 * 60,
+      };
     });
-  const blockCovering = (h: number) =>
-    blockIntervals.find((iv) => iv.startMin <= h * 60 && iv.endMin >= (h + 1) * 60) ?? null;
+  // 🔴 An hour folds into a "blocked" band only when EVERY chair is blocked
+  // through it. One barber's block used to fold the hour for the whole shop,
+  // hiding the other chairs' open time. A block with no barber (an Acuity
+  // block) still covers them all.
+  const blockCovering = (h: number) => {
+    const covering = blockIntervals.filter((iv) => iv.startMin <= h * 60 && iv.endMin >= (h + 1) * 60);
+    if (covering.length === 0) return null;
+    const chairs = chairIds.length > 0 ? chairIds : [null];
+    const everyChair = chairs.every((chair) =>
+      covering.some((iv) => iv.staffId === null || chair === null || iv.staffId === chair),
+    );
+    return everyChair ? covering[0]! : null;
+  };
 
   // Room left INSIDE an hour that already holds bookings (dayGaps.ts), per
   // chair. Every row counts, whatever the category filter shows: open time is
   // a fact about the calendar, not about the chip that is selected. A
   // cancelled booking holds nothing; a row with no end (or a zero-length one,
   // as some synced visits arrive) is taken as half an hour.
-  const chairIds = staff.map((s) => s.id);
+  // Only barbers who still work here have a chair: a deactivated one's empty
+  // chair made every booked hour offer "Add at <hour>:00".
+  const chairIds = staff.filter((s) => s.active).map((s) => s.id);
   const busy: BusySpan[] = rows
     .filter((r) => r.status !== "canceled")
     .map((r) => {
@@ -1886,9 +1920,10 @@ function DayPlanner({
           }
           const h = item.hour;
           const slot = (byHour.get(h) ?? []).sort((a, b) => a.start.localeCompare(b.start));
-          // An empty hour already offers its "+"; a busy one offers the room
-          // it has left, at the minute that room starts.
-          const openAt = isNative && slot.length > 0 ? firstOpenMinute(busy, h, chairIds) : null;
+          // The room this hour has left, at the minute it starts - for EVERY
+          // hour. An hour with nothing STARTING in it can still be inside a
+          // long appointment, and its "+" used to book over it.
+          const openAt = isNative ? firstOpenMinute(busy, h, chairIds) : null;
           return (
             <motion.div
               key={h}
@@ -1904,7 +1939,22 @@ function DayPlanner({
               </div>
               <div className="min-w-0 flex-1">
                 {slot.length === 0 ? (
-                  isNative ? (
+                  isNative && openAt === null ? (
+                    // Every chair is taken through this hour by something that
+                    // started earlier: nothing to add here.
+                    <div className="py-1 text-xs text-muted/40">— booked —</div>
+                  ) : isNative && openAt !== null && openAt > h * 60 ? (
+                    <button
+                      type="button"
+                      onClick={() => onAddAt(h, true, openAt - h * 60)}
+                      className="group flex w-full items-center gap-2 py-1 text-xs text-muted transition-colors hover:text-gold"
+                    >
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full border border-subtle text-muted transition-colors group-hover:border-gold/50 group-hover:text-gold">
+                        +
+                      </span>
+                      <span>Add at {clockLabel(openAt)}</span>
+                    </button>
+                  ) : isNative ? (
                     // A "+" bubble to add an appointment at this open hour.
                     <button
                       type="button"
@@ -2308,10 +2358,13 @@ export function AppointmentBlock({
     );
   }
 
-  function act(fn: (id: string) => Promise<{ ok: boolean }>, label: string) {
+  function act(fn: (id: string) => Promise<{ ok: boolean; error?: string }>, label: string) {
     start(async () => {
       const res = await fn(row.id);
-      toast(res.ok ? label : "Couldn't update", res.ok ? "success" : "error");
+      toast(
+        res.ok ? label : (ACT_REFUSAL[res.error ?? ""] ?? "Couldn't update"),
+        res.ok ? "success" : "error",
+      );
       if (res.ok) onChanged();
     });
   }
@@ -2366,6 +2419,12 @@ export function AppointmentBlock({
     start(async () => {
       const res = await nudgeAppointmentAction(row.id, trimmed);
       if (!res.ok) {
+        // The menu closed up front (so a preset can't go twice); a failure
+        // puts the typed message back instead of making him retype it.
+        if (res.error !== "nudge_limit") {
+          setCustomNudge(trimmed);
+          setNudgeMenu(true);
+        }
         toast(
           res.error === "nudge_limit"
             ? "Nudge limit reached for this appointment"
@@ -2681,7 +2740,9 @@ export function AppointmentBlock({
                 Nudge{(row.nudgesSent ?? 0) > 0 ? " (1 left)" : ""}
               </button>
               {nudgeMenu && (
-                <div className="absolute left-0 z-20 mt-1 w-64 overflow-hidden rounded-lg border border-subtle bg-charcoal-900 p-1 shadow-lg">
+                <div className="absolute inset-x-0 z-20 mt-1 overflow-hidden rounded-lg border border-subtle bg-charcoal-900 p-1 shadow-lg sm:right-auto sm:w-64">
+                  {/* Full column width on a phone: at 256px it ran past the card,
+                      and Month view's overflow-hidden cut most of Send off. */}
                   {nudgePresets(vocab).map((preset) => (
                     <button
                       key={preset}

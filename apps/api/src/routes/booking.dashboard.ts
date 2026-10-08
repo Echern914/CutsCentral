@@ -2736,13 +2736,17 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       },
       orderBy: { startsAt: "asc" },
       take: BLOCK_CAP,
-      select: { id: true, startsAt: true, endsAt: true, reason: true },
+      select: { id: true, startsAt: true, endsAt: true, reason: true, staffId: true },
     });
     if (blocks.length >= BLOCK_CAP) truncated = true;
     for (const b of blocks) {
       agenda.push({
         id: b.id,
         source: "block",
+        // WHOSE chair it takes. Without it the calendar read every barber's
+        // block as covering every chair: one barber's lunch hid the whole
+        // shop's open time. (Acuity blocks carry none, and do cover them all.)
+        staffId: b.staffId,
         start: b.startsAt.toISOString(),
         end: b.endsAt.toISOString(),
         clientName: b.reason || "Blocked",

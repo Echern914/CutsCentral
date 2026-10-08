@@ -100,6 +100,13 @@ export interface AppointmentEditState {
    */
   saveError: string | null;
   /**
+   * Put every field back to the booking as it is NOW. Called each time the
+   * edit view opens: the form's state outlives the view, so a Cancel used to
+   * keep the abandoned change (saved along with the next edit), and a price
+   * changed from the sheet's hero was written back to its old figure.
+   */
+  reset: () => void;
+  /**
    * The footer hands this its click event, so it reads its argument
    * defensively - only a real confirmation string counts.
    */
@@ -426,12 +433,39 @@ export function useAppointmentEdit({
     });
   }
 
+  function reset() {
+    setServiceId(row.serviceId ?? null);
+    setStaffId(row.staffId ?? null);
+    if (ctx) {
+      const parts = toLocalParts(row.start, ctx.timezone);
+      setDate(parts.date);
+      setTime(parts.time);
+    }
+    const min = spanMinutes(row) ?? 30;
+    setDuration(min > 0 ? String(min) : "");
+    setPrice(row.price != null ? String(row.price) : "");
+    setNotes(row.notes ?? "");
+    setClientId(row.clientId ?? null);
+    setClientName(row.clientName);
+    setClientQuery("");
+    setChangingClient(false);
+    setPhone(detail ? (detail.contact.phoneDisplay ?? detail.contact.phone ?? "") : "");
+    setEmail(detail?.contact.email ?? "");
+    setBlockConflict(null);
+    setOverlapConflict(null);
+    setOffHoursConflict(null);
+    setSaveError(null);
+    acceptedOverlap.current = null;
+    acceptedCustomTime.current = false;
+  }
+
   return {
     ctx,
     loadError,
     pending: pending || saving,
     dirty,
     saveError,
+    reset,
     save,
     blockConflict,
     confirmBlock: () => save({ confirmation: blockConflict?.confirmation }),

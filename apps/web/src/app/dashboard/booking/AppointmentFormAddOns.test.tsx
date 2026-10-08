@@ -70,7 +70,7 @@ const GLOSS = addOn({ id: "ao-gloss", name: "Gloss", durationMin: 20, price: 25,
 const RETIRED = addOn({ id: "ao-old", name: "Retired rinse", durationMin: 10, price: 3, active: false });
 const ALL = [BEARD, TOWEL, GLOSS, RETIRED];
 
-function open(addOns: AddOnRow[] = ALL) {
+function open(addOns: AddOnRow[] = ALL, tapped = false) {
   render(
     <AppointmentForm
       staff={[DEE]}
@@ -78,6 +78,7 @@ function open(addOns: AddOnRow[] = ALL) {
       addOns={addOns}
       timezone={TZ}
       prefillISO={PREFILL}
+      tapped={tapped}
       onClose={vi.fn()}
       onCreated={vi.fn()}
       toast={vi.fn()}
@@ -348,7 +349,8 @@ describe("Schedule", () => {
 
   it("a time the add-ons no longer fit is refused in words about the add-ons", async () => {
     create.mockResolvedValueOnce({ ok: false, error: "invalid_slot" });
-    await open();
+    // Opened from the calendar's 10:00 AM row: that hour is what Schedule sends.
+    await open(ALL, true);
     pickService("Haircut");
     fireEvent.click(addOnButton("Beard trim"));
     nameIt();

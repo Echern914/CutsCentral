@@ -205,14 +205,23 @@ export function TierOpeningForm({
     }
   }
 
+  // Said inside this dialog (its footer), not by toast: the toast layer
+  // draws beneath the dialog, so on a phone End hold looked like nothing.
+  const [releasing, setReleasing] = useState<string | null>(null);
   async function release(id: string) {
-    const res = await releaseTierOpeningAction(id);
-    if (!res.ok) {
-      toast("Couldn't end that hold. Try again.", "error");
-      return;
+    if (releasing) return;
+    setReleasing(id);
+    setError(null);
+    try {
+      const res = await releaseTierOpeningAction(id).catch(() => ({ ok: false }));
+      if (!res.ok) {
+        // A hold that lapsed or was booked is gone: re-read so it drops off.
+        setError("Couldn't end that hold. It may have already ended or been booked.");
+      }
+      void loadOpenings();
+    } finally {
+      setReleasing(null);
     }
-    toast("Hold ended - it's back on your booking page.", "success");
-    void loadOpenings();
   }
 
   return (
@@ -253,7 +262,8 @@ export function TierOpeningForm({
                   <button
                     type="button"
                     onClick={() => void release(o.id)}
-                    className="flex h-11 shrink-0 items-center rounded-lg border border-subtle px-3 text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+                    disabled={releasing === o.id}
+                    className="flex h-11 shrink-0 items-center rounded-lg border border-subtle px-3 text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
                   >
                     End hold
                   </button>

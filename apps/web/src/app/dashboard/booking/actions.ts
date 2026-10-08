@@ -730,8 +730,12 @@ export interface BookingQuestionInput {
 
 export async function createBookingQuestionAction(
   input: BookingQuestionInput,
-): Promise<Result> {
-  return done(await apiSend("POST", "/api/booking/questions", input));
+): Promise<Result & { id?: string }> {
+  const res = await apiSend<{ id: string }>("POST", "/api/booking/questions", input);
+  const out = done(res);
+  // The REAL id, so the card can edit or remove what it just added. A made-up
+  // one meant Remove deleted nothing while saying "Removed."
+  return out.ok ? { ...out, id: res.data?.id } : out;
 }
 
 export async function updateBookingQuestionAction(
@@ -742,7 +746,11 @@ export async function updateBookingQuestionAction(
 }
 
 export async function deleteBookingQuestionAction(id: string): Promise<Result> {
-  return done(await apiSend("DELETE", `/api/booking/questions/${id}`));
+  const res = await apiSend<{ ok?: boolean }>("DELETE", `/api/booking/questions/${id}`);
+  // The route answers 200 { ok: false } when there was nothing to remove: that
+  // is not a removal, and saying "Removed." left a live question on the form.
+  if (res.ok && res.data?.ok === false) return { ok: false, error: "not_found" };
+  return done(res);
 }
 
 /**

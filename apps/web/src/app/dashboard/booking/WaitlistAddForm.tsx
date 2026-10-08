@@ -86,6 +86,13 @@ export function WaitlistAddForm({
       }
       windows.push(res.window);
     }
+    // The API checks the email strictly; a near miss used to come back as
+    // "Couldn't add them. Please try again." on every retry, naming nothing.
+    const em = email.trim();
+    if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+      setError("That email doesn't look right. Fix it, or leave it blank - a phone number is enough.");
+      return;
+    }
     start(async () => {
       const res = await createWaitlistEntryAction({
         firstName: firstName.trim(),
@@ -101,7 +108,11 @@ export function WaitlistAddForm({
         setError(
           res.error === "already_waiting"
             ? "They're already on the list for this exact request."
-            : "Couldn't add them. Please try again.",
+            : res.error === "invalid_input"
+              ? "Something on the form isn't valid. Check the email and phone."
+              : res.error === "invalid_window"
+                ? "One of the days or times can't be used. Check the options."
+                : "Couldn't add them. Please try again.",
         );
         return;
       }
