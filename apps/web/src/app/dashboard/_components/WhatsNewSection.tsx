@@ -11,8 +11,10 @@ import type { WhatsNewEntry } from "@chairback/config/whatsNew";
  * red count look like something is urgent.
  */
 
-/** How many entries the bell shows; the rest are history. */
+/** How many entries the bell shows when nothing is new; the rest are history. */
 export const WHATS_NEW_SHOWN = 6;
+/** The most it shows, however long someone has been away. */
+export const WHATS_NEW_MAX = 20;
 
 export function WhatsNewSection({
   entries,
@@ -21,7 +23,15 @@ export function WhatsNewSection({
   entries: readonly WhatsNewEntry[];
   unseenIds: ReadonlySet<string>;
 }) {
-  const shown = entries.slice(0, WHATS_NEW_SHOWN);
+  // 🔴 Every unseen update is shown, not just the newest six. Opening the bell
+  // marks them ALL seen, so an update cut off below the sixth was never shown
+  // to anyone: on a day with eight entries, two of them and everything from
+  // the day before were invisible.
+  let lastUnseen = -1;
+  entries.forEach((e, i) => {
+    if (unseenIds.has(e.id)) lastUnseen = i;
+  });
+  const shown = entries.slice(0, Math.max(WHATS_NEW_SHOWN, Math.min(lastUnseen + 1, WHATS_NEW_MAX)));
   if (shown.length === 0) return null;
   return (
     <section aria-label="What's new" data-qa="whats-new">

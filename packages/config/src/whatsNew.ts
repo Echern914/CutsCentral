@@ -95,6 +95,15 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "booking no longer offers a $0.00 charge.",
   },
   {
+    id: "2026-10-08-bell-back-button",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "A Back button here, and every update you missed",
+    body:
+      "On a phone this list filled the screen and there was no way to close it. A Back button now stays at the top " +
+      "left while you scroll. This list also shows every update you haven't seen, not just the newest six.",
+  },
+  {
     id: "2026-10-08-hours-load-and-requests",
     date: "2026-10-08",
     kind: "fix",
