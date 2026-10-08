@@ -15,7 +15,7 @@ import {
   type PageSectionKey,
   type PageThemeKey,
 } from "@chairback/config/constants";
-import { isUsableBookingLink } from "@chairback/config/bookingLinks";
+import { isUsableBookingLink, showsRequestForm } from "@chairback/config/bookingLinks";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
@@ -101,9 +101,9 @@ export function ShopPageClient({
   const hasBooking = bookIsNative || outsideLink !== null;
   // Show the request form when the barber enabled it OR when there's no booking
   // path at all - so a no-link shop with requests off still gives clients a way
-  // to reach out, instead of a dead page with no CTA. (Native booking replaces
-  // the form entirely - it IS self-serve booking.)
-  const showRequestForm = !bookIsNative && (data.takesRequests || !hasBooking);
+  // to reach out, instead of a dead page with no CTA. The request route reads
+  // the same rule (bookingLinks.ts), so a form shown here is one it accepts.
+  const showRequestForm = showsRequestForm(data);
 
   const fontKey: PageFontKey =
     (data.fontKey as PageFontKey) in PAGE_FONTS ? (data.fontKey as PageFontKey) : DEFAULT_PAGE_FONT;

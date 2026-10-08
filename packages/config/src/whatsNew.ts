@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-08-hours-load-and-requests",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Your hours are safe on a weak signal",
+    body:
+      "If your hours can't load, the sheet now says so with Try again, instead of showing every day off and letting a " +
+      "save replace your real week. Save problems show above Save hours. With no booking link, your page's request " +
+      "form now reaches you.",
+  },
+  {
     id: "2026-10-06-repeat-numbers-type",
     date: "2026-10-06",
     kind: "fix",

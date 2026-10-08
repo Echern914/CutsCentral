@@ -18,6 +18,7 @@ import { createApp } from "../app.js";
 const app = createApp();
 const emailA = `req-a-${randomToken(6)}@test.local`.toLowerCase();
 const emailB = `req-b-${randomToken(6)}@test.local`.toLowerCase();
+const emailC = `req-c-${randomToken(6)}@test.local`.toLowerCase();
 const password = "supersecret123";
 let cookieA: string;
 let cookieB: string;
@@ -69,7 +70,7 @@ afterAll(async () => {
   else process.env.DRY_RUN = ORIGINAL_DRY_RUN;
   __resetEnvCacheForTests();
   __setMessageProviderForTests(undefined);
-  for (const email of [emailA, emailB]) {
+  for (const email of [emailA, emailB, emailC]) {
     const user = await prisma.user.findUnique({ where: { email } });
     if (user) {
       await prisma.shop.deleteMany({ where: { ownerId: user.id } });
@@ -190,6 +191,56 @@ describe("public request submission", () => {
     expect(
       list.body.requests.some((r: { firstName: string }) => r.firstName === "Resilient"),
     ).toBe(true);
+  });
+});
+
+/**
+ * 🔴 THE PAGE AND THE ROUTE READ ONE RULE (bookingLinks.showsRequestForm).
+ *
+ * The page shows "Request an appointment" to a shop with no way to book even
+ * with requests switched off, so a client is never left on a dead page. The
+ * route used to refuse every shop with the switch off, so that client got
+ * "Something went wrong" on every try and the barber never saw the request.
+ */
+describe("the request route takes exactly what the page shows", () => {
+  let shopIdC: string;
+  let slugC: string;
+  beforeAll(async () => {
+    await signupAndShop(emailC, "Req Cuts C");
+    const user = await prisma.user.findUniqueOrThrow({ where: { email: emailC } });
+    const shop = await prisma.shop.findFirstOrThrow({ where: { ownerId: user.id } });
+    shopIdC = shop.id;
+    slugC = shop.slug!;
+  });
+  const setShop = (data: {
+    bookingMode?: "link" | "native";
+    bookingUrl?: string | null;
+    takesRequests?: boolean;
+  }) =>
+    prisma.shop.update({ where: { id: shopIdC }, data });
+  const send = () =>
+    request(app).post(`/api/page/${slugC}/request`).send({ firstName: "Ana", phone: "(302) 555-0142" });
+
+  it("🔴 no booking link and requests off: the form shows, so the request is saved", async () => {
+    await setShop({ bookingMode: "link", bookingUrl: null, takesRequests: false });
+    const res = await send();
+    expect(res.status).toBe(201);
+    expect(await prisma.appointmentRequest.count({ where: { shopId: shopIdC, firstName: "Ana" } })).toBe(1);
+  });
+
+  it("a malformed saved link is no way to book either", async () => {
+    await setShop({ bookingMode: "link", bookingUrl: "not a link", takesRequests: false });
+    expect((await send()).status).toBe(201);
+  });
+
+  it("a real booking link with requests off: no form, so still refused", async () => {
+    await setShop({ bookingMode: "link", bookingUrl: "https://book.example/x", takesRequests: false });
+    expect((await send()).status).toBe(404);
+  });
+
+  it("ChairBack booking replaces the form, so a request is refused even with the switch on", async () => {
+    await setShop({ bookingMode: "native", bookingUrl: null, takesRequests: true });
+    expect((await send()).status).toBe(404);
   });
 });
 

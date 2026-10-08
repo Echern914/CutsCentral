@@ -3,8 +3,26 @@ import {
   bookNowUrl,
   isUsableBookingLink,
   messageBookingUrl,
+  showsRequestForm,
   type BookingLinkShop,
 } from "./bookingLinks.js";
+
+describe("showsRequestForm - the shop page and the request route share it", () => {
+  const shop = (bookingMode: string, bookingUrl: string | null, takesRequests: boolean) =>
+    showsRequestForm({ bookingMode, bookingUrl, takesRequests });
+  it("🔴 a shop with no way to book shows the form even with requests off", () => {
+    expect(shop("link", null, false)).toBe(true);
+    expect(shop("link", "not a link", false)).toBe(true);
+  });
+  it("a shop with a real booking link shows it only when requests are on", () => {
+    expect(shop("link", "https://book.example/x", false)).toBe(false);
+    expect(shop("link", "https://book.example/x", true)).toBe(true);
+  });
+  it("ChairBack booking never shows it", () => {
+    expect(shop("native", null, true)).toBe(false);
+    expect(shop("native", null, false)).toBe(false);
+  });
+});
 
 /**
  * Where "Book" goes, for every booking mode - the rule nudges, win-backs,

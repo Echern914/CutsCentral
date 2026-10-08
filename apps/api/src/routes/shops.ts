@@ -46,7 +46,7 @@ import { requireManager, requireOwner } from "../auth/roles.js";
 import { linkReferralOnShopCreate } from "../services/referral.js";
 import { recordPartnerReferralInTx, resolvePartnerCode } from "../services/partnerProgram.js";
 import { AFFILIATE_CLAIM_COOKIE, checkTellApart, tellApartRefusal } from "@chairback/config";
-import { messageBookingUrl } from "@chairback/config/bookingLinks";
+import { messageBookingUrl, showsRequestForm } from "@chairback/config/bookingLinks";
 import {
   BOOKING_CHECKLIST_LINE_MAX,
   BOOKING_CHECKLIST_MAX_LINES,
@@ -1280,9 +1280,10 @@ publicPageRouter.post("/:slug/request", leadLimiter, async (req, res) => {
   }
   const slug = String(req.params.slug).toLowerCase();
   const shop = await prisma.shop.findUnique({ where: { slug } });
-  // 404 unless the page is live AND the barber is accepting requests - never
-  // reveal a shop that hasn't opted in.
-  if (!shop || !shop.publicPageEnabled || !shop.takesRequests) {
+  // 404 unless the page is live AND it shows the request form - the same rule
+  // the page renders by (bookingLinks.ts), so a shop with no way to book takes
+  // requests even with the switch off, and a ChairBack-booking shop takes none.
+  if (!shop || !shop.publicPageEnabled || !showsRequestForm(shop)) {
     res.status(404).json({ error: "not_found" });
     return;
   }
