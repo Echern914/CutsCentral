@@ -243,7 +243,10 @@ describe("history and voids", () => {
     await waitFor(() => screen.getByRole("button", { name: "Void the $150 payment from Mon, Sep 21" }));
     fireEvent.click(screen.getByRole("button", { name: "Void the $150 payment from Mon, Sep 21" }));
     fireEvent.click(screen.getByRole("button", { name: "Void it" }));
-    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't void it - try again", "error"));
+    // 🔴 Said beside the button, inside the History sheet - a toast drew
+    // beneath the sheet, so on a phone a failed void looked like nothing.
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Couldn't void it/);
+    expect(toast).not.toHaveBeenCalledWith(expect.stringMatching(/Couldn't void/), "error");
     expect(screen.queryByText(/^Voided/)).toBeNull();
     expect(screen.getByRole("button", { name: "Void it" })).toBeTruthy();
   });

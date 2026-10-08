@@ -1,5 +1,9 @@
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
+import { LocalDate } from "@/components/ui/LocalDate";
+
+/** "Oct 6" - kept here (a server file), never imported from a client one. */
+const DAY_STAMP: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
 
 export interface ActivityItem {
   type: "nudge" | "visit";
@@ -43,10 +47,9 @@ export function ActivityFeed({
               <span className="text-sm text-offwhite">{item.who}</span>
               <span className="text-xs text-muted">{item.detail}</span>
               <span className="ml-auto text-xs text-muted">
-                {new Date(item.at).toLocaleDateString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                })}
+                {/* In the barber's own zone: this renders on the server, where
+                    an evening visit was already tomorrow. */}
+                <LocalDate iso={item.at} options={DAY_STAMP} />
               </span>
             </li>
           ))}

@@ -25,13 +25,14 @@ import { resolveRewardsTheme, rewardsFontVars, surfaceStyle, type RewardsTheme }
 // The interface lives with the rewards sub-route (its page owns the API call);
 // this component just renders whichever page mounts it.
 import type { RewardsData } from "./rewards/page";
+import { formatPrice } from "@/lib/serviceFields";
 
 function promoValue(p: RewardsData["promotions"][number]): string | null {
   switch (p.kind) {
     case "PERCENT_OFF":
       return p.percentOff ? `${p.percentOff}% off` : null;
     case "AMOUNT_OFF":
-      return p.amountOff ? `$${p.amountOff} off` : null;
+      return p.amountOff ? `${formatPrice(Number(p.amountOff))} off` : null;
     case "FREE_ADDON":
       return null; // the title/description say it all
     case "EXTRA_PUNCHES":

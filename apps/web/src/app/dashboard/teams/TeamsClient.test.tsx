@@ -140,7 +140,10 @@ describe("leaving", () => {
       .getAllByRole("button", { name: "Leave team" })
       .find((b) => b.className.includes("bg-rose"))!;
     fireEvent.click(confirm);
-    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't leave - try again", "error"));
+    // 🔴 Said in the dialog's footer: a toast draws beneath the dialog, so on
+    // a phone the button just went back to "Leave team" with no word.
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Couldn't leave\. You're still on the team/);
+    expect(toast).not.toHaveBeenCalledWith(expect.stringMatching(/Couldn't leave/), "error");
     expect(myTeamsAction).not.toHaveBeenCalled();
   });
 });

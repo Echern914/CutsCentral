@@ -72,8 +72,13 @@ export function VisitHistory({
     const fields: { when?: string; serviceName?: string | null } = {};
     const origDate = toDateInput(v.date);
     if (editDate && editDate !== origDate) {
-      // Send local noon to avoid a timezone day-shift; the server only uses the day.
-      fields.when = new Date(`${editDate}T12:00:00`).toISOString();
+      // Keep the visit's own time of day on the new date, and never send a
+      // future instant: it used to send NOON, which the API refuses as "in
+      // the future" for today before about midday.
+      const orig = new Date(v.date);
+      const [y, m, d] = editDate.split("-").map(Number);
+      const moved = new Date(y!, m! - 1, d!, orig.getHours(), orig.getMinutes(), orig.getSeconds());
+      fields.when = (moved.getTime() > Date.now() ? new Date() : moved).toISOString();
     }
     const trimmed = editService.trim();
     if (trimmed !== (v.service ?? "")) fields.serviceName = trimmed || null;

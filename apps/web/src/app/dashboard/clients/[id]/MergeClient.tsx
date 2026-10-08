@@ -38,17 +38,20 @@ export function MergeClient({
   const [searching, startSearch] = useTransition();
   const [merging, startMerge] = useTransition();
   const [picked, setPicked] = useState<Hit | null>(null);
+  const [searched, setSearched] = useState<string | null>(null);
 
   function runSearch() {
     const term = q.trim();
     if (!term) {
       setHits([]);
+      setSearched(null);
       return;
     }
     startSearch(async () => {
       const results = await searchClientsAction(term);
       // Never offer THIS client as its own merge source.
       setHits(results.filter((h) => h.id !== clientId));
+      setSearched(term);
     });
   }
 
@@ -145,7 +148,9 @@ export function MergeClient({
               ))}
             </ul>
           )}
-          {!searching && q.trim() !== "" && hits.length === 0 && (
+          {/* Only once THIS text was searched: it read "No matching clients."
+              while the barber was still typing, before any search ran. */}
+          {!searching && searched !== null && searched === q.trim() && hits.length === 0 && (
             <p className="mt-2 text-xs text-muted">No matching clients.</p>
           )}
         </>

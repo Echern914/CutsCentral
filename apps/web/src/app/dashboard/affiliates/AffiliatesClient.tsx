@@ -541,8 +541,10 @@ function Dashboard({
       try {
         await navigator.share({ text });
         return;
-      } catch {
-        // Cancelled or unsupported: fall through to copying.
+      } catch (err) {
+        // A closed share sheet is changing their mind, not a failure: it used
+        // to fall through and toast "copied". Only a real failure copies.
+        if (err instanceof DOMException && err.name === "AbortError") return;
       }
     }
     copy(text, "Message");

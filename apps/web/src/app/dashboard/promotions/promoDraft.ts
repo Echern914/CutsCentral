@@ -1,5 +1,6 @@
 import { LOYALTY_TIER_KEYS, type LoyaltyTierKey } from "@chairback/config/constants";
 import type { Promo } from "./page";
+import { formatPrice } from "@/lib/serviceFields";
 
 /** What a promo is worth, in the words the promotions list shows. */
 export function valueLabel(p: Pick<Promo, "kind" | "percentOff" | "amountOff" | "extraPunches">): string {
@@ -7,7 +8,7 @@ export function valueLabel(p: Pick<Promo, "kind" | "percentOff" | "amountOff" | 
     case "PERCENT_OFF":
       return `${p.percentOff}% off`;
     case "AMOUNT_OFF":
-      return `$${p.amountOff} off`;
+      return `${formatPrice(Number(p.amountOff))} off`;
     case "FREE_ADDON":
       return "Free add-on";
     case "EXTRA_PUNCHES":

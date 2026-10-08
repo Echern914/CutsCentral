@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { Dialog } from "@/components/ui/Dialog";
 import { getShopQrAction, type ShopQr } from "@/app/dashboard/booking/qrActions";
 import { cn } from "@/lib/cn";
+import { copyText } from "@/lib/contactUri";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
 
@@ -68,11 +69,15 @@ export function ShareBookingDialog({
   // Shown without the scheme: it is read at a glance, not parsed.
   const display = bookUrl.replace(/^https?:\/\//, "");
 
-  function copy() {
-    navigator.clipboard
-      ?.writeText(bookUrl)
-      .then(() => toast("Booking link copied", "success"))
-      .catch(() => toast("Couldn't copy link", "error"));
+  // Said ON the button, inside this dialog: a toast draws beneath the dialog,
+  // so on a phone Copy looked like it did nothing either way.
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  useEffect(() => {
+    if (!open) setCopyState("idle");
+  }, [open]);
+  async function copy() {
+    const ok = await copyText(bookUrl);
+    setCopyState(ok ? "copied" : "failed");
   }
 
   async function share() {
@@ -99,7 +104,20 @@ export function ShareBookingDialog({
         {/* THE CODE. White plate on purpose: a QR needs light quiet-zone
             contrast to scan, and inverting it for the dark theme is the
             classic way to ship one that photographs but never reads. */}
-        <div className="flex h-[13.5rem] w-[13.5rem] items-center justify-center rounded-2xl bg-white p-3">
+        {/* Print shows ONLY the code. Without this the printout was the whole
+            dashboard with the dialog over it. `html body` outranks the home QR
+            card's own print rules, whichever loads last. */}
+        {qr && (
+          <style>{`@media print {
+            body * { visibility: hidden !important; }
+            html body #cb-share-qr-print, html body #cb-share-qr-print * { visibility: visible !important; }
+            html body #cb-share-qr-print { position: fixed; inset: 0; margin: auto; width: 3.5in; height: 3.5in; }
+          }`}</style>
+        )}
+        <div
+          id="cb-share-qr-print"
+          className="flex h-[13.5rem] w-[13.5rem] items-center justify-center rounded-2xl bg-white p-3"
+        >
           {qr ? (
             <div
               className="h-full w-full [&>svg]:h-full [&>svg]:w-full"
@@ -123,7 +141,10 @@ export function ShareBookingDialog({
         </p>
 
         <div className="grid w-full grid-cols-2 gap-2">
-          <ActionButton onClick={copy} label="Copy link">
+          <ActionButton
+            onClick={() => void copy()}
+            label={copyState === "copied" ? "Copied" : copyState === "failed" ? "Couldn't copy" : "Copy link"}
+          >
             <CopyMark />
           </ActionButton>
 

@@ -113,7 +113,14 @@ export function ClientActions({
     });
   }
 
-  /** The shared "which card?" popover for log-visit / +1 punch. */
+  /**
+   * The shared "which card?" panel for log-visit / +1 punch.
+   *
+   * 🔴 IN THE ROW'S FLOW, never floated off a button. These panels were
+   * `absolute right-0 w-64` on a button near the left edge, so on a phone
+   * they ran ~150px off-screen and the card names could not be read. The
+   * wrappers are `contents`, so each open panel takes its own full line.
+   */
   function CardPicker({
     label,
     onPick,
@@ -122,7 +129,7 @@ export function ClientActions({
     onPick: (cardTypeId?: string) => void;
   }) {
     return (
-      <div className="absolute right-0 z-10 mt-2 w-64 rounded-2xl border border-subtle bg-charcoal-800 p-2 shadow-glow-sm">
+      <div className="w-full basis-full rounded-2xl sm:max-w-xs border border-subtle bg-charcoal-800 p-2 shadow-glow-sm">
         <p className="px-2 pb-1.5 pt-1 text-[10px] uppercase tracking-wide text-muted">
           {label}
         </p>
@@ -197,7 +204,7 @@ export function ClientActions({
         {isOptedOut ? "Opt back in" : "Opt out"}
       </button>
 
-      <div className="relative">
+      <div className="contents">
         <button
           disabled={pending}
           onClick={() => (hasCards ? setVisitPickerOpen((v) => !v) : logVisit())}
@@ -210,7 +217,7 @@ export function ClientActions({
       </div>
 
       {rewardsEnabled && (
-        <div className="relative">
+        <div className="contents">
           <button
             disabled={pending}
             onClick={() => {
@@ -231,7 +238,7 @@ export function ClientActions({
             />
           )}
           {bonusFor && (
-            <div className="absolute right-0 z-10 mt-2 w-72 rounded-2xl border border-subtle bg-charcoal-800 p-3 shadow-glow-sm">
+            <div className="w-full basis-full rounded-2xl sm:max-w-xs border border-subtle bg-charcoal-800 p-3 shadow-glow-sm">
               <ReasonPicker
                 prompt={`Why the bonus punch${bonusFor.cardTypeId ? ` on ${cardName(bonusFor.cardTypeId)}` : ""}?`}
                 presets={BONUS_REASONS}
@@ -245,7 +252,7 @@ export function ClientActions({
       )}
 
       {rewardsEnabled && affordable.length > 0 && !redeemedName && (
-        <div className="relative">
+        <div className="contents">
           <button
             onClick={() => setPickerOpen((v) => !v)}
             className="rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
@@ -253,7 +260,7 @@ export function ClientActions({
             Redeem reward{affordable.length > 1 ? ` (${affordable.length})` : ""}
           </button>
           {pickerOpen && (
-            <div className="absolute right-0 z-10 mt-2 w-64 rounded-2xl border border-subtle bg-charcoal-800 p-2 shadow-glow-sm">
+            <div className="w-full basis-full rounded-2xl sm:max-w-xs border border-subtle bg-charcoal-800 p-2 shadow-glow-sm">
               <p className="px-2 pb-1.5 pt-1 text-[10px] uppercase tracking-wide text-muted">
                 Pick the reward to redeem
               </p>
@@ -302,7 +309,7 @@ export function ClientActions({
       )}
 
       {promotions.length > 0 && (
-        <div className="relative">
+        <div className="contents">
           <button
             onClick={() => setPromoPickerOpen((v) => !v)}
             className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
@@ -310,7 +317,7 @@ export function ClientActions({
             Promo used…
           </button>
           {promoPickerOpen && (
-            <div className="absolute right-0 z-10 mt-2 w-64 rounded-2xl border border-subtle bg-charcoal-800 p-2 shadow-glow-sm">
+            <div className="w-full basis-full rounded-2xl sm:max-w-xs border border-subtle bg-charcoal-800 p-2 shadow-glow-sm">
               <p className="px-2 pb-1.5 pt-1 text-[10px] uppercase tracking-wide text-muted">
                 Which promo did they use?
               </p>

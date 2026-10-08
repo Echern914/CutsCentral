@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { draftTiersFromParam, promoBroadcastDraft, promoBroadcastHref } from "./promoDraft";
+import { draftTiersFromParam, promoBroadcastDraft, promoBroadcastHref, valueLabel } from "./promoDraft";
 import type { Promo } from "./page";
 
 const promo: Promo = {
@@ -41,5 +41,12 @@ describe("promo -> composer draft", () => {
     expect(draftTiersFromParam(tiers)).toEqual(["GOLD", "SILVER"]);
     expect(draftTiersFromParam("GOLD,PLATINUM,GOLD,")).toEqual(["GOLD"]);
     expect(draftTiersFromParam(undefined)).toEqual([]);
+  });
+});
+
+describe("valueLabel", () => {
+  it("🔴 a dollar-off promo keeps its cents: $12.50 off, not $12.5 off", () => {
+    expect(valueLabel({ kind: "AMOUNT_OFF", amountOff: 12.5, percentOff: null, extraPunches: null } as never)).toBe("$12.50 off");
+    expect(valueLabel({ kind: "AMOUNT_OFF", amountOff: 5, percentOff: null, extraPunches: null } as never)).toBe("$5 off");
   });
 });

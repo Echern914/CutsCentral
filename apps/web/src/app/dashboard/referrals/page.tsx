@@ -5,7 +5,11 @@ import { apiGet } from "@/lib/api";
 import { ReferralShare, type ReferralRow } from "./ReferralShare";
 import { PartnerEarnings, type PartnerMe } from "./PartnerEarnings";
 
-export const metadata: Metadata = { title: "Refer a {vocab.providerNoun}" };
+// It said "Refer a {vocab.providerNoun}" literally: a plain string, not a template.
+export async function generateMetadata(): Promise<Metadata> {
+  const vocab = await getVocabulary();
+  return { title: `Refer a ${vocab.providerNoun}` };
+}
 
 interface ReferralData {
   code: string | null;

@@ -82,8 +82,14 @@ interface ClientDetail {
   nudges: { sentAt: string; status: string; resultedInBooking: boolean }[];
 }
 
-function fmt(d: string | null) {
-  return d ? new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "None";
+/**
+ * A date in the SHOP's zone. This page renders on the server (UTC on Vercel),
+ * so with no zone an evening visit read as the next day.
+ */
+function fmt(d: string | null, timeZone: string) {
+  return d
+    ? new Date(d).toLocaleDateString("en-US", { timeZone, month: "short", day: "numeric", year: "numeric" })
+    : "None";
 }
 
 interface LedgerEntry {
@@ -290,7 +296,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
                 : "n/a"
           }
         />
-        <Stat label="Last visit" value={fmt(client.lastVisitAt)} />
+        <Stat label="Last visit" value={fmt(client.lastVisitAt, timezone)} />
       </div>
 
       {/* Per-card balances - only meaningful once the shop has custom cards. */}
@@ -354,7 +360,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
             <ul className="max-h-80 divide-y divide-subtle overflow-y-auto">
               {nudges.map((n, i) => (
                 <li key={i} className="flex items-center justify-between px-5 py-3">
-                  <span className="text-sm text-offwhite">{fmt(n.sentAt)}</span>
+                  <span className="text-sm text-offwhite">{fmt(n.sentAt, timezone)}</span>
                   <span className="text-xs text-muted">
                     {n.status.toLowerCase()}
                     {n.resultedInBooking && (

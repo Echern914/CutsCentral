@@ -90,6 +90,7 @@ export function TeamsClient({
   const [saving, setSaving] = useState<string | null>(null);
   const [leaving, setLeaving] = useState<MyTeamLink | null>(null);
   const [leaveBusy, setLeaveBusy] = useState(false);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
 
   async function flip(link: MyTeamLink, key: ShareKey) {
     setSaving(`${link.id}:${key}`);
@@ -116,10 +117,18 @@ export function TeamsClient({
 
   async function leave(link: MyTeamLink) {
     setLeaveBusy(true);
-    const res = await leaveTeamAction(link.id);
+    setLeaveError(null);
+    const res = await leaveTeamAction(link.id).catch(() => ({ ok: false, error: "network" }));
     setLeaveBusy(false);
     if (!res.ok && res.error !== "not_found") {
-      toast("Couldn't leave - try again", "error");
+      // In the dialog's footer, not a toast: the toast draws beneath it, so the
+      // button just went back to "Leave team" and they closed it believing
+      // they had left.
+      setLeaveError(
+        link.status === "PENDING"
+          ? "Couldn't withdraw. Nothing changed, so try again."
+          : "Couldn't leave. You're still on the team, so try again.",
+      );
       return;
     }
     setLeaving(null);
@@ -266,7 +275,10 @@ export function TeamsClient({
               <div className="mt-4 flex justify-start">
                 <button
                   type="button"
-                  onClick={() => setLeaving(link)}
+                  onClick={() => {
+                    setLeaveError(null);
+                    setLeaving(link);
+                  }}
                   className="min-h-[40px] px-2 text-xs text-rose-300 transition-colors hover:text-rose-200"
                 >
                   {active ? "Leave team" : "Withdraw request"}
@@ -308,18 +320,31 @@ export function TeamsClient({
 
       <Dialog
         open={leaving !== null}
-        onClose={() => (leaveBusy ? undefined : setLeaving(null))}
+        onClose={() => {
+          if (leaveBusy) return;
+          setLeaveError(null);
+          setLeaving(null);
+        }}
         title={
           leaving?.status === "PENDING"
             ? "Withdraw your request?"
             : `Leave ${leaving?.team.name ?? "this"} team?`
         }
         footer={
+          <div className="flex flex-col gap-2">
+          {leaveError && (
+            <p role="alert" className="text-right text-xs text-danger-soft">
+              {leaveError}
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <button
               type="button"
               disabled={leaveBusy}
-              onClick={() => setLeaving(null)}
+              onClick={() => {
+                setLeaveError(null);
+                setLeaving(null);
+              }}
               className="min-h-[40px] rounded-full border border-subtle px-4 text-xs text-muted transition-colors hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-50"
             >
               Stay
@@ -336,6 +361,7 @@ export function TeamsClient({
                   ? "Withdraw"
                   : "Leave team"}
             </button>
+          </div>
           </div>
         }
       >

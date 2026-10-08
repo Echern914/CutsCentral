@@ -109,7 +109,7 @@ export function dealValue(p: Promotion): string | null {
     case "PERCENT_OFF":
       return p.percentOff ? `${p.percentOff}% off` : null;
     case "AMOUNT_OFF":
-      return p.amountOff ? `$${p.amountOff} off` : null;
+      return p.amountOff ? `${dollars(Number(p.amountOff))} off` : null;
     case "FREE_ADDON":
       return null;
     case "EXTRA_PUNCHES":
@@ -125,4 +125,10 @@ export function dealEnds(endsAt: string | null, now: number, timeZone?: string):
   if (days === 1) return "last day";
   if (days <= 14) return `ends in ${days} days`;
   return `ends ${new Date(endsAt).toLocaleDateString("en-US", { month: "short", day: "numeric", ...(timeZone ? { timeZone } : {}) })}`;
+}
+
+/** "$12.50", "$5" - a dollar-off deal with cents read "$2.5 off". */
+function dollars(n: number): string {
+  const cents = Math.round(n * 100);
+  return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
 }

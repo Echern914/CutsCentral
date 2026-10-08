@@ -105,9 +105,12 @@ function mapRows(grid: string[][]): { rows: ImportClientRow[]; warning?: string 
     out.push({
       firstName: firstName.slice(0, 80),
       lastName: lastName ? lastName.slice(0, 80) : undefined,
-      phone: get(iPhone) || undefined,
-      email: get(iEmail) || undefined,
-      notes: get(iNotes) || undefined,
+      // Every field within the API's caps: one long cell used to fail the
+      // WHOLE 500-row batch with no row number. Over 40 characters is never
+      // one phone number, so the server reports it as that row's skip.
+      phone: get(iPhone).slice(0, 40) || undefined,
+      email: get(iEmail).slice(0, 160) || undefined,
+      notes: get(iNotes).slice(0, 2000) || undefined,
     });
   }
   return { rows: out };
@@ -156,7 +159,14 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
       for (let i = 0; i < rows.length; i += BATCH) {
         const r = await importClientsAction(rows.slice(i, i + BATCH));
         if (!r.ok) {
-          toast(r.error ?? "Import failed.", "error");
+          // Earlier batches are already in. Say what was, and from which row
+          // it stopped, instead of only "Import failed".
+          if (i > 0) {
+            setResult(totals);
+            toast(`Imported up to row ${i}. Rows ${i + 1} on weren't added - fix the file and import them again.`, "error");
+          } else {
+            toast(r.error ?? "Import failed.", "error");
+          }
           return;
         }
         totals.created! += r.created ?? 0;

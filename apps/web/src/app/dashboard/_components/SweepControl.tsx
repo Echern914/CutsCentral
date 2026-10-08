@@ -44,6 +44,9 @@ export function SweepControl({
       const s = await sweepPreviewAction();
       setPreview(s);
       setConfirming(false);
+      // A failed or rate-limited preview used to flip back to the button with
+      // no word, so he tapped it over and over.
+      if (!s) setError("Couldn't run the preview. Try again in a minute.");
     });
   }
 

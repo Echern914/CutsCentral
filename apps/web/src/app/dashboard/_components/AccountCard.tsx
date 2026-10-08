@@ -292,6 +292,9 @@ export function AccountCard({
                 name="confirm"
                 className={`mt-1 ${field}`}
                 autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 aria-invalid={delState.error ? true : undefined}
                 aria-describedby={delState.error ? "err-del-shop" : undefined}
               />
@@ -322,6 +325,9 @@ export function AccountCard({
                 name="confirm"
                 className={`mt-1 ${field}`}
                 autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 aria-invalid={delAcctState.error ? true : undefined}
                 aria-describedby={delAcctState.error ? "err-del-account" : undefined}
               />

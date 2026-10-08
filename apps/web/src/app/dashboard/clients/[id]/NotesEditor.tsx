@@ -39,11 +39,17 @@ export function NotesEditor({
       </div>
       <textarea
         value={notes}
+        // The API keeps 2,000 characters. Capped here so nothing is cut off
+        // silently after "Notes saved".
+        maxLength={2000}
         onChange={(e) => setNotes(e.target.value)}
         rows={4}
         placeholder="Private notes: preferences, history, anything useful."
         className="w-full resize-none rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50"
       />
+      {notes.length > 1800 && (
+        <p className="mt-1 text-xs text-muted">{notes.length.toLocaleString()} / 2,000</p>
+      )}
     </Card>
   );
 }
