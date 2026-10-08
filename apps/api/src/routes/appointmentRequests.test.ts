@@ -212,7 +212,11 @@ describe("the request route takes exactly what the page shows", () => {
     shopIdC = shop.id;
     slugC = shop.slug!;
   });
-  const setShop = (data: { bookingMode?: string; bookingUrl?: string | null; takesRequests?: boolean }) =>
+  const setShop = (data: {
+    bookingMode?: "link" | "native";
+    bookingUrl?: string | null;
+    takesRequests?: boolean;
+  }) =>
     prisma.shop.update({ where: { id: shopIdC }, data });
   const send = () =>
     request(app).post(`/api/page/${slugC}/request`).send({ firstName: "Ana", phone: "(302) 555-0142" });
