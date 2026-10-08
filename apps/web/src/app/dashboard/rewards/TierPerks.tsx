@@ -173,7 +173,9 @@ export function TierPerks({
   const rules = fromDraft(drafts);
   const checked = validateTierRules(rules);
   const rulesDirty = JSON.stringify(rules) !== JSON.stringify(fromDraft(toDraft(startRules)));
-  const perksDirty = LOYALTY_TIER_KEYS.some((k) => (perks[k] ?? "") !== (initial[k] ?? ""));
+  // Compared as the server stores it (trimmed): iOS predictive text adds a
+  // trailing space, and the save never showed Saved for that perk.
+  const perksDirty = LOYALTY_TIER_KEYS.some((k) => (perks[k] ?? "").trim() !== (initial[k] ?? ""));
   const dirty = perksDirty || rulesDirty;
   const ruleError = checked.ok ? null : errorCopy(checked.error, checked.tier);
 

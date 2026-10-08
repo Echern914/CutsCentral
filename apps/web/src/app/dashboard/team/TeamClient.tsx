@@ -91,7 +91,11 @@ export function TeamClient({
   const [error, setError] = useState<string | null>(null);
 
   /** Run a mutation, then re-read the roster so the UI can't drift. */
-  function run(fn: () => Promise<{ ok: boolean; error?: string }>, okMsg: string) {
+  function run(
+    fn: () => Promise<{ ok: boolean; error?: string }>,
+    okMsg: string,
+    onOk?: () => void,
+  ) {
     start(async () => {
       const res = await fn();
       if (!res.ok) {
@@ -100,6 +104,7 @@ export function TeamClient({
         return;
       }
       setError(null);
+      onOk?.();
       const fresh = await teamAction();
       if (fresh) setData(fresh);
       toast(okMsg, "success");
@@ -112,6 +117,10 @@ export function TeamClient({
       setError("Add an email address.");
       return;
     }
+    // 🔴 The form clears only once the invite is SENT. `run(...).valueOf()`
+    // threw (run returns nothing) before the fields were cleared, so a second
+    // tap sent a second invite - and one live invite per address meant that
+    // cancelled the first email's link.
     run(
       () =>
         inviteMemberAction({
@@ -120,9 +129,11 @@ export function TeamClient({
           ...(staffId ? { staffId } : {}),
         }),
       "Invitation sent",
-    ).valueOf();
-    setEmail("");
-    setStaffId("");
+      () => {
+        setEmail("");
+        setStaffId("");
+      },
+    );
   }
 
   // Chairs not yet claimed by a seat — the only ones worth offering.

@@ -51,6 +51,7 @@ export function AtRiskTable({
 function NudgeRow({ row, appBaseUrl }: { row: AtRiskRow; appBaseUrl: string }) {
   const [pending, startTransition] = useTransition();
   const [sent, setSent] = useState(false);
+  const [why, setWhy] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const rewardsUrl = `${appBaseUrl}/r/${row.magicToken}`;
@@ -71,6 +72,11 @@ function NudgeRow({ row, appBaseUrl }: { row: AtRiskRow; appBaseUrl: string }) {
           {row.lastService ? ` · last: ${row.lastService}` : ""}
         </p>
         {row.phone && <p className="text-xs text-muted/70">{row.phone}</p>}
+        {why && (
+          <p role="alert" className="mt-1 text-xs text-danger-soft">
+            {why}
+          </p>
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <button
@@ -84,8 +90,12 @@ function NudgeRow({ row, appBaseUrl }: { row: AtRiskRow; appBaseUrl: string }) {
           disabled={pending || sent}
           onClick={() =>
             startTransition(async () => {
-              const res = await nudgeNowAction(row.id);
+              setWhy(null);
+              const res = await nudgeNowAction(row.id).catch(() => ({ ok: false, reason: undefined }));
               if (res.ok) setSent(true);
+              // It used to go back to "Nudge now" with no word, and he tapped
+              // again and again. The API says why (cooldown, opted out, ...).
+              else setWhy(res.reason ?? "Couldn't send the nudge. Try again.");
             })
           }
           className="rounded-full border border-gold/50 px-4 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"

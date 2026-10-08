@@ -96,6 +96,9 @@ function VoidButton({
   onVoid: () => Promise<boolean>;
 }) {
   const [state, setState] = useState<"idle" | "confirm" | "busy">("idle");
+  // Said beside the button, inside the History sheet: the toast draws
+  // beneath the sheet, so on a phone a failed void looked like nothing.
+  const [failed, setFailed] = useState(false);
   if (state === "idle") {
     return (
       <button
@@ -116,7 +119,15 @@ function VoidButton({
           disabled={state === "busy"}
           onClick={async () => {
             setState("busy");
-            setState((await onVoid()) ? "idle" : "confirm");
+            setFailed(false);
+            let ok = false;
+            try {
+              ok = await onVoid();
+            } catch {
+              ok = false;
+            }
+            setFailed(!ok);
+            setState(ok ? "idle" : "confirm");
           }}
           className="min-h-[40px] rounded-full bg-rose-500/90 px-3 text-[11px] font-semibold text-white disabled:opacity-50"
         >
@@ -131,6 +142,11 @@ function VoidButton({
           Keep
         </button>
       </div>
+      {failed && (
+        <p role="alert" className="max-w-[16rem] text-right text-[11px] text-danger-soft">
+          Couldn&apos;t void it. Try again.
+        </p>
+      )}
       {hint && (
         <p className="max-w-[16rem] text-right text-[11px] text-muted">
           {hint}
@@ -395,7 +411,7 @@ export function OwnerRent({
       toast(done, "success");
       return true;
     }
-    toast("Couldn't void it - try again", "error");
+    // The failure is said by the Void button itself (in the sheet).
     return false;
   }
 

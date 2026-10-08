@@ -1753,8 +1753,11 @@ publicPageRouter.post("/:slug/review", leadLimiter, async (req, res) => {
 // nudges, Acuity connection) via cascading deletes. Requires the shop name as
 // a typed confirmation to prevent accidents.
 shopsRouter.delete("/me", requireUser, requireShop, requireOwner, async (req, res) => {
-  const confirm = String(req.body?.confirm ?? "");
-  if (confirm !== req.shop!.name) {
+  // Same rule as deleting an account: the name, ignoring case and the space
+  // iOS predictive text adds. Exact matching refused "Cherncuts " for
+  // "cherncuts" while the screen showed a perfect match.
+  const confirm = String(req.body?.confirm ?? "").trim().toLowerCase();
+  if (confirm !== req.shop!.name.trim().toLowerCase()) {
     res.status(400).json({ error: "confirm_mismatch" });
     return;
   }

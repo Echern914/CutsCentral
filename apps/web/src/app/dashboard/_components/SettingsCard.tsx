@@ -88,11 +88,11 @@ export function SettingsCard({ settings }: { settings: ShopSettings }) {
         <div className="grid grid-cols-2 gap-4">
           <label className={labelCls}>
             Buffer days
-            <input name="nudgeBufferDays" type="number" min={0} defaultValue={settings.nudgeBufferDays} className={`mt-1 ${field}`} />
+            <input name="nudgeBufferDays" type="number" min={0} max={90} step={1} required defaultValue={settings.nudgeBufferDays} className={`mt-1 ${field}`} />
           </label>
           <label className={labelCls}>
             Daily SMS cap
-            <input name="dailySendCap" type="number" min={1} defaultValue={settings.dailySendCap} className={`mt-1 ${field}`} />
+            <input name="dailySendCap" type="number" min={1} max={1000} step={1} required defaultValue={settings.dailySendCap} className={`mt-1 ${field}`} />
           </label>
         </div>
         {/* 🔴 NO REWARDS CHECKBOX HERE ANY MORE. The switch lives on the Rewards
@@ -119,6 +119,8 @@ export function SettingsCard({ settings }: { settings: ShopSettings }) {
             type="number"
             min={1}
             max={90}
+            step={1}
+            required
             defaultValue={settings.rebookWindowDays}
             className={`mt-1 ${field} sm:max-w-[160px]`}
           />
@@ -152,6 +154,7 @@ export function SettingsCard({ settings }: { settings: ShopSettings }) {
               value={template}
               onChange={(e) => setTemplate(e.target.value)}
               rows={3}
+              maxLength={480}
               placeholder="Leave blank to use the default message."
               className={`mt-1 ${field} resize-none`}
             />

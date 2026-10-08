@@ -66,6 +66,15 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "keeps today's holiday price.",
   },
   {
+    id: "2026-10-08-home-clients-team-truth",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Home, clients and team say what really happened",
+    body:
+      "Today no longer counts a lunch block as an appointment. Nudge now, Leave team and voiding rent say why when " +
+      "they fail. Cancel on Edit profile throws the change away. Card pickers fit a phone, and promos show $12.50 off.",
+  },
+  {
     id: "2026-10-08-checkout-tells-the-truth",
     date: "2026-10-08",
     kind: "fix",

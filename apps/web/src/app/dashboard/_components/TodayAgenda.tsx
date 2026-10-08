@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/Card";
 import { resolveServiceColor } from "@chairback/config/serviceColor";
 import { NAME_WRAP_CLS, initialsOf } from "./appointmentCardStyles";
 import { SpecialChip } from "./SpecialChip";
+import { formatPrice } from "@/lib/serviceFields";
 
 /** One row of today's agenda (the subset of /api/booking/agenda we render). */
 export interface TodayRow {
@@ -71,7 +72,11 @@ export function TodayAgenda({
     hour: "numeric",
     minute: "2-digit",
   });
-  const remaining = rows.filter((r) => !CLOSED.has(r.status)).length;
+  // 🔴 Blocked time (a lunch, an Acuity block) is not an appointment. It was
+  // counted in "N appointments left" and drawn as a client row, initials and
+  // all - "1 appointment left today" on a day with nothing booked.
+  const bookings = rows.filter((r) => r.source !== "block");
+  const remaining = bookings.filter((r) => !CLOSED.has(r.status)).length;
 
   return (
     <Card className="mb-6 overflow-hidden" >
@@ -79,7 +84,7 @@ export function TodayAgenda({
         <div>
           <h2 className="font-display text-lg">Today</h2>
           <p className="text-xs text-muted">
-            {rows.length === 0
+            {bookings.length === 0
               ? "Nothing on the books."
               : `${remaining} ${remaining === 1 ? "appointment" : "appointments"} left today.`}
           </p>
@@ -106,6 +111,21 @@ export function TodayAgenda({
               serviceName: r.serviceName,
             }).hex;
             const closed = CLOSED.has(r.status);
+            if (r.source === "block") {
+              return (
+                <li key={r.id} className="px-5 py-3" style={{ opacity: 0.6 }}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs tabular-nums text-muted">
+                      {timeFmt.format(new Date(r.start))}
+                    </span>
+                    <span className="shrink-0 rounded-full bg-charcoal-700 px-2.5 py-0.5 text-[10px] font-medium text-muted">
+                      Blocked
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-muted [overflow-wrap:anywhere]">{r.clientName}</p>
+                </li>
+              );
+            }
             return (
               <li
                 key={r.id}
@@ -127,7 +147,7 @@ export function TodayAgenda({
                     </span>
                   ) : r.price !== null ? (
                     <span className="shrink-0 text-xs tabular-nums text-muted">
-                      ${r.price}
+                      {formatPrice(r.price)}
                     </span>
                   ) : null}
                 </div>

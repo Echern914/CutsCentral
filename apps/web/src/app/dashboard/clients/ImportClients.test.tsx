@@ -45,3 +45,26 @@ describe("ImportClients - a row with only a name that is already in the book", (
     expect(text).not.toContain("couldn't be saved");
   });
 });
+
+/**
+ * 🔴 ONE LONG CELL NEVER FAILS A WHOLE BATCH. The API caps phone (40), email
+ * (160) and notes (2000) per row and refused the WHOLE 500-row request for one
+ * cell over, with no row number. Every field now leaves within its cap.
+ */
+describe("ImportClients - fields leave within the API's caps", () => {
+  beforeEach(() => importRows.mockReset());
+
+  it("clips a runaway phone, email and note", async () => {
+    importRows.mockResolvedValue({ ok: true, created: 1, unchanged: 0, total: 1, skipped: [] });
+    const long = (n: number) => "9".repeat(n);
+    await importFile(
+      `First name,Phone,Email,Notes\nTheo,${long(60)},${"a".repeat(170)}@x.com,${"n".repeat(2100)}\nRowan,,,\n`,
+      2,
+    );
+    await waitFor(() => expect(importRows).toHaveBeenCalled());
+    const [row] = importRows.mock.calls[0]![0] as { phone: string; email: string; notes: string }[];
+    expect(row!.phone.length).toBeLessThanOrEqual(40);
+    expect(row!.email.length).toBeLessThanOrEqual(160);
+    expect(row!.notes.length).toBeLessThanOrEqual(2000);
+  });
+});

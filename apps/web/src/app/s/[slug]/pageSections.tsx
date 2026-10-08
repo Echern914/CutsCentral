@@ -12,6 +12,7 @@ import {
 import { fadeUp } from "@/components/motion/variants";
 import { ReviewForm } from "./ReviewForm";
 import type { ShopPageData } from "./page";
+import { formatPrice } from "@/lib/serviceFields";
 
 /**
  * The movable sections of the public page, shared by every page design. The
@@ -319,7 +320,7 @@ function promoValue(p: ShopPageData["promotions"][number]): string | null {
     case "PERCENT_OFF":
       return p.percentOff ? `${p.percentOff}% off` : null;
     case "AMOUNT_OFF":
-      return p.amountOff ? `$${p.amountOff} off` : null;
+      return p.amountOff ? `${formatPrice(Number(p.amountOff))} off` : null;
     case "FREE_ADDON":
       return null;
     case "EXTRA_PUNCHES":

@@ -221,7 +221,7 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
                             color: LOYALTY_TIERS[c.loyaltyTier].color,
                             backgroundColor: `${LOYALTY_TIERS[c.loyaltyTier].color}1A`,
                           }}
-                          title="Loyalty tier (by lifetime completed visits)"
+                          title="Loyalty tier (set by your tier rules on Rewards, or raised by hand)"
                         >
                           {LOYALTY_TIERS[c.loyaltyTier].label}
                         </span>

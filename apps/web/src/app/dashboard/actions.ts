@@ -20,10 +20,14 @@ export async function switchShopAction(shopId: string): Promise<void> {
   redirect("/dashboard");
 }
 
-export async function nudgeNowAction(clientId: string): Promise<{ ok: boolean }> {
+export async function nudgeNowAction(
+  clientId: string,
+): Promise<{ ok: boolean; error?: string; reason?: string }> {
   const res = await apiSend("POST", `/api/dashboard/nudge/${clientId}`);
   revalidatePath("/dashboard");
-  return { ok: res.ok };
+  // The API's sentence for a refusal (cooldown, opted out, ...): the home row
+  // shows it instead of quietly going back to "Nudge now".
+  return { ok: res.ok, error: res.error, reason: res.reason };
 }
 
 /** Rotate a client's rewards link: every previously texted /r/ link dies at
@@ -154,7 +158,21 @@ export async function saveSettingsAction(
   revalidatePath("/dashboard");
   // The noun renders all over Insights ("Twists per week") - refresh it too.
   revalidatePath("/dashboard/insights");
-  return res.ok ? { saved: true } : { error: "Could not save settings." };
+  if (res.ok) return { saved: true };
+  // Name the box: the whole save is refused for one bad field, and a bare
+  // "Could not save settings." left the barber guessing which.
+  const field = res.issues?.[0]?.path?.[0];
+  const SETTINGS_FIELD: Record<string, string> = {
+    nudgeBufferDays: "Buffer days must be a whole number from 0 to 90.",
+    dailySendCap: "Daily SMS cap must be a whole number from 1 to 1,000.",
+    rebookWindowDays: "Rebooking window must be a whole number of days from 1 to 90.",
+    smsTemplate: "Keep the nudge message under 480 characters.",
+    bookingUrl: "Use a full booking link starting with https://, or leave it blank.",
+    name: "Keep the shop name under 120 characters.",
+  };
+  return {
+    error: (typeof field === "string" && SETTINGS_FIELD[field]) || "Could not save settings.",
+  };
 }
 
 /** One typeahead match: the client-list search returns a combined `name`. */
