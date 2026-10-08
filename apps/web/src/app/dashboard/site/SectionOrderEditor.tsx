@@ -32,6 +32,9 @@ export function SectionOrderEditor({
   const rows = [...visible, ...hidden];
 
   function toggle(key: PageSectionKey) {
+    // [] is stored as "the default order", which shows EVERY section - so
+    // switching off the last one turned all of them back on.
+    if (visible.includes(key) && visible.length === 1) return;
     onChange(visible.includes(key) ? visible.filter((k) => k !== key) : [...visible, key]);
   }
 

@@ -42,6 +42,15 @@ export function MyRewardsClient() {
   // and so a double tap cannot fire two requests.
   const [cooldownLeft, setCooldownLeft] = useState(0);
 
+  /** Back to the number box - there was no way out of a mistyped number. */
+  function startOver() {
+    setStep("phone");
+    setCode("");
+    setProof(null);
+    setShops([]);
+    setFlash(null);
+  }
+
   useEffect(() => {
     if (cooldownLeft <= 0) return;
     const t = setInterval(() => setCooldownLeft((v) => Math.max(0, v - 1)), 1000);
@@ -167,6 +176,9 @@ export function MyRewardsClient() {
           >
             {cooldownLeft > 0 ? `Send a fresh code (${cooldownLeft}s)` : "Send a fresh code"}
           </button>
+          <button type="button" className={GHOST} disabled={pending} onClick={startOver}>
+            Use a different number
+          </button>
         </>
       )}
 
@@ -174,10 +186,15 @@ export function MyRewardsClient() {
         (shops.length === 0 ? (
           // Verified, and no shop knows this number. The one honest empty state
           // in the flow - the viewer has proven they ARE the phone's owner.
-          <p className="text-center text-muted">
-            We couldn&apos;t find rewards for this number. If your shop uses
-            ChairBack, ask them to add this number to your profile.
-          </p>
+          <>
+            <p className="text-center text-muted">
+              We couldn&apos;t find rewards for this number. If your shop uses
+              ChairBack, ask them to add this number to your profile.
+            </p>
+            <button type="button" className={GHOST} disabled={pending} onClick={startOver}>
+              Use a different number
+            </button>
+          </>
         ) : (
           <>
             <p className="text-center text-muted">Choose your shop:</p>

@@ -69,14 +69,15 @@ export function GetTheApp({
     }
     if (dismissed) return;
     // Only show if there's a relevant store link for this platform.
-    const link = isIos() ? appStoreUrl : (playStoreUrl ?? appStoreUrl);
+    // Android gets the Play Store or nothing - never an Apple link it can't open.
+    const link = isIos() ? appStoreUrl : (playStoreUrl ?? null);
     if (!link) return;
     setShow(true);
   }, [appStoreUrl, playStoreUrl]);
 
   if (!show) return null;
 
-  const storeUrl = isIos() ? appStoreUrl : (playStoreUrl ?? appStoreUrl);
+  const storeUrl = isIos() ? appStoreUrl : (playStoreUrl ?? null);
   if (!storeUrl) return null;
 
   function dismiss() {

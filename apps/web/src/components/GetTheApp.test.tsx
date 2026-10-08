@@ -136,9 +136,26 @@ describe("Open in ChairBack", () => {
     // universal links for same-domain navigations. That failure is silent,
     // which is exactly why it is pinned by a test.
     setUA(IPHONE_SAFARI);
-    render(<GetTheApp surface="manage" openPath="/book/manage/mt_abc" />);
+    render(<GetTheApp surface="booking" openPath="/book/cherncuts" />);
     const open = (await screen.findByText(/open in chairback/i)) as HTMLAnchorElement;
     expect(open.getAttribute("href")).not.toMatch(/^https?:/);
+  });
+
+  it("🔴 a manage path (it carries the visit's token) is never handed to the unverified scheme", async () => {
+    // Any app can claim chairback://, and the manage token changes or cancels
+    // the visit - so the manage and confirmation cards are install-only.
+    setUA(IPHONE_SAFARI);
+    render(<GetTheApp surface="manage" openPath="/book/manage/mt_abc" />);
+    await screen.findByText(/get the app/i);
+    expect(screen.queryByText(/open in chairback/i)).toBeNull();
+    expect(document.body.innerHTML).not.toContain("mt_abc");
+  });
+
+  it("Get the app is the main button, so a tap without the app is never a Safari error", async () => {
+    setUA(IPHONE_SAFARI);
+    render(<GetTheApp surface="booking" openPath="/book/cherncuts" />);
+    const store = (await screen.findByText(/get the app/i)).closest("a")!;
+    expect(store.className).toMatch(/bg-gold/);
   });
 
   it("without an openPath the card is install-only", async () => {

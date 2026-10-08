@@ -61,10 +61,14 @@ function digitsOnly(v: string): string {
   return v.replace(/\D/g, "").slice(0, 15);
 }
 
-function prettyPhone(d: string): string {
+export function prettyPhone(raw: string): string {
+  // A leading US "1" is the country code, not part of the number; it used to
+  // shift every digit and hide the last one.
+  const d = raw.length === 11 && raw.startsWith("1") ? raw.slice(1) : raw;
+  if (d.length > 10) return raw; // never hide a typed digit
   if (d.length <= 3) return d;
   if (d.length <= 6) return `(${d.slice(0, 3)}) ${d.slice(3)}`;
-  return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6, 10)}`;
+  return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
 }
 
 export function KioskClient() {
@@ -83,7 +87,9 @@ export function KioskClient() {
   const [lastName, setLastName] = useState("");
   const [serviceIds, setServiceIds] = useState<string[]>([]);
   const [preferredStaffId, setPreferredStaffId] = useState<string | null>(null);
-  const [smsConsent, setSmsConsent] = useState(true);
+  // 🔴 MUST start unticked, for every customer: a pre-ticked box is not
+  // consent (the booking page has the same rule).
+  const [smsConsent, setSmsConsent] = useState(false);
   const [estimate, setEstimate] = useState<{
     waitMin: number | null;
     ahead: number;
@@ -100,7 +106,7 @@ export function KioskClient() {
     setLastName("");
     setServiceIds([]);
     setPreferredStaffId(null);
-    setSmsConsent(true);
+    setSmsConsent(false);
     setEstimate(null);
     setPending(false);
     setFlash(null);
@@ -187,6 +193,13 @@ export function KioskClient() {
       serviceIds.every((svc) => offers.has(`${svc}:${s.id}`)),
     );
   }, [data, serviceIds]);
+  // Changing services can leave the chosen barber off the list - kept, they
+  // were sent to a barber who doesn't do what the customer now wants.
+  useEffect(() => {
+    if (preferredStaffId && !eligibleStaff.some((s) => s.id === preferredStaffId)) {
+      setPreferredStaffId(null);
+    }
+  }, [eligibleStaff, preferredStaffId]);
 
   // ---- step actions -------------------------------------------------------
 
@@ -201,6 +214,12 @@ export function KioskClient() {
     setPending(false);
     if (res.status === 400) {
       setFlash("That doesn't look like a mobile number - check it and try again.");
+      return;
+    }
+    // Walk-ins paused (texting off, or the shop stopped taking them): say so,
+    // not "couldn't reach the shop's system".
+    if (res.error === "not_accepting") {
+      setStep("closed");
       return;
     }
     if (!res.ok) {
@@ -513,6 +532,9 @@ export function KioskClient() {
         >
           Next
         </button>
+        <button type="button" className={GHOST} onClick={reset}>
+          Start over
+        </button>
       </>,
     );
   }
@@ -566,6 +588,9 @@ export function KioskClient() {
         >
           Next
         </button>
+        <button type="button" className={GHOST} onClick={reset}>
+          Start over
+        </button>
       </>,
     );
   }
@@ -613,6 +638,9 @@ export function KioskClient() {
           onClick={() => void toReview()}
         >
           {pending ? "One sec…" : "See my wait"}
+        </button>
+        <button type="button" className={GHOST} disabled={pending} onClick={reset}>
+          Start over
         </button>
       </>,
     );
@@ -664,9 +692,14 @@ export function KioskClient() {
         >
           {pending ? "Joining…" : "Join the line"}
         </button>
-        <button type="button" className={GHOST} onClick={() => setStep("services")}>
-          Go back
-        </button>
+        <div className="flex gap-3">
+          <button type="button" className={`${GHOST} flex-1`} onClick={() => setStep("services")}>
+            Go back
+          </button>
+          <button type="button" className={`${GHOST} flex-1`} disabled={pending} onClick={reset}>
+            Start over
+          </button>
+        </div>
       </>,
     );
   }

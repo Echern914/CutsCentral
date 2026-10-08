@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
-import { PATH_HEADER, normalizeHost } from "@/lib/customDomainGuard";
+import { PATH_HEADER, isPlatformHost, normalizeHost } from "@/lib/customDomainGuard";
 import {
   CUSTOM_DOMAIN_PREFIX,
   PLATFORM_ORIGIN,
@@ -56,17 +56,6 @@ const INTERNAL_PREFIXES = [CUSTOM_DOMAIN_PREFIX, RESOLVER_PREFIX];
  * Hosts that ARE this app. Anything else is a shop's custom domain (attached
  * to the Vercel project by /api/domains).
  */
-function isPlatformHost(host: string): boolean {
-  // `getchairback.com.` (the root dot) is the same name, not a customer's.
-  const h = host.toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
-  return (
-    h === "getchairback.com" ||
-    h.endsWith(".getchairback.com") || // www + any future subdomain
-    h.endsWith(".vercel.app") || // preview deployments
-    h === "localhost" ||
-    h === "127.0.0.1"
-  );
-}
 
 export function middleware(req: NextRequest) {
   const { pathname, searchParams } = req.nextUrl;

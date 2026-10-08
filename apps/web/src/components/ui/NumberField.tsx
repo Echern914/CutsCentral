@@ -104,7 +104,10 @@ export function NumberField({
     <input
       id={id}
       type="number"
-      inputMode={inputMode ?? (integer ? "numeric" : "decimal")}
+      // A field that takes negatives must not get a pad with no minus key (the
+      // iPhone's numeric/decimal pads have none). Left unset, iOS shows the
+      // numbers-and-punctuation keyboard, which does.
+      inputMode={inputMode ?? (min !== undefined && min < 0 ? undefined : integer ? "numeric" : "decimal")}
       min={min}
       max={max}
       step={step}

@@ -71,9 +71,18 @@ export function ConsentCard({
     });
   }
 
+  // 🔴 The quiet lines show a failure too. Stop texts and Resume texts set an
+  // error that only the full card rendered, so a failed tap here said nothing.
+  const errorLine = error ? (
+    <p role="alert" className="mt-1 text-center text-xs" style={{ color: "#ef4444" }}>
+      {error}
+    </p>
+  ) : null;
+
   // Opted in: quiet confirmation + a way to stop.
   if (state === "opted_in") {
     return (
+      <div>
       <p className="px-1 text-center text-xs" style={{ color: theme.muted }}>
         You&apos;re getting texts from {shopName}.{" "}
         <button
@@ -85,12 +94,16 @@ export function ConsentCard({
           Stop texts
         </button>
       </p>
+      {errorLine}
+      </div>
     );
   }
 
-  // Opted out: quiet line with a way back in.
-  if (state === "opted_out") {
+  // Opted out: quiet line with a way back in. With no phone on file there is
+  // nothing to text yet, so the full card (with its number box) shows instead.
+  if (state === "opted_out" && hasPhone) {
     return (
+      <div>
       <p className="px-1 text-center text-xs" style={{ color: theme.muted }}>
         You&apos;ve opted out of texts.{" "}
         <button
@@ -103,6 +116,8 @@ export function ConsentCard({
           Resume texts
         </button>
       </p>
+      {errorLine}
+      </div>
     );
   }
 

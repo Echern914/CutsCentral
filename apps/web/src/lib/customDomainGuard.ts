@@ -46,6 +46,23 @@ const plausible = (host: string): string | null =>
  * is not a plausible hostname (an international name arrives in the punycode
  * form browsers send).
  */
+/**
+ * Is this ChairBack's own host (or a preview / local one), rather than a shop's
+ * custom domain? Shared by the middleware and anything client-side that must
+ * not show owner-only UI on a shop's own domain.
+ */
+export function isPlatformHost(host: string): boolean {
+  // `getchairback.com.` (the root dot) is the same name, not a customer's.
+  const h = host.toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
+  return (
+    h === "getchairback.com" ||
+    h.endsWith(".getchairback.com") || // www + any future subdomain
+    h.endsWith(".vercel.app") || // preview deployments
+    h === "localhost" ||
+    h === "127.0.0.1"
+  );
+}
+
 export function normalizeHost(raw: string): string | null {
   return plausible(raw.trim().toLowerCase().replace(/:\d+$/, "").replace(/\.$/, ""));
 }
