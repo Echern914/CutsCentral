@@ -93,6 +93,26 @@ describe("🔴 a retried submission returns the booking it made", () => {
     expect(await prisma.appointment.count({ where: { shopId, firstName: "Retry" } })).toBe(1);
   });
 
+  it("🔴 a retry still gets its booking when the time would no longer pass the slot rules", async () => {
+    // The first copy landed at 4:00 PM. Before the retry arrives the barber
+    // shortens his day to 3:00 PM, so the slot rules - checked before any
+    // write - now refuse that time. Only the read that comes BEFORE them can
+    // answer the retry with the booking it already made.
+    const operationId = opId();
+    const first = await book({ startsAt: tomorrowAt(16), firstName: "Late", operationId });
+    expect(first.status).toBe(201);
+    const short = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, startMin: 9 * 60, endMin: 15 * 60 }));
+    await request(app).put(`/api/booking/staff/${staffId}/availability`).set("Cookie", cookie).send({ rules: short });
+    try {
+      const again = await book({ startsAt: tomorrowAt(16), firstName: "Late", operationId });
+      expect(again.status).toBe(200);
+      expect(again.body).toMatchObject({ id: first.body.id, replayed: true });
+    } finally {
+      const full = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, startMin: 9 * 60, endMin: 17 * 60 }));
+      await request(app).put(`/api/booking/staff/${staffId}/availability`).set("Cookie", cookie).send({ rules: full });
+    }
+  });
+
   it("a DIFFERENT submission for the same time is still refused - it names the booking in the way", async () => {
     const one = await book({ startsAt: tomorrowAt(11), firstName: "First", operationId: opId() });
     expect(one.status).toBe(201);
