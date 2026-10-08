@@ -35,6 +35,7 @@ import {
   type DetailHistoryItem,
 } from "./actions";
 import type { AgendaRow } from "./page";
+import { requestRebook } from "./rebookEvent";
 import { InstagramHandle } from "@/components/InstagramHandle";
 import { SpecialChip } from "../_components/SpecialChip";
 
@@ -103,6 +104,7 @@ export function AppointmentSheet({
   onClose,
   onChanged,
   initialView = "detail",
+  canBookAgain = false,
 }: {
   row: AgendaRow;
   toast: Toast;
@@ -110,6 +112,12 @@ export function AppointmentSheet({
   /** The agenda needs re-reading: a save, a checkout, anything that mutates. */
   onChanged: () => void;
   initialView?: SheetView;
+  /**
+   * Offer "Book again". Only where the calendar's booking form is mounted to
+   * answer it (a native-booking shop) - anywhere else it would be a button
+   * that does nothing.
+   */
+  canBookAgain?: boolean;
 }) {
   const vocab = useVocab();
   const [rawView, setView] = useState<SheetView>(initialView);
@@ -498,6 +506,24 @@ export function AppointmentSheet({
           setMenu={setMenu}
           onEdit={() => setView("edit")}
           onCheckout={() => setView(newCheckout ? "pay" : "charges")}
+          onBookAgain={
+            canBookAgain && detail?.clientId
+              ? () => {
+                  // Who and what carry over - never the time, price, payment
+                  // or status. This sheet closes: the form takes over, and
+                  // this appointment is left exactly as it is.
+                  requestRebook({
+                    clientId: detail.clientId!,
+                    clientLabel: detail.clientName,
+                    serviceId: row.serviceId ?? null,
+                    serviceName: detail.serviceName,
+                    staffId: row.staffId ?? null,
+                    staffName: detail.staffName,
+                  });
+                  onClose();
+                }
+              : undefined
+          }
           onAct={act}
           onPriceSaved={() => {
             onChanged();
@@ -534,6 +560,7 @@ function DetailView({
   setMenu,
   onEdit,
   onCheckout,
+  onBookAgain,
   onAct,
   onPriceSaved,
   showRefunds,
@@ -555,6 +582,8 @@ function DetailView({
   setMenu: (m: MenuKind) => void;
   onEdit: () => void;
   onCheckout: () => void;
+  /** Start this client's next visit; absent where Book again isn't offered. */
+  onBookAgain?: () => void;
   onAct: (
     fn: (id: string) => Promise<{ ok: boolean }>,
     label: string,
@@ -757,6 +786,7 @@ function DetailView({
             setMenu(null);
             onEdit();
           }}
+          onBookAgain={onBookAgain}
           onAct={onAct}
         />
       )}
@@ -2034,12 +2064,14 @@ function MoreMenu({
   detail,
   onClose,
   onEdit,
+  onBookAgain,
   onAct,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail;
   onClose: () => void;
   onEdit: () => void;
+  onBookAgain?: () => void;
   onAct: (
     fn: (id: string) => Promise<{ ok: boolean }>,
     label: string,
@@ -2057,6 +2089,13 @@ function MoreMenu({
       icon: <UserIcon />,
       href: `/dashboard/clients/${detail.clientId}`,
     });
+  }
+  // The client's NEXT visit, from this one - whatever its status, and most of
+  // all a finished cut, booked while they are still in the chair. ChairBack's
+  // own bookings only: an Acuity or Square booking's client and service live
+  // in that platform, and the visit should be booked there.
+  if (native && detail.clientId && onBookAgain) {
+    items.push({ key: "rebook", label: "Book again", icon: <CalendarIcon />, onClick: onBookAgain });
   }
   if (detail.editable) {
     items.push({ key: "edit", label: "Edit appointment", icon: <PencilIcon />, onClick: onEdit });

@@ -64,7 +64,8 @@ import { swipeAllowedFrom, swipeIntent } from "./daySwipe";
 import { dayTotals, type DayTotals } from "./dayTotals";
 import { nowAnchorHour } from "./nowAnchor";
 import { clockLabel, firstOpenMinute, type BusySpan } from "./dayGaps";
-import { AppointmentForm } from "./AppointmentForm";
+import { AppointmentForm, type RebookFrom } from "./AppointmentForm";
+import { REBOOK_EVENT } from "./rebookEvent";
 import {
   WAITLIST_BOOK_EVENT,
   type WaitlistBookDetail,
@@ -383,6 +384,15 @@ export function BookingCalendar({
     return () => window.removeEventListener(WAITLIST_BOOK_EVENT, onBook);
   }, []);
 
+  // "Book again" from an appointment's Full details (rebookEvent.ts): the same
+  // one booking form, started with that client's next visit.
+  const [rebookFrom, setRebookFrom] = useState<RebookFrom | null>(null);
+  useEffect(() => {
+    const onRebook = (e: Event) => setRebookFrom((e as CustomEvent<RebookFrom>).detail);
+    window.addEventListener(REBOOK_EVENT, onRebook);
+    return () => window.removeEventListener(REBOOK_EVENT, onRebook);
+  }, []);
+
   const refreshAgenda = useCallback(() => {
     // A cancelled or declined booking can free a slot the waitlist wants, so
     // the badge moves with the agenda rather than lagging a poll behind it.
@@ -398,6 +408,17 @@ export function BookingCalendar({
       setAgenda((prev) => mergeAgendaWindow(prev, res.data!.agenda, win));
     });
   }, [viewYear, viewMonth, refreshWaitingCount]);
+
+  // After Book again jumps to the new booking's day, refetch the month now on
+  // screen - possibly not the one the form was opened from, and possibly one
+  // loaded earlier that nothing else would refetch. Run as an effect so it
+  // sees the month AFTER the jump; the sheet opens once the row is in.
+  const [refetchAfterRebook, setRefetchAfterRebook] = useState(false);
+  useEffect(() => {
+    if (!refetchAfterRebook) return;
+    setRefetchAfterRebook(false);
+    refreshAgenda();
+  }, [refetchAfterRebook, refreshAgenda]);
 
   /**
    * Adopt a server re-render.
@@ -872,6 +893,29 @@ export function BookingCalendar({
           toast={toast}
         />
       )}
+      {isNative && rebookFrom && (
+        <AppointmentForm
+          staff={staff}
+          services={services}
+          addOns={addOns}
+          timezone={tz}
+          prefillISO={new Date().toISOString()}
+          rebook={rebookFrom}
+          onClose={() => setRebookFrom(null)}
+          onCreated={(made) => {
+            setRebookFrom(null);
+            router.refresh();
+            // Straight to what was just booked: its day, then its sheet - the
+            // working link to the new appointment, opened for him.
+            if (made) {
+              gotoDayKey(dayKeyOf(made.startsAt));
+              setDeepLinkId(made.id);
+            }
+            setRefetchAfterRebook(true);
+          }}
+          toast={toast}
+        />
+      )}
       {isNative && tierDay && (
         <TierOpeningForm
           staff={staff}
@@ -914,6 +958,7 @@ export function BookingCalendar({
           initialView="detail"
           onClose={() => setDeepLinkId(null)}
           onChanged={refreshAgenda}
+          canBookAgain={isNative}
         />
       )}
     </div>
@@ -1990,6 +2035,7 @@ function DayPlanner({
                         }
                         toast={toast}
                         onChanged={onChanged}
+                        canBookAgain={isNative}
                       />
                     ))}
                     {openAt !== null && (
@@ -2228,11 +2274,14 @@ export function AppointmentBlock({
   timeLabel,
   toast,
   onChanged,
+  canBookAgain = false,
 }: {
   row: AgendaRow;
   timeLabel: string;
   toast: Toast;
   onChanged: () => void;
+  /** Its sheet offers "Book again" (the calendar's form is there to answer). */
+  canBookAgain?: boolean;
 }) {
   const vocab = useVocab();
   const [pending, start] = useTransition();
@@ -2907,6 +2956,7 @@ export function AppointmentBlock({
           initialView={sheet}
           onClose={() => setSheet(null)}
           onChanged={onChanged}
+          canBookAgain={canBookAgain}
         />
       )}
     </div>

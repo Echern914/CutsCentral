@@ -577,6 +577,12 @@ export interface CreateApptInput {
     count?: number;
     until?: string; // ISO
   };
+  /**
+   * One per submission, sent again unchanged when the form retries it: the
+   * API hands back the booking the first copy made instead of a second one.
+   * Single bookings only.
+   */
+  operationId?: string;
 }
 
 export interface SeriesSummary {
@@ -586,6 +592,12 @@ export interface SeriesSummary {
 }
 
 export type CreateApptResult = Result & {
+  /** The new booking (a series: its first visit). */
+  id?: string;
+  /** A retry the API recognised: the booking an earlier copy already made. */
+  replayed?: boolean;
+  /** False when the request never got an answer - safe to retry as-is. */
+  answered?: boolean;
   series?: SeriesSummary;
   /** For `external_block`: the block, in words, in the shop's zone. */
   reason?: string;
@@ -618,6 +630,8 @@ export async function createAppointmentAction(
   input: CreateApptInput,
 ): Promise<CreateApptResult> {
   const res = await apiSend<{
+    id?: string | null;
+    replayed?: boolean;
     series?: SeriesSummary;
     forced?: boolean;
     mirror?: string;
@@ -631,6 +645,7 @@ export async function createAppointmentAction(
   if (!res.ok) {
     return {
       ok: false,
+      answered: res.status !== 0,
       error: res.error ?? "failed",
       ...(res.reason ? { reason: res.reason } : {}),
       ...(res.confirmation ? { confirmation: res.confirmation } : {}),
@@ -641,6 +656,9 @@ export async function createAppointmentAction(
   }
   return {
     ok: true,
+    answered: true,
+    ...(res.data?.id ? { id: res.data.id } : {}),
+    ...(res.data?.replayed ? { replayed: true } : {}),
     series: res.data?.series,
     ...(res.data?.forced ? { forced: true, mirror: res.data.mirror } : {}),
     ...(res.data?.clientConfirmation ? { clientConfirmation: res.data.clientConfirmation } : {}),

@@ -58,6 +58,31 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  * TAPPED that is not an open time is offered as itself ("Book this time"), and
  * Custom time takes a price: his after-hours rate instead of the menu's.
  */
+/**
+ * "Book again", opened from an appointment's Full details: who and what carry
+ * over into the next visit. Never the old time, price, payment or status - the
+ * form starts with no time at all, so the barber picks the new day and time.
+ */
+export interface RebookFrom {
+  clientId: string;
+  clientLabel: string;
+  /** The visit's service and provider, used only while still offered. */
+  serviceId: string | null;
+  serviceName: string | null;
+  staffId: string | null;
+  staffName: string | null;
+}
+
+/** One per submission (the API's operationId: 8-100 characters). */
+function newOperationId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export function AppointmentForm({
   staff,
   services,
@@ -66,6 +91,7 @@ export function AppointmentForm({
   prefillISO,
   tapped = false,
   waitlist,
+  rebook,
   onClose,
   onCreated,
   toast,
@@ -98,23 +124,40 @@ export function AppointmentForm({
     staffId: string | null;
     windowHint: string | null;
   };
+  /** Booking this client's next visit from one of their appointments. */
+  rebook?: RebookFrom;
   onClose: () => void;
-  onCreated: () => void;
+  /** `made` is the new single booking (never a series), to open it. */
+  onCreated: (made?: { id: string; startsAt: string }) => void;
   toast: Toast;
 }) {
   const activeServices = services.filter((s) => s.active);
   const activeStaff = staff.filter((s) => s.active);
+  // What "Book again" carries over is only kept while it is still offered: a
+  // retired service or a provider who left is named below, never pre-picked.
+  const rebookServiceId =
+    rebook?.serviceId && activeServices.some((s) => s.id === rebook.serviceId) ? rebook.serviceId : null;
+  const rebookStaffId =
+    rebook?.staffId && activeStaff.some((s) => s.id === rebook.staffId) ? rebook.staffId : null;
 
   const [serviceId, setServiceId] = useState<string | null>(
-    // A waitlist prefill wins over the single-option shortcut: it is what the
-    // customer actually asked for.
-    waitlist?.serviceId ??
+    // A waitlist (or Book again) prefill wins over the single-option shortcut:
+    // it is what the customer actually asked for, or had last time.
+    rebookServiceId ??
+      waitlist?.serviceId ??
       (activeServices.length === 1 ? activeServices[0]!.id : null),
   );
   const [staffId, setStaffId] = useState<string | null>(
-    waitlist?.staffId ?? (activeStaff.length === 1 ? activeStaff[0]!.id : null),
+    rebookStaffId ?? waitlist?.staffId ?? (activeStaff.length === 1 ? activeStaff[0]!.id : null),
   );
-  const [startsAt, setStartsAt] = useState<string>(prefillISO);
+  // Book again starts with NO time: the next visit's day and time are picked,
+  // never inherited from the old one or defaulted to an hour nobody chose.
+  const [startsAt, setStartsAt] = useState<string>(rebook ? "" : prefillISO);
+  // The day the open times are listed for. Fixed to the tapped day everywhere
+  // but Book again, where the barber picks it.
+  const [dayISO, setDayISO] = useState<string>(prefillISO);
+  // Kept across retries of ONE submission; replaced once the API has answered.
+  const operationId = useRef<string>(newOperationId());
   const [customTime, setCustomTime] = useState(false);
   // Custom time's price, as typed. Empty = the service's own price.
   const [priceText, setPriceText] = useState("");
@@ -132,8 +175,8 @@ export function AppointmentForm({
   // (add-ons belong to a service) and when a special is picked.
   const [addOnIds, setAddOnIds] = useState<string[]>([]);
 
-  const [clientId, setClientId] = useState<string | null>(null);
-  const [clientLabel, setClientLabel] = useState<string>("");
+  const [clientId, setClientId] = useState<string | null>(rebook?.clientId ?? null);
+  const [clientLabel, setClientLabel] = useState<string>(rebook?.clientLabel ?? "");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ClientOption[]>([]);
   const [newName, setNewName] = useState(waitlist?.name ?? "");
@@ -198,7 +241,7 @@ export function AppointmentForm({
     () => new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit" }),
     [timezone],
   );
-  // The shop-tz calendar day of the prefill, for the slots window.
+  // The shop-tz calendar day being listed, for the slots window.
   const dayKey = useMemo(
     () =>
       new Intl.DateTimeFormat("en-CA", {
@@ -206,9 +249,25 @@ export function AppointmentForm({
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
-      }).format(new Date(prefillISO)),
-    [prefillISO, timezone],
+      }).format(new Date(dayISO)),
+    [dayISO, timezone],
   );
+  // Today in the shop, the earliest day Book again offers.
+  const todayKey = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
+  /** Book again: list another day. Whatever time was picked belonged to the old day. */
+  function pickDay(key: string) {
+    const [y, m, d] = key.split("-").map(Number);
+    if (!y || !m || !d) return;
+    setDayISO(zonedWallTimeToUtc(y, m - 1, d, 12 * 60, timezone).toISOString());
+    setStartsAt("");
+    setTargetedSlotId(null);
+  }
 
   // Only times on the tapped calendar day (shop tz).
   const onDay = useMemo(() => {
@@ -466,7 +525,14 @@ export function AppointmentForm({
         // What is ticked ON SCREEN - derived, so an add-on the form is no
         // longer showing can never ride along.
         addOnIds: chosenAddOns.length > 0 ? chosenAddOns.map((a) => a.id) : undefined,
+        // A retry of THIS submission (a lost answer) gets the booking it made,
+        // not a second one. A series answers per visit, so it sends none.
+        operationId: recurrence ? undefined : operationId.current,
       });
+      // The API answered, so this submission is settled: a refusal booked
+      // nothing, and the next attempt ("Book anyway", another time) is a new
+      // one. Only a request that never got an answer keeps its id to retry.
+      if (!res.ok && res.answered !== false) operationId.current = newOperationId();
       if (!res.ok) {
         if (res.error === "external_block") {
           // Show the block, ask - the booking happens only on confirm, and
@@ -517,7 +583,11 @@ export function AppointmentForm({
                     : "That time isn't available. Use Custom time to force it."
                   : res.error === "invalid_add_on"
                     ? "An add-on you ticked isn't offered with this service any more. Close this and open it again to see the current list."
-                    : "Couldn't schedule. Please try again.",
+                    : res.error === "replay_not_booked"
+                      ? (res.reason ?? "That booking didn't go through. Check the calendar before booking again.")
+                      : res.answered === false
+                        ? "No answer from ChairBack - check your connection and tap again. It won't book twice."
+                        : "Couldn't schedule. Please try again.",
         );
         return;
       }
@@ -540,10 +610,15 @@ export function AppointmentForm({
         toast("Booked - but Acuity didn't block that time. Block it in Acuity so it can't be sold.", "error");
       } else if (res.forced && res.mirror === "unknown") {
         toast("Booked over the other appointment - still confirming the time on Acuity.", "success");
+      } else if (rebook) {
+        toast(
+          `Next visit booked: ${dayFmt.format(new Date(startsAt))} at ${timeFmt.format(new Date(startsAt))}`,
+          "success",
+        );
       } else {
         toast(res.forced ? "Booked over the other appointment" : "Appointment scheduled", "success");
       }
-      onCreated();
+      onCreated(res.id && !res.series ? { id: res.id, startsAt } : undefined);
     });
   }
 
@@ -551,13 +626,13 @@ export function AppointmentForm({
     <Dialog
       open
       onClose={onClose}
-      title="New appointment"
+      title={rebook ? "Book again" : "New appointment"}
       titleAlign="center"
       className="sm:max-w-lg"
       footer={
         <FormFooter
           error={error}
-          label="Schedule appointment"
+          label={rebook ? "Book next visit" : "Schedule appointment"}
           pendingLabel="Scheduling…"
           pending={pending}
           onSubmit={submit}
@@ -565,6 +640,24 @@ export function AppointmentForm({
       }
     >
       <div data-qa="new-appt-form" className="flex min-w-0 flex-col gap-5">
+        {rebook && (
+          <div data-qa="rebook-summary" className="flex min-w-0 flex-col gap-1 rounded-xl border border-subtle px-4 py-3 text-sm">
+            <p className="[overflow-wrap:anywhere] text-offwhite">
+              Next visit for <span className="font-medium">{rebook.clientLabel}</span>. Pick the day and time.
+            </p>
+            <p className="text-xs text-muted">The appointment you came from stays exactly as it is.</p>
+            {rebook.serviceId && !rebookServiceId && (
+              <p className="text-xs text-gold">
+                {rebook.serviceName ?? "Their last service"} isn&apos;t offered any more. Pick a service below.
+              </p>
+            )}
+            {rebook.staffId && !rebookStaffId && (
+              <p className="text-xs text-gold">
+                {rebook.staffName ?? "Their last provider"} isn&apos;t taking bookings now. Pick a provider below.
+              </p>
+            )}
+          </div>
+        )}
         {blockConflict && (
           <ExternalBlockBanner
             conflict={blockConflict}
@@ -722,7 +815,7 @@ export function AppointmentForm({
           // will actually be booked - never the day that was tapped. The two
           // disagreeing ("FRI, SEP 25" over a value on Sep 24) is how a barber
           // booked the wrong night without anything on screen telling him.
-          title={`Time · ${dayFmt.format(new Date(customTime && startsAt ? startsAt : prefillISO))}`}
+          title={`Time · ${dayFmt.format(new Date(customTime && startsAt ? startsAt : dayISO))}`}
           action={
             <button
               type="button"
@@ -744,6 +837,19 @@ export function AppointmentForm({
             </button>
           }
         >
+          {rebook && !customTime && (
+            <label className="mb-2 flex min-w-0 flex-col gap-1 text-xs text-muted">
+              Day
+              <input
+                id="rebook-day"
+                type="date"
+                className={INPUT}
+                min={todayKey}
+                value={dayKey}
+                onChange={(e) => pickDay(e.target.value)}
+              />
+            </label>
+          )}
           {customTime ? (
             <div className="flex min-w-0 flex-col gap-1.5">
               <input

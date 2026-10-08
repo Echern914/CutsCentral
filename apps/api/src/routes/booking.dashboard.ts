@@ -3045,6 +3045,16 @@ const createApptSchema = z
      * phone stays silent, as it always has. Single bookings only.
      */
     confirmClient: z.literal(true).optional(),
+    /**
+     * 🔴 ONE SUBMISSION, ONE BOOKING. Minted by the form when it opens and sent
+     * again on every retry of that submission, so a request re-sent after a
+     * lost response hands back the booking it already made - instead of a
+     * second one, or a "Book anyway" naming the barber's own new booking as
+     * the conflict. The partial unique (shopId, operationId) is the wall; the
+     * read below is the fast path. Single bookings only: a series answers per
+     * occurrence.
+     */
+    operationId: z.string().trim().min(8).max(100).optional(),
     // Optional "repeats every N weeks" rule. When present, the appointment above
     // is occurrence 0 (its startsAt sets the weekday + time-of-day), and N-1 more
     // are generated. Exactly one of count / until. Capped so a bad rule can't
@@ -3072,6 +3082,10 @@ const createApptSchema = z
   .refine((d) => !(d.confirmClient && d.recurrence), {
     message: "A confirmation is sent for a single booking only.",
     path: ["confirmClient"],
+  })
+  .refine((d) => !(d.operationId && d.recurrence), {
+    message: "An operation id is for a single booking only.",
+    path: ["operationId"],
   });
 
 /**
@@ -3228,6 +3242,36 @@ async function confirmIfAsked(
   return confirmBookedFromList({ shopId, appointmentId });
 }
 
+/**
+ * Answer a retried create from what its first copy left. True when it
+ * answered (the caller stops); false when nothing carries this operation id.
+ *
+ * 🔴 A ROW IS NOT A BOOKING. The first copy may have been undone in the same
+ * request - a forced booking Acuity refused is CANCELLED, not deleted - or
+ * cancelled by hand since. Reporting that row as "booked" would tell the
+ * barber a client has a time they do not. So only a live row replays as done.
+ */
+async function answerReplay(
+  res: import("express").Response,
+  shopId: string,
+  operationId: string,
+): Promise<boolean> {
+  const prior = await prisma.appointment.findFirst({
+    where: { shopId, operationId },
+    select: { id: true, status: true },
+  });
+  if (!prior) return false;
+  if (prior.status === "CANCELED" || prior.status === "NO_SHOW") {
+    res.status(409).json({
+      error: "replay_not_booked",
+      reason: "That booking didn't go through, or was cancelled since. Check the calendar before booking again.",
+    });
+    return true;
+  }
+  res.status(200).json({ ok: true, id: prior.id, replayed: true });
+  return true;
+}
+
 bookingDashboardRouter.post("/appointments", async (req, res) => {
   // One clock for the whole request, named once: the outbound mirror decides
   // "does this still occupy the chair" against it, and a handler that reads
@@ -3254,6 +3298,10 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     return;
   }
   const d = parsed.data;
+  // A retry of a submission that already landed: hand back what it made, and
+  // nothing else. Checked BEFORE any slot rule - by now the booking itself
+  // occupies that time, so every check below would refuse its own retry.
+  if (d.operationId && (await answerReplay(res, shopId, d.operationId))) return;
   // A typed price rides only on a single Custom time booking - never a special
   // (its own price) or a repeating series (one price, many dates, no screen
   // that showed it for each).
@@ -3645,6 +3693,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
           notes: d.note || null,
           manageToken: randomToken(),
           bookedVia: targeted ? "targeted_slot" : undefined,
+          ...(d.operationId ? { operationId: d.operationId } : {}),
           // A deliberate double is recorded as one: who confirmed it, and when.
           ...(guard.overlapsCrossed
             ? { overlapForcedAt: now, overlapForcedByUserId: req.userId ?? null }
@@ -3815,6 +3864,14 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     const clientConfirmation = await confirmIfAsked(d.confirmClient, mirror, shopId, result.id);
     res.status(201).json({ ok: true, id: result.id, clientConfirmation });
   } catch (err) {
+    // 🔴 THE RACE THE READ ABOVE CANNOT WIN. Two copies of one submission both
+    // found nothing and both went in. The loser then waits on the barber's
+    // lock and is refused by the overlap guard - naming the WINNER, its own
+    // booking, as the conflict (or, past every guard, by the unique index).
+    // Whatever refused it, if this submission's booking exists the answer is
+    // that booking, never an error: a retry that reports failure is how a
+    // barber taps again and books twice.
+    if (d.operationId && (await answerReplay(res, shopId, d.operationId))) return;
     // The one refusal that must be SHOWN, not just returned: which block, when,
     // and why - so the barber decides with the facts, then confirms.
     if (err instanceof ExternalBlockError) {
