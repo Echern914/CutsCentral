@@ -19,7 +19,7 @@ import {
 } from "./actions";
 import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
 import { shopLocalInputValue } from "./shopLocalInput";
-import { parsePrice } from "@/lib/serviceFields";
+import { formatPrice, parsePrice } from "@/lib/serviceFields";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
 
@@ -597,7 +597,7 @@ export function AppointmentForm({
                     {s.name}
                   </span>
                   <span className="block text-xs text-muted">
-                    {s.durationMin} min{s.price != null ? ` · $${s.price.toFixed(0)}` : ""}
+                    {s.durationMin} min{s.price != null ? ` · ${formatPrice(s.price)}` : ""}
                   </span>
                 </span>
                 {serviceId === s.id && (

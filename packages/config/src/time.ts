@@ -203,6 +203,18 @@ export function zonedMinutesOfDay(at: Date, timeZone: string): number {
   return at.getUTCHours() * 60 + at.getUTCMinutes();
 }
 
+/**
+ * "YYYY-MM-DD" for the day it is at `at` in `timeZone` - the SHOP's date.
+ *
+ * Never `toISOString().slice(0, 10)` for a shop's "today": that is the UTC
+ * date, which in the US evening is already tomorrow. A holiday price for
+ * Christmas Eve was dropped as "past" from 7 PM Eastern on Christmas Eve.
+ */
+export function zonedDateKey(at: Date, timeZone: string): string {
+  const { year, month0, day } = zonedDateParts(at, timeZone);
+  return `${year}-${String(month0 + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 export function zonedDateParts(
   at: Date,
   timeZone: string,
