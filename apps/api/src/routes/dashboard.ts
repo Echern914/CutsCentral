@@ -1385,7 +1385,12 @@ dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
       }
     }
 
-    if (!parsed.data.separateVisit) {
+    // Asked only of a screen that can ANSWER it: the requestId is how a caller
+    // says it speaks this protocol. An older page still open in the app (or a
+    // browser) when this ships sends none, and keeps logging exactly as it did -
+    // it has no "Log a separate visit" to offer, so a refusal there would only
+    // read as "Could not log visit".
+    if (requestId && !parsed.data.separateVisit) {
       const existing = await visitOnBooksThatDay(tx, shop.id, client.id, day);
       if (existing) return { kind: "visit_on_books" as const, existing };
     }

@@ -192,6 +192,9 @@ describe("🔴 Log visit cannot credit one sitting twice", () => {
     return rows.reduce((s, r) => s + r.punchesEarned, 0);
   }
 
+  /** A fresh tap id, as the current screen sends with every Log visit. */
+  const tap = () => `tap-${randomToken(16)}`;
+
   const logVisit = (id: string, body: Record<string, unknown>) =>
     request(app).post(`/api/dashboard/clients/${id}/visits`).set("Cookie", cookieA).send(body);
 
@@ -276,7 +279,7 @@ describe("🔴 Log visit cannot credit one sitting twice", () => {
       },
     });
     // Logged at 3:30pm the same shop-local day - the same cut, by another door.
-    const res = await logVisit(id, { when: localAt(2, 15).toISOString() });
+    const res = await logVisit(id, { when: localAt(2, 15).toISOString(), requestId: tap() });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("visit_on_books");
     expect(res.body.existing).toEqual({ at: starts.toISOString(), serviceName: "Haircut", source: "booking" });
@@ -284,8 +287,36 @@ describe("🔴 Log visit cannot credit one sitting twice", () => {
     expect(await visitEarns(id)).toBe(0);
 
     // The barber says it really was a separate visit: that is theirs to log.
-    const separate = await logVisit(id, { when: localAt(2, 15).toISOString(), separateVisit: true });
+    const separate = await logVisit(id, {
+      when: localAt(2, 15).toISOString(),
+      requestId: tap(),
+      separateVisit: true,
+    });
     expect(separate.status).toBe(201);
+    expect(await visitEarns(id)).toBe(1);
+  });
+
+  it("an OLDER screen (no requestId) logs exactly as before - it has no question to show", async () => {
+    // A page loaded before this shipped, still open in the app: it sends no
+    // requestId and cannot offer "Log a separate visit". It must keep working
+    // the way it did, not start failing with a question it cannot display.
+    const id = await newClient("OldScreen");
+    const starts = localAt(6, 14);
+    await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        clientId: id,
+        firstName: "OldScreen",
+        status: "BOOKED",
+        startsAt: starts,
+        endsAt: new Date(starts.getTime() + 45 * 60_000),
+        manageToken: randomToken(),
+      },
+    });
+    const res = await logVisit(id, { when: localAt(6, 15).toISOString() });
+    expect(res.status).toBe(201);
     expect(await visitEarns(id)).toBe(1);
   });
 
@@ -303,7 +334,7 @@ describe("🔴 Log visit cannot credit one sitting twice", () => {
         serviceName: "Haircut",
       },
     });
-    const a = await logVisit(done, { when: localAt(3, 18).toISOString() });
+    const a = await logVisit(done, { when: localAt(3, 18).toISOString(), requestId: tap() });
     expect(a.status).toBe(409);
     expect(a.body.existing.source).toBe("booking");
 
@@ -319,7 +350,7 @@ describe("🔴 Log visit cannot credit one sitting twice", () => {
         serviceName: "Fade",
       },
     });
-    const b = await logVisit(synced, { when: localAt(3, 9).toISOString() });
+    const b = await logVisit(synced, { when: localAt(3, 9).toISOString(), requestId: tap() });
     expect(b.status).toBe(409);
     expect(b.body.existing).toMatchObject({ serviceName: "Fade", source: "synced" });
   });
@@ -355,7 +386,7 @@ describe("🔴 Log visit cannot credit one sitting twice", () => {
         manageToken: randomToken(),
       },
     });
-    const res = await logVisit(id, { when: localAt(4, 16).toISOString() });
+    const res = await logVisit(id, { when: localAt(4, 16).toISOString(), requestId: tap() });
     expect(res.status).toBe(201);
     expect(await visitEarns(id)).toBe(1);
   });

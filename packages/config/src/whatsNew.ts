@@ -39,11 +39,11 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
     id: "2026-10-08-one-visit-one-punch",
     date: "2026-10-08",
     kind: "fix",
-    title: "One visit earns its punch once",
+    title: "Log visit can't punch the same visit twice",
     body:
-      "A party booked together now earns the person who booked it one punch, not one per seat. " +
-      "Log visit asks first when the client already has a visit that day, and a tap sent twice logs once. " +
-      "Rewards now shows when a promotion is adding punches to every visit.",
+      "Log visit now asks first when the client already has a booked or synced visit that day, so the same cut " +
+      "isn't punched twice, and a tap sent twice logs once. Rewards now shows when a promotion is adding punches " +
+      "to every visit.",
   },
   {
     id: "2026-10-08-booking-page-truth",
