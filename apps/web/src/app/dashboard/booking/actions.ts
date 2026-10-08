@@ -744,10 +744,11 @@ export async function applySeriesEditAction(
     `/api/booking/series/${encodeURIComponent(seriesId)}/edit`,
     input,
   );
-  if (res.ok && res.data) {
-    revalidatePath("/dashboard/booking");
-    return { ok: true, data: res.data };
-  }
+  // 🔴 NO revalidatePath HERE. Re-rendering the calendar page from the server
+  // moves a visit whose time changed into another hour, which remounts its
+  // card and closes the sheet showing this result. The sheet re-reads the
+  // agenda itself when he leaves the result (SeriesEditView.tsx).
+  if (res.ok && res.data) return { ok: true, data: res.data };
   const body = res.body as Partial<SeriesEditPreview> | undefined;
   return {
     ok: false,

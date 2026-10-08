@@ -432,6 +432,12 @@ export function BookingCalendar({
   useEffect(() => {
     const iv = setInterval(() => {
       if (document.visibilityState !== "visible") return;
+      // Not under an open dialog. An appointment's sheet lives inside its
+      // card, and a refresh that moves the booking to another hour remounts
+      // the card and closes the sheet - with whatever it was showing (a save's
+      // result, a repeat's per-date outcome). Nothing behind a dialog needs
+      // the poll; the next tick after it closes catches up.
+      if (document.querySelector('[role="dialog"]')) return;
       refreshAgenda();
       // Entries expire on a server cron - nothing client-side would ever tell
       // us, so the poll is the only thing that retires a stale badge.

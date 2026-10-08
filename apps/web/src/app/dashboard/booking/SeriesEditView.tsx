@@ -91,7 +91,10 @@ export function useSeriesEdit({
   row: AgendaRow;
   /** The view is open. Nothing is fetched for a sheet that never opens it. */
   active: boolean;
-  /** After a change landed: the agenda needs re-reading. */
+  /**
+   * The agenda needs re-reading: called once he LEAVES a change that landed
+   * (or may have), never while its result is on screen - see below.
+   */
   onApplied: () => void;
 }): SeriesEditState {
   const [ctx, setCtx] = useState<EditContext | null>(null);
@@ -144,6 +147,30 @@ export function useSeriesEdit({
       alive = false;
     };
   }, [active]);
+
+  // 🔴 THE CALENDAR IS RE-READ WHEN HE LEAVES THE RESULT, not when it lands.
+  // This sheet lives inside the visit's calendar card. Re-reading the agenda
+  // moves a visit whose time changed into another slot, which remounts the
+  // card and closes the sheet - taking the per-date result, and any date the
+  // synced calendar did not confirm, with it before he has read it. So a
+  // change that (may have) landed is remembered, and the agenda is re-read on
+  // Done or Back, or when the sheet closes.
+  const refreshOwed = useRef(false);
+  const onAppliedNow = useRef(onApplied);
+  onAppliedNow.current = onApplied;
+  useEffect(() => {
+    if (active || !refreshOwed.current) return;
+    refreshOwed.current = false;
+    onAppliedNow.current();
+  }, [active]);
+  useEffect(
+    () => () => {
+      if (!refreshOwed.current) return;
+      refreshOwed.current = false;
+      onAppliedNow.current();
+    },
+    [],
+  );
 
   const input = useMemo((): SeriesEditInput | null => {
     if (!ctx || !row.seriesId) return null;
@@ -209,7 +236,7 @@ export function useSeriesEdit({
       if (res.ok && res.data) {
         setApplied(res.data);
         setStage("done");
-        onApplied();
+        refreshOwed.current = true;
         return;
       }
       if (res.error === "series_conflict" && res.preview) {
@@ -221,6 +248,7 @@ export function useSeriesEdit({
       if (res.error === "stale_preview" || res.error === "network_error" || res.error?.startsWith("http_5")) {
         // Never retried blind: read the dates again, which also shows whether
         // a tap whose answer was lost already went through.
+        if (res.error !== "stale_preview") refreshOwed.current = true;
         const again = await readPreview();
         if (again) {
           setNotice(

@@ -247,7 +247,28 @@ describe("apply", () => {
     });
     expect(done.textContent).toContain("Changed 2 appointments.");
     expect(done.textContent).toMatch(/one email with the new time for the next visit/);
-    expect(onChanged).toHaveBeenCalled();
+    // 🔴 Not while the result is on screen: re-reading the agenda moves this
+    // visit's card to its new slot, which remounts it and closes the sheet.
+    expect(onChanged).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("🔴 closing the sheet straight from the result still re-reads the calendar, once", async () => {
+    applySeries.mockResolvedValue({
+      ok: true,
+      data: {
+        changed: [{ id: "appt1", startsAt: PREVIEW.change[0]!.to.startsAt, endsAt: PREVIEW.change[0]!.to.endsAt, mirror: "skipped" }],
+        skipped: [],
+      },
+    });
+    const view = await openSeriesEdit();
+    await reviewElevenAm();
+    fireEvent.click(screen.getByRole("button", { name: "Apply to 2 appointments" }));
+    await screen.findByTestId("series-edit-done");
+    expect(onChanged).not.toHaveBeenCalled();
+    view.unmount();
+    expect(onChanged).toHaveBeenCalledTimes(1);
   });
 
   it("🔴 two taps send one apply", async () => {
