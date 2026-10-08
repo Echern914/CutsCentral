@@ -36,6 +36,15 @@ export function GalleryEditor({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
   const [urlDraft, setUrlDraft] = useState("");
+  // How many of the last batch didn't upload. The hook's own error is cleared
+  // by the NEXT upload starting, so the third of five failing used to leave no
+  // trace once the fourth succeeded.
+  const [failedCount, setFailedCount] = useState(0);
+  // The list as of the latest render. A multi-photo upload takes seconds, and
+  // appending to the `items` it STARTED with threw away every caption and tag
+  // typed while it ran.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const remaining = GALLERY_MAX - items.length;
 
   function addUrls(urls: string[]) {
@@ -46,16 +55,23 @@ export function GalleryEditor({
 
   async function handleFiles(files: FileList | File[]) {
     clearError();
+    setFailedCount(0);
     const list = Array.from(files)
       .filter((f) => f.type.startsWith("image/"))
       .slice(0, remaining);
     // Upload sequentially so order is predictable and we stop at the cap.
     const uploaded: GalleryItem[] = [];
+    let failed = 0;
     for (const f of list) {
       const url = await upload(f);
       if (url) uploaded.push({ url });
+      else failed++;
     }
-    if (uploaded.length) onChange([...items, ...uploaded]);
+    if (uploaded.length) {
+      const latest = itemsRef.current;
+      onChange([...latest, ...uploaded.slice(0, Math.max(0, GALLERY_MAX - latest.length))]);
+    }
+    if (list.length > 1) setFailedCount(failed);
   }
 
   function onDrop(e: DragEvent) {
@@ -266,7 +282,14 @@ export function GalleryEditor({
         <span>
           {items.length}/{GALLERY_MAX} photos · drag to reorder
         </span>
-        {error && <span className="text-danger-soft">{error}</span>}
+        {failedCount > 0 ? (
+          <span role="alert" className="text-danger-soft">
+            {failedCount === 1 ? "1 photo" : `${failedCount} photos`} didn&rsquo;t upload. Try
+            {failedCount === 1 ? " it" : " them"} again.
+          </span>
+        ) : (
+          error && <span className="text-danger-soft">{error}</span>
+        )}
       </div>
     </div>
   );

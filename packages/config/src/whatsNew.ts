@@ -105,6 +105,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "form now reaches you.",
   },
   {
+    id: "2026-10-08-limits-hours-and-saves",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Close at midnight, and saves that say when they fail",
+    body:
+      "Hours can now end at midnight. A service over 600 minutes or an add-on over 480 is named instead of " +
+      "\"Couldn't add\". Quota, target and plan saves say when they fail, and switching a service quota from week " +
+      "to month replaces it. Service groups no longer claim to set hours.",
+  },
+  {
     id: "2026-10-08-calendar-and-forms-truth",
     date: "2026-10-08",
     kind: "fix",

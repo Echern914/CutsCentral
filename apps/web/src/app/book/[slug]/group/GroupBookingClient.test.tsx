@@ -507,3 +507,41 @@ describe("the times asked for fit the shop's booking window", () => {
     expect(days).toBeLessThanOrEqual(7);
   });
 });
+
+describe("changing the barber after picking services", () => {
+  const twoBarbers = {
+    ...data,
+    staff: [
+      { id: "stf_1", name: "Sam", bio: null, imageUrl: null },
+      { id: "stf_2", name: "Pat", bio: null, imageUrl: null },
+    ],
+    offerings: [
+      { serviceId: "svc_cut", staffId: "stf_1" },
+      { serviceId: "svc_kids", staffId: "stf_1" },
+      { serviceId: "svc_kids", staffId: "stf_2" },
+    ],
+  } as unknown as BookShopData;
+
+  it("🔴 a pick the new barber does not offer is not counted, so See times waits for a real one", async () => {
+    render(<GroupBookingClient data={twoBarbers} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sam" }));
+    fireEvent.click(screen.getByRole("button", { name: "2 people" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    const names = await screen.findAllByPlaceholderText("First name");
+    fireEvent.change(names[0]!, { target: { value: "Eric" } });
+    fireEvent.change(names[1]!, { target: { value: "Brother" } });
+    for (const pick of screen.getAllByRole("button", { name: /Haircut/ })) fireEvent.click(pick);
+    expect((screen.getByRole("button", { name: "See times" }) as HTMLButtonElement).disabled).toBe(false);
+
+    // Back, and Pat, who only does kids cuts: the Haircut picks can't be drawn.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.queryByRole("button", { name: /Haircut/ })).toBeNull();
+    expect((screen.getByRole("button", { name: "See times" }) as HTMLButtonElement).disabled).toBe(true);
+
+    for (const pick of screen.getAllByRole("button", { name: /Kids cut/ })) fireEvent.click(pick);
+    fireEvent.click(screen.getByRole("button", { name: "See times" }));
+    await waitFor(() => expect(slotsAction).toHaveBeenCalled());
+  });
+});
