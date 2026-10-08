@@ -85,6 +85,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "they fail. Cancel on Edit profile throws the change away. Card pickers fit a phone, and promos show $12.50 off.",
   },
   {
+    id: "2026-10-08-assistant-knows-whats-new",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Ask the assistant about this week's changes",
+    body:
+      "The assistant now answers questions about Add at, repeats, Save anyway, Didn't finish booking, deposits on " +
+      "moved bookings, saved cards, page designs and the app's Rewards tab. It no longer says a whole repeat can be " +
+      "edited: change one date, or cancel the rest and set it up again.",
+  },
+  {
     id: "2026-10-08-checkout-tells-the-truth",
     date: "2026-10-08",
     kind: "fix",
