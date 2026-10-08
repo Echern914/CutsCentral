@@ -2,6 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { Card } from "@/components/ui/Card";
+import { copyText } from "@/lib/contactUri";
+import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { getShopQrAction, type ShopQr } from "./qrActions";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
@@ -32,6 +34,11 @@ export function ShopQrCard({
 }) {
   const [qr, setQr] = useState<ShopQr | null>(null);
   const [pending, start] = useTransition();
+  // 🔴 Inside the iPhone app a `download` link and `window.print()` both do
+  // nothing: the WebView has no downloads and no print sheet. The buttons
+  // looked fine and a barber tapped them again and again, so in the app they
+  // are replaced with where they DO work.
+  const inApp = useIsNativeApp();
 
   function generate() {
     start(async () => {
@@ -83,33 +90,45 @@ export function ShopQrCard({
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
-            <a
-              href={qr.png}
-              download={`${slugify(shopName)}-booking-qr.png`}
-              className="rounded-lg bg-gold/15 px-3 py-1.5 text-xs font-medium text-gold transition-colors hover:bg-gold/25"
-            >
-              Download PNG
-            </a>
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:text-offwhite"
-            >
-              Print card
-            </button>
+            {!inApp && (
+              <>
+                <a
+                  href={qr.png}
+                  download={`${slugify(shopName)}-booking-qr.png`}
+                  className="rounded-lg bg-gold/15 px-3 py-1.5 text-xs font-medium text-gold transition-colors hover:bg-gold/25"
+                >
+                  Download PNG
+                </a>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:text-offwhite"
+                >
+                  Print card
+                </button>
+              </>
+            )}
             <button
               type="button"
               onClick={() => {
-                void navigator.clipboard
-                  ?.writeText(qr.url)
-                  .then(() => toast("Link copied", "success"))
-                  .catch(() => toast("Couldn't copy", "error"));
+                // copyText falls back where navigator.clipboard is missing,
+                // which includes app WebViews; `?.` alone made that a no-op
+                // with no toast at all.
+                void copyText(qr.url).then((ok) =>
+                  toast(ok ? "Link copied" : "Couldn't copy", ok ? "success" : "error"),
+                );
               }}
               className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:text-offwhite"
             >
               Copy link
             </button>
           </div>
+          {inApp && (
+            <p className="mt-2 text-xs text-muted">
+              To print it or save the picture, open your dashboard in a web browser at
+              getchairback.com.
+            </p>
+          )}
 
           {/* Print rules live with the thing they print. Hiding BODY children
               and un-hiding the card's ancestor chain is what stops the sidebar,

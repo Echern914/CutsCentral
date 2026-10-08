@@ -74,6 +74,17 @@ export function parsePrice(raw: string): ParseResult<number | null> {
 export const MIN_SERVICE_MINUTES = 5;
 
 /**
+ * The longest appointment the API will accept: `durationMin` (and every
+ * per-day and per-window length) is `.max(600)` in booking.dashboard.ts. A
+ * 700-minute service used to pass the client and come back as a bare
+ * "Couldn't add".
+ */
+export const MAX_SERVICE_MINUTES = 600;
+
+/** The most extra time an add-on can carry. Mirrors `addOnSchema` (.max(480)). */
+export const MAX_ADD_ON_MINUTES = 480;
+
+/**
  * A length in whole minutes, or null for "not set".
  *
  * Fractional input is ROUNDED rather than refused. "7.5" is a barber saying

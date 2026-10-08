@@ -22,6 +22,9 @@ vi.mock("./actions", () => ({
   verifySavedCardCodeAction: vi.fn(),
 }));
 
+const reload = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/reloadPage", () => ({ reloadPage: reload }));
+
 // Stripe's card form stands in as two buttons: save the card, or skip it.
 vi.mock("./PaymentStep", () => ({
   PaymentStep: (p: { onPaid: () => void; onSkip?: () => void }) => (
@@ -222,5 +225,19 @@ describe("a card shop that requires the card (card-or-nothing)", () => {
     expect(await screen.findByText("Save a card to confirm")).toBeTruthy();
     expect(screen.getByText("Not booked yet")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "stub skip" })).toBeNull();
+  });
+
+  it("🔴 a time released before the card landed says so AND gives a way to pick another", async () => {
+    reload.mockReset();
+    bookAction.mockResolvedValue(setupResponse(false));
+    cardSaved.mockResolvedValue({ ok: true } as never);
+    bookingStatus.mockResolvedValue({ ok: true, status: "CANCELED" } as never);
+    const confirm = await reachLastStep(shopData(false));
+    await act(async () => fireEvent.click(confirm));
+    await act(async () => fireEvent.click(await screen.findByRole("button", { name: "stub save card" })));
+    expect(await screen.findByText("That time was released before the payment landed.")).toBeTruthy();
+    // "Please pick another time" used to be the end of the page.
+    fireEvent.click(screen.getByRole("button", { name: "Pick another time" }));
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });

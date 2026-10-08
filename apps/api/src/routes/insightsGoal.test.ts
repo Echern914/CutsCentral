@@ -362,6 +362,35 @@ describe("goal planner: plans, chair-time target, per-service quotas", () => {
     ).toBe(false);
   });
 
+  it("🔴 switching a service's quota from week to month REPLACES it, never a hidden second one", async () => {
+    const svc = await prisma.service.create({
+      data: { shopId, name: "Quota Switch", durationMin: 30, price: 40 },
+      select: { id: true },
+    });
+    expect(
+      (await putGoal({ metric: "visits", period: "week", target: 12, serviceId: svc.id })).status,
+    ).toBe(200);
+    // A dollar quota on the same service is a different metric, and stays.
+    expect(
+      (await putGoal({ metric: "revenue", period: "week", target: 400, serviceId: svc.id })).status,
+    ).toBe(200);
+    expect(
+      (await putGoal({ metric: "visits", period: "month", target: 50, serviceId: svc.id })).status,
+    ).toBe(200);
+
+    const rows = await prisma.serviceGoal.findMany({
+      where: { shopId, serviceId: svc.id },
+      select: { metric: true, period: true, target: true },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        { metric: "visits", period: "month", target: 50 },
+        { metric: "revenue", period: "week", target: 400 },
+      ]),
+    );
+  });
+
   it("ships the planner payload: per-service run-rates + full-window capacity", async () => {
     // Give the shop a schedule so capacity is non-zero: Mon-Sun 9-5.
     const staff = await prisma.staff.create({ data: { shopId, name: "Cap" }, select: { id: true } });
