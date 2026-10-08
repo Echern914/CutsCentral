@@ -11,6 +11,7 @@ import { cancelWaitlistAction } from "./actions";
  */
 export function CancelWaitlist({ token }: { token: string }) {
   const [done, setDone] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [pending, start] = useTransition();
 
   if (done) {
@@ -40,14 +41,21 @@ export function CancelWaitlist({ token }: { token: string }) {
         aria-busy={pending}
         onClick={() =>
           start(async () => {
-            await cancelWaitlistAction(token);
-            setDone(true);
+            setFailed(false);
+            const r = await cancelWaitlistAction(token).catch(() => ({ ok: false }));
+            if (r.ok) setDone(true);
+            else setFailed(true);
           })
         }
         className="mt-5 w-full rounded-xl border border-white/15 bg-white/10 py-3 text-sm font-semibold text-offwhite transition-colors hover:bg-white/15 disabled:opacity-50"
       >
         {pending ? "Removing…" : "Take me off the list"}
       </button>
+      {failed && (
+        <p role="alert" className="mt-3 text-sm text-danger-soft">
+          That didn&rsquo;t go through, so you&rsquo;re still on the list. Check your connection and try again.
+        </p>
+      )}
     </div>
   );
 }

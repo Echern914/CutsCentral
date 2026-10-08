@@ -52,7 +52,9 @@ export function ImageField({
         <div className={cn("group relative overflow-hidden rounded-xl border border-subtle bg-charcoal-700", aspectCls)}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={value} alt={label} className="h-full w-full object-cover" />
-          <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100">
+          {/* Shown on touch, revealed on hover only where hover exists: on a
+              phone they were invisible, and a tap could hit Remove unseen. */}
+          <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-100 transition-opacity duration-150 ease-out focus-within:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
             <button
               type="button"
               onClick={() => fileInput.current?.click()}

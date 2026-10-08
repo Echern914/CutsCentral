@@ -61,6 +61,13 @@ export function RequestForm({
       setError("Add a phone or email so they can reach you back.");
       return;
     }
+    // The API checks the email strictly; a typo used to come back as
+    // "Something went wrong" on every try, naming nothing.
+    const em = email.trim();
+    if (em && !/^[^\s@,]+@[^\s@,]+\.[^\s@,]{2,}$/.test(em)) {
+      setError("That email doesn't look right. Fix it, or clear it and leave your number.");
+      return;
+    }
     startTransition(async () => {
       const res = await submitRequestAction(slug, {
         firstName: firstName.trim(),

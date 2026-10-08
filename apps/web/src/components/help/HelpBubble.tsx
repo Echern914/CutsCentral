@@ -11,6 +11,7 @@ import {
   type SupportResolution,
 } from "@chairback/config/supportEngine";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
+import { isPlatformHost } from "@/lib/customDomainGuard";
 
 /**
  * The Assistant, in the corner of every page.
@@ -51,7 +52,22 @@ const PARA = "\n\n";
  * questions with dashboard instructions. /demo and the tour surfaces are
  * excluded because they run their own full-screen overlay.
  */
-const HIDDEN_PREFIXES = ["/s/", "/r/", "/book", "/demo", "/welcome", "/team/join"];
+const HIDDEN_PREFIXES = [
+  "/s/",
+  "/r/",
+  "/book",
+  "/demo",
+  "/welcome",
+  "/team/join",
+  // Client pages the list was missing: an owner's assistant has nothing to say
+  // to a client holding a waitlist spot, a kiosk customer or a rewards lookup.
+  "/custom-domain",
+  "/from-domain",
+  "/waitlist",
+  "/my-rewards",
+  "/kiosk",
+  "/line",
+];
 
 type Message =
   | { id: number; role: "user"; text: string }
@@ -95,7 +111,14 @@ export function HelpBubble() {
   // launcher drops back down. See DashboardNav.tsx.
   const onDashboard = pathname.startsWith("/dashboard");
 
-  const hidden = HIDDEN_PREFIXES.some((p) => pathname === p || pathname.startsWith(p));
+  // A shop's custom domain serves its pages at a bare "/", which no prefix
+  // can catch - so the host itself decides there.
+  const [onShopDomain, setOnShopDomain] = useState(false);
+  useEffect(() => {
+    setOnShopDomain(!isPlatformHost(window.location.host));
+  }, []);
+  const hidden =
+    onShopDomain || HIDDEN_PREFIXES.some((p) => pathname === p || pathname.startsWith(p));
 
   const send = useCallback(
     (text: string) => {

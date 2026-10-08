@@ -162,7 +162,11 @@ export function GetTheApp({
    * hands over NOTHING worth stealing: a shop slug that is already public in
    * the address bar above it, and never a token or a session.
    */
-  const openUrl = openPath ? `${MOBILE_APP.scheme}:/${openPath}` : null;
+  // 🔴 A PATH WITH A TOKEN NEVER GOES OVER THE SCHEME. The manage and
+  // confirmation screens passed /book/manage/<token>: any app can claim
+  // `chairback://`, and that token changes or cancels the visit.
+  const openUrl =
+    openPath && !/\/book\/manage\//.test(openPath) ? `${MOBILE_APP.scheme}:/${openPath}` : null;
 
   function dismiss() {
     setShow(false);
@@ -179,22 +183,11 @@ export function GetTheApp({
         <div className="min-w-0 flex-1">
           <p className="font-semibold text-offwhite">{copy.headline}</p>
           <p className="mt-1 text-sm text-muted">{copy.body}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {openUrl && (
-              <a
-                className="inline-flex min-h-11 items-center rounded-full bg-gold px-5 font-semibold text-charcoal-900"
-                href={openUrl}
-                onClick={() => track("app_opened", { surface })}
-              >
-                Open in ChairBack
-              </a>
-            )}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {/* Get the app is the main button. "Open in ChairBack" was, and for
+                anyone without the app a custom scheme is a Safari error. */}
             <a
-              className={
-                openUrl
-                  ? "inline-flex min-h-11 items-center rounded-full border border-subtle px-5 font-semibold text-offwhite"
-                  : "inline-flex min-h-11 items-center rounded-full bg-gold px-5 font-semibold text-charcoal-900"
-              }
+              className="inline-flex min-h-11 items-center rounded-full bg-gold px-5 font-semibold text-charcoal-900"
               href={MOBILE_APP.appStoreUrl}
               target="_blank"
               rel="noopener noreferrer"
@@ -202,6 +195,15 @@ export function GetTheApp({
             >
               Get the app
             </a>
+            {openUrl && (
+              <a
+                className="inline-flex min-h-11 items-center px-2 text-sm text-muted underline underline-offset-2"
+                href={openUrl}
+                onClick={() => track("app_opened", { surface })}
+              >
+                Already have it? Open in ChairBack
+              </a>
+            )}
           </div>
         </div>
         <button

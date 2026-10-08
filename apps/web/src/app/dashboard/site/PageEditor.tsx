@@ -383,6 +383,13 @@ export function PageEditor({
             >
               {enabled ? "Live" : "Hidden"}
             </button>
+            {/* The pill only changes the form: nothing goes live (or comes
+                down) until Save at the bottom, which it never said. */}
+            {changedKeys.includes("publicPageEnabled") && (
+              <span className="text-xs text-gold" role="status">
+                {enabled ? "Save page to publish" : "Save page to hide it"}
+              </span>
+            )}
           </div>
         </Card>
 

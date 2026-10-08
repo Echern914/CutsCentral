@@ -56,6 +56,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "times show in your own time.",
   },
   {
+    id: "2026-10-08-client-pages-truth",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Client pages and the kiosk ask and say it right",
+    body:
+      "The walk-in kiosk's text consent box now starts unticked for every customer, and every step has Start over. " +
+      "Client forms name a mistyped email, and leaving a waitlist says if it didn't go through. Android no longer " +
+      "gets an Apple link.",
+  },
+  {
     id: "2026-10-08-services-tab-fixes",
     date: "2026-10-08",
     kind: "fix",

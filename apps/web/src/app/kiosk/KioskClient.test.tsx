@@ -298,3 +298,66 @@ describe("idle + double-submit", () => {
     expect(checkInMock).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * 🔴 Kiosk mishaps from the 2026-10-08 sweep: the SMS consent box arrived
+ * TICKED (and re-ticked for every customer - not consent); texting paused read
+ * as "couldn't reach the shop"; a barber the customer could no longer see was
+ * kept; an 11-digit number with a leading 1 was garbled; and only the phone
+ * and code screens had Start over.
+ */
+describe("kiosk fixes", () => {
+  async function toReview() {
+    render(<KioskClient />);
+    fireEvent.click(await screen.findByRole("button", { name: /check in/i }));
+    fireEvent.change(screen.getByLabelText(/mobile number/i), { target: { value: "2125551234" } });
+    fireEvent.click(screen.getByRole("button", { name: /text me a code/i }));
+    fireEvent.change(await screen.findByLabelText(/verification code/i), { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: /^verify$/i }));
+    fireEvent.change(await screen.findByLabelText(/first name/i), { target: { value: "Marcus" } });
+    fireEvent.click(screen.getByRole("button", { name: /^next$/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Fade/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^next$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /see my wait/i }));
+    await screen.findByText(/estimated wait about/i);
+  }
+
+  it("🔴 the SMS consent box starts UNticked", async () => {
+    await toReview();
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: /join the line/i }));
+    await screen.findByText(/you're in line/i);
+    expect(checkInMock).toHaveBeenCalledWith(expect.objectContaining({ smsConsent: false }));
+  });
+
+  it("walk-ins paused says so when the code is asked for", async () => {
+    challengeMock.mockResolvedValue({ ok: false, status: 409, data: null, error: "not_accepting" } as never);
+    render(<KioskClient />);
+    fireEvent.click(await screen.findByRole("button", { name: /check in/i }));
+    fireEvent.change(screen.getByLabelText(/mobile number/i), { target: { value: "2125551234" } });
+    fireEvent.click(screen.getByRole("button", { name: /text me a code/i }));
+    expect(await screen.findByText(/Walk-ins are paused right now/)).toBeTruthy();
+    expect(screen.queryByText(/couldn't reach/i)).toBeNull();
+  });
+
+  it("every step after the code has Start over", async () => {
+    render(<KioskClient />);
+    fireEvent.click(await screen.findByRole("button", { name: /check in/i }));
+    fireEvent.change(screen.getByLabelText(/mobile number/i), { target: { value: "2125551234" } });
+    fireEvent.click(screen.getByRole("button", { name: /text me a code/i }));
+    fireEvent.change(await screen.findByLabelText(/verification code/i), { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: /^verify$/i }));
+    await screen.findByLabelText(/first name/i);
+    fireEvent.click(screen.getByRole("button", { name: /start over/i }));
+    expect(await screen.findByRole("button", { name: /check in/i })).toBeTruthy();
+  });
+});
+
+describe("prettyPhone", () => {
+  it("drops a leading US 1 and never hides a typed digit", async () => {
+    const { prettyPhone } = await import("./KioskClient");
+    expect(prettyPhone("12125551234")).toBe("(212) 555-1234");
+    expect(prettyPhone("2125551234")).toBe("(212) 555-1234");
+    expect(prettyPhone("212555123456")).toBe("212555123456");
+  });
+});

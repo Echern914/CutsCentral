@@ -149,7 +149,7 @@ export function GalleryEditor({
               type="button"
               onClick={() => remove(i)}
               aria-label="Remove photo"
-              className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/60 text-white opacity-0 backdrop-blur transition-[opacity,background-color] duration-150 ease-out hover:bg-black/80 group-hover:opacity-100"
+              className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/60 text-white opacity-100 backdrop-blur transition-[opacity,background-color] duration-150 ease-out hover:bg-black/80 focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
             >
               ✕
             </button>
