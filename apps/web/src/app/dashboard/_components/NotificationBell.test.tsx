@@ -62,6 +62,32 @@ describe("what's new in the bell", () => {
     expect(markSeen).not.toHaveBeenCalled();
   });
 
+  it("🔴 Back closes the panel - on a phone the list covers the backdrop, so it is the only way out", () => {
+    render(<NotificationBell signals={[]} whatsNew={{ seenId: WHATS_NEW[0]!.id, accountCreatedAt: longAgo }} />);
+    fireEvent.click(screen.getByRole("button", { name: /Notifications/ }));
+    expect(screen.getByRole("dialog", { name: "Notifications" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.queryByRole("dialog", { name: "Notifications" })).toBeNull();
+  });
+
+  it("🔴 every unseen update is listed, not just the newest six - opening marks them all seen", () => {
+    // Seen up to the 11th entry: the ten above it are new.
+    render(<NotificationBell signals={[]} whatsNew={{ seenId: WHATS_NEW[10]!.id, accountCreatedAt: longAgo }} />);
+    fireEvent.click(screen.getByRole("button", { name: /Notifications/ }));
+    expect(document.querySelectorAll('[data-qa="whats-new-entry"]').length).toBe(10);
+    expect(screen.getByText(WHATS_NEW[9]!.title)).toBeTruthy();
+  });
+
+  it("nothing new still shows the newest six, and a long absence stops at twenty", () => {
+    render(<NotificationBell signals={[]} whatsNew={{ seenId: WHATS_NEW[0]!.id, accountCreatedAt: longAgo }} />);
+    fireEvent.click(screen.getByRole("button", { name: /Notifications/ }));
+    expect(document.querySelectorAll('[data-qa="whats-new-entry"]').length).toBe(6);
+    cleanup();
+    render(<NotificationBell signals={[]} whatsNew={{ seenId: null, accountCreatedAt: longAgo }} />);
+    fireEvent.click(screen.getByRole("button", { name: /Notifications/ }));
+    expect(document.querySelectorAll('[data-qa="whats-new-entry"]').length).toBe(20);
+  });
+
   it("an older API that sends no marker shows no dot", () => {
     render(<NotificationBell signals={[]} />);
     expect(document.querySelector('[data-qa="whats-new-dot"]')).toBeNull();
