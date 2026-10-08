@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { ReplyBox } from "./ReplyBox";
+import { LocalDate } from "@/components/ui/LocalDate";
+import { DATE_TIME_STAMP } from "@/lib/dateStamp";
 
 interface ToolCall {
   name: string;
@@ -107,12 +109,7 @@ function MessageBubble({ message }: { message: Message }) {
         </p>
       )}
       <p className="mt-0.5 text-[10px] text-muted/60">
-        {new Date(message.createdAt).toLocaleString(undefined, {
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-        })}
+        <LocalDate iso={message.createdAt} options={DATE_TIME_STAMP} />
       </p>
     </div>
   );

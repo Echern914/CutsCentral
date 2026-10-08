@@ -4,6 +4,8 @@ import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { Card } from "@/components/ui/Card";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { UpgradeCallout } from "../_components/UpgradeCallout";
+import { LocalDate } from "@/components/ui/LocalDate";
+import { DATE_TIME_STAMP } from "@/lib/dateStamp";
 
 interface NudgeRow {
   who: string;
@@ -70,12 +72,7 @@ export default async function NudgesPage() {
                   <div>
                     <p className="text-sm text-offwhite">{n.who}</p>
                     <p className="text-xs text-muted">
-                      {new Date(n.at).toLocaleString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
+                      <LocalDate iso={n.at} options={DATE_TIME_STAMP} />
                     </p>
                   </div>
                   <div className="flex items-center gap-2">

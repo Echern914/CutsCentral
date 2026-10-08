@@ -49,6 +49,21 @@ const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
 
+/** What the API accepts for a Venmo username or a $cashtag (payments.dashboard.ts). */
+const PAY_HANDLE = /^[A-Za-z0-9._-]*$/;
+
+/**
+ * A handle as the barber pasted it, made into what the API stores: a pasted
+ * profile link keeps only its last part, and the leading @ or $ goes.
+ */
+export function payHandle(raw: string | null | undefined, sigil: RegExp): string {
+  const v = (raw ?? "").trim();
+  const lastPart = /^(https?:\/\/)?(www\.)?(venmo\.com|account\.venmo\.com|cash\.app)\//i.test(v)
+    ? (v.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop() ?? "")
+    : v;
+  return lastPart.replace(sigil, "");
+}
+
 export function PaymentsManager({
   initial,
   apiBase,
@@ -139,16 +154,36 @@ export function PaymentsManager({
     setPd((prev) => ({ ...prev, [k]: v }));
   }
   function savePayDirect() {
+    // The API's own rules, checked here so the barber is told WHICH box to fix
+    // (a pasted profile link or a space used to get a bare "Couldn't save").
+    const venmo = payHandle(pd.venmo, /^@/);
+    const cashApp = payHandle(pd.cashApp, /^\$/);
+    const problem =
+      !PAY_HANDLE.test(venmo) || venmo.length > 60
+        ? "Venmo: just your username, with letters, numbers, . _ or - (no spaces or links)."
+        : !PAY_HANDLE.test(cashApp) || cashApp.length > 60
+          ? "Cash App: just your $cashtag, with letters, numbers, . _ or - (no spaces or links)."
+          : (pd.zelle ?? "").trim().length > 120
+            ? "Zelle: an email or phone number, under 120 characters."
+            : (pd.note ?? "").trim().length > 280
+              ? "Note: keep it under 280 characters."
+              : null;
+    if (problem) {
+      toast(problem, "error");
+      return;
+    }
     start(async () => {
       const r = await savePayDirectAction({
         enabled: pd.enabled,
         zelle: pd.zelle ?? "",
-        venmo: pd.venmo ?? "",
-        cashApp: pd.cashApp ?? "",
+        venmo,
+        cashApp,
         note: pd.note ?? "",
       });
-      if (r.ok) toast("Pay-direct settings saved", "success");
-      else toast("Couldn't save", "error");
+      if (r.ok) {
+        setPd((prev) => ({ ...prev, venmo, cashApp }));
+        toast("Pay-direct settings saved", "success");
+      } else toast("Couldn't save. Check the handles and try again.", "error");
     });
   }
 
@@ -251,19 +286,34 @@ export function PaymentsManager({
   }
 
   function save() {
+    // 🔴 OUT OF RANGE IS REFUSED, NEVER QUIETLY CHANGED. These used to clamp:
+    // a $1,500 deposit saved as $1,000 (and $0.50 as $1) under "Payment
+    // settings saved", while the box still showed what was typed. An empty
+    // box still means 0 for the fee and the cutoff, as before.
+    const feePct = cancelFeePct.trim() === "" ? 0 : Number(cancelFeePct);
+    const hoursRaw = cancelHours.trim() === "" ? 0 : Number(cancelHours);
+    const depositRaw = Number(depositDollars);
+    const problem =
+      !Number.isFinite(feePct) || feePct < 0 || feePct > 100
+        ? "The cancellation fee must be 0 to 100%."
+        : !Number.isFinite(hoursRaw) || hoursRaw < 0 || hoursRaw > 720
+          ? "The cancellation cutoff must be 0 to 720 hours."
+          : mode === "deposit" && !(Number.isFinite(depositRaw) && depositRaw >= 1 && depositRaw <= 1000)
+            ? "The deposit must be $1 to $1,000."
+            : null;
+    if (problem) {
+      toast(problem, "error");
+      return;
+    }
+    const hours = Math.round(hoursRaw);
+    const depositCents = Math.round(depositRaw * 100);
     start(async () => {
-      // Coerce the raw string inputs and clamp to the API's bounds (fee 0-100%
-      // -> 0-10000 bps, hours 0-720). An empty/garbage field saves as 0.
-      const feePct = Math.min(100, Math.max(0, Number(cancelFeePct) || 0));
-      const hours = Math.min(720, Math.max(0, Math.round(Number(cancelHours) || 0)));
-      // $1 floor matches the API: "deposit mode with a $0 deposit" would be a
-      // silently free booking, which is never what the barber meant.
-      const depositCents = Math.min(
-        100_000,
-        Math.max(100, Math.round((Number(depositDollars) || 0) * 100)),
-      );
       const r = await savePaymentSettingsAction({
-        paymentsMode: mode,
+        // 🔴 Stripe can't charge (disconnected, or the account slipped): the
+        // stored mode is inert - bookings pay in person - and re-sending it got
+        // the WHOLE save refused with "Finish connecting Stripe", even to change
+        // a cancellation policy. Leave it out; everything else still saves.
+        ...(ready || mode === "off" ? { paymentsMode: mode } : {}),
         cancelWindowHours: hours,
         cancelFeeBps: Math.round(feePct * 100),
         ...(mode === "deposit" ? { depositAmountCents: depositCents, depositNonRefundable } : {}),

@@ -8,7 +8,23 @@ const ERROR_COPY: Record<string, string> = {
   send_failed_or_opted_out:
     "Couldn't send — this number may have texted STOP (opted out).",
   invalid_input: "Type a message first.",
+  // Texting is a platform switch. Without this the box said "Try again", and
+  // the barber retried a send that could never work.
+  texting_off: "Texting is turned off right now, so nothing was sent. Reach them another way for now.",
 };
+
+/**
+ * Enter sends only from a hardware keyboard. On a phone, Return is how you
+ * start a new line - it used to send a half-written text from the shop's
+ * number, which can't be recalled.
+ */
+function enterSends(): boolean {
+  try {
+    return window.matchMedia?.("(hover: hover) and (pointer: fine)").matches ?? false;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Barber's manual-reply box. Sending takes over the thread (the AI goes silent)
@@ -22,7 +38,7 @@ export function ReplyBox({ conversationId }: { conversationId: string }) {
 
   const send = () => {
     const body = text.trim();
-    if (!body) return;
+    if (!body || pending) return;
     setError(null);
     startTransition(async () => {
       const r = await sendReplyAction(conversationId, body);
@@ -40,12 +56,13 @@ export function ReplyBox({ conversationId }: { conversationId: string }) {
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
-          // Enter sends; Shift+Enter makes a newline.
-          if (e.key === "Enter" && !e.shiftKey) {
+          // Enter sends at a desk; Shift+Enter, and Return on a phone, make a newline.
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && enterSends()) {
             e.preventDefault();
             send();
           }
         }}
+        enterKeyHint="enter"
         rows={2}
         maxLength={1000}
         placeholder="Type a reply — sends from your shop's number and takes over from the AI"

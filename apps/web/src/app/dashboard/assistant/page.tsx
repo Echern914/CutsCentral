@@ -88,6 +88,9 @@ export default async function AssistantPage({
       </header>
 
       <AskField
+        // A new ?q= while already on this page must ask the NEW question: the
+        // field seeds its state once, so the old question and answer stayed.
+        key={handedOver ?? ""}
         role={role}
         rewardsEnabled={rewardsEnabled}
         affiliateProgramEnabled={affiliateProgramEnabled}

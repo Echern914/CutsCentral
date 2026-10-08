@@ -19,6 +19,7 @@ import {
   UpgradeToTierButton,
 } from "./BillingActions";
 import { ReceptionistControls } from "./ReceptionistControls";
+import { ownsReceptionist, planLabel } from "./planState";
 
 // The /api/billing shape lives ONCE in lib/billing.ts (shared with the
 // layout's lock plumbing, TrialBanner, and the receptionist page).
@@ -114,19 +115,6 @@ const PREMIUM_AI_FEATURES: TierFeature[] = [
   { lead: "Everything in Premium" },
 ];
 
-/** Human label for the shop's current tier state. */
-function planLabel(b: BillingStatus): string {
-  if (b.plan === "pro_ai") return PLANS.pro_ai.name;
-  if (b.subscribed && b.receptionist.entitled && !b.receptionist.compAccess) {
-    return `${PLANS.pro.name} + AI receptionist`;
-  }
-  if (b.compAccess) return `${b.planName} · complimentary`;
-  if (b.subscribed && b.plan === "starter") return PLANS.starter.name;
-  if (b.subscribed) return b.planName;
-  if (b.hasAccess && b.billingEnabled) return "Free trial";
-  return "Free";
-}
-
 export default async function BillingPage({
   searchParams,
 }: {
@@ -193,7 +181,12 @@ export default async function BillingPage({
       )}
       {searchParams?.upgrade === "success" && (
         <div className="mb-5 rounded-2xl border border-emerald-soft/40 bg-emerald-soft/10 px-4 py-3 text-sm text-emerald-soft">
-          Upgraded to Premium AI. Turn on your receptionist below.
+          {/* The plan the page just loaded IS the new tier (the API writes it
+              before answering). A Starter -> Premium upgrade used to be told
+              it bought Premium AI and to switch on a receptionist it lacks. */}
+          {b?.plan === "pro_ai"
+            ? `Upgraded to ${PLANS.pro_ai.name}. Turn on your receptionist below.`
+            : `Upgraded to ${PLANS.pro.name}. Your texts and promos are live.`}
         </div>
       )}
       {searchParams?.receptionist === "success" && (
@@ -240,7 +233,11 @@ export default async function BillingPage({
                     ${currentPrice}
                     <span className="text-sm text-muted">/mo</span>
                   </p>
-                  <p className="text-xs text-muted">first {b.trialDays} days free</p>
+                  {/* Only while the shop is ON its free trial. A paying
+                      shop read "first 14 days free" under its own price. */}
+                  {!b.compAccess && !b.subscribed && b.billingEnabled && b.hasAccess && (
+                    <p className="text-xs text-muted">first {b.trialDays} days free</p>
+                  )}
                 </div>
               </HideInNativeApp>
             </div>
@@ -585,7 +582,7 @@ export default async function BillingPage({
                       )}
                       {b.plan !== "pro_ai" &&
                         b.subscribed &&
-                        !b.receptionist.entitled &&
+                        !ownsReceptionist(b) &&
                         !b.aiTrial.available &&
                         (b.premiumAi.billingEnabled ? (
                           <UpgradeToPremiumAiButton
@@ -600,7 +597,7 @@ export default async function BillingPage({
                         ))}
                       {b.subscribed &&
                         b.plan !== "pro_ai" &&
-                        b.receptionist.entitled && (
+                        ownsReceptionist(b) && (
                           <p className="text-xs text-muted">
                             You already have the AI receptionist via your add-on
                             — same power, nothing more to buy.

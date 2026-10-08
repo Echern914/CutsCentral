@@ -132,3 +132,31 @@ describe("a referral code at signup", () => {
     }
   });
 });
+
+/**
+ * 🔴 STEP 1 NAMES WHAT TO FIX. A cleared "Punches needed" box went out as 0
+ * (Number("")), the API refused it, and every refusal read "Check the booking
+ * URL" - for a URL the new owner never typed.
+ */
+describe("step 1 refusals", () => {
+  it("a cleared Punches needed box is left to the default, not sent as 0", async () => {
+    apiSend.mockResolvedValue(created);
+    const f = form();
+    f.set("rewardThreshold", "");
+    await createShopAction({}, f);
+    expect(apiSend.mock.calls[0]![2]).not.toHaveProperty("rewardThreshold");
+  });
+
+  it("🔴 an out-of-range punch count says so, not 'Check the booking URL'", async () => {
+    apiSend.mockResolvedValue({
+      ok: false,
+      status: 400,
+      error: "invalid_input",
+      issues: [{ path: ["rewardThreshold"], message: "too big" }],
+    });
+    const f = form();
+    f.set("rewardThreshold", "500");
+    const out = await createShopAction({}, f);
+    expect(out).toMatchObject({ error: "Punches needed must be a whole number from 1 to 100." });
+  });
+});

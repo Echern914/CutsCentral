@@ -2,6 +2,8 @@ import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { ReviewModeration } from "./ReviewModeration";
+import { LocalDate } from "@/components/ui/LocalDate";
+import { DATE_TIME_STAMP } from "@/lib/dateStamp";
 
 interface ReviewRow {
   id: string;
@@ -92,12 +94,7 @@ export default async function ReviewsPage() {
                       </p>
                     )}
                     <p className="mt-1.5 text-[11px] text-muted/70">
-                      {new Date(r.createdAt).toLocaleString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
+                      <LocalDate iso={r.createdAt} options={DATE_TIME_STAMP} />
                     </p>
                   </div>
                   <ReviewModeration id={r.id} status={r.status} />
