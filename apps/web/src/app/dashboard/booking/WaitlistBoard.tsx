@@ -588,6 +588,8 @@ export interface WaitlistBookDetail {
   serviceId: string | null;
   staffId: string | null;
   windowHint: string | null;
+  /** The earliest asked-for day ("YYYY-MM-DD", shop tz), or null for any day. */
+  dayKey: string | null;
 }
 function bookEvent(entry: WaitlistEntry): CustomEvent<WaitlistBookDetail> {
   return new CustomEvent<WaitlistBookDetail>(WAITLIST_BOOK_EVENT, {
@@ -600,6 +602,11 @@ function bookEvent(entry: WaitlistEntry): CustomEvent<WaitlistBookDetail> {
       serviceId: entry.serviceId,
       staffId: entry.staffId,
       windowHint: entry.windows.length ? entry.windows.map(describeWindow).join(" · ") : null,
+      dayKey:
+        entry.windows
+          .map((w) => w.startDate)
+          .filter((d): d is string => Boolean(d))
+          .sort()[0] ?? null,
     },
   });
 }

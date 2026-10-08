@@ -86,6 +86,15 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "form now reaches you.",
   },
   {
+    id: "2026-10-08-calendar-and-forms-truth",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "The calendar shows exactly what's open",
+    body:
+      "One barber's block-off no longer hides the other chairs, and the hours inside a long appointment no longer " +
+      "offer a +. Cancel in Edit appointment throws the change away. A booking question you just added can be removed.",
+  },
+  {
     id: "2026-10-06-repeat-numbers-type",
     date: "2026-10-06",
     kind: "fix",

@@ -214,6 +214,9 @@ describe("blocking whole days", () => {
       [3, 4, 5].map((n) => nyAt(dayKeyAhead(n), 0).toISOString()),
     );
     expect(blocks.every((b) => b.clientName === "Vacation")).toBe(true);
+    // 🔴 Whose chair it takes: without it the calendar read one barber's
+    // block as covering every chair in the shop.
+    expect(blocks.every((b) => (b as { staffId?: string | null }).staffId === S.staffId)).toBe(true);
   });
 
   it("refuses an impossible date, an inverted range, days that have passed, and a range over a year", async () => {

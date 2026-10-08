@@ -110,16 +110,19 @@ export function BookingQuestionsCard({
         // New questions go to the end of the form the customer sees.
         sortOrder: questions.reduce((max, q) => Math.max(max, q.sortOrder), -1) + 1,
       });
-      if (!r.ok) {
+      if (!r.ok || !r.id) {
         toast("Couldn't add that question.", "error");
         return;
       }
-      // The id comes back on the next server render; until then show it
-      // locally so the list never looks like the tap did nothing.
+      // 🔴 THE SERVER'S ID. This list is seeded once and never re-reads its
+      // props, so a stand-in id lasted until a full reload - and Edit and
+      // Remove sent it, changing nothing on the real, possibly Required,
+      // question while the card said "Removed."
+      const id = r.id;
       setQuestions((prev) => [
         ...prev,
         {
-          id: `pending-${Date.now()}`,
+          id,
           label: trimmed,
           helpText: helpText.trim() || null,
           kind,

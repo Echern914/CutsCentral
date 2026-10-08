@@ -401,6 +401,19 @@ export function AppointmentForm({
     if (!serviceId) return setError("Pick a service.");
     if (!staffId) return setError("Pick a provider.");
     if (!startsAt) return setError("Pick a time.");
+    // Opened without a tapped hour (the waitlist's Book, the New button), the
+    // form starts on a placeholder instant - "now", to the second. Schedule
+    // before choosing anything sent it, and read "That time isn't available.
+    // Use Custom time" when nothing had been chosen at all.
+    if (
+      !tapped &&
+      !customTime &&
+      !special &&
+      startsAt === prefillISO &&
+      !slots.some((s) => s.startsAt === startsAt)
+    ) {
+      return setError("Pick a time.");
+    }
     if (!clientId && !newName.trim()) return setError("Pick a client or enter a name.");
     if (repeat && endMode === "until" && !until) return setError("Pick an end date.");
     // A repeat box holding a number it cannot use: refuse, never guess.
@@ -713,7 +726,16 @@ export function AppointmentForm({
           action={
             <button
               type="button"
-              onClick={() => setCustomTime((v) => !v)}
+              onClick={() => {
+                if (customTime) {
+                  // 🔴 Leaving Custom time forgets the typed time. It may be on
+                  // another day the grid does not show, and it used to ride
+                  // along: Schedule booked a night the screen never displayed.
+                  setStartsAt(prefillISO);
+                  setTargetedSlotId(null);
+                }
+                setCustomTime((v) => !v);
+              }}
               // A real 44px hit area; the negative margin keeps the header line
               // visually as tight as the sheet's.
               className="-my-3 flex h-11 items-center px-2 text-[11px] text-muted underline-offset-2 transition-colors duration-150 ease-out hover:text-offwhite hover:underline"
@@ -1096,6 +1118,12 @@ export function RepeatNumber(props: {
 }) {
   const { value, min, max, onChange, onProblem } = props;
   const [draft, setDraft] = useState(String(value));
+  // A box that leaves the screen takes its complaint with it. It comes back
+  // showing the last good number, so a remembered range error refused a value
+  // the barber could see was fine.
+  const onProblemRef = useRef(onProblem);
+  onProblemRef.current = onProblem;
+  useEffect(() => () => onProblemRef.current(null), []);
   // Follow the form's number when it changes from outside (not mid-typing).
   const [seen, setSeen] = useState(value);
   if (seen !== value) {

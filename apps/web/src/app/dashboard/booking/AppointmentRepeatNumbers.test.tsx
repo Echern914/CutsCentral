@@ -121,6 +121,20 @@ describe("the repeat boxes on a phone", () => {
     expect(weeks().value).toBe("4");
   });
 
+  it("🔴 a box that goes away takes its complaint with it", async () => {
+    await openRepeating();
+    typeOnPhone(total(), "⌫⌫60");
+    expect(screen.getAllByText("A repeat can be 2 to 52 appointments.").length).toBeGreaterThan(0);
+    // Switch to "Until a date" and back: the count box leaves and returns on
+    // its last good number, which Schedule must then accept.
+    fireEvent.click(screen.getByRole("button", { name: "Until a date" }));
+    fireEvent.click(screen.getByRole("button", { name: "For a count" }));
+    // "6" was valid on the way to "60", so 6 is the last good number.
+    expect(total().value).toBe("6");
+    schedule();
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+  });
+
   it("letters never get in", async () => {
     await openRepeating();
     typeOnPhone(weeks(), "⌫a2");

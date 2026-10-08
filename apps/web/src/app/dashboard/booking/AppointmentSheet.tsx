@@ -159,7 +159,15 @@ export function AppointmentSheet({
       onChanged();
       load();
     },
-  });
+  });
+  // 🔴 Every visit to Edit starts from the booking as it is NOW. Cancel and Back
+  // only change the view, so without this the abandoned change came back (and
+  // was saved with the next edit), and a price saved from the hero was written
+  // back to its old figure.
+  useEffect(() => {
+    if (rawView === "edit") edit.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawView]);
 
   // The shop's timezone is the only one an appointment time means anything in.
   const zone = detail?.timezone;

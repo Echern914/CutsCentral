@@ -9,6 +9,7 @@ import type { StaffRow } from "./page";
 import { addBlockAction, type BlockOffInput } from "./actions";
 import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
 import {
+  addDaysToKey,
   blockSummary,
   dayCount,
   isDayKey,
@@ -68,7 +69,9 @@ export function BlockOffForm({
   const [multiDay, setMultiDay] = useState(false);
   const [endDate, setEndDate] = useState(initialDate);
   const [fromTime, setFromTime] = useState(pad(defaultFromHour) + ":00");
-  const [toTime, setToTime] = useState(pad(Math.min(23, defaultFromHour + 1)) + ":00");
+  // The 11 PM row runs to midnight ("00:00"), not 11 PM - 11 PM to 11 PM
+  // opened the form already refused.
+  const [toTime, setToTime] = useState(defaultFromHour >= 23 ? "00:00" : pad(defaultFromHour + 1) + ":00");
   // Whole-day switch: testers blocking a vacation were hand-typing 00:00-23:00
   // per day, which leaves 23:00-midnight open - a real slot for late-hours
   // shops. All day = local midnight to next-midnight, DST-exact (the API does
@@ -127,7 +130,9 @@ export function BlockOffForm({
       // The same hours on every day, as shop-local minutes; the API resolves
       // each day's instants itself. NaN from a cleared input fails the check.
       const fromMin = minutesOf(fromTime);
-      const toMin = minutesOf(toTime);
+      // 🔴 An end of 12:00 AM is the END of the day, not its start - otherwise
+      // nothing could block the last hour without blocking the whole day.
+      const toMin = toTime === "00:00" ? 24 * 60 : minutesOf(toTime);
       if (!(toMin > fromMin)) return "End time must be after the start time.";
       return {
         kind: "days",
@@ -147,7 +152,17 @@ export function BlockOffForm({
     // the barber's device is in a different timezone than the shop.
     const [y, m, d] = date.split("-").map(Number);
     const startsAt = zonedWallTimeToUtc(y!, m! - 1, d!, minutesOf(fromTime), timezone);
-    const endsAt = zonedWallTimeToUtc(y!, m! - 1, d!, minutesOf(toTime), timezone);
+    // An end of 12:00 AM is midnight at the END of this day: the next day's
+    // 00:00, worked out on the day key so a DST night stays exact.
+    const endKey = toTime === "00:00" ? addDaysToKey(date, 1) : date;
+    const [ey, em, ed] = endKey.split("-").map(Number);
+    const endsAt = zonedWallTimeToUtc(
+      ey!,
+      em! - 1,
+      ed!,
+      toTime === "00:00" ? 0 : minutesOf(toTime),
+      timezone,
+    );
     // NaN from a cleared input makes an Invalid Date, which compares false.
     if (!(endsAt.getTime() > startsAt.getTime())) {
       return "End time must be after the start time.";
