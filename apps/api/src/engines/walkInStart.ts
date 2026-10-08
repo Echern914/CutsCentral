@@ -371,6 +371,7 @@ export async function completeEntry(opts: {
         startsAt: true,
         endsAt: true,
         priceAtBooking: true,
+        groupId: true,
         service: { select: { name: true } },
       },
     });
@@ -387,6 +388,7 @@ export async function completeEntry(opts: {
           endsAt: appt.endsAt,
           priceAtBooking: appt.priceAtBooking,
           serviceName: appt.service?.name ?? null,
+          groupId: appt.groupId,
         },
         now,
         // The shop completed this walk-in: they were in the chair.
