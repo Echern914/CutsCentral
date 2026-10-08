@@ -61,6 +61,25 @@ export function bookNowUrl(shop: BookingLinkShop, appBaseUrl: string): string | 
 }
 
 /**
+ * Does the shop's page show "Request an appointment", and so does the request
+ * route take one? ONE rule for both, because they disagreed: the page showed
+ * the form to every shop with no way to book (so a client is never left on a
+ * dead page), while the route refused every shop with requests switched off.
+ * A client at a no-link shop filled it in and got "Something went wrong" on
+ * every try, and the barber never saw the request.
+ *
+ * ChairBack booking replaces the form entirely - it IS self-serve booking.
+ */
+export function showsRequestForm(shop: {
+  bookingMode: string;
+  bookingUrl: string | null;
+  takesRequests: boolean;
+}): boolean {
+  if (shop.bookingMode === "native") return false;
+  return shop.takesRequests || !isUsableBookingLink(shop.bookingUrl);
+}
+
+/**
  * The Book link an automatic or barber-sent MESSAGE carries - nudge, win-back,
  * promotion, text and push alike.
  *

@@ -4045,7 +4045,7 @@ const timeSelectCls =
 // Hours persist only on "Save hours", so an unsaved close would silently lose
 // edits — the same "I filled it in, left, and it was gone" trap the old Hours
 // tab guarded. We diff against the loaded/saved snapshot and confirm on close.
-function StaffHoursSheet({
+export function StaffHoursSheet({
   staffId,
   staffName,
   toast,
@@ -4060,6 +4060,14 @@ function StaffHoursSheet({
     WEEKDAYS.map(() => ({ on: false, start: "09:00", end: "17:00", breaks: [] })),
   );
   const [loaded, setLoaded] = useState(false);
+  // 🔴 A failed load is NOT an empty week. Showing seven unticked days after a
+  // dropped connection let a barber "fix" the lost hours by ticking one day and
+  // saving - and a save REPLACES the whole week, so it deleted the real one.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadNonce, setLoadNonce] = useState(0);
+  // What went wrong with the last Save, read directly above the button. A toast
+  // draws beneath this sheet, so on a phone it was never seen.
+  const [problem, setProblem] = useState<string | null>(null);
   const [pending, start] = useTransition();
   // JSON snapshot of the last loaded/saved state; `dirty` = unsaved edits exist.
   const [savedSnapshot, setSavedSnapshot] = useState<string>("");
@@ -4068,46 +4076,52 @@ function StaffHoursSheet({
   // here changes nothing a customer can see, because each service's own hours
   // veto the day afterwards — so the row says so rather than looking saved.
   const [noServiceDays, setNoServiceDays] = useState<number[]>([]);
+  // An edit answers the last refusal, so it stops being shown.
+  useEffect(() => setProblem(null), [rows]);
 
   // Load this staff member's hours on mount (the Sheet only opens for one).
   useEffect(() => {
+    setLoaded(false);
+    setLoadFailed(false);
     start(async () => {
       const r = await getAvailabilityAction(staffId);
+      if (!r.ok || !r.data) {
+        setLoadFailed(true);
+        return;
+      }
       const next: HourRow[] = WEEKDAYS.map(() => ({
         on: false,
         start: "09:00",
         end: "17:00",
         breaks: [],
       }));
-      if (r.ok && r.data) {
-        for (const rule of r.data.rules) {
-          next[rule.weekday] = {
-            ...next[rule.weekday]!,
-            on: true,
-            start: minToHHMM(rule.startMin),
-            end: minToHHMM(rule.endMin),
-          };
-        }
-        // Recurring breaks bucket onto their weekday (turn the day on too, so a
-        // break isn't stranded on an unchecked - and therefore closed - day).
-        for (const b of r.data.recurringBlocks) {
-          const row = next[b.weekday];
-          if (!row) continue;
-          row.on = true;
-          row.breaks.push({
-            start: minToHHMM(b.startMin),
-            end: minToHHMM(b.endMin),
-            reason: b.reason ?? "",
-          });
-        }
-        setNoServiceDays(r.data.weekdaysWithNoService ?? []);
+      for (const rule of r.data.rules) {
+        next[rule.weekday] = {
+          ...next[rule.weekday]!,
+          on: true,
+          start: minToHHMM(rule.startMin),
+          end: minToHHMM(rule.endMin),
+        };
       }
+      // Recurring breaks bucket onto their weekday (turn the day on too, so a
+      // break isn't stranded on an unchecked - and therefore closed - day).
+      for (const b of r.data.recurringBlocks) {
+        const row = next[b.weekday];
+        if (!row) continue;
+        row.on = true;
+        row.breaks.push({
+          start: minToHHMM(b.startMin),
+          end: minToHHMM(b.endMin),
+          reason: b.reason ?? "",
+        });
+      }
+      setNoServiceDays(r.data.weekdaysWithNoService ?? []);
       setRows(next);
       setSavedSnapshot(JSON.stringify(next)); // this loaded state IS the baseline
       setLoaded(true);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [staffId]);
+  }, [staffId, loadNonce]);
 
   // Guard every exit while dirty: hard unloads, and the dashboard's sticky-nav
   // <Link>s / Sign-out form (soft navigation never fires beforeunload — the
@@ -4151,13 +4165,17 @@ function StaffHoursSheet({
   }
 
   function save() {
+    // Only a week that actually loaded may be written back over the saved one.
+    if (!loaded || loadFailed) return;
+    setProblem(null);
     const rules = rows
       .map((r, weekday) =>
         r.on ? { weekday, startMin: hhmmToMin(r.start), endMin: hhmmToMin(r.end) } : null,
       )
       .filter((x): x is { weekday: number; startMin: number; endMin: number } => x !== null);
-    if (rules.some((r) => r.endMin <= r.startMin)) {
-      toast("Each day's end time must be after its start time", "error");
+    const backwardsDay = rules.find((r) => r.endMin <= r.startMin);
+    if (backwardsDay) {
+      setProblem(`${WEEKDAYS[backwardsDay.weekday]}: the end time must be after the start time.`);
       return;
     }
     // Only breaks on ENABLED days are meaningful (a break on a closed day
@@ -4179,8 +4197,11 @@ function StaffHoursSheet({
         });
       }
     }
-    if (recurringBlocks.some((b) => b.endMin <= b.startMin)) {
-      toast("Each break's end time must be after its start time", "error");
+    const backwardsBreak = recurringBlocks.find((b) => b.endMin <= b.startMin);
+    if (backwardsBreak) {
+      setProblem(
+        `${WEEKDAYS[backwardsBreak.weekday]}: a break's end time must be after its start time.`,
+      );
       return;
     }
     // Snapshot exactly what's being persisted so a successful save clears dirty.
@@ -4192,7 +4213,7 @@ function StaffHoursSheet({
         toast("Hours saved", "success");
       } else {
         // Do NOT clear dirty on failure - the edits are still unsaved.
-        toast("Couldn't save — your changes are still here. Try again.", "error");
+        setProblem("Couldn't save. Your changes are still here, so try again.");
       }
     });
   }
@@ -4202,7 +4223,21 @@ function StaffHoursSheet({
       <p className="mb-3 text-xs text-muted">
         When this staff member is available to book — and any recurring breaks.
       </p>
-      {!loaded ? (
+      {loadFailed ? (
+        <div role="alert" className="flex flex-col items-start gap-3">
+          <p className="text-sm text-danger-soft">
+            Couldn&apos;t load {staffName}&apos;s hours. Nothing has changed, and
+            the saved hours are still in place.
+          </p>
+          <button
+            type="button"
+            onClick={() => setLoadNonce((n) => n + 1)}
+            className="rounded-xl border border-subtle px-4 py-2 text-sm text-offwhite"
+          >
+            Try again
+          </button>
+        </div>
+      ) : !loaded ? (
         <p className="text-sm text-muted">Loading hours…</p>
       ) : (
         <>
@@ -4305,8 +4340,14 @@ function StaffHoursSheet({
               </div>
             ))}
           </div>
+          {problem && (
+            <p role="alert" className="mt-4 text-sm text-danger-soft">
+              {problem}
+            </p>
+          )}
           <div className="mt-5 flex items-center gap-3">
             <button
+              type="button"
               onClick={save}
               disabled={pending}
               className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
