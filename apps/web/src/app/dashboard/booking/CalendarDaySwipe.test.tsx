@@ -15,7 +15,9 @@ vi.mock("@/components/VocabProvider", () => ({
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
 }));
-const getAgendaAction = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => ({ ok: false })));
+const getAgendaAction = vi.hoisted(() =>
+  vi.fn(async (..._a: unknown[]): Promise<{ ok: boolean; data?: unknown }> => ({ ok: false })),
+);
 vi.mock("./actions", () => ({
   getWaitlistAction: vi.fn(async () => ({ ok: false })),
   getAgendaAction,
