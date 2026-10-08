@@ -19,6 +19,14 @@ export interface ApiResult<T> {
   data: T | null;
   error?: string;
   /**
+   * The whole JSON body of a FAILURE. `data` stays null on a failure (callers
+   * use it as the success signal), so an endpoint whose refusals carry the
+   * answer - checkout's `result: "ambiguous"`, `attempt`, `dueCents` - needs
+   * this to reach it. Dropping it is how an unconfirmed charge was shown as
+   * "Nothing was charged".
+   */
+  body?: unknown;
+  /**
    * Field-level validation failures, present only when the API rejected with
    * `invalid_input` and included zod issues. Lets callers show the real
    * offending field instead of one generic "could not save" line.
@@ -234,10 +242,12 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let conflicts: string[] | undefined;
   let policy: unknown;
   let payment: unknown;
+  let body: unknown;
   try {
     const json = (await res.json()) as T & { error?: string; issues?: unknown };
     if (res.ok) data = json;
     else {
+      body = json;
       error = (json as { error?: string }).error ?? `http_${res.status}`;
       const why = (json as { reason?: unknown }).reason;
       if (typeof why === "string") reason = why;
@@ -290,6 +300,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
     ...(conflicts ? { conflicts } : {}),
     ...(policy ? { policy } : {}),
     ...(payment ? { payment } : {}),
+    ...(body !== undefined ? { body } : {}),
   };
 }
 

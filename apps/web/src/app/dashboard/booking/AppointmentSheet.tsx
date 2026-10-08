@@ -296,10 +296,22 @@ export function AppointmentSheet({
     closeAfter = false,
   ) {
     setMenu(null);
+    setSavedNotice(null);
     start(async () => {
-      const res = await fn(row.id);
+      let res: { ok: boolean };
+      try {
+        res = await fn(row.id);
+      } catch {
+        res = { ok: false };
+      }
       if (!res.ok) {
-        toast("That didn't go through", "error");
+        // In the footer, not a toast: a toast draws beneath this sheet, so on a
+        // phone a failed Mark done or Cancel looked like nothing happened.
+        setSavedNotice({
+          message: "That didn't go through. Nothing changed, so try again.",
+          tone: "warning",
+        });
+        load(); // another device may already have changed it
         return;
       }
       toast(label, "success");
@@ -433,6 +445,7 @@ export function AppointmentSheet({
         newCheckout ? (
           <CheckoutFlow
             appointmentId={row.id}
+            timeZone={zone}
             onDone={() => {
               onChanged();
               load();
@@ -483,10 +496,6 @@ export function AppointmentSheet({
             load();
           }}
           showRefunds={newCheckout}
-          onRefunded={() => {
-            onChanged();
-            load();
-          }}
           onDepositRefunded={(message) => {
             setSavedNotice({ message, tone: "success" });
             onChanged();
@@ -520,7 +529,6 @@ function DetailView({
   onAct,
   onPriceSaved,
   showRefunds,
-  onRefunded,
   onDepositRefunded,
 }: {
   row: AgendaRow;
@@ -548,9 +556,7 @@ function DetailView({
   onPriceSaved: () => void;
   /** The new checkout is live for this shop, so its card payments can be refunded here. */
   showRefunds: boolean;
-  /** Money went back to a customer: re-read the booking and the agenda. */
-  onRefunded: () => void;
-  /** A kept deposit went back: say so in the footer, then re-read. */
+  /** Money went back to a customer: say so in the footer, then re-read. */
   onDepositRefunded: (message: string) => void;
 }) {
   return (
@@ -628,7 +634,7 @@ function DetailView({
               booking - another platform's payments are refunded there. Renders
               nothing unless a card payment from this checkout exists. */}
           {showRefunds && detail?.source === "appointment" && detail.origin === "chairback" && (
-            <CheckoutRefund appointmentId={detail.id} toast={toast} onRefunded={onRefunded} />
+            <CheckoutRefund appointmentId={detail.id} onRefunded={onDepositRefunded} />
           )}
         </div>
         <div className="flex min-w-0 flex-col gap-3">
