@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useToast } from "@/components/ui/Toast";
 import {
   bonusPunchAction,
@@ -14,6 +14,16 @@ import { ReasonPicker } from "./ReasonPicker";
 
 /** Why a bonus punch - one tap for the usual reasons, a few words otherwise. */
 const BONUS_REASONS = ["Referral", "Made up for a problem", "Promotion", "Loyal regular"];
+
+/** A fresh id for one "Log visit" tap (the API's requestId: 16-64 of [A-Za-z0-9_-]). */
+function newTapId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 export interface RedeemableReward {
   id: string;
@@ -93,12 +103,41 @@ export function ClientActions({
       .catch(() => toast("Couldn't copy link", "error"));
   }
 
-  function logVisit(cardTypeId?: string) {
+  // 🔴 ONE TAP, ONE VISIT. The id is minted when a Log visit starts and kept
+  // until the API gives a definite answer, so a retry after a dropped response
+  // (or a second tap while the first is still out) is recognised as the same
+  // visit and logged once. `inFlight` covers the gap where `pending` drops
+  // while the action is still awaiting.
+  const visitTap = useRef<string | null>(null);
+  const inFlight = useRef(false);
+  // The visit already on the books that day, waiting for the barber to say
+  // whether this is a separate one. Holds the card they picked, if any.
+  const [onBooks, setOnBooks] = useState<{ message: string; cardTypeId?: string } | null>(null);
+
+  function logVisit(cardTypeId?: string, separateVisit = false) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    visitTap.current ??= newTapId();
+    const requestId = visitTap.current;
     startTransition(async () => {
-      const r = await logVisitAction(clientId, undefined, cardTypeId);
-      setVisitPickerOpen(false);
-      if (r.ok) toast("Visit logged. Punches added", "success");
-      else toast("Could not log visit", "error");
+      try {
+        const r = await logVisitAction(clientId, undefined, cardTypeId, { requestId, separateVisit });
+        setVisitPickerOpen(false);
+        // status 0 = the request never completed: keep the id, so trying
+        // again is the same visit, not a second one.
+        if (r.status !== 0) visitTap.current = null;
+        if (r.ok) {
+          setOnBooks(null);
+          toast(r.replayed ? "Already logged - nothing added" : "Visit logged. Punches added", "success");
+        } else if (r.error === "visit_on_books") {
+          setOnBooks({
+            message: r.message ?? "This client already has a visit on the books that day.",
+            cardTypeId,
+          });
+        } else toast("Could not log visit", "error");
+      } finally {
+        inFlight.current = false;
+      }
     });
   }
 
@@ -213,7 +252,35 @@ export function ClientActions({
         >
           Log visit
         </button>
-        {visitPickerOpen && <CardPicker label="Punch which card?" onPick={logVisit} />}
+        {visitPickerOpen && <CardPicker label="Punch which card?" onPick={(id) => logVisit(id)} />}
+        {onBooks && (
+          <div
+            role="alertdialog"
+            aria-label="Visit already on the books"
+            className="absolute right-0 z-10 mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-subtle bg-charcoal-800 p-3 shadow-glow-sm"
+          >
+            <p className="text-sm text-offwhite">{onBooks.message}</p>
+            <p className="mt-1 text-xs text-muted">
+              Only log another if this was a separate visit, or it will earn twice.
+            </p>
+            <div className="mt-3 flex flex-wrap justify-end gap-2">
+              <button
+                disabled={pending}
+                onClick={() => setOnBooks(null)}
+                className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={pending}
+                onClick={() => logVisit(onBooks.cardTypeId, true)}
+                className="rounded-full border border-gold/50 px-3 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
+              >
+                Log a separate visit
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {rewardsEnabled && (

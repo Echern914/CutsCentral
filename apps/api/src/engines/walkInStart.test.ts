@@ -581,6 +581,7 @@ describe("complete", () => {
           endsAt: appt!.endsAt,
           priceAtBooking: appt!.priceAtBooking,
           serviceName: "Fade",
+          groupId: appt!.groupId,
         },
         t,
       ),

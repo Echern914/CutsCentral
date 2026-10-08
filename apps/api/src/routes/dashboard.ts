@@ -65,6 +65,7 @@ import {
 import { dismissDuplicates, findDuplicateGroups } from "../services/clientDuplicates.js";
 import { appNamesForClients, clientsForAccounts } from "../services/customerAppName.js";
 import { recomputeCadence } from "../engines/cadence.js";
+import { shopLocalDayWindow } from "../engines/serviceDailyLimit.js";
 import { sweepShop, type EligibilityData } from "../engines/nudge.js";
 import { sweepShopWinback } from "../engines/winback.js";
 import { isNudgeEligible } from "../engines/eligibility.js";
@@ -1259,8 +1260,69 @@ const logVisitSchema = z
     // Barber's card override: absent = auto-route by service; null = force the
     // default card; an id = punch that specific card.
     cardTypeId: z.string().min(1).nullable().optional(),
+    // 🔴 ONE TAP, ONE VISIT. The screen mints this once per "Log visit" and
+    // sends the SAME value when it tries again, so a request re-sent after a
+    // lost response finds the visit it already logged instead of logging a
+    // second one - and a second punch. It becomes the visit's own key, under
+    // the (shopId, acuityAppointmentId) unique. Optional only so an older
+    // screen keeps working; without it there is nothing to recognise a retry by.
+    requestId: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{16,64}$/)
+      .optional(),
+    // A person confirmed this is a SEPARATE visit from the one already on the
+    // books that day (the 409 visit_on_books below).
+    separateVisit: z.boolean().optional(),
   })
   .strict();
+
+/**
+ * The client's visit already on the books for the shop-local day of `when`,
+ * from a source that earns its OWN punch: a ChairBack booking (it earns when it
+ * is done) or an Acuity/Square visit (it earns when it ends). Logging the same
+ * cut again by hand is the one way a single sitting earned twice without
+ * anything going wrong in the code - so it is asked about, never assumed.
+ *
+ * Other HAND-LOGGED visits do not count: a retry is caught by requestId, and a
+ * second visit a person logs on purpose is theirs to log.
+ */
+async function visitOnBooksThatDay(
+  tx: Prisma.TransactionClient,
+  shopId: string,
+  clientId: string,
+  window: { start: Date; end: Date },
+): Promise<{ at: Date; serviceName: string | null; source: "booking" | "synced" } | null> {
+  const [booked, visit] = await Promise.all([
+    // A ChairBack booking not yet done. A finished one has its Visit below.
+    tx.appointment.findFirst({
+      where: { shopId, clientId, status: "BOOKED", startsAt: { gte: window.start, lt: window.end } },
+      orderBy: { startsAt: "asc" },
+      select: { startsAt: true, service: { select: { name: true } } },
+    }),
+    tx.visit.findFirst({
+      where: {
+        shopId,
+        clientId,
+        NOT: { acuityAppointmentId: { startsWith: "manual:" } },
+        status: { in: ["SCHEDULED", "RESCHEDULED", "COMPLETED"] },
+        canceledAt: null,
+        noShow: false,
+        scheduledAt: { gte: window.start, lt: window.end },
+      },
+      orderBy: { scheduledAt: "asc" },
+      select: { scheduledAt: true, serviceName: true, acuityAppointmentId: true },
+    }),
+  ]);
+  if (booked) return { at: booked.startsAt, serviceName: booked.service?.name ?? null, source: "booking" };
+  if (visit) {
+    return {
+      at: visit.scheduledAt,
+      serviceName: visit.serviceName,
+      source: visit.acuityAppointmentId.startsWith("booking:") ? "booking" : "synced",
+    };
+  }
+  return null;
+}
 
 dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
   const shop = req.shop!;
@@ -1297,16 +1359,42 @@ dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
     }
   }
 
-  const { visit, earn } = await runWithShop(shop.id, async (tx) => {
-    // Same client row lock as every other ledger write (serializes earns).
+  // Composite unique is (shopId, acuityAppointmentId); manual visits are
+  // namespaced so they can never collide with Acuity's. A requestId makes the
+  // key the SAME on every retry of one tap, so the unique itself refuses a
+  // second visit for it.
+  const requestId = parsed.data.requestId;
+  const visitKey = requestId ? `manual:req:${requestId}` : `manual:${randomToken(8)}`;
+  const day = shopLocalDayWindow(when, shop.timezone);
+
+  const outcome = await runWithShop(shop.id, async (tx) => {
+    // Same client row lock as every other ledger write (serializes earns), and
+    // what makes the two checks below safe: a racing retry of this same tap
+    // waits here, then sees the visit the first one committed.
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${client.id} FOR UPDATE`;
+
+    if (requestId) {
+      const prior = await tx.visit.findUnique({
+        where: { shopId_acuityAppointmentId: { shopId: shop.id, acuityAppointmentId: visitKey } },
+        select: { id: true, clientId: true },
+      });
+      if (prior) {
+        return prior.clientId === client.id
+          ? { kind: "replayed" as const, visitId: prior.id }
+          : { kind: "request_reused" as const };
+      }
+    }
+
+    if (!parsed.data.separateVisit) {
+      const existing = await visitOnBooksThatDay(tx, shop.id, client.id, day);
+      if (existing) return { kind: "visit_on_books" as const, existing };
+    }
+
     const created = await tx.visit.create({
       data: {
         shopId: shop.id,
         clientId: client.id,
-        // Composite unique is (shopId, acuityAppointmentId); manual visits get
-        // a namespaced random id so they can never collide with Acuity's.
-        acuityAppointmentId: `manual:${randomToken(8)}`,
+        acuityAppointmentId: visitKey,
         status: "COMPLETED",
         scheduledAt: when,
         endAt: when,
@@ -1325,8 +1413,50 @@ dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
       when,
       { ...(cardOverride === undefined ? {} : { cardTypeId: cardOverride }), evenBeforeStart: true },
     );
-    return { visit: created, earn: earned };
+    return { kind: "created" as const, visit: created, earn: earned };
   });
+
+  if (outcome.kind === "request_reused") {
+    // The same tap's id on a different client: never a retry, so never served
+    // as one - and never a second visit under a key already taken.
+    res.status(409).json({ error: "request_reused" });
+    return;
+  }
+  if (outcome.kind === "visit_on_books") {
+    const { at, serviceName: onBooksService, source } = outcome.existing;
+    const time = new Intl.DateTimeFormat("en-US", {
+      timeZone: shop.timezone,
+      weekday: "short",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(at);
+    res.status(409).json({
+      error: "visit_on_books",
+      // Shown as-is above the confirm: the shop's own clock, not the reader's.
+      message:
+        `Already on the books that day: ${time}${onBooksService ? ` · ${onBooksService}` : ""}` +
+        ` (${source === "booking" ? "booked in ChairBack" : "synced from your booking app"}).` +
+        " That visit earns its own punch.",
+      existing: {
+        at: outcome.existing.at.toISOString(),
+        serviceName: outcome.existing.serviceName,
+        source: outcome.existing.source,
+      },
+    });
+    return;
+  }
+  if (outcome.kind === "replayed") {
+    // Already logged by an earlier try of this same tap: report it, write
+    // nothing, announce nothing. The balance is the card its punch landed on.
+    const punch = await forShop(shop.id).punch.findFirst({
+      where: { visitId: outcome.visitId },
+      select: { cardTypeId: true },
+    });
+    const balance = await currentBalance(shop.id, client.id, punch?.cardTypeId ?? null);
+    res.status(200).json({ ok: true, visitId: outcome.visitId, balance, replayed: true });
+    return;
+  }
+  const { visit, earn } = outcome;
   // Outside the tx - recomputeCadence opens its own shop-scoped transaction.
   await recomputeCadence(shop.id, client.id);
   // The balance shown is the earned card's (the number the barber just changed).

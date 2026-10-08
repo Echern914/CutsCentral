@@ -340,19 +340,41 @@ export async function logVisitAction(
   serviceName?: string,
   // Card override; omitted = auto-route by service, null = force default card.
   cardTypeId?: string | null,
-): Promise<{ ok: boolean; balance?: number }> {
-  const res = await apiSend<{ ok: boolean; balance: number }>(
+  opts: {
+    /** One per tap, re-sent unchanged on a retry: the API logs it once. */
+    requestId?: string;
+    /** The barber confirmed it is a separate visit from the one on the books. */
+    separateVisit?: boolean;
+  } = {},
+): Promise<{
+  ok: boolean;
+  status: number;
+  balance?: number;
+  replayed?: boolean;
+  error?: string;
+  message?: string;
+}> {
+  const res = await apiSend<{ ok: boolean; balance: number; replayed?: boolean }>(
     "POST",
     `/api/dashboard/clients/${clientId}/visits`,
     {
       ...(serviceName ? { serviceName } : {}),
       ...(cardTypeId !== undefined && { cardTypeId }),
+      ...(opts.requestId ? { requestId: opts.requestId } : {}),
+      ...(opts.separateVisit ? { separateVisit: true } : {}),
     },
   );
   revalidatePath(`/dashboard/clients/${clientId}`);
   revalidatePath("/dashboard/clients");
   revalidatePath("/dashboard");
-  return { ok: res.ok, balance: res.data?.balance };
+  return {
+    ok: res.ok,
+    status: res.status,
+    balance: res.data?.balance,
+    replayed: res.data?.replayed,
+    error: res.error,
+    message: res.message,
+  };
 }
 
 export async function reversePunchAction(
