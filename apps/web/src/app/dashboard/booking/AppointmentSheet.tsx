@@ -20,6 +20,7 @@ import {
   type SavedNotice,
 } from "./AppointmentEditForm";
 import { CheckoutFlow } from "./CheckoutFlow";
+import { SeriesEditFields, SeriesEditFooter, useSeriesEdit } from "./SeriesEditView";
 import { CheckoutRefund } from "./CheckoutRefund";
 import { DepositRefund } from "./DepositRefund";
 import { TipRefund } from "./TipRefund";
@@ -49,6 +50,8 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  *
  *   detail  → who it is, what the booking is, what is owed, what to do next
  *   edit    → the same booking, editable (native bookings only)
+ *   series  → a repeat's time, service or provider, this visit and every
+ *             upcoming one after it (SeriesEditView.tsx)
  *   charges → the ticket, itemised            ┐ the EXISTING chair-checkout
  *   pay     → amount + how it was paid        ┘ flow, unchanged
  *
@@ -75,7 +78,7 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  * respected here as everywhere. See ContactMenu.
  */
 
-export type SheetView = "detail" | "edit" | "charges" | "pay";
+export type SheetView = "detail" | "edit" | "series" | "charges" | "pay";
 
 /** Which action surface is open over the sheet, if any. */
 type MenuKind = "contact" | "more" | null;
@@ -160,6 +163,14 @@ export function AppointmentSheet({
       load();
     },
   });
+  const series = useSeriesEdit({
+    row,
+    active: rawView === "series",
+    onApplied: () => {
+      onChanged();
+      load();
+    },
+  });
   // 🔴 Every visit to Edit starts from the booking as it is NOW. Cancel and Back
   // only change the view, so without this the abandoned change came back (and
   // was saved with the next edit), and a price saved from the hero was written
@@ -331,7 +342,9 @@ export function AppointmentSheet({
 
   //  ── chrome ──────────────────────────────────────────────────────────────
   const title =
-    view === "edit"
+    view === "series"
+      ? "This and future"
+      : view === "edit"
       ? row.status === "pending"
         ? "Edit request"
         : "Edit appointment"
@@ -345,6 +358,8 @@ export function AppointmentSheet({
       : {
           detail: () => setView("detail"),
           edit: () => setView("detail"),
+          // Back from the dates is back to the fields, not out of the change.
+          series: () => (series.stage === "review" ? series.back() : setView("detail")),
           charges: () => setView("detail"),
           pay: () => setView(newCheckout ? "detail" : "charges"),
         }[view];
@@ -364,7 +379,9 @@ export function AppointmentSheet({
   }
 
   const footer =
-    view === "edit" ? (
+    view === "series" ? (
+      <SeriesEditFooter state={series} onClose={() => setView("detail")} />
+    ) : view === "edit" ? (
       <EditFooter
         pending={edit.pending}
         disabled={!edit.ctx || !edit.dirty}
@@ -437,8 +454,18 @@ export function AppointmentSheet({
       footer={footer}
       className="sm:max-w-lg lg:max-w-3xl"
     >
-      {view === "edit" ? (
-        <AppointmentEditFields state={edit} />
+      {view === "series" ? (
+        <SeriesEditFields state={series} />
+      ) : view === "edit" ? (
+        <>
+          {row.seriesId && (
+            <p className="mb-3 px-1 text-sm text-muted" data-testid="edit-this-only">
+              This changes this appointment only. To change the ones after it too, use More, then
+              &ldquo;Edit this and future&rdquo;.
+            </p>
+          )}
+          <AppointmentEditFields state={edit} />
+        </>
       ) : view === "charges" ? (
         <ChargesView
           row={row}
@@ -497,6 +524,7 @@ export function AppointmentSheet({
           menu={menu}
           setMenu={setMenu}
           onEdit={() => setView("edit")}
+          onEditSeries={() => setView("series")}
           onCheckout={() => setView(newCheckout ? "pay" : "charges")}
           onAct={act}
           onPriceSaved={() => {
@@ -533,6 +561,7 @@ function DetailView({
   menu,
   setMenu,
   onEdit,
+  onEditSeries,
   onCheckout,
   onAct,
   onPriceSaved,
@@ -554,6 +583,7 @@ function DetailView({
   menu: MenuKind;
   setMenu: (m: MenuKind) => void;
   onEdit: () => void;
+  onEditSeries: () => void;
   onCheckout: () => void;
   onAct: (
     fn: (id: string) => Promise<{ ok: boolean }>,
@@ -756,6 +786,10 @@ function DetailView({
           onEdit={() => {
             setMenu(null);
             onEdit();
+          }}
+          onEditSeries={() => {
+            setMenu(null);
+            onEditSeries();
           }}
           onAct={onAct}
         />
@@ -2034,12 +2068,14 @@ function MoreMenu({
   detail,
   onClose,
   onEdit,
+  onEditSeries,
   onAct,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail;
   onClose: () => void;
   onEdit: () => void;
+  onEditSeries: () => void;
   onAct: (
     fn: (id: string) => Promise<{ ok: boolean }>,
     label: string,
@@ -2060,6 +2096,17 @@ function MoreMenu({
   }
   if (detail.editable) {
     items.push({ key: "edit", label: "Edit appointment", icon: <PencilIcon />, onClick: onEdit });
+  }
+  // A repeat's later visits, changed together. Only a confirmed ChairBack
+  // visit can start it: a request or a card step is not settled yet, and a
+  // synced visit is changed where it lives.
+  if (row.seriesId && native && detail.status === "upcoming" && detail.editable) {
+    items.push({
+      key: "edit-series",
+      label: "Edit this and future",
+      icon: <PencilIcon />,
+      onClick: onEditSeries,
+    });
   }
   if (native && detail.status === "upcoming" && detail.checkInStatus !== "arrived") {
     items.push({
