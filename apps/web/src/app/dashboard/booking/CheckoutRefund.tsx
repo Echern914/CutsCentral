@@ -26,8 +26,6 @@ import {
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
-type Toast = (msg: string, kind?: "success" | "error") => void;
-
 /** What each refusal means for the person holding the phone. */
 function explain(error: string | undefined, reason: string | undefined): string {
   switch (error) {
@@ -50,25 +48,36 @@ function explain(error: string | undefined, reason: string | undefined): string 
         : "This payment was never collected, so there is nothing to refund.";
     case "refund_refused":
       return "Stripe refused the refund. Nothing was refunded.";
+    // The server only READ Stripe, failed, and asked it for nothing.
     case "stripe_unavailable":
-    case "network_error":
       return "Couldn't reach Stripe. Nothing was refunded - try again.";
-    case "unconfirmed":
-      return "We couldn't confirm the refund yet. Pressing Refund again is safe - it can't refund twice.";
-    default:
+    // Refused before anything was asked of Stripe.
+    case "invalid_input":
+    case "not_found":
+    case "forbidden_role":
+    case "unauthorized":
+    case "subscription_required":
       return "That didn't work. Nothing was refunded.";
+    // 🔴 EVERYTHING ELSE IS UNKNOWN, NOT "NOTHING". A web-to-API timeout
+    // (network_error), a 5xx, or no answer at all can each come after Stripe
+    // made the refund - and "Nothing was refunded" there sends a barber to hand
+    // back cash as well. Pressing again names the same refund, so it is safe.
+    case "unconfirmed":
+    default:
+      return "We couldn't confirm the refund yet. Pressing Refund again is safe - it can't refund twice.";
   }
 }
 
 export function CheckoutRefund({
   appointmentId,
-  toast,
   onRefunded,
 }: {
   appointmentId: string;
-  toast: Toast;
-  /** The sheet and the agenda need re-reading once money moved. */
-  onRefunded: () => void;
+  /**
+   * Money moved: say so (in the sheet's footer - a toast draws beneath the
+   * sheet, so on a phone it was never seen), then re-read.
+   */
+  onRefunded: (message: string) => void;
 }) {
   const [payments, setPayments] = useState<CheckoutRefundable[] | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -102,22 +111,29 @@ export function CheckoutRefund({
     setMessage(null);
     setPending(true);
     try {
-      const res = await refundCheckoutPaymentAction(appointmentId, {
-        paymentId: p.paymentId,
-        amountCents: p.refundableCents,
-        ...(note.trim() ? { note: note.trim() } : {}),
-      });
+      let res: Awaited<ReturnType<typeof refundCheckoutPaymentAction>>;
+      try {
+        res = await refundCheckoutPaymentAction(appointmentId, {
+          paymentId: p.paymentId,
+          amountCents: p.refundableCents,
+          ...(note.trim() ? { note: note.trim() } : {}),
+        });
+      } catch {
+        // No answer reached this phone. The refund may have been made.
+        setMessage(explain("unconfirmed", undefined));
+        return;
+      }
       if (res.ok) {
         setConfirming(null);
         setNote("");
-        toast(
-          res.result === "already_refunded"
-            ? "This payment was already refunded"
-            : `Refunded ${money(res.amountCents ?? p.refundableCents)}`,
-          "success",
-        );
         load();
-        onRefunded();
+        onRefunded(
+          res.result === "already_refunded"
+            ? "This payment was already refunded."
+            : res.status === "pending"
+              ? `Refund of ${money(res.amountCents ?? p.refundableCents)} sent. Stripe is still processing it.`
+              : `Refunded ${money(res.amountCents ?? p.refundableCents)} to the client.`,
+        );
         return;
       }
       setMessage(explain(res.error, res.reason));

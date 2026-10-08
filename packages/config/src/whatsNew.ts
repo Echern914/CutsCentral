@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-08-checkout-tells-the-truth",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Checkout never guesses whether a card was charged",
+    body:
+      "If checkout can't confirm a charge or refund, it now says so and tells you not to collect again, instead of " +
+      "\"Nothing was charged\". Pressing Charge again shows the first result and never charges twice. A paid-in-full " +
+      "booking no longer offers a $0.00 charge.",
+  },
+  {
     id: "2026-10-08-hours-load-and-requests",
     date: "2026-10-08",
     kind: "fix",

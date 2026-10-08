@@ -98,10 +98,13 @@ const CASH_METHODS = [
 
 export function CheckoutFlow({
   appointmentId,
+  timeZone,
   onDone,
   onBackToAppointment,
 }: {
   appointmentId: string;
+  /** The shop's IANA zone: the appointment's time means nothing in any other. */
+  timeZone?: string;
   /** A collection landed: the agenda and the sheet need re-reading. */
   onDone: () => void;
   /** The clear way back to the same appointment. */
@@ -192,7 +195,10 @@ export function CheckoutFlow({
       // this way a resumed press does not need them echoed back to it.
       const conn = await terminalConnectionTokenAction();
       if (!conn.ok || !conn.locationId || !conn.connectAccountId) {
-        // The attempt is open and stays open: the server must conclude it.
+        // The attempt is open and no card was ever presented. Ask the server to
+        // read the untouched intent and close it, or every other method stays
+        // blocked behind an attempt nothing will ever finish.
+        await settleTapToPayAction(appointmentId, { attemptId: opened.attemptId });
         await load();
         return { ok: false, error: "tap_to_pay_unavailable" };
       }
@@ -256,6 +262,11 @@ export function CheckoutFlow({
   // unresolved, offering any way to collect is offering a second charge.
   if (live && step !== "result") {
     const ambiguous = live.state === "ambiguous";
+    const needsAuth = live.state === "requires_action";
+    // pending / processing: started, not finished. A tap is checked by reading
+    // Stripe (settle); a saved card resolves itself, so this re-reads.
+    const tapOpen = !ambiguous && !needsAuth && live.method === "tap_to_pay";
+    const stillConfirming = !ambiguous && !needsAuth && !tapOpen;
     return (
       <div className="flex flex-col gap-4">
         <div
@@ -270,23 +281,62 @@ export function CheckoutFlow({
           <p className="font-medium">
             {ambiguous
               ? "We could not confirm that charge"
-              : "This card needs the customer to authenticate"}
+              : needsAuth
+                ? "This card needs the customer to authenticate"
+                : tapOpen
+                  ? "A Tap to Pay charge is still open"
+                  : "Still confirming this charge"}
           </p>
           <p className="mt-1 text-xs leading-relaxed">
             {ambiguous
               ? `${money(live.amountCents)} may or may not have been taken. Do not collect again — this resolves itself shortly, and collecting now is how someone gets charged twice.`
-              : `${money(live.amountCents)} has NOT been charged. Cancel this attempt to take payment another way.`}
+              : needsAuth
+                ? `${money(live.amountCents)} has NOT been charged. Cancel this attempt to take payment another way.`
+                : tapOpen
+                  ? `Check it before taking ${money(live.amountCents)} another way. The card may have been read.`
+                  : `${money(live.amountCents)} is still being confirmed. Do not collect again. Check again in a moment.`}
           </p>
         </div>
-        {!ambiguous && (
+        {(tapOpen || stillConfirming) && (
+          <button
+            type="button"
+            disabled={busy}
+            data-qa="check-attempt"
+            onClick={async () => {
+              setBusy(true);
+              setError(null);
+              try {
+                if (tapOpen) {
+                  const r = await settleTapToPayAction(appointmentId, { attemptId: live.id });
+                  if (!r.ok) setError("Couldn't check that tap. Try again in a moment.");
+                }
+                await load();
+              } catch {
+                setError("Couldn't check. Check your connection and try again.");
+              } finally {
+                setBusy(false);
+              }
+            }}
+            className="min-h-[2.75rem] rounded-lg border border-subtle px-4 text-sm text-offwhite disabled:opacity-50"
+          >
+            {busy ? "Checking…" : tapOpen ? "Check the tap" : "Check again"}
+          </button>
+        )}
+        {needsAuth && (
           <button
             type="button"
             disabled={busy}
             data-qa="cancel-attempt"
             onClick={async () => {
               setBusy(true);
-              const res = await cancelCheckoutAttemptAction(appointmentId, live.id);
-              setBusy(false);
+              let res: { ok: boolean };
+              try {
+                res = await cancelCheckoutAttemptAction(appointmentId, live.id);
+              } catch {
+                res = { ok: false };
+              } finally {
+                setBusy(false);
+              }
               if (!res.ok) {
                 setError("Couldn't cancel that attempt. Try again in a moment.");
                 return;
@@ -346,7 +396,9 @@ export function CheckoutFlow({
             <p className="mt-0.5 text-xs text-muted">{state.appointment.clientName}</p>
           )}
           {outcome.paidAt && (
-            <p className="mt-2 text-xs text-muted">{new Date(outcome.paidAt).toLocaleString()}</p>
+            <p className="mt-2 text-xs text-muted">
+              {new Date(outcome.paidAt).toLocaleString(undefined, timeZone ? { timeZone } : undefined)}
+            </p>
           )}
           {outcome.receiptReference && (
             <p className="mt-2 break-all text-[11px] text-muted/80">
@@ -434,23 +486,67 @@ export function CheckoutFlow({
             setBusy(true);
             setError(null);
             if (!requestId.current) requestId.current = newRequestId();
-            const res =
-              choice.kind === "saved_card"
-                ? await chargeSavedCardAction(appointmentId, {
-                    amountCents: chargeCents,
-                    requestId: requestId.current,
-                  })
-                : choice.kind === "tap_to_pay"
-                  ? await runTapToPay(requestId.current)
-                  : await recordCashCheckoutAction(appointmentId, {
+            let res: ChargeCardResult;
+            try {
+              res =
+                choice.kind === "saved_card"
+                  ? await chargeSavedCardAction(appointmentId, {
                       amountCents: chargeCents,
-                      method: choice.method,
                       requestId: requestId.current,
-                      confirmed: true,
-                    });
+                    })
+                  : choice.kind === "tap_to_pay"
+                    ? await runTapToPay(requestId.current)
+                    : await recordCashCheckoutAction(appointmentId, {
+                        amountCents: chargeCents,
+                        method: choice.method,
+                        requestId: requestId.current,
+                        confirmed: true,
+                      });
+            } catch {
+              // 🔴 NO ANSWER REACHED THIS PHONE (signal lost, app backgrounded).
+              // It may have gone through. requestId is kept, so pressing again
+              // is a replay, never a second charge.
+              setError(UNCONFIRMED_COPY);
+              setBusy(false);
+              await load().catch(() => {});
+              return;
+            }
             setBusy(false);
 
-            if (res.result === "requires_action" || res.result === "ambiguous") {
+            // 🔴 A REPLAY REPORTS WHERE THE FIRST PRESS GOT TO, and has no
+            // `result` of its own. Read without this, a card that WAS charged
+            // came back as "Not charged" - and a barber collects again.
+            if (res.replay && res.attempt) {
+              const a = res.attempt;
+              if (a.state === "succeeded") {
+                setOutcome({
+                  ...res,
+                  ok: true,
+                  result: "paid",
+                  amountCents: a.amountCents,
+                  card: a.card ?? null,
+                  paidAt: a.settledAt,
+                });
+                setStep("result");
+                onDone();
+                return;
+              }
+              if (a.state === "failed") {
+                setOutcome({ ...res, ok: false, result: "declined", amountCents: a.amountCents });
+                setStep("result");
+                return;
+              }
+              // Still open (pending, processing, requires_action, ambiguous) or
+              // cancelled: the re-read balance and live attempt tell the truth.
+              await load();
+              return;
+            }
+
+            if (
+              res.result === "requires_action" ||
+              res.result === "ambiguous" ||
+              res.result === "processing"
+            ) {
               // Not paid, and not retryable from here: re-read so the live
               // attempt banner takes over the screen.
               await load();
@@ -458,6 +554,9 @@ export function CheckoutFlow({
             }
             if (!res.ok && !res.result) {
               setError(errorCopy(res.error, res.dueCents, vocab.serviceNoun));
+              // An unknown failure may still have landed: re-read, so a charge
+              // that went through shows as a zero balance or an open attempt.
+              if (!DEFINITE_REFUSALS.has(res.error ?? "")) await load().catch(() => {});
               return;
             }
             setOutcome(res);
@@ -503,6 +602,7 @@ export function CheckoutFlow({
             day: "numeric",
             hour: "numeric",
             minute: "2-digit",
+            ...(timeZone ? { timeZone } : {}),
           })}
         </p>
       </div>
@@ -539,6 +639,19 @@ export function CheckoutFlow({
         </p>
       </div>
 
+      {/* 🔴 NOTHING TO COLLECT, NO METHODS. The server takes exactly the
+          balance and refuses 0, so "Charge $0.00" on a paid-in-full or
+          unpriced booking failed on every method, every time. */}
+      {dueCents === null || dueCents === 0 ? (
+        <p
+          className="rounded-lg border border-subtle/60 px-3.5 py-3 text-center text-sm text-muted"
+          data-qa="nothing-due"
+        >
+          {dueCents === 0
+            ? "Nothing left to collect. This was paid in full."
+            : "This appointment has no price yet. Set the price on the appointment before checking out."}
+        </p>
+      ) : (
       <div>
         <p className="text-[11px] font-medium uppercase tracking-wide text-muted">How are they paying?</p>
         <div className="mt-2 flex flex-col gap-1.5">
@@ -620,6 +733,7 @@ export function CheckoutFlow({
           ))}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -735,7 +849,35 @@ function errorCopy(
       return "Tap to Pay was stopped. Check the balance before collecting again.";
     case "tap_to_pay_failed":
       return "That tap didn't go through. Check the balance before trying again.";
-    default:
+    // Refused before any money was asked for.
+    case "invalid_input":
+    case "not_found":
+    case "card_unavailable":
+    case "no_card":
       return "That didn't go through. Nothing was charged.";
+    // 🔴 Anything else - a timeout, a 5xx, an answer we don't recognise - is
+    // UNKNOWN. "Nothing was charged" there is how a customer pays twice.
+    default:
+      return UNCONFIRMED_COPY;
   }
 }
+
+const UNCONFIRMED_COPY =
+  "We couldn't confirm what happened. Check the balance before collecting again. Pressing Charge again won't charge twice.";
+
+/** Refusals the server makes before any money is asked for: nothing to re-read. */
+const DEFINITE_REFUSALS = new Set([
+  "amount_not_authorized",
+  "paid_already",
+  "no_service_consent",
+  "not_finished",
+  "over_agreed_price",
+  "consent_withdrawn",
+  "tap_to_pay_disabled",
+  "connect_required",
+  "tap_to_pay_education_failed",
+  "invalid_input",
+  "not_found",
+  "card_unavailable",
+  "no_card",
+]);

@@ -39,15 +39,12 @@ function withRefunds(refunds: CheckoutRefundable[]) {
   getCheckoutRefundsAction.mockResolvedValue({ ok: true, refunds });
 }
 
-const toast = vi.fn();
 const onRefunded = vi.fn();
-const mount = () =>
-  render(<CheckoutRefund appointmentId="appt_1" toast={toast} onRefunded={onRefunded} />);
+const mount = () => render(<CheckoutRefund appointmentId="appt_1" onRefunded={onRefunded} />);
 
 beforeEach(() => {
   getCheckoutRefundsAction.mockReset();
   refundCheckoutPaymentAction.mockReset();
-  toast.mockReset();
   onRefunded.mockReset();
 });
 
@@ -94,8 +91,8 @@ describe("the refund button", () => {
       amountCents: 100,
       note: "Test payment",
     });
-    await waitFor(() => expect(toast).toHaveBeenCalledWith("Refunded $1.00", "success"));
-    expect(onRefunded).toHaveBeenCalled();
+    // Said in the sheet's footer, not a toast (which draws beneath the sheet).
+    await waitFor(() => expect(onRefunded).toHaveBeenCalledWith("Refunded $1.00 to the client."));
     expect(getCheckoutRefundsAction).toHaveBeenCalledTimes(2);
   });
 
@@ -108,6 +105,41 @@ describe("the refund button", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/Pressing Refund again is safe/);
     expect(onRefunded).not.toHaveBeenCalled();
+  });
+
+  it("🔴 a lost answer is UNKNOWN, never 'Nothing was refunded'", async () => {
+    // The 12s web-to-API timeout, or a 5xx after Stripe acted: the refund may
+    // have gone through, and "Nothing was refunded" sends the barber to hand
+    // back cash as well.
+    for (const error of ["network_error", "http_500", "internal"]) {
+      withRefunds([payment()]);
+      refundCheckoutPaymentAction.mockResolvedValue({ ok: false, error });
+      const { unmount } = mount();
+      fireEvent.click(await screen.findByText("Refund $1.00"));
+      fireEvent.click(document.querySelector('[data-qa="refund-confirm"]')!);
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent, error).not.toMatch(/Nothing was refunded/);
+      expect(alert.textContent, error).toMatch(/couldn't confirm the refund/);
+      unmount();
+    }
+  });
+
+  it("🔴 no answer at all (the call throws) says so, instead of nothing", async () => {
+    withRefunds([payment()]);
+    refundCheckoutPaymentAction.mockRejectedValue(new Error("offline"));
+    mount();
+    fireEvent.click(await screen.findByText("Refund $1.00"));
+    fireEvent.click(document.querySelector('[data-qa="refund-confirm"]')!);
+    expect((await screen.findByRole("alert")).textContent).toMatch(/couldn't confirm the refund/);
+  });
+
+  it("Stripe saying no, before anything moved, still says nothing was refunded", async () => {
+    withRefunds([payment()]);
+    refundCheckoutPaymentAction.mockResolvedValue({ ok: false, error: "stripe_unavailable" });
+    mount();
+    fireEvent.click(await screen.findByText("Refund $1.00"));
+    fireEvent.click(document.querySelector('[data-qa="refund-confirm"]')!);
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Nothing was refunded/);
   });
 
   it("🔴 a refund it cannot finish sends the shop to SUPPORT, and warns off its own Stripe", async () => {

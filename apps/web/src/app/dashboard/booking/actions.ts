@@ -1064,6 +1064,17 @@ export async function getCheckoutRefundsAction(
   return { ok: true, refunds: res.data.refunds ?? [] };
 }
 
+/**
+ * What a checkout route answered, success or not. Its refusals carry the
+ * answer itself (`result`, `attempt`, `message`, `dueCents`), so reading only
+ * a 2xx body turned "we could not confirm that charge" into a generic error
+ * the screen worded as "Nothing was charged".
+ */
+function checkoutBody(res: { ok: boolean; data: unknown; body?: unknown }): Record<string, unknown> {
+  const raw = res.ok ? res.data : res.body;
+  return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+}
+
 export type ChargeCardResult = Result & {
   result?: "paid" | "requires_action" | "processing" | "ambiguous" | "declined" | "unavailable";
   amountCents?: number;
@@ -1090,7 +1101,7 @@ export async function chargeSavedCardAction(
     `/api/checkout/appointments/${appointmentId}/charge-card`,
     input,
   );
-  const body = (res.data ?? {}) as Record<string, unknown>;
+  const body = checkoutBody(res);
   return {
     ok: res.ok,
     error: res.ok ? undefined : ((body.error as string) ?? res.error ?? "failed"),
@@ -1127,7 +1138,7 @@ export async function startTapToPayAction(
     `/api/checkout/appointments/${appointmentId}/tap-to-pay-intent`,
     input,
   );
-  const body = (res.data ?? {}) as Record<string, unknown>;
+  const body = checkoutBody(res);
   return {
     ok: res.ok,
     error: res.ok ? undefined : ((body.error as string) ?? res.error ?? "failed"),
@@ -1144,7 +1155,7 @@ export async function terminalConnectionTokenAction(): Promise<{
   error?: string;
 }> {
   const res = await apiSend("POST", `/api/payments/terminal/connection-token`, {});
-  const body = (res.data ?? {}) as Record<string, unknown>;
+  const body = checkoutBody(res);
   return {
     ok: res.ok,
     error: res.ok ? undefined : ((body.error as string) ?? res.error ?? "failed"),
@@ -1167,7 +1178,7 @@ export async function settleTapToPayAction(
     `/api/checkout/appointments/${appointmentId}/tap-to-pay-settle`,
     input,
   );
-  const body = (res.data ?? {}) as Record<string, unknown>;
+  const body = checkoutBody(res);
   return {
     ok: res.ok,
     error: res.ok ? undefined : ((body.error as string) ?? res.error ?? "failed"),
@@ -1186,7 +1197,7 @@ export async function recordCashCheckoutAction(
   },
 ): Promise<ChargeCardResult> {
   const res = await apiSend("POST", `/api/checkout/appointments/${appointmentId}/cash`, input);
-  const body = (res.data ?? {}) as Record<string, unknown>;
+  const body = checkoutBody(res);
   return {
     ok: res.ok,
     error: res.ok ? undefined : ((body.error as string) ?? res.error ?? "failed"),
