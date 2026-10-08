@@ -253,35 +253,39 @@ export function ClientActions({
           Log visit
         </button>
         {visitPickerOpen && <CardPicker label="Punch which card?" onPick={(id) => logVisit(id)} />}
-        {onBooks && (
-          <div
-            role="alertdialog"
-            aria-label="Visit already on the books"
-            className="absolute right-0 z-10 mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-subtle bg-charcoal-800 p-3 shadow-glow-sm"
-          >
-            <p className="text-sm text-offwhite">{onBooks.message}</p>
-            <p className="mt-1 text-xs text-muted">
-              Only log another if this was a separate visit, or it will earn twice.
-            </p>
-            <div className="mt-3 flex flex-wrap justify-end gap-2">
-              <button
-                disabled={pending}
-                onClick={() => setOnBooks(null)}
-                className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                disabled={pending}
-                onClick={() => logVisit(onBooks.cardTypeId, true)}
-                className="rounded-full border border-gold/50 px-3 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
-              >
-                Log a separate visit
-              </button>
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Its own full-width row, straight under the button that asked - never a
+          popover, which on a phone hung off the edge of the screen when the
+          button wrapped to the left. */}
+      {onBooks && (
+        <div
+          role="alertdialog"
+          aria-label="Visit already on the books"
+          className="min-w-0 basis-full rounded-2xl border border-subtle bg-charcoal-800 p-3"
+        >
+          <p className="text-sm text-offwhite">{onBooks.message}</p>
+          <p className="mt-1 text-xs text-muted">
+            Only log another if this was a separate visit, or it will earn twice.
+          </p>
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
+            <button
+              disabled={pending}
+              onClick={() => setOnBooks(null)}
+              className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              disabled={pending}
+              onClick={() => logVisit(onBooks.cardTypeId, true)}
+              className="rounded-full border border-gold/50 px-3 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
+            >
+              Log a separate visit
+            </button>
+          </div>
+        </div>
+      )}
 
       {rewardsEnabled && (
         <div className="contents">
