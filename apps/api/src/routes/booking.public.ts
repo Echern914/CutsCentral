@@ -99,7 +99,8 @@ import {
   savedCardForToken,
   verifySavedCardCode,
 } from "../billing/savedCard.js";
-import { getSignInMessageProvider, signInTextsEnabled } from "../messaging/twilio.js";
+import { getSignInMessageProvider, signInTextsEnabled, smsEnabled } from "../messaging/twilio.js";
+import { hasPremiumAccess } from "../billing/entitlements.js";
 import { buildAppointmentIcs } from "../messaging/ics.js";
 import {
   appointmentWalletEnabled,
@@ -655,6 +656,12 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       // The owner's note for clients, shown on the booked screen
       // (config/clientNote.ts). Null = nothing shown.
       clientNote: normalizeClientNote(shop.clientNote),
+      // Whether this shop's reminder TEXT can go out at all - the shop half of
+      // appointmentNotify's skipReason (texting on, Premium). The booked screen
+      // promised "We'll text you a reminder" to every consenting client, with
+      // texting switched off platform-wide. The client half (consent, phone)
+      // is the page's own.
+      textReminders: smsEnabled() && hasPremiumAccess(shop),
     },
     // Whether "Add to Apple Wallet" is a real action on the confirmation
     // screen. DARK until the WALLET_APPT_* env is set, and the page must know

@@ -121,6 +121,17 @@ export function formatPrice(n: number): string {
 }
 
 /**
+ * formatPrice for a figure held in CENTS - a deposit, a balance, a charge.
+ *
+ * 🔴 Never `(cents / 100).toFixed(0)`: a $12.50 deposit read "$13" on the Pay
+ * button while Stripe and the Apple Pay sheet charged $12.50, and a $45 cut
+ * read "$13 deposit, $33 due".
+ */
+export function formatCents(cents: number): string {
+  return formatPrice(Math.round(cents) / 100);
+}
+
+/**
  * "30 min" - the ONE place the minutes unit is appended. Same reasoning as
  * formatPrice: a number in, so "30 min min" cannot be constructed.
  *

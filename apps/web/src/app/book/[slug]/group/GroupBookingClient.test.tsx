@@ -446,3 +446,64 @@ describe("🔴 the shop's checklist (Before you book)", () => {
     ).toBe(false);
   });
 });
+
+/**
+ * 🔴 A SAVED PARTY ONLY REOPENS THE PAGE WHILE IT IS STILL CONFIRMING.
+ *
+ * Reload protection used to last forever: a parent who booked two kids last
+ * month opened the group page and was shown the OLD party as "You're booked",
+ * with no way to book another.
+ */
+describe("the saved party expires, and another can be booked", () => {
+  const saved = (savedAt?: number) =>
+    localStorage.setItem(
+      "cb_group_pending",
+      JSON.stringify({ slug: "cherncuts", groupId: "grp_old", manageToken: "tok_old", kind: "booked", savedAt }),
+    );
+
+  it("🔴 a party saved a month ago does not hijack the page", () => {
+    saved(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    render(<GroupBookingClient data={data} />);
+    expect(screen.queryByText("You're booked")).toBeNull();
+    expect(screen.getByRole("button", { name: "Sam" })).toBeTruthy();
+    expect(localStorage.getItem("cb_group_pending")).toBeNull();
+  });
+
+  it("an entry from before the lifetime rule (no savedAt) is dropped too", () => {
+    saved(undefined);
+    render(<GroupBookingClient data={data} />);
+    expect(screen.queryByText("You're booked")).toBeNull();
+  });
+
+  it("a fresh one still survives a reload", async () => {
+    saved(Date.now() - 60 * 1000);
+    render(<GroupBookingClient data={data} />);
+    expect(await screen.findByText("You're booked")).toBeTruthy();
+  });
+
+  it("🔴 Book another group starts over", async () => {
+    saved(Date.now());
+    render(<GroupBookingClient data={data} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Book another group" }));
+    expect(screen.getByRole("button", { name: "Sam" })).toBeTruthy();
+    expect(localStorage.getItem("cb_group_pending")).toBeNull();
+  });
+
+  it("without an email, it never claims a confirmation was sent", async () => {
+    createAction.mockResolvedValue({ kind: "booked", groupId: "grp_1", manageToken: "tok_1" });
+    await reachReview();
+    fillBooker();
+    fireEvent.click(screen.getByRole("button", { name: /Confirm 2 appointments/ }));
+    await screen.findByText("You're booked");
+    expect(screen.queryByText(/sent one confirmation/)).toBeNull();
+  });
+});
+
+describe("the times asked for fit the shop's booking window", () => {
+  it("🔴 a shop that books 7 days out is asked for 7 days, not 30", async () => {
+    await reachReview(2, { ...data, shop: { ...shop, bookingMaxDays: 7 } } as BookShopData);
+    const { from, to } = slotsAction.mock.calls[0]![1] as { from: string; to: string };
+    const days = (Date.parse(to) - Date.parse(from)) / (24 * 60 * 60 * 1000);
+    expect(days).toBeLessThanOrEqual(7);
+  });
+});

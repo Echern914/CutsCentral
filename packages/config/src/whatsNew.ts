@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-08-booking-page-truth",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Your booking page shows the exact price",
+    body:
+      "Deposits and prices with cents show as $12.50, not $13. Clients are promised a reminder text only when one " +
+      "will be sent. Group booking works when you book less than a month out. In Acuity settings, Use this calendar " +
+      "and Confirm save in one tap.",
+  },
+  {
     id: "2026-10-08-billing-and-settings-truth",
     date: "2026-10-08",
     kind: "fix",

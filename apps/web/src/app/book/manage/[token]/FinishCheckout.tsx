@@ -6,6 +6,7 @@ import { PaymentStep } from "../../[slug]/PaymentStep";
 import { bookingStatusAction, cardSavedAction } from "../../[slug]/actions";
 import { DEPOSIT_KEPT_LINE } from "../../[slug]/depositTerms";
 import type { ManageData } from "./page";
+import { formatCents } from "@/lib/serviceFields";
 
 /**
  * Finish a booking that is still waiting on its card - from the booking's own
@@ -101,7 +102,7 @@ export function FinishCheckout({
       : finish.isDeposit
         ? "Pay the deposit to book this time"
         : "Pay to book this time";
-  const amountLabel = finish.kind === "setup" ? null : `$${(finish.amountCents / 100).toFixed(0)}`;
+  const amountLabel = finish.kind === "setup" ? null : formatCents(finish.amountCents);
 
   return (
     <section className="mt-6 rounded-xl border border-gold/40 bg-gold/10 p-4" data-qa="finish-checkout">
@@ -121,7 +122,7 @@ export function FinishCheckout({
             <> You aren&rsquo;t charged today - you pay at your visit.</>
           )
         ) : finish.isDeposit && finish.balanceDueCents > 0 ? (
-          <> The remaining ${(finish.balanceDueCents / 100).toFixed(0)} is due at {shopName}.</>
+          <> The remaining {formatCents(finish.balanceDueCents)} is due at {shopName}.</>
         ) : null}
         {/* The same terms the first card step said, before they pay. */}
         {finish.kind === "payment" && finish.nonRefundable && <> {DEPOSIT_KEPT_LINE}</>}

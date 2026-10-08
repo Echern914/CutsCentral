@@ -90,6 +90,7 @@ import {
 import { groupsToAutoExpand } from "./autoExpand";
 import { revealElement } from "./reveal";
 import { ClientNoteBlock } from "../ClientNoteBlock";
+import { formatCents, formatPrice } from "@/lib/serviceFields";
 
 /** One selectable time in the calendar grid, with who can serve it. */
 interface DaySlot {
@@ -899,7 +900,7 @@ export function BookingClient({
     const first = [...calendarDays].sort()[0];
     if (first) {
       autoPickedDay.current = first;
-      pickDay(first);
+      pickDay(first, { auto: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calendarDays]);
@@ -916,7 +917,7 @@ export function BookingClient({
     const first = [...openDaySet].sort()[0];
     if (first && first !== dayDate) {
       autoPickedDay.current = first;
-      pickDay(first);
+      pickDay(first, { auto: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openDaySet, dayDate]);
@@ -928,14 +929,23 @@ export function BookingClient({
   // happily accept the (genuinely valid) day-A slot.
   const daySeq = useRef(0);
 
-  function pickDay(day: string) {
+  /**
+   * `auto`: the PAGE moved the day (the first landing, a re-aim, a hop past a
+   * dead day). Only a deliberate pick starts the day-first flow over. An
+   * automatic one used to clear the service too, so a rebook link's prefilled
+   * service ("Book this look", one-tap rebook) vanished about a second after
+   * it appeared, whenever today had nothing left.
+   */
+  function pickDay(day: string, opts: { auto?: boolean } = {}) {
     setDayDate(day);
     setDayMonth(monthKey(day));
-    setServiceId(null);
-    // Deliberately NOT resetting expandedGroups: switching days keeps the
-    // customer's opened cards open (compare times across days in place).
-    setAddOnIds([]);
-    clearSlotPick();
+    if (!opts.auto) {
+      setServiceId(null);
+      // Deliberately NOT resetting expandedGroups: switching days keeps the
+      // customer's opened cards open (compare times across days in place).
+      setAddOnIds([]);
+      clearSlotPick();
+    }
     setDayLoading(true);
     setDayData(null);
     setDayError(false);
@@ -964,7 +974,7 @@ export function BookingClient({
           if (next) {
             autoHops.current += 1;
             autoPickedDay.current = next;
-            pickDay(next); // owns the loading/day state from here
+            pickDay(next, { auto: true }); // owns the loading/day state from here
             return;
           }
         }
@@ -2086,8 +2096,8 @@ export function BookingClient({
   function priceLabel(svc: { priceRange: { min: number; max: number } | null }): string | null {
     if (!svc.priceRange) return null;
     const { min, max } = svc.priceRange;
-    if (min === max) return `$${min.toFixed(0)}`;
-    return `$${min.toFixed(0)}-$${max.toFixed(0)}`;
+    if (min === max) return formatPrice(min);
+    return `${formatPrice(min)}-${formatPrice(max)}`;
   }
 
   // The exact price for the slot the customer has chosen (so no surprise). A
@@ -2224,7 +2234,7 @@ export function BookingClient({
               <>
                 Your time is held. Pay a{" "}
                 <strong className="text-offwhite">
-                  ${(payCharge.amountCents / 100).toFixed(0)} deposit
+                  {formatCents(payCharge.amountCents)} deposit
                 </strong>{" "}
                 to lock it in
                 {payCharge.balanceDueCents > 0 ? (
@@ -2232,7 +2242,7 @@ export function BookingClient({
                     {" "}
                     — the remaining{" "}
                     <strong className="text-offwhite">
-                      ${(payCharge.balanceDueCents / 100).toFixed(0)}
+                      {formatCents(payCharge.balanceDueCents)}
                     </strong>{" "}
                     is due at {data.shop.name}.
                   </>
@@ -2329,9 +2339,9 @@ export function BookingClient({
                 payCharge?.kind === "setup"
                   ? null
                   : payCharge
-                    ? `$${(payCharge.amountCents / 100).toFixed(0)}`
+                    ? formatCents(payCharge.amountCents)
                     : selectedPrice !== null
-                      ? `$${selectedPrice.toFixed(0)}`
+                      ? formatPrice(selectedPrice)
                       : null
               }
               intent={payCharge?.kind === "setup" ? "setup" : "payment"}
@@ -2372,6 +2382,8 @@ export function BookingClient({
 
   // ---- Confirmation screen ----
   if (confirmedToken !== null) {
+    // The client half (they agreed, and gave a phone) AND the shop half.
+    const textsReminder = consent && phone.trim() !== "" && data.shop.textReminders === true;
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
         {data.shop.slug === DEMO.SHOP_SLUG && <DemoTour route="book" />}
@@ -2446,8 +2458,10 @@ export function BookingClient({
               <>
                 {data.shop.name} has your appointment.
                 {email.trim() ? " We'll email your confirmation." : ""}
-                {consent && phone.trim() ? " We'll text you a reminder before your visit." : ""}
-                {!email.trim() && !(consent && phone.trim())
+                {/* Only when a text can really go: texting is a platform
+                    switch (off for weeks at a time) and a Premium feature. */}
+                {textsReminder ? " We'll text you a reminder before your visit." : ""}
+                {!email.trim() && !textsReminder
                   ? " Save this page to manage your appointment."
                   : ""}
               </>
@@ -3088,7 +3102,13 @@ export function BookingClient({
           provider step if there was one, else back to the service list. */}
       {serviceId && staffId && (
         <Section
-          title={`${timeStepNo} · Pick a time`}
+          // Day-first, this calendar only appears for a prefilled service, and
+          // a number would collide with "2 · Choose a service" above it.
+          title={
+            dayFirst
+              ? `Pick a time for ${bookableServices.find((s) => s.id === serviceId)?.name ?? "your service"}`
+              : `${timeStepNo} · Pick a time`
+          }
           tour="slots"
           back={
             <BackStep onClick={isMultiBarber ? backToProvider : backToService} />
@@ -3256,8 +3276,8 @@ export function BookingClient({
                       {timeFmt.format(new Date(s.startsAt))}
                       {s.targeted && (
                         <span className="block text-[10px] font-semibold">
-                          {s.targeted.label || "Special"} · $
-                          {s.targeted.price.toFixed(0)}
+                          {s.targeted.label || "Special"} ·{" "}
+                          {formatPrice(s.targeted.price)}
                         </span>
                       )}
                     </button>
@@ -3313,7 +3333,7 @@ export function BookingClient({
                   className="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
                   style={{ backgroundColor: accent, color: onAccent }}
                 >
-                  +${u.priceDelta.toFixed(0)}
+                  +{formatPrice(u.priceDelta)}
                 </span>
               </button>
             ))}
@@ -3392,7 +3412,7 @@ export function BookingClient({
                         </span>
                       </span>
                       {a.price != null && a.price > 0 && (
-                        <span className="opacity-80">+${a.price.toFixed(0)}</span>
+                        <span className="opacity-80">+{formatPrice(a.price)}</span>
                       )}
                     </button>
                   );
@@ -3436,7 +3456,7 @@ export function BookingClient({
                     {selectedService?.name}
                     {addOnIds.length > 0 && ` + ${addOnIds.length} add-on${addOnIds.length > 1 ? "s" : ""}`}
                   </span>
-                  <span className="font-semibold">${grandTotal.toFixed(0)}</span>
+                  <span className="font-semibold">{formatPrice(grandTotal)}</span>
                 </div>
               )}
               {/*
@@ -3459,7 +3479,7 @@ export function BookingClient({
                       ? "You'll be asked for a card to keep on file - no charge today. You're booked either way."
                       : "You'll save a card to confirm — no charge today."
                     : paymentTerms.mode === "deposit" && paymentTerms.depositAmountCents
-                      ? `A $${Math.round(paymentTerms.depositAmountCents / 100)} deposit is taken when you book.`
+                      ? `A ${formatCents(paymentTerms.depositAmountCents)} deposit is taken when you book.`
                       : "Payment is taken when you book."}
                   {/* Said BEFORE the time is held, not first on the card step. */}
                   {paymentTerms.collects === "payment" && depositKept && (

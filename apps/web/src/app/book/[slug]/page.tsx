@@ -88,6 +88,11 @@ export interface BookShopData {
     bookingPolicy?: BookingPolicyData | null;
     /** The owner's note for clients, on the booked screen. Optional = older API. */
     clientNote?: string | null;
+    /**
+     * Whether a reminder TEXT can go out from this shop at all (texting on,
+     * Premium). Optional: an API older than this field promises no text.
+     */
+    textReminders?: boolean;
     // Fee-free direct-payment handles (display-only); null when the barber hasn't
     // turned it on. Shown on the confirmation so the customer can pay directly.
     payDirect: {
