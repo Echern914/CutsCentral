@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-08-billing-and-settings-truth",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Billing, payments and inbox say what really happened",
+    body:
+      "During a Premium AI trial, Billing now shows Keep it. Payment settings refuse an out-of-range deposit instead " +
+      "of changing it. On a phone, Return in an inbox reply makes a new line instead of sending. Inbox and request " +
+      "times show in your own time.",
+  },
+  {
     id: "2026-10-08-services-tab-fixes",
     date: "2026-10-08",
     kind: "fix",

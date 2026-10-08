@@ -32,12 +32,15 @@ export async function createShopAction(
   // that renders neutral wording and gets asked once, which is the honest result.
   const industry = String(formData.get("industry") ?? "").trim();
   const partnerCode = String(formData.get("partnerCode") ?? "").trim();
+  // A cleared box is "use the default", not 0 - Number("") is 0, which the API
+  // refuses, and the owner was told to check a booking URL they never entered.
+  const rawThreshold = String(formData.get("rewardThreshold") ?? "").trim();
   const res = await apiSend("POST", "/api/shops", {
     name: String(formData.get("name") ?? ""),
     ...(industry ? { industry } : {}),
     bookingUrl: String(formData.get("bookingUrl") ?? ""),
     timezone: String(formData.get("timezone") ?? "America/New_York"),
-    rewardThreshold: Number(formData.get("rewardThreshold") ?? 10),
+    ...(rawThreshold ? { rewardThreshold: Number(rawThreshold) } : {}),
     rewardLabel: String(formData.get("rewardLabel") ?? "").trim() || undefined,
     smsAttested: true,
     ...(partnerCode ? { partnerCode } : {}),
@@ -47,7 +50,7 @@ export async function createShopAction(
   const codeError = res.status === 400 && res.error ? PARTNER_CODE_ERROR_COPY[res.error] : undefined;
   if (codeError) return { error: codeError, field: "partnerCode" };
   if (!res.ok && res.status !== 409) {
-    return { error: "Could not create your shop. Check the booking URL." };
+    return { error: onboardingRefusal(res) };
   }
   // The affiliate claim (if any) travelled with this request - apiSend forwards
   // this origin's cookies - and the shop it applied to now exists, so the claim
@@ -93,4 +96,19 @@ async function askTheTeamTheyCameFor(): Promise<void> {
   if (!teamKeyOk(team)) return;
   const res = await apiSend("POST", "/api/teams/join", { team });
   if (res.ok || res.status === 409 || res.status === 404) clearTeamLinkCookie();
+}
+
+/**
+ * Which part of step 1 the API refused, named - not "Check the booking URL"
+ * for every refusal, including ones that had nothing to do with a URL.
+ */
+function onboardingRefusal(res: { error?: string; issues?: { path: (string | number)[] }[] }): string {
+  const field = res.issues?.[0]?.path?.[0];
+  if (res.error === "invalid_input") {
+    if (field === "rewardThreshold") return "Punches needed must be a whole number from 1 to 100.";
+    if (field === "name") return "Keep the shop name under 120 characters.";
+    if (field === "rewardLabel") return "Keep the reward name under 80 characters.";
+    if (field === "bookingUrl") return "That booking link doesn't look right. Use a full link starting with https://, or leave it blank.";
+  }
+  return "Could not create your shop. Check the details and try again.";
 }

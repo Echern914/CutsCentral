@@ -61,6 +61,7 @@ export default function OnboardingShopPage() {
               placeholder="Shop or studio name"
               aria-label="Shop or studio name"
               required
+              maxLength={120}
               className={field}
             />
             <select
@@ -122,6 +123,9 @@ export default function OnboardingShopPage() {
                   name="rewardThreshold"
                   type="number"
                   min={1}
+                  max={100}
+                  step={1}
+                  inputMode="numeric"
                   defaultValue={10}
                   placeholder="Punches needed"
                   aria-label="Punches needed for the reward"
@@ -129,6 +133,7 @@ export default function OnboardingShopPage() {
                 />
                 <input
                   name="rewardLabel"
+                  maxLength={80}
                   key={industry}
                   defaultValue={industry ? BUSINESS_TYPES[industry].defaultReward.name : ""}
                   placeholder="Reward name"

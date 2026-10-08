@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { enableReceptionistAction } from "./actions";
+import { copyText } from "@/lib/contactUri";
 
 /**
  * Minimal enable/disable controls for the AI receptionist, shown once the shop
@@ -31,6 +32,7 @@ export function ReceptionistControls({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   const needsTerms = !termsAccepted && !enabled;
   const nativeReady = bookingMode === "native";
@@ -86,10 +88,17 @@ export function ReceptionistControls({
           </div>
           <button
             type="button"
-            onClick={() => void navigator.clipboard.writeText(shopNumber)}
+            aria-live="polite"
+            onClick={async () => {
+              // copyText falls back where navigator.clipboard is missing (some
+              // app WebViews), and the button itself says what happened.
+              const ok = await copyText(shopNumber);
+              setCopyState(ok ? "copied" : "failed");
+              if (ok) setTimeout(() => setCopyState("idle"), 2000);
+            }}
             className="rounded-full border border-subtle px-4 py-1.5 text-xs text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700"
           >
-            Copy
+            {copyState === "copied" ? "Copied" : copyState === "failed" ? "Couldn't copy" : "Copy"}
           </button>
         </div>
       )}

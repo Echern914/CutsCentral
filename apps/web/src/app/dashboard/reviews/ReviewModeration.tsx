@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { cn } from "@/lib/cn";
 import { setReviewStatusAction } from "./actions";
 
@@ -17,9 +17,12 @@ const OPTIONS: { value: Status; label: string }[] = [
 /** Inline moderation switcher for a review row. Revalidate-on-save. */
 export function ReviewModeration({ id, status }: { id: string; status: Status }) {
   const [pending, startTransition] = useTransition();
+  // The pill only moves once the server has it. A refused or dropped change
+  // used to leave it where it was with no word, so it looked done.
+  const [failed, setFailed] = useState(false);
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex flex-wrap items-center gap-1">
       {OPTIONS.map((opt) => {
         const active = opt.value === status;
         return (
@@ -28,8 +31,10 @@ export function ReviewModeration({ id, status }: { id: string; status: Status })
             type="button"
             disabled={pending || active}
             onClick={() =>
-              startTransition(() => {
-                void setReviewStatusAction(id, opt.value);
+              startTransition(async () => {
+                setFailed(false);
+                const r = await setReviewStatusAction(id, opt.value).catch(() => ({ ok: false }));
+                if (!r.ok) setFailed(true);
               })
             }
             className={cn(
@@ -47,6 +52,11 @@ export function ReviewModeration({ id, status }: { id: string; status: Status })
           </button>
         );
       })}
+      {failed && (
+        <span role="alert" className="text-[11px] text-danger-soft">
+          Didn&apos;t save. Try again.
+        </span>
+      )}
     </div>
   );
 }
