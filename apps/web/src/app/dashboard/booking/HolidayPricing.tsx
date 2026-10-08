@@ -5,6 +5,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { cn } from "@/lib/cn";
 import { MoneyField } from "@/components/ui/UnitField";
 import { parsePrice } from "@/lib/serviceFields";
+import { zonedDateKey } from "@chairback/config/time";
 import { collapseRuns, expandRange, MAX_RANGE_DAYS } from "@/lib/dateRanges";
 import { updateServiceAction } from "./actions";
 import type { ServiceRow } from "./page";
@@ -37,9 +38,12 @@ interface HolidayGroup {
   entries: { serviceId: string; serviceName: string; price: number }[];
 }
 
-/** Shop-local "today" is close enough to dim a date that has already passed. */
-function todayKey(): string {
-  return new Date().toISOString().slice(0, 10);
+/**
+ * The SHOP's date. Not the UTC date: in a US evening that is already tomorrow,
+ * so today could not be picked and today's holiday showed as passed.
+ */
+function todayKey(timezone?: string): string {
+  return zonedDateKey(new Date(), timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
 }
 
 /** "2026-12-24" -> "Thu, Dec 24, 2026". Noon avoids a DST off-by-one. */
@@ -56,9 +60,12 @@ function prettyDate(date: string): string {
 
 export function HolidayPricing({
   services,
+  timezone,
   toast,
 }: {
   services: ServiceRow[];
+  /** The shop's IANA zone, which decides what "today" is. */
+  timezone?: string;
   toast: Toast;
 }) {
   // No refresh callback: updateServiceAction revalidates /dashboard/booking, so
@@ -130,7 +137,7 @@ export function HolidayPricing({
     return out;
   }, [groups]);
 
-  const today = todayKey();
+  const today = todayKey(timezone);
 
   function toggle(id: string) {
     setPicked((cur) => {

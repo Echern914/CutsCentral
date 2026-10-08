@@ -10,7 +10,7 @@ import {
 } from "react";
 import { SERVICE_COLORS, SERVICE_COLOR_KEYS } from "@chairback/config/constants";
 import { cap, useVocab } from "@/components/VocabProvider";
-import { zonedWallTimeToUtc } from "@chairback/config/time";
+import { zonedDateKey, zonedWallTimeToUtc } from "@chairback/config/time";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { NumberField } from "@/components/ui/NumberField";
@@ -92,6 +92,7 @@ import { isHiddenService } from "@chairback/config/serviceVisibility";
 import { UpgradeRules } from "./UpgradeRules";
 import {
   MIN_SERVICE_MINUTES,
+  formatPrice,
   parseDuration,
   parsePrice,
 } from "@/lib/serviceFields";
@@ -433,7 +434,7 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
 
 //  Settings
 
-function SettingsTab({
+export function SettingsTab({
   shop,
   bookUrl,
   connect,
@@ -471,6 +472,9 @@ function SettingsTab({
       remind24h: boolean;
       remind2h: boolean;
     }> = {},
+    // Undo the caller's own optimistic flip when the save is refused, so a
+    // toggle never reads On while the server still has it Off.
+    onFail?: () => void,
   ) {
     start(async () => {
       const r = await saveBookingSettingsAction({
@@ -490,6 +494,7 @@ function SettingsTab({
         pushReminder24hEnabled: next.remind24h ?? remind24h,
         pushReminder2hEnabled: next.remind2h ?? remind2h,
       });
+      if (!r.ok) onFail?.();
       toast(r.ok ? "Booking settings saved" : "Couldn't save", r.ok ? "success" : "error");
     });
   }
@@ -507,40 +512,40 @@ function SettingsTab({
   function toggleSlotOpened() {
     const next = !slotOpened;
     setSlotOpened(next);
-    persist({ slotOpened: next });
+    persist({ slotOpened: next }, () => setSlotOpened(!next));
   }
 
   // Flip "require my approval before a booking is confirmed" and save.
   function toggleRequireApproval() {
     const next = !requireApproval;
     setRequireApproval(next);
-    persist({ requireApproval: next });
+    persist({ requireApproval: next }, () => setRequireApproval(!next));
   }
 
   // Flip "approve new clients who join from the app" and save.
   function toggleApproveClients() {
     const next = !approveClients;
     setApproveClients(next);
-    persist({ approveClients: next });
+    persist({ approveClients: next }, () => setApproveClients(!next));
   }
 
   // Flip "open the public menu with group cards" and save.
   function toggleGroupsFirst() {
     const next = !groupsFirst;
     setGroupsFirst(next);
-    persist({ groupsFirst: next });
+    persist({ groupsFirst: next }, () => setGroupsFirst(!next));
   }
 
   // Flip one of the automatic push-reminder tiers (24h / 2h) and save.
   function toggleRemind24h() {
     const next = !remind24h;
     setRemind24h(next);
-    persist({ remind24h: next });
+    persist({ remind24h: next }, () => setRemind24h(!next));
   }
   function toggleRemind2h() {
     const next = !remind2h;
     setRemind2h(next);
-    persist({ remind2h: next });
+    persist({ remind2h: next }, () => setRemind2h(!next));
   }
 
   function save() {
@@ -550,8 +555,9 @@ function SettingsTab({
   // Picking a platform card both selects AND saves the mode (so the choice
   // sticks without a separate Save click); native config below has its own Save.
   function pickMode(next: typeof mode) {
+    const prev = mode;
     setMode(next);
-    persist({ mode: next });
+    persist({ mode: next }, () => setMode(prev));
   }
 
   return (
@@ -618,9 +624,10 @@ function SettingsTab({
           />
           <div className="mt-4 grid gap-4 sm:grid-cols-3">
             <label className="block">
-              <span className={labelCls}>Min notice (hours)</span>
+              <span className={labelCls}>Min notice (hours, 0 to 720)</span>
               <NumberField
                 min={0}
+                max={720}
                 integer
                 className={field}
                 value={lead}
@@ -628,9 +635,10 @@ function SettingsTab({
               />
             </label>
             <label className="block">
-              <span className={labelCls}>Book up to (days ahead)</span>
+              <span className={labelCls}>Book up to (days ahead, 1 to 365)</span>
               <NumberField
                 min={1}
+                max={365}
                 integer
                 className={field}
                 value={maxDays}
@@ -638,9 +646,10 @@ function SettingsTab({
               />
             </label>
             <label className="block">
-              <span className={labelCls}>Buffer between (min)</span>
+              <span className={labelCls}>Buffer between (min, 0 to 240)</span>
               <NumberField
                 min={0}
+                max={240}
                 integer
                 className={field}
                 value={buffer}
@@ -850,23 +859,41 @@ function SettingsTab({
 
 //  Staff
 
-function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast }) {
+export function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast }) {
   const [name, setName] = useState("");
   const [pending, start] = useTransition();
   // The staff member whose weekly-hours Sheet is open (null = closed).
   const [hoursFor, setHoursFor] = useState<StaffRow | null>(null);
 
+  // Return in the name box calls add() directly, past the disabled button, so
+  // a second Return while the first add was in flight added the person twice.
+  const adding = useRef(false);
   function add() {
-    if (!name.trim()) return;
+    if (!name.trim() || adding.current) return;
+    adding.current = true;
     start(async () => {
-      const r = await createStaffAction({ name: name.trim() });
-      if (r.ok) {
-        toast("Staff member added", "success");
-        setName("");
-      } else toast("Couldn't add", "error");
+      try {
+        const r = await createStaffAction({ name: name.trim() });
+        if (r.ok) {
+          toast("Staff member added", "success");
+          setName("");
+        } else toast("Couldn't add", "error");
+      } finally {
+        adding.current = false;
+      }
     });
   }
   function remove(id: string) {
+    // One tap used to take a barber off booking for good: nothing here brings a
+    // removed person back, and adding the name again starts from no hours.
+    const person = initial.find((s) => s.id === id);
+    if (
+      !window.confirm(
+        `Remove ${person?.name ?? "this staff member"}? They stop taking bookings, and their hours and service setup can't be brought back from here.`,
+      )
+    ) {
+      return;
+    }
     start(async () => {
       const r = await deleteStaffAction(id);
       toast(r.ok ? "Staff member removed" : "Couldn't remove", r.ok ? "success" : "error");
@@ -908,7 +935,8 @@ function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast }) {
               </button>
               <button
                 onClick={() => remove(s.id)}
-                className="text-xs text-danger-soft hover:underline"
+                disabled={pending}
+                className="text-xs text-danger-soft hover:underline disabled:opacity-50"
               >
                 Remove
               </button>
@@ -1049,12 +1077,17 @@ export function ServicesTab({
         price: s.price,
         priceOverrides: s.priceOverrides ?? undefined,
         durationOverrides: s.durationOverrides ?? undefined,
+        dailyLimits: s.dailyLimits ?? undefined,
+        dateOverrides: s.dateOverrides ?? undefined,
         hoursWindows: s.hoursWindows ?? undefined,
         timeOverrides: s.timeOverrides ?? undefined,
         color: s.color ?? null,
         dailyTarget: s.dailyTarget ?? null,
         offeredByAll: s.offeredByAll ?? false,
         staffIds: s.offeredByAll ? undefined : (s.staffIds ?? []),
+        // 🔴 The API defaults a new service to public, so a hidden service's
+        // copy used to go straight onto the booking page.
+        visibility: isHiddenService(s) ? "hidden" : "public",
       });
       toast(
         r.ok ? `Duplicated — "${s.name} copy" added below` : "Couldn't duplicate",
@@ -1291,6 +1324,7 @@ export function ServicesTab({
                   ?.name ?? null)
               : null
           }
+          timezone={timezone}
           toast={toast}
           onClose={() => setEditing(null)}
           onSaved={(row) => justSaved.remember(initial.find((r) => r.id === row.id) ?? row, row)}
@@ -1313,7 +1347,7 @@ export function ServicesTab({
       {/* Holiday pricing, shop-wide. The per-service editor can still set a
           date one service at a time; this is the same data grouped BY DATE,
           which is how a barber actually thinks about a holiday. */}
-      <HolidayPricing services={initial} toast={toast} />
+      <HolidayPricing services={initial} timezone={timezone} toast={toast} />
 
       <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
 
@@ -1332,6 +1366,7 @@ export function ServiceEditForm({
   services,
   staff,
   groupName,
+  timezone,
   toast,
   onClose,
   onSaved,
@@ -1344,12 +1379,18 @@ export function ServiceEditForm({
   // Non-null = this service is in a group; the group owns hours + limits, so the
   // per-service hours editor is replaced with a note (the group overrides it).
   groupName: string | null;
+  /** The shop's IANA zone: which date is "today" for its holiday prices. */
+  timezone?: string;
   toast: Toast;
   onClose: () => void;
   /** The row as it was just written - the list shows it until the page refresh lands. */
   onSaved: (row: ServiceRow) => void;
 }) {
   const vocab = useVocab();
+  const shopToday = zonedDateKey(
+    new Date(),
+    timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+  );
   const activeStaff = staff.filter((s) => s.active);
   const [name, setName] = useState(service.name);
   // Public-card content: a multi-line description (supports an "INCLUDES:" list)
@@ -1581,7 +1622,7 @@ export function ServiceEditForm({
       // restriction actually persists - PATCH is partial, absent = unchanged.
       dailyLimits: buildDailyLimits(dayLimits),
       priceOverrides: buildPriceOverrides(dayPrices),
-      dateOverrides: buildDateOverrides(specialDates),
+      dateOverrides: buildDateOverrides(specialDates, shopToday),
       durationOverrides: buildDurationOverrides(dayDurations),
       // Same rule for the time windows ([] clears them all).
       timeOverrides: buildTimeOverrides(timeRows),
@@ -1761,6 +1802,7 @@ export function ServiceEditForm({
           rows={specialDates}
           onChange={setSpecialDates}
           basePrice={price}
+          today={shopToday}
         />
 
         {/* Time-of-day windows: "after 9 PM this runs $60 and takes 20 min".
@@ -1996,6 +2038,12 @@ function TargetedSlotsManager({
   const [editMinutes, setEditMinutes] = useState(30);
   const [editPrice, setEditPrice] = useState("");
   const [pending, start] = useTransition();
+  // The edit form is the publish form at the top of the card, often a long
+  // scroll above the series' own Edit button - on a phone the tap looked dead.
+  const editBannerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (editingRule) editBannerRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }, [editingRule]);
 
   function refresh() {
     start(async () => {
@@ -2149,6 +2197,10 @@ function TargetedSlotsManager({
       start(async () => {
         const r = await updateTargetedSlotRuleAction(ruleId, {
           label: label.trim(),
+          // The "Also bookable as" chips stay tappable while editing, so what
+          // they show is sent - it used to be dropped while the toast said
+          // "Series updated".
+          serviceIds: [serviceId, ...alsoServiceIds],
           durationMin: minutes,
           price: Number(price),
           schedule,
@@ -2272,11 +2324,23 @@ function TargetedSlotsManager({
       toast("Pick a future time", "error");
       return;
     }
+    // 🔴 A cleared box is not $0. Number("") is 0, so a blank price used to
+    // publish the special as free.
+    const parsedPrice = parsePrice(editPrice);
+    if (!parsedPrice.ok) {
+      toast(parsedPrice.error, "error");
+      return;
+    }
+    if (parsedPrice.value === null) {
+      toast("Enter a price", "error");
+      return;
+    }
+    const price = parsedPrice.value;
     start(async () => {
       const r = await updateTargetedSlotAction(id, {
         startsAt: startsAt.toISOString(),
         durationMin: editMinutes,
-        price: Number(editPrice) >= 0 ? Number(editPrice) : undefined,
+        price,
       });
       toast(r.ok ? "Slot updated" : "Couldn't update (already booked?)", r.ok ? "success" : "error");
       if (r.ok) {
@@ -2287,6 +2351,13 @@ function TargetedSlotsManager({
   }
 
   function removeRule(rule: TargetedSlotRuleRow) {
+    // One tap used to end the whole series, and nothing turns one back on: the
+    // barber rebuilt every day, time and price from scratch.
+    const name = rule.label?.trim() ? `"${rule.label.trim()}"` : "this series";
+    const question = rule.indefinite
+      ? `Turn off ${name}? Its open dates are removed and it stops repeating. Booked visits stay. It can't be turned back on, so to change it, use Edit instead.`
+      : `Remove ${name}? Every upcoming open date in it is deleted. Booked visits stay. This can't be undone.`;
+    if (!window.confirm(question)) return;
     start(async () => {
       const r = await deleteTargetedSlotRuleAction(rule.id);
       toast(
@@ -2343,7 +2414,10 @@ function TargetedSlotsManager({
         subtitle="Publish specific one-off times at their own price - a late-night special, a model rate. They show under the service with a badge, can be booked exactly once, and block that time from normal booking. Your booking rules apply to them too: clients can't book one inside your min notice or further out than you take bookings."
       />
       {editingRule && (
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gold/40 bg-gold/10 px-4 py-2.5 text-sm text-gold">
+        <div
+          ref={editBannerRef}
+          className="mt-3 flex flex-wrap scroll-mt-24 items-center justify-between gap-2 rounded-xl border border-gold/40 bg-gold/10 px-4 py-2.5 text-sm text-gold"
+        >
           <span>
             Editing this series — booked dates keep their time and price; every
             open date follows your changes.
@@ -2588,7 +2662,9 @@ function TargetedSlotsManager({
           className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
         >
           {editingRule
-            ? "Save changes"
+            ? editingRule.draft
+              ? "Publish"
+              : "Save changes"
             : mode === "weekly"
               ? "Publish schedule"
               : "Publish slot"}
@@ -2706,7 +2782,7 @@ function TargetedSlotsManager({
                 {everyTimeHasOwnDuration(rule.schedule)
                   ? ""
                   : ` · ${rule.durationMin} min`}{" "}
-                · ${rule.price.toFixed(0)}
+                · {formatPrice(rule.price)}
               </p>
               <p className="mt-1 text-[11px] text-muted">
                 {rule.indefinite
@@ -2807,7 +2883,8 @@ function TargetedSlotsManager({
               </button>
               <button
                 onClick={() => remove(t.id)}
-                className="text-xs text-danger-soft hover:underline"
+                disabled={pending}
+                className="text-xs text-danger-soft hover:underline disabled:opacity-50"
               >
                 Remove
               </button>
@@ -2817,7 +2894,7 @@ function TargetedSlotsManager({
       >
         <p className="text-xs text-muted">
           {nameOf(services, t.serviceId)} · {nameOf(staff, t.staffId)} ·{" "}
-          {t.durationMin} min · ${t.price.toFixed(0)}
+          {t.durationMin} min · {formatPrice(t.price)}
         </p>
         {isEditing && (
           <div className="mt-2 flex flex-wrap items-end gap-2">
@@ -4400,13 +4477,16 @@ type SpecialDateRow = { date: string; price: string };
  * be hostile. A later duplicate date silently loses to the earlier one, which
  * is also what the stored map can represent.
  */
-function buildDateOverrides(rows: SpecialDateRow[]): Record<string, number> {
+export function buildDateOverrides(
+  rows: SpecialDateRow[],
+  /** The SHOP's date (zonedDateKey) - the UTC date is tomorrow every US evening. */
+  today: string,
+): Record<string, number> {
   const out: Record<string, number> = {};
   // Drop dates that have already passed. They resolve against nothing, and
   // without this every holiday a shop ever priced accumulates in the blob and
   // in the editor. The row is labelled "past - will be dropped" so this is
   // never a surprise.
-  const today = new Date().toISOString().slice(0, 10);
   for (const r of rows) {
     const date = r.date.trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
@@ -4902,14 +4982,14 @@ function SpecialDatesEditor({
   rows,
   onChange,
   basePrice,
+  today,
 }: {
   rows: SpecialDateRow[];
   onChange: (next: SpecialDateRow[]) => void;
   basePrice: string;
+  /** The shop's date; a row before it is "past - will be dropped". */
+  today: string;
 }) {
-  // Shop-local "today" is close enough here: this only dims a row that has
-  // already passed, and being an hour off either way changes nothing.
-  const today = new Date().toISOString().slice(0, 10);
   const field =
     "rounded-lg border border-subtle bg-charcoal-700 px-2.5 py-1.5 text-sm text-offwhite placeholder:text-muted/60 outline-none focus:border-gold/50";
   function patch(i: number, p: Partial<SpecialDateRow>) {

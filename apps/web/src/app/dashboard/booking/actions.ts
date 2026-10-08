@@ -161,6 +161,7 @@ export async function createServiceAction(input: {
   dailyTarget?: number | null;
   offeredByAll?: boolean;
   staffIds?: string[];
+  visibility?: ServiceVisibility;
 }): Promise<Result> {
   return done(await apiSend("POST", "/api/booking/services", input));
 }
@@ -1587,6 +1588,8 @@ export async function updateTargetedSlotRuleAction(
   id: string,
   input: {
     label?: string; // "" clears it
+    /** The whole set the series is bookable as; replaces the old set. */
+    serviceIds?: string[];
     durationMin?: number;
     price?: number;
     schedule?: Record<string, { start: string; durationMin?: number; price?: number; slotMin?: number }[]>;

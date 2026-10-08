@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-08-services-tab-fixes",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Services, specials and staff do what they say",
+    body:
+      "Editing a special now saves its Also bookable as choices, and a blank price is refused instead of saved as free. " +
+      "Turning off a series or removing staff asks first. A hidden service's copy stays hidden, and an evening save " +
+      "keeps today's holiday price.",
+  },
+  {
     id: "2026-10-08-checkout-tells-the-truth",
     date: "2026-10-08",
     kind: "fix",

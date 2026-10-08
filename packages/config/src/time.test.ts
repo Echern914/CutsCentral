@@ -6,7 +6,20 @@ import {
   hourInTimeZone,
   isQuietHours,
   median,
+  zonedDateKey,
 } from "./time.js";
+
+describe("zonedDateKey - the shop's date, not the UTC date", () => {
+  it("🔴 8 PM Eastern on Christmas Eve is still the 24th, though UTC says the 25th", () => {
+    const at = new Date("2026-12-25T01:00:00.000Z");
+    expect(at.toISOString().slice(0, 10)).toBe("2026-12-25");
+    expect(zonedDateKey(at, "America/New_York")).toBe("2026-12-24");
+    expect(zonedDateKey(at, "America/Los_Angeles")).toBe("2026-12-24");
+  });
+  it("pads month and day", () => {
+    expect(zonedDateKey(new Date("2026-03-05T12:00:00.000Z"), "UTC")).toBe("2026-03-05");
+  });
+});
 
 describe("median", () => {
   it("returns null for empty input", () => {
