@@ -226,6 +226,11 @@ export function AppointmentForm({
     acceptedOverlap.current = null;
     setOverlapConflict(null);
   }, [startsAt, serviceId, staffId, customTime, addOnKey]);
+  // "Pick a time." is answered the moment one is picked - left up, it reads
+  // as if the time just tapped were refused.
+  useEffect(() => {
+    if (startsAt) setError((e) => (e === "Pick a time." ? null : e));
+  }, [startsAt]);
 
   const dayFmt = useMemo(
     () =>

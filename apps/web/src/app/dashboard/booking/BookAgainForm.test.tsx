@@ -89,6 +89,11 @@ describe("what Book again carries over", () => {
     bookNext();
     expect(await screen.findByText("Pick a time.")).toBeInTheDocument();
     expect(create).not.toHaveBeenCalled();
+
+    // Answered by picking one: the question goes away rather than sitting over
+    // the time just tapped as if it were refused.
+    fireEvent.click(screen.getByRole("button", { name: "11:00 AM" }));
+    await waitFor(() => expect(screen.queryByText("Pick a time.")).toBeNull());
   });
 
   it("books the picked time for the SAME client, service and provider, and hands back the new booking", async () => {
