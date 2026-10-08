@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { BookingModeKey } from "@chairback/config/constants";
 import type { ServiceVisibility } from "@chairback/config/serviceVisibility";
 import { apiGet, apiSend } from "@/lib/api";
+import { refusedOnlyNewKeys } from "@/lib/apiCompat";
 import type { AgendaResponse } from "./page";
 
 type Result = { ok: boolean; error?: string };
@@ -591,11 +592,35 @@ export interface SeriesSummary {
   skipped: { startsAt: string; reason: string }[];
 }
 
+/** A booking as SAVED - what a retried request's id already made. */
+export interface SavedBooking {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+}
+
+function readSavedBooking(raw: unknown): SavedBooking | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const b = raw as Record<string, unknown>;
+  return typeof b.id === "string" && typeof b.startsAt === "string" && typeof b.endsAt === "string"
+    ? { id: b.id, startsAt: b.startsAt, endsAt: b.endsAt }
+    : undefined;
+}
+
 export type CreateApptResult = Result & {
   /** The new booking (a series: its first visit). */
   id?: string;
+  /** The booking's SAVED times - what to say and where to go, never the form's. */
+  startsAt?: string;
+  endsAt?: string;
   /** A retry the API recognised: the booking an earlier copy already made. */
   replayed?: boolean;
+  /**
+   * operation_mismatch / operation_in_progress: the booking this submission's
+   * id already made, as saved (the retry asked for something else, or that
+   * booking's calendar protection has not settled yet).
+   */
+  booked?: SavedBooking;
   /** False when the request never got an answer - safe to retry as-is. */
   answered?: boolean;
   series?: SeriesSummary;
@@ -629,24 +654,31 @@ export type CreateApptResult = Result & {
 export async function createAppointmentAction(
   input: CreateApptInput,
 ): Promise<CreateApptResult> {
-  const res = await apiSend<{
+  type Created = {
     id?: string | null;
+    startsAt?: string;
+    endsAt?: string;
     replayed?: boolean;
     series?: SeriesSummary;
     forced?: boolean;
     mirror?: string;
     clientConfirmation?: "email" | "none";
-  }>(
-    "POST",
-    "/api/booking/appointments",
-    input,
-  );
+  };
+  let res = await apiSend<Created>("POST", "/api/booking/appointments", input);
+  // An API from before operationId (mid-deploy) refused it and booked
+  // nothing: book the way this screen used to (lib/apiCompat.ts).
+  if (input.operationId && refusedOnlyNewKeys(res, ["operationId"])) {
+    const { operationId: _dropped, ...legacy } = input;
+    res = await apiSend<Created>("POST", "/api/booking/appointments", legacy);
+  }
   if (res.ok) revalidatePath("/dashboard/booking");
   if (!res.ok) {
+    const booked = readSavedBooking(res.booked);
     return {
       ok: false,
       answered: res.status !== 0,
       error: res.error ?? "failed",
+      ...(booked ? { booked } : {}),
       ...(res.reason ? { reason: res.reason } : {}),
       ...(res.confirmation ? { confirmation: res.confirmation } : {}),
       ...(res.code ? { code: res.code } : {}),
@@ -658,6 +690,8 @@ export async function createAppointmentAction(
     ok: true,
     answered: true,
     ...(res.data?.id ? { id: res.data.id } : {}),
+    ...(res.data?.startsAt ? { startsAt: res.data.startsAt } : {}),
+    ...(res.data?.endsAt ? { endsAt: res.data.endsAt } : {}),
     ...(res.data?.replayed ? { replayed: true } : {}),
     series: res.data?.series,
     ...(res.data?.forced ? { forced: true, mirror: res.data.mirror } : {}),

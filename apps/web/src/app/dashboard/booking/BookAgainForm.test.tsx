@@ -3,7 +3,15 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ServiceRow, StaffRow } from "./page";
 import type { DashSlot } from "./actions";
 
-type CreateReply = { ok: boolean; id?: string; answered?: boolean; error?: string; reason?: string };
+type CreateReply = {
+  ok: boolean;
+  id?: string;
+  startsAt?: string;
+  answered?: boolean;
+  error?: string;
+  reason?: string;
+  booked?: { id: string; startsAt: string; endsAt: string };
+};
 
 const getSlots = vi.hoisted(() =>
   vi.fn(async (..._a: unknown[]) => ({ ok: true, slots: [] as DashSlot[] })),
@@ -134,6 +142,70 @@ describe("what Book again carries over", () => {
     fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));
     bookNext();
     await waitFor(() => expect(sentAt(0).startsAt).toBe(NEXT_FRI_11.startsAt));
+  });
+});
+
+describe("🔴 what the screen says is the SAVED booking", () => {
+  it("success names and opens the booking as saved - not the time on screen", async () => {
+    // A retry's answer: the first tap's booking, saved at a different time.
+    create.mockResolvedValueOnce({ ok: true, id: "saved1", startsAt: NEXT_FRI_11.startsAt } as CreateReply);
+    const { onCreated, toast } = open();
+    fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));
+    bookNext();
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "saved1", startsAt: NEXT_FRI_11.startsAt }));
+    expect(toast).toHaveBeenCalledWith("Next visit booked: Fri, Oct 9 at 11:00 AM", "success");
+  });
+
+  it("🔴 the id already booked something ELSE: names it, books nothing, and never claims this choice", async () => {
+    create.mockResolvedValueOnce({
+      ok: false,
+      answered: true,
+      error: "operation_mismatch",
+      booked: { id: "old1", startsAt: AT_11.startsAt, endsAt: AT_11.endsAt },
+    } as CreateReply);
+    const { onCreated, toast } = open();
+    fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));
+    bookNext();
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent("Your first tap already booked Fri, Oct 2 at 11:00 AM. Nothing new was booked.");
+    expect(onCreated).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open that booking" }));
+    expect(onCreated).toHaveBeenCalledWith({ id: "old1", startsAt: AT_11.startsAt });
+  });
+
+  it("after a mismatch, tapping again is a NEW submission (the barber chose to book this one too)", async () => {
+    create.mockResolvedValueOnce({
+      ok: false,
+      answered: true,
+      error: "operation_mismatch",
+      booked: { id: "old1", startsAt: AT_11.startsAt, endsAt: AT_11.endsAt },
+    } as CreateReply);
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));
+    bookNext();
+    await screen.findByRole("alert");
+    bookNext();
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(sentAt(1).operationId).not.toBe(sentAt(0).operationId);
+  });
+
+  it("🔴 still settling: says so, and the next tap asks about THE SAME booking (keeps the id)", async () => {
+    create.mockResolvedValueOnce({
+      ok: false,
+      answered: true,
+      error: "operation_in_progress",
+      booked: { id: "old1", startsAt: AT_11.startsAt, endsAt: AT_11.endsAt },
+    } as CreateReply);
+    const { onCreated } = open();
+    fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));
+    bookNext();
+    expect(await screen.findByRole("alert")).toHaveTextContent("is still being confirmed with your calendar");
+    expect(onCreated).not.toHaveBeenCalled();
+    bookNext();
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(sentAt(1).operationId).toBe(sentAt(0).operationId);
   });
 });
 

@@ -185,3 +185,160 @@ describe("🔴 a retried submission returns the booking it made", () => {
     expect(res.status).toBe(400);
   });
 });
+
+/**
+ * 🔴 THE SAVED BOOKING, NOT THE SCREEN. A retry is answered from what its id
+ * actually booked - and refused when it now asks for something else, or when
+ * that booking's calendar protection has not settled.
+ */
+describe("🔴 a retry is answered from the saved booking", () => {
+  let staff2: string;
+  let both: string; // a service both providers offer
+  let clientA: string;
+  let clientB: string;
+
+  beforeAll(async () => {
+    staff2 = (await request(app).post("/api/booking/staff").set("Cookie", cookie).send({ name: "Sam" })).body.id;
+    both = (
+      await request(app)
+        .post("/api/booking/services")
+        .set("Cookie", cookie)
+        .send({ name: "Beard", durationMin: 30, price: 20, staffIds: [staffId, staff2] })
+    ).body.id;
+    const rules = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, startMin: 9 * 60, endMin: 17 * 60 }));
+    await request(app).put(`/api/booking/staff/${staff2}/availability`).set("Cookie", cookie).send({ rules });
+    clientA = (await request(app).post("/api/dashboard/clients").set("Cookie", cookie).send({ firstName: "Ana" })).body.id;
+    clientB = (await request(app).post("/api/dashboard/clients").set("Cookie", cookie).send({ firstName: "Bo" })).body.id;
+  });
+
+  /** Book with an existing client, as Book again does. */
+  const again = (operationId: string, over: Record<string, unknown> = {}) =>
+    book({ startsAt: tomorrowAt(9), serviceId: both, clientId: clientA, customTime: true, operationId, ...over });
+
+  const cancel = (id: string) =>
+    prisma.appointment.update({ where: { id }, data: { status: "CANCELED", canceledAt: new Date() } });
+
+  it("the first answer and a replay both carry the SAVED start and end", async () => {
+    const operationId = opId();
+    const first = await again(operationId);
+    expect(first.status).toBe(201);
+    expect(first.body.startsAt).toBe(tomorrowAt(9));
+    const replay = await again(operationId);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toMatchObject({ id: first.body.id, startsAt: tomorrowAt(9), replayed: true, mirror: "skipped" });
+    expect(replay.body.endsAt).toBe(first.body.endsAt);
+    await cancel(first.body.id);
+  });
+
+  const changes: Array<[string, () => Record<string, unknown>]> = [
+    ["the day", () => ({ startsAt: tomorrowAt(15) })],
+    ["the service", () => ({ serviceId })],
+    ["the provider", () => ({ staffId: staff2 })],
+    ["the client", () => ({ clientId: clientB })],
+  ];
+  for (const [change, over] of changes) {
+    it(`🔴 lost answer, then ${change} changed: refused, naming what WAS booked - nothing new is booked`, async () => {
+      const operationId = opId();
+      const first = await again(operationId);
+      expect(first.status).toBe(201);
+      const before = await prisma.appointment.count({ where: { shopId } });
+
+      const changed = await again(operationId, over());
+      expect(changed.status).toBe(409);
+      expect(changed.body.error).toBe("operation_mismatch");
+      expect(changed.body.booked).toMatchObject({ id: first.body.id, startsAt: tomorrowAt(9) });
+      expect(await prisma.appointment.count({ where: { shopId } })).toBe(before);
+      await cancel(first.body.id);
+    });
+  }
+
+  it("an id reused with different add-ons is not the same request either", async () => {
+    const addOn = await request(app)
+      .post("/api/booking/addons")
+      .set("Cookie", cookie)
+      .send({ name: "Hot towel", durationMin: 0, price: 5, serviceIds: [both] });
+    expect(addOn.status).toBe(201);
+    const operationId = opId();
+    const first = await again(operationId);
+    expect(first.status).toBe(201);
+    const withAddOn = await again(operationId, { addOnIds: [addOn.body.id ?? addOn.body.addOn?.id] });
+    expect(withAddOn.status).toBe(409);
+    expect(withAddOn.body.error).toBe("operation_mismatch");
+    await cancel(first.body.id);
+  });
+
+  async function withBlock(appointmentId: string, state: "PENDING" | "ACTIVE" | "UNKNOWN" | "FAILED") {
+    const appt = await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } });
+    const row = await prisma.acuityOutboundBlock.create({
+      data: {
+        shopId,
+        appointmentId,
+        staffId: appt.staffId,
+        acuityCalendarId: `cal-${randomToken(4)}`,
+        startsAt: appt.startsAt,
+        endsAt: appt.endsAt,
+        state,
+      },
+      select: { id: true },
+    });
+    return row.id;
+  }
+  const age = (blockId: string, ms: number) =>
+    prisma.$executeRaw`UPDATE "AcuityOutboundBlock" SET "updatedAt" = ${new Date(Date.now() - ms).toISOString()}::timestamp WHERE id = ${blockId}`;
+
+  it("🔴 a retry while the calendar block is still PENDING is told it is in progress - not booked", async () => {
+    const operationId = opId();
+    const first = await again(operationId);
+    const block = await withBlock(first.body.id, "PENDING");
+    const replay = await again(operationId);
+    expect(replay.status).toBe(409);
+    expect(replay.body).toMatchObject({
+      error: "operation_in_progress",
+      booked: { id: first.body.id, startsAt: tomorrowAt(9) },
+    });
+
+    // Once the block lands, the same retry is answered with the booking and its protection.
+    await prisma.acuityOutboundBlock.update({ where: { id: block }, data: { state: "ACTIVE" } });
+    const settled = await again(operationId);
+    expect(settled.status).toBe(200);
+    expect(settled.body).toMatchObject({ id: first.body.id, mirror: "active", replayed: true });
+    await cancel(first.body.id);
+  });
+
+  it("an UNCERTAIN block replays as uncertain, never as protected", async () => {
+    const operationId = opId();
+    const first = await again(operationId);
+    await withBlock(first.body.id, "UNKNOWN");
+    const replay = await again(operationId);
+    expect(replay.status).toBe(200);
+    expect(replay.body.mirror).toBe("unknown");
+    await cancel(first.body.id);
+  });
+
+  it("🔴 a FORCED booking whose block just failed is mid-undo: in progress; long settled: booked, failed", async () => {
+    const operationId = opId();
+    const first = await again(operationId);
+    await prisma.appointment.update({ where: { id: first.body.id }, data: { overlapForcedAt: new Date() } });
+    const block = await withBlock(first.body.id, "FAILED");
+    const fresh = await again(operationId);
+    expect(fresh.status).toBe(409);
+    expect(fresh.body.error).toBe("operation_in_progress");
+
+    // The undo never ran (it could not): the booking stands, and says so.
+    await age(block, 10 * 60_000);
+    const later = await again(operationId);
+    expect(later.status).toBe(200);
+    expect(later.body).toMatchObject({ forced: true, mirror: "failed" });
+
+    // The undo DID run: never reported as booked.
+    await cancel(first.body.id);
+    const undone = await again(operationId);
+    expect(undone.status).toBe(409);
+    expect(undone.body.error).toBe("replay_not_booked");
+  });
+
+  it("an operation id is refused with a client confirmation (a replay could only re-send the push)", async () => {
+    const res = await again(opId(), { confirmClient: true });
+    expect(res.status).toBe(400);
+  });
+});

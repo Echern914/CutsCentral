@@ -16,6 +16,7 @@ import {
   type ClientOption,
   type DashSlot,
   type DaySpecial,
+  type SavedBooking,
 } from "./actions";
 import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
 import { shopLocalInputValue } from "./shopLocalInput";
@@ -209,6 +210,12 @@ export function AppointmentForm({
    * answer - only another time).
    */
   const [overlapConflict, setOverlapConflict] = useState<BlockConflict | null>(null);
+  /**
+   * This submission's id already made a booking (its first answer was lost):
+   * the retry asked for something else ("mismatch"), or that booking's calendar
+   * protection is still settling. Shown with the booking's SAVED time.
+   */
+  const [earlier, setEarlier] = useState<{ kind: "mismatch" | "settling"; booked: SavedBooking } | null>(null);
   // The overlap he already said yes to, carried on the retry that follows - so
   // confirming an overlap and THEN an Acuity block sends both answers. Forgotten
   // the moment the time, service or provider changes (a different question).
@@ -461,6 +468,7 @@ export function AppointmentForm({
     const overlapConfirmation = acceptedOverlap.current ?? undefined;
     setBlockConflict(null);
     setOverlapConflict(null);
+    setEarlier(null);
     setError(null);
     if (!serviceId) return setError("Pick a service.");
     if (!staffId) return setError("Pick a provider.");
@@ -537,8 +545,18 @@ export function AppointmentForm({
       // The API answered, so this submission is settled: a refusal booked
       // nothing, and the next attempt ("Book anyway", another time) is a new
       // one. Only a request that never got an answer keeps its id to retry.
-      if (!res.ok && res.answered !== false) operationId.current = newOperationId();
+      // Except "still confirming": that id's booking exists and is settling, and
+      // the next tap must learn how it settled - not book a second one.
+      if (!res.ok && res.answered !== false && res.error !== "operation_in_progress") {
+        operationId.current = newOperationId();
+      }
       if (!res.ok) {
+        // 🔴 This submission's EARLIER try is what was saved. Say so, with its
+        // own time - never describe the choice on screen now as booked.
+        if ((res.error === "operation_mismatch" || res.error === "operation_in_progress") && res.booked) {
+          setEarlier({ kind: res.error === "operation_mismatch" ? "mismatch" : "settling", booked: res.booked });
+          return;
+        }
         if (res.error === "external_block") {
           // Show the block, ask - the booking happens only on confirm, and
           // only with the confirmation that names THIS block. A refusal that
@@ -616,14 +634,13 @@ export function AppointmentForm({
       } else if (res.forced && res.mirror === "unknown") {
         toast("Booked over the other appointment - still confirming the time on Acuity.", "success");
       } else if (rebook) {
-        toast(
-          `Next visit booked: ${dayFmt.format(new Date(startsAt))} at ${timeFmt.format(new Date(startsAt))}`,
-          "success",
-        );
+        // The SAVED time - a retry's answer is the booking as it was made.
+        const savedAt = new Date(res.startsAt ?? startsAt);
+        toast(`Next visit booked: ${dayFmt.format(savedAt)} at ${timeFmt.format(savedAt)}`, "success");
       } else {
         toast(res.forced ? "Booked over the other appointment" : "Appointment scheduled", "success");
       }
-      onCreated(res.id && !res.series ? { id: res.id, startsAt } : undefined);
+      onCreated(res.id && !res.series ? { id: res.id, startsAt: res.startsAt ?? startsAt } : undefined);
     });
   }
 
@@ -673,6 +690,28 @@ export function AppointmentForm({
             onConfirm={() => submit({ confirmation: blockConflict.confirmation })}
             onDismiss={() => setBlockConflict(null)}
           />
+        )}
+        {earlier && (
+          <div
+            role="alert"
+            data-qa="earlier-booking"
+            className="flex min-w-0 flex-col gap-2 rounded-xl border border-gold/40 bg-gold/5 px-4 py-3 text-sm"
+          >
+            <p className="[overflow-wrap:anywhere] text-offwhite">
+              {earlier.kind === "mismatch"
+                ? `Your first tap already booked ${dayFmt.format(new Date(earlier.booked.startsAt))} at ${timeFmt.format(new Date(earlier.booked.startsAt))}. Nothing new was booked.`
+                : `The booking for ${dayFmt.format(new Date(earlier.booked.startsAt))} at ${timeFmt.format(new Date(earlier.booked.startsAt))} is still being confirmed with your calendar. Check it in a moment before booking again.`}
+            </p>
+            {earlier.kind === "mismatch" && rebook && (
+              <button
+                type="button"
+                onClick={() => onCreated({ id: earlier.booked.id, startsAt: earlier.booked.startsAt })}
+                className="self-start rounded-full border border-gold/50 px-3 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+              >
+                Open that booking
+              </button>
+            )}
+          </div>
         )}
         {overlapConflict && (
           <ExternalBlockBanner
