@@ -42,6 +42,8 @@ interface PromoteAppt {
   endsAt: Date;
   priceAtBooking: Prisma.Decimal | null;
   serviceName: string | null;
+  /** The party this seat belongs to (booking.group.ts); null for a single booking. */
+  groupId: string | null;
 }
 
 /**
@@ -99,16 +101,31 @@ export async function promoteOneAppointmentInTx(
     update: {}, // already promoted - leave the existing visit untouched
   });
 
+  // 🔴 A PARTY EARNS ITS BOOKER ONE PUNCH, NOT ONE PER SEAT. Every seat of a
+  // group booking is written under the BOOKER's client (booking.group.ts) - the
+  // other attendees are first names, not clients - so earning per seat handed
+  // the booker a punch for each person they brought: "me and my brother" earned
+  // two. The first seat to complete earns; the rest complete without a punch.
+  // Serialized by the client lock above, so two seats finishing together cannot
+  // both see "none yet". An earn counts while it is still linked to its seat's
+  // visit: a barber's undo keeps that link (their correction stands), while a
+  // retroactive cancel detaches it (clawBackVisitEarn), freeing the punch for a
+  // seat that really happened.
+  const partyAlreadyEarned =
+    appt.groupId !== null &&
+    (await tx.punchLedger.count({
+      where: {
+        shopId: shop.id,
+        clientId: appt.clientId,
+        visit: { appointment: { groupId: appt.groupId, id: { not: appt.id } } },
+      },
+    })) > 0;
+
   // Earn punches (idempotent via PunchLedger.visitId). The visit "happened" when
   // it ended, so promo windows are checked against endsAt.
-  const earn = await earnPunchForVisitInTx(
-    tx,
-    shop,
-    appt.clientId,
-    visit.id,
-    appt.serviceName,
-    appt.endsAt,
-  );
+  const earn = partyAlreadyEarned
+    ? null
+    : await earnPunchForVisitInTx(tx, shop, appt.clientId, visit.id, appt.serviceName, appt.endsAt);
 
   await tx.appointment.update({
     where: { id: appt.id },
@@ -142,6 +159,7 @@ export async function promoteFulfilledAppointments(
       startsAt: true,
       endsAt: true,
       priceAtBooking: true,
+      groupId: true,
       service: { select: { name: true } },
     },
   });
@@ -169,6 +187,7 @@ export async function promoteFulfilledAppointments(
             endsAt: a.endsAt,
             priceAtBooking: a.priceAtBooking,
             serviceName: a.service?.name ?? null,
+            groupId: a.groupId,
           },
           now,
         ),
