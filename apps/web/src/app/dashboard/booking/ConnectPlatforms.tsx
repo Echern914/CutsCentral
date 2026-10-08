@@ -109,7 +109,8 @@ export function ConnectPlatforms({
         toast(`${name} disconnected.`, "success");
         router.refresh();
       } else {
-        toast(r.error ?? `Couldn't disconnect ${name}.`, "error");
+        // A sentence, never the raw code ("unresolved_acuity_releases").
+        toast(disconnectRefusal(name, r.error), "error");
       }
     });
   }
@@ -179,7 +180,22 @@ export function ConnectPlatforms({
             <button
               key={c.key}
               type="button"
-              onClick={() => available && onPick(c.key)}
+              onClick={() => {
+                if (!available || selected) return;
+                // 🔴 The whole card is the button, around the small Connect /
+                // Reconnect / Disconnect pills. A slightly missed tap on one of
+                // those switched a live ChairBack-booking shop away, and its
+                // clients could no longer book. Leaving ChairBack booking asks.
+                if (
+                  mode === "native" &&
+                  !window.confirm(
+                    `Switch online booking to ${c.name}? Clients will no longer be able to book on your ChairBack page.`,
+                  )
+                ) {
+                  return;
+                }
+                onPick(c.key);
+              }}
               disabled={!available}
               className={cn(
                 "group relative flex flex-col gap-3 rounded-2xl border p-4 text-left transition-all duration-200 ease-out",
@@ -364,4 +380,16 @@ function Check() {
       <path d="M5 12l5 5L20 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
+}
+
+/** What a refused Disconnect means, in words. */
+export function disconnectRefusal(name: string, code?: string): string {
+  if (code === "unresolved_acuity_releases") {
+    return `Couldn't disconnect ${name} yet. ChairBack is still removing its blocks from your ${name} calendar, so try again in a few minutes.`;
+  }
+  if (code === "network_error") {
+    return `Couldn't reach ChairBack to disconnect ${name}. Check your connection and try again.`;
+  }
+  if (code === "forbidden_role") return `Only the owner or a manager can disconnect ${name}.`;
+  return `Couldn't disconnect ${name}. Try again in a moment.`;
 }

@@ -173,6 +173,10 @@ export async function groupCreateAction(
     // precisely what the idempotency key is for on the retry.
     return { kind: "network" };
   }
+  // 🔴 apiPublicSend never throws: a timeout, abort or dropped connection comes
+  // back as status 0, so the catch above never saw it and this read "Nothing
+  // was booked" for a party that may exist. A retry with the SAME key is safe.
+  if (!res.ok && res.status === 0) return { kind: "network" };
   if (res.ok && res.data) {
     // 202 carries status:"processing"; 200 (idempotent replay) and 201 do not.
     if (res.data.status === "processing") {

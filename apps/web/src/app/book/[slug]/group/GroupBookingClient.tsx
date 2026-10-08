@@ -48,14 +48,28 @@ interface PendingGroup {
   groupId: string;
   manageToken: string;
   kind: "booked" | "confirming";
+  /** When it was saved. Reload protection only needs the confirming window. */
+  savedAt?: number;
 }
+
+/**
+ * 🔴 HOW LONG A SAVED PARTY REOPENS THE PAGE. It used to be forever: a parent
+ * who booked two kids last month opened the group page and was told "You're
+ * booked" for the OLD party, with no way to book another short of clearing
+ * site data. An entry from before this rule has no savedAt and is dropped too.
+ */
+export const PENDING_LIFETIME_MS = 30 * 60 * 1000;
 
 function readPending(slug: string): PendingGroup | null {
   try {
     const raw = localStorage.getItem(PENDING_KEY);
     if (!raw) return null;
     const p = JSON.parse(raw) as PendingGroup;
-    return p && p.slug === slug && p.manageToken ? p : null;
+    if (!p || typeof p.savedAt !== "number" || Date.now() - p.savedAt > PENDING_LIFETIME_MS) {
+      localStorage.removeItem(PENDING_KEY);
+      return null;
+    }
+    return p.slug === slug && p.manageToken ? p : null;
   } catch {
     return null;
   }
@@ -140,6 +154,9 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
     return data.services.filter((s) => ids.has(s.id));
   }, [data.offerings, data.services, staffId]);
 
+  /** Days of times to ask for: a month, or less when the shop books less far out. */
+  const windowDays = Math.max(1, Math.min(30, data.shop.bookingMaxDays));
+
   const ready =
     attendees.length >= 2 &&
     attendees.every((a) => a.firstName.trim().length > 0 && a.serviceId);
@@ -155,8 +172,10 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
   const loadSlots = useCallback(async () => {
     if (!staffId || !ready) return;
     setSlotsBusy(true);
+    // Never wider than the shop's own booking window: the API refuses a range
+    // past bookingMaxDays, and a 7-day shop got "could not load times" forever.
     const from = new Date();
-    const to = new Date(from.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const to = new Date(from.getTime() + windowDays * 24 * 60 * 60 * 1000);
     const res = await groupSlotsAction(slug, {
       staffId,
       // 🔴 In attendee order, repeats kept - two siblings can want the same cut.
@@ -173,10 +192,10 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
     setSlots(res.data.slots);
     if (res.data.slots.length === 0) {
       setNotice(
-        `No time in the next month fits all ${attendees.length} of you back to back with this ${providerNoun}.`,
+        `No time in the next ${windowDays} days fits all ${attendees.length} of you back to back with this ${providerNoun}.`,
       );
     }
-  }, [attendees, providerNoun, ready, slug, staffId]);
+  }, [attendees, providerNoun, ready, slug, staffId, windowDays]);
 
   async function chooseTime(iso: string) {
     if (!staffId) return;
@@ -230,7 +249,13 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
     setSubmitting(false);
 
     if (res.kind === "booked" || res.kind === "confirming") {
-      writePending({ slug, groupId: res.groupId, manageToken: res.manageToken, kind: res.kind });
+      writePending({
+        slug,
+        groupId: res.groupId,
+        manageToken: res.manageToken,
+        kind: res.kind,
+        savedAt: Date.now(),
+      });
       setOutcome(res);
       setStep("done");
       return;
@@ -292,8 +317,9 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
           </p>
         ) : (
           <p className="text-muted">
-            {data.shop.name} has the whole group booked. We&apos;ve sent one
-            confirmation covering everyone.
+            {data.shop.name} has the whole group booked.
+            {/* Only when there is somewhere to send it. */}
+            {email.trim() ? " We've sent one confirmation covering everyone." : " Save this page's link to manage it."}
           </p>
         )}
 
@@ -321,6 +347,21 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
         >
           View or change this group
         </Link>
+        <button
+          type="button"
+          onClick={() => {
+            writePending(null);
+            setOutcome(null);
+            setPlan(null);
+            setStartsAt(null);
+            setNotice(null);
+            setIdempotencyKey(null);
+            setStep("who");
+          }}
+          className="mt-3 block text-sm text-gold underline"
+        >
+          Book another group
+        </button>
       </Shell>
     );
   }

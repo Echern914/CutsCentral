@@ -199,10 +199,20 @@ export function AcuityCalendarMap() {
         {data.staff.map((s) => {
           const value = s.calendarId ?? "";
           // Unambiguous shape (one chair, one calendar): preselect it in the
-          // control so one tap saves — but still SHOW it, because an unseen
-          // default is how the wrong barber gets blocked.
+          // control - but still SHOW it, because an unseen default is how the
+          // wrong barber gets blocked.
           const suggested =
             !s.calendarId && data.preselectCalendarId ? data.preselectCalendarId : null;
+          // 🔴 What the control SHOWS but the server does not have yet: the
+          // preselected calendar, or a mapping made before a reconnect. Picking
+          // the option already shown fires no change event (always, on the iOS
+          // wheel), so these need a button of their own or they can't be saved.
+          const unsavedChoice =
+            s.bookable && suggested
+              ? suggested
+              : s.bookable && s.problem === "stale" && s.calendarId
+                ? s.calendarId
+                : null;
           return (
             <li key={s.id} className="flex flex-col gap-3 rounded-lg border border-subtle p-3">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -255,6 +265,16 @@ export function AcuityCalendarMap() {
                     )}
                   </select>
                 </label>
+                {unsavedChoice && (
+                  <button
+                    type="button"
+                    disabled={savingId === s.id}
+                    onClick={() => save(s.id, unsavedChoice, data.connectedAt)}
+                    className="h-11 shrink-0 rounded-lg bg-emerald-soft px-4 text-sm font-semibold text-charcoal-900 disabled:opacity-50 sm:h-9"
+                  >
+                    {s.problem === "stale" ? "Confirm" : "Use this calendar"}
+                  </button>
+                )}
               </div>
 
               {/* THE OTHER CALENDARS THIS SAME PERSON IS SOLD ON.
