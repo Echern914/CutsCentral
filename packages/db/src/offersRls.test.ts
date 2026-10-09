@@ -4,7 +4,7 @@ import { prisma } from "./client.js";
 import { runWithShop } from "./tenant.js";
 
 /**
- * Offer and OfferRedemption are TENANT tables (migration 20261053000000_offers).
+ * Offer and OfferRedemption are TENANT tables (migration 20261054000000_offers).
  * A shop session sees its own offers and none of another shop's - a code is
  * looked up by (shop, code) and must never resolve across shops.
  *
