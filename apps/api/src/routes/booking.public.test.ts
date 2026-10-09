@@ -616,7 +616,7 @@ describe("day-of-week pricing", () => {
     expect(Number(appt!.priceAtBooking)).toBe(45);
   });
 
-  it("REPRICES to $55 when a Saturday booking is moved to a Sunday", async () => {
+  it("🔴 a Saturday booking moved to a Sunday is repriced to $55 only once the client has seen both figures - and the change is recorded", async () => {
     const saturday = nextWeekdayAt(6, 13);
     const booking = await request(app)
       .post(`/api/book/${slugA}`)
@@ -624,17 +624,28 @@ describe("day-of-week pricing", () => {
     expect(booking.status).toBe(201);
     const token = booking.body.manageToken;
 
+    // The menu says $55 on Sundays: the move is refused with both figures and
+    // nothing changes (engines/movePrice.ts) - a silent reprice is how a
+    // booking lost its add-ons and agreed prices.
     const sunday = nextWeekdayAt(0, 13);
+    const asked = await request(app).post(`/api/book/manage/${token}/reschedule`).send({ startsAt: sunday.toISOString() });
+    expect(asked.status).toBe(409);
+    expect(asked.body).toEqual({ error: "price_changes", code: "PRICE_CHANGES", fromCents: 4500, toCents: 5500 });
+    const still = await prisma.appointment.findFirst({ where: { phone: "+13025550803" }, select: { id: true, priceAtBooking: true, startsAt: true } });
+    expect(Number(still!.priceAtBooking)).toBe(45);
+    expect(still!.startsAt.toISOString()).toBe(saturday.toISOString());
+
+    // Sent back with the figure they saw: moved, repriced, and on the record.
     const move = await request(app)
       .post(`/api/book/manage/${token}/reschedule`)
-      .send({ startsAt: sunday.toISOString() });
+      .send({ startsAt: sunday.toISOString(), acceptPriceCents: 5500 });
     expect(move.status).toBe(200);
-
-    const appt = await prisma.appointment.findFirst({
-      where: { phone: "+13025550803" },
-      select: { priceAtBooking: true },
-    });
+    expect(move.body.price).toEqual({ kind: "repriced", fromCents: 4500, toCents: 5500 });
+    const appt = await prisma.appointment.findFirst({ where: { phone: "+13025550803" }, select: { priceAtBooking: true } });
     expect(Number(appt!.priceAtBooking)).toBe(55);
+    const history = await prisma.appointmentPriceChange.findMany({ where: { appointmentId: still!.id } });
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ fromPriceCents: 4500, toPriceCents: 5500, actorUserId: null });
   });
 });
 
