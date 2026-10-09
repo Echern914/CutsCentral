@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-08-moved-booking-keeps-its-price",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "A moved appointment keeps its price",
+    body:
+      "Moving an appointment used to reset it to the new day's menu price, dropping add-ons and any price you set. " +
+      "Those now move with it. If only the menu price differs, the client sees both figures first, and the change " +
+      "goes in the price history.",
+  },
+  {
     id: "2026-10-08-booking-page-truth",
     date: "2026-10-08",
     kind: "fix",

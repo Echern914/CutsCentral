@@ -114,14 +114,35 @@ export async function rescheduleOptionsAction(
 export async function rescheduleBookingAction(
   token: string,
   startsAt: string,
-): Promise<{ ok: boolean; error?: string }> {
-  const res = await apiPublicSend(
+  /** The new price, in cents, exactly as a `price_changes` answer showed it. */
+  acceptPriceCents?: number,
+): Promise<{
+  ok: boolean;
+  error?: string;
+  /**
+   * `price_changes`: the new time has a different menu price. Nothing moved.
+   * The page shows both figures and asks; a yes sends `toCents` back.
+   */
+  priceChange?: { fromCents: number | null; toCents: number };
+  /** On success: what the booking now costs, if it changed. */
+  repriced?: { fromCents: number | null; toCents: number };
+}> {
+  const res = await apiPublicSend<{ price?: { kind: string; fromCents?: number | null; toCents?: number } }>(
     "POST",
     `/api/book/manage/${encodeURIComponent(token)}/reschedule`,
-    { startsAt },
+    { startsAt, ...(acceptPriceCents !== undefined ? { acceptPriceCents } : {}) },
   );
-  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
-  return { ok: true };
+  if (!res.ok) {
+    const body = res.body as { error?: string; fromCents?: number | null; toCents?: number } | undefined;
+    if (res.error === "price_changes" && body && typeof body.toCents === "number") {
+      return { ok: false, error: "price_changes", priceChange: { fromCents: body.fromCents ?? null, toCents: body.toCents } };
+    }
+    return { ok: false, error: res.error ?? "failed" };
+  }
+  const price = res.data?.price;
+  return price?.kind === "repriced" && typeof price.toCents === "number"
+    ? { ok: true, repriced: { fromCents: price.fromCents ?? null, toCents: price.toCents } }
+    : { ok: true };
 }
 
 /**

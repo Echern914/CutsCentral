@@ -41,6 +41,8 @@ import { lastNameHasLetter } from "@chairback/config/clientIdentity";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { staffSpanBlocked } from "../engines/blockedTime.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import { addOnCentsOf, dollarsToCents, movePrice } from "../engines/movePrice.js";
+import { recordPriceChange } from "../services/appointmentPriceLedger.js";
 import {
   completeReschedule,
   dispatchCreateAll,
@@ -3874,7 +3876,17 @@ bookingPublicRouter.get(
 );
 
 // POST /api/book/manage/:token/reschedule - move a booking to a new open slot.
-const rescheduleSchema = z.object({ startsAt: validDate }).strict();
+const rescheduleSchema = z
+  .object({
+    startsAt: validDate,
+    /**
+     * The new time's price, in cents, exactly as a 409 `price_changes` showed
+     * it on the page. A menu-priced booking is repriced only after the client
+     * has seen the figure (engines/movePrice.ts).
+     */
+    acceptPriceCents: z.number().int().min(0).optional(),
+  })
+  .strict();
 
 bookingPublicRouter.post(
   "/manage/:token/reschedule",
@@ -3902,6 +3914,8 @@ bookingPublicRouter.post(
         bookedVia: true,
         // What it was booked at: a payment below this was a deposit.
         priceAtBooking: true,
+        // What that price carries that the menu doesn't (engines/movePrice.ts).
+        addOns: true,
         // The BOOKING payment: what the customer prepaid to hold this slot.
         // A balance collected at the chair belongs to a cut that already
         // happened and must not gate rescheduling a future one.
@@ -3974,7 +3988,8 @@ bookingPublicRouter.post(
         }) *
           60_000,
     );
-    // The new slot may carry a different date/window/weekday price - reprice.
+    // The new slot may carry a different date/window/weekday MENU price.
+    // Whether this booking takes it is movePrice's call, below.
     const effectivePrice = effectivePriceAt(
       appt.service.price === null ? null : Number(appt.service.price),
       {
@@ -3996,6 +4011,43 @@ bookingPublicRouter.post(
       return;
     }
 
+    // 🔴 WHAT THE MOVE DOES TO THE PRICE (engines/movePrice.ts). Add-ons, a
+    // price the shop set by hand and any discount move with the booking
+    // untouched. Only a plain menu price (or a special's, once left) may
+    // change with the time - and never silently: the client sees the new
+    // figure and sends it back before anything moves.
+    const menuAtOld = effectivePriceAt(
+      appt.service.price === null ? null : Number(appt.service.price),
+      {
+        at: appt.startsAt,
+        timezone: appt.shop.timezone,
+        weekdayOverrides: appt.service.priceOverrides,
+        dateOverrides: appt.service.dateOverrides,
+        timeWindows: appt.service.timeOverrides,
+      },
+    );
+    const handEdited =
+      (await prisma.appointmentPriceChange.count({ where: { shopId: appt.shopId, appointmentId: appt.id } })) > 0;
+    const move = movePrice({
+      bookedCents: dollarsToCents(appt.priceAtBooking),
+      addOnCents: addOnCentsOf(appt.addOns),
+      menuAtOldCents: dollarsToCents(menuAtOld),
+      menuAtNewCents: dollarsToCents(effectivePrice),
+      handEdited,
+      special: appt.bookedVia === TARGETED_SLOT_ORIGIN,
+      discounted: false,
+    });
+    if (move.kind === "changes" && parsed.data.acceptPriceCents !== move.toCents) {
+      res.status(409).json({
+        error: "price_changes",
+        code: "PRICE_CHANGES",
+        fromCents: move.fromCents,
+        toCents: move.toCents,
+      });
+      return;
+    }
+    const movedCents = move.kind === "changes" ? move.toCents : move.totalCents;
+
     // A booking PAID at booking can't be reconciled here (no top-up or partial
     // refund on this path), so a new price it can't take is refused and the
     // customer pointed at the shop, rather than silently left over/under-
@@ -4008,7 +4060,7 @@ bookingPublicRouter.post(
       !paidBookingTakesPrice({
         paidCents: bookingPayment.amount,
         bookedPriceCents: toCents(appt.priceAtBooking === null ? null : Number(appt.priceAtBooking)),
-        newPriceCents: toCents(effectivePrice),
+        newPriceCents: movedCents === null ? null : toCents(movedCents / 100),
       })
     ) {
       res.status(409).json({ error: "price_changed", message: "That day has a different price. Please contact the shop to move a paid booking." });
@@ -4050,8 +4102,8 @@ bookingPublicRouter.post(
             timezone: appt.shop.timezone,
           },
         });
-        // Move it, reprice for the new date, and reset send-state so a fresh
-        // confirmation/reminder go out - the PUSH reminder stamps too, or the
+        // Move it, keep (or, once seen, change) its price, and reset
+        // send-state so a fresh confirmation/reminder go out - the PUSH reminder stamps too, or the
         // moved appointment would silently never get its 24h/2h push. Check-in
         // state is likewise cleared: an "en route" tapped for the OLD time is
         // meaningless for the new one (and would pin a stale pill days out).
@@ -4060,7 +4112,11 @@ bookingPublicRouter.post(
           data: {
             startsAt,
             endsAt,
-            priceAtBooking: effectivePrice ?? null,
+            // The price moves with the booking. Only a menu change the client
+            // accepted rewrites it - recorded below, like any price change.
+            ...(move.kind === "changes"
+              ? { priceAtBooking: new Prisma.Decimal((move.toCents / 100).toFixed(2)) }
+              : {}),
             // 🔴 The EMAIL stamps must reset with the SMS ones. Confirmation
             // SMS is off for cost (CONFIRMATION_SMS_ENABLED=false), so email is
             // the only channel a customer hears about a booking on - and
@@ -4079,9 +4135,9 @@ bookingPublicRouter.post(
             etaMinutes: null,
             runningLate: false,
             // 🔴 LEAVING A SPECIAL. The only times this route accepts are
-            // regular-grid ones (isSlotBookable above), and the price was just
-            // re-measured from the service - so a moved special is now an
-            // ordinary booking. Clear its origin marker, or the barber's
+            // regular-grid ones (isSlotBookable above), and movePrice has
+            // offered the menu price for the new time - so a moved special is
+            // now an ordinary booking. Clear its origin marker, or the barber's
             // calendar and his "moved" alert keep calling a 2 PM regular-price
             // booking "After hours" (and the undo-cancel path would go hunting
             // for a special at the new time).
@@ -4096,6 +4152,17 @@ bookingPublicRouter.post(
           await tx.targetedSlot.updateMany({
             where: { shopId: appt.shopId, bookedAppointmentId: appt.id },
             data: { bookedAppointmentId: null },
+          });
+        }
+        if (move.kind === "changes") {
+          await recordPriceChange(tx, {
+            shopId: appt.shopId,
+            appointmentId: appt.id,
+            actorUserId: null,
+            fromPriceCents: move.fromCents,
+            toPriceCents: move.toCents,
+            fromCollectedCents: null,
+            toCollectedCents: null,
           });
         }
         publicReschedOutboxIds = await swapForReschedule(tx, {
@@ -4157,7 +4224,14 @@ bookingPublicRouter.post(
       kind: "rescheduled",
     });
     await noteAvailabilityChanged(appt.shopId);
-    res.json({ ok: true, startsAt: startsAt.toISOString() });
+    res.json({
+      ok: true,
+      startsAt: startsAt.toISOString(),
+      price:
+        move.kind === "changes"
+          ? { kind: "repriced", fromCents: move.fromCents, toCents: move.toCents }
+          : { kind: move.kind, totalCents: move.totalCents },
+    });
   },
 );
 
