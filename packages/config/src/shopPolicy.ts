@@ -335,6 +335,37 @@ export function paidBookingTakesPrice(input: {
   return deposit ? input.newPriceCents >= input.paidCents : input.newPriceCents === input.paidCents;
 }
 
+/** "$40" / "$12.50" / "no price" - money as a move's price question says it. */
+export function formatMovePriceCents(cents: number | null): string {
+  if (cents === null) return "no price";
+  return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
+}
+
+/**
+ * THE QUESTION A MOVE AT A DIFFERENT PRICE ASKS, in words.
+ *
+ * A reschedule that would change what a booking costs (a plain menu price
+ * that differs at the new time, or a special being left for a regular slot -
+ * the API's movePrice engine decides which) moves NOTHING until whoever is
+ * moving it has seen both figures and said yes. Every door that asks - the
+ * SMS receptionist and the party (group) manage page - quotes this one
+ * sentence, so a client never hears two versions of the same change.
+ *
+ * `leavingSpecial` names why: the old price belonged to a special, and the new
+ * time is an ordinary one at the menu price.
+ */
+export function describeMovePriceChange(input: {
+  fromCents: number | null;
+  toCents: number;
+  leavingSpecial?: boolean;
+}): string {
+  const from = formatMovePriceCents(input.fromCents);
+  const to = formatMovePriceCents(input.toCents);
+  return input.leavingSpecial
+    ? `The current booking is a special at ${from}; the new time is a regular slot at ${to}. Moving it changes the price from ${from} to ${to}.`
+    : `The new time has a different menu price. Moving it changes the price from ${from} to ${to}.`;
+}
+
 /**
  * What the shop KEEPS when the CLIENT cancels a booking they paid for at
  * booking - the one rule the cancel engine charges with and the receptionist
