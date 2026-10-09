@@ -696,6 +696,11 @@ export interface SeriesEditVisit {
   id: string;
   from: { startsAt: string; endsAt: string; staffId: string; serviceId: string };
   to: { startsAt: string; endsAt: string; staffId: string; serviceId: string };
+  /**
+   * What it was booked at and still costs after the change (a new service
+   * never re-prices it). Absent from an older API - then nothing is claimed.
+   */
+  bookedPriceCents?: number | null;
   /** Why this date cannot take the change, already in words. */
   problem?: { code: string; text: string };
 }

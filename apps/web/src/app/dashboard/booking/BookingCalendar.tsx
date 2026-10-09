@@ -430,20 +430,37 @@ export function BookingCalendar({
   // flips the Booked -> En route -> Arrived pill without a manual refresh when
   // a client taps "On my way".
   useEffect(() => {
+    let catchUp: ReturnType<typeof setInterval> | null = null;
+    const tick = () => {
+      refreshAgenda();
+      // Entries expire on a server cron - nothing client-side would ever tell
+      // us, so the poll is the only thing that retires a stale badge.
+      refreshWaitingCount();
+    };
     const iv = setInterval(() => {
       if (document.visibilityState !== "visible") return;
       // Not under an open dialog. An appointment's sheet lives inside its
       // card, and a refresh that moves the booking to another hour remounts
       // the card and closes the sheet - with whatever it was showing (a save's
-      // result, a repeat's per-date outcome). Nothing behind a dialog needs
-      // the poll; the next tick after it closes catches up.
-      if (document.querySelector('[role="dialog"]')) return;
-      refreshAgenda();
-      // Entries expire on a server cron - nothing client-side would ever tell
-      // us, so the poll is the only thing that retires a stale badge.
-      refreshWaitingCount();
+      // result, a repeat's per-date outcome). The skipped tick is owed, and
+      // paid the moment the last dialog closes rather than up to 20 s later.
+      // Nothing is decided from the picture behind a dialog: every booking,
+      // edit and move is checked by the server when it is saved.
+      if (document.querySelector('[role="dialog"]')) {
+        catchUp ??= setInterval(() => {
+          if (document.querySelector('[role="dialog"]')) return;
+          if (catchUp) clearInterval(catchUp);
+          catchUp = null;
+          tick();
+        }, 500);
+        return;
+      }
+      tick();
     }, 20_000);
-    return () => clearInterval(iv);
+    return () => {
+      clearInterval(iv);
+      if (catchUp) clearInterval(catchUp);
+    };
   }, [refreshAgenda, refreshWaitingCount]);
 
   function gotoMonth(delta: number) {

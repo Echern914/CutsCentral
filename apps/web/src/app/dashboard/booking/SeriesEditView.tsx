@@ -3,6 +3,7 @@
 import { cap, useVocab } from "@/components/VocabProvider";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
+import { formatCents } from "@/lib/serviceFields";
 import { Field, Group, INPUT } from "./formkit";
 import {
   applySeriesEditAction,
@@ -371,12 +372,40 @@ export function SeriesEditFields({ state }: { state: SeriesEditState }) {
 
   if (state.stage === "review" && state.preview) {
     const p = state.preview;
+    // 🔴 A NEW SERVICE KEEPS THE BOOKED PRICE, and the review says so in as
+    // many words - the same rule as editing one appointment's service. The new
+    // service's menu price is never substituted; whether it should be is the
+    // shop's call, made by changing a price on purpose.
+    const serviceMoves = p.change.filter((c) => c.to.serviceId !== c.from.serviceId);
+    const priceKnown = serviceMoves.every((c) => c.bookedPriceCents !== undefined);
+    const prices = [...new Set(serviceMoves.map((c) => c.bookedPriceCents ?? null))];
+    const mixedPrices = priceKnown && prices.length > 1;
+    const priceLine = !priceKnown
+      ? "Prices stay as booked."
+      : prices.length > 1
+        ? "Each keeps the price it was booked at, shown by date below."
+        : prices[0] === null || prices[0] === undefined
+          ? "No price was booked, and none is added."
+          : `Booked price stays ${formatCents(prices[0])}.`;
     return (
       <div className="flex min-w-0 flex-col gap-4" data-testid="series-edit-review">
         {state.notice && (
           <p role="status" className="rounded-xl border border-gold/30 bg-gold/5 px-3.5 py-2.5 text-sm text-offwhite">
             {state.notice}
           </p>
+        )}
+        {serviceMoves.length > 0 && (
+          <div className="flex min-w-0 flex-col gap-1 rounded-xl border border-subtle px-3.5 py-2.5" data-testid="series-service-price">
+            <p className="text-sm text-offwhite [overflow-wrap:anywhere]">
+              Service: {[...new Set(serviceMoves.map((c) => serviceName(c.from.serviceId)))].join(" or ")} →{" "}
+              {serviceName(serviceMoves[0]!.to.serviceId)}
+            </p>
+            <p className="text-sm text-offwhite">{priceLine}</p>
+            <p className="text-[11px] leading-snug text-muted/80">
+              The new service&apos;s menu price isn&apos;t used. To charge it, change that appointment&apos;s price on
+              its own.
+            </p>
+          </div>
         )}
         <Group title={p.change.length ? `${p.change.length} will change` : "Nothing will change"}>
           {p.change.length === 0 ? (
@@ -399,6 +428,9 @@ export function SeriesEditFields({ state }: { state: SeriesEditState }) {
                       {c.to.staffId !== c.from.staffId && ` · ${staffName(c.from.staffId)} → ${staffName(c.to.staffId)}`}
                       {c.to.serviceId !== c.from.serviceId &&
                         ` · ${serviceName(c.from.serviceId)} → ${serviceName(c.to.serviceId)}`}
+                      {mixedPrices &&
+                        c.to.serviceId !== c.from.serviceId &&
+                        ` · stays ${c.bookedPriceCents == null ? "unpriced" : formatCents(c.bookedPriceCents)}`}
                     </span>
                     {c.problem && (
                       <span className="text-sm text-danger-soft [overflow-wrap:anywhere]" data-testid="series-problem">
@@ -430,7 +462,9 @@ export function SeriesEditFields({ state }: { state: SeriesEditState }) {
         )}
 
         <ul className="flex flex-col gap-1 px-1 text-[11px] leading-snug text-muted/80">
-          <li>Prices stay as booked. To change a price, edit that appointment on its own.</li>
+          {serviceMoves.length === 0 && (
+            <li>Prices stay as booked. To change a price, edit that appointment on its own.</li>
+          )}
           <li>
             If ChairBack emailed your {vocab.clientNoun} about these, they get one email with the new time for the
             next visit, and each later reminder shows its new time.

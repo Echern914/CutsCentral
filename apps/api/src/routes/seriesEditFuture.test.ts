@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { Prisma, prisma } from "@chairback/db";
-import { localMinutesOfDay, randomToken, zonedWallTimeToUtc } from "@chairback/config";
+import { __resetEnvCacheForTests, localMinutesOfDay, randomToken, zonedWallTimeToUtc } from "@chairback/config";
 import { AcuityError } from "../acuity/client.js";
 import { createApp } from "../app.js";
 import {
@@ -11,6 +11,7 @@ import {
 } from "../backgroundWork.js";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 import { raceBehindRowLock } from "../testing/raceBarrier.js";
+import { agreedPriceCents } from "../services/appointmentPriceLedger.js";
 
 /**
  * "THIS AND FUTURE" ON A REPEAT (engines/seriesEdit.ts).
@@ -284,6 +285,51 @@ describe("apply", () => {
       expect(row.priceAtBooking?.toFixed(2)).toBe("30.00");
     }
     expect(await prisma.payment.count({ where: { shopId } })).toBe(0);
+  });
+
+  it("🔴 the booked price is what every surface reads after a new service: review, row, client page, checkout", async () => {
+    const { series, rows } = await makeSeries();
+    const body = { fromAppointmentId: rows[0]!.id, changes: { serviceId: svcLong } };
+    // The review: each date says what it was booked at ($30), not the new
+    // service's menu price ($55).
+    const p = await preview(series.id, body);
+    expect(p.status).toBe(200);
+    expect(p.body.change.map((c: { bookedPriceCents: number | null }) => c.bookedPriceCents)).toEqual(
+      rows.map(() => 3000),
+    );
+    expect((await apply(series.id, { ...body, digest: p.body.digest })).status).toBe(200);
+
+    const after = await rowsOf(series.id);
+    for (const row of after) {
+      expect(row.serviceId).toBe(svcLong);
+      expect(row.priceAtBooking?.toFixed(2)).toBe("30.00");
+    }
+    // No price edit was recorded, so what the client agreed to is still $30 -
+    // the ceiling a saved card can be charged up to.
+    expect(await prisma.appointmentPriceChange.count({ where: { appointmentId: { in: after.map((r) => r.id) } } })).toBe(0);
+    expect(await agreedPriceCents(shopId, after[0]!.id, 3000)).toBe(3000);
+
+    // The client's own page shows the new service and its length (it shows no
+    // price, so it cannot contradict one).
+    const manage = await request(app).get(`/api/book/manage/${after[0]!.manageToken}`);
+    expect(manage.status).toBe(200);
+    expect(manage.body.service.name).toBe("Cut+Beard");
+    expect(Date.parse(manage.body.endsAt) - Date.parse(manage.body.startsAt)).toBe(60 * 60_000);
+    expect(manage.body).not.toHaveProperty("price");
+
+    // Checkout collects the booked $30.
+    process.env.SERVICE_CHECKOUT_ENABLED = "true";
+    __resetEnvCacheForTests();
+    try {
+      const co = await agent.get(`/api/checkout/appointments/${after[0]!.id}`);
+      expect(co.status).toBe(200);
+      expect(co.body.appointment.serviceName).toBe("Cut+Beard");
+      expect(co.body.totalCents).toBe(3000);
+      expect(co.body.remainingCents).toBe(3000);
+    } finally {
+      delete process.env.SERVICE_CHECKOUT_ENABLED;
+      __resetEnvCacheForTests();
+    }
   });
 
   it("leaves cancelled, completed, waiting and Acuity-owned visits alone, and says why", async () => {

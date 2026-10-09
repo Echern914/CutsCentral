@@ -54,6 +54,7 @@ function describePlan(plan: SeriesEditPlan) {
       id: v.id,
       from: { startsAt: v.from.startsAt.toISOString(), endsAt: v.from.endsAt.toISOString(), staffId: v.from.staffId, serviceId: v.from.serviceId },
       to: { startsAt: v.to.startsAt.toISOString(), endsAt: v.to.endsAt.toISOString(), staffId: v.to.staffId, serviceId: v.to.serviceId },
+      bookedPriceCents: v.bookedPriceCents,
       ...(v.problem ? { problem: v.problem } : {}),
     })),
     skipped: plan.skipped.map((s) => ({ id: s.id, startsAt: s.startsAt.toISOString(), reason: s.reason })),

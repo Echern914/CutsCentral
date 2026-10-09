@@ -13,6 +13,7 @@ import { effectiveDurationAt } from "./pricing.js";
 import { appointmentOwnedByPlatform } from "./visitOrigin.js";
 import { swapForReschedule } from "./acuityMirror.js";
 import { blockSentence, describeOverlap, holdSentence } from "../services/appointmentOverride.js";
+import { decimalToCents } from "../services/appointmentPriceLedger.js";
 
 /**
  * EDIT "THIS AND FUTURE" APPOINTMENTS OF A REPEAT - start time, service and
@@ -83,6 +84,12 @@ export interface PlannedVisit {
   to: { startsAt: Date; endsAt: Date; staffId: string; serviceId: string };
   /** The time or the provider changes - the client would notice. */
   clientVisible: boolean;
+  /**
+   * What this visit was booked at, and still costs after the change: a
+   * different service never re-prices it (the single edit doesn't either).
+   * Shown in the review so the barber sees the price stay, not assumes it.
+   */
+  bookedPriceCents: number | null;
   emailedBefore: boolean;
   problem?: SeriesSlotProblem;
 }
@@ -183,6 +190,7 @@ export async function planSeriesEdit(
       serviceId: true,
       status: true,
       updatedAt: true,
+      priceAtBooking: true,
       confirmationEmailSentAt: true,
       reminderEmailSentAt: true,
       visit: { select: { acuityAppointmentId: true } },
@@ -263,6 +271,7 @@ export async function planSeriesEdit(
       from: { startsAt: row.startsAt, endsAt: row.endsAt, staffId: row.staffId, serviceId: row.serviceId },
       to,
       clientVisible: startsAt.getTime() !== row.startsAt.getTime() || staffId !== row.staffId,
+      bookedPriceCents: decimalToCents(row.priceAtBooking),
       emailedBefore: row.confirmationEmailSentAt !== null || row.reminderEmailSentAt !== null,
     });
     digestParts.push([row.id, isoMin(row.updatedAt), isoMin(startsAt), isoMin(endsAt), staffId, serviceId]);

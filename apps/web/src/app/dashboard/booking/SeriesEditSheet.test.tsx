@@ -190,6 +190,53 @@ describe("where it is offered", () => {
   });
 });
 
+describe("a new service keeps the booked price, and the review says so", () => {
+  /** Both Thursdays: Trim -> Trim and wash at the same time, booked at `cents`. */
+  const serviceChange = (cents: (number | null | undefined)[]): SeriesEditPreview => ({
+    ...PREVIEW,
+    change: PREVIEW.change.map((c, i) => ({
+      id: c.id,
+      from: c.from,
+      to: { ...c.from, endsAt: new Date(Date.parse(c.from.startsAt) + 60 * 60_000).toISOString(), serviceId: "svc2" },
+      ...(cents[i] === undefined ? {} : { bookedPriceCents: cents[i] }),
+    })),
+  });
+  async function reviewTrimAndWash(preview: SeriesEditPreview) {
+    previewSeries.mockResolvedValue({ ok: true, data: preview });
+    await openSeriesEdit();
+    fireEvent.change(screen.getByLabelText(/^Service/), { target: { value: "svc2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review dates" }));
+    await screen.findByTestId("series-edit-review");
+    return screen.getByTestId("series-service-price").textContent ?? "";
+  }
+
+  it("🔴 'Service: Trim → Trim and wash' and 'Booked price stays $40.'", async () => {
+    const said = await reviewTrimAndWash(serviceChange([4000, 4000]));
+    expect(previewSeries).toHaveBeenCalledWith("ser1", { fromAppointmentId: "appt1", changes: { serviceId: "svc2" } });
+    expect(said).toContain("Service: Trim → Trim and wash");
+    expect(said).toContain("Booked price stays $40.");
+    expect(said).toMatch(/menu price isn.t used/);
+  });
+
+  it("different booked prices are each named by date", async () => {
+    const said = await reviewTrimAndWash(serviceChange([4000, 3550]));
+    expect(said).toContain("Each keeps the price it was booked at");
+    const review = screen.getByTestId("series-edit-review").textContent ?? "";
+    expect(review).toContain("stays $40");
+    expect(review).toContain("stays $35.50");
+  });
+
+  it("an unpriced booking is not given one", async () => {
+    expect(await reviewTrimAndWash(serviceChange([null, null]))).toContain("No price was booked, and none is added.");
+  });
+
+  it("an older API that sends no price: claims nothing about the figure", async () => {
+    const said = await reviewTrimAndWash(serviceChange([undefined, undefined]));
+    expect(said).toContain("Prices stay as booked.");
+    expect(said).not.toMatch(/\$|No price was booked/);
+  });
+});
+
 describe("review before anything changes", () => {
   it("🔴 sends only what changed, and shows every date before applying", async () => {
     await openSeriesEdit();
