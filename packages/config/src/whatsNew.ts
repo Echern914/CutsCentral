@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-08-one-visit-one-punch",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Log visit can't punch the same visit twice",
+    body:
+      "Log visit now asks first when the client already has a visit that day (booked, synced or logged by hand), " +
+      "so the same cut isn't punched twice. A tap sent twice, or retried after a dropped connection, logs once. " +
+      "Rewards now shows when a promotion is adding punches to every visit.",
+  },
+  {
     id: "2026-10-08-booking-page-truth",
     date: "2026-10-08",
     kind: "fix",

@@ -1,6 +1,7 @@
 "use client";
 
 import { cap, useVocab } from "@/components/VocabProvider";
+import Link from "next/link";
 import { useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { NumberField } from "@/components/ui/NumberField";
@@ -27,6 +28,11 @@ const smallBtn =
 const goldBtn =
   "rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50";
 
+/** "Oct 31" - the same reading the Promotions page gives a promo's end. */
+function fmtShortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 type Reward = LoyaltyConfig["rewards"][number];
 type Rule = LoyaltyConfig["rules"][number];
 type CardType = LoyaltyConfig["cards"][number];
@@ -36,7 +42,11 @@ export function RewardsBuilder({ config }: { config: LoyaltyConfig }) {
     <div className="flex flex-col gap-6">
       <PunchCards cards={config.cards} />
       <RewardMenu rewards={config.rewards} cards={config.cards} />
-      <Earning punchesPerVisit={config.punchesPerVisit} rules={config.rules} />
+      <Earning
+        punchesPerVisit={config.punchesPerVisit}
+        rules={config.rules}
+        extraPromos={config.extraPunchPromos ?? []}
+      />
     </div>
   );
 }
@@ -359,9 +369,11 @@ function RewardForm({
 function Earning({
   punchesPerVisit,
   rules,
+  extraPromos,
 }: {
   punchesPerVisit: number;
   rules: Rule[];
+  extraPromos: NonNullable<LoyaltyConfig["extraPunchPromos"]>;
 }) {
   const vocab = useVocab();
   const { toast } = useToast();
@@ -370,6 +382,7 @@ function Earning({
   const [adding, setAdding] = useState(false);
   const [match, setMatch] = useState("");
   const [punches, setPunches] = useState(2);
+  const extraTotal = extraPromos.reduce((sum, p) => sum + p.extraPunches, 0);
 
   function saveRate(next: number) {
     const clamped = Math.min(10, Math.max(1, next));
@@ -425,6 +438,34 @@ function Earning({
         </span>
         <p className="text-sm text-offwhite">{rate === 1 ? "punch" : "punches"}</p>
       </div>
+
+      {/* 🔴 What a visit ACTUALLY earns right now. Extra-punch promotions stack
+          on top of the rate above, and they live on another page - so a shop
+          set to 1 with an open-ended double-punch promo was paying 2 with
+          nothing here saying so. */}
+      {extraTotal > 0 && (
+        <div role="note" className="border-b border-subtle bg-gold/5 px-5 py-3">
+          <p className="text-sm text-offwhite">
+            Right now a visit earns{" "}
+            <span className="font-semibold text-gold">{rate + extraTotal}</span>: promotions add{" "}
+            {extraTotal} on top.
+          </p>
+          <ul className="mt-1 flex flex-col gap-0.5 text-xs text-muted">
+            {extraPromos.map((p) => (
+              <li key={p.id} className="min-w-0 truncate">
+                &ldquo;{p.title}&rdquo; +{p.extraPunches}{" "}
+                {p.endsAt ? `until ${fmtShortDate(p.endsAt)}` : "with no end date"}
+              </li>
+            ))}
+          </ul>
+          <Link
+            href="/dashboard/promotions"
+            className="mt-1 inline-block text-xs text-gold underline-offset-2 hover:underline"
+          >
+            Manage promotions
+          </Link>
+        </div>
+      )}
 
       {/* Service rules */}
       <div className="px-5 py-4">
