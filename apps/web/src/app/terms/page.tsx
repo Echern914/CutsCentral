@@ -3,10 +3,13 @@ import { APP_NAME } from "@chairback/config/constants";
 import {
   A,
   H2,
+  H3,
   LEGAL_ENTITY,
   LegalShell,
   Notice,
   P,
+  PRIVACY_TERMS_EFFECTIVE_DATE,
+  PRIVACY_TERMS_UPDATED_DATE,
   Strong,
   SUPPORT_EMAIL,
   UL,
@@ -21,6 +24,8 @@ export default function TermsPage() {
   return (
     <LegalShell
       title="Terms of Service"
+      effectiveDate={PRIVACY_TERMS_EFFECTIVE_DATE}
+      updatedDate={PRIVACY_TERMS_UPDATED_DATE}
       intro={
         <Notice>
           PLEASE READ THESE TERMS CAREFULLY. BY CREATING AN ACCOUNT OR USING THE
@@ -36,16 +41,20 @@ export default function TermsPage() {
         agreement between you and {LEGAL_ENTITY} (<Strong>“{APP_NAME}”</Strong>,{" "}
         <Strong>“we”</Strong>, <Strong>“us”</Strong>, or <Strong>“our”</Strong>)
         and govern your access to and use of the {APP_NAME} websites,
-        dashboards, public shop pages, rewards pages, APIs, and related services
-        (collectively, the <Strong>“Service”</Strong>).
+        dashboards, public shop and booking pages, rewards pages, the{" "}
+        {APP_NAME} mobile app, APIs, and related services (collectively, the{" "}
+        <Strong>“Service”</Strong>).
       </P>
       <P>
-        {APP_NAME} is a client-retention and loyalty platform for barbershops,
-        salons, and similar appointment-based personal-care businesses. The
-        Service can connect to
-        your scheduling account (currently Acuity Scheduling), track completed
-        visits, maintain digital punch-card balances, host a public page for
-        your shop, and send text messages (such as rebooking reminders and
+        {APP_NAME} is a booking, client-retention, and loyalty platform for
+        barbershops, salons, and similar appointment-based personal-care
+        businesses. The Service can take online bookings for your shop, connect
+        to your scheduling account (currently Acuity Scheduling or Square),
+        collect payments from your clients through your own Stripe account
+        (deposits, pay-ahead bookings, card-on-file charges, and tips), track
+        completed visits, maintain digital punch-card
+        balances, host a public page for your shop, and send texts, emails,
+        and app notifications (such as confirmations, rebooking reminders, and
         promotional offers) to your clients on your behalf.
       </P>
       <P>
@@ -70,9 +79,11 @@ export default function TermsPage() {
           You must be at least 18 years old and able to form a binding contract.
         </li>
         <li>
-          The Service is offered for business use by barbershops, salons, and
-          similar appointment-based businesses located in the United States. It
-          is not offered for personal, household, or consumer use.
+          Shop accounts are offered for business use by barbershops, salons,
+          and similar appointment-based businesses located in the United States,
+          not for personal, household, or consumer use. Clients who book with a
+          Shop or use the {APP_NAME} app are covered by “If you are a Client”
+          below.
         </li>
         <li>
           You must provide accurate account information and keep it current.
@@ -87,6 +98,46 @@ export default function TermsPage() {
           We may suspend or terminate accounts that violate these Terms or that
           we reasonably believe create risk or legal exposure for us, other
           users, or message recipients.
+        </li>
+      </UL>
+      <H3>If you are a Client</H3>
+      <P>
+        If you book with a Shop through the Service, pay a Shop, or use the{" "}
+        {APP_NAME} app, these Terms apply to that use, and:
+      </P>
+      <UL>
+        <li>
+          <Strong>Your booking is with the Shop.</Strong> The Shop sets its
+          services, prices, availability, and policies, including any deposit,
+          cancellation, no-show, and card-on-file terms. Those policies are
+          shown to you before you book, and by booking you agree to the version
+          shown. {APP_NAME} is not a party to your appointment and does not
+          provide the services.
+        </li>
+        <li>
+          <Strong>Payments go to the Shop.</Strong> Card payments are processed
+          by Stripe and paid to the Shop. Refunds, kept deposits, fees, and
+          charges to a saved card are decided by the Shop under the policy you
+          agreed to. A card is saved only if you choose to save it.
+        </li>
+        <li>
+          <Strong>Rewards are the Shop’s offer</Strong> (see Section 7).
+        </li>
+        <li>
+          <Strong>Your app account</Strong> is yours alone. Keep your sign-in
+          codes private. You can delete the account at any time from the app’s
+          Profile screen; each Shop’s own record of your visits stays with that
+          Shop (see our <A href="/privacy">Privacy Policy</A>).
+        </li>
+        <li>
+          Texts are sent only with the consent the law requires, and you can
+          reply STOP at any time. App notifications are optional and can be
+          turned off in your phone’s settings.
+        </li>
+        <li>
+          Questions about an appointment, a price, a payment, or a reward are
+          between you and the Shop. Contact the Shop first; we will help where
+          we can at <A href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</A>.
         </li>
       </UL>
 
@@ -133,7 +184,14 @@ export default function TermsPage() {
         </li>
       </UL>
 
-      <H2>5. Text messaging — your responsibilities</H2>
+      <H2>5. Messaging — your responsibilities</H2>
+      <P>
+        The Service can also email your clients and send notifications to
+        clients who use the {APP_NAME} app. Promotional emails go only to
+        clients who agreed to receive them and carry an unsubscribe link; you
+        are responsible for the content of the messages you write and send,
+        and the commitments below apply to them as they do to texts.
+      </P>
       <P>
         The Service can send SMS messages to your clients on your behalf, from a
         telephone number shared across the platform, with your shop’s name in
@@ -244,6 +302,23 @@ export default function TermsPage() {
           compliance.
         </li>
       </UL>
+      <H3>The help assistant and AI tools you connect</H3>
+      <UL>
+        <li>
+          The assistant built into the dashboard answers questions from{" "}
+          {APP_NAME}’s own help content. It does not send your data to an AI
+          provider.
+        </li>
+        <li>
+          You may connect an AI assistant of your own choosing to your account
+          (for example through our MCP connector). The connection is read-only
+          and covers only what you allow when you connect it: it cannot book,
+          cancel, move, refund, or message anyone. What it reads, including
+          Client Data, you choose to share with that provider. You are
+          responsible for that provider, its terms, and what you do with its
+          answers. You can disconnect it at any time.
+        </li>
+      </UL>
 
       <H2>7. Rewards, punch cards, and promotions are your offers</H2>
       <UL>
@@ -333,9 +408,11 @@ export default function TermsPage() {
 
       <H2>10. Third-party services</H2>
       <P>
-        The Service interoperates with third-party services such as Acuity
-        Scheduling (Squarespace), Twilio, Google (optional sign-in), and our
-        hosting and database providers. Your use of a third-party service is
+        The Service interoperates with third-party services such as Stripe
+        (billing and payments), Acuity Scheduling (Squarespace), Square,
+        Twilio, Resend, Apple (Sign in with Apple, Apple Wallet, and app
+        notifications), Google (optional sign-in), any AI assistant you
+        connect, and our hosting and database providers. Your use of a third-party service is
         governed by that third party’s own terms and privacy policy. We do not
         control third-party services and are not responsible for their acts,
         omissions, outages, data errors, or changes to their APIs. If you
@@ -345,14 +422,55 @@ export default function TermsPage() {
         with that provider.
       </P>
 
-      <H2>11. Fees</H2>
-      <P>
-        The Service is currently offered free of charge. We may introduce paid
-        plans, fees, or usage limits in the future. If we do, we will give you
-        reasonable advance notice, and continued use after the effective date of
-        a fee constitutes acceptance. Carrier message and data rates charged to
-        message recipients are always outside our control.
-      </P>
+      <H2>11. Fees and payments</H2>
+      <H3>Your subscription</H3>
+      <UL>
+        <li>
+          Shop accounts are offered on the paid plans shown on our{" "}
+          <A href="/pricing">pricing page</A>, after a free trial. Plans are
+          billed monthly in advance through Stripe and renew automatically
+          each month until you cancel.
+        </li>
+        <li>
+          Plans are month to month: you can cancel at any time from your
+          billing settings, with no term and no cancellation fee. Except where
+          the law requires otherwise, fees already paid are not refunded.
+        </li>
+        <li>
+          If a payment fails, we may limit paid features until it is resolved.
+          We will give you reasonable advance notice of any price change, and
+          continued use after it takes effect means you accept it.
+        </li>
+        <li>
+          Referral credits, if any, are governed by the program terms shown
+          when you refer someone and by our{" "}
+          <A href="/affiliate-terms">partner terms</A> where they apply.
+        </li>
+      </UL>
+      <H3>Payments from your clients</H3>
+      <UL>
+        <li>
+          To take card payments through the Service you must connect your own
+          Stripe account and accept Stripe’s terms, including the Stripe
+          Connected Account Agreement. You are the merchant of record for
+          payments your clients make to you.
+        </li>
+        <li>
+          <Strong>You are responsible for</Strong> your deposit, cancellation,
+          no-show, and card-on-file policies; for getting your client’s consent
+          before charging a saved card, as the Service asks them for; for
+          refunds, disputes, and chargebacks; and for taxes on your services.
+          Stripe’s processing fees apply to your payments.
+        </li>
+        <li>
+          {APP_NAME} does not currently take a fee from your clients’ payments.
+          If that changes, we will tell you before it applies to you.
+        </li>
+        <li>
+          Carrier message and data rates charged to message recipients are
+          always outside our control.
+        </li>
+      </UL>
 
       <H2>12. Intellectual property; feedback</H2>
       <P>

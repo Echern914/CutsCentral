@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-09-privacy-terms-updated",
+    date: "2026-10-09",
+    kind: "feature",
+    title: "Updated Privacy Policy and Terms",
+    body:
+      "Our Privacy Policy and Terms now cover what has launched since June: paid plans, client payments through " +
+      "your Stripe account, the ChairBack app, email and app notifications, Square, and AI tools you connect. " +
+      "They take effect October 23.",
+  },
+  {
     id: "2026-10-08-moved-booking-keeps-its-price",
     date: "2026-10-08",
     kind: "fix",
