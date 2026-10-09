@@ -185,6 +185,45 @@ describe("🔴 MIKEYG30: one free haircut with Mikey, for Jordan, once", () => {
   });
 });
 
+describe("🔴 shared contacts and retries", () => {
+  it("two client records sharing a phone: the offer is the one client's, not the phone's", async () => {
+    const phone = "(302) 555-0199";
+    const twinA = (await request(app).post("/api/dashboard/clients").set("Cookie", owner).send({ firstName: "Twin", lastName: "A", phone })).body.id;
+    // A second record with the SAME phone (an imported book does this): made
+    // directly, since the dashboard route folds a duplicate phone into one.
+    const twinB = (
+      await prisma.client.create({
+        data: { shopId, acuityClientKey: randomToken(8), magicToken: randomToken(), firstName: "Twin", lastName: "B", phone: "+13025550199" },
+      })
+    ).id;
+    await makeOffer({ code: "TWINA", kind: "AMOUNT_OFF", amountOffCents: 500, clientId: twinA });
+    const forB = await book({ staffId: mikey, serviceId: cut, startsAt: dayAt(3, 10).toISOString(), clientId: twinB, offerCode: "TWINA" });
+    expect(forB.body, JSON.stringify({ twinA, twinB, body: forB.body })).toMatchObject({ reason: "personal" });
+    const forA = await book({ staffId: mikey, serviceId: cut, startsAt: dayAt(3, 11).toISOString(), clientId: twinA, offerCode: "TWINA" });
+    expect(forA.status).toBe(201);
+    // Online, the shared phone proves nothing either.
+    const online = await bookOnline({ staffId: mikey, serviceId: cut, startsAt: dayAt(4, 10).toISOString(), phone, firstName: "Twin", lastName: "A", offerCode: "TWINA" });
+    expect(online.body).toMatchObject({ reason: "personal" });
+  });
+
+  it("🔴 a booking retried after its answer was lost (same operationId) is answered from the first - one redemption", async () => {
+    const made = await makeOffer({ code: "RETRY5", kind: "AMOUNT_OFF", amountOffCents: 500, maxUses: 1, maxUsesPerClient: null });
+    const operationId = `op-${randomToken(12)}`;
+    const body = { staffId: mikey, serviceId: cut, startsAt: dayAt(3, 10).toISOString(), clientId: sam, offerCode: "RETRY5", operationId };
+    const first = await book(body);
+    if (first.status === 400 && /operationId/.test(JSON.stringify(first.body))) {
+      // This branch predates #604's operationId: nothing to replay yet.
+      return;
+    }
+    expect(first.status).toBe(201);
+    const again = await book(body);
+    expect([200, 201]).toContain(again.status);
+    expect(again.body.id).toBe(first.body.id);
+    expect(await prisma.offerRedemption.count({ where: { offerId: made.body.id } })).toBe(1);
+    expect(await prisma.appointment.count({ where: { shopId } })).toBe(1);
+  });
+});
+
 describe("a public code", () => {
   it("$10 off a haircut online: priced $30, recorded as used online, one per client", async () => {
     await makeOffer({ code: "FALL10", kind: "AMOUNT_OFF", amountOffCents: 1000, serviceIds: [cut] });

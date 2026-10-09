@@ -74,7 +74,7 @@ describe("🔴 MIKEYG30 from Jordan's page", () => {
     expect(said).toContain("Jordan Q gets a free Haircut with Mikey.");
     expect(said).toContain("Haircut: $40 → pays $0");
     expect(said).toContain("One use.");
-    expect(said).toContain("Only when you book it for Jordan Q.");
+    expect(said).toContain("Staff-applied: only when you book Jordan Q (New appointment → Offer). Not usable online.");
     expect(said).toContain("ChairBack sends nothing.");
     // The code's letters are only a name.
     expect(screen.getByText(/Saved as MIKEYG30\. Its letters don't change what it gives\./)).toBeTruthy();
@@ -100,6 +100,7 @@ describe("🔴 MIKEYG30 from Jordan's page", () => {
     const made = await screen.findByTestId("offer-made");
     expect(made.textContent).toContain("MIKEYG30");
     expect(made.textContent).toContain("ChairBack doesn't send it. Share it with Jordan Q yourself.");
+    expect(screen.getByTestId("staff-applied-note").textContent).toMatch(/Staff-applied\..*New appointment → pick Jordan Q as the client → Offer/);
   });
 
   it("🔴 two taps make one offer", async () => {
@@ -197,7 +198,7 @@ describe("the list", () => {
     const row = within(screen.getByTestId("offers-list")).getByText("MIKEYG30").closest("li")!;
     expect(row.textContent).toContain("A free Haircut");
     expect(row.textContent).toContain("with Mikey");
-    expect(row.textContent).toContain("Only Jordan Q · 0 of 1 used");
+    expect(row.textContent).toContain("Only Jordan Q · staff-applied (New appointment → Offer) · 0 of 1 used");
   });
 
   it("an unused offer can be deleted; a used one only paused", async () => {
