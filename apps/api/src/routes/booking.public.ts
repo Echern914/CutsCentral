@@ -42,6 +42,16 @@ import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { staffSpanBlocked } from "../engines/blockedTime.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import {
+  claimOfferUse,
+  findOfferByCode,
+  OfferRefused,
+  quoteMovedVisit,
+  quoteOffer,
+  recordMovedPrice,
+  type OfferQuote,
+} from "../engines/offers.js";
+import { offerRefusalText, offerValueWords } from "@chairback/config/offers";
+import {
   completeReschedule,
   dispatchCreateAll,
   releaseForAppointment,
@@ -131,6 +141,7 @@ import { sha256Hex } from "../engines/waitlistJoin.js";
 import {
   rewardsLimiter,
   bookingReadLimiter,
+  offerCodeLimiter,
   bookingWriteLimiter,
   savedCardCodeLimiter,
 } from "../middleware/rateLimit.js";
@@ -264,6 +275,74 @@ function publicPaymentSummary(shop: {
 // ---------------------------------------------------------------------------
 
 // GET /api/book/offer/:token - reveal the held slot to the link holder.
+const codeCheckSchema = z
+  .object({
+    code: z.string().trim().min(1).max(40),
+    serviceId: z.string().min(1),
+    staffId: z.string().min(1),
+    startsAt: validDate,
+    addOnIds: z.array(z.string().min(1)).max(20).optional(),
+  })
+  .strict();
+
+/**
+ * "HAVE A CODE?" - what a shop's code does to this visit, priced exactly the
+ * way the booking will price it (the create route asks again, under a lock,
+ * when it books). Public codes only: a personal offer is refused here.
+ */
+bookingPublicRouter.post("/:slug/code", offerCodeLimiter, async (req, res) => {
+  const shop = await resolveNativeShop(req.params.slug);
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const parsed = codeCheckSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const d = parsed.data;
+  const service = await prisma.service.findFirst({
+    where: { id: d.serviceId, shopId: shop.id, active: true },
+    select: { name: true, price: true, priceOverrides: true, dateOverrides: true, timeOverrides: true },
+  });
+  if (!service) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  try {
+    const offer = shop.offersEnabled ? await findOfferByCode(prisma, shop.id, d.code) : null;
+    if (!offer) throw new OfferRefused("not_found");
+    const base = effectivePriceAt(service.price === null ? null : Number(service.price), {
+      at: d.startsAt,
+      timezone: shop.timezone,
+      weekdayOverrides: service.priceOverrides,
+      dateOverrides: service.dateOverrides,
+      timeWindows: service.timeOverrides,
+    });
+    const addOns = await resolveAddOns(shop.id, d.serviceId, d.addOnIds);
+    const quote = await quoteOffer(prisma, offer, {
+      serviceCents: base === null ? null : Math.round(base * 100),
+      addOnCents: Math.round(addOns.extraPrice * 100),
+      clientId: null,
+      now: new Date(),
+      visit: { serviceId: d.serviceId, staffId: d.staffId, startsAt: d.startsAt, provenClientId: null },
+    });
+    res.json({
+      ok: true,
+      code: offer.code,
+      words: offerValueWords(offer, (id) => (id === d.serviceId ? service.name : null)),
+      ...quote,
+    });
+  } catch (err) {
+    if (err instanceof OfferRefused) {
+      res.status(409).json(publicOfferRefusedBody(err, shop.timezone));
+      return;
+    }
+    throw err;
+  }
+});
+
 bookingPublicRouter.get("/offer/:token", bookingReadLimiter, async (req, res) => {
   const now = new Date();
   const offer = await prisma.waitlistOffer.findUnique({
@@ -618,6 +697,9 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       // When on, the booking page offers "Join the waitlist" (a standing button
       // and when a day is fully booked).
       waitlistEnabled: shop.waitlistEnabled,
+      // Whether the page offers "Have a code?" (engines/offers.ts). A code
+      // typed anyway is refused exactly like a typo when this is off.
+      offersEnabled: shop.offersEnabled,
       // The form marks Email required when true, so the customer finds out at
       // the field rather than at submit. The server enforces it regardless.
       emailRequired: publicBookingEmailRequired(),
@@ -1635,6 +1717,11 @@ const createSchema = z
     savedCardToken: z.string().min(20).max(200).optional(),
     // Chosen service add-ons (ids). Invalid/foreign ids are dropped server-side.
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
+    /**
+     * A shop's PUBLIC offer code (engines/offers.ts). A personal offer is
+     * refused here: nothing on this page proves who is booking.
+     */
+    offerCode: z.string().trim().min(1).max(40).optional(),
     // Answers to the shop's own booking questions. Ids that aren't this shop's
     // live questions are dropped server-side; what the shop DOES ask is
     // validated against the question itself (engines/bookingIntake.ts), so the
@@ -2057,6 +2144,42 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     basePrice === null && addOns.extraPrice === 0
       ? null
       : (basePrice ?? 0) + addOns.extraPrice;
+  // 🔴 OFFERS ONLINE: PUBLIC CODES ONLY. Name, phone and email on this page are
+  // typed, not proven, so a personal offer is refused here (the shop books it
+  // for its client). Priced now, so the deposit is taken on what they will
+  // actually pay; the use is claimed in the booking's own transaction below.
+  let offerUse: { offerId: string; code: string; quote: OfferQuote; serviceCents: number | null } | null = null;
+  if (d.offerCode !== undefined) {
+    try {
+      const offer = shop.offersEnabled ? await findOfferByCode(prisma, shop.id, d.offerCode) : null;
+      if (!offer) throw new OfferRefused("not_found");
+      const serviceCents = basePrice === null ? null : Math.round(basePrice * 100);
+      const quote = await quoteOffer(prisma, offer, {
+        serviceCents,
+        addOnCents: Math.round(addOns.extraPrice * 100),
+        clientId: null,
+        now,
+        visit: {
+          serviceId: d.serviceId,
+          staffId: d.staffId,
+          startsAt,
+          provenClientId: null,
+          special: Boolean(targeted),
+          series: Boolean(d.recurrence),
+        },
+      });
+      offerUse = { offerId: offer.id, code: offer.code, quote, serviceCents };
+    } catch (err) {
+      if (err instanceof OfferRefused) {
+        res.status(409).json(publicOfferRefusedBody(err, shop.timezone));
+        return;
+      }
+      throw err;
+    }
+  }
+  // What this visit costs: the offer's total when one was used. A $0 total
+  // takes no deposit (toCents(0) is null - nothing to charge).
+  const bookedPrice = offerUse ? offerUse.quote.totalCents / 100 : effectivePrice;
   // The grid's own checks. A targeted slot was held to the same booking rules
   // above (and to blocks); it is deliberately bookable outside the weekly
   // hours, so the availability check below is for grid slots only.
@@ -2404,7 +2527,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
   // When true the appointment is written as a HOLD instead (PENDING with a
   // holdExpiresAt minutes out) and becomes a booking only when Stripe says the
   // money landed - see services/appointmentPaymentHold.ts.
-  const fullCents = toCents(effectivePrice);
+  const fullCents = toCents(bookedPrice);
   // DEPOSIT charges a fixed amount now and leaves the rest for the chair; AHEAD
   // charges the whole ticket. Capped at the price either way, so a $20 deposit
   // can never overcharge a $15 line-up.
@@ -2551,7 +2674,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           holdReason: collectsUpFront ? "payment" : null,
           startsAt,
           endsAt,
-          priceAtBooking: effectivePrice ?? undefined,
+          priceAtBooking: bookedPrice ?? undefined,
           addOns: addOns.snapshot as unknown as Prisma.InputJsonValue,
           // Frozen at booking time: renaming or deleting a question later never
           // rewrites what this customer answered.
@@ -2581,6 +2704,22 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           data: { bookedAppointmentId: appt.id },
         });
         if (claimed.count === 0) throw new SlotTakenError();
+      }
+      // The offer's use, in this same commit. A hold that runs out, or a
+      // cancellation, gives it back without touching this row (engines/offers.ts).
+      if (offerUse) {
+        await claimOfferUse(tx, {
+          shopId: shop.id,
+          offerId: offerUse.offerId,
+          appointmentId: appt.id,
+          via: "online",
+          expected: offerUse.quote,
+          serviceCents: offerUse.serviceCents,
+          addOnCents: Math.round(addOns.extraPrice * 100),
+          clientId: client.id,
+          now,
+          visit: { serviceId: d.serviceId, staffId: d.staffId, startsAt, provenClientId: null },
+        });
       }
       // Outbound Acuity mirror: the INTENT is written in this same
       // transaction, so an appointment can never exist without one. The HTTP
@@ -2623,6 +2762,12 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     }
     if (err instanceof SavedCardNotTheirsError) {
       res.status(409).json({ error: "saved_card_unavailable", code: "SAVED_CARD_UNAVAILABLE" });
+      return;
+    }
+    // The code's last use went (or the offer changed) between the price and
+    // the write: nothing was booked.
+    if (err instanceof OfferRefused) {
+      res.status(409).json(publicOfferRefusedBody(err, shop.timezone));
       return;
     }
     if (err instanceof SlotTakenError) {
@@ -3099,6 +3244,8 @@ const MANAGE_SELECT = {
       holdExpiresAt: true,
       // The balance line on a reopened card step (unfinishedCheckoutFor).
       priceAtBooking: true,
+      // Tip suggestions start from the price before an offer (services/tips.ts).
+      offerRedemption: { select: { listPriceCents: true } },
       // Whose appointment this is - for the card they saved here, if any, and
       // whether the shop blocked them from moving it (never sent to the page).
       clientId: true,
@@ -3996,6 +4143,26 @@ bookingPublicRouter.post(
       return;
     }
 
+    // 🔴 A booking made with an offer keeps it on the move - applied to the new
+    // time's price - or the move is refused and says why (engines/offers.ts).
+    const moved = await quoteMovedVisit(prisma, {
+      appointmentId: appt.id,
+      serviceId: appt.serviceId,
+      staffId: appt.staffId,
+      startsAt,
+      serviceCents: effectivePrice === null ? null : Math.round(effectivePrice * 100),
+      addOnCents: 0,
+    });
+    if (moved.kind === "refused") {
+      res.status(409).json({
+        error: "offer_refused",
+        reason: moved.reason,
+        message: `Your booking used an offer. ${offerRefusalText(moved.reason, { endsAt: moved.endsAt, timeZone: appt.shop.timezone, online: true })}`,
+      });
+      return;
+    }
+    const movedPrice = moved.kind === "applied" ? moved.totalCents / 100 : effectivePrice;
+
     // A booking PAID at booking can't be reconciled here (no top-up or partial
     // refund on this path), so a new price it can't take is refused and the
     // customer pointed at the shop, rather than silently left over/under-
@@ -4008,7 +4175,7 @@ bookingPublicRouter.post(
       !paidBookingTakesPrice({
         paidCents: bookingPayment.amount,
         bookedPriceCents: toCents(appt.priceAtBooking === null ? null : Number(appt.priceAtBooking)),
-        newPriceCents: toCents(effectivePrice),
+        newPriceCents: toCents(movedPrice),
       })
     ) {
       res.status(409).json({ error: "price_changed", message: "That day has a different price. Please contact the shop to move a paid booking." });
@@ -4055,12 +4222,13 @@ bookingPublicRouter.post(
         // moved appointment would silently never get its 24h/2h push. Check-in
         // state is likewise cleared: an "en route" tapped for the OLD time is
         // meaningless for the new one (and would pin a stale pill days out).
+        if (moved.kind === "applied") await recordMovedPrice(tx, moved);
         await tx.appointment.update({
           where: { id: appt.id },
           data: {
             startsAt,
             endsAt,
-            priceAtBooking: effectivePrice ?? null,
+            priceAtBooking: movedPrice ?? null,
             // 🔴 The EMAIL stamps must reset with the SMS ones. Confirmation
             // SMS is off for cost (CONFIRMATION_SMS_ENABLED=false), so email is
             // the only channel a customer hears about a booking on - and
@@ -4164,3 +4332,18 @@ bookingPublicRouter.post(
 // A tip from the client's own appointment page, after the visit
 // (booking.tips.ts). On the same token as cancel and reschedule.
 registerTipRoutes(bookingPublicRouter);
+
+/**
+ * An offer refusal on the public page. One shop only: a code from another
+ * shop, or this shop with offers off, reads exactly like a typo.
+ */
+function publicOfferRefusedBody(err: OfferRefused, timeZone: string) {
+  return {
+    error: "offer_refused",
+    reason: err.reason,
+    message:
+      err.reason === "changed"
+        ? "That offer just changed. Check the price and book again."
+        : offerRefusalText(err.reason, { endsAt: err.endsAt, timeZone, online: true }),
+  };
+}
