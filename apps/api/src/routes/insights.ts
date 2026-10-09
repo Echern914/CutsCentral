@@ -1052,15 +1052,24 @@ insightsRouter.put("/goal", requirePremiumAccess, async (req, res) => {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    await runWithShop(shop.id, (tx) =>
-      tx.serviceGoal.upsert({
+    // 🔴 ONE QUOTA PER SERVICE AND METRIC. The Insights row shows a single
+    // quota for each (service, metric), so switching "12 a week" to "50 a
+    // month" must REPLACE it. A bare upsert keyed on the period added a second
+    // row instead, and the row went on showing whichever one it found first -
+    // often the old weekly number the barber had just changed. Same
+    // transaction, so there is never a moment with both or with neither.
+    await runWithShop(shop.id, async (tx) => {
+      await tx.serviceGoal.deleteMany({
+        where: { shopId: shop.id, serviceId, metric, period: { not: period } },
+      });
+      await tx.serviceGoal.upsert({
         where: {
           shopId_serviceId_metric_period: { shopId: shop.id, serviceId, metric, period },
         },
         create: { shopId: shop.id, serviceId, metric, period, target },
         update: { target },
-      }),
-    );
+      });
+    });
     res.json({ ok: true });
     return;
   }

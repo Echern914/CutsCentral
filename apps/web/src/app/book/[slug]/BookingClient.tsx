@@ -91,6 +91,7 @@ import { groupsToAutoExpand } from "./autoExpand";
 import { revealElement } from "./reveal";
 import { ClientNoteBlock } from "../ClientNoteBlock";
 import { formatCents, formatPrice } from "@/lib/serviceFields";
+import { reloadPage } from "@/lib/reloadPage";
 
 /** One selectable time in the calendar grid, with who can serve it. */
 interface DaySlot {
@@ -2331,6 +2332,17 @@ export function BookingClient({
                   : " Please pick another time, or call "}
                 {data.shop.name}.
               </p>
+              {/* A full reload is the reset: it clears the payment secret, the
+                  charge, the held slot and the series in one step, and the
+                  unfinished-booking memory was already forgotten above. The
+                  copy told them to pick another time with nothing to tap. */}
+              <button
+                type="button"
+                onClick={reloadPage}
+                className="mt-3 rounded-full border border-amber-200/40 px-4 py-2 text-sm font-medium text-amber-100"
+              >
+                {seriesResult ? "Start again" : "Pick another time"}
+              </button>
             </div>
           ) : (
             <PaymentStep
@@ -4285,7 +4297,7 @@ function SavedCardUnlock({
       onUnlocked(res.savedCard);
       return;
     }
-    setNote("That code didn't work. Check it, or ask for a new one in a minute.");
+    setNote("That code didn't work. Check it, or send a new one.");
   }
 
   return (
@@ -4320,6 +4332,19 @@ function SavedCardUnlock({
             {busy ? "Checking…" : "Use my card"}
           </button>
         </div>
+      )}
+      {stage === "code" && (
+        <button
+          type="button"
+          onClick={() => {
+            setCode("");
+            void sendCode();
+          }}
+          disabled={busy}
+          className="self-start text-xs text-muted underline underline-offset-4 hover:text-offwhite disabled:opacity-60"
+        >
+          Send a new code
+        </button>
       )}
       {note && <p role="status">{note}</p>}
     </div>

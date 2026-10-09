@@ -118,3 +118,89 @@ describe("collectTapToPay", () => {
     expect(collect).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The reader connection across collections. The SDK refuses to connect while a
+ * reader is already connected, and nothing ever disconnected, so the second
+ * tap of an app session failed as "unavailable".
+ */
+describe("collectTapToPay - one reader connection per account", () => {
+  const same = { locationId: request.locationId, onBehalfOf: request.connectAccountId };
+
+  it("🔴 the second collection reuses a live connection for the same account and location", async () => {
+    const discover = vi.fn(async () => ({ reader: {} }));
+    const connect = vi.fn(async () => ({ ok: true as const }));
+    const t = terminal({ discoverTapToPayReader: discover, connect, connection: () => same });
+    expect((await collectTapToPay(t, request)).outcome).toBe("collected");
+    expect(discover).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("🔴 a connection made for ANOTHER account is dropped first - one barber's reader never takes another's payment", async () => {
+    const order: string[] = [];
+    const t = terminal({
+      connection: () => ({ locationId: request.locationId, onBehalfOf: "acct_OTHER" }),
+      disconnect: vi.fn(async () => {
+        order.push("disconnect");
+        return { ok: true as const };
+      }),
+      discoverTapToPayReader: vi.fn(async () => {
+        order.push("discover");
+        return { reader: {} };
+      }),
+      connect: vi.fn(async (p) => {
+        order.push(`connect:${p.onBehalfOf}`);
+        return { ok: true as const };
+      }),
+    });
+    expect((await collectTapToPay(t, request)).outcome).toBe("collected");
+    expect(order).toEqual(["disconnect", "discover", `connect:${request.connectAccountId}`]);
+  });
+
+  it("a different location reconnects too", async () => {
+    const disconnect = vi.fn(async () => ({ ok: true as const }));
+    const t = terminal({ connection: () => ({ ...same, locationId: "tml_OTHER" }), disconnect });
+    expect((await collectTapToPay(t, request)).outcome).toBe("collected");
+    expect(disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("🔴 'already connected' from the SDK: let go and connect once more", async () => {
+    const connect = vi
+      .fn()
+      .mockResolvedValueOnce({ error: "already connected", code: "AlreadyConnectedToReader" })
+      .mockResolvedValueOnce({ ok: true });
+    const disconnect = vi.fn(async () => ({ ok: true as const }));
+    const t = terminal({ connect, disconnect });
+    expect((await collectTapToPay(t, request)).outcome).toBe("collected");
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  it("only once: a second 'already connected' is reported, not looped on", async () => {
+    const connect = vi.fn(async () => ({ error: "already connected", code: "AlreadyConnectedToReader" }));
+    const t = terminal({ connect, disconnect: vi.fn(async () => ({ ok: true as const })) });
+    expect((await collectTapToPay(t, request)).outcome).toBe("unavailable");
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  it("🔴 a reused connection that went away (backgrounded): reconnect and retrieve again - before any card is read", async () => {
+    const retrieve = vi
+      .fn()
+      .mockResolvedValueOnce({ error: "not connected", code: "NotConnectedToReader" })
+      .mockResolvedValueOnce({ paymentIntent: { id: "pi_1" } });
+    const connect = vi.fn(async () => ({ ok: true as const }));
+    const collect = vi.fn(async () => ({ paymentIntent: { id: "pi_1" } }));
+    const t = terminal({ connection: () => same, retrieve, connect, collect, disconnect: vi.fn(async () => ({ ok: true as const })) });
+    expect((await collectTapToPay(t, request)).outcome).toBe("collected");
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(retrieve).toHaveBeenCalledTimes(2);
+    expect(collect).toHaveBeenCalledTimes(1);
+  });
+
+  it("🔴 never retries once a card may have been read: a drop during collection is reported, not repeated", async () => {
+    const collect = vi.fn(async () => ({ error: "not connected", code: "NotConnectedToReader" }));
+    const t = terminal({ connection: () => same, collect });
+    expect((await collectTapToPay(t, request)).outcome).toBe("failed");
+    expect(collect).toHaveBeenCalledTimes(1);
+  });
+});

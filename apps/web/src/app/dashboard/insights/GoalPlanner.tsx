@@ -161,7 +161,8 @@ export function GoalPlanner({
         .filter(([, l]) => l.priceDelta !== 0 || l.extraCuts > 0)
         .map(([serviceId, l]) => ({ serviceId, ...l })),
     };
-    const r = await saveGoalAction({ metric, period, target, plan });
+    // A thrown action (the network) used to leave Save on "Saving…" for good.
+    const r = await saveGoalAction({ metric, period, target, plan }).catch(() => ({ ok: false }));
     if (r.ok) {
       await onSaved();
       onClose();
@@ -184,9 +185,17 @@ export function GoalPlanner({
       className="max-w-2xl"
       footer={
         <>
-          <p className="hidden text-[11px] leading-snug text-muted sm:block sm:max-w-[20rem]">
-            The plan saves with the goal — your card shows goal vs plan vs actual.
-          </p>
+          {/* The error lives HERE, beside Save. In the body it sat under the
+              whole service list, out of sight of the button on a phone, so a
+              failed save looked like a Save that did nothing. */}
+          <FormError id={errorId} className="w-full sm:w-auto sm:flex-1">
+            {error}
+          </FormError>
+          {!error && (
+            <p className="hidden text-[11px] leading-snug text-muted sm:block sm:max-w-[20rem]">
+              The plan saves with the goal — your card shows goal vs plan vs actual.
+            </p>
+          )}
           {/* Below ~380px "Save goal & plan" wraps to two lines inside a
               half-width button. Stack them full width instead (-reverse puts
               the primary on top) rather than abbreviating the label. */}
@@ -373,8 +382,6 @@ export function GoalPlanner({
             )}
           </ul>
         </div>
-
-        <FormError id={errorId}>{error}</FormError>
 
         <p className="text-[11px] leading-snug text-muted sm:hidden">
           The plan saves with the goal — your card shows goal vs plan vs actual.

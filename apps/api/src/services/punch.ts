@@ -54,14 +54,16 @@ export async function visitEarnAmount(
 }
 
 /**
- * Extra punches per visit from LIVE "extra punches" promotions (double-punch
- * weeks etc.). Stacks on top of the rule/base amount.
+ * The "extra punches" promotions LIVE at `now` (double-punch weeks etc.). The
+ * one definition: the earn adds them below, and the Rewards page shows them
+ * next to the base rate - a shop set to "1 punch a visit" with a forgotten
+ * open-ended promo was otherwise giving 2 with nothing on that page saying so.
  */
-export async function liveExtraPunches(
+export async function liveExtraPunchPromos(
   tx: Prisma.TransactionClient,
   shopId: string,
   now: Date,
-): Promise<number> {
+): Promise<{ id: string; title: string; extraPunches: number; endsAt: Date | null }[]> {
   const promos = await tx.promotion.findMany({
     where: {
       shopId,
@@ -70,9 +72,23 @@ export async function liveExtraPunches(
       startsAt: { lte: now },
       OR: [{ endsAt: null }, { endsAt: { gt: now } }],
     },
-    select: { extraPunches: true },
+    orderBy: { startsAt: "asc" },
+    select: { id: true, title: true, extraPunches: true, endsAt: true },
   });
-  return promos.reduce((sum, p) => sum + Math.max(0, p.extraPunches ?? 0), 0);
+  return promos.map((p) => ({ ...p, extraPunches: Math.max(0, p.extraPunches ?? 0) }));
+}
+
+/**
+ * Extra punches per visit from LIVE "extra punches" promotions. Stacks on top
+ * of the rule/base amount.
+ */
+export async function liveExtraPunches(
+  tx: Prisma.TransactionClient,
+  shopId: string,
+  now: Date,
+): Promise<number> {
+  const promos = await liveExtraPunchPromos(tx, shopId, now);
+  return promos.reduce((sum, p) => sum + p.extraPunches, 0);
 }
 
 /** Which card an earn lands on, and how many punches (before promo extras). */

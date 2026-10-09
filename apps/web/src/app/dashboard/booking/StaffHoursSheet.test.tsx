@@ -95,3 +95,29 @@ describe("Staff hours sheet", () => {
     expect(screen.getByRole("button", { name: "Save hours" })).toBeTruthy();
   });
 });
+
+describe("working until midnight", () => {
+  it("🔴 an end of midnight can be picked and saves as the end of the day (1440)", async () => {
+    getAvailabilityAction.mockResolvedValue({ ok: true, data: WEEK });
+    open();
+    const friEnd = (await screen.findByRole("combobox", { name: "Fri end" })) as HTMLSelectElement;
+    // The last option, after 11:45 PM; "12:00 AM" at the top is the START of a day.
+    const last = friEnd.options[friEnd.options.length - 1]!;
+    expect(last.textContent).toBe("12:00 AM (midnight)");
+    fireEvent.change(friEnd, { target: { value: last.value } });
+    fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+    await waitFor(() => expect(saveAvailabilityAction).toHaveBeenCalledTimes(1));
+    const [, rules] = saveAvailabilityAction.mock.calls[0]!;
+    expect((rules as { weekday: number; endMin: number }[]).find((r) => r.weekday === 5)!.endMin).toBe(1440);
+  });
+
+  it("a saved midnight end reads as midnight, not noon", async () => {
+    getAvailabilityAction.mockResolvedValue({
+      ok: true,
+      data: { ...WEEK, rules: [{ weekday: 6, startMin: 1080, endMin: 1440 }] },
+    });
+    open();
+    const satEnd = (await screen.findByRole("combobox", { name: "Sat end" })) as HTMLSelectElement;
+    expect(satEnd.selectedOptions[0]!.textContent).toBe("12:00 AM (midnight)");
+  });
+});

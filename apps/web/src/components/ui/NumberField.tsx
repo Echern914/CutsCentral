@@ -35,9 +35,17 @@ export function NumberField({
   disabled,
   inputMode,
   blankAtFallback = false,
+  onCommit,
 }: {
   value: number;
   onChange: (next: number) => void;
+  /**
+   * Called once with the settled number when the field is LEFT (blur, or
+   * Enter). For a field that saves to the server on its own: `onChange` fires
+   * on every keystroke with the clamped in-between value, so saving from it
+   * sent 5 (the clamp of "1") on the way to typing 15.
+   */
+  onCommit?: (n: number) => void;
   min?: number;
   max?: number;
   step?: number;
@@ -121,6 +129,9 @@ export function NumberField({
       onFocus={() => {
         focused.current = true;
       }}
+      onKeyDown={(e) => {
+        if (onCommit && e.key === "Enter") e.currentTarget.blur();
+      }}
       onChange={(e) => {
         const raw = e.target.value;
         setDraft(raw); // show exactly what they typed (incl. empty)
@@ -134,7 +145,9 @@ export function NumberField({
         // or out-of-range draft doesn't linger — but under blankAtFallback a
         // committed fallback settles back to BLANK, not to a typed "0", or the
         // stuck zero returns the moment the field loses focus.
-        setDraft(show(coerce(draft)));
+        const settled = coerce(draft);
+        setDraft(show(settled));
+        onCommit?.(settled);
       }}
     />
   );

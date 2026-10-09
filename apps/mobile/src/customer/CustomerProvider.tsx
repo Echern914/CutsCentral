@@ -9,13 +9,14 @@ import {
   type MutableRefObject,
   type ReactNode,
 } from "react";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "expo-router";
 import { API_ORIGIN, STORAGE } from "@/src/config";
 import { getExpoPushToken } from "@/src/push";
 import { ApiError, createApiClient, type ApiClient } from "./api";
 import { clearCustomerSession, loadCustomerSession, saveCustomerSession } from "./sessionStore";
+import { createDeviceRegistrar, type DeviceRegistrar } from "./deviceRegistration";
 
 /**
  * Who is signed in to My ChairBack, and the API client that speaks for them.
@@ -40,6 +41,8 @@ interface CustomerContext {
   signOut: () => Promise<void>;
   /** The push token this phone registered, so sign-out can unregister it. */
   pushToken: MutableRefObject<string | null>;
+  /** Registers this phone for push; see deviceRegistration.ts. */
+  registrar: DeviceRegistrar;
 }
 
 const Ctx = createContext<CustomerContext | null>(null);
@@ -49,8 +52,15 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
   const [isDemo, setIsDemo] = useState(false);
   const token = useRef<string | null>(null);
   const pushToken = useRef<string | null>(null);
+  // Read by the registrar between awaits, so it sees a sign-out that happens
+  // while iOS is still answering - state would be a stale closure.
+  const canRegister = useRef(false);
+  canRegister.current = status === "signedIn" && !isDemo;
+  const registrarRef = useRef<DeviceRegistrar | null>(null);
 
   const dropLocal = useCallback(async () => {
+    canRegister.current = false;
+    void registrarRef.current?.stop();
     token.current = null;
     pushToken.current = null;
     clearCache();
@@ -71,6 +81,18 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
     [dropLocal],
   );
 
+  if (!registrarRef.current) {
+    registrarRef.current = createDeviceRegistrar({
+      getToken: getExpoPushToken,
+      register: async (expoPushToken) => {
+        await api.send("POST", "/api/me/devices", { expoPushToken, platform: Platform.OS === "ios" ? "ios" : "android" });
+        pushToken.current = expoPushToken;
+      },
+      canRegister: () => canRegister.current && token.current !== null,
+    });
+  }
+  const registrar = registrarRef.current;
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -89,12 +111,16 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
     clearCache();
     setIsDemo(opts.demo === true);
     if (!opts.demo) await saveCustomerSession(next);
+    registrar.resume();
     setStatus("signedIn");
-  }, []);
+  }, [registrar]);
 
   const signOut = useCallback(async () => {
-    // Stop this phone hearing from any shop BEFORE the session goes.
-    const device = pushToken.current;
+    // Stop this phone hearing from any shop BEFORE the session goes. stop()
+    // first: no new registration starts, and one already in flight is waited
+    // for, so it can't land after this and leave the phone registered.
+    canRegister.current = false;
+    const device = (await registrar.stop()) ?? pushToken.current;
     if (device && token.current && !isDemo) {
       await api.send("POST", "/api/me/devices/remove", { expoPushToken: device }).catch(() => {});
     }
@@ -103,11 +129,11 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
     // from the sign-in screen.
     await AsyncStorage.removeItem(STORAGE.lastToken).catch(() => {});
     await dropLocal();
-  }, [api, dropLocal, isDemo]);
+  }, [api, dropLocal, isDemo, registrar]);
 
   const value = useMemo<CustomerContext>(
-    () => ({ status, isDemo, api, signIn, signOut, pushToken }),
-    [status, isDemo, api, signIn, signOut],
+    () => ({ status, isDemo, api, signIn, signOut, pushToken, registrar }),
+    [status, isDemo, api, signIn, signOut, registrar],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -119,26 +145,23 @@ export function useCustomer(): CustomerContext {
 }
 
 /**
- * Register this phone for push from every linked shop - once per launch, after
- * the customer has reached their home (so the system prompt arrives when it
- * makes sense, not on a sign-in screen). Best-effort: a denied permission or a
- * failed call changes nothing else.
+ * Register this phone for push from every linked shop - once the customer has
+ * reached their home (so the system prompt arrives when it makes sense, not on
+ * a sign-in screen), and again on every return to the foreground until the
+ * server has confirmed it: a customer who turns notifications on in Settings
+ * is registered when they come back, not on the next cold launch. See
+ * deviceRegistration.ts for the rules. Best-effort: nothing else depends on it.
  */
 export function useRegisterDevice(): void {
-  const ctx = useCustomer();
-  const done = useRef(false);
+  const { status, isDemo, registrar } = useCustomer();
   useEffect(() => {
-    if (done.current || ctx.status !== "signedIn" || ctx.isDemo) return;
-    done.current = true;
-    (async () => {
-      const expoPushToken = await getExpoPushToken();
-      if (!expoPushToken) return;
-      ctx.pushToken.current = expoPushToken;
-      await ctx.api
-        .send("POST", "/api/me/devices", { expoPushToken, platform: Platform.OS === "ios" ? "ios" : "android" })
-        .catch(() => {});
-    })();
-  }, [ctx]);
+    if (status !== "signedIn" || isDemo) return;
+    void registrar.attempt();
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next === "active") void registrar.attempt();
+    });
+    return () => sub.remove();
+  }, [status, isDemo, registrar]);
 }
 
 // ---------------------------------------------------------------------------

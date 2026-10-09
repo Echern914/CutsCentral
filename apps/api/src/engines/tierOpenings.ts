@@ -543,7 +543,11 @@ export interface CustomerTierOpening {
   endsAt: string;
   serviceName: string | null;
   staffName: string | null;
-  /** The service's listed price, or null when the shop has not priced it. */
+  /**
+   * The price for THIS slot (weekday, date and time-of-day prices applied),
+   * the same figure the claim books at, or null when the shop has not priced
+   * it.
+   */
   price: number | null;
   /** "Gold members", "Silver and Gold members" */
   audience: string;
@@ -593,13 +597,16 @@ export async function openingsForAccount(accountId: string, now = new Date()): P
       tx.staff.findMany({ where: { id: { in: rows.map((r) => r.opening.staffId) } }, select: { id: true, name: true } }),
       tx.service.findMany({
         where: { id: { in: rows.map((r) => r.opening.serviceId) } },
-        select: { id: true, name: true, price: true },
+        // The override columns too: the card must show what the claim will
+        // book at (`slotPrice` below and in claimTierOpening), not the base
+        // price - a Saturday-priced cut read "$35" and booked at $45.
+        select: { id: true, name: true, price: true, priceOverrides: true, dateOverrides: true, timeOverrides: true },
       }),
     ]);
     const staffById = new Map(staff.map((s) => [s.id, s]));
     const serviceById = new Map(services.map((s) => [s.id, s]));
     return rows.map(({ opening: o }) => {
-      const svc = serviceById.get(o.serviceId);
+      const svc = serviceById.get(o.serviceId) ?? null;
       return {
         id: o.id,
         shop: { name: o.shop.name, logoUrl: o.shop.logoUrl, timezone: o.shop.timezone },
@@ -607,7 +614,7 @@ export async function openingsForAccount(accountId: string, now = new Date()): P
         endsAt: o.endsAt.toISOString(),
         serviceName: svc?.name ?? null,
         staffName: staffById.get(o.staffId)?.name ?? null,
-        price: svc?.price == null ? null : Number(svc.price),
+        price: slotPrice(svc, o.startsAt, o.shop.timezone),
         audience: audienceLabel(o.minTier),
         tierLabel: LOYALTY_TIERS[o.minTier].label,
         heldUntil: o.heldUntil.toISOString(),
@@ -638,7 +645,18 @@ export type ClaimTierOpeningResult =
   | { outcome: "deposit_required" }
   | { outcome: "unavailable_external" }
   /** The shop blocked this client from booking online since the invitation. */
-  | { outcome: "contact_shop" };
+  | { outcome: "contact_shop" }
+  /**
+   * The slot's price is no longer the one the member was shown. Nothing was
+   * written and the hold stands: show them `price` and let them confirm it.
+   */
+  | { outcome: "price_changed"; price: number | null };
+
+/** Same money, to the cent; null (unpriced) only equals null. */
+function samePrice(a: number | null, b: number | null): boolean {
+  if (a === null || b === null) return a === b;
+  return Math.round(a * 100) === Math.round(b * 100);
+}
 
 /**
  * Book an opening as one of its invited members - revalidated and written
@@ -654,6 +672,13 @@ export type ClaimTierOpeningResult =
 export async function claimTierOpening(params: {
   accountId: string;
   openingId: string;
+  /**
+   * The price the member was shown and agreed to. When given, a claim at any
+   * other price is refused (`price_changed`) instead of booked - the shop
+   * edited a Saturday rate while the card sat open. Undefined (an app from
+   * before this) books at the slot's price, as it always did.
+   */
+  expectedPrice?: number | null;
   now?: Date;
 }): Promise<ClaimTierOpeningResult> {
   const now = params.now ?? new Date();
@@ -754,6 +779,11 @@ export async function claimTierOpening(params: {
       // slot is not lost to everyone. Only the row is taken, like any other
       // write that just ends a hold.
       const priceAtBooking = slotPrice(service, opening.startsAt, shop.timezone);
+      // Never book at a price the member didn't see. Before any write, so the
+      // hold stands while they look at the new figure.
+      if (params.expectedPrice !== undefined && !samePrice(params.expectedPrice, priceAtBooking)) {
+        return { outcome: "price_changed", price: priceAtBooking };
+      }
       if (claimWouldRequirePayment(shop, priceAtBooking)) {
         if (!(await lockRow())) return { outcome: "ended" };
         await tx.tierOpening.update({ where: { id: opening.id }, data: { status: "RELEASED" } });

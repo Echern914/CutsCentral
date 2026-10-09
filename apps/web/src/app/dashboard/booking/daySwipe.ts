@@ -43,13 +43,41 @@ export function swipeIntent(
 }
 
 /**
- * Should a gesture starting on this element be read as a day swipe at all?
- *
- * Anything inside `[data-noswipe]` is opted out — those are the strips that do
- * their own horizontal scrolling, where a sideways drag already means something
- * and hijacking it would make them unusable.
+ * How close to the screen's side a touch can start and still be ours. iOS
+ * (the app's web view allows back-swipe) and Android gesture navigation both
+ * own a sideways drag that begins at the very edge: that is "go back", and
+ * reading it as "previous day" too would do both at once.
  */
-export function swipeAllowedFrom(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return true;
-  return target.closest("[data-noswipe]") === null;
+export const EDGE_GUTTER_PX = 24;
+
+/**
+ * Where a sideways drag already means something else, so it is never a day swipe:
+ * typing (moving the caret, selecting text), a dialog, and anything inside
+ * `[data-noswipe]` - the strips that do their own horizontal scrolling, where
+ * hijacking the drag would make them unusable.
+ */
+const NOT_A_SWIPE =
+  "input, textarea, select, [contenteditable=''], [contenteditable='true'], " +
+  "[role='dialog'], [role='alertdialog'], [data-noswipe]";
+
+/**
+ * The full gate for the START of a day swipe.
+ *
+ * 🔴 THE TOUCH MUST START INSIDE THE CALENDAR ITSELF - in the DOM, not just in
+ * the React tree. An appointment's sheet is a dialog PORTALED to <body>, and
+ * React still bubbles its touch events up through the component that rendered
+ * it - straight into the day view's swipe handler. A sideways drag inside an
+ * open sheet changed the day, which unmounted the sheet and threw away the
+ * edit in it. DOM containment is what tells the two apart.
+ */
+export function swipeStartAllowed(
+  target: EventTarget | null,
+  container: Element,
+  clientX: number,
+  viewportWidth: number,
+): boolean {
+  if (!(target instanceof Node) || !container.contains(target)) return false;
+  if (clientX < EDGE_GUTTER_PX || clientX > viewportWidth - EDGE_GUTTER_PX) return false;
+  const el = target instanceof Element ? target : target.parentElement;
+  return el === null || el.closest(NOT_A_SWIPE) === null;
 }

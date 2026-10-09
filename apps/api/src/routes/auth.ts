@@ -8,6 +8,7 @@ import {
   WHATS_NEW,
 } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
+import { signOutEverywhere } from "../services/userDevice.js";
 import { hashPassword, verifyPassword } from "../auth/password.js";
 import {
   SESSION_COOKIE_NAME,
@@ -180,10 +181,14 @@ authRouter.post("/logout", async (req, res) => {
       select: { tokenVersion: true },
     });
     if (user && (payload.v ?? 0) === user.tokenVersion) {
-      await prisma.user.update({
-        where: { id: payload.userId },
-        data: { tokenVersion: { increment: 1 } },
-      });
+      // Signing out revokes every session, so no device should keep getting
+      // this user's booking alerts, with clients' names in them - a shared
+      // front-desk phone did. The app's Sign out is a client-side navigation
+      // that never reaches the native layer, so this is the one place that
+      // sees it. A device registers again as soon as someone signs in on it
+      // (apps/mobile/app/barber.tsx). One transaction with the version bump,
+      // so a registration racing it can't put the device back.
+      await signOutEverywhere(payload.userId);
     }
   }
   clearSessionCookie(res);

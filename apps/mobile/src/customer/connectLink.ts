@@ -1,3 +1,19 @@
+import { ApiError } from "./api";
+
+/**
+ * Did the server REFUSE to connect this profile - or did the request simply
+ * not get an answer?
+ *
+ * 🔴 Only a refusal (404: no such link / not your contact; 409/400: claimed
+ * elsewhere, too many) gets the "may already belong to another account" line.
+ * Offline, a rate limit or a server error said the same thing and took the
+ * Connect button away, so a customer on a weak signal was told their own
+ * profile was somebody else's and called the shop about the network.
+ */
+export function claimWasRefused(err: unknown): boolean {
+  return err instanceof ApiError && (err.kind === "not_found" || err.kind === "invalid");
+}
+
 /**
  * Is this a ChairBack link that can never connect a profile - the shop's own
  * page or booking link rather than the customer's personal /r/ link?

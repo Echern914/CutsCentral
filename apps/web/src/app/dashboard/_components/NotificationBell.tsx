@@ -151,6 +151,34 @@ export function NotificationBell({
             className="fixed inset-0 z-50 overflow-y-auto bg-black/60 px-4 pb-10 pt-20 backdrop-blur-sm"
             onClick={() => setOpen(false)}
           >
+            {/* A way out that is always on screen. On a phone the What's new
+                list fills the whole overlay, so there is no backdrop left to
+                tap, and the app has no Escape key: without this the panel
+                could not be closed at all. Fixed, so it stays put while the
+                list scrolls under it. */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+              }}
+              className="glass fixed left-4 z-10 inline-flex min-h-[44px] items-center gap-1.5 rounded-full px-4 text-sm font-semibold text-offwhite shadow-lg transition-colors duration-150 ease-out hover:bg-charcoal-700"
+              style={{ top: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
+            >
+              <svg
+                className="h-4 w-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+              Back
+            </button>
             <div
               role="dialog"
               aria-modal="true"
