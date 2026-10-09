@@ -112,6 +112,12 @@ declare global {
   namespace Express {
     interface Request {
       userId?: string;
+      /**
+       * The tokenVersion the accepted session was minted at. A write that must
+       * not outlive a sign-out (a push device registration) re-checks it under
+       * the user's row lock - see services/userDevice.ts.
+       */
+      sessionVersion?: number;
       shop?: Shop;
       /** True when the session carries the read-only demo claim. */
       demoSession?: boolean;
@@ -175,6 +181,7 @@ export async function requireUser(
         req.demoSession = true;
       }
       req.userId = payload.userId;
+      req.sessionVersion = version;
       next();
       return;
     }

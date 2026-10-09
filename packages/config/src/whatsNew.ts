@@ -76,6 +76,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "keeps today's holiday price.",
   },
   {
+    id: "2026-10-08-sign-out-alerts-and-held-prices",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Signing out stops your booking alerts",
+    body:
+      "Signing out now stops new booking and cancellation alerts on every phone you were signed in on, until you " +
+      "sign in there again. A slot you hold for your members now shows them that slot's own price, like your " +
+      "Saturday rate, before they book it.",
+  },
+  {
     id: "2026-10-08-home-clients-team-truth",
     date: "2026-10-08",
     kind: "fix",

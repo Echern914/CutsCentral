@@ -3,6 +3,7 @@ import { z } from "zod";
 import { redactForAudit } from "../messaging/auditBody.js";
 import { messageBookingUrl } from "@chairback/config/bookingLinks";
 import { forShop, prisma, runAsOwner, runWithShop, Prisma } from "@chairback/db"; // runWithShop: batch a page's tenant reads into one connection
+import { registerUserDevice } from "../services/userDevice.js";
 import {
   NUDGE,
   apiEnv,
@@ -123,7 +124,8 @@ const pushNativeSchema = z
  * push-native). The row is keyed to the USER, not a client: business events
  * (new appointment request) fan out to every device this user registered,
  * across every shop they own. shopId records the shop active at registration
- * (the table's RLS home); the write goes through runAsOwner because a
+ * (the table's RLS home); the write (services/userDevice.ts, which also refuses
+ * a session signed out mid-request) is owner-scoped because a
  * re-registering manager's existing row may carry another of their shops'
  * shopId, which a shop-scoped write couldn't touch. userId/shopId come from
  * the session, never the body. Upsert by token so re-registering refreshes.
@@ -135,29 +137,18 @@ dashboardRouter.post("/push/native", async (req, res) => {
     return;
   }
   const { expoPushToken, platform } = parsed.data;
-  await runAsOwner((tx) =>
-    tx.pushSubscription.upsert({
-      where: { expoPushToken },
-      create: {
-        shopId: req.shop!.id,
-        userId: req.userId!,
-        kind: "expo",
-        expoPushToken,
-        userAgent: platform ?? null,
-      },
-      update: {
-        shopId: req.shop!.id,
-        userId: req.userId!,
-        // A device is one identity: if this token ever re-registers from the
-        // barber app after being a customer device, it stops being client-keyed.
-        clientId: null,
-        kind: "expo",
-        userAgent: platform ?? null,
-        failureCount: 0,
-        lastSeenAt: new Date(),
-      },
-    }),
-  );
+  const registered = await registerUserDevice({
+    userId: req.userId!,
+    sessionVersion: req.sessionVersion!,
+    shopId: req.shop!.id,
+    expoPushToken,
+    platform: platform ?? null,
+  });
+  if (!registered) {
+    // Signed out while this was in flight: the device stays unregistered.
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
   res.json({ ok: true });
 });
 
