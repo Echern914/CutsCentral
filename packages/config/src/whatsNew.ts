@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-08-edit-repeat-this-and-future",
+    date: "2026-10-08",
+    kind: "feature",
+    title: "Change a repeat from one date onward",
+    body:
+      "Open an appointment in a repeat, tap More, then Edit this and future to change the start time, service or " +
+      "provider for it and every upcoming one. You see each date before anything changes. Prices stay as booked, " +
+      "and finished, cancelled or one-off changed dates stay as they are.",
+  },
+  {
     id: "2026-10-08-book-again",
     date: "2026-10-08",
     kind: "feature",

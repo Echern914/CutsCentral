@@ -52,6 +52,7 @@ import {
   type BlockConflictRow,
 } from "../services/blockOffDays.js";
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
+import { registerSeriesEdit } from "./booking.seriesEdit.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
 import { registerUnfinishedBookings } from "./booking.unfinished.js";
 import { registerDepositRefund, registerTipRefund } from "./booking.depositRefund.js";
@@ -4878,6 +4879,10 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
 // Edit an appointment (its own module - see booking.appointmentEdit.ts for the
 // reuse-the-same-engine rules and the Acuity-safe move ordering).
 registerAppointmentEdit(bookingDashboardRouter, noteAvailabilityChanged);
+
+// "This and future" on a repeat: preview, then apply exactly what was shown
+// (booking.seriesEdit.ts; the rules are in engines/seriesEdit.ts).
+registerSeriesEdit(bookingDashboardRouter, noteAvailabilityChanged);
 
 // Read ONE booking in full, for the appointment sheet: contact, payment truth
 // and what may be edited (booking.appointmentDetail.ts).

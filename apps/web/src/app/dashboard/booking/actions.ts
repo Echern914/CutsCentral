@@ -726,6 +726,96 @@ export async function cancelSeriesAction(
   );
 }
 
+//  "This and future" on a repeat: preview, then apply exactly what was shown
+
+export interface SeriesEditInput {
+  fromAppointmentId: string;
+  /** startMin = shop-local minutes after midnight. Only what changes is sent. */
+  changes: { startMin?: number; serviceId?: string; staffId?: string };
+  includeExceptions?: boolean;
+  customTime?: boolean;
+}
+
+export type SeriesSkipReason =
+  | "past"
+  | "completed"
+  | "cancelled"
+  | "not_confirmed"
+  | "external"
+  | "edited_on_its_own";
+
+export interface SeriesEditVisit {
+  id: string;
+  from: { startsAt: string; endsAt: string; staffId: string; serviceId: string };
+  to: { startsAt: string; endsAt: string; staffId: string; serviceId: string };
+  /**
+   * What it was booked at and still costs after the change (a new service
+   * never re-prices it). Absent from an older API - then nothing is claimed.
+   */
+  bookedPriceCents?: number | null;
+  /** Why this date cannot take the change, already in words. */
+  problem?: { code: string; text: string };
+}
+
+export interface SeriesEditPreview {
+  /** Pins the apply to exactly these rows; handed back, never shown. */
+  digest: string;
+  alreadyDone: number;
+  change: SeriesEditVisit[];
+  skipped: { id: string; startsAt: string; reason: SeriesSkipReason }[];
+}
+
+export interface SeriesEditApplied {
+  alreadyApplied?: boolean;
+  /** mirror: active | failed | unknown | skipped | observed, per visit. */
+  changed: { id: string; startsAt: string; endsAt: string; mirror: string }[];
+  skipped: SeriesEditPreview["skipped"];
+  clientNotified?: boolean;
+}
+
+export async function previewSeriesEditAction(
+  seriesId: string,
+  input: SeriesEditInput,
+): Promise<{ ok: boolean; data?: SeriesEditPreview; error?: string }> {
+  const res = await apiSend<SeriesEditPreview>(
+    "POST",
+    `/api/booking/series/${encodeURIComponent(seriesId)}/edit/preview`,
+    input,
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
+}
+
+export async function applySeriesEditAction(
+  seriesId: string,
+  input: SeriesEditInput & { digest: string },
+): Promise<{
+  ok: boolean;
+  data?: SeriesEditApplied;
+  error?: string;
+  /** On `series_conflict`: the dates again, each with what is in its way. */
+  preview?: SeriesEditPreview;
+}> {
+  const res = await apiSend<SeriesEditApplied>(
+    "POST",
+    `/api/booking/series/${encodeURIComponent(seriesId)}/edit`,
+    input,
+  );
+  // 🔴 NO revalidatePath HERE. Re-rendering the calendar page from the server
+  // moves a visit whose time changed into another hour, which remounts its
+  // card and closes the sheet showing this result. The sheet re-reads the
+  // agenda itself when he leaves the result (SeriesEditView.tsx).
+  if (res.ok && res.data) return { ok: true, data: res.data };
+  const body = res.body as Partial<SeriesEditPreview> | undefined;
+  return {
+    ok: false,
+    error: res.error ?? "failed",
+    ...(res.error === "series_conflict" && body && Array.isArray(body.change)
+      ? { preview: body as SeriesEditPreview }
+      : {}),
+  };
+}
+
 //  Service add-ons
 
 export interface AddOnInput {
