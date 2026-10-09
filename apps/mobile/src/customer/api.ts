@@ -22,6 +22,8 @@ export class ApiError extends Error {
     readonly status: number,
     /** The API's machine code (e.g. "phone_not_supported"), when it sent one. */
     readonly code: string | null = null,
+    /** The whole error body, for the few refusals that carry data (a new price). */
+    readonly body: Record<string, unknown> | null = null,
   ) {
     super(`api_${kind}_${status}`);
     this.name = "ApiError";
@@ -63,8 +65,8 @@ export async function request<T>(
     clearTimeout(timer);
   }
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new ApiError(kindFor(res.status), res.status, body?.error ?? null);
+    const body = (await res.json().catch(() => null)) as ({ error?: string } & Record<string, unknown>) | null;
+    throw new ApiError(kindFor(res.status), res.status, body?.error ?? null, body);
   }
   return (await res.json()) as T;
 }

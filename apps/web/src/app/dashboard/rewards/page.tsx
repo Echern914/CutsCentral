@@ -12,6 +12,8 @@ export const metadata: Metadata = { title: "Rewards" };
 
 export interface LoyaltyConfig {
   punchesPerVisit: number;
+  /** Live "extra punches" promotions: they add to every visit on top of the rate. */
+  extraPunchPromos?: { id: string; title: string; extraPunches: number; endsAt: string | null }[];
   /** What each loyalty tier is worth at this shop. Every key optional. */
   tierPerks: Partial<Record<"BRONZE" | "SILVER" | "GOLD", string>>;
   /** What it takes to reach each tier at this shop (defaults when unset). */

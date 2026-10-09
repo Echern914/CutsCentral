@@ -4,6 +4,8 @@ import { useLocalSearchParams } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { STORAGE, WEB_ORIGIN, rewardsUrl } from "@/src/config";
 import { invalidate, useCustomer } from "@/src/customer/CustomerProvider";
+import { errorCopy } from "@/src/customer/api";
+import { claimWasRefused } from "@/src/customer/connectLink";
 import { color, radius, space } from "@/src/customer/theme";
 import { Button, Txt } from "@/src/customer/ui";
 import { WebPage } from "@/src/customer/WebPage";
@@ -33,6 +35,9 @@ export default function LinkScreen() {
   }>();
   const { status, api, isDemo } = useCustomer();
   const [offer, setOffer] = useState<"idle" | "busy" | "connected" | "refused" | "dismissed">("idle");
+  // A request that got no answer (offline, rate limit, server error): the
+  // offer stays open, says what happened, and Connect becomes Try again.
+  const [failMsg, setFailMsg] = useState<string | null>(null);
 
   useEffect(() => {
     // Remembered only so the sign-in screen can offer "Open my shop's page".
@@ -42,16 +47,22 @@ export default function LinkScreen() {
   async function connect() {
     if (!token) return;
     setOffer("busy");
+    setFailMsg(null);
     try {
       await api.send("POST", "/api/me/profiles/claim", { link: token });
       // The home, shops, rewards and history all change with this.
       invalidate("/api/me");
       setOffer("connected");
-    } catch {
-      // Already connected elsewhere, not this account's contact, or nothing to
-      // connect: one answer for all of them. A link that opens nothing must
-      // not become a way to learn whose it is.
-      setOffer("refused");
+    } catch (err) {
+      if (claimWasRefused(err)) {
+        // Already connected elsewhere, not this account's contact, or nothing
+        // to connect: one answer for all of them. A link that opens nothing
+        // must not become a way to learn whose it is.
+        setOffer("refused");
+      } else {
+        setFailMsg(errorCopy(err).body);
+        setOffer("idle");
+      }
     }
   }
 
@@ -76,9 +87,14 @@ export default function LinkScreen() {
                 <Txt variant="subhead" style={styles.bannerText}>
                   Are these visits yours? Connect this profile to My ChairBack.
                 </Txt>
+                {failMsg ? (
+                  <Txt variant="footnote" tone="secondary" accessibilityLiveRegion="polite">
+                    {`Nothing was connected. ${failMsg}`}
+                  </Txt>
+                ) : null}
                 <View style={styles.bannerActions}>
                   <Button
-                    label="Connect"
+                    label={failMsg ? "Try again" : "Connect"}
                     busy={offer === "busy"}
                     onPress={() => void connect()}
                     style={styles.bannerButton}

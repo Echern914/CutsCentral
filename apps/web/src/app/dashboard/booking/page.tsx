@@ -298,8 +298,9 @@ export default async function BookingPage({
   // calendar instead of the default Settings tab. An unknown or absent value
   // falls back to the default, so a stale or hand-typed link can't render blank.
   // `?appointment=<id>&day=YYYY-MM-DD` is a barber alert's link: open that
-  // booking, on its day.
-  searchParams?: { tab?: string; appointment?: string; day?: string };
+  // booking, on its day. `day` (and `view=day`) are also where the calendar
+  // keeps the day being looked at, so a refresh reopens on it.
+  searchParams?: { tab?: string; appointment?: string; day?: string; view?: string };
 }) {
   // The month calendar loads the current month on first paint (with a week of
   // padding on each side so the visible grid's leading/trailing days are filled),
@@ -380,6 +381,7 @@ export default async function BookingPage({
         initialTab={searchParams?.tab}
         openAppointmentId={searchParams?.appointment}
         openDay={searchParams?.day}
+        openView={searchParams?.view === "day" ? "day" : undefined}
         appBase={process.env.APP_BASE_URL ?? ""}
         apiBase={API_BASE}
         connect={connect}

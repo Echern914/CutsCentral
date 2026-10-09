@@ -1,11 +1,12 @@
 "use client";
 
 import { cap, useVocab } from "@/components/VocabProvider";
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
+import { useAppHasNextUpWidget } from "@/lib/useAppHasNextUpWidget";
 import {
   forgetDeviceAction,
   saveNotifyPrefsAction,
@@ -92,23 +93,43 @@ export function NotificationsCard({
   shopNotifyPhone: string | null;
 }) {
   const vocab = useVocab();
+  const hasWidget = useAppHasNextUpWidget();
   const [prefs, setPrefs] = useState<NotifyPrefs>(initial);
   const [devices, setDevices] = useState<NotifyDevice[]>(initialDevices);
   const [pending, start] = useTransition();
   const [testing, setTesting] = useState(false);
   const { toast } = useToast();
 
+  // What the server last CONFIRMED. A failed save rolls back to this, not to
+  // the screen as it was when that save started: with two saves in flight, the
+  // older one's `before` put back a value the newer one had already replaced.
+  const confirmed = useRef<NotifyPrefs>(initial);
+
   /** Optimistic: flip locally, persist, roll back if the save fails. */
   function save(patch: Partial<NotifyPrefs>) {
-    const before = prefs;
-    setPrefs({ ...prefs, ...patch });
+    setPrefs((p) => ({ ...p, ...patch }));
     start(async () => {
       const r = await saveNotifyPrefsAction(patch);
-      if (!r.ok) {
-        setPrefs(before);
-        toast("Couldn't save that", "error");
+      if (r.ok) {
+        confirmed.current = { ...confirmed.current, ...patch };
+        return;
       }
+      // Only the fields THIS save touched go back.
+      const back: Partial<NotifyPrefs> = {};
+      for (const k of Object.keys(patch) as (keyof NotifyPrefs)[]) {
+        (back as Record<string, unknown>)[k] = confirmed.current[k];
+      }
+      setPrefs((p) => ({ ...p, ...back }));
+      toast("Couldn't save that", "error");
     });
+  }
+
+  /**
+   * A number box saves once, when it is left. Typing 15 used to save 5 (the
+   * clamp of "1") and then 15, two writes and a reminder briefly set wrong.
+   */
+  function saveNumber(key: "nextUpLeadMin" | "travelBufferMin", n: number) {
+    if (n !== confirmed.current[key]) save({ [key]: n });
   }
 
   async function sendTest() {
@@ -183,7 +204,8 @@ export function NotificationsCard({
               Remind me
               <NumberField
                 value={prefs.nextUpLeadMin}
-                onChange={(n) => save({ nextUpLeadMin: n })}
+                onChange={(n) => setPrefs((p) => ({ ...p, nextUpLeadMin: n }))}
+                onCommit={(n) => saveNumber("nextUpLeadMin", n)}
                 min={5}
                 max={120}
                 step={5}
@@ -204,7 +226,8 @@ export function NotificationsCard({
               On jobs I travel to, warn me
               <NumberField
                 value={prefs.travelBufferMin}
-                onChange={(n) => save({ travelBufferMin: n })}
+                onChange={(n) => setPrefs((p) => ({ ...p, travelBufferMin: n }))}
+                onCommit={(n) => saveNumber("travelBufferMin", n)}
                 min={0}
                 max={120}
                 step={5}
@@ -265,6 +288,21 @@ export function NotificationsCard({
               disabled={pending}
             />
           </Row>
+          {hasWidget && (
+            // Only where the widget exists. Anyone holding the locked phone
+            // can read it, so the name is the barber's call.
+            <Row
+              title="Client names on the lock screen"
+              hint="Your Lock Screen widget shows who's next. Off: just the time and service."
+            >
+              <Toggle
+                on={prefs.lockScreenNames}
+                onChange={(v) => save({ lockScreenNames: v })}
+                label="Show client names on the lock screen"
+                disabled={pending}
+              />
+            </Row>
+          )}
         </div>
 
         {/* ---- How they reach you ---- */}

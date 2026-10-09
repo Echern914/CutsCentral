@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
-import { __resetEnvCacheForTests, randomToken, zonedDateParts, zonedWallTimeToUtc } from "@chairback/config";
+import { __resetEnvCacheForTests, randomToken, zonedDateKey, zonedDateParts, zonedWallTimeToUtc } from "@chairback/config";
 import { createApp } from "../app.js";
 import { mintCustomerSession } from "../auth/customerSession.js";
 import { __setExpoSenderForTests, __setPushSenderForTests, type PushPayload } from "../messaging/push.js";
@@ -499,6 +499,61 @@ describe("booking it", () => {
     expect(late.status).toBe(410);
     const list = await request(app).get("/api/me/openings").set(asCustomer(gold2));
     expect(list.body.openings.map((o: { id: string }) => o.id)).not.toContain(openingId);
+  });
+
+  it("🔴 the price on the card is the price it books at - a weekday price, then a one-day price", async () => {
+    // The card read the service's base price ($40) while the claim booked at
+    // the slot's own price: a member agreed to one figure and was recorded at
+    // another.
+    const m = await member("GOLD", "Penny");
+    const at = freshStart();
+    const shownPrice = async (openingId: string) =>
+      ((await request(app).get("/api/me/openings").set(asCustomer(m))).body.openings as { id: string; price: number }[]).find(
+        (o) => o.id === openingId,
+      )?.price;
+    await prisma.service.update({
+      where: { id: serviceId },
+      data: { priceOverrides: { [zonedDateParts(at, TZ).weekday]: 45 } },
+    });
+    try {
+      const { openingId } = (await hold(at)).body;
+      expect(await shownPrice(openingId)).toBe(45);
+      // A price for that one date outranks the weekday price, on both paths.
+      await prisma.service.update({ where: { id: serviceId }, data: { dateOverrides: { [zonedDateKey(at, TZ)]: 50 } } });
+      expect(await shownPrice(openingId)).toBe(50);
+
+      // 🔴 The member is still looking at the $45 card when the shop's $50
+      // takes effect: refused, the new price named, nothing booked, the hold
+      // standing for them.
+      const stale = await request(app).post(`/api/me/openings/${openingId}/book`).set(asCustomer(m)).send({ expectedPrice: 45 });
+      expect(stale.status).toBe(409);
+      expect(stale.body).toEqual({ error: "price_changed", price: 50 });
+      expect(await prisma.appointment.count({ where: { shopId, startsAt: at } })).toBe(0);
+      expect((await prisma.tierOpening.findUniqueOrThrow({ where: { id: openingId } })).status).toBe("HELD");
+
+      // They confirm the new price, and that is what is recorded.
+      const booked = await request(app).post(`/api/me/openings/${openingId}/book`).set(asCustomer(m)).send({ expectedPrice: 50 });
+      expect(booked.status).toBe(201);
+      const appt = await prisma.appointment.findFirstOrThrow({ where: { shopId, startsAt: at }, select: { priceAtBooking: true } });
+      expect(Number(appt.priceAtBooking)).toBe(50);
+    } finally {
+      await prisma.service.update({ where: { id: serviceId }, data: { priceOverrides: {}, dateOverrides: {} } });
+      // Later tests count the Gold members with the app; this one was only
+      // ever needed here.
+      await prisma.client.update({ where: { id: m.clientId }, data: { loyaltyTier: null } });
+    }
+  });
+
+  it("an app from before the price check books at the slot's price, and a nonsense price is refused at the door", async () => {
+    const at = freshStart();
+    const { openingId } = (await hold(at)).body;
+    const bad = await request(app).post(`/api/me/openings/${openingId}/book`).set(asCustomer(gold)).send({ expectedPrice: "forty" });
+    expect(bad.status).toBe(400);
+    // No body at all: the older app's request, unchanged.
+    const booked = await request(app).post(`/api/me/openings/${openingId}/book`).set(asCustomer(gold));
+    expect(booked.status).toBe(201);
+    const appt = await prisma.appointment.findFirstOrThrow({ where: { shopId, startsAt: at }, select: { priceAtBooking: true } });
+    expect(Number(appt.priceAtBooking)).toBe(40);
   });
 
   it("🔴 two members tapping at the same moment: exactly one booking", async () => {

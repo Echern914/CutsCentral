@@ -73,6 +73,11 @@ export function YearlyReport() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<null | "download" | "share">(null);
+  // The options read failed (null, or the action threw). Without this the
+  // sheet opened onto two empty pickers and nothing else: no message, no
+  // report, and three disabled buttons.
+  const [optionsFailed, setOptionsFailed] = useState(false);
+  const [optionsTry, setOptionsTry] = useState(0);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
   // Options are read once, when the sheet is first opened - not on page load.
@@ -80,16 +85,23 @@ export function YearlyReport() {
   useEffect(() => {
     if (!open || options) return;
     let cancelled = false;
-    void yearlyReportOptionsAction().then((o) => {
-      if (cancelled || !o) return;
-      setOptions(o);
-      setYear((y) => y ?? o.years[0] ?? o.currentYear);
-      setSubject((s) => s ?? o.defaultSubject ?? (o.canReportShop ? "shop" : null));
-    });
+    setOptionsFailed(false);
+    void yearlyReportOptionsAction()
+      .catch(() => null)
+      .then((o) => {
+        if (cancelled) return;
+        if (!o) {
+          setOptionsFailed(true);
+          return;
+        }
+        setOptions(o);
+        setYear((y) => y ?? o.years[0] ?? o.currentYear);
+        setSubject((s) => s ?? o.defaultSubject ?? (o.canReportShop ? "shop" : null));
+      });
     return () => {
       cancelled = true;
     };
-  }, [open, options]);
+  }, [open, options, optionsTry]);
 
   const load = useCallback(async () => {
     if (year === null || subject === null) return;
@@ -309,6 +321,19 @@ export function YearlyReport() {
             )}
           </div>
 
+          {optionsFailed && (
+            <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-rose-300">
+              <span>Couldn&rsquo;t load your report options.</span>
+              <button
+                type="button"
+                onClick={() => setOptionsTry((n) => n + 1)}
+                className="rounded-lg border border-white/15 px-3 py-1.5 text-xs font-medium text-offwhite hover:bg-white/5"
+              >
+                Try again
+              </button>
+            </div>
+          )}
+          {!options && !optionsFailed && <p className="text-sm text-muted">Loading…</p>}
           {error && (
             <p role="alert" className="text-sm text-rose-300">
               {error}

@@ -271,7 +271,7 @@ export function Gallery({ data, theme, layout }: { data: ShopPageData; theme: Th
             />
             {item.caption && (
               <figcaption
-                className="absolute inset-x-0 bottom-0 px-3 py-2 text-[11px] font-medium text-white opacity-0 transition-opacity duration-200 ease-out group-hover:opacity-100"
+                className="absolute inset-x-0 bottom-0 px-3 py-2 text-[11px] font-medium text-white transition-opacity duration-200 ease-out [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
                 style={{ background: "linear-gradient(0deg, rgba(0,0,0,0.7), transparent)" }}
               >
                 {item.caption}

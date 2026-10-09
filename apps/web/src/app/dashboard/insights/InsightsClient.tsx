@@ -467,7 +467,7 @@ function BucketBars({
  * a toggle so a long menu doesn't bury the ranking — but they are reachable,
  * because "my service isn't in here" is indistinguishable from "it's broken".
  */
-function ServiceBars({
+export function ServiceBars({
   services,
   pending,
   serviceGoals,
@@ -488,6 +488,10 @@ function ServiceBars({
   const [goalTarget, setGoalTarget] = useState<number>(10);
   const [goalPeriod, setGoalPeriod] = useState<GoalPeriod>("week");
   const [goalSaving, setGoalSaving] = useState(false);
+  // A refused or failed Save/Remove. Both used to just stop "Saving…" and
+  // leave the editor open as if nothing had been asked, so a barber tapped
+  // Save again and again on a quota that never landed.
+  const [goalError, setGoalError] = useState<string | null>(null);
 
   // The metric a row's quota uses follows the card's toggle: ranking by
   // bookings sets cut quotas, ranking by revenue sets dollar quotas.
@@ -501,36 +505,53 @@ function ServiceBars({
     const existing = goalFor(serviceId);
     setGoalTarget(existing?.target ?? (goalMetric === "visits" ? 10 : 500));
     setGoalPeriod(existing?.period ?? "week");
+    setGoalError(null);
     setGoalEditor(serviceId);
   }
 
   async function saveServiceGoal(serviceId: string) {
     setGoalSaving(true);
-    const r = await saveGoalAction({
-      metric: goalMetric,
-      period: goalPeriod,
-      target: goalTarget,
-      serviceId,
-    });
-    if (r.ok) {
+    setGoalError(null);
+    try {
+      const r = await saveGoalAction({
+        metric: goalMetric,
+        period: goalPeriod,
+        target: goalTarget,
+        serviceId,
+      });
+      if (!r.ok) {
+        setGoalError("Couldn't save that target. Try again.");
+        return;
+      }
       await onRefreshGoals();
       setGoalEditor(null);
+    } catch {
+      setGoalError("Couldn't save that target. Try again.");
+    } finally {
+      setGoalSaving(false);
     }
-    setGoalSaving(false);
   }
 
   async function removeServiceGoal(g: ServiceGoalRow) {
     setGoalSaving(true);
-    const r = await clearGoalAction({
-      metric: g.metric,
-      period: g.period,
-      serviceId: g.serviceId,
-    });
-    if (r.ok) {
+    setGoalError(null);
+    try {
+      const r = await clearGoalAction({
+        metric: g.metric,
+        period: g.period,
+        serviceId: g.serviceId,
+      });
+      if (!r.ok) {
+        setGoalError("Couldn't remove that target. It's still set.");
+        return;
+      }
       await onRefreshGoals();
       setGoalEditor(null);
+    } catch {
+      setGoalError("Couldn't remove that target. It's still set.");
+    } finally {
+      setGoalSaving(false);
     }
-    setGoalSaving(false);
   }
 
   const booked = services.filter((s) => s.count > 0);
@@ -656,6 +677,11 @@ function ServiceBars({
                       {goalSaving ? "Saving…" : "Save"}
                     </button>
                   </div>
+                  {goalError && (
+                    <p role="alert" className="w-full text-[11px] text-red-300">
+                      {goalError}
+                    </p>
+                  )}
                 </div>
               )}
             </li>
@@ -727,7 +753,7 @@ const UTIL_VIEWS = [
  * thinks in: which weekday runs empty, whether it's trending up or down over the
  * selected range, or what fills the chair. Range follows the page's one control.
  */
-function UtilizationCard({
+export function UtilizationCard({
   period,
   bucket,
   range,
@@ -759,25 +785,42 @@ function UtilizationCard({
   const [editingTarget, setEditingTarget] = useState(false);
   const [targetDraft, setTargetDraft] = useState<number>(chairTimeTarget ?? 75);
   const [savingTarget, setSavingTarget] = useState(false);
+  const [targetError, setTargetError] = useState<string | null>(null);
 
   async function saveTarget() {
     setSavingTarget(true);
-    const r = await saveChairTimeGoalAction(targetDraft);
-    if (r.ok) {
+    setTargetError(null);
+    try {
+      const r = await saveChairTimeGoalAction(targetDraft);
+      if (!r.ok) {
+        setTargetError("Couldn't save your target. Try again.");
+        return;
+      }
       await onRefreshGoals();
       setEditingTarget(false);
+    } catch {
+      setTargetError("Couldn't save your target. Try again.");
+    } finally {
+      setSavingTarget(false);
     }
-    setSavingTarget(false);
   }
 
   async function clearTarget() {
     setSavingTarget(true);
-    const r = await clearChairTimeGoalAction();
-    if (r.ok) {
+    setTargetError(null);
+    try {
+      const r = await clearChairTimeGoalAction();
+      if (!r.ok) {
+        setTargetError("Couldn't remove your target. It's still set.");
+        return;
+      }
       await onRefreshGoals();
       setEditingTarget(false);
+    } catch {
+      setTargetError("Couldn't remove your target. It's still set.");
+    } finally {
+      setSavingTarget(false);
     }
-    setSavingTarget(false);
   }
 
   useEffect(() => {
@@ -840,6 +883,7 @@ function UtilizationCard({
             type="button"
             onClick={() => {
               setTargetDraft(chairTimeTarget ?? 75);
+              setTargetError(null);
               setEditingTarget((v) => !v);
             }}
             className="rounded-full border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
@@ -888,6 +932,11 @@ function UtilizationCard({
                 {savingTarget ? "Saving…" : "Save"}
               </button>
             </div>
+            {targetError && (
+              <p role="alert" className="w-full text-xs text-red-300">
+                {targetError}
+              </p>
+            )}
           </div>
         )}
         {/* Controls: the range (same control as the page top), how to slice it,
@@ -1195,6 +1244,7 @@ function GoalsCard({
 }) {
   const [planning, setPlanning] = useState<string | null>(null); // goalKey
   const [saving, setSaving] = useState(false);
+  const [clearError, setClearError] = useState<string | null>(null);
   const nounPlural = pluralServiceNoun(serviceNoun);
 
   async function clear(g: Goal) {
@@ -1206,9 +1256,16 @@ function GoalsCard({
       return;
     }
     setSaving(true);
-    const r = await clearGoalAction({ metric: g.metric, period: g.period });
-    if (r.ok) await onRefresh();
-    setSaving(false);
+    setClearError(null);
+    try {
+      const r = await clearGoalAction({ metric: g.metric, period: g.period });
+      if (r.ok) await onRefresh();
+      else setClearError("Couldn't remove that goal. It's still set.");
+    } catch {
+      setClearError("Couldn't remove that goal. It's still set.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   if (!goals) {
@@ -1228,6 +1285,11 @@ function GoalsCard({
         title="Goals"
         subtitle={`Set a quota for the week and the month — then plan how to hit it: raise a price, add ${nounPlural}, pick how booked you want to run.`}
       />
+      {clearError && (
+        <p role="alert" className="mt-3 text-sm text-red-300">
+          {clearError}
+        </p>
+      )}
       {!anySet && (
         <p className="mt-3 text-sm text-muted">
           Nothing set yet. Pick any of the four below and Insights tracks whether

@@ -232,13 +232,13 @@ describe("marking resolved", () => {
     expect(await screen.findByText(/already resolved by dana/i)).toBeInTheDocument();
   });
 
-  it("a failure says nothing was changed", async () => {
+  it("🔴 a failure says nothing was changed INSIDE the dialog, where a phone can see it", async () => {
     resolveConflictAction.mockResolvedValue({ ok: false, error: "failed" });
     render(<ConflictInbox />);
     fireEvent.click(await screen.findByRole("button", { name: /mark resolved/i }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: /^mark resolved$/i }));
-    expect(await screen.findByText(/nothing was changed/i)).toBeInTheDocument();
+    expect((await within(dialog).findByRole("alert")).textContent).toMatch(/nothing was changed/i);
   });
 });
 
@@ -617,7 +617,10 @@ describe("resolve all", () => {
     render(<ConflictInbox onUnresolvedCount={onCount} />);
     const dialog = await openConfirm();
     fireEvent.click(within(dialog).getByRole("button", { name: "Resolve all 16" }));
-    expect(await screen.findByText("Couldn't mark them resolved. Nothing was changed.")).toBeInTheDocument();
+    // In the dialog's footer: the page's notice is hidden behind the dialog.
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "Couldn't mark them resolved. Nothing was changed. Try again.",
+    );
     await waitFor(() => expect(onCount).toHaveBeenLastCalledWith(16));
   });
 

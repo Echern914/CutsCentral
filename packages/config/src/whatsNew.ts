@@ -36,6 +36,55 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-08-sheet-stays-after-edit",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "An appointment stays open after you change its time",
+    body:
+      "Moving an appointment to another hour used to close it the moment you saved, along with any note that Acuity " +
+      "hadn't confirmed the new time yet. It now stays open on the new time, with that note, until you close it.",
+  },
+  {
+    id: "2026-10-08-edit-repeat-this-and-future",
+    date: "2026-10-08",
+    kind: "feature",
+    title: "Change a repeat from one date onward",
+    body:
+      "Open an appointment in a repeat, tap More, then Edit this and future to change the start time, service or " +
+      "provider for it and every upcoming one. You see each date before anything changes. Prices stay as booked, " +
+      "and finished, cancelled or one-off changed dates stay as they are.",
+  },
+  {
+    id: "2026-10-08-book-again",
+    date: "2026-10-08",
+    kind: "feature",
+    title: "Book a client's next visit from their appointment",
+    body:
+      "Open an appointment's Full details, tap More, then Book again. The client, service and provider carry over; " +
+      "you pick the day and time. The appointment you started from is never changed, and a booking sent twice on " +
+      "a weak connection is only made once.",
+  },
+  {
+    id: "2026-10-08-swipe-days-month-view",
+    date: "2026-10-08",
+    kind: "feature",
+    title: "Swipe between days on the calendar",
+    body:
+      "On the Month view, swipe left or right on the open day to move to the next or previous day, " +
+      "just like the Day view. Swiping inside an open appointment no longer changes the day, and a refresh " +
+      "keeps you on the day you were looking at.",
+  },
+  {
+    id: "2026-10-08-one-visit-one-punch",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Log visit can't punch the same visit twice",
+    body:
+      "Log visit now asks first when the client already has a visit that day (booked, synced or logged by hand), " +
+      "so the same cut isn't punched twice. A tap sent twice, or retried after a dropped connection, logs once. " +
+      "Rewards now shows when a promotion is adding punches to every visit.",
+  },
+  {
     id: "2026-10-08-booking-page-truth",
     date: "2026-10-08",
     kind: "fix",
@@ -76,6 +125,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "keeps today's holiday price.",
   },
   {
+    id: "2026-10-08-sign-out-alerts-and-held-prices",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Signing out stops your booking alerts",
+    body:
+      "Signing out now stops new booking and cancellation alerts on every phone you were signed in on, until you " +
+      "sign in there again. A slot you hold for your members now shows them that slot's own price, like your " +
+      "Saturday rate, before they book it.",
+  },
+  {
     id: "2026-10-08-home-clients-team-truth",
     date: "2026-10-08",
     kind: "fix",
@@ -83,6 +142,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
     body:
       "Today no longer counts a lunch block as an appointment. Nudge now, Leave team and voiding rent say why when " +
       "they fail. Cancel on Edit profile throws the change away. Card pickers fit a phone, and promos show $12.50 off.",
+  },
+  {
+    id: "2026-10-08-assistant-knows-whats-new",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Ask the assistant about this week's changes",
+    body:
+      "The assistant now answers questions about Add at, repeats, Save anyway, Didn't finish booking, deposits on " +
+      "moved bookings, saved cards, page designs and the app's Rewards tab. It no longer says a whole repeat can be " +
+      "edited: change one date, or cancel the rest and set it up again.",
   },
   {
     id: "2026-10-08-checkout-tells-the-truth",
@@ -95,6 +164,15 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "booking no longer offers a $0.00 charge.",
   },
   {
+    id: "2026-10-08-bell-back-button",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "A Back button here, and every update you missed",
+    body:
+      "On a phone this list filled the screen and there was no way to close it. A Back button now stays at the top " +
+      "left while you scroll. This list also shows every update you haven't seen, not just the newest six.",
+  },
+  {
     id: "2026-10-08-hours-load-and-requests",
     date: "2026-10-08",
     kind: "fix",
@@ -103,6 +181,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "If your hours can't load, the sheet now says so with Try again, instead of showing every day off and letting a " +
       "save replace your real week. Save problems show above Save hours. With no booking link, your page's request " +
       "form now reaches you.",
+  },
+  {
+    id: "2026-10-08-limits-hours-and-saves",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Close at midnight, and saves that say when they fail",
+    body:
+      "Hours can now end at midnight. A service over 600 minutes or an add-on over 480 is named instead of " +
+      "\"Couldn't add\". Quota, target and plan saves say when they fail, and switching a service quota from week " +
+      "to month replaces it. Service groups no longer claim to set hours.",
   },
   {
     id: "2026-10-08-calendar-and-forms-truth",

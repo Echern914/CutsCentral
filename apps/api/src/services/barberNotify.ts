@@ -53,6 +53,8 @@ export const NOTIFY_DEFAULTS = {
   dayAheadHour: 19,
   newBookingEnabled: true,
   cancelEnabled: true,
+  // The Lock Screen widget shows client first names (routes/nextUp.ts).
+  lockScreenNames: true,
 };
 
 export type NotifyPrefs = typeof NOTIFY_DEFAULTS;
@@ -161,6 +163,7 @@ export async function resolveNotifyPrefs(
     dayAheadHour: row.dayAheadHour,
     newBookingEnabled: row.newBookingEnabled,
     cancelEnabled: row.cancelEnabled,
+    lockScreenNames: row.lockScreenNames,
   };
 }
 

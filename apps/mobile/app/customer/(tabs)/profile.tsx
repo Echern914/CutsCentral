@@ -7,6 +7,7 @@ import { WEB_ORIGIN } from "@/src/config";
 import { invalidate, useCustomer, useResource } from "@/src/customer/CustomerProvider";
 import { Screen } from "@/src/customer/Screen";
 import { ApiError, errorCopy } from "@/src/customer/api";
+import { secondsLeft, sendKey, startCooldown, type Cooldowns } from "@/src/customer/codeCooldown";
 import { displayPhone } from "@/src/customer/format";
 import { color, radius, space, type } from "@/src/customer/theme";
 import { OpeningCard } from "@/src/customer/openings";
@@ -270,15 +271,35 @@ function ContactEditor({
   const [value, setValue] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
+  // "Send a new code" has its own spinner: Verify's busy must not read "Sending…".
+  const [sending, setSending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [cooldowns, setCooldowns] = useState<Cooldowns>({});
+  const [now, setNow] = useState(() => Date.now());
   const field = channel === "sms" ? "phone" : "email";
+  const wait = secondsLeft(cooldowns, sendKey(channel, value), now);
+
+  useEffect(() => {
+    if (wait <= 0) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [wait > 0]);
 
   async function start() {
+    if (busy || wait > 0) return;
+    const resending = step === "code";
     setBusy(true);
+    setSending(resending);
     setMessage(null);
+    // A stale code never rides into the next step.
+    setCode("");
     try {
       await api.send("POST", "/api/me/contact/start", { channel, [field]: value });
+      const sentAt = Date.now();
+      setCooldowns((c) => startCooldown(c, sendKey(channel, value), sentAt));
+      setNow(sentAt);
       setStep("code");
+      if (resending) setMessage("We sent a new code. Use the newest one.");
     } catch (err) {
       const c = err instanceof ApiError ? err.code : null;
       setMessage(
@@ -292,6 +313,7 @@ function ContactEditor({
       );
     } finally {
       setBusy(false);
+      setSending(false);
     }
   }
 
@@ -380,13 +402,22 @@ function ContactEditor({
           onPress={() => {
             setStep("idle");
             setMessage(null);
+            setCode("");
           }}
         />
+        {step === "code" ? (
+          <Button
+            label={sending ? "Sending…" : wait > 0 ? `Send a new code (${wait}s)` : "Send a new code"}
+            variant="plain"
+            disabled={busy || wait > 0}
+            onPress={() => void start()}
+          />
+        ) : null}
         <Button
-          label={step === "enter" ? "Send code" : "Verify"}
+          label={step === "enter" ? (wait > 0 ? `Send code (${wait}s)` : "Send code") : "Verify"}
           variant="secondary"
           busy={busy}
-          disabled={step === "enter" ? value.trim().length === 0 : code.length !== 6}
+          disabled={step === "enter" ? value.trim().length === 0 || wait > 0 : code.length !== 6}
           onPress={step === "enter" ? start : verify}
           style={styles.flex}
         />

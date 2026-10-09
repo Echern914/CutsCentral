@@ -627,3 +627,69 @@ describe("findHelp — what shipped late September", () => {
     expect(helpAnswerById("saved-card-charge")!.a).toMatch(/72 hours/);
   });
 });
+
+/**
+ * What shipped in early October (#560-#596), in the words a barber types, and
+ * the sentences that work made false.
+ */
+describe("findHelp — what shipped early October", () => {
+  const BATTERY: [string, string][] = [
+    // Add at, in a busy hour (#591)
+    ["can I fit someone in between two appointments", "add-in-busy-hour"],
+    ["there's a half hour gap after a booking, how do I book it", "add-in-busy-hour"],
+    ["what is the add at button on my calendar", "add-in-busy-hour"],
+    // Repeats (#578/#593)
+    ["how do I edit the whole series", "recurring"],
+    ["change the whole series", "recurring"],
+    ["why were some repeat dates unavailable", "recurring"],
+    // Save anyway on Edit (#570)
+    ["save anyway", "edit-save-anyway"],
+    ["it says that time isn't one of this service's usual openings", "edit-save-anyway"],
+    ["change the service on a booking", "edit-save-anyway"],
+    // Didn't finish booking (#574/#583/#588)
+    ["what is didn't finish booking", "didnt-finish-booking"],
+    ["clients who picked a time but didnt finish", "didnt-finish-booking"],
+    ["what does the book them button do", "didnt-finish-booking"],
+    // Deposit moves (#575)
+    ["what happens to the deposit if I move the booking", "move-with-deposit"],
+    ["can a client reschedule with a deposit", "move-with-deposit"],
+    // Saved card for next time (#563)
+    ["can clients save their card for next time", "saved-card-next-time"],
+    ["client says text me a code to use their card", "saved-card-next-time"],
+    ["book in one tap", "saved-card-next-time"],
+    // Page designs (#564)
+    ["how do I change my page design", "page-designs"],
+    ["what is book this look", "page-designs"],
+    ["how do I tag my photos with a service", "page-designs"],
+    // The app's Rewards tab (#565)
+    ["what's on the rewards tab in the app", "app-rewards-tab"],
+    ["time left to rebook countdown", "app-rewards-tab"],
+    // What's new (#560)
+    ["where do I see what's new", "whats-new"],
+    ["what is the gold dot on the bell", "whats-new"],
+  ];
+  it.each(BATTERY)("%j -> %s", (q, id) => expectAnswer(q, id));
+
+  it("keeps what the older entries answered", () => {
+    expectAnswer("how do i edit an appointment", "cancel-reschedule");
+    expectAnswer("book anyway", "book-anyway");
+    expectAnswer("can I move an appointment to another barber", "move-appointment");
+    expectAnswer("refund a client", "refund-a-client");
+  });
+
+  it("no longer says what stopped being true", () => {
+    const a = (id: string) => helpAnswerById(id)!.a;
+    // Series-wide: Edit this and future (time, service, barber) and the cancel
+    // scopes - and still no way to change how often it repeats.
+    expect(a("recurring")).not.toMatch(/edit the series later/);
+    expect(a("recurring")).toMatch(/More, then Edit this and future/);
+    expect(a("recurring")).toMatch(/To change how often it repeats, cancel the rest/);
+    expect(a("recurring")).toMatch(/This & all future/);
+    // The new-time email goes only where ChairBack had already emailed them.
+    expect(a("move-appointment")).not.toMatch(/the client gets the updated details/);
+    expect(a("move-appointment")).toMatch(/If ChairBack already emailed the client/);
+    // A move doesn't ping the waitlist, and synced bookings are changed elsewhere.
+    expect(a("cancel-reschedule")).not.toMatch(/pings the waitlist/);
+    expect(a("cancel-reschedule")).not.toMatch(/move anything yourself/);
+  });
+});

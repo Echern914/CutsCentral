@@ -274,4 +274,17 @@ describe("a new phone", () => {
     expect(screen.queryByRole("radio", { name: /Pay with/ })).toBeNull();
     expect(localStorage.getItem(SAVED_CARD_KEY)).toBeNull();
   });
+
+  it("🔴 a new code can be sent from the code step (the panel said to ask, with no way to)", async () => {
+    requestCode.mockResolvedValue({ ok: true });
+    verifyCode.mockResolvedValue({ ok: false });
+    await reachLastStep();
+    fireEvent.click(screen.getByRole("button", { name: "Saved a card here before? Use it" }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Text me a code" })));
+    fireEvent.change(screen.getByLabelText("Code from the text"), { target: { value: "000000" } });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Use my card" })));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send a new code" })));
+    expect(requestCode).toHaveBeenCalledTimes(2);
+    expect((screen.getByLabelText("Code from the text") as HTMLInputElement).value).toBe("");
+  });
 });

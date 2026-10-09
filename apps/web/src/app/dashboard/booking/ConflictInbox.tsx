@@ -262,6 +262,7 @@ export function ConflictInbox({
   async function confirmResolveAll() {
     if (!asOf || openCount <= 0) return;
     setSaving(true);
+    setDialogError(null);
     // Optimistic like the single resolve, and put back if it did not happen.
     const before = openCount;
     publishCount(0);
@@ -278,7 +279,9 @@ export function ConflictInbox({
         void load(status);
         return;
       }
-      setNotice("Couldn't mark them resolved. Nothing was changed.");
+      // In the dialog's footer: the page's notice sits BEHIND the dialog,
+      // where a phone shows nothing and the barber taps again.
+      setDialogError("Couldn't mark them resolved. Nothing was changed. Try again.");
       return;
     }
     const n = res.resolved ?? 0;
@@ -295,6 +298,7 @@ export function ConflictInbox({
   async function confirmResolve() {
     if (!confirming) return;
     setSaving(true);
+    setDialogError(null);
 
     /**
      * 🔴 OPTIMISTIC, THEN RECONCILED, AND REVERTED IF IT FAILED.
@@ -316,7 +320,7 @@ export function ConflictInbox({
     setSaving(false);
     if (!res.ok) {
       publishCount(before);
-      setNotice("Couldn't mark that resolved. Nothing was changed.");
+      setDialogError("Couldn't mark that resolved. Nothing was changed. Try again.");
       return;
     }
     // 🔴 Tell the truth about who resolved it. `changed: false` means somebody
@@ -376,6 +380,7 @@ export function ConflictInbox({
             type="button"
             onClick={() => {
               setNotice(null);
+              setDialogError(null);
               setNote("");
               setConfirmingAll(true);
             }}
@@ -487,6 +492,7 @@ export function ConflictInbox({
                     type="button"
                     onClick={() => {
                       setNotice(null);
+                      setDialogError(null);
                       setNote("");
                       setConfirming(r);
                     }}
@@ -521,6 +527,12 @@ export function ConflictInbox({
         title="Mark this resolved?"
         className="max-w-md"
         footer={
+          <div className="flex flex-col gap-2">
+            {dialogError && (
+              <p role="alert" data-testid="resolve-error" className="text-xs text-red-300">
+                {dialogError}
+              </p>
+            )}
           <div className="flex flex-wrap justify-end gap-2">
             <button
               type="button"
@@ -538,6 +550,7 @@ export function ConflictInbox({
             >
               {saving ? "Saving…" : "Mark resolved"}
             </button>
+          </div>
           </div>
         }
       >
@@ -632,6 +645,12 @@ export function ConflictInbox({
         title={`Resolve all ${openCount}?`}
         className="max-w-md"
         footer={
+          <div className="flex flex-col gap-2">
+            {dialogError && (
+              <p role="alert" data-testid="resolve-error" className="text-xs text-red-300">
+                {dialogError}
+              </p>
+            )}
           <div className="flex flex-wrap justify-end gap-2">
             <button
               type="button"
@@ -649,6 +668,7 @@ export function ConflictInbox({
             >
               {saving ? "Saving…" : `Resolve all ${openCount}`}
             </button>
+          </div>
           </div>
         }
       >
