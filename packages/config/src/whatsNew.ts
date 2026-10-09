@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-08-book-again",
+    date: "2026-10-08",
+    kind: "feature",
+    title: "Book a client's next visit from their appointment",
+    body:
+      "Open an appointment's Full details, tap More, then Book again. The client, service and provider carry over; " +
+      "you pick the day and time. The appointment you started from is never changed, and a booking sent twice on " +
+      "a weak connection is only made once.",
+  },
+  {
     id: "2026-10-08-swipe-days-month-view",
     date: "2026-10-08",
     kind: "feature",
