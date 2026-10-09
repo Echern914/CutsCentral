@@ -3,6 +3,7 @@ import { Alert, StyleSheet, View } from "react-native";
 import { ApiError, errorCopy } from "./api";
 import { invalidate, useCustomer } from "./CustomerProvider";
 import { dayLabel, money, timeLabel, timeRange } from "./format";
+import { priceChange } from "./openingClaim";
 import { color, radius, space } from "./theme";
 import type { Opening } from "./types";
 import { Avatar, Button, Txt } from "./ui";
@@ -30,25 +31,33 @@ export function OpeningCard({
   const tz = opening.shop.timezone;
   const what = [opening.serviceName, opening.staffName ? `with ${opening.staffName}` : null].filter(Boolean).join(" ");
   const verb = opening.requiresApproval ? "Request it" : "Book it";
+  const priceLabel = (price: number | null) => (price === null ? null : money(Math.round(price * 100)));
 
+  // The confirmation names the price too: it is the figure the server checks
+  // the booking against (openingClaim.ts).
   function confirm() {
+    const price = priceLabel(opening.price);
     Alert.alert(
       `${verb}?`,
       `${dayLabel(opening.startsAt, tz, now)}, ${timeRange(opening.startsAt, opening.endsAt, tz)} at ${opening.shop.name}${
         what ? ` · ${what}` : ""
-      }.`,
+      }${price ? ` · ${price}` : ""}.`,
       [
         { text: "Not now", style: "cancel" },
-        { text: verb, onPress: () => void book() },
+        { text: verb, onPress: () => void book(opening.price) },
       ],
     );
   }
 
-  async function book() {
+  async function book(expectedPrice: number | null) {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await api.send<{ pending: boolean }>("POST", `/api/me/openings/${encodeURIComponent(opening.id)}/book`);
+      const res = await api.send<{ pending: boolean }>(
+        "POST",
+        `/api/me/openings/${encodeURIComponent(opening.id)}/book`,
+        { expectedPrice },
+      );
       // Everything that shows appointments has changed.
       invalidate("/api/me");
       onBooked();
@@ -59,6 +68,22 @@ export function OpeningCard({
           : `${dayLabel(opening.startsAt, tz, now)} at ${timeLabel(opening.startsAt, tz)}. It's on your appointments.`,
       );
     } catch (err) {
+      // 🔴 The shop changed the price while this card was open: nothing was
+      // booked and the hold stands. Ask again, at the new figure.
+      const changed = priceChange(err);
+      if (changed) {
+        onBooked(); // refresh the card to the new price behind the question
+        const next = priceLabel(changed.price);
+        Alert.alert(
+          "The price changed",
+          next ? `This time is now ${next}. ${verb} at ${next}?` : `This time no longer has a listed price. ${verb} anyway?`,
+          [
+            { text: "Not now", style: "cancel" },
+            { text: next ? `${verb} at ${next}` : verb, onPress: () => void book(changed.price) },
+          ],
+        );
+        return;
+      }
       // Someone else took it, or the hold ran out while this screen was open.
       const gone =
         err instanceof ApiError && (err.status === 410 || err.status === 409 || err.status === 404);
