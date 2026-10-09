@@ -99,9 +99,18 @@ describe("the sheet's date and time", () => {
     const { unmount } = render(
       <AppointmentSheet row={row} toast={vi.fn()} onClose={vi.fn()} onChanged={vi.fn()} />,
     );
-    expect(dialogText()).toMatch(/10:00/);
-    unmount();
-    answer({ ok: false });
+    try {
+      // No record yet, so no shop zone either: the row's time in the device's
+      // own zone (CI runs in UTC; a phone in New York reads 10:00 AM).
+      const own = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" })
+        .format(new Date(row.start))
+        .split(/\s/)[0]!;
+      expect(dialogText()).toContain(own);
+    } finally {
+      // Never leave a pending read behind for the next test.
+      unmount();
+      answer({ ok: false });
+    }
   });
 
   it("a synced visit keeps the row's time (its record is not the calendar's source)", async () => {
