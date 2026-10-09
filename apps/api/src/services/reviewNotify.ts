@@ -155,6 +155,7 @@ export async function reviewNotifyPrefs(
     dayAheadHour: row.dayAheadHour,
     newBookingEnabled: row.newBookingEnabled,
     cancelEnabled: row.cancelEnabled,
+    lockScreenNames: row.lockScreenNames,
   };
 }
 

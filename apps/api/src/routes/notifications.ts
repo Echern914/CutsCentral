@@ -87,6 +87,7 @@ const prefsSchema = z
     dayAheadHour: z.number().int().min(0).max(23),
     newBookingEnabled: z.boolean(),
     cancelEnabled: z.boolean(),
+    lockScreenNames: z.boolean(),
   })
   .partial()
   .strict();
