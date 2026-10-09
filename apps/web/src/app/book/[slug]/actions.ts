@@ -163,6 +163,33 @@ export interface UpgradesResult {
  *
  * Failure is silent by design: an upsell that can't load is simply not shown.
  */
+export type CodeCheck =
+  | { ok: true; code: string; words: string; listPriceCents: number; discountCents: number; totalCents: number }
+  | { ok: false; message: string };
+
+/** "Have a code?": what the shop's code does to this booking, before booking. */
+export async function checkCodeAction(
+  slug: string,
+  input: { code: string; serviceId: string; staffId: string; startsAt: string; addOnIds?: string[] },
+): Promise<CodeCheck> {
+  const res = await apiPublicSend<Extract<CodeCheck, { ok: true }>>(
+    "POST",
+    `/api/book/${encodeURIComponent(slug)}/code`,
+    input,
+  );
+  if (res.ok && res.data) return { ...res.data, ok: true };
+  const message = (res.body as { message?: unknown } | undefined)?.message;
+  return {
+    ok: false,
+    message:
+      typeof message === "string"
+        ? message
+        : res.status === 429
+          ? "Too many tries. Wait a minute and try again."
+          : "Couldn't check that code. Try again.",
+  };
+}
+
 export async function getUpgradesAction(
   slug: string,
   input: { startsAt: string; staffId: string; serviceId: string },
@@ -257,6 +284,8 @@ export interface BookInput {
   saveCard?: boolean;
   /** This device's key to the client's saved card: book with it, no card step. */
   savedCardToken?: string;
+  /** A shop's public offer code, checked against this booking. */
+  offerCode?: string;
 }
 
 /**

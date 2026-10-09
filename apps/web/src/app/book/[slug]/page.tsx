@@ -46,6 +46,8 @@ export interface BookShopData {
     // When on, the booking page offers "Join the waitlist" (a standing button
     // and when a chosen day is fully booked).
     waitlistEnabled?: boolean;
+    /** The page offers "Have a code?" (absent from an older API = no). */
+    offersEnabled?: boolean;
     /** True while confirmations go by email only - the form then requires it. */
     emailRequired?: boolean;
     // When on (and the shop has groups), the menu opens with group cards

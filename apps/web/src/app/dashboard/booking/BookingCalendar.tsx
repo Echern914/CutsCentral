@@ -192,6 +192,7 @@ export function BookingCalendar({
   pendingWaitlistBooking = null,
   onPendingWaitlistBookingTaken,
   acuityConnected = false,
+  offersEnabled = false,
 }: {
   initial: AgendaResponse;
   initialWaitlist: WaitlistRow[];
@@ -232,6 +233,8 @@ export function BookingCalendar({
   onPendingWaitlistBookingTaken?: () => void;
   /** Rewards are on, so there are tiers to hold an opening for. */
   tierOpenings?: boolean;
+  /** Offers & codes is on for this shop: the booking form takes a code. */
+  offersEnabled?: boolean;
 }) {
   const tz = initial.timezone;
   const router = useRouter();
@@ -995,6 +998,7 @@ export function BookingCalendar({
       {/* New Appointment / Block Off sheets (native only). */}
       {isNative && addAt && (
         <AppointmentForm
+          offersEnabled={offersEnabled}
           staff={staff}
           services={services}
           addOns={addOns}
@@ -1017,6 +1021,7 @@ export function BookingCalendar({
       )}
       {isNative && waitlistBooking && (
         <AppointmentForm
+          offersEnabled={offersEnabled}
           staff={staff}
           services={services}
           addOns={addOns}

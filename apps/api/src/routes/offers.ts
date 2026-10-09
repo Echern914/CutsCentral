@@ -66,17 +66,35 @@ offersRouter.get("/", async (req, res) => {
     ...(clientId ? { clientId } : {}),
     ...(seat.manager ? {} : { staffIds: { has: seat.staffId ?? "-" } }),
   };
-  const offers = await prisma.offer.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    take: 200,
-    include: { client: { select: { id: true, firstName: true, lastName: true } } },
-  });
+  const [offers, services, staff] = await Promise.all([
+    prisma.offer.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      include: { client: { select: { id: true, firstName: true, lastName: true } } },
+    }),
+    // What the Create offer form picks from - here, because a barber seat
+    // cannot read the manager-only booking menu.
+    prisma.service.findMany({
+      where: { shopId, active: true },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      select: { id: true, name: true, price: true },
+    }),
+    prisma.staff.findMany({
+      where: { shopId, active: true },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      select: { id: true, name: true },
+    }),
+  ]);
   const now = new Date();
   const uses = await offerUseCounts(prisma, offers.map((o) => o.id), now);
+  const on = await shopOffersOn(shopId);
   res.json({
     enabled: true,
     canCreate,
+    timezone: on?.timezone ?? "UTC",
+    services: services.map((s) => ({ id: s.id, name: s.name, price: s.price === null ? null : Number(s.price) })),
+    staff,
     // What this seat may make offers for (null = anything).
     allowedServiceIds: seat.manager ? null : seat.serviceIds,
     ownStaffId: seat.manager ? null : seat.staffId,

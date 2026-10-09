@@ -13,6 +13,8 @@ import { InstagramHandle } from "@/components/InstagramHandle";
 import { UpcomingVisits, type UpcomingRow } from "./UpcomingVisits";
 import { BookingBlock } from "./BookingBlock";
 import { ClientActions } from "./ClientActions";
+import { ClientOffers } from "./ClientOffers";
+import type { OffersList } from "../../offers/actions";
 import { EditClient } from "./EditClient";
 import { EmailMarketing, type ClientEmailMarketing } from "./EmailMarketing";
 import { SavedCardPanel, type SavedCardFacts } from "./SavedCardPanel";
@@ -106,10 +108,12 @@ interface LedgerEntry {
 }
 
 export default async function ClientDetailPage({ params }: { params: { id: string } }) {
-  const [res, ledgerRes, me] = await Promise.all([
+  const [res, ledgerRes, me, offersRes] = await Promise.all([
     apiGet<ClientDetail>(`/api/dashboard/clients/${params.id}`),
     apiGet<{ entries: LedgerEntry[] }>(`/api/dashboard/clients/${params.id}/ledger`),
     getMe(),
+    // Offers & codes: { enabled: false } for every shop it isn't switched on for.
+    apiGet<OffersList>(`/api/offers?clientId=${encodeURIComponent(params.id)}`),
   ]);
   if (res.status === 404) notFound();
   // A dropped/stale/revoked session (e.g. a token minted before a tokenVersion
@@ -239,6 +243,15 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           rewardsEnabled={rewardsOn}
         />
       </div>
+
+      {offersRes.data?.enabled && (
+        <div className="mb-6">
+          <ClientOffers
+            list={offersRes.data}
+            client={{ id: client.id, name: [client.firstName, client.lastName].filter(Boolean).join(" ") || "Client" }}
+          />
+        </div>
+      )}
 
       {client.archived && (
         <div className="mb-4 rounded-2xl border border-subtle bg-charcoal-800 px-5 py-3 text-sm text-muted">

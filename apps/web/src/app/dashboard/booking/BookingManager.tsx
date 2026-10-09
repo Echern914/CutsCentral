@@ -430,6 +430,7 @@ export function BookingManager({
               openDay={openDay}
               openView={openView}
               tierOpenings={shop.rewardsEnabled}
+              offersEnabled={Boolean(shop.offersEnabled)}
               pendingWaitlistBooking={waitlistHandoff.pending}
               onPendingWaitlistBookingTaken={waitlistHandoff.taken}
             />

@@ -18,6 +18,7 @@ import {
   type DaySpecial,
   type SavedBooking,
 } from "./actions";
+import { quoteOfferAction, type OfferQuote } from "../offers/actions";
 import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
 import { shopLocalInputValue } from "./shopLocalInput";
 import { formatPrice, parsePrice } from "@/lib/serviceFields";
@@ -96,6 +97,7 @@ export function AppointmentForm({
   onClose,
   onCreated,
   toast,
+  offersEnabled = false,
 }: {
   staff: StaffRow[];
   services: ServiceRow[];
@@ -131,6 +133,8 @@ export function AppointmentForm({
   /** `made` is the new single booking (never a series), to open it. */
   onCreated: (made?: { id: string; startsAt: string }) => void;
   toast: Toast;
+  /** The shop has Offers & codes switched on: the form takes a code. */
+  offersEnabled?: boolean;
 }) {
   const activeServices = services.filter((s) => s.active);
   const activeStaff = staff.filter((s) => s.active);
@@ -386,6 +390,43 @@ export function AppointmentForm({
   const basePrice = customPrice ?? selectedService?.price ?? null;
   const totalPrice = basePrice == null && addOnPrice === 0 ? null : (basePrice ?? 0) + addOnPrice;
 
+  // OFFER CODE. Checked by the API against THIS visit (service, provider,
+  // time, add-ons, client) - the booking asks again when it is made. Anything
+  // that changes the visit clears an applied code, so the price shown is
+  // never one worked out for a different visit.
+  const [offerText, setOfferText] = useState("");
+  const [offer, setOffer] = useState<Extract<OfferQuote, { ok: true }> | null>(null);
+  const [offerNote, setOfferNote] = useState<string | null>(null);
+  const [checkingOffer, setCheckingOffer] = useState(false);
+  const offerVisitKey = JSON.stringify([serviceId, staffId, startsAt, clientId, addOnIds, customPrice, targetedSlotId, repeat]);
+  useEffect(() => {
+    setOffer(null);
+  }, [offerVisitKey]);
+  async function checkOffer() {
+    if (!offerText.trim() || !serviceId || !staffId || checkingOffer) return;
+    setCheckingOffer(true);
+    setOfferNote(null);
+    try {
+      const q = await quoteOfferAction({
+        code: offerText,
+        ...(clientId ? { clientId } : {}),
+        serviceId,
+        staffId,
+        startsAt,
+        ...(chosenAddOns.length > 0 ? { addOnIds: chosenAddOns.map((a) => a.id) } : {}),
+        ...(customPrice !== null ? { price: customPrice } : {}),
+        special: Boolean(targetedSlotId),
+        series: repeat,
+      });
+      if (q.ok) setOffer(q);
+      else setOfferNote(q.message);
+    } catch {
+      setOfferNote("No answer from ChairBack. Check your connection and try again.");
+    } finally {
+      setCheckingOffer(false);
+    }
+  }
+
   /**
    * The hour he tapped, offered as itself when it is not one of the times
    * listed. Only once the list has loaded (so "not listed" is known), and only
@@ -547,6 +588,9 @@ export function AppointmentForm({
       // What is ticked ON SCREEN - derived, so an add-on the form is no
       // longer showing can never ride along.
       addOnIds: chosenAddOns.length > 0 ? chosenAddOns.map((a) => a.id) : undefined,
+      // Only a code checked against this very visit rides along. Part of the
+      // details, so a different offer on a retry counts as a change.
+      ...(offer ? { offerCode: offer.code } : {}),
     };
     const fingerprint = JSON.stringify(details);
 
@@ -641,6 +685,13 @@ export function AppointmentForm({
             reason: res.reason ?? "A customer is booking this time right now. Pick another time.",
             confirmation: "",
           });
+          return;
+        }
+        // The offer's last use went, or it changed, after it was checked:
+        // nothing was booked, and the form says so where Save is.
+        if (res.error === "offer_refused") {
+          setOffer(null);
+          setError(res.message ?? "That offer can't be used on this booking.");
           return;
         }
         setError(
@@ -1195,6 +1246,47 @@ export function AppointmentForm({
             </>
           )}
         </Group>
+
+        {offersEnabled && (
+          <Group title="Offer">
+            <div className="flex min-w-0 gap-2">
+              <input
+                className={cn(INPUT, "flex-1 uppercase")}
+                placeholder="Code"
+                aria-label="Offer code"
+                value={offerText}
+                onChange={(e) => {
+                  setOfferText(e.target.value);
+                  setOffer(null);
+                  setOfferNote(null);
+                }}
+                autoCapitalize="characters"
+              />
+              <button
+                type="button"
+                onClick={() => void checkOffer()}
+                disabled={!offerText.trim() || !serviceId || !staffId || checkingOffer}
+                className="h-11 shrink-0 rounded-lg border border-subtle px-4 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+              >
+                {checkingOffer ? "Checking…" : "Apply"}
+              </button>
+            </div>
+            {offer ? (
+              <p className="text-sm text-offwhite [overflow-wrap:anywhere]" data-testid="offer-applied">
+                <span className="font-mono text-gold">{offer.code}</span> · {offer.words} · pays{" "}
+                {formatPrice(offer.totalCents / 100)} (was {formatPrice(offer.listPriceCents / 100)})
+              </p>
+            ) : offerNote ? (
+              <p role="alert" className="text-sm text-danger-soft">
+                {offerNote}
+              </p>
+            ) : (
+              <p className="text-[11px] text-muted/80">
+                {!serviceId || !staffId ? "Pick the service and provider first." : "Checked against this exact booking."}
+              </p>
+            )}
+          </Group>
+        )}
 
         <Group title="Note">
           <Field label="Only you see this">
