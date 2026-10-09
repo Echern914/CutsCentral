@@ -151,22 +151,46 @@ describe("the client moves it from their link", () => {
     expect((await moveOnline(manageToken, at(4, 12))).status).toBe(200);
   });
 
-  it("🔴 a FULLY prepaid booking is still refused a time at a different price", async () => {
-    // Paid $30 in full when it was booked at $30; the time it moves to is $40.
+  it("🔴 a FULLY prepaid booking at an AGREED price ($30, not the $40 menu) moves and keeps that price", async () => {
+    // Paid $30 in full when it was booked at $30. The price is the booking's,
+    // not the menu's (engines/movePrice.ts): it moves with it, so the
+    // prepayment still matches and nothing needs reconciling.
     const { id, manageToken } = await paidBooking(at(5, 10), 30, 3000);
     const res = await moveOnline(manageToken, at(5, 12));
-    expect(res.status).toBe(409);
-    expect(res.body.error).toBe("price_changed");
-    const row = await prisma.appointment.findUniqueOrThrow({ where: { id }, select: { startsAt: true } });
-    expect(row.startsAt.getTime()).toBe(at(5, 10).getTime());
+    expect(res.status).toBe(200);
+    expect(res.body.price).toEqual({ kind: "kept", totalCents: 3000 });
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id }, select: { startsAt: true, priceAtBooking: true } });
+    expect(row.startsAt.getTime()).toBe(at(5, 12).getTime());
+    expect(Number(row.priceAtBooking)).toBe(30);
   });
 
-  it("🔴 a deposit larger than the new price is refused - the client would have overpaid", async () => {
-    // Booked at $50 with a $45 deposit; the new time's price is $40.
+  it("🔴 a FULLY prepaid MENU booking is still refused a time whose menu price differs", async () => {
+    // Booked at the $40 menu and paid $40 in full; the new day's menu says $55.
+    const { id, manageToken } = await paidBooking(at(5, 10), 40, 4000);
+    // Not a week out: that would be the SAME weekday, and the override would
+    // explain the old price too, making it read as an agreed one.
+    const target = at(11, 12);
+    await prisma.service.update({ where: { id: serviceId }, data: { priceOverrides: { [String(target.getUTCDay())]: 55 } } });
+    try {
+      const res = await moveOnline(manageToken, target);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("price_changed");
+      // The seen-first ask never comes: payment decides first, and it can't take $55.
+      const row = await prisma.appointment.findUniqueOrThrow({ where: { id }, select: { startsAt: true, priceAtBooking: true } });
+      expect(row.startsAt.getTime()).toBe(at(5, 10).getTime());
+      expect(Number(row.priceAtBooking)).toBe(40);
+    } finally {
+      await prisma.service.update({ where: { id: serviceId }, data: { priceOverrides: {} } });
+    }
+  });
+
+  it("🔴 a deposit larger than an agreed price can't happen on a move: the $50 price moves with its $45 deposit", async () => {
+    // Booked at $50 (not the $40 menu) with a $45 deposit. The price is kept,
+    // so the deposit is still covered and the move stands.
     const { manageToken } = await paidBooking(at(6, 10), 50, 4500);
     const res = await moveOnline(manageToken, at(6, 12));
-    expect(res.status).toBe(409);
-    expect(res.body.error).toBe("price_changed");
+    expect(res.status).toBe(200);
+    expect(res.body.price).toEqual({ kind: "kept", totalCents: 5000 });
   });
 });
 
@@ -176,11 +200,25 @@ describe("the shop moves it from the dashboard", () => {
     expect((await moveFromDashboard(id, at(7, 12))).status).toBe(200);
   });
 
-  it("a FULLY prepaid booking is still refused a time at a different price", async () => {
-    const { id } = await paidBooking(at(8, 10), 30, 3000);
-    const res = await moveFromDashboard(id, at(8, 12));
-    expect(res.status).toBe(409);
-    expect(res.body.error).toBe("price_changed");
+  it("a FULLY prepaid MENU booking is still refused a time whose menu price differs", async () => {
+    // Booked at the $40 menu and paid $40 in full; the new day's menu says $55.
+    const { id } = await paidBooking(at(8, 10), 40, 4000);
+    const target = at(13, 12);
+    await prisma.service.update({ where: { id: serviceId }, data: { priceOverrides: { [String(target.getUTCDay())]: 55 } } });
+    try {
+      const res = await moveFromDashboard(id, target);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("price_changed");
+    } finally {
+      await prisma.service.update({ where: { id: serviceId }, data: { priceOverrides: {} } });
+    }
+  });
+
+  it("a FULLY prepaid booking at an AGREED price ($30) moves from the dashboard and keeps it", async () => {
+    const { id } = await paidBooking(at(9, 10), 30, 3000);
+    const res = await moveFromDashboard(id, at(9, 12));
+    expect(res.status).toBe(200);
+    expect(res.body.price).toEqual({ kind: "kept", totalCents: 3000 });
   });
 });
 

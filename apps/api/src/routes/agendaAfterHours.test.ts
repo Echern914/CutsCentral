@@ -249,10 +249,17 @@ describe("afterHours on the agenda", () => {
     expect((await agendaRow(special.id)).afterHours).toBe(true);
     expect(await slotClaim(slotId)).toBe(special.id);
 
-    // The manage page only offers regular-grid times; 11 AM is one.
-    const moved = await request(app)
+    // The manage page only offers regular-grid times; 11 AM is one. Leaving
+    // the special means the menu price for 11 AM, which the client sees first
+    // (engines/movePrice.ts) and then sends back.
+    const asked = await request(app)
       .post(`/api/book/manage/${special.manageToken}/reschedule`)
       .send({ startsAt: dayAt(4, 11).toISOString() });
+    expect(asked.status).toBe(409);
+    expect(asked.body).toMatchObject({ error: "price_changes", toCents: 12000 });
+    const moved = await request(app)
+      .post(`/api/book/manage/${special.manageToken}/reschedule`)
+      .send({ startsAt: dayAt(4, 11).toISOString(), acceptPriceCents: 12000 });
     expect(moved.status).toBe(200);
 
     // An ordinary 11 AM booking at the regular price now.

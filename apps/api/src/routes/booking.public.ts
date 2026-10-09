@@ -4037,15 +4037,6 @@ bookingPublicRouter.post(
       special: appt.bookedVia === TARGETED_SLOT_ORIGIN,
       discounted: false,
     });
-    if (move.kind === "changes" && parsed.data.acceptPriceCents !== move.toCents) {
-      res.status(409).json({
-        error: "price_changes",
-        code: "PRICE_CHANGES",
-        fromCents: move.fromCents,
-        toCents: move.toCents,
-      });
-      return;
-    }
     const movedCents = move.kind === "changes" ? move.toCents : move.totalCents;
 
     // A booking PAID at booking can't be reconciled here (no top-up or partial
@@ -4064,6 +4055,19 @@ bookingPublicRouter.post(
       })
     ) {
       res.status(409).json({ error: "price_changed", message: "That day has a different price. Please contact the shop to move a paid booking." });
+      return;
+    }
+
+    // Payment can take the new figure (or there is none): now the client must
+    // have SEEN it. A menu price that differs at the new time is refused with
+    // both numbers until the page sends the new one back.
+    if (move.kind === "changes" && parsed.data.acceptPriceCents !== move.toCents) {
+      res.status(409).json({
+        error: "price_changes",
+        code: "PRICE_CHANGES",
+        fromCents: move.fromCents,
+        toCents: move.toCents,
+      });
       return;
     }
 

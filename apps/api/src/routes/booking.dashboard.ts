@@ -4556,18 +4556,12 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
     menuAtOldCents: dollarsToCents(menuAtOld),
     menuAtNewCents: dollarsToCents(effectivePrice),
     handEdited,
-    special: appt.bookedVia === "targeted_slot",
+    // The shop moving its own special keeps the special - and its price: he
+    // is moving the special he sold, not leaving it. (The client's own move
+    // off a special, on the public route, is the one that offers the menu.)
+    special: false,
     discounted: false,
   });
-  if (move.kind === "changes" && parsed.data.acceptPriceCents !== move.toCents) {
-    res.status(409).json({
-      error: "price_changes",
-      fromCents: move.fromCents,
-      toCents: move.toCents,
-      message: `That time has a different price: ${formatCentsPlain(move.fromCents)} becomes ${formatCentsPlain(move.toCents)}. Move it at the new price?`,
-    });
-    return;
-  }
   const movedCents = move.kind === "changes" ? move.toCents : move.totalCents;
 
   // A PAID booking moving to a price it can't take can't be reconciled here
@@ -4589,6 +4583,19 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       error: "price_changed",
       message:
         "That day has a different price and this booking is already paid. Refund or take the difference in person, then move it.",
+    });
+    return;
+  }
+
+  // Payment can take the new figure (or there is none): now the figure itself
+  // must have been SEEN. A menu price that differs at the new time is refused
+  // with both numbers until the barber sends the new one back.
+  if (move.kind === "changes" && parsed.data.acceptPriceCents !== move.toCents) {
+    res.status(409).json({
+      error: "price_changes",
+      fromCents: move.fromCents,
+      toCents: move.toCents,
+      message: `That time has a different price: ${formatCentsPlain(move.fromCents)} becomes ${formatCentsPlain(move.toCents)}. Move it at the new price?`,
     });
     return;
   }

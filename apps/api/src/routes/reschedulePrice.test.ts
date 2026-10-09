@@ -184,6 +184,15 @@ describe("🔴 a menu price may change - never in silence", () => {
     expect(await price(a.id)).toBe(55);
   });
 
+  it("the shop moving its own special keeps the special's price (he moved the special he sold)", async () => {
+    const a = await bookRow({ priceAtBooking: new Prisma.Decimal("150.00"), bookedVia: "targeted_slot" });
+    const res = await shopMove(a.id, nextWeekday(MONDAY, 11), { customTime: true });
+    expect(res.status).toBe(200);
+    expect(res.body.price).toEqual({ kind: "kept", totalCents: 15000 });
+    expect(await price(a.id)).toBe(150);
+    expect(await ledger(a.id)).toEqual([]);
+  });
+
   it("leaving a special ($150 at 8 PM) offers the menu price, on the client's door", async () => {
     const at = nextWeekday(MONDAY, 10);
     const a = await bookRow({ priceAtBooking: new Prisma.Decimal("150.00"), bookedVia: "targeted_slot", startsAt: at });
