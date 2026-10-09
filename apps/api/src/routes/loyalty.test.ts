@@ -216,3 +216,79 @@ describe("loyalty designer", () => {
     expect(res.body.rewardReady).toBe(false);
   });
 });
+
+/**
+ * 🔴 THE RATE THE PAGE SHOWS IS THE RATE A VISIT EARNS. An "extra punches"
+ * promotion adds to every visit, but it is made on the Promotions page - so a
+ * shop whose Rewards page said "1 punch" could be paying 2 with nothing there
+ * to say why. The config now carries the live ones, read through the same
+ * predicate the earn uses.
+ */
+describe("live extra-punch promotions on the earn settings", () => {
+  const DAY = 86_400_000;
+  let shopB: string;
+  let shopA: string;
+
+  async function shopOf(email: string): Promise<string> {
+    // Signup lowercases the address; randomToken in the fixture can emit capitals.
+    const user = await prisma.user.findUniqueOrThrow({ where: { email: email.toLowerCase() } });
+    return (await prisma.shop.findFirstOrThrow({ where: { ownerId: user.id }, select: { id: true } })).id;
+  }
+
+  beforeAll(async () => {
+    shopB = await shopOf(emailB);
+    shopA = await shopOf(emailA);
+  });
+
+  it("lists only what is live for THIS shop, and a visit earns exactly the rate it implies", async () => {
+    const before = await request(app).get("/api/loyalty").set("Cookie", cookieB);
+    expect(before.body.punchesPerVisit).toBe(1);
+    expect(before.body.extraPunchPromos).toEqual([]);
+
+    const now = Date.now();
+    const live = await prisma.promotion.create({
+      data: { shopId: shopB, kind: "EXTRA_PUNCHES", title: "Double punch", extraPunches: 1 },
+      select: { id: true },
+    });
+    await prisma.promotion.createMany({
+      data: [
+        // Paused, ended, not started yet, and a discount: none adds a punch now.
+        { shopId: shopB, kind: "EXTRA_PUNCHES", title: "Paused", extraPunches: 3, active: false },
+        {
+          shopId: shopB,
+          kind: "EXTRA_PUNCHES",
+          title: "Ended",
+          extraPunches: 3,
+          startsAt: new Date(now - 10 * DAY),
+          endsAt: new Date(now - DAY),
+        },
+        { shopId: shopB, kind: "EXTRA_PUNCHES", title: "Next week", extraPunches: 3, startsAt: new Date(now + 7 * DAY) },
+        { shopId: shopB, kind: "PERCENT_OFF", title: "20% off", percentOff: 20 },
+        // Another shop's live promo must never show here.
+        { shopId: shopA, kind: "EXTRA_PUNCHES", title: "Shop A's", extraPunches: 5 },
+      ],
+    });
+
+    const config = await request(app).get("/api/loyalty").set("Cookie", cookieB);
+    expect(config.body.extraPunchPromos).toEqual([
+      { id: live.id, title: "Double punch", extraPunches: 1, endsAt: null },
+    ]);
+
+    // The earn agrees with the page: base 1 + the one live promo = 2.
+    const client = await request(app)
+      .post("/api/dashboard/clients")
+      .set("Cookie", cookieB)
+      .send({ firstName: "Promo" });
+    expect(client.status).toBe(201);
+    const visit = await request(app)
+      .post(`/api/dashboard/clients/${client.body.id}/visits`)
+      .set("Cookie", cookieB)
+      .send({});
+    expect(visit.status).toBe(201);
+    expect(visit.body.balance).toBe(2);
+
+    // Shop A sees its own promo, never B's.
+    const configA = await request(app).get("/api/loyalty").set("Cookie", cookieA);
+    expect(configA.body.extraPunchPromos.map((p: { title: string }) => p.title)).toEqual(["Shop A's"]);
+  });
+});

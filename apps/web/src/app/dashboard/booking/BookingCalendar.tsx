@@ -6,8 +6,12 @@
 import { cap, useVocab } from "@/components/VocabProvider";
 import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import {
+  type ReactNode,
   type TouchEvent as ReactTouchEvent,
+  createContext,
+  Fragment,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -51,6 +55,7 @@ import {
   declineAppointmentAction,
   dismissAppointmentAction,
   getAgendaAction,
+  getAppointmentDetailAction,
   getWaitlistAction,
   markArrivedAction,
   noShowAppointmentAction,
@@ -60,11 +65,12 @@ import {
   restoreAppointmentAction,
 } from "./actions";
 import { agendaWindowOf, mergeAgendaWindow } from "./agendaMerge";
-import { swipeAllowedFrom, swipeIntent } from "./daySwipe";
+import { swipeIntent, swipeStartAllowed } from "./daySwipe";
 import { dayTotals, type DayTotals } from "./dayTotals";
 import { nowAnchorHour } from "./nowAnchor";
 import { clockLabel, firstOpenMinute, type BusySpan } from "./dayGaps";
-import { AppointmentForm } from "./AppointmentForm";
+import { AppointmentForm, type RebookFrom } from "./AppointmentForm";
+import { REBOOK_EVENT } from "./rebookEvent";
 import {
   WAITLIST_BOOK_EVENT,
   type WaitlistBookDetail,
@@ -180,6 +186,7 @@ export function BookingCalendar({
   toast,
   openAppointmentId,
   openDay,
+  openView,
   tierOpenings = false,
   pendingWaitlistBooking = null,
   onPendingWaitlistBookingTaken,
@@ -208,6 +215,8 @@ export function BookingCalendar({
    * appointment"). Anything that isn't a date is ignored.
    */
   openDay?: string;
+  /** Open on the Day view (the address remembers it, below). */
+  openView?: "day";
   /**
    * A waitlist "Book appointment" tapped on the WAITLIST TAB, where this
    * calendar is not mounted and so could not hear the event. BookingManager
@@ -345,8 +354,23 @@ export function BookingCalendar({
   const [selectedDay, setSelectedDay] = useState<string | null>(linkedDay ?? todayKey);
   // Month overview vs one-day planner. Day view needs a day, so the switch
   // falls back to today when the month view was sitting collapsed.
-  const [view, setView] = useState<CalendarView>("month");
+  const [view, setView] = useState<CalendarView>(openView === "day" ? "day" : "month");
   const shownDay = selectedDay ?? todayKey;
+
+  /**
+   * NEWEST ANSWER WINS, per window of days. Swiping back and forth over a
+   * month's edge can ask for the same month twice, and a poll can overlap a
+   * load; whichever was ASKED last is the truth. Without this, a slower older
+   * answer landing second rolled the days back - retracting a booking made in
+   * between - until the next poll.
+   */
+  const windowSeq = useRef(new Map<string, number>());
+  const askFor = (from: string, to: string): (() => boolean) => {
+    const key = `${from}|${to}`;
+    const n = (windowSeq.current.get(key) ?? 0) + 1;
+    windowSeq.current.set(key, n);
+    return () => windowSeq.current.get(key) === n;
+  };
 
   // Fetch a month's data on demand (paged to a month we haven't loaded yet).
   function ensureMonthLoaded(year: number, month1to12: number) {
@@ -356,8 +380,10 @@ export function BookingCalendar({
     const end = new Date(year, month1to12, 0);
     const from = new Date(start.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const to = new Date(end.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const stillLatest = askFor(from, to);
     startMonthLoad(async () => {
       const res = await getAgendaAction(from, to);
+      if (!stillLatest()) return;
       if (!res.ok || !res.data) {
         toast("Couldn't load that month", "error");
         return;
@@ -383,6 +409,15 @@ export function BookingCalendar({
     return () => window.removeEventListener(WAITLIST_BOOK_EVENT, onBook);
   }, []);
 
+  // "Book again" from an appointment's Full details (rebookEvent.ts): the same
+  // one booking form, started with that client's next visit.
+  const [rebookFrom, setRebookFrom] = useState<RebookFrom | null>(null);
+  useEffect(() => {
+    const onRebook = (e: Event) => setRebookFrom((e as CustomEvent<RebookFrom>).detail);
+    window.addEventListener(REBOOK_EVENT, onRebook);
+    return () => window.removeEventListener(REBOOK_EVENT, onRebook);
+  }, []);
+
   const refreshAgenda = useCallback(() => {
     // A cancelled or declined booking can free a slot the waitlist wants, so
     // the badge moves with the agenda rather than lagging a poll behind it.
@@ -391,13 +426,25 @@ export function BookingCalendar({
     const end = new Date(viewYear, viewMonth, 0);
     const from = new Date(start.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const to = new Date(end.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const stillLatest = askFor(from, to);
     void getAgendaAction(from, to).then((res) => {
-      if (!res.ok || !res.data) return;
+      if (!stillLatest() || !res.ok || !res.data) return;
       if (res.data.categories) setCategories(res.data.categories);
       const win = agendaWindowOf(res.data, from, to);
       setAgenda((prev) => mergeAgendaWindow(prev, res.data!.agenda, win));
     });
   }, [viewYear, viewMonth, refreshWaitingCount]);
+
+  // After Book again jumps to the new booking's day, refetch the month now on
+  // screen - possibly not the one the form was opened from, and possibly one
+  // loaded earlier that nothing else would refetch. Run as an effect so it
+  // sees the month AFTER the jump; the sheet opens once the row is in.
+  const [refetchAfterRebook, setRefetchAfterRebook] = useState(false);
+  useEffect(() => {
+    if (!refetchAfterRebook) return;
+    setRefetchAfterRebook(false);
+    refreshAgenda();
+  }, [refetchAfterRebook, refreshAgenda]);
 
   /**
    * Adopt a server re-render.
@@ -430,14 +477,37 @@ export function BookingCalendar({
   // flips the Booked -> En route -> Arrived pill without a manual refresh when
   // a client taps "On my way".
   useEffect(() => {
-    const iv = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
+    let catchUp: ReturnType<typeof setInterval> | null = null;
+    const tick = () => {
       refreshAgenda();
       // Entries expire on a server cron - nothing client-side would ever tell
       // us, so the poll is the only thing that retires a stale badge.
       refreshWaitingCount();
+    };
+    const iv = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      // Not under an open dialog. An appointment's sheet lives inside its
+      // card, and a refresh that moves the booking to another hour remounts
+      // the card and closes the sheet - with whatever it was showing (a save's
+      // result, a repeat's per-date outcome). The skipped tick is owed, and
+      // paid the moment the last dialog closes rather than up to 20 s later.
+      // Nothing is decided from the picture behind a dialog: every booking,
+      // edit and move is checked by the server when it is saved.
+      if (document.querySelector('[role="dialog"]')) {
+        catchUp ??= setInterval(() => {
+          if (document.querySelector('[role="dialog"]')) return;
+          if (catchUp) clearInterval(catchUp);
+          catchUp = null;
+          tick();
+        }, 500);
+        return;
+      }
+      tick();
     }, 20_000);
-    return () => clearInterval(iv);
+    return () => {
+      clearInterval(iv);
+      if (catchUp) clearInterval(catchUp);
+    };
   }, [refreshAgenda, refreshWaitingCount]);
 
   function gotoMonth(delta: number) {
@@ -552,13 +622,17 @@ export function BookingCalendar({
 
   // Swipe between days. `touchAction: pan-y` on the container tells the browser
   // we handle horizontal ourselves, which stops the day flipping AND the page
-  // scrolling on one diagonal drag.
+  // scrolling on one diagonal drag. Where a touch may START is swipeStartAllowed's
+  // call (daySwipe.ts) - most importantly, never inside an appointment's sheet.
+  // A swipe only ever changes which day is SHOWN; it writes nothing.
   const swipeStart = useRef<{ x: number; y: number } | null>(null);
-  const daySwipeHandlers = {
+  const swipeHandlersFor = (move: (delta: -1 | 1) => void) => ({
     onTouchStart: (e: ReactTouchEvent<HTMLDivElement>) => {
       const t = e.touches[0];
       swipeStart.current =
-        e.touches.length === 1 && t && swipeAllowedFrom(e.target)
+        e.touches.length === 1 &&
+        t &&
+        swipeStartAllowed(e.target, e.currentTarget, t.clientX, window.innerWidth)
           ? { x: t.clientX, y: t.clientY }
           : null;
     },
@@ -568,9 +642,26 @@ export function BookingCalendar({
       const t = e.changedTouches[0];
       if (!start || !t) return;
       const intent = swipeIntent(t.clientX - start.x, t.clientY - start.y);
-      if (intent) gotoDay(intent === "prev" ? -1 : 1);
+      if (intent) move(intent === "prev" ? -1 : 1);
     },
+    // The system took the gesture (iOS back-swipe, a scroll it claimed): the
+    // drag is not ours to finish.
+    onTouchCancel: () => {
+      swipeStart.current = null;
+    },
+  });
+  const daySwipeHandlers = swipeHandlersFor(gotoDay);
+  // The month view's open day pages the same way. Crossing into another month
+  // brings the grid along (gotoDayKey), so the selected cell stays on screen.
+  // 🔴 Through a ref that always holds THIS render's move: that panel is keyed
+  // by day, so for its 200ms exit the old one is still on screen holding the
+  // last render's handlers - a quick second swipe landing on it would page
+  // from the day it was showing, not the day that is showing now.
+  const plannerMove = useRef<(delta: -1 | 1) => void>(() => {});
+  plannerMove.current = (delta) => {
+    if (selectedDay) gotoDayKey(shiftDayKey(selectedDay, delta));
   };
+  const plannerSwipeHandlers = swipeHandlersFor((delta) => plannerMove.current(delta));
 
   const navBtn =
     "rounded-lg border border-subtle px-2.5 py-1.5 text-sm text-muted transition-colors hover:text-offwhite";
@@ -585,13 +676,26 @@ export function BookingCalendar({
    * fire minutes before the booking, which is always inside it.
    */
   const [deepLinkId, setDeepLinkId] = useState<string | null>(openAppointmentId ?? null);
+  /**
+   * THE ADDRESS FOLLOWS THE CALENDAR. The day being looked at (and Day vs
+   * Month) is written back as it changes - by swipe, arrows, week strip or a
+   * tapped cell - so a refresh, or the app's pull to refresh, reopens on that
+   * day instead of jumping back to today's month. Replaced, never pushed: Back
+   * still leaves the calendar rather than stepping through every day seen.
+   * The appointment id is still dropped on arrival, per the note above.
+   */
   useEffect(() => {
-    if (!openAppointmentId && !openDay) return;
     const url = new URL(window.location.href);
     url.searchParams.delete("appointment");
-    url.searchParams.delete("day");
-    window.history.replaceState(null, "", url.pathname + url.search);
-  }, [openAppointmentId, openDay]);
+    if (view === "day") url.searchParams.set("view", "day");
+    else url.searchParams.delete("view");
+    if (selectedDay && selectedDay !== todayKey) url.searchParams.set("day", selectedDay);
+    else url.searchParams.delete("day");
+    const next = url.pathname + url.search;
+    if (next !== window.location.pathname + window.location.search) {
+      window.history.replaceState(window.history.state, "", next);
+    }
+  }, [view, selectedDay, todayKey]);
   // Opened on a linked day in another month: load that month, and the
   // booking's sheet opens as soon as its row arrives (deepLinkedRow below).
   useEffect(() => {
@@ -603,7 +707,60 @@ export function BookingCalendar({
     ? (agenda.find((r) => r.id === deepLinkId && r.source === "appointment") ?? null)
     : null;
 
+  // The one appointment sheet a card opened - see SheetHost. It shows the
+  // booking's row as the agenda has it NOW, so a save that moves it to 3:00 PM
+  // re-renders the same open sheet instead of closing it.
+  const [hosted, setHosted] = useState<HostedSheet | null>(null);
+  const hostedLive = hosted
+    ? agenda.find((r) => r.id === hosted.row.id && r.source === hosted.row.source)
+    : undefined;
+  // 🔴 A save that moves the booking beyond the loaded weeks (next month, say)
+  // drops its row from the agenda, and a sheet left holding the old row would
+  // start its next Edit from the OLD date - one time change away from moving
+  // it back. So fetch the weeks around where the booking is now; the row
+  // arrives and the sheet follows it again. If it can't be found there, the
+  // sheet closes, as it always did when its booking left the calendar.
+  const hostedId = hosted?.row.id ?? null;
+  const hostedSource = hosted?.row.source ?? null;
+  const hostedGone = hosted !== null && hostedLive === undefined;
+  useEffect(() => {
+    if (!hostedGone || !hostedId) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const found = await getAppointmentDetailAction(
+          hostedId,
+          hostedSource === "visit" ? "visit" : "appointment",
+        );
+        if (!alive) return;
+        if (found.ok && found.data) {
+          const at = Date.parse(found.data.startsAt);
+          const from = new Date(at - 7 * 24 * 60 * 60 * 1000).toISOString();
+          const to = new Date(at + 7 * 24 * 60 * 60 * 1000).toISOString();
+          const res = await getAgendaAction(from, to);
+          if (!alive) return;
+          if (res.ok && res.data && res.data.agenda.some((r) => r.id === hostedId)) {
+            const win = agendaWindowOf(res.data, from, to);
+            setAgenda((prev) => mergeAgendaWindow(prev, res.data!.agenda, win));
+            return;
+          }
+        }
+      } catch {
+        if (!alive) return;
+      }
+      setHosted(null);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [hostedGone, hostedId, hostedSource]);
+  const openHostedSheet = useCallback<SheetOpener>(
+    (row, view, render) => setHosted({ row, view, render }),
+    [],
+  );
+
   return (
+    <SheetHost.Provider value={openHostedSheet}>
     <div className="flex flex-col gap-4">
       {/* Waitlist dropdown sits ABOVE the calendar. */}
       <WaitlistPanel initial={initialWaitlist} onOpenTab={onOpenWaitlist} />
@@ -660,7 +817,12 @@ export function BookingCalendar({
         /* DAY VIEW: the planner gets the whole card. Keyed on the day so it
            remounts as you page - which is what resets DayPlanner's category
            filter, exactly as tapping a different month cell does. */
-        <div className="mt-4" style={{ touchAction: "pan-y" }} {...daySwipeHandlers}>
+        <div
+          className="mt-4"
+          style={{ touchAction: "pan-y" }}
+          data-qa="day-view-swipe"
+          {...daySwipeHandlers}
+        >
           <DayHeader
             days={weekDays}
             shownDay={shownDay}
@@ -775,6 +937,9 @@ export function BookingCalendar({
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: PLANNER_OPEN_MS / 1000, ease: "easeOut" }}
             className="overflow-hidden"
+            style={{ touchAction: "pan-y" }}
+            data-qa="month-day-planner"
+            {...plannerSwipeHandlers}
           >
             <DayPlanner
               // The default view, so this is the planner most visits open on.
@@ -872,6 +1037,29 @@ export function BookingCalendar({
           toast={toast}
         />
       )}
+      {isNative && rebookFrom && (
+        <AppointmentForm
+          staff={staff}
+          services={services}
+          addOns={addOns}
+          timezone={tz}
+          prefillISO={new Date().toISOString()}
+          rebook={rebookFrom}
+          onClose={() => setRebookFrom(null)}
+          onCreated={(made) => {
+            setRebookFrom(null);
+            router.refresh();
+            // Straight to what was just booked: its day, then its sheet - the
+            // working link to the new appointment, opened for him.
+            if (made) {
+              gotoDayKey(dayKeyOf(made.startsAt));
+              setDeepLinkId(made.id);
+            }
+            setRefetchAfterRebook(true);
+          }}
+          toast={toast}
+        />
+      )}
       {isNative && tierDay && (
         <TierOpeningForm
           staff={staff}
@@ -914,11 +1102,42 @@ export function BookingCalendar({
           initialView="detail"
           onClose={() => setDeepLinkId(null)}
           onChanged={refreshAgenda}
+          canBookAgain={isNative}
         />
       )}
+
+      {hosted && (
+        <Fragment key={`${hosted.row.source}:${hosted.row.id}`}>
+          {hosted.render(hosted.view, hostedLive ?? hosted.row, () => setHosted(null))}
+        </Fragment>
+      )}
     </div>
+    </SheetHost.Provider>
   );
 }
+
+/**
+ * 🔴 WHERE A CARD'S APPOINTMENT SHEET IS MOUNTED.
+ *
+ * It used to be mounted inside its calendar card, and the cards are grouped by
+ * HOUR. So anything that moved the booking - the barber's own edit to 3:00 PM,
+ * the 20 s poll, a server re-render - remounted the card in its new hour and
+ * closed the sheet along with whatever it was saying: "Saved — still
+ * confirming the time on Acuity" was gone 300 ms after Save, on a production
+ * build. The calendar now mounts the sheet, keyed by the booking, and the card
+ * only asks. The card still decides WHAT the sheet is (its props live in the
+ * card's `renderSheet`); the calendar decides how long it lives.
+ *
+ * Without a provider (a card rendered on its own, as the card tests do) the
+ * card falls back to mounting the sheet itself.
+ */
+type SheetOpener = (
+  row: AgendaRow,
+  view: SheetView,
+  render: (view: SheetView, row: AgendaRow, close: () => void) => ReactNode,
+) => void;
+type HostedSheet = { row: AgendaRow; view: SheetView; render: Parameters<SheetOpener>[2] };
+const SheetHost = createContext<SheetOpener | null>(null);
 
 /**
  * Build an ISO instant for a (YYYY-MM-DD day, hour) as a prefill. Converts in
@@ -1990,6 +2209,7 @@ function DayPlanner({
                         }
                         toast={toast}
                         onChanged={onChanged}
+                        canBookAgain={isNative}
                       />
                     ))}
                     {openAt !== null && (
@@ -2228,18 +2448,35 @@ export function AppointmentBlock({
   timeLabel,
   toast,
   onChanged,
+  canBookAgain = false,
 }: {
   row: AgendaRow;
   timeLabel: string;
   toast: Toast;
   onChanged: () => void;
+  /** Its sheet offers "Book again" (the calendar's form is there to answer). */
+  canBookAgain?: boolean;
 }) {
   const vocab = useVocab();
   const [pending, start] = useTransition();
   const [seriesMenu, setSeriesMenu] = useState(false);
   const [nudgeMenu, setNudgeMenu] = useState(false);
   // ONE sheet for this row. The value is which view it opens on; null = closed.
+  // Opened through the calendar's SheetHost when there is one, so the sheet
+  // outlives this card being remounted in another hour.
   const [sheet, setSheet] = useState<SheetView | null>(null);
+  const host = useContext(SheetHost);
+  const renderSheet = (view: SheetView, live: AgendaRow, close: () => void) => (
+    <AppointmentSheet
+      row={live}
+      toast={toast}
+      initialView={view}
+      onClose={close}
+      onChanged={onChanged}
+      canBookAgain={canBookAgain}
+    />
+  );
+  const openSheet = (view: SheetView) => (host ? host(row, view, renderSheet) : setSheet(view));
   /**
    * COLLAPSED BY DEFAULT. A day with eight cuts used to be eight full cards of
    * service lines and button rows, which is a lot of scrolling to answer "who
@@ -2801,7 +3038,7 @@ export function AppointmentBlock({
               🔴 Checkout does NOT complete the appointment - Done still does,
               and Done is still where the loyalty punch is earned. */}
           <button
-            onClick={() => setSheet("charges")}
+            onClick={() => openSheet("charges")}
             disabled={pending}
             className={cn(
               BTN_BASE,
@@ -2871,7 +3108,7 @@ export function AppointmentBlock({
               Checkout is the card's one primary action and a second bright
               button would compete with the money moment. */}
           <button
-            onClick={() => setSheet("edit")}
+            onClick={() => openSheet("edit")}
             disabled={pending}
             aria-label={`Edit appointment for ${row.clientName}`}
             className={cn(BTN_BASE, "gap-1.5 border border-subtle text-muted hover:text-offwhite")}
@@ -2887,7 +3124,7 @@ export function AppointmentBlock({
           card's own actions are the common case and this is the deep one. */}
       <button
         type="button"
-        onClick={() => setSheet("detail")}
+        onClick={() => openSheet("detail")}
         aria-label={`Open appointment details for ${row.clientName || "this client"}`}
         className="mt-2 flex h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-subtle text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:h-9"
       >
@@ -2897,18 +3134,11 @@ export function AppointmentBlock({
       )}
 
       {/* The appointment sheet: contact, payment truth, editing and the
-          chair-side checkout, all behind one dialog. Mounted from the row so it
-          always carries THAT booking's live figures; onChanged refreshes the
+          chair-side checkout, all behind one dialog. Normally the calendar
+          mounts it (SheetHost) with the booking's live row; this is the
+          fallback for a card rendered on its own. onChanged refreshes the
           agenda, which is what flips the button to "Paid ✓". */}
-      {sheet && (
-        <AppointmentSheet
-          row={row}
-          toast={toast}
-          initialView={sheet}
-          onClose={() => setSheet(null)}
-          onChanged={onChanged}
-        />
-      )}
+      {sheet && renderSheet(sheet, row, () => setSheet(null))}
     </div>
   );
 }

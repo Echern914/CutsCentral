@@ -42,7 +42,8 @@
     "./clientNote": "./src/clientNote.ts",
     "./serviceVisibility": "./src/serviceVisibility.ts",
     "./addOns": "./src/addOns.ts",
-    "./tips": "./src/tips.ts"
+    "./tips": "./src/tips.ts",
+    "./promoPricing": "./src/promoPricing.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

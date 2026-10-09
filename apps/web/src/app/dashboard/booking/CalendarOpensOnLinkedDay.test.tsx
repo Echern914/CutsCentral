@@ -81,8 +81,10 @@ describe("the calendar opens on the linked day", () => {
     expect(getAgendaAction).not.toHaveBeenCalled();
   });
 
-  it("the link is taken off the address, so a refresh doesn't reopen it", async () => {
+  it("the booking is taken off the address, so a refresh doesn't reopen its sheet", async () => {
     renderCalendar({ openAppointmentId: "ap_1", openDay: "2026-10-20" });
-    await waitFor(() => expect(window.location.search).toBe("?tab=Appointments"));
+    // The DAY stays: the address follows the calendar, so a refresh reopens on
+    // the day being looked at - never on the booking's sheet again.
+    await waitFor(() => expect(window.location.search).toBe("?tab=Appointments&day=2026-10-20"));
   });
 });
