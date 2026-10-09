@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
 import * as WebBrowser from "expo-web-browser";
-import { API_ORIGIN, WEB_ORIGIN } from "@/src/config";
+import { API_ORIGIN, NEXT_UP_WIDGET_ENABLED, WEB_ORIGIN } from "@/src/config";
 import { parseOpenAuthRequest, resumeUrl } from "@/src/nativeBridge";
 
 // If the real page content hasn't signaled ready within this long, stop spinning
@@ -129,10 +129,17 @@ true;
 // - rewardsTab: its Rewards tab holds a client's whole rewards - the rebooking
 //   timer, the stamps, the deals, what they've claimed - so a shop's page drops
 //   its own "Your rewards" button here (web useAppHasRewardsTab).
+// - nextUpWidget: ONLY in a build with the Lock Screen widget (its build flag),
+//   so the dashboard offers the widget's names switch only where a widget
+//   exists (web useAppHasNextUpWidget).
 const ANNOUNCE_CAPABILITIES = `
 (function () {
   try {
-    window.__cbNative = Object.assign(window.__cbNative || {}, { openAuth: true, rewardsTab: true });
+    window.__cbNative = Object.assign(window.__cbNative || {}, ${JSON.stringify({
+      openAuth: true,
+      rewardsTab: true,
+      ...(NEXT_UP_WIDGET_ENABLED ? { nextUpWidget: true } : {}),
+    })});
   } catch (e) {}
 })();
 true;
