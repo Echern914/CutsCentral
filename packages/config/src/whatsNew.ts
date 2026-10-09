@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-09-repeat-change-acuity-still-confirming",
+    date: "2026-10-09",
+    kind: "fix",
+    title: "Changing a long repeat no longer stalls on Acuity",
+    body:
+      "Edit this and future used to wait for Acuity on every date, and a long repeat could end in \"We couldn't " +
+      "confirm that went through\". It now shows the result right away, marks any date Acuity is still confirming, " +
+      "and checks again until each is confirmed or turned down.",
+  },
+  {
     id: "2026-10-08-moved-booking-keeps-its-price",
     date: "2026-10-08",
     kind: "fix",

@@ -9,6 +9,7 @@ import {
   applySeriesEditAction,
   getEditContextAction,
   previewSeriesEditAction,
+  recheckSeriesEditMirrorAction,
   type EditContext,
   type SeriesEditApplied,
   type SeriesEditInput,
@@ -27,6 +28,11 @@ import type { AgendaRow } from "./page";
  *              every date can take it.
  *   done    -> what happened, per date, including what the synced calendar
  *              did or did not confirm.
+ *
+ * 🔴 "STILL CONFIRMING" IS NOT DONE. The apply answers without waiting for a
+ * slow Acuity, so a date can come back "unknown". It is said as still
+ * confirming - never as moved there - and read again (on its own a few times,
+ * and on "Check again") until Acuity confirms or refuses it.
  *
  * The API applies exactly the reviewed rows (a digest pins them): if they
  * changed in between, it refuses and this view reviews again. A tap whose
@@ -64,7 +70,14 @@ export interface SeriesEditState {
   review: () => void;
   apply: () => void;
   back: () => void;
+  /** Reading where the still-confirming dates stand now. */
+  checking: boolean;
+  recheck: () => void;
 }
+
+/** How often, and how many times, still-confirming dates are read again unasked. */
+export const RECHECK_EVERY_MS = 5_000;
+const AUTO_RECHECKS = 6;
 
 /** "14:30" -> 870; null when it is not a time. */
 function toMinutes(hhmm: string): number | null {
@@ -113,6 +126,9 @@ export function useSeriesEdit({
   const [busy, setBusy] = useState(false);
   // Flips synchronously: two taps in one tick must not send two applies.
   const inFlight = useRef(false);
+  const [checking, setChecking] = useState(false);
+  const checkingNow = useRef(false);
+  const autoChecks = useRef(0);
 
   // Every OPENING starts from this visit as it is now - never from a review or
   // a result left over from the last time. Keyed on opening alone: an apply
@@ -235,6 +251,7 @@ export function useSeriesEdit({
         res = { ok: false, error: "network_error" };
       }
       if (res.ok && res.data) {
+        autoChecks.current = 0;
         setApplied(res.data);
         setStage("done");
         refreshOwed.current = true;
@@ -274,6 +291,50 @@ export function useSeriesEdit({
     setError(null);
   }
 
+  // Only the dates still confirming are read again, and only their state is
+  // taken from the answer: a date already confirmed or refused stays as said.
+  // A read that fails changes nothing - "still confirming" is still true.
+  function recheck() {
+    const seriesId = row.seriesId;
+    const waiting = applied?.changed.filter((c) => c.mirror === "unknown").map((c) => c.id) ?? [];
+    if (checkingNow.current || !seriesId || waiting.length === 0) return;
+    checkingNow.current = true;
+    setChecking(true);
+    void (async () => {
+      let res: Awaited<ReturnType<typeof recheckSeriesEditMirrorAction>> | undefined;
+      try {
+        res = await recheckSeriesEditMirrorAction(seriesId, waiting);
+      } catch {
+        res = undefined;
+      }
+      if (!res?.ok || !res.data) return;
+      const now = new Map(res.data.changed.map((c) => [c.id, c.mirror] as const));
+      setApplied((prev) =>
+        prev && {
+          ...prev,
+          changed: prev.changed.map((c) =>
+            c.mirror === "unknown" && now.has(c.id) ? { ...c, mirror: now.get(c.id)! } : c,
+          ),
+        },
+      );
+    })().finally(() => {
+      checkingNow.current = false;
+      setChecking(false);
+    });
+  }
+
+  const stillConfirming = stage === "done" ? (applied?.changed.filter((c) => c.mirror === "unknown").length ?? 0) : 0;
+  const recheckNow = useRef(recheck);
+  recheckNow.current = recheck;
+  useEffect(() => {
+    if (!active || stillConfirming === 0 || checking || autoChecks.current >= AUTO_RECHECKS) return;
+    const t = setTimeout(() => {
+      autoChecks.current++;
+      recheckNow.current();
+    }, RECHECK_EVERY_MS);
+    return () => clearTimeout(t);
+  }, [active, stillConfirming, checking]);
+
   return {
     stage,
     ctx,
@@ -298,6 +359,8 @@ export function useSeriesEdit({
     review,
     apply,
     back,
+    checking,
+    recheck,
   };
 }
 
@@ -354,10 +417,20 @@ export function SeriesEditFields({ state }: { state: SeriesEditState }) {
             </p>
           )}
           {unsettled.length > 0 && (
-            <p className="text-sm text-amber-300" role="status">
-              Still confirming with Acuity for {unsettled.map((c) => day.format(new Date(c.startsAt))).join(", ")}.
-              The old time stays blocked there until it does.
-            </p>
+            <div className="flex min-w-0 flex-col items-start gap-2">
+              <p className="text-sm text-amber-300 [overflow-wrap:anywhere]" role="status">
+                Still confirming with Acuity for {unsettled.map((c) => day.format(new Date(c.startsAt))).join(", ")}.
+                The old time stays blocked there until it does. This can take a few minutes.
+              </p>
+              <button
+                type="button"
+                onClick={state.recheck}
+                disabled={state.checking}
+                className="flex h-11 flex-none items-center justify-center rounded-xl border border-subtle px-5 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+              >
+                {state.checking ? "Checking…" : "Check again"}
+              </button>
+            </div>
           )}
           {refused.length > 0 && (
             <p className="text-sm text-amber-300" role="alert">
@@ -470,8 +543,8 @@ export function SeriesEditFields({ state }: { state: SeriesEditState }) {
             next visit, and each later reminder shows its new time.
           </li>
           <li>
-            A calendar connected to Acuity is updated one date at a time; anything Acuity doesn&apos;t confirm is named
-            after you apply.
+            A calendar connected to Acuity is updated one date at a time; any date Acuity hasn&apos;t confirmed yet, or
+            turned down, is named after you apply.
           </li>
         </ul>
       </div>

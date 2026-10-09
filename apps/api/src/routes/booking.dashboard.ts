@@ -69,6 +69,7 @@ import {
   buildObserveReport,
   completeReschedule,
   dispatchAfterCommit,
+  mirrorOutcomeOfRows,
   releaseAllForShop,
   recordMirrorIntent,
   releaseForAppointment,
@@ -3363,16 +3364,7 @@ async function answerReplay(
   // Blocks that still stand for this booking (a moved booking's old ones are released).
   const blocks = prior.outboundBlocks.filter((b) => b.state !== "RELEASING" && b.state !== "RELEASED");
   const states = new Set(blocks.map((b) => b.state));
-  const mirror: DispatchOutcome =
-    blocks.length === 0
-      ? "skipped"
-      : states.has("FAILED")
-        ? "failed"
-        : states.has("UNKNOWN")
-          ? "unknown"
-          : states.has("PENDING")
-            ? "unknown"
-            : "active";
+  const mirror: DispatchOutcome = mirrorOutcomeOfRows(blocks);
   const settling =
     states.has("PENDING") ||
     (prior.overlapForcedAt !== null &&
