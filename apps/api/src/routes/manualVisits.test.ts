@@ -296,6 +296,28 @@ describe("🔴 Log visit cannot credit one sitting twice", () => {
     expect(await visitEarns(id)).toBe(1);
   });
 
+  it("🔴 a visit already LOGGED BY HAND that day: a new tap (after an error screen or a refresh) is asked about, not punched again", async () => {
+    const id = await newClient("Retap");
+    const first = tap();
+    expect((await logVisit(id, { when: localAt(9, 14).toISOString(), requestId: first })).status).toBe(201);
+    // The page lost that tap's id; the barber taps Log visit again.
+    const again = await logVisit(id, { when: localAt(9, 16).toISOString(), requestId: tap() });
+    expect(again.status).toBe(409);
+    expect(again.body.error).toBe("visit_on_books");
+    expect(again.body.existing.source).toBe("manual");
+    expect(again.body.message).toMatch(/Already logged that day: .*\(logged by hand\)\. It already earned its punch\./);
+    expect(await prisma.visit.count({ where: { shopId, clientId: id } })).toBe(1);
+    expect(await visitEarns(id)).toBe(1);
+    // The SAME tap retried is still answered from its own visit - never asked.
+    const retry = await logVisit(id, { when: localAt(9, 14).toISOString(), requestId: first });
+    expect(retry.status).toBe(200);
+    expect(retry.body.replayed).toBe(true);
+    // A real second visit that day is the barber's to log.
+    const separate = await logVisit(id, { when: localAt(9, 17).toISOString(), requestId: tap(), separateVisit: true });
+    expect(separate.status).toBe(201);
+    expect(await visitEarns(id)).toBe(2);
+  });
+
   it("an OLDER screen (no requestId) logs exactly as before - it has no question to show", async () => {
     // A page loaded before this shipped, still open in the app: it sends no
     // requestId and cannot offer "Log a separate visit". It must keep working

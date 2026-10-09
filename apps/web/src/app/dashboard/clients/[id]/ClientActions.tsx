@@ -121,7 +121,16 @@ export function ClientActions({
     const requestId = visitTap.current;
     startTransition(async () => {
       try {
-        const r = await logVisitAction(clientId, undefined, cardTypeId, { requestId, separateVisit });
+        let r: Awaited<ReturnType<typeof logVisitAction>>;
+        try {
+          r = await logVisitAction(clientId, undefined, cardTypeId, { requestId, separateVisit });
+        } catch {
+          // 🔴 The PHONE lost the answer (no signal, the app backgrounded) - the
+          // visit may well be logged. Same as no answer from the API: keep the
+          // id so the next tap is answered from it. Uncaught, this threw the
+          // page to "Couldn't load this client" and the id went with it.
+          r = { ok: false, status: 0 };
+        }
         setVisitPickerOpen(false);
         // status 0 = the request never completed: keep the id, so trying
         // again is the same visit, not a second one.
@@ -134,6 +143,8 @@ export function ClientActions({
             message: r.message ?? "This client already has a visit on the books that day.",
             cardTypeId,
           });
+        } else if (r.status === 0) {
+          toast("No answer from ChairBack - tap Log visit again. It won't log twice.", "error");
         } else toast("Could not log visit", "error");
       } finally {
         inFlight.current = false;

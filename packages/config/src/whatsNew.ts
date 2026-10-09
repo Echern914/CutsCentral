@@ -41,9 +41,9 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
     kind: "fix",
     title: "Log visit can't punch the same visit twice",
     body:
-      "Log visit now asks first when the client already has a booked or synced visit that day, so the same cut " +
-      "isn't punched twice, and a tap sent twice logs once. Rewards now shows when a promotion is adding punches " +
-      "to every visit.",
+      "Log visit now asks first when the client already has a visit that day (booked, synced or logged by hand), " +
+      "so the same cut isn't punched twice. A tap sent twice, or retried after a dropped connection, logs once. " +
+      "Rewards now shows when a promotion is adding punches to every visit.",
   },
   {
     id: "2026-10-08-booking-page-truth",

@@ -1291,8 +1291,8 @@ async function visitOnBooksThatDay(
   shopId: string,
   clientId: string,
   window: { start: Date; end: Date },
-): Promise<{ at: Date; serviceName: string | null; source: "booking" | "synced" } | null> {
-  const [booked, visit] = await Promise.all([
+): Promise<{ at: Date; serviceName: string | null; source: "booking" | "synced" | "manual" } | null> {
+  const [booked, visit, byHand] = await Promise.all([
     // A ChairBack booking not yet done. A finished one has its Visit below.
     tx.appointment.findFirst({
       where: { shopId, clientId, status: "BOOKED", startsAt: { gte: window.start, lt: window.end } },
@@ -1312,6 +1312,22 @@ async function visitOnBooksThatDay(
       orderBy: { scheduledAt: "asc" },
       select: { scheduledAt: true, serviceName: true, acuityAppointmentId: true },
     }),
+    // 🔴 A visit already LOGGED BY HAND that day. A tap whose answer was lost
+    // keeps its id only while the page is open: after the error screen, a
+    // refresh or coming back later, the next tap is new - and without this it
+    // logged (and punched) the same visit a second time. A retry of the SAME
+    // tap never gets here: it is answered from its own visit above.
+    tx.visit.findFirst({
+      where: {
+        shopId,
+        clientId,
+        acuityAppointmentId: { startsWith: "manual:" },
+        canceledAt: null,
+        scheduledAt: { gte: window.start, lt: window.end },
+      },
+      orderBy: { scheduledAt: "asc" },
+      select: { scheduledAt: true, serviceName: true },
+    }),
   ]);
   if (booked) return { at: booked.startsAt, serviceName: booked.service?.name ?? null, source: "booking" };
   if (visit) {
@@ -1321,6 +1337,7 @@ async function visitOnBooksThatDay(
       source: visit.acuityAppointmentId.startsWith("booking:") ? "booking" : "synced",
     };
   }
+  if (byHand) return { at: byHand.scheduledAt, serviceName: byHand.serviceName, source: "manual" };
   return null;
 }
 
@@ -1439,9 +1456,12 @@ dashboardRouter.post("/clients/:clientId/visits", async (req, res) => {
       error: "visit_on_books",
       // Shown as-is above the confirm: the shop's own clock, not the reader's.
       message:
-        `Already on the books that day: ${time}${onBooksService ? ` · ${onBooksService}` : ""}` +
-        ` (${source === "booking" ? "booked in ChairBack" : "synced from your booking app"}).` +
-        " That visit earns its own punch.",
+        source === "manual"
+          ? `Already logged that day: ${time}${onBooksService ? ` · ${onBooksService}` : ""} (logged by hand).` +
+            " It already earned its punch."
+          : `Already on the books that day: ${time}${onBooksService ? ` · ${onBooksService}` : ""}` +
+            ` (${source === "booking" ? "booked in ChairBack" : "synced from your booking app"}).` +
+            " That visit earns its own punch.",
       existing: {
         at: outcome.existing.at.toISOString(),
         serviceName: outcome.existing.serviceName,
