@@ -1532,6 +1532,23 @@ export async function dismissAppointmentAction(id: string): Promise<Result> {
   return done(await apiSend("POST", `/api/booking/appointments/${id}/dismiss`));
 }
 
+/**
+ * Take a walk-in recorded by mistake off the schedule and out of the takings.
+ * Tells nobody and moves no money: a walk-in with a card payment or tip is
+ * refused, and `message` carries the server's own sentence saying why.
+ */
+export async function removeWalkInAction(
+  id: string,
+): Promise<{ ok: boolean; error?: string; message?: string }> {
+  const res = await apiSend(
+    "POST",
+    `/api/booking/appointments/${encodeURIComponent(id)}/remove-walk-in`,
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed", message: res.message };
+  revalidatePath("/dashboard/booking");
+  return { ok: true };
+}
+
 export async function noShowAppointmentAction(id: string): Promise<Result> {
   return done(await apiSend("POST", `/api/booking/appointments/${id}/no-show`));
 }
@@ -1973,6 +1990,12 @@ export interface AppointmentDetail {
   editable: boolean;
   readOnlyReason: "external" | "not_editable" | null;
   externalManageUrl: string | null;
+  /**
+   * A walk-in this shop recorded in ChairBack - the one finished visit the
+   * sheet offers to remove. The server decides; the sheet never guesses from
+   * the service name. Optional so an older API reads as "not a walk-in".
+   */
+  walkIn?: boolean;
 }
 
 /**

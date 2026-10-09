@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-09-remove-walk-in",
+    date: "2026-10-09",
+    kind: "feature",
+    title: "Remove a walk-in you recorded by mistake",
+    body:
+      "Open the walk-in, tap More, then Remove walk-in. It comes off your schedule and out of your takings, and " +
+      "nobody is told. A walk-in paid by card or tipped through ChairBack needs that refunded first. To fix one, " +
+      "remove it and record it again.",
+  },
+  {
     id: "2026-10-08-moved-booking-keeps-its-price",
     date: "2026-10-08",
     kind: "fix",

@@ -32,6 +32,7 @@ import {
   getAppointmentDetailAction,
   markArrivedAction,
   noShowAppointmentAction,
+  removeWalkInAction,
   type AppointmentDetail,
   type DetailHistoryItem,
 } from "./actions";
@@ -355,6 +356,51 @@ export function AppointmentSheet({
     });
   }
 
+  //  ── Remove walk-in: asked in the sheet, answered in the sheet ──
+  // The question sits in the footer, which never scrolls away, and so does a
+  // refusal: a toast draws beneath this dialog and is invisible on a phone.
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  // Its own busy flag, not useTransition: that one does not stay on across an
+  // awaited call, and a second tap would send a second request.
+  const [removing, setRemoving] = useState(false);
+  useEffect(() => {
+    if (rawView !== "detail") setConfirmRemove(false);
+  }, [rawView]);
+
+  function askRemoveWalkIn() {
+    setMenu(null);
+    setSavedNotice(null);
+    setRemoveError(null);
+    setConfirmRemove(true);
+  }
+
+  function removeWalkIn() {
+    if (removing) return;
+    setRemoveError(null);
+    setRemoving(true);
+    void (async () => {
+      try {
+        let res: Awaited<ReturnType<typeof removeWalkInAction>>;
+        try {
+          res = await removeWalkInAction(row.id);
+        } catch {
+          res = { ok: false };
+        }
+        if (!res.ok) {
+          setRemoveError(res.message ?? "That didn't go through. Nothing changed, so try again.");
+          load();
+          return;
+        }
+        toast("Walk-in removed", "success");
+        onChanged();
+        onClose();
+      } finally {
+        setRemoving(false);
+      }
+    })();
+  }
+
   //  ── chrome ──────────────────────────────────────────────────────────────
   const title =
     view === "series"
@@ -441,6 +487,17 @@ export function AppointmentSheet({
           />
         </div>
       )
+    ) : confirmRemove && detail ? (
+      <RemoveWalkInFooter
+        detail={detail}
+        error={removeError}
+        removing={removing}
+        onKeep={() => {
+          setConfirmRemove(false);
+          setRemoveError(null);
+        }}
+        onRemove={removeWalkIn}
+      />
     ) : (
       <DetailFooter detail={detail} notice={savedNotice} onEdit={() => setView("edit")} />
     );
@@ -560,6 +617,7 @@ export function AppointmentSheet({
               : undefined
           }
           onAct={act}
+          onRemoveWalkIn={askRemoveWalkIn}
           onPriceSaved={() => {
             onChanged();
             load();
@@ -598,6 +656,7 @@ function DetailView({
   onCheckout,
   onBookAgain,
   onAct,
+  onRemoveWalkIn,
   onPriceSaved,
   showRefunds,
   onDepositRefunded,
@@ -626,6 +685,8 @@ function DetailView({
     label: string,
     closeAfter?: boolean,
   ) => void;
+  /** Ask, in the sheet, whether to remove this walk-in. */
+  onRemoveWalkIn: () => void;
   /** The price changed on the server: re-read the booking and the agenda. */
   onPriceSaved: () => void;
   /** The new checkout is live for this shop, so its card payments can be refunded here. */
@@ -829,6 +890,7 @@ function DetailView({
             onEditSeries();
           }}
           onAct={onAct}
+          onRemoveWalkIn={onRemoveWalkIn}
         />
       )}
     </div>
@@ -2108,6 +2170,7 @@ function MoreMenu({
   onBookAgain,
   onEditSeries,
   onAct,
+  onRemoveWalkIn,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail;
@@ -2120,6 +2183,7 @@ function MoreMenu({
     label: string,
     closeAfter?: boolean,
   ) => void;
+  onRemoveWalkIn: () => void;
 }) {
   const items: MenuItem[] = [];
   const native = detail.source === "appointment" && detail.origin === "chairback";
@@ -2186,6 +2250,20 @@ function MoreMenu({
       icon: <BanIcon />,
       tone: "danger",
       onClick: () => onAct(cancelAppointmentAction, "Canceled", true),
+    });
+  }
+  // A walk-in recorded by mistake - the only finished visit that can be taken
+  // back off the books. The SERVER says it is a walk-in (`walkIn`); a service
+  // that happens to be called "Walk-in" never decides it. It asks first, in
+  // the sheet.
+  if (native && detail.walkIn === true && detail.status === "completed") {
+    items.push({
+      key: "remove-walk-in",
+      divided: true,
+      label: "Remove walk-in",
+      icon: <BanIcon />,
+      tone: "danger",
+      onClick: onRemoveWalkIn,
     });
   }
   if (detail.externalManageUrl) {
@@ -2379,6 +2457,70 @@ function PayView({
 }
 
 //  ── footers ───────────────────────────────────────────────────────────────
+
+/**
+ * "Remove walk-in?" - asked in the footer, which never scrolls away, saying
+ * exactly what will happen before anything does. A refusal (a card payment or
+ * tip still on it) is read here too, in the server's own words.
+ */
+function RemoveWalkInFooter({
+  detail,
+  error,
+  removing,
+  onKeep,
+  onRemove,
+}: {
+  detail: AppointmentDetail;
+  error: string | null;
+  removing: boolean;
+  onKeep: () => void;
+  onRemove: () => void;
+}) {
+  const day = sameShopDay(detail.startsAt, new Date().toISOString(), detail.timezone)
+    ? "today's takings"
+    : "that day's takings";
+  return (
+    <div className="flex w-full flex-col gap-2" data-testid="remove-walk-in-confirm">
+      <p className="text-sm font-medium text-offwhite">Remove this walk-in?</p>
+      <p className="text-xs leading-relaxed text-muted">
+        It comes off your schedule and out of {day}. Any punches it earned come off. Nobody is told.
+      </p>
+      {error && (
+        <p role="alert" data-testid="remove-walk-in-error" className="text-sm text-danger-soft">
+          {error}
+        </p>
+      )}
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <button
+          type="button"
+          onClick={onKeep}
+          disabled={removing}
+          className="flex h-11 flex-1 items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+        >
+          Keep it
+        </button>
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={removing}
+          className="flex h-11 flex-1 items-center justify-center rounded-xl border border-danger-soft/50 px-4 text-sm font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50"
+        >
+          {removing ? "Removing…" : "Remove walk-in"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Whether two instants fall on the same calendar day in the shop's zone. */
+function sameShopDay(aIso: string, bIso: string, zone: string): boolean {
+  try {
+    const f = new Intl.DateTimeFormat("en-CA", { timeZone: zone, dateStyle: "short" });
+    return f.format(new Date(aIso)) === f.format(new Date(bIso));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The detail view's footer is deliberately QUIET: the sheet's one solid-brass

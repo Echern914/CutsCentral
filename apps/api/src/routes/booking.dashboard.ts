@@ -12,11 +12,13 @@ import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import {
+  CancelRefusedError,
   cancelAppointment,
   cancelSeries,
   promoteOneAppointmentInTx,
   type CancelSeriesScope,
 } from "../engines/appointmentPromotion.js";
+import { isRecordedWalkIn, WALK_IN_SERVICE_NAME } from "../engines/walkInReceipt.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { collapseExternalBlocks } from "../engines/externalBlockCollapse.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
@@ -4419,6 +4421,11 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
       endsAt: true,
       bookedVia: true,
       payments: { select: { id: true } },
+      firstName: true,
+      seriesId: true,
+      groupId: true,
+      service: { select: { name: true } },
+      visit: { select: { acuityAppointmentId: true } },
     },
   });
   if (!appt) {
@@ -4427,6 +4434,15 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
   }
   if (appt.status !== "CANCELED") {
     res.status(409).json({ error: "not_canceled" });
+    return;
+  }
+  // 🔴 A REMOVED WALK-IN IS NOT UNDONE HERE. This route brings a booking back
+  // as BOOKED - a reservation, re-checked against the chair - and a walk-in is
+  // a COMPLETED receipt for a cut that already happened: restored here it would
+  // come back as an upcoming booking with money already on it. Recording the
+  // walk-in again is the honest path, and is one tap.
+  if (isRecordedWalkIn(appt)) {
+    res.status(409).json({ error: "not_restorable" });
     return;
   }
   if (!appt.canceledAt || now.getTime() - appt.canceledAt.getTime() > RESTORE_WINDOW_MS) {
@@ -6711,8 +6727,6 @@ const walkInSchema = z
   })
   .strict();
 
-/** Name of the auto-provisioned service every walk-in is booked against. */
-const WALK_IN_SERVICE_NAME = "Walk-in";
 /** Chair time a walk-in is assumed to occupy when the shop has no signal. */
 const WALK_IN_FALLBACK_MIN = 30;
 
@@ -7169,6 +7183,97 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     id: result.id,
     ...(result.conflict ? { conflict: result.conflict } : {}),
   });
+});
+
+/**
+ * POST /appointments/:id/remove-walk-in - take a walk-in recorded by mistake
+ * back off the books ("It doesn't let someone change a walk-in or cancel it").
+ *
+ * A walk-in is born COMPLETED and paid, so neither Edit (live bookings only)
+ * nor Cancel (upcoming visits) is offered for it, and the generic cancel is the
+ * wrong tool for a mistake: it emails a client, can offer the time to the
+ * waitlist, refunds booking money through Stripe and settles a kept card.
+ *
+ * This is the same teardown through the ONE cancel path (cancelAppointment),
+ * with the parts that speak or pay switched off:
+ *   - CANCELED + dismissed: off the day view, and out of revenue, Chair time
+ *     and Insights, which all read only live statuses (readChairEvents);
+ *   - any loyalty it earned is clawed back through the punch ledger;
+ *   - its Acuity block, if it holds one, is released;
+ *   - NOBODY is told: no email, no text, no push, no Auto-fill, no waitlist;
+ *   - NO MONEY MOVES: a walk-in carrying a live card payment or tip is
+ *     refused with nothing changed. The shop refunds it first, then removes it.
+ *
+ * Only a walk-in this shop recorded in ChairBack qualifies (isRecordedWalkIn);
+ * another shop's id is a 404, any other booking a 409. Removing it twice is a
+ * no-op answer, never an error.
+ */
+const REMOVE_WALK_IN_MONEY_MESSAGE =
+  "This walk-in has a card payment or tip taken through ChairBack. Refund it first, then remove the walk-in.";
+
+bookingDashboardRouter.post("/appointments/:id/remove-walk-in", async (req, res) => {
+  const shopId = req.shop!.id;
+  const appointmentId = req.params.id!;
+  const read = () =>
+    prisma.appointment.findFirst({
+      where: { id: appointmentId, shopId },
+      select: {
+        id: true,
+        status: true,
+        firstName: true,
+        bookedVia: true,
+        seriesId: true,
+        groupId: true,
+        service: { select: { name: true } },
+        visit: { select: { acuityAppointmentId: true } },
+      },
+    });
+  const appt = await read();
+  if (!appt) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (!isRecordedWalkIn(appt)) {
+    res.status(409).json({ error: "not_a_walk_in" });
+    return;
+  }
+  if (appt.status === "CANCELED") {
+    res.json({ ok: true, alreadyRemoved: true });
+    return;
+  }
+  if (appt.status !== "COMPLETED") {
+    res.status(409).json({ error: "not_removable" });
+    return;
+  }
+
+  let removed: boolean;
+  try {
+    removed = await cancelAppointment(shopId, appointmentId, "CANCELED", new Date(), {
+      initiator: "barber",
+      onlyFrom: ["COMPLETED"],
+      silent: true,
+      dismiss: true,
+      refuseIfMoney: true,
+    });
+  } catch (err) {
+    if (err instanceof CancelRefusedError) {
+      res.status(409).json({ error: "money_taken", message: REMOVE_WALK_IN_MONEY_MESSAGE });
+      return;
+    }
+    throw err;
+  }
+  if (!removed) {
+    // Lost a race: another tap (or device) moved it first. Removed is removed.
+    const now = await read();
+    if (now?.status === "CANCELED") {
+      res.json({ ok: true, alreadyRemoved: true });
+      return;
+    }
+    res.status(409).json({ error: "not_removable" });
+    return;
+  }
+  logger.info({ shopId, appointmentId }, "walk-in removed");
+  res.json({ ok: true, alreadyRemoved: false });
 });
 
 /**
