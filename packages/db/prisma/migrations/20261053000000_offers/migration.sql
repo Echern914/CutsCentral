@@ -35,9 +35,14 @@ CREATE TABLE "Offer" (
     -- typed back in can never be stored.
     CONSTRAINT "Offer_code_check" CHECK ("code" ~ '^[A-Z0-9-]{3,24}$'),
     -- Exactly the value its kind needs, inside isValidDiscount()'s range.
+    -- 🔴 Every value is tested IS NOT NULL explicitly: a CHECK that comes out
+    -- NULL passes, and "NULL BETWEEN 1 AND ..." is NULL - without it an
+    -- AMOUNT_OFF offer with no amount was accepted.
     CONSTRAINT "Offer_value_check" CHECK (
-      ("kind" = 'AMOUNT_OFF' AND "amountOffCents" BETWEEN 1 AND 1000000 AND "percentOffBps" IS NULL AND "freeServiceId" IS NULL)
-      OR ("kind" = 'PERCENT_OFF' AND "percentOffBps" BETWEEN 1 AND 10000 AND "amountOffCents" IS NULL AND "freeServiceId" IS NULL)
+      ("kind" = 'AMOUNT_OFF' AND "amountOffCents" IS NOT NULL AND "amountOffCents" BETWEEN 1 AND 1000000
+        AND "percentOffBps" IS NULL AND "freeServiceId" IS NULL)
+      OR ("kind" = 'PERCENT_OFF' AND "percentOffBps" IS NOT NULL AND "percentOffBps" BETWEEN 1 AND 10000
+        AND "amountOffCents" IS NULL AND "freeServiceId" IS NULL)
       OR ("kind" = 'FREE_SERVICE' AND "freeServiceId" IS NOT NULL AND "amountOffCents" IS NULL AND "percentOffBps" IS NULL)
     ),
     CONSTRAINT "Offer_limits_check" CHECK (
