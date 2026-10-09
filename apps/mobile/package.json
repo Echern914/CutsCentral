@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@babel/runtime": "^7.25.0",
+    "@bacons/apple-targets": "4.0.6",
     "@expo-google-fonts/bricolage-grotesque": "^0.4.1",
     "@expo/metro-runtime": "~6.1.2",
     "@react-native-async-storage/async-storage": "2.2.0",

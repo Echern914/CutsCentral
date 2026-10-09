@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { BookingModeKey } from "@chairback/config/constants";
 import type { ServiceVisibility } from "@chairback/config/serviceVisibility";
 import { apiGet, apiSend } from "@/lib/api";
+import { refusedOnlyNewKeys } from "@/lib/apiCompat";
 import type { AgendaResponse } from "./page";
 
 type Result = { ok: boolean; error?: string };
@@ -577,6 +578,12 @@ export interface CreateApptInput {
     count?: number;
     until?: string; // ISO
   };
+  /**
+   * One per submission, sent again unchanged when the form retries it: the
+   * API hands back the booking the first copy made instead of a second one.
+   * Single bookings only.
+   */
+  operationId?: string;
 }
 
 export interface SeriesSummary {
@@ -585,7 +592,37 @@ export interface SeriesSummary {
   skipped: { startsAt: string; reason: string }[];
 }
 
+/** A booking as SAVED - what a retried request's id already made. */
+export interface SavedBooking {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+}
+
+function readSavedBooking(raw: unknown): SavedBooking | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const b = raw as Record<string, unknown>;
+  return typeof b.id === "string" && typeof b.startsAt === "string" && typeof b.endsAt === "string"
+    ? { id: b.id, startsAt: b.startsAt, endsAt: b.endsAt }
+    : undefined;
+}
+
 export type CreateApptResult = Result & {
+  /** The new booking (a series: its first visit). */
+  id?: string;
+  /** The booking's SAVED times - what to say and where to go, never the form's. */
+  startsAt?: string;
+  endsAt?: string;
+  /** A retry the API recognised: the booking an earlier copy already made. */
+  replayed?: boolean;
+  /**
+   * operation_mismatch / operation_in_progress: the booking this submission's
+   * id already made, as saved (the retry asked for something else, or that
+   * booking's calendar protection has not settled yet).
+   */
+  booked?: SavedBooking;
+  /** False when the request never got an answer - safe to retry as-is. */
+  answered?: boolean;
   series?: SeriesSummary;
   /** For `external_block`: the block, in words, in the shop's zone. */
   reason?: string;
@@ -617,21 +654,31 @@ export type CreateApptResult = Result & {
 export async function createAppointmentAction(
   input: CreateApptInput,
 ): Promise<CreateApptResult> {
-  const res = await apiSend<{
+  type Created = {
+    id?: string | null;
+    startsAt?: string;
+    endsAt?: string;
+    replayed?: boolean;
     series?: SeriesSummary;
     forced?: boolean;
     mirror?: string;
     clientConfirmation?: "email" | "none";
-  }>(
-    "POST",
-    "/api/booking/appointments",
-    input,
-  );
+  };
+  let res = await apiSend<Created>("POST", "/api/booking/appointments", input);
+  // An API from before operationId (mid-deploy) refused it and booked
+  // nothing: book the way this screen used to (lib/apiCompat.ts).
+  if (input.operationId && refusedOnlyNewKeys(res, ["operationId"])) {
+    const { operationId: _dropped, ...legacy } = input;
+    res = await apiSend<Created>("POST", "/api/booking/appointments", legacy);
+  }
   if (res.ok) revalidatePath("/dashboard/booking");
   if (!res.ok) {
+    const booked = readSavedBooking(res.booked);
     return {
       ok: false,
+      answered: res.status !== 0,
       error: res.error ?? "failed",
+      ...(booked ? { booked } : {}),
       ...(res.reason ? { reason: res.reason } : {}),
       ...(res.confirmation ? { confirmation: res.confirmation } : {}),
       ...(res.code ? { code: res.code } : {}),
@@ -641,6 +688,11 @@ export async function createAppointmentAction(
   }
   return {
     ok: true,
+    answered: true,
+    ...(res.data?.id ? { id: res.data.id } : {}),
+    ...(res.data?.startsAt ? { startsAt: res.data.startsAt } : {}),
+    ...(res.data?.endsAt ? { endsAt: res.data.endsAt } : {}),
+    ...(res.data?.replayed ? { replayed: true } : {}),
     series: res.data?.series,
     ...(res.data?.forced ? { forced: true, mirror: res.data.mirror } : {}),
     ...(res.data?.clientConfirmation ? { clientConfirmation: res.data.clientConfirmation } : {}),
@@ -672,6 +724,96 @@ export async function cancelSeriesAction(
       ...(fromAppointmentId ? { fromAppointmentId } : {}),
     }),
   );
+}
+
+//  "This and future" on a repeat: preview, then apply exactly what was shown
+
+export interface SeriesEditInput {
+  fromAppointmentId: string;
+  /** startMin = shop-local minutes after midnight. Only what changes is sent. */
+  changes: { startMin?: number; serviceId?: string; staffId?: string };
+  includeExceptions?: boolean;
+  customTime?: boolean;
+}
+
+export type SeriesSkipReason =
+  | "past"
+  | "completed"
+  | "cancelled"
+  | "not_confirmed"
+  | "external"
+  | "edited_on_its_own";
+
+export interface SeriesEditVisit {
+  id: string;
+  from: { startsAt: string; endsAt: string; staffId: string; serviceId: string };
+  to: { startsAt: string; endsAt: string; staffId: string; serviceId: string };
+  /**
+   * What it was booked at and still costs after the change (a new service
+   * never re-prices it). Absent from an older API - then nothing is claimed.
+   */
+  bookedPriceCents?: number | null;
+  /** Why this date cannot take the change, already in words. */
+  problem?: { code: string; text: string };
+}
+
+export interface SeriesEditPreview {
+  /** Pins the apply to exactly these rows; handed back, never shown. */
+  digest: string;
+  alreadyDone: number;
+  change: SeriesEditVisit[];
+  skipped: { id: string; startsAt: string; reason: SeriesSkipReason }[];
+}
+
+export interface SeriesEditApplied {
+  alreadyApplied?: boolean;
+  /** mirror: active | failed | unknown | skipped | observed, per visit. */
+  changed: { id: string; startsAt: string; endsAt: string; mirror: string }[];
+  skipped: SeriesEditPreview["skipped"];
+  clientNotified?: boolean;
+}
+
+export async function previewSeriesEditAction(
+  seriesId: string,
+  input: SeriesEditInput,
+): Promise<{ ok: boolean; data?: SeriesEditPreview; error?: string }> {
+  const res = await apiSend<SeriesEditPreview>(
+    "POST",
+    `/api/booking/series/${encodeURIComponent(seriesId)}/edit/preview`,
+    input,
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
+}
+
+export async function applySeriesEditAction(
+  seriesId: string,
+  input: SeriesEditInput & { digest: string },
+): Promise<{
+  ok: boolean;
+  data?: SeriesEditApplied;
+  error?: string;
+  /** On `series_conflict`: the dates again, each with what is in its way. */
+  preview?: SeriesEditPreview;
+}> {
+  const res = await apiSend<SeriesEditApplied>(
+    "POST",
+    `/api/booking/series/${encodeURIComponent(seriesId)}/edit`,
+    input,
+  );
+  // 🔴 NO revalidatePath HERE. Re-rendering the calendar page from the server
+  // moves a visit whose time changed into another hour, which remounts its
+  // card and closes the sheet showing this result. The sheet re-reads the
+  // agenda itself when he leaves the result (SeriesEditView.tsx).
+  if (res.ok && res.data) return { ok: true, data: res.data };
+  const body = res.body as Partial<SeriesEditPreview> | undefined;
+  return {
+    ok: false,
+    error: res.error ?? "failed",
+    ...(res.error === "series_conflict" && body && Array.isArray(body.change)
+      ? { preview: body as SeriesEditPreview }
+      : {}),
+  };
 }
 
 //  Service add-ons

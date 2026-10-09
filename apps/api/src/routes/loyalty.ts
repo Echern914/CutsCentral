@@ -10,6 +10,7 @@ import {
   type PastVisitCredit,
   type PastVisitMonths,
 } from "../services/pastVisitCredit.js";
+import { liveExtraPunchPromos } from "../services/punch.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
 /**
@@ -89,7 +90,7 @@ async function cardBelongsToShop(
 loyaltyRouter.get("/", async (req, res) => {
   const shop = req.shop!;
   const db = forShop(shop.id);
-  const [rewards, rules, cards, grantCounts, redemptionCounts, activityByCard] = await Promise.all([
+  const [rewards, rules, cards, grantCounts, redemptionCounts, activityByCard, extraPromos] = await Promise.all([
     db.reward.findMany({ orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] }),
     db.earnRule.findMany({ orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] }),
     db.cardType.findMany({ orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] }),
@@ -123,6 +124,9 @@ loyaltyRouter.get("/", async (req, res) => {
       where: { shopId: shop.id, cardTypeId: { not: null } },
       _count: { _all: true },
     }),
+    // Promotions adding punches to every visit right now - the same predicate
+    // the earn uses, so this page can never show a rate the earn does not pay.
+    runWithShop(shop.id, (tx) => liveExtraPunchPromos(tx, shop.id, new Date())),
   ]);
   const redeemedById = new Map(
     redemptionCounts.map((r) => [r.rewardId, r._count._all]),
@@ -131,6 +135,12 @@ loyaltyRouter.get("/", async (req, res) => {
   const activeCardIds = new Set(activityByCard.map((a) => a.cardTypeId));
   res.json({
     punchesPerVisit: shop.punchesPerVisit,
+    extraPunchPromos: extraPromos.map((p) => ({
+      id: p.id,
+      title: p.title,
+      extraPunches: p.extraPunches,
+      endsAt: p.endsAt?.toISOString() ?? null,
+    })),
     // What each loyalty tier is worth here. Parsed rather than passed through:
     // it is a Json column, so its runtime type is whatever was last written.
     tierPerks: parseTierPerks(shop.tierPerks),

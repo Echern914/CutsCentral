@@ -679,9 +679,11 @@ describe("findHelp — what shipped early October", () => {
 
   it("no longer says what stopped being true", () => {
     const a = (id: string) => helpAnswerById(id)!.a;
-    // No whole-series edit exists; only per-date Edit and the cancel scopes.
+    // Series-wide: Edit this and future (time, service, barber) and the cancel
+    // scopes - and still no way to change how often it repeats.
     expect(a("recurring")).not.toMatch(/edit the series later/);
-    expect(a("recurring")).toMatch(/There's no way yet to change the time, service or barber of the whole repeat/);
+    expect(a("recurring")).toMatch(/More, then Edit this and future/);
+    expect(a("recurring")).toMatch(/To change how often it repeats, cancel the rest/);
     expect(a("recurring")).toMatch(/This & all future/);
     // The new-time email goes only where ChairBack had already emailed them.
     expect(a("move-appointment")).not.toMatch(/the client gets the updated details/);

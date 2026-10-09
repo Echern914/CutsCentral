@@ -95,6 +95,17 @@ export const TAP_TO_PAY_NATIVE_ENABLED: boolean =
   Constants.expoConfig?.extra?.tapToPayNativeEnabled === true;
 
 /**
+ * Whether THIS binary has the Lock Screen widget (app.config.ts,
+ * NEXT_UP_WIDGET_ENABLED). Strict `=== true`: an older build has none.
+ */
+export const NEXT_UP_WIDGET_ENABLED: boolean =
+  Constants.expoConfig?.extra?.nextUpWidgetEnabled === true;
+
+/** The App Group the app and the widget share. */
+export const NEXT_UP_APP_GROUP: string =
+  (Constants.expoConfig?.extra?.nextUpAppGroup as string | undefined) ?? "group.com.getchairback.rewards";
+
+/**
  * The 3-way role picker (app/index.tsx) is LIVE: "barber" and "manager" route to
  * the NATIVE Apple/Google sign-in (app/login.tsx) and then the dashboard
  * WebView via the /app-auth cookie handoff. The customer path is My ChairBack

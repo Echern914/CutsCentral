@@ -300,8 +300,22 @@ customerMeRouter.get("/openings", async (req, res) => {
  * Book one. Every refusal that could reveal an opening this account was not
  * invited to is the same 404.
  */
+/** The price the member was shown, in dollars; absent from apps before it. */
+const claimOpeningSchema = z
+  .object({ expectedPrice: z.number().finite().min(0).max(100_000).nullable().optional() })
+  .strict();
+
 customerMeRouter.post("/openings/:id/book", async (req, res) => {
-  const result = await claimTierOpening({ accountId: accountId(req), openingId: String(req.params.id) });
+  const parsed = claimOpeningSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const result = await claimTierOpening({
+    accountId: accountId(req),
+    openingId: String(req.params.id),
+    expectedPrice: parsed.data.expectedPrice,
+  });
   switch (result.outcome) {
     case "claimed": {
       // Same post-commit side effects as any customer booking, including the
@@ -343,6 +357,10 @@ customerMeRouter.post("/openings/:id/book", async (req, res) => {
       return;
     case "deposit_required":
       res.status(409).json({ error: "deposit_required" });
+      return;
+    case "price_changed":
+      // Nothing booked; the hold stands. The app shows the new price and asks.
+      res.status(409).json({ error: "price_changed", price: result.price });
       return;
     default: {
       // Exhaustive: a new outcome is a build failure, never a hung request.

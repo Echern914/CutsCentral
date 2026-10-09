@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { LoyaltyTierKey } from "@chairback/config/constants";
 import { apiGet, apiSend } from "@/lib/api";
+import { refusedOnlyNewKeys } from "@/lib/apiCompat";
 import { setActiveShopCookie } from "@/lib/activeShopCookie";
 import type { ClientTier } from "./clients/[id]/TierStanding";
 import type { ClientEmailMarketing, YesMethod } from "./clients/[id]/EmailMarketing";
@@ -340,19 +341,46 @@ export async function logVisitAction(
   serviceName?: string,
   // Card override; omitted = auto-route by service, null = force default card.
   cardTypeId?: string | null,
-): Promise<{ ok: boolean; balance?: number }> {
-  const res = await apiSend<{ ok: boolean; balance: number }>(
-    "POST",
-    `/api/dashboard/clients/${clientId}/visits`,
-    {
-      ...(serviceName ? { serviceName } : {}),
-      ...(cardTypeId !== undefined && { cardTypeId }),
-    },
-  );
+  opts: {
+    /** One per tap, re-sent unchanged on a retry: the API logs it once. */
+    requestId?: string;
+    /** The barber confirmed it is a separate visit from the one on the books. */
+    separateVisit?: boolean;
+  } = {},
+): Promise<{
+  ok: boolean;
+  status: number;
+  balance?: number;
+  replayed?: boolean;
+  error?: string;
+  message?: string;
+}> {
+  const base = {
+    ...(serviceName ? { serviceName } : {}),
+    ...(cardTypeId !== undefined && { cardTypeId }),
+  };
+  const path = `/api/dashboard/clients/${clientId}/visits`;
+  let res = await apiSend<{ ok: boolean; balance: number; replayed?: boolean }>("POST", path, {
+    ...base,
+    ...(opts.requestId ? { requestId: opts.requestId } : {}),
+    ...(opts.separateVisit ? { separateVisit: true } : {}),
+  });
+  // An API from before these fields (mid-deploy) refused them and wrote
+  // nothing: log the visit the way this screen used to (lib/apiCompat.ts).
+  if (refusedOnlyNewKeys(res, ["requestId", "separateVisit"])) {
+    res = await apiSend<{ ok: boolean; balance: number; replayed?: boolean }>("POST", path, base);
+  }
   revalidatePath(`/dashboard/clients/${clientId}`);
   revalidatePath("/dashboard/clients");
   revalidatePath("/dashboard");
-  return { ok: res.ok, balance: res.data?.balance };
+  return {
+    ok: res.ok,
+    status: res.status,
+    balance: res.data?.balance,
+    replayed: res.data?.replayed,
+    error: res.error,
+    message: res.message,
+  };
 }
 
 export async function reversePunchAction(

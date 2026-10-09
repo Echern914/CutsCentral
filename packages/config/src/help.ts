@@ -157,7 +157,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "no-acuity",
     q: "I'm not on Acuity — can I still use it?",
-    a: "Yes, completely. Add clients in seconds and tap \"Log visit\" after each appointment: punches, rewards, and rebooking texts all work exactly the same.\n\nYou can also just take bookings through ChairBack directly. Acuity only makes the syncing automatic, and you can connect it any time.",
+    a: "Yes, completely. Take bookings through ChairBack directly: a booking earns its punch when it's marked done, so there's nothing else to tap.\n\nFor a visit that was never booked (a walk-in, or an old visit), open the client and tap \"Log visit\": punches, rewards, and rebooking texts work exactly the same. Don't log a booked visit again, or it earns twice.\n\nAcuity only makes the syncing automatic, and you can connect it any time.",
     keywords: ["without acuity", "no acuity", "not on acuity", "manual", "log visit", "by hand"],
     category: "start",
   },
@@ -267,11 +267,11 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "recurring",
     q: "Can I set up a standing appointment?",
-    // 🔴 There is no way to edit a whole series on main: no route changes a
-    // series' time, service or barber. This answer used to promise "You can
-    // edit the series later", and a barber who asked was sent looking for a
-    // button that doesn't exist. Cancel scopes are the only series-wide action.
-    a: "Yes. On the calendar, tap the time (or New appointment), pick the client and service, then in the Repeat card choose Repeat appointment. Set Every 1 to 8 weeks, then For a count (2 to 52 appointments) or Until a date, and tap Schedule appointment.\n\nEach date is booked on its own, as far ahead as you like: the limit on how far ahead clients can book online doesn't apply to a repeat you make. A date that's blocked off or already booked is skipped and the rest still book (so is one outside your hours, unless you used Custom time). You're told how many: “Booked 10 — 2 dates were unavailable”. A repeat stops at 52 appointments, even with Until a date.\n\nTo change one date, open that appointment and Edit it — it stays part of the repeat. There's no way yet to change the time, service or barber of the whole repeat at once: cancel the rest and set up a new one. On the appointment, Cancel ▾ offers Just this one, This & all future, or The whole series. The client gets a cancellation email for each visit cancelled, if they have an email.\n\nA repeat can't carry add-ons, a special, or a typed price.",
+    // 🔴 This answer once promised "You can edit the series later" before any
+    // route could. Series-wide changes are now exactly two: Edit this and future
+    // (time, service, barber; booking.seriesEdit.ts) and the Cancel scopes.
+    // Frequency still cannot change - say so rather than imply it.
+    a: "Yes. On the calendar, tap the time (or New appointment), pick the client and service, then in the Repeat card choose Repeat appointment. Set Every 1 to 8 weeks, then For a count (2 to 52 appointments) or Until a date, and tap Schedule appointment.\n\nEach date is booked on its own, as far ahead as you like: the limit on how far ahead clients can book online doesn't apply to a repeat you make. A date that's blocked off or already booked is skipped and the rest still book (so is one outside your hours, unless you used Custom time). You're told how many: “Booked 10 — 2 dates were unavailable”. A repeat stops at 52 appointments, even with Until a date.\n\nTo change one date, open that appointment and Edit it — it stays part of the repeat. To change the time, service or barber of this date and every upcoming one after it, open that date, tap More, then Edit this and future: you see each date that would change before anything does. Prices stay as booked, and dates that are finished, cancelled or changed on their own are left alone. To change how often it repeats, cancel the rest and set up a new one. On the appointment, Cancel ▾ offers Just this one, This & all future, or The whole series. The client gets a cancellation email for each visit cancelled, if they have an email.\n\nA repeat can't carry add-ons, a special, or a typed price.",
     keywords: [
       "recurring", "repeat", "every 2 weeks", "standing", "regular", "series", "weekly", "biweekly",
       "repeat appointment", "edit the series", "change the series", "change a repeat", "edit a repeat",

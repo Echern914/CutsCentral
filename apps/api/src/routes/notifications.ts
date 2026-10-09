@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma, runAsOwner, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
+import { signOutEverywhere } from "../services/userDevice.js";
 import { logger } from "../logger.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import {
@@ -86,6 +87,7 @@ const prefsSchema = z
     dayAheadHour: z.number().int().min(0).max(23),
     newBookingEnabled: z.boolean(),
     cancelEnabled: z.boolean(),
+    lockScreenNames: z.boolean(),
   })
   .partial()
   .strict();
@@ -161,10 +163,9 @@ notificationsRouter.delete("/devices/:id", async (req, res) => {
  */
 notificationsRouter.post("/sign-out-everywhere", async (req, res) => {
   const userId = req.userId!;
-  await prisma.user.update({
-    where: { id: userId },
-    data: { tokenVersion: { increment: 1 } },
-  });
+  // The lost-phone button: the phone must stop showing booking alerts (with
+  // clients' names) too, not just lose its session.
+  await signOutEverywhere(userId);
   logger.info({ userId }, "user signed out of all sessions");
   res.json({ ok: true });
 });

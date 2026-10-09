@@ -45,6 +45,46 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "hadn't confirmed the new time yet. It now stays open on the new time, with that note, until you close it.",
   },
   {
+    id: "2026-10-08-edit-repeat-this-and-future",
+    date: "2026-10-08",
+    kind: "feature",
+    title: "Change a repeat from one date onward",
+    body:
+      "Open an appointment in a repeat, tap More, then Edit this and future to change the start time, service or " +
+      "provider for it and every upcoming one. You see each date before anything changes. Prices stay as booked, " +
+      "and finished, cancelled or one-off changed dates stay as they are.",
+  },
+  {
+    id: "2026-10-08-book-again",
+    date: "2026-10-08",
+    kind: "feature",
+    title: "Book a client's next visit from their appointment",
+    body:
+      "Open an appointment's Full details, tap More, then Book again. The client, service and provider carry over; " +
+      "you pick the day and time. The appointment you started from is never changed, and a booking sent twice on " +
+      "a weak connection is only made once.",
+  },
+  {
+    id: "2026-10-08-swipe-days-month-view",
+    date: "2026-10-08",
+    kind: "feature",
+    title: "Swipe between days on the calendar",
+    body:
+      "On the Month view, swipe left or right on the open day to move to the next or previous day, " +
+      "just like the Day view. Swiping inside an open appointment no longer changes the day, and a refresh " +
+      "keeps you on the day you were looking at.",
+  },
+  {
+    id: "2026-10-08-one-visit-one-punch",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Log visit can't punch the same visit twice",
+    body:
+      "Log visit now asks first when the client already has a visit that day (booked, synced or logged by hand), " +
+      "so the same cut isn't punched twice. A tap sent twice, or retried after a dropped connection, logs once. " +
+      "Rewards now shows when a promotion is adding punches to every visit.",
+  },
+  {
     id: "2026-10-08-booking-page-truth",
     date: "2026-10-08",
     kind: "fix",
@@ -83,6 +123,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "Editing a special now saves its Also bookable as choices, and a blank price is refused instead of saved as free. " +
       "Turning off a series or removing staff asks first. A hidden service's copy stays hidden, and an evening save " +
       "keeps today's holiday price.",
+  },
+  {
+    id: "2026-10-08-sign-out-alerts-and-held-prices",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "Signing out stops your booking alerts",
+    body:
+      "Signing out now stops new booking and cancellation alerts on every phone you were signed in on, until you " +
+      "sign in there again. A slot you hold for your members now shows them that slot's own price, like your " +
+      "Saturday rate, before they book it.",
   },
   {
     id: "2026-10-08-home-clients-team-truth",

@@ -89,6 +89,12 @@ export interface ApiResult<T> {
    * (book/[slug]/depositTerms.ts readPaymentTerms).
    */
   payment?: unknown;
+  /**
+   * With operation_mismatch / operation_in_progress (a retried booking): the
+   * booking that request id ALREADY made, as saved. Untyped here - the caller
+   * checks its shape (dashboard/booking/actions.ts).
+   */
+  booked?: unknown;
 }
 
 function authHeader(): Record<string, string> {
@@ -242,6 +248,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let conflicts: string[] | undefined;
   let policy: unknown;
   let payment: unknown;
+  let booked: unknown;
   let body: unknown;
   try {
     const json = (await res.json()) as T & { error?: string; issues?: unknown };
@@ -265,6 +272,8 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
       if (current && typeof current === "object") policy = current;
       const terms = (json as { payment?: unknown }).payment;
       if (terms && typeof terms === "object") payment = terms;
+      const made = (json as { booked?: unknown }).booked;
+      if (made && typeof made === "object") booked = made;
       const listed = (json as { conflicts?: unknown }).conflicts;
       if (Array.isArray(listed)) {
         const lines = listed.filter((l): l is string => typeof l === "string");
@@ -300,6 +309,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
     ...(conflicts ? { conflicts } : {}),
     ...(policy ? { policy } : {}),
     ...(payment ? { payment } : {}),
+    ...(booked ? { booked } : {}),
     ...(body !== undefined ? { body } : {}),
   };
 }
