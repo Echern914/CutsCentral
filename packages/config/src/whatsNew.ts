@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-08-swipe-days-month-view",
+    date: "2026-10-08",
+    kind: "feature",
+    title: "Swipe between days on the calendar",
+    body:
+      "On the Month view, swipe left or right on the open day to move to the next or previous day, " +
+      "just like the Day view. Swiping inside an open appointment no longer changes the day, and a refresh " +
+      "keeps you on the day you were looking at.",
+  },
+  {
     id: "2026-10-08-one-visit-one-punch",
     date: "2026-10-08",
     kind: "fix",
