@@ -109,3 +109,53 @@ describe("barber auth flow", () => {
     expect(setCookie[0]).toMatch(/cb_session=;/);
   });
 });
+
+describe("signing out stops the booking alerts", () => {
+  const otherEmail = `auth-other-${Date.now()}@test.local`;
+
+  afterAll(async () => {
+    const other = await prisma.user.findUnique({ where: { email: otherEmail } });
+    if (other) {
+      await prisma.shop.deleteMany({ where: { ownerId: other.id } });
+      await prisma.user.delete({ where: { id: other.id } });
+    }
+  });
+
+  it("🔴 drops the user's own devices - and only theirs", async () => {
+    // A shared front-desk phone kept showing "new booking" alerts, with the
+    // client's name, after the barber signed out in the app.
+    const signup = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: otherEmail, password, name: "Front Desk", smsAttested: true });
+    const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
+    const shop = await request(app).post("/api/shops").set("Cookie", cookie).send({ name: "Desk Cuts", smsAttested: true });
+    const shopId = shop.body.id as string;
+    const userId = signup.body.id as string;
+
+    const suffix = Date.now();
+    const registered = await request(app)
+      .post("/api/barber/push/native")
+      .set("Cookie", cookie)
+      .send({ expoPushToken: `ExponentPushToken[desk-${suffix}]`, platform: "ios" });
+    expect(registered.status).toBe(200);
+    // A client's device at the same shop, and another barber's device, stay.
+    const client = await prisma.client.create({
+      data: { shopId, acuityClientKey: `desk-${suffix}`, magicToken: `desk-${suffix}`, firstName: "Kept", source: "manual" },
+    });
+    await prisma.pushSubscription.create({
+      data: { shopId, clientId: client.id, kind: "expo", expoPushToken: `ExponentPushToken[client-${suffix}]` },
+    });
+    const first = await prisma.user.findUniqueOrThrow({ where: { email } });
+    await prisma.pushSubscription.create({
+      data: { shopId, userId: first.id, kind: "expo", expoPushToken: `ExponentPushToken[other-${suffix}]` },
+    });
+    expect(await prisma.pushSubscription.count({ where: { userId } })).toBe(1);
+
+    expect((await request(app).post("/api/auth/logout").set("Cookie", cookie)).status).toBe(200);
+
+    expect(await prisma.pushSubscription.count({ where: { userId } })).toBe(0);
+    expect(await prisma.pushSubscription.count({ where: { clientId: client.id } })).toBe(1);
+    expect(await prisma.pushSubscription.count({ where: { userId: first.id } })).toBe(1);
+    await prisma.pushSubscription.deleteMany({ where: { userId: first.id } });
+  });
+});

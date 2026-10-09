@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
+import * as Notifications from "expo-notifications";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   type WebView,
@@ -9,12 +10,15 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { AppWebView } from "@/src/AppWebView";
 import {
+  API_ORIGIN,
   appAuthUrl,
   dashboardUrl,
   demoDashboardUrl,
   TAP_TO_PAY_NATIVE_ENABLED,
   WEB_ORIGIN,
 } from "@/src/config";
+import { clearNextUpWidget, createWidgetRefresher, refreshNextUpWidget } from "@/src/nextUpWidget";
+import { nextUpWidgetStore } from "@/src/nextUpWidgetStore";
 import { clearSession, loadSession } from "@/src/session";
 import { registerBarberPush } from "@/src/push";
 import { ModeSwitchBar } from "@/src/ModeSwitchBar";
@@ -63,6 +67,41 @@ export default function BarberScreen() {
   const [source, setSource] = useState<
     { uri: string; headers?: Record<string, string> } | null
   >(null);
+  // The signed-in session, for feeding the Lock Screen widget. Null in demo and
+  // with no session: the shared demo tenant must never reach a lock screen.
+  const [widgetBearer, setWidgetBearer] = useState<string | null>(null);
+
+  // 🔒 The Lock Screen widget (src/nextUpWidget.ts): refreshed now, on every
+  // return to the foreground, and when a booking alert lands while the app is
+  // open - so "Next up" is current whenever the barber looks. Only in a build
+  // that has the widget (nextUpWidgetStore() is null otherwise).
+  useEffect(() => {
+    const store = nextUpWidgetStore();
+    if (!store || !widgetBearer) return;
+    const refresher = createWidgetRefresher(
+      () =>
+        refreshNextUpWidget({
+          bearer: widgetBearer,
+          apiOrigin: API_ORIGIN,
+          webOrigin: WEB_ORIGIN,
+          fetch: (input, init) => fetch(input, init),
+          store,
+        }),
+      60_000,
+      Date.now,
+    );
+    void refresher.refresh(true);
+    const app = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refresher.refresh();
+    });
+    const alerts = Notifications.addNotificationReceivedListener(() => {
+      void refresher.refresh(true);
+    });
+    return () => {
+      app.remove();
+      alerts.remove();
+    };
+  }, [widgetBearer]);
 
   useEffect(() => {
     (async () => {
@@ -83,6 +122,7 @@ export default function BarberScreen() {
           registered.current = true;
           registerBarberPush(token);
         }
+        setWidgetBearer(token);
         setSource({
           uri: appAuthUrl(next),
           headers: { Authorization: `Bearer ${token}` },
@@ -132,6 +172,10 @@ export default function BarberScreen() {
   function onShouldStartLoad(req: WebViewNavigation): boolean {
     if (req.url.startsWith(`${WEB_ORIGIN}/login`)) {
       clearSession().catch(() => {});
+      // Signed out: the lock screen must stop showing this shop's clients.
+      setWidgetBearer(null);
+      const store = nextUpWidgetStore();
+      if (store) clearNextUpWidget(store);
       router.replace("/login");
       return false;
     }

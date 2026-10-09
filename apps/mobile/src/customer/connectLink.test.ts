@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { isShopLinkNotPersonal, linkTarget } from "./connectLink";
+import { ApiError } from "./api";
+import { claimWasRefused, isShopLinkNotPersonal, linkTarget } from "./connectLink";
+
+describe("claimWasRefused", () => {
+  it("🔴 offline, a rate limit and a server error are NOT a refusal - the customer can try again", () => {
+    expect(claimWasRefused(new ApiError("offline", 0))).toBe(false);
+    expect(claimWasRefused(new ApiError("rate_limited", 429))).toBe(false);
+    expect(claimWasRefused(new ApiError("server", 503))).toBe(false);
+    expect(claimWasRefused(new Error("boom"))).toBe(false);
+  });
+
+  it("the server's own answers are: not found, claimed elsewhere, too many", () => {
+    expect(claimWasRefused(new ApiError("not_found", 404))).toBe(true);
+    expect(claimWasRefused(new ApiError("invalid", 409, "claimed_elsewhere"))).toBe(true);
+    expect(claimWasRefused(new ApiError("invalid", 409, "too_many"))).toBe(true);
+  });
+});
 
 describe("isShopLinkNotPersonal", () => {
   it("flags the shop's booking link a customer actually pasted (2026-09-24)", () => {

@@ -157,7 +157,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "no-acuity",
     q: "I'm not on Acuity — can I still use it?",
-    a: "Yes, completely. Add clients in seconds and tap \"Log visit\" after each appointment: punches, rewards, and rebooking texts all work exactly the same.\n\nYou can also just take bookings through ChairBack directly. Acuity only makes the syncing automatic, and you can connect it any time.",
+    a: "Yes, completely. Take bookings through ChairBack directly: a booking earns its punch when it's marked done, so there's nothing else to tap.\n\nFor a visit that was never booked (a walk-in, or an old visit), open the client and tap \"Log visit\": punches, rewards, and rebooking texts work exactly the same. Don't log a booked visit again, or it earns twice.\n\nAcuity only makes the syncing automatic, and you can connect it any time.",
     keywords: ["without acuity", "no acuity", "not on acuity", "manual", "log visit", "by hand"],
     category: "start",
   },

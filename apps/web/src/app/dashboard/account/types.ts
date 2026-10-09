@@ -17,6 +17,8 @@ export interface NotifyPrefs {
   dayAheadHour: number;
   newBookingEnabled: boolean;
   cancelEnabled: boolean;
+  /** The Lock Screen widget shows client first names. */
+  lockScreenNames: boolean;
 }
 
 /** A registered push device - where notifications actually land. */

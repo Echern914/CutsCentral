@@ -41,6 +41,7 @@ const PREFS = {
   dayAheadHour: 20,
   newBookingEnabled: true,
   cancelEnabled: true,
+  lockScreenNames: true,
 } as unknown as NotifyPrefs;
 
 beforeEach(() => {
@@ -81,5 +82,35 @@ describe("the reminder minutes box", () => {
     await act(async () => fireEvent.blur(box));
     expect(toast).toHaveBeenCalledWith("Couldn't save that", "error");
     expect(box.value).toBe("10");
+  });
+});
+
+/**
+ * The Lock Screen widget's one setting. It only means something where the
+ * widget exists, so the web (and an app build without the widget) never shows
+ * it.
+ */
+describe("client names on the lock screen", () => {
+  const w = window as unknown as { __cbNative?: { nextUpWidget?: boolean }; ReactNativeWebView?: unknown };
+
+  it("is not offered on the web", () => {
+    render(<NotificationsCard initial={PREFS} devices={[]} shopNotifyPhone={null} />);
+    expect(screen.queryByLabelText("Show client names on the lock screen")).toBeNull();
+  });
+
+  it("🔴 in an app with the widget it is offered, and turning it off saves just that", async () => {
+    w.__cbNative = { nextUpWidget: true };
+    w.ReactNativeWebView = {};
+    try {
+      render(<NotificationsCard initial={PREFS} devices={[]} shopNotifyPhone={null} />);
+      const toggle = await screen.findByLabelText("Show client names on the lock screen");
+      await act(async () => {
+        fireEvent.click(toggle);
+      });
+      expect(a.saveNotifyPrefsAction).toHaveBeenCalledWith({ lockScreenNames: false });
+    } finally {
+      delete w.__cbNative;
+      delete w.ReactNativeWebView;
+    }
   });
 });
