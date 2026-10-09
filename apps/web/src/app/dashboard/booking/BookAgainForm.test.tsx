@@ -210,6 +210,22 @@ describe("🔴 what the screen says is the SAVED booking", () => {
 });
 
 describe("🔴 one submission, one booking", () => {
+  it("🔴 an answer lost on the way back to the PHONE: the form stays, says tap again, and the retry is the same submission", async () => {
+    const { onCreated } = open();
+    fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));
+    // A server action whose response never arrives rejects in the browser.
+    create.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    bookNext();
+    expect(await screen.findByText(/No answer from ChairBack/)).toBeInTheDocument();
+    expect(onCreated).not.toHaveBeenCalled();
+
+    create.mockResolvedValueOnce({ ok: true, id: "new1", startsAt: AT_11.startsAt, endsAt: AT_11.endsAt } as CreateReply);
+    bookNext();
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(sentAt(1).operationId).toBe(sentAt(0).operationId);
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "new1", startsAt: AT_11.startsAt }));
+  });
+
   it("a lost answer keeps the operationId for the retry; a real refusal starts a new one", async () => {
     open();
     fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));

@@ -517,31 +517,41 @@ export function AppointmentForm({
       : undefined;
 
     start(async () => {
-      const res = await createAppointmentAction({
-        staffId,
-        serviceId,
-        startsAt,
-        clientId: clientId ?? undefined,
-        firstName: clientId ? undefined : newName.trim(),
-        phone: clientId ? undefined : newPhone.trim() || undefined,
-        note: note.trim() || undefined,
-        customTime,
-        // Custom time only (typedPrice is null otherwise); empty = menu price.
-        price: customPrice ?? undefined,
-        externalBlockConfirmation,
-        overlapConfirmation,
-        recurrence,
-        // Atomic waitlist link - see CreateApptInput.
-        waitlistEntryId: waitlist?.entryId,
-        // Claimed server-side in the same transaction, at its own price.
-        targetedSlotId: special?.id,
-        // What is ticked ON SCREEN - derived, so an add-on the form is no
-        // longer showing can never ride along.
-        addOnIds: chosenAddOns.length > 0 ? chosenAddOns.map((a) => a.id) : undefined,
-        // A retry of THIS submission (a lost answer) gets the booking it made,
-        // not a second one. A series answers per visit, so it sends none.
-        operationId: recurrence ? undefined : operationId.current,
-      });
+      let res: Awaited<ReturnType<typeof createAppointmentAction>>;
+      try {
+        res = await createAppointmentAction({
+          staffId,
+          serviceId,
+          startsAt,
+          clientId: clientId ?? undefined,
+          firstName: clientId ? undefined : newName.trim(),
+          phone: clientId ? undefined : newPhone.trim() || undefined,
+          note: note.trim() || undefined,
+          customTime,
+          // Custom time only (typedPrice is null otherwise); empty = menu price.
+          price: customPrice ?? undefined,
+          externalBlockConfirmation,
+          overlapConfirmation,
+          recurrence,
+          // Atomic waitlist link - see CreateApptInput.
+          waitlistEntryId: waitlist?.entryId,
+          // Claimed server-side in the same transaction, at its own price.
+          targetedSlotId: special?.id,
+          // What is ticked ON SCREEN - derived, so an add-on the form is no
+          // longer showing can never ride along.
+          addOnIds: chosenAddOns.length > 0 ? chosenAddOns.map((a) => a.id) : undefined,
+          // A retry of THIS submission (a lost answer) gets the booking it made,
+          // not a second one. A series answers per visit, so it sends none.
+          operationId: recurrence ? undefined : operationId.current,
+        });
+      } catch {
+        // 🔴 The PHONE lost the answer (no signal, the app backgrounded) - the
+        // server may well have booked it. Same as no answer from the API: keep
+        // this submission's id, so the next tap is answered from whatever it
+        // made. Uncaught, this threw the whole dashboard to its error screen
+        // and the id went with the form.
+        res = { ok: false, answered: false, error: "network_error" };
+      }
       // The API answered, so this submission is settled: a refusal booked
       // nothing, and the next attempt ("Book anyway", another time) is a new
       // one. Only a request that never got an answer keeps its id to retry.
