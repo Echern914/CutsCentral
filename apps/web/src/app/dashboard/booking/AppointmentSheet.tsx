@@ -199,14 +199,21 @@ export function AppointmentSheet({
   }, []);
   const zoneDiffers = Boolean(zone && browserZone && zone !== browserZone);
 
-  const dateLabel = useMemo(() => fmtDate(row.start, zone), [row.start, zone]);
+  // The booking's own record wins once it has loaded. The agenda row can be a
+  // step behind it: a save that moves the booking out of the calendar's loaded
+  // weeks leaves this sheet holding the last row the calendar had, while
+  // `load()` re-reads the booking itself after every change.
+  const own = detail?.source === "appointment" ? detail : null;
+  const startIso = own?.startsAt ?? row.start;
+  const endIso = own ? (own.endsAt ?? row.end) : row.end;
+  const dateLabel = useMemo(() => fmtDate(startIso, zone), [startIso, zone]);
   const timeLabel = useMemo(
-    () => fmtTimeRange(row.start, row.end, zone),
-    [row.start, row.end, zone],
+    () => fmtTimeRange(startIso, endIso, zone),
+    [startIso, endIso, zone],
   );
   const durMin =
-    row.end && row.end > row.start
-      ? Math.round((Date.parse(row.end) - Date.parse(row.start)) / 60_000)
+    endIso && endIso > startIso
+      ? Math.round((Date.parse(endIso) - Date.parse(startIso)) / 60_000)
       : null;
 
   const pay = detail?.payment ?? null;

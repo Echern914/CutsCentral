@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-08-sheet-stays-after-edit",
+    date: "2026-10-08",
+    kind: "fix",
+    title: "An appointment stays open after you change its time",
+    body:
+      "Moving an appointment to another hour used to close it the moment you saved, along with any note that Acuity " +
+      "hadn't confirmed the new time yet. It now stays open on the new time, with that note, until you close it.",
+  },
+  {
     id: "2026-10-08-edit-repeat-this-and-future",
     date: "2026-10-08",
     kind: "feature",
