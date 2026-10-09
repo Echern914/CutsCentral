@@ -62,6 +62,7 @@ import {
   centsToDecimal,
   decimalToCents,
   dollarsToCentsExact,
+  handEditCount,
   recordPriceChange,
 } from "../services/appointmentPriceLedger.js";
 import {
@@ -81,6 +82,7 @@ import {
   BackfillRefusedError,
 } from "../engines/acuityBackfill.js";
 import { toCents } from "../billing/payments.js";
+import { addOnCentsOf, dollarsToCents, movePrice } from "../engines/movePrice.js";
 import { releaseCardOnFile } from "../billing/cardOnFile.js";
 import { attachClientSavedCard } from "../billing/savedCard.js";
 import { retireOpenTip, tipDescription } from "../billing/tips.js";
@@ -4623,6 +4625,12 @@ const rescheduleApptSchema = z
     /** Barber override: skip the hours/blocked check. Overlap still applies. */
     customTime: z.boolean().optional(),
     /**
+     * The new time's price, in cents, as a 409 `price_changes` showed it. A
+     * menu-priced booking moving to a time with a different menu price is
+     * repriced only when the barber has seen that figure (engines/movePrice).
+     */
+    acceptPriceCents: z.number().int().min(0).optional(),
+    /**
      * Confirms booking OVER the exact spans a previous 409 `external_block`
      * named: the `confirmation` digest from that refusal, replayed. It
      * authorises those blocks and nothing else - if the conflict changed, the
@@ -4664,6 +4672,9 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       payments: { where: { purpose: "booking" }, select: { status: true, amount: true } },
       // What it was booked at: a payment below this was a deposit.
       priceAtBooking: true,
+      // What that price carries that the menu doesn't (engines/movePrice.ts).
+      addOns: true,
+      bookedVia: true,
       service: {
         select: {
           durationMin: true,
@@ -4710,6 +4721,36 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
     },
   );
 
+  // 🔴 WHAT THE MOVE DOES TO THE PRICE (engines/movePrice.ts). An agreed price
+  // - add-ons, a typed or hand-edited figure, a discount - moves with the
+  // booking untouched. Only a plain menu price may change with the time, and
+  // only after the barber has seen the new figure (acceptPriceCents).
+  const menuAtOld = effectivePriceAt(
+    appt.service.price === null ? null : Number(appt.service.price),
+    {
+      at: appt.startsAt,
+      timezone: shop.timezone,
+      weekdayOverrides: appt.service.priceOverrides,
+      dateOverrides: appt.service.dateOverrides,
+      timeWindows: appt.service.timeOverrides,
+    },
+  );
+  // By hand only: a previous move's accepted reprice is the menu's own figure.
+  const handEdited = (await handEditCount(shopId, appt.id)) > 0;
+  const move = movePrice({
+    bookedCents: dollarsToCents(appt.priceAtBooking),
+    addOnCents: addOnCentsOf(appt.addOns),
+    menuAtOldCents: dollarsToCents(menuAtOld),
+    menuAtNewCents: dollarsToCents(effectivePrice),
+    handEdited,
+    // The shop moving its own special keeps the special - and its price: he
+    // is moving the special he sold, not leaving it. (The client's own move
+    // off a special, on the public route, is the one that offers the menu.)
+    special: false,
+    discounted: false,
+  });
+  const movedCents = move.kind === "changes" ? move.toCents : move.totalCents;
+
   // A PAID booking moving to a price it can't take can't be reconciled here
   // (no partial capture or top-up on this path), so it's refused rather than
   // silently leaving the customer over- or under-charged. A deposit only needs
@@ -4722,13 +4763,26 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
     !paidBookingTakesPrice({
       paidCents: bookingPayment.amount,
       bookedPriceCents: toCents(appt.priceAtBooking === null ? null : Number(appt.priceAtBooking)),
-      newPriceCents: toCents(effectivePrice),
+      newPriceCents: movedCents === null ? null : toCents(movedCents / 100),
     })
   ) {
     res.status(409).json({
       error: "price_changed",
       message:
         "That day has a different price and this booking is already paid. Refund or take the difference in person, then move it.",
+    });
+    return;
+  }
+
+  // Payment can take the new figure (or there is none): now the figure itself
+  // must have been SEEN. A menu price that differs at the new time is refused
+  // with both numbers until the barber sends the new one back.
+  if (move.kind === "changes" && parsed.data.acceptPriceCents !== move.toCents) {
+    res.status(409).json({
+      error: "price_changes",
+      fromCents: move.fromCents,
+      toCents: move.toCents,
+      message: `That time has a different price: ${formatCentsPlain(move.fromCents)} becomes ${formatCentsPlain(move.toCents)}. Move it at the new price?`,
     });
     return;
   }
@@ -4798,7 +4852,11 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
         data: {
           startsAt,
           endsAt,
-          priceAtBooking: effectivePrice ?? null,
+          // The price moves with the booking. Only an accepted menu change
+          // rewrites it - and that is recorded below, like any price change.
+          ...(move.kind === "changes"
+            ? { priceAtBooking: new Prisma.Decimal((move.toCents / 100).toFixed(2)) }
+            : {}),
           // 🔴 The EMAIL stamps must reset with the SMS ones. Confirmation
           // SMS is off for cost (CONFIRMATION_SMS_ENABLED=false), so email is
           // the only channel a customer hears about a booking on - and
@@ -4818,6 +4876,18 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
           runningLate: false,
         },
       });
+      if (move.kind === "changes") {
+        await recordPriceChange(tx, {
+          shopId,
+          appointmentId: appt.id,
+          actorUserId: req.userId ?? null,
+          fromPriceCents: move.fromCents,
+          toPriceCents: move.toCents,
+          fromCollectedCents: null,
+          toCollectedCents: null,
+          source: "move",
+        });
+      }
       // Retire the old mirror row and record the new time's intent in the SAME
       // transaction. The HTTP swap (create new, THEN delete old) happens after
       // commit - see completeReschedule for why that order is load-bearing.
@@ -4873,7 +4943,14 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
   // Fire-and-forget: a wallet problem must never affect the reschedule.
   void pokeAppointmentPass(appt.id);
   await noteAvailabilityChanged(shopId);
-  res.json({ ok: true, startsAt: startsAt.toISOString() });
+  res.json({
+    ok: true,
+    startsAt: startsAt.toISOString(),
+    price:
+      move.kind === "changes"
+        ? { kind: "repriced", fromCents: move.fromCents, toCents: move.toCents }
+        : { kind: move.kind, totalCents: move.totalCents },
+  });
 });
 
 // Edit an appointment (its own module - see booking.appointmentEdit.ts for the
@@ -7248,3 +7325,9 @@ bookingDashboardRouter.post("/appointments/:id/price", async (req, res) => {
     collectedCents: collectedCents ?? fromCollectedCents,
   });
 });
+
+/** "$40" / "$12.50" / "no price" for a refusal's one sentence. */
+function formatCentsPlain(cents: number | null): string {
+  if (cents === null) return "no price";
+  return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
+}

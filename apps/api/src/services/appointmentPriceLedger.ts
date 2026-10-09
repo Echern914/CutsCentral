@@ -50,6 +50,13 @@ export interface PriceChangeInput {
   /** Only when the chair figure was edited too; null otherwise. */
   fromCollectedCents: number | null;
   toCollectedCents: number | null;
+  /**
+   * "move" for a reschedule's menu reprice that the mover saw and accepted.
+   * Left out (NULL) for every change by hand. A move's row is NOT a hand edit:
+   * the price it sets is the menu's own figure for the new time, so the next
+   * move measures it again (handEditCount).
+   */
+  source?: "move";
 }
 
 /** Append one ledger row. Call INSIDE the transaction that moves the money. */
@@ -61,10 +68,23 @@ export async function recordPriceChange(
 }
 
 /**
+ * How many times this booking's price was changed BY HAND. A reschedule's own
+ * accepted reprice (source "move") doesn't count: counting it made every later
+ * move keep that figure in silence - a client who accepted $45 to move to a
+ * Sunday kept paying $45 after moving back to a $40 Monday.
+ */
+export async function handEditCount(shopId: string, appointmentId: string): Promise<number> {
+  return prisma.appointmentPriceChange.count({ where: { shopId, appointmentId, source: null } });
+}
+
+/**
  * The price the customer agreed to: the ticket as it stood before the first
- * by-hand edit, or the current ticket when it was never edited. Capped by the
- * current ticket as well, so a price LOWERED after booking lowers the fee
- * (that direction is the shop's to give away).
+ * change, or the current ticket when it was never changed. Capped by the
+ * current ticket, so a price LOWERED after booking lowers the fee (that
+ * direction is the shop's to give away), and by the LATEST figure accepted at
+ * a move: a client who left a $150 special at $40 agreed to $40, and a later
+ * raise by hand doesn't lift what their card can be charged. An accepted move
+ * UP never lifts it either - the first figure still caps it.
  *
  * A booking that was unpriced at the time (null) agreed to nothing: the answer
  * is null, and `cardOnFileFeeCents(null)` is 0.
@@ -81,6 +101,12 @@ export async function agreedPriceCents(
   });
   if (!first) return currentCents;
   if (first.fromPriceCents === null) return null;
-  if (currentCents === null) return first.fromPriceCents;
-  return Math.min(first.fromPriceCents, currentCents);
+  const lastMove = await prisma.appointmentPriceChange.findFirst({
+    where: { shopId, appointmentId, source: "move" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { toPriceCents: true },
+  });
+  const agreed = lastMove ? Math.min(first.fromPriceCents, lastMove.toPriceCents) : first.fromPriceCents;
+  if (currentCents === null) return agreed;
+  return Math.min(agreed, currentCents);
 }

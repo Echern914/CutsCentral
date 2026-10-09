@@ -833,6 +833,11 @@ function ReschedulePicker({
   const [selected, setSelected] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  // 🔴 A NEW TIME WITH A DIFFERENT PRICE IS SHOWN BEFORE IT MOVES. The API
+  // answers `price_changes` with both figures and moves nothing; the client
+  // sees "$40 → $45" and says yes (sending that figure back) or picks another
+  // time. Nothing is repriced in silence, and what they agreed is recorded.
+  const [priceAsk, setPriceAsk] = useState<{ iso: string; fromCents: number | null; toCents: number } | null>(null);
   const [pending, startTransition] = useTransition();
 
   const dayFmt = useMemo(
@@ -884,11 +889,25 @@ function ReschedulePicker({
     });
   }
 
-  function move(iso: string) {
+  function move(iso: string, acceptPriceCents?: number) {
     setErr(null);
     setSelected(iso);
+    if (acceptPriceCents === undefined) setPriceAsk(null);
     startTransition(async () => {
-      const res = await rescheduleBookingAction(token, iso);
+      let res: Awaited<ReturnType<typeof rescheduleBookingAction>>;
+      try {
+        res = await rescheduleBookingAction(token, iso, acceptPriceCents);
+      } catch {
+        // The answer never arrived. The move may or may not have landed, so
+        // nothing is claimed: the list is re-read and they can look.
+        setSelected(null);
+        setErr("No answer. Check your connection, then look at the time shown above before trying again.");
+        return;
+      }
+      if (!res.ok && res.error === "price_changes" && res.priceChange) {
+        setPriceAsk({ iso, ...res.priceChange });
+        return;
+      }
       if (!res.ok && res.error === "contact_shop") {
         // The shop arranges this client's bookings itself. Any other time
         // would get the same answer, so no refreshed list - just who to ask.
@@ -912,11 +931,15 @@ function ReschedulePicker({
         if (fresh) setSlots(fresh.slots);
         return;
       }
+      setPriceAsk(null);
       setDone(iso);
       setOpen(false);
       onMoved(iso);
     });
   }
+
+  const money = (cents: number | null) =>
+    cents === null ? "no price" : cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
 
   if (done) {
     return (
@@ -959,6 +982,44 @@ function ReschedulePicker({
         <p role="alert" className="mt-3 text-xs text-red-400">
           {err}
         </p>
+      )}
+
+      {priceAsk && (
+        <div
+          role="alertdialog"
+          aria-label="This time has a different price"
+          data-qa="price-changes"
+          className="mt-3 rounded-lg border border-gold/50 bg-gold/10 p-3 text-sm"
+        >
+          <p className="font-semibold">
+            {timeFmt.format(new Date(priceAsk.iso))} on {dayFmt.format(new Date(priceAsk.iso))} is priced differently.
+          </p>
+          <p className="mt-1">
+            Your price would change from <span className="font-semibold">{money(priceAsk.fromCents)}</span> to{" "}
+            <span className="font-semibold">{money(priceAsk.toCents)}</span>. Nothing has moved yet.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => move(priceAsk.iso, priceAsk.toCents)}
+              className="rounded-lg bg-gold px-3 py-1.5 text-xs font-semibold text-charcoal disabled:opacity-40"
+            >
+              {pending ? "Moving…" : `Move it at ${money(priceAsk.toCents)}`}
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => {
+                setPriceAsk(null);
+                setSelected(null);
+              }}
+              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs font-medium"
+            >
+              Keep my time
+            </button>
+          </div>
+        </div>
       )}
 
       {loading && <p className="mt-3 text-xs text-muted">Loading times…</p>}

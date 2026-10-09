@@ -267,9 +267,16 @@ describe("barber booking alerts", () => {
     pushes = [];
     sent = [];
 
-    const res = await request(app)
+    // Leaving a special offers the menu price for the new time first
+    // (engines/movePrice.ts): the client sees both figures, then moves.
+    const asked = await request(app)
       .post(`/api/book/manage/${manageToken}/reschedule`)
       .send({ startsAt: futureAtHour(8, 14).toISOString() });
+    expect(asked.status).toBe(409);
+    expect(asked.body.error).toBe("price_changes");
+    const res = await request(app)
+      .post(`/api/book/manage/${manageToken}/reschedule`)
+      .send({ startsAt: futureAtHour(8, 14).toISOString(), acceptPriceCents: asked.body.toCents });
     expect(res.status).toBe(200);
     await waitFor(() => barberSms().some((s) => s.body.includes("moved their")));
     const push = pushes.find((p) => p.payload.title === "Booking moved")!;
