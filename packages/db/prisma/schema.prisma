@@ -939,6 +939,11 @@ model BarberNotifyPref {
   // Reactive alerts that already existed - now switchable.
   newBookingEnabled Boolean @default(true)
   cancelEnabled     Boolean @default(true)
+  // The Lock Screen widget ("Next: Sam · 2:30 PM · Fade"). Anyone holding the
+  // locked phone can read it - a shared front-desk phone was the reason sign-
+  // out now drops push devices - so a barber can show the time and service
+  // without the client's name. On by default, like the Next up push preview.
+  lockScreenNames Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

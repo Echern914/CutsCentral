@@ -6,6 +6,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
+import { useAppHasNextUpWidget } from "@/lib/useAppHasNextUpWidget";
 import {
   forgetDeviceAction,
   saveNotifyPrefsAction,
@@ -92,6 +93,7 @@ export function NotificationsCard({
   shopNotifyPhone: string | null;
 }) {
   const vocab = useVocab();
+  const hasWidget = useAppHasNextUpWidget();
   const [prefs, setPrefs] = useState<NotifyPrefs>(initial);
   const [devices, setDevices] = useState<NotifyDevice[]>(initialDevices);
   const [pending, start] = useTransition();
@@ -286,6 +288,21 @@ export function NotificationsCard({
               disabled={pending}
             />
           </Row>
+          {hasWidget && (
+            // Only where the widget exists. Anyone holding the locked phone
+            // can read it, so the name is the barber's call.
+            <Row
+              title="Client names on the lock screen"
+              hint="Your Lock Screen widget shows who's next. Off: just the time and service."
+            >
+              <Toggle
+                on={prefs.lockScreenNames}
+                onChange={(v) => save({ lockScreenNames: v })}
+                label="Show client names on the lock screen"
+                disabled={pending}
+              />
+            </Row>
+          )}
         </div>
 
         {/* ---- How they reach you ---- */}
