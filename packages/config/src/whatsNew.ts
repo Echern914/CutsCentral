@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-09-server-hiccup-never-books-twice",
+    date: "2026-10-09",
+    kind: "fix",
+    title: "A server hiccup never books or punches twice",
+    body:
+      "If ChairBack can't confirm a booking or a logged visit because of a server error, tapping again now finds " +
+      "what the first tap saved instead of adding a second one. Change the details meanwhile and it tells you " +
+      "what was saved.",
+  },
+  {
     id: "2026-10-08-moved-booking-keeps-its-price",
     date: "2026-10-08",
     kind: "fix",
