@@ -157,9 +157,15 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
   /** Days of times to ask for: a month, or less when the shop books less far out. */
   const windowDays = Math.max(1, Math.min(30, data.shop.bookingMaxDays));
 
+  /**
+   * 🔴 Counts only a service THIS barber offers. A pick made under another
+   * barber is not drawn (the list is `offered`), so it used to pass this check
+   * invisibly and the times request failed with a misleading error.
+   */
+  const offeredIds = useMemo(() => new Set(offered.map((s) => s.id)), [offered]);
   const ready =
     attendees.length >= 2 &&
-    attendees.every((a) => a.firstName.trim().length > 0 && a.serviceId);
+    attendees.every((a) => a.firstName.trim().length > 0 && offeredIds.has(a.serviceId));
 
   /**
    * 🔴 DOES NOT CLEAR THE NOTICE. It used to, and that silently ate the one

@@ -7,7 +7,7 @@ import {
   type Reader,
 } from "@stripe/stripe-terminal-react-native";
 import { TokenRelay } from "./tokenRelay";
-import { collectTapToPay, type TerminalLike } from "./collect";
+import { collectTapToPay, NOT_CONNECTED_CODES, type TerminalLike } from "./collect";
 import {
   capabilityScript,
   educationResultScript,
@@ -51,6 +51,11 @@ function TapToPayInner({
   const waitingForReader = useRef<((r: Reader.Type | null) => void) | null>(null);
   const busy = useRef(false);
   const initialized = useRef(false);
+  // The account and location the reader is connected for, while it is. Set on
+  // a successful connect, cleared on a disconnect - ours, or the SDK telling
+  // us the reader went away (the app was backgrounded, the session dropped) -
+  // so the next collection reuses a live connection and reconnects a dead one.
+  const connection = useRef<{ locationId: string; onBehalfOf: string } | null>(null);
   // Our own instructions, for an iPhone too old for Apple's overlay. The
   // promise resolves when the barber dismisses it, so "educated" means read,
   // not merely displayed.
@@ -61,8 +66,10 @@ function TapToPayInner({
     initialize,
     discoverReaders,
     connectReader,
+    disconnectReader,
     retrievePaymentIntent,
     collectPaymentMethod,
+    cancelCollectPaymentMethod,
     confirmPaymentIntent,
   } = useStripeTerminal({
     onUpdateDiscoveredReaders: (readers) => {
@@ -70,6 +77,14 @@ function TapToPayInner({
       if (!resolve) return;
       waitingForReader.current = null;
       resolve(readers[0] ?? null);
+    },
+    // The reader went away without us asking (the app was backgrounded, the
+    // session dropped): the next collection must reconnect, not reuse.
+    onDidDisconnect: () => {
+      connection.current = null;
+    },
+    onDidChangeConnectionStatus: (status) => {
+      if (status === "notConnected") connection.current = null;
     },
   });
 
@@ -109,12 +124,25 @@ function TapToPayInner({
           // device the first time instead of being refused with nothing to do.
           tosAcceptancePermitted: true,
         });
-        return res.error ? { error: res.error.message } : { ok: true };
+        if (res.error) return { error: res.error.message, code: res.error.code };
+        connection.current = { locationId, onBehalfOf };
+        return { ok: true };
+      },
+      connection() {
+        return connection.current;
+      },
+      async disconnect() {
+        const res = await disconnectReader();
+        // Gone either way: a failed disconnect of a dead reader is not a live
+        // connection to reuse.
+        connection.current = null;
+        return res?.error ? { error: res.error.message } : { ok: true };
       },
       async retrieve(clientSecret) {
         const res = await retrievePaymentIntent(clientSecret);
+        if (res.error?.code && NOT_CONNECTED_CODES.has(res.error.code)) connection.current = null;
         return res.error || !res.paymentIntent
-          ? { error: res.error?.message ?? "intent not found" }
+          ? { error: res.error?.message ?? "intent not found", code: res.error?.code }
           : { paymentIntent: res.paymentIntent };
       },
       async collect(paymentIntent) {
@@ -123,6 +151,7 @@ function TapToPayInner({
             typeof collectPaymentMethod
           >[0]["paymentIntent"],
         });
+        if (res.error?.code && NOT_CONNECTED_CODES.has(res.error.code)) connection.current = null;
         return res.error || !res.paymentIntent
           ? { error: res.error?.message ?? "collection failed", code: res.error?.code }
           : { paymentIntent: res.paymentIntent };
@@ -146,7 +175,15 @@ function TapToPayInner({
           : { error: "the reader returned no payment status" };
       },
     }),
-    [initialize, discoverReaders, connectReader, retrievePaymentIntent, collectPaymentMethod, confirmPaymentIntent],
+    [
+      initialize,
+      discoverReaders,
+      connectReader,
+      disconnectReader,
+      retrievePaymentIntent,
+      collectPaymentMethod,
+      confirmPaymentIntent,
+    ],
   );
 
   const handleMessage = useCallback(
@@ -210,6 +247,10 @@ function TapToPayInner({
       const timeout = setTimeout(() => {
         if (!busy.current) return;
         busy.current = false;
+        // 🔴 Stop the read too. Freeing only our flag left the SDK still
+        // collecting, so the next attempt found it busy. Cancelling before a
+        // card is presented takes nothing; the server still owns the outcome.
+        void cancelCollectPaymentMethod().catch(() => undefined);
         inject(resultScript(requestId, "failed", "the reader did not answer"));
       }, COLLECT_TIMEOUT_MS);
 
@@ -228,7 +269,7 @@ function TapToPayInner({
         });
       return true;
     },
-    [inject, relay, terminal],
+    [inject, relay, terminal, cancelCollectPaymentMethod],
   );
 
   return (

@@ -298,3 +298,23 @@ describe("who may ask for whose report", () => {
     );
   });
 });
+
+describe("when the options can't be read", () => {
+  it("🔴 says so and offers Try again, instead of an empty sheet", async () => {
+    optionsAction.mockResolvedValueOnce(null);
+    render(<YearlyReport />);
+    fireEvent.click(screen.getByTestId("yearly-report-open"));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/load your report options/);
+    fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(screen.getByTestId("yearly-report-preview")).toBeTruthy());
+    expect(optionsAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("a thrown read is a failure too, not a sheet that loads forever", async () => {
+    optionsAction.mockRejectedValueOnce(new Error("network"));
+    render(<YearlyReport />);
+    fireEvent.click(screen.getByTestId("yearly-report-open"));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/load your report options/);
+  });
+});

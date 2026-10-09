@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
-import { forShop, prisma, runAsOwner, runWithShop } from "@chairback/db";
+import { forShop, prisma, runWithShop } from "@chairback/db";
+import { registerUserDevice } from "../services/userDevice.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireRole } from "../auth/roles.js";
 import {
@@ -209,7 +210,8 @@ function dayKeyIn(timeZone: string, at: Date): string {
  * manager-gated /api/dashboard/push/native, mounted here because that gate
  * made a BARBER seat structurally unable to register a device (the one
  * personal readiness task that was impossible). Same handler contract:
- * userId/shopId come from the session, upsert by token, runAsOwner because
+ * userId/shopId come from the session, upsert by token (services/userDevice.ts,
+ * which also refuses a session signed out mid-request), owner-scoped because
  * a re-registering user's row may carry another of their shops' shopId.
  * The manager route stays exactly as it was - never open that gate.
  */
@@ -227,26 +229,17 @@ barberRouter.post("/push/native", async (req, res) => {
     return;
   }
   const { expoPushToken, platform } = parsed.data;
-  await runAsOwner((tx) =>
-    tx.pushSubscription.upsert({
-      where: { expoPushToken },
-      create: {
-        shopId: req.shop!.id,
-        userId: req.userId!,
-        kind: "expo",
-        expoPushToken,
-        userAgent: platform ?? null,
-      },
-      update: {
-        shopId: req.shop!.id,
-        userId: req.userId!,
-        clientId: null,
-        kind: "expo",
-        userAgent: platform ?? null,
-        failureCount: 0,
-        lastSeenAt: new Date(),
-      },
-    }),
-  );
+  const registered = await registerUserDevice({
+    userId: req.userId!,
+    sessionVersion: req.sessionVersion!,
+    shopId: req.shop!.id,
+    expoPushToken,
+    platform: platform ?? null,
+  });
+  if (!registered) {
+    // Signed out while this was in flight: the device stays unregistered.
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
   res.json({ ok: true });
 });

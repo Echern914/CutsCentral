@@ -40,6 +40,7 @@ import { tierOpeningsRouter } from "./routes/tierOpenings.js";
 import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { barberRouter } from "./routes/barber.js";
+import { nextUpRouter } from "./routes/nextUp.js";
 import { barberClientsRouter } from "./routes/barberClients.js";
 import { walkInBarberRouter } from "./routes/walkIn.barber.js";
 import { walkInPublicRouter } from "./routes/walkIn.public.js";
@@ -264,6 +265,9 @@ export function createApp(): Express {
   // more-specific-first mounting so barberRouter can never shadow it.
   app.use("/api/barber/clients", dashboardLimiter, barberClientsRouter);
   app.use("/api/barber", dashboardLimiter, barberRouter);
+  // Who's next, for the Lock Screen widget: its own narrow token or the
+  // app's session (routes/nextUp.ts).
+  app.use("/api/next-up", dashboardLimiter, nextUpRouter);
   app.use("/api/insights", dashboardLimiter, insightsRouter); // barber analytics page
   // The yearly report has a gate of its own - a BARBER seat may read HIS OWN
   // year here even though every other insights card is manager-only. See the

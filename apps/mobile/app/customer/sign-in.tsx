@@ -6,6 +6,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_ORIGIN, STORAGE } from "@/src/config";
 import { useCustomer } from "@/src/customer/CustomerProvider";
 import { ApiError, errorCopy, publicPost } from "@/src/customer/api";
+import { secondsLeft, sendKey, startCooldown, type Cooldowns } from "@/src/customer/codeCooldown";
 import { displayPhone } from "@/src/customer/format";
 import { color, radius, space, type } from "@/src/customer/theme";
 import { Button, Tap, Txt, Wordmark } from "@/src/customer/ui";
@@ -37,7 +38,10 @@ export default function SignInScreen() {
   const lastNameRef = useRef<TextInput>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [cooldown, setCooldown] = useState(0);
+  // One wait per channel AND contact (src/customer/codeCooldown.ts): a text
+  // that never came must not hold back "Email me a code".
+  const [cooldowns, setCooldowns] = useState<Cooldowns>({});
+  const [now, setNow] = useState(() => Date.now());
   const [pendingToken, setPendingToken] = useState<string | null>(null);
   const [legacyToken, setLegacyToken] = useState<string | null>(null);
 
@@ -48,23 +52,29 @@ export default function SignInScreen() {
       .catch(() => setLegacyToken(null));
   }, []);
 
+  const wait = secondsLeft(cooldowns, sendKey(channel, contact), now);
+
   useEffect(() => {
-    if (cooldown <= 0) return;
-    const t = setInterval(() => setCooldown((v) => Math.max(0, v - 1)), 1000);
+    if (wait <= 0) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [cooldown > 0]);
+  }, [wait > 0]);
 
   const field = channel === "sms" ? "phone" : "email";
 
   async function sendCode() {
-    if (busy || cooldown > 0 || !contact.trim()) return;
+    if (busy || wait > 0 || !contact.trim()) return;
+    const resending = step === "code";
     setBusy(true);
     setMessage(null);
     try {
       await publicPost(API_ORIGIN, "/api/customer-auth/start", { channel, [field]: contact.trim() });
       setStep("code");
       setCode("");
-      setCooldown(60);
+      const sentAt = Date.now();
+      setCooldowns((c) => startCooldown(c, sendKey(channel, contact), sentAt));
+      setNow(sentAt);
+      if (resending) setMessage("We sent a new code. Use the newest one.");
     } catch (err) {
       const c = err instanceof ApiError ? err.code : null;
       if (c === "phone_not_supported") {
@@ -198,9 +208,9 @@ export default function SignInScreen() {
             {/* Back here from "Change number" inside the resend wait: the button
                 counts down rather than being a tap that silently does nothing. */}
             <Button
-              label={`${channel === "sms" ? "Text me a code" : "Email me a code"}${cooldown > 0 ? ` (${cooldown}s)` : ""}`}
+              label={`${channel === "sms" ? "Text me a code" : "Email me a code"}${wait > 0 ? ` (${wait}s)` : ""}`}
               busy={busy}
-              disabled={!contact.trim() || cooldown > 0}
+              disabled={!contact.trim() || wait > 0}
               onPress={() => void sendCode()}
               style={styles.primary}
             />
@@ -253,9 +263,9 @@ export default function SignInScreen() {
             ) : null}
             <Button label="Continue" busy={busy} disabled={code.length !== 6} onPress={() => void verify()} style={styles.primary} />
             <Button
-              label={cooldown > 0 ? `Send a new code (${cooldown}s)` : "Send a new code"}
+              label={busy ? "Sending…" : wait > 0 ? `Send a new code (${wait}s)` : "Send a new code"}
               variant="plain"
-              disabled={cooldown > 0 || busy}
+              disabled={wait > 0 || busy}
               onPress={() => void sendCode()}
             />
             <Button

@@ -157,7 +157,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "no-acuity",
     q: "I'm not on Acuity — can I still use it?",
-    a: "Yes, completely. Add clients in seconds and tap \"Log visit\" after each appointment: punches, rewards, and rebooking texts all work exactly the same.\n\nYou can also just take bookings through ChairBack directly. Acuity only makes the syncing automatic, and you can connect it any time.",
+    a: "Yes, completely. Take bookings through ChairBack directly: a booking earns its punch when it's marked done, so there's nothing else to tap.\n\nFor a visit that was never booked (a walk-in, or an old visit), open the client and tap \"Log visit\": punches, rewards, and rebooking texts work exactly the same. Don't log a booked visit again, or it earns twice.\n\nAcuity only makes the syncing automatic, and you can connect it any time.",
     keywords: ["without acuity", "no acuity", "not on acuity", "manual", "log visit", "by hand"],
     category: "start",
   },
@@ -267,8 +267,20 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "recurring",
     q: "Can I set up a standing appointment?",
-    a: "Yes. On the calendar, tap the time (or New appointment), pick the client and service, then under Repeat choose Repeat appointment. Set how many weeks apart (every 1 to 8 weeks), then For a count (up to 52) or Until a date, and tap Schedule appointment. The whole series goes on the calendar in one shot.\n\nYou can edit the series later, or change a single date in it without touching the rest.",
-    keywords: ["recurring", "repeat", "every 2 weeks", "standing", "regular", "series", "weekly", "biweekly"],
+    // 🔴 There is no way to edit a whole series on main: no route changes a
+    // series' time, service or barber. This answer used to promise "You can
+    // edit the series later", and a barber who asked was sent looking for a
+    // button that doesn't exist. Cancel scopes are the only series-wide action.
+    a: "Yes. On the calendar, tap the time (or New appointment), pick the client and service, then in the Repeat card choose Repeat appointment. Set Every 1 to 8 weeks, then For a count (2 to 52 appointments) or Until a date, and tap Schedule appointment.\n\nEach date is booked on its own, as far ahead as you like: the limit on how far ahead clients can book online doesn't apply to a repeat you make. A date that's blocked off or already booked is skipped and the rest still book (so is one outside your hours, unless you used Custom time). You're told how many: “Booked 10 — 2 dates were unavailable”. A repeat stops at 52 appointments, even with Until a date.\n\nTo change one date, open that appointment and Edit it — it stays part of the repeat. There's no way yet to change the time, service or barber of the whole repeat at once: cancel the rest and set up a new one. On the appointment, Cancel ▾ offers Just this one, This & all future, or The whole series. The client gets a cancellation email for each visit cancelled, if they have an email.\n\nA repeat can't carry add-ons, a special, or a typed price.",
+    keywords: [
+      "recurring", "repeat", "every 2 weeks", "standing", "regular", "series", "weekly", "biweekly",
+      "repeat appointment", "edit the series", "change the series", "change a repeat", "edit a repeat",
+      // Not "cancel the series" or "...appointment in the series": with the
+      // typo matcher they took "how do i cancle an apointment" from
+      // cancel-reschedule.
+      "change the whole series", "this and all future",
+      "dates were unavailable", "repeat skipped", "repeat past 60 days",
+    ],
     category: "booking",
     action: { label: "Open booking", featureId: "online-booking" },
   },
@@ -315,7 +327,10 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "cancel-reschedule",
     q: "How does a client cancel or reschedule?",
-    a: "Their confirmation carries a manage link — they cancel or move the appointment there themselves, and the freed slot goes straight back into the picker (and pings the waitlist).\n\nYou can also cancel or move anything yourself from the agenda.",
+    // Was: "the freed slot ... pings the waitlist" for a move too (only a
+    // cancel does), and "cancel or move anything yourself" (synced Acuity and
+    // Square bookings are changed in those apps).
+    a: "Their confirmation and reminder emails carry a link to their appointment. From there they can cancel, or tap Reschedule and pick a new time with the same barber and service. A cancelled time goes straight back on your booking page, and your waitlist hears about it. A client you've blocked can cancel but not move.\n\nYou can cancel or move a booking yourself from the calendar: open it and tap Edit. A booking synced from Acuity or Square is changed in that app instead.",
     keywords: [
       "cancel appointment", "reschedule", "move appointment", "change time", "client cancel",
       "edit an appointment", "edit appointment", "change an appointment", "amend booking",
@@ -1543,7 +1558,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "refund-a-client",
     q: "How do I refund a client?",
-    a: "If they paid by card through ChairBack, open the appointment on your calendar. A deposit you kept when they cancelled or didn't show, and a card payment taken at checkout, are refunded from there, back to the card or account they paid with. Don't refund from your own Stripe account: that takes the money back from you, and the client gets nothing. For anything else paid online, contact ChairBack support.\n\nIf they paid you cash, or direct by Zelle, Venmo or Cash App, the money never touched us: hand it back and adjust what you recorded so your numbers match reality.",
+    a: "If they paid by card through ChairBack, open the appointment on your calendar. A deposit you kept when they cancelled or didn't show, and a card payment taken at checkout, are refunded from there, back to the card or account they paid with. For a kept deposit, the Paid at booking panel has a Refund button with the amount on it (“Refund $10.00”); it gives back the whole amount, and ChairBack doesn't message the client about it, so let them know. Don't refund from your own Stripe account: that takes the money back from you, and the client gets nothing. For anything else paid online, contact ChairBack support.\n\nIf they paid you cash, or direct by Zelle, Venmo or Cash App, the money never touched us: hand it back and adjust what you recorded so your numbers match reality.",
     keywords: [
       "refund", "refund a client", "refunded", "pay them back", "reverse a charge",
       "return payment", "cancel a payment", "refund a customer", "money back",
@@ -1709,7 +1724,10 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "move-appointment",
     q: "Can I move an appointment to another barber?",
-    a: "Open the appointment on the calendar — the chair and the time are both editable there, and the client gets the updated details.\n\nIf the new time doesn't appear as available, that chair's hours or an existing booking are in the way rather than anything being broken.",
+    // "the client gets the updated details" was true only sometimes: the
+    // new-time email goes out only if ChairBack had already emailed them about
+    // that booking (#590). Say when.
+    a: "Open the appointment on the calendar and tap Edit. The Date, Start and barber are all editable there; tap Save changes.\n\nIf ChairBack already emailed the client about this booking (its confirmation or its reminder), they get a new confirmation email with the new time, and their reminder goes out again before it. Changing only the length, service or price sends nothing.\n\nA booking with a deposit moves the same way: the deposit stays on it, and nothing is refunded or charged.\n\nIf the new time isn't one of your usual openings, you're asked whether to Save anyway. If a booking is already there, you're shown who and can Book anyway. A booking synced from Acuity or Square is moved in that app instead.",
     keywords: [
       // NOT "change barber": Damerau counts "charge" as one edit from "change",
       // so that keyword fuzzy-matched "do you charge per barber" and answered a
@@ -2013,6 +2031,125 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
       "dont charge my card",
     ],
     category: "money",
+  },
+
+  /* ======================== Shipped early October ==========================
+   * Add in a busy hour (#591/#605), repeats past 60 days (#593), Save anyway
+   * on Edit (#570), What's new in the bell (#560), Didn't finish booking
+   * (#574/#583/#588), a deposit booking can be moved (#575), a moved booking
+   * tells the client (#590), a card saved for next time (#563), page designs
+   * (#564) and the app's Rewards tab (#565).
+   *
+   * Same rules as the September block: every label is the one the code
+   * renders, multi-word keywords only, no `primaryFor` on a generic word.
+   * ====================================================================== */
+  {
+    // #591: a 30-minute cut ended at 6:30 and the 6 PM row offered nothing,
+    // so the half hour after it looked unbookable.
+    id: "add-in-busy-hour",
+    q: "Can I fit someone into an hour that already has a booking?",
+    a: "Yes. On the Appointments tab, open the day (Day view, or tap a day on the month). Under the bookings in each hour you'll see Add at with the first free time in that hour that has at least 10 minutes open, like “Add at 6:30 PM”. Tap it and New appointment opens on that time.\n\nPick the client, service and barber. If that time isn't one of your open times for the service, you'll see “The time you tapped · not one of your open times” with Book this time, which books exactly that time.\n\nAdd at only finds the gap. It doesn't know which service you'll pick, so if the service runs into the next booking you're shown who's there and asked before anything is double-booked. An hour every chair is busy for says — booked —.",
+    keywords: [
+      "busy hour", "add at", "add at button", "add at on my calendar", "fit someone in", "fit a client in", "fit in between",
+      "gap between appointments", "gap in my day", "in between bookings", "between two appointments",
+      "half hour gap", "free half hour", "room in an hour", "hour already has a booking",
+    ],
+    category: "booking",
+    action: { label: "Open appointments", featureId: "appointments" },
+  },
+  {
+    id: "edit-save-anyway",
+    // Not "Why won't…": `saved-card-refused` opens that way and the q text
+    // scores too.
+    q: "Editing a booking says it isn't one of the usual openings — can I still save it?",
+    a: "Yes. When you change a booking's service, length, time or barber, Edit appointment checks the new time against the times clients can book online: the service's usual start times, your hours and the service's, and your booking notice. Outside them, you'll see “That time isn't one of this service's usual openings” with Save anyway and Go back.\n\nTap Save anyway to keep the change. If it now overlaps another booking you're shown who's there and can choose Book anyway, and a customer who is paying for that time right now can't be overridden. If you edit it again, tap Save anyway again.\n\nChanging the service sets the length to that service's length but keeps the price, so change Price too if it should be different. A saved change shows “Saved. Appointment updated.”",
+    keywords: [
+      // No "edit" or "appointment" phrases: scoring is per token, and they
+      // took "how do i edit an appointment" from cancel-reschedule.
+      "save anyway", "usual openings", "isnt one of this services usual openings",
+      "change the service on a booking", "change a bookings service", "cant change the service",
+      "go back or save anyway", "booking wont save",
+    ],
+    category: "booking",
+    action: { label: "Open appointments", featureId: "appointments" },
+  },
+  {
+    id: "didnt-finish-booking",
+    q: "Who is on Didn't finish booking, and what do I do about them?",
+    a: "Clients who picked a time on your booking page but didn't finish paying or saving a card, so they aren't booked — and they may think they are. It sits above the calendar on Calendar → Appointments, and only shows when someone is on it. It only happens if you take a deposit or full payment, or require a saved card: the time is held for 10 minutes while they finish.\n\nTap a row to see why (Didn't save a card, Didn't pay…), when they tried, and their phone and email. Then:\n• Book them — books that time for them and emails them a confirmation, and pushes the app if they use it. You're asked first.\n• Email them to pick a new time — shown when someone else has booked that time since. It emails them a link to your booking page, once.\n• Text or Call — opens your own phone. ChairBack sends nothing.\n• Dismiss — takes them off the list. Nothing is cancelled or sent.\n\nSomeone drops off the list by themselves once they book for real, or once the time they wanted has passed.",
+    keywords: [
+      "didnt finish booking", "didn't finish booking", "unfinished booking", "unfinished bookings",
+      "book them", "book them button", "email them to pick a new time", "picked a time but didnt finish",
+      "thinks theyre booked", "think they are booked", "abandoned booking", "didnt pay the deposit",
+      "didnt save a card", "card step", "held for 10 minutes",
+    ],
+    category: "booking",
+    action: { label: "Open appointments", featureId: "appointments" },
+  },
+  {
+    id: "move-with-deposit",
+    // Not "What happens to…": the q text scores, and "happen" took "Why did a
+    // double booking happen?" from double-booking.
+    q: "Does the deposit stay on a booking that gets moved?",
+    a: "It stays on the booking. Moving never refunds or charges anything; the deposit still counts toward what they owe.\n\nWhen you move it from Edit, the price stays as it was unless you change Price. A client moving it from their own link gets the new time's price, and a time priced below what they already paid is refused.\n\nIf they cancel instead, your Deposit refunds setting decides whether they get it back, and if you cancel, it's always refunded in full.",
+    keywords: [
+      "move a booking with a deposit", "move a deposit booking", "reschedule with a deposit",
+      "deposit when moving", "deposit when rescheduling", "deposit after moving", "does the deposit move",
+      "moved booking deposit",
+    ],
+    category: "money",
+    action: { label: "Open appointments", featureId: "appointments" },
+  },
+  {
+    // 🔴 "Saved card" means three things on screen: this keep-for-next-time
+    // card, "Require a saved card to book", and the service-charge permission
+    // (saved-card-charge). This entry is only the first, and says the other
+    // two don't come with it.
+    id: "saved-card-next-time",
+    q: "Can my clients save their card for next time?",
+    a: "Yes, if your shop uses Card on file (Payments → How customers pay) and doesn't approve bookings first. When they book, a client can tick “Save this card for my future appointments at this shop”. It starts unticked.\n\nNext time on the same phone, your booking page offers their card (“Pay with Visa •••• 4242 - saved at” your shop) and they book in one tap, with no card step. On a new phone they tap “Saved a card here before? Use it”, then Text me a code; the 6-digit code lasts 5 minutes. The phone or email they book with has to match theirs.\n\nYou'll see it on their client page under Card on file. Only the client can remove it, from their appointment link. Saving a card doesn't turn on no-show fees or let you charge for the service: those follow your own settings and what they tick on each booking.\n\nIt isn't offered for repeat or group bookings, or at shops that take a deposit or full payment when booking.",
+    keywords: [
+      "save their card", "save card for next time", "card for next time", "save this card",
+      "card for future appointments", "one tap booking", "book in one tap", "saved a card here before",
+      "text me a code", "code to use their saved card", "use my card", "remove this card",
+      "remove their saved card", "card saved for next time",
+    ],
+    category: "money",
+    action: { label: "Open payments", featureId: "pay-ahead" },
+  },
+  {
+    id: "page-designs",
+    q: "How do I pick a different design for my page?",
+    a: "Your page → Page design. There are six: Classic (the page you have now, and the default), Photos first, Lookbook, The reel, Profile and Fresh work. The five new ones lead with your photos. Tap one to see it in the preview; nothing goes live until you tap Save page, and your live page can take about a minute to catch up.\n\nThey work best with tagged photos. Under Photo gallery, pick the service in each photo, and who did it if you have a team. A client who opens a tagged photo gets Book this look, which opens booking with that service and barber already picked. Photos are dated when you save them, and Fresh work shows the newest first.\n\n“Start from a template”, under Sections, is a different thing: it only reorders the sections on your page.",
+    keywords: [
+      "page design", "page designs", "change my page design", "different design", "new page design",
+      "page layout", "change the layout", "photos first", "lookbook", "the reel", "fresh work",
+      "book this look", "tag a photo", "tag my photos", "service in the photo", "who did the photo",
+    ],
+    category: "brand",
+    action: { label: "Open your page", featureId: "mini-site" },
+  },
+  {
+    id: "app-rewards-tab",
+    q: "What do my clients see on the Rewards tab in the ChairBack app?",
+    a: "A card for each shop they've visited that has rewards on: their punch card and tier, rewards ready to use, your current deals, and a countdown, Time left to rebook. The countdown runs from their last visit for your rebooking window (Home → Settings), or their own if they set one, and switches to You're booked when they have a visit coming up. Book now opens your page.\n\nIt follows your Show these sections choices under Your page → Client rewards page, so hiding the countdown or the punch grid there hides it in the app too.\n\nThe countdown comes with app version 1.1.5. On it, the Your rewards button comes off your page inside the app, because the tab has it all. Clients on an older version keep the button, and on the web it always stays.",
+    keywords: [
+      "rewards tab", "app rewards tab", "rewards in the app", "time left to rebook", "rebook countdown",
+      "countdown timer", "rebooking window", "your rewards button", "rewards button gone",
+      "clients see in the app",
+    ],
+    category: "clients",
+  },
+  {
+    id: "whats-new",
+    q: "Where do I see what's new in ChairBack?",
+    a: "Tap the bell at the top of your dashboard. Needs you lists what's waiting on you; below it, What's new lists the latest features and fixes, newest first, each marked Fix or New feature. The ones you haven't seen yet say New.\n\nA gold dot on the bell means there are updates you haven't seen. It shows only when nothing needs you: a red number on the bell comes first. Opening the bell marks the updates seen on all your devices.",
+    keywords: [
+      "whats new", "what's new", "new features", "release notes", "changelog", "gold dot",
+      "gold dot on the bell", "what changed in chairback", "latest updates", "new updates",
+      "notification bell", "the bell",
+    ],
+    category: "start",
   },
 ];
 

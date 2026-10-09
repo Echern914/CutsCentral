@@ -91,6 +91,8 @@ import { EyeIcon, ServiceCard, serviceSummary } from "./ServiceCard";
 import { isHiddenService } from "@chairback/config/serviceVisibility";
 import { UpgradeRules } from "./UpgradeRules";
 import {
+  MAX_ADD_ON_MINUTES,
+  MAX_SERVICE_MINUTES,
   MIN_SERVICE_MINUTES,
   formatPrice,
   parseDuration,
@@ -1018,6 +1020,7 @@ export function ServicesTab({
     // would then refuse to save.
     const parsedDuration = parseDuration(String(duration), {
       min: MIN_SERVICE_MINUTES,
+      max: MAX_SERVICE_MINUTES,
     });
     if (!parsedDuration.ok) {
       toast(parsedDuration.error, "error");
@@ -1026,6 +1029,11 @@ export function ServicesTab({
     const parsedPrice = parsePrice(price);
     if (!parsedPrice.ok) {
       toast(parsedPrice.error, "error");
+      return;
+    }
+    const dayErr = dayOverridesError(dayPrices, dayDurations);
+    if (dayErr) {
+      toast(dayErr, "error");
       return;
     }
     // Time windows get the same specific validation as the edit Sheet.
@@ -1380,8 +1388,8 @@ export function ServiceEditForm({
    *  per service was the pilot's exact complaint). */
   services: ServiceRow[];
   staff: StaffRow[];
-  // Non-null = this service is in a group; the group owns hours + limits, so the
-  // per-service hours editor is replaced with a note (the group overrides it).
+  // Non-null = this service is in a group. The group only shares its "at once"
+  // cap; the hours editor stays, with a note naming the group.
   groupName: string | null;
   /** The shop's IANA zone: which date is "today" for its holiday prices. */
   timezone?: string;
@@ -1582,6 +1590,7 @@ export function ServiceEditForm({
     // are caught here with a specific message rather than a generic 400.
     const parsedDuration = parseDuration(String(duration), {
       min: MIN_SERVICE_MINUTES,
+      max: MAX_SERVICE_MINUTES,
     });
     if (!parsedDuration.ok) {
       setError(parsedDuration.error);
@@ -1596,10 +1605,15 @@ export function ServiceEditForm({
     const priceNum = parsedPrice.value;
     // A custom window whose end is not after its start is a user error, not a
     // "closed" instruction - block save so they don't silently lose the day.
-    // Skipped when grouped: the group owns hours, so the editor is hidden and we
-    // must not send its (now irrelevant) windows.
+    // A grouped service's hours are its own (a group only shares its "at once"
+    // cap), so these rows are always checked and always sent.
     if (hasInvalidHoursRow(hoursRows)) {
       setError("Service hours: each window's end must be after its start");
+      return;
+    }
+    const dayErr = dayOverridesError(dayPrices, dayDurations);
+    if (dayErr) {
+      setError(dayErr);
       return;
     }
     // Time windows validated with a SPECIFIC message (end>start, price/minutes
@@ -3232,7 +3246,7 @@ function AddOnsManager({
       toast(parsedPrice.error, "error");
       return;
     }
-    const parsedDuration = parseDuration(String(duration));
+    const parsedDuration = parseDuration(String(duration), { max: MAX_ADD_ON_MINUTES });
     if (!parsedDuration.ok) {
       toast(parsedDuration.error, "error");
       return;
@@ -3284,7 +3298,7 @@ function AddOnsManager({
       return;
     }
     const priceNum = parsedPrice.value;
-    const parsedDuration = parseDuration(String(draftDuration));
+    const parsedDuration = parseDuration(String(draftDuration), { max: MAX_ADD_ON_MINUTES });
     if (!parsedDuration.ok) {
       toast(parsedDuration.error, "error");
       return;
@@ -3568,7 +3582,7 @@ function ServiceGroupsManager({
     <Card className="p-5">
       <CardHeader
         title="Service groups"
-        subtitle="Bundle services under one shared set of available hours and booking limits (Acuity-style). A grouped service uses the group's hours instead of its own."
+        subtitle="Bundle related services so they share one 'at once' limit and sit together in your list. Hours and daily limits are still set on each service."
       />
       <div className="mt-3 flex gap-2">
         <input
@@ -3880,7 +3894,7 @@ function ServiceGroupEditor({
   function remove() {
     if (
       !window.confirm(
-        `Remove the group "${group.name}"? Its services stay, but the shared hours and limits are gone.`,
+        `Remove the group "${group.name}"? Its services stay, with their own hours, but the shared 'at once' limit is gone.`,
       )
     ) {
       return;
@@ -4347,6 +4361,7 @@ export function StaffHoursSheet({
                     value={r.end}
                     onChange={(v) => patchRow(i, { end: v })}
                     className={timeSelectCls}
+                    allowMidnightEnd
                     aria-label={`${WEEKDAYS[i]} end`}
                   />
                 </div>
@@ -4388,6 +4403,7 @@ export function StaffHoursSheet({
                           value={b.end}
                           onChange={(v) => patchBreak(i, bi, { end: v })}
                           className={timeSelectCls}
+                          allowMidnightEnd
                           aria-label={`${WEEKDAYS[i]} break end`}
                         />
                         <input
@@ -4595,10 +4611,33 @@ function buildDurationOverrides(
     // parseDuration ROUNDS a fractional entry. The old Number.isInteger test
     // failed on "7.5" and skipped the key entirely, so a barber typing seven
     // and a half minutes saw their Friday override silently disappear on save.
-    const parsed = parseDuration(val, { min: MIN_SERVICE_MINUTES });
+    const parsed = parseDuration(val, { min: MIN_SERVICE_MINUTES, max: MAX_SERVICE_MINUTES });
     if (parsed.ok && parsed.value !== null) out[wd] = parsed.value;
   }
   return out;
+}
+
+/**
+ * The first per-day price or length the API would refuse, named by its day, or
+ * null. The builders above DROP an entry their parser refuses, which is only
+ * safe because Save runs this first: without it a Friday length of 700 was
+ * either silently dropped or (before the cap) turned the whole save into a
+ * bare 400.
+ */
+export function dayOverridesError(
+  dayPrices: Record<number, string>,
+  dayDurations: Record<number, string>,
+): string | null {
+  for (let wd = 0; wd < 7; wd++) {
+    const price = parsePrice(dayPrices[wd] ?? "");
+    if (!price.ok) return `${WEEKDAYS[wd]} price: ${price.error.toLowerCase()}`;
+    const length = parseDuration(dayDurations[wd] ?? "", {
+      min: MIN_SERVICE_MINUTES,
+      max: MAX_SERVICE_MINUTES,
+    });
+    if (!length.ok) return `${WEEKDAYS[wd]} length: ${length.error.toLowerCase()}`;
+  }
+  return null;
 }
 
 // Per-weekday availability rows. Three modes (Drick: unchecking a day looked
@@ -4925,6 +4964,7 @@ function AvailableHoursRows({
                     value={w.end}
                     onChange={(v) => patchWindow(i, k, { end: v })}
                     className={timeSelectCls}
+                    allowMidnightEnd
                     aria-label={`${WEEKDAYS[i]} window ${k + 1} until`}
                   />
                   {/* The row actions get their own margin + hit area: butted
@@ -5215,7 +5255,7 @@ function timeRowsError(rows: TimeWindowRow[]): string | null {
     }
     const parsedPrice = parsePrice(price);
     if (!parsedPrice.ok) return `Time windows: ${parsedPrice.error.toLowerCase()}`;
-    const parsedMins = parseDuration(mins, { min: MIN_SERVICE_MINUTES });
+    const parsedMins = parseDuration(mins, { min: MIN_SERVICE_MINUTES, max: MAX_SERVICE_MINUTES });
     if (!parsedMins.ok) return `Time windows: ${parsedMins.error.toLowerCase()}`;
     spans.push({ s, e, days: rowDays(r) });
   }
@@ -5234,8 +5274,15 @@ function timeRowsError(rows: TimeWindowRow[]): string | null {
   return null;
 }
 
-/** API payload from validated rows (the FULL array; [] clears every window). */
-function buildTimeOverrides(rows: TimeWindowRow[]): {
+/**
+ * API payload from validated rows (the FULL array; [] clears every window).
+ *
+ * Built with the SAME parsers timeRowsError checks with. `Number(r.durationMin)`
+ * sent "7.5" unrounded, which the check had passed and the API's `.int()`
+ * refused, and `Number(r.price)` turned a pasted "$45" into NaN, which JSON
+ * sends as null: the window's price was cleared without a word.
+ */
+export function buildTimeOverrides(rows: TimeWindowRow[]): {
   s: number;
   e: number;
   days: number[];
@@ -5249,12 +5296,19 @@ function buildTimeOverrides(rows: TimeWindowRow[]): {
     // All seven selected is the same thing as "every day"; normalize so the two
     // can't read as different configs.
     days: r.days.length === 7 ? [] : [...r.days].sort((a, b) => a - b),
-    price: r.price.trim() ? Number(r.price) : null,
-    durationMin: r.durationMin.trim() ? Number(r.durationMin) : null,
+    price: valueOrNull(parsePrice(r.price)),
+    durationMin: valueOrNull(
+      parseDuration(r.durationMin, { min: MIN_SERVICE_MINUTES, max: MAX_SERVICE_MINUTES }),
+    ),
     opensHours: r.opensHours,
   }));
 }
 
+
+/** A parse that timeRowsError already passed; a refusal can only mean blank. */
+function valueOrNull(r: { ok: true; value: number | null } | { ok: false }): number | null {
+  return r.ok ? r.value : null;
+}
 
 function VaryByTimeEditor({
   rows,
@@ -5311,6 +5365,7 @@ function VaryByTimeEditor({
               value={r.end}
               onChange={(v) => patch(i, { end: v })}
               className={select}
+              allowMidnightEnd
               aria-label={`Window ${i + 1} end time`}
             />
             <MoneyField

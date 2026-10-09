@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { APP_NAME, apiEnv, randomToken } from "@chairback/config";
-import { prisma } from "@chairback/db";
+import { prisma, runAsOwner } from "@chairback/db";
 import { hashPassword } from "../auth/password.js";
 import { authLimiter } from "../middleware/rateLimit.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
@@ -145,16 +145,20 @@ passwordResetRouter.post("/reset-password", authLimiter, async (req, res) => {
   // keeping this endpoint a pure credential write. Pending email-change tokens
   // die too: a reset is the lockout-recovery path, and a live emailed token is
   // a session-independent way back in for whoever requested it.
-  await prisma.$transaction([
-    prisma.user.update({
+  // Every session is dead, so no phone keeps the booking alerts either: they
+  // carry clients' names, and a reset usually follows a lost phone or a
+  // shared login. Owner-scoped, because a plain delete on the RLS-forced push
+  // table would match nothing; the same transaction as the bump, as at
+  // sign-out (services/userDevice.ts).
+  const passwordHash = await hashPassword(parsed.data.newPassword);
+  await runAsOwner(async (tx) => {
+    await tx.user.update({
       where: { id: row.userId },
-      data: {
-        passwordHash: await hashPassword(parsed.data.newPassword),
-        tokenVersion: { increment: 1 },
-      },
-    }),
-    prisma.emailChangeToken.deleteMany({ where: { userId: row.userId, usedAt: null } }),
-  ]);
+      data: { passwordHash, tokenVersion: { increment: 1 } },
+    });
+    await tx.emailChangeToken.deleteMany({ where: { userId: row.userId, usedAt: null } });
+    await tx.pushSubscription.deleteMany({ where: { userId: row.userId } });
+  });
 
   res.json({ ok: true });
 });

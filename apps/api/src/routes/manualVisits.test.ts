@@ -1,8 +1,9 @@
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { randomToken, zonedDateParts, zonedWallTimeToUtc } from "@chairback/config";
 import { createApp } from "../app.js";
+import { raceBehindRowLock } from "../testing/raceBarrier.js";
 
 /**
  * Manual visit logging - the no-Acuity path. A logged visit must behave
@@ -149,5 +150,266 @@ describe("manual visit logging", () => {
       .set("Cookie", cookieB)
       .send({});
     expect(res.status).toBe(404);
+  });
+});
+
+/**
+ * 🔴 ONE SITTING, ONE PUNCH. Two ways a single cut earned twice through Log
+ * visit, neither of them a code error a person could see:
+ *  - the request was sent again (a retry after a dropped response, a second
+ *    tap) and each copy logged its own visit;
+ *  - the cut was already on the books - a ChairBack booking that earns when it
+ *    is done, or an Acuity/Square visit that earns when it ends - and was then
+ *    logged again by hand.
+ */
+describe("🔴 Log visit cannot credit one sitting twice", () => {
+  const TZ = "America/New_York"; // the shop default; set explicitly below
+  let shopId: string;
+  let staffId: string;
+  let serviceId: string;
+
+  /** Shop-local h:00 on the day `daysAgo` days back. */
+  function localAt(daysAgo: number, hour: number): Date {
+    const p = zonedDateParts(new Date(Date.now() - daysAgo * DAY), TZ);
+    return zonedWallTimeToUtc(p.year, p.month0, p.day, hour * 60, TZ);
+  }
+
+  async function newClient(firstName: string): Promise<string> {
+    const res = await request(app)
+      .post("/api/dashboard/clients")
+      .set("Cookie", cookieA)
+      .send({ firstName });
+    expect(res.status).toBe(201);
+    return res.body.id as string;
+  }
+
+  /** Every punch this client earned from a visit (the ledger, not the screen). */
+  async function visitEarns(id: string): Promise<number> {
+    const rows = await prisma.punchLedger.findMany({
+      where: { shopId, clientId: id, visitId: { not: null }, reversalOfId: null },
+      select: { punchesEarned: true },
+    });
+    return rows.reduce((s, r) => s + r.punchesEarned, 0);
+  }
+
+  /** A fresh tap id, as the current screen sends with every Log visit. */
+  const tap = () => `tap-${randomToken(16)}`;
+
+  const logVisit = (id: string, body: Record<string, unknown>) =>
+    request(app).post(`/api/dashboard/clients/${id}/visits`).set("Cookie", cookieA).send(body);
+
+  beforeAll(async () => {
+    const owner = await prisma.user.findUniqueOrThrow({ where: { email: emailA } });
+    const shop = await prisma.shop.findFirstOrThrow({ where: { ownerId: owner.id }, select: { id: true } });
+    shopId = shop.id;
+    await prisma.shop.update({ where: { id: shopId }, data: { timezone: TZ } });
+    staffId = (await prisma.staff.create({ data: { shopId, name: "Mo" }, select: { id: true } })).id;
+    serviceId = (
+      await prisma.service.create({
+        data: { shopId, name: "Haircut", durationMin: 45, price: 40 },
+        select: { id: true },
+      })
+    ).id;
+  });
+
+  it("the same tap sent twice logs ONE visit and ONE punch; the retry reports the first", async () => {
+    const id = await newClient("Retry");
+    const requestId = `tap-${randomToken(16)}`;
+    const first = await logVisit(id, { requestId });
+    expect(first.status).toBe(201);
+    const again = await logVisit(id, { requestId });
+    expect(again.status).toBe(200);
+    expect(again.body.replayed).toBe(true);
+    expect(again.body.visitId).toBe(first.body.visitId);
+    expect(again.body.balance).toBe(1);
+
+    expect(await prisma.visit.count({ where: { shopId, clientId: id } })).toBe(1);
+    expect(await visitEarns(id)).toBe(1);
+  });
+
+  it("a tap's id reused on a different client is refused, and logs nothing", async () => {
+    const a = await newClient("First");
+    const b = await newClient("Second");
+    const requestId = `tap-${randomToken(16)}`;
+    expect((await logVisit(a, { requestId })).status).toBe(201);
+    const reused = await logVisit(b, { requestId });
+    expect(reused.status).toBe(409);
+    expect(reused.body.error).toBe("request_reused");
+    expect(await prisma.visit.count({ where: { shopId, clientId: b } })).toBe(0);
+  });
+
+  it("a malformed requestId is a 400, not a visit", async () => {
+    const id = await newClient("Malformed");
+    const res = await logVisit(id, { requestId: "short" });
+    expect(res.status).toBe(400);
+    expect(await prisma.visit.count({ where: { shopId, clientId: id } })).toBe(0);
+  });
+
+  it("🔴 a retry racing the first try (behind the client lock) still logs one visit", async () => {
+    const id = await newClient("Racer");
+    const requestId = `tap-${randomToken(16)}`;
+    const { results, settledEarly } = await raceBehindRowLock("Client", id, [
+      () => logVisit(id, { requestId }).then((r) => r.status),
+      () => logVisit(id, { requestId }).then((r) => r.status),
+    ]);
+    expect(settledEarly).toBe(0);
+    const statuses = results
+      .filter((r): r is PromiseFulfilledResult<number> => r.status === "fulfilled")
+      .map((r) => r.value)
+      .sort();
+    expect(statuses).toEqual([200, 201]);
+    expect(await prisma.visit.count({ where: { shopId, clientId: id } })).toBe(1);
+    expect(await visitEarns(id)).toBe(1);
+  });
+
+  it("🔴 a client with a ChairBack booking that day is asked about first - nothing is written", async () => {
+    const id = await newClient("Booked");
+    const starts = localAt(2, 14);
+    await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        clientId: id,
+        firstName: "Booked",
+        status: "BOOKED",
+        startsAt: starts,
+        endsAt: new Date(starts.getTime() + 45 * 60_000),
+        manageToken: randomToken(),
+      },
+    });
+    // Logged at 3:30pm the same shop-local day - the same cut, by another door.
+    const res = await logVisit(id, { when: localAt(2, 15).toISOString(), requestId: tap() });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("visit_on_books");
+    expect(res.body.existing).toEqual({ at: starts.toISOString(), serviceName: "Haircut", source: "booking" });
+    expect(await prisma.visit.count({ where: { shopId, clientId: id } })).toBe(0);
+    expect(await visitEarns(id)).toBe(0);
+
+    // The barber says it really was a separate visit: that is theirs to log.
+    const separate = await logVisit(id, {
+      when: localAt(2, 15).toISOString(),
+      requestId: tap(),
+      separateVisit: true,
+    });
+    expect(separate.status).toBe(201);
+    expect(await visitEarns(id)).toBe(1);
+  });
+
+  it("🔴 a visit already LOGGED BY HAND that day: a new tap (after an error screen or a refresh) is asked about, not punched again", async () => {
+    const id = await newClient("Retap");
+    const first = tap();
+    expect((await logVisit(id, { when: localAt(9, 14).toISOString(), requestId: first })).status).toBe(201);
+    // The page lost that tap's id; the barber taps Log visit again.
+    const again = await logVisit(id, { when: localAt(9, 16).toISOString(), requestId: tap() });
+    expect(again.status).toBe(409);
+    expect(again.body.error).toBe("visit_on_books");
+    expect(again.body.existing.source).toBe("manual");
+    expect(again.body.message).toMatch(/Already logged that day: .*\(logged by hand\)\. It already earned its punch\./);
+    expect(await prisma.visit.count({ where: { shopId, clientId: id } })).toBe(1);
+    expect(await visitEarns(id)).toBe(1);
+    // The SAME tap retried is still answered from its own visit - never asked.
+    const retry = await logVisit(id, { when: localAt(9, 14).toISOString(), requestId: first });
+    expect(retry.status).toBe(200);
+    expect(retry.body.replayed).toBe(true);
+    // A real second visit that day is the barber's to log.
+    const separate = await logVisit(id, { when: localAt(9, 17).toISOString(), requestId: tap(), separateVisit: true });
+    expect(separate.status).toBe(201);
+    expect(await visitEarns(id)).toBe(2);
+  });
+
+  it("an OLDER screen (no requestId) logs exactly as before - it has no question to show", async () => {
+    // A page loaded before this shipped, still open in the app: it sends no
+    // requestId and cannot offer "Log a separate visit". It must keep working
+    // the way it did, not start failing with a question it cannot display.
+    const id = await newClient("OldScreen");
+    const starts = localAt(6, 14);
+    await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        clientId: id,
+        firstName: "OldScreen",
+        status: "BOOKED",
+        startsAt: starts,
+        endsAt: new Date(starts.getTime() + 45 * 60_000),
+        manageToken: randomToken(),
+      },
+    });
+    const res = await logVisit(id, { when: localAt(6, 15).toISOString() });
+    expect(res.status).toBe(201);
+    expect(await visitEarns(id)).toBe(1);
+  });
+
+  it("a finished booking (its visit is on file) and a synced Acuity visit are asked about too", async () => {
+    const done = await newClient("Done");
+    await prisma.visit.create({
+      data: {
+        shopId,
+        clientId: done,
+        acuityAppointmentId: `booking:${randomToken(8)}`,
+        status: "COMPLETED",
+        scheduledAt: localAt(3, 11),
+        endAt: localAt(3, 12),
+        completedAt: localAt(3, 12),
+        serviceName: "Haircut",
+      },
+    });
+    const a = await logVisit(done, { when: localAt(3, 18).toISOString(), requestId: tap() });
+    expect(a.status).toBe(409);
+    expect(a.body.existing.source).toBe("booking");
+
+    const synced = await newClient("Synced");
+    await prisma.visit.create({
+      data: {
+        shopId,
+        clientId: synced,
+        acuityAppointmentId: String(Math.floor(Math.random() * 1e9) + 1e9),
+        status: "SCHEDULED",
+        scheduledAt: localAt(3, 10),
+        endAt: localAt(3, 11),
+        serviceName: "Fade",
+      },
+    });
+    const b = await logVisit(synced, { when: localAt(3, 9).toISOString(), requestId: tap() });
+    expect(b.status).toBe(409);
+    expect(b.body.existing).toMatchObject({ serviceName: "Fade", source: "synced" });
+  });
+
+  it("a cancelled booking, or a booking on another day, does not stand in the way", async () => {
+    const id = await newClient("Clear");
+    const starts = localAt(4, 14);
+    await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        clientId: id,
+        firstName: "Clear",
+        status: "CANCELED",
+        canceledAt: new Date(),
+        startsAt: starts,
+        endsAt: new Date(starts.getTime() + 45 * 60_000),
+        manageToken: randomToken(),
+      },
+    });
+    const yesterday = localAt(5, 14);
+    await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId,
+        serviceId,
+        clientId: id,
+        firstName: "Clear",
+        status: "BOOKED",
+        startsAt: yesterday,
+        endsAt: new Date(yesterday.getTime() + 45 * 60_000),
+        manageToken: randomToken(),
+      },
+    });
+    const res = await logVisit(id, { when: localAt(4, 16).toISOString(), requestId: tap() });
+    expect(res.status).toBe(201);
+    expect(await visitEarns(id)).toBe(1);
   });
 });
