@@ -215,8 +215,8 @@ describe("the shop moves it from the dashboard", () => {
   });
 
   it("a FULLY prepaid booking at an AGREED price ($30) moves from the dashboard and keeps it", async () => {
-    const { id } = await paidBooking(at(9, 10), 30, 3000);
-    const res = await moveFromDashboard(id, at(9, 12));
+    const { id } = await paidBooking(at(10, 10), 30, 3000);
+    const res = await moveFromDashboard(id, at(10, 12));
     expect(res.status).toBe(200);
     expect(res.body.price).toEqual({ kind: "kept", totalCents: 3000 });
   });
