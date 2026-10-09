@@ -39,6 +39,10 @@ export function ClientOffers({ list, client }: { list: OffersList; client: { id:
           </button>
         )}
       </div>
+      <p className="text-[12px] text-muted">
+        A personal offer is <span className="text-offwhite">staff-applied</span>: it works when you book this{" "}
+        {vocab.clientNoun} (Calendar → New appointment → Offer), not on the online booking page.
+      </p>
       {mine.length === 0 ? (
         <p className="text-sm text-muted">No offers for this {vocab.clientNoun}.</p>
       ) : (

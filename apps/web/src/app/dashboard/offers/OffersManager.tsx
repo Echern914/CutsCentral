@@ -68,7 +68,7 @@ export function OffersManager({ list, clientId }: { list: OffersList; clientId?:
           {list.offers.map((o) => {
             const limit =
               o.maxUses === null ? `${o.uses} used` : `${o.uses} of ${o.maxUses} used`;
-            const forWhom = o.client ? `Only ${o.client.name}` : "Anyone with the code";
+            const forWhom = o.client ? `Only ${o.client.name} · staff-applied (New appointment → Offer)` : "Anyone with the code · online or in person";
             const covers =
               o.kind === "FREE_SERVICE"
                 ? ""

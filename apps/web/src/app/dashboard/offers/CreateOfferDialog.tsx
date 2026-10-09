@@ -216,8 +216,14 @@ export function CreateOfferDialog({
           </div>
           <p className="text-sm text-muted">
             ChairBack doesn&apos;t send it. Share it {client ? `with ${client.name}` : "where you like"} yourself.
-            {client ? ` It only works when you book it for ${client.name}.` : ""}
           </p>
+          {client && (
+            <p className="text-sm text-offwhite" data-testid="staff-applied-note">
+              <span className="font-medium">Staff-applied.</span> It works only when you book {client.name}: Calendar →
+              New appointment → pick {client.name} as the client → Offer → enter the code. It can&apos;t be used on the
+              online booking page.
+            </p>
+          )}
         </div>
       ) : (
         <div className="flex min-w-0 flex-col gap-4" data-testid="offer-form">
@@ -323,7 +329,11 @@ export function CreateOfferDialog({
               </p>
             ))}
             <p className="text-[11px] leading-snug text-muted">
-              {usesWords} {endWords} {client ? `Only when you book it for ${client.name}.` : "Anyone who has the code can use it."} ChairBack sends nothing.
+              {usesWords} {endWords}{" "}
+              {client
+                ? `Staff-applied: only when you book ${client.name} (New appointment → Offer). Not usable online.`
+                : "Anyone who has the code can use it, online or when you book them."}{" "}
+              ChairBack sends nothing.
             </p>
           </section>
         </div>
