@@ -5675,6 +5675,11 @@ model AppointmentPriceChange {
   toPriceCents       Int
   fromCollectedCents Int?
   toCollectedCents   Int?
+  /// What wrote the row. NULL = a change by hand (the price editor, an edit).
+  /// "move" = a reschedule's menu reprice that the mover saw and accepted: it
+  /// is never read as a hand edit (engines/movePrice.ts), and its figure caps
+  /// what a saved card can be charged (agreedPriceCents).
+  source             String?
   createdAt DateTime @default(now())
 
   @@index([shopId, appointmentId, createdAt])

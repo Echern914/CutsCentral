@@ -61,6 +61,7 @@ import {
   centsToDecimal,
   decimalToCents,
   dollarsToCentsExact,
+  handEditCount,
   recordPriceChange,
 } from "../services/appointmentPriceLedger.js";
 import {
@@ -4549,7 +4550,8 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       timeWindows: appt.service.timeOverrides,
     },
   );
-  const handEdited = (await prisma.appointmentPriceChange.count({ where: { shopId, appointmentId: appt.id } })) > 0;
+  // By hand only: a previous move's accepted reprice is the menu's own figure.
+  const handEdited = (await handEditCount(shopId, appt.id)) > 0;
   const move = movePrice({
     bookedCents: dollarsToCents(appt.priceAtBooking),
     addOnCents: addOnCentsOf(appt.addOns),
@@ -4698,6 +4700,7 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
           toPriceCents: move.toCents,
           fromCollectedCents: null,
           toCollectedCents: null,
+          source: "move",
         });
       }
       // Retire the old mirror row and record the new time's intent in the SAME

@@ -206,6 +206,51 @@ describe("🔴 a menu price may change - never in silence", () => {
   });
 });
 
+describe("🔴 a second move, after an accepted one", () => {
+  // An accepted reprice writes a ledger row. That row is the MOVE's, not a hand
+  // edit: the booking's price is the menu's figure for its time again, so the
+  // next move must ask again rather than keep that figure in silence.
+  it("Sunday $45 -> Monday (accepted $40) -> back to Sunday asks again ($40 -> $45), on the client's door", async () => {
+    const a = await bookRow({ priceAtBooking: new Prisma.Decimal("45.00"), startsAt: nextWeekday(SUNDAY, 10) });
+    expect((await clientMove(a.manageToken, nextWeekday(MONDAY, 11))).body).toMatchObject({ fromCents: 4500, toCents: 4000 });
+    expect((await clientMove(a.manageToken, nextWeekday(MONDAY, 11), { acceptPriceCents: 4000 })).status).toBe(200);
+    expect(await price(a.id)).toBe(40);
+    const back = await clientMove(a.manageToken, nextWeekday(SUNDAY, 12));
+    expect(back.status).toBe(409);
+    expect(back.body).toMatchObject({ error: "price_changes", fromCents: 4000, toCents: 4500 });
+    expect(await price(a.id)).toBe(40);
+    expect((await clientMove(a.manageToken, nextWeekday(SUNDAY, 12), { acceptPriceCents: 4500 })).status).toBe(200);
+    expect(await price(a.id)).toBe(45);
+    const rows = await ledger(a.id);
+    expect(rows.map((r) => [r.fromPriceCents, r.toPriceCents, r.source])).toEqual([
+      [4500, 4000, "move"],
+      [4000, 4500, "move"],
+    ]);
+  });
+
+  it("🔴 Monday $40 -> Sunday (accepted $45) -> back to Monday asks ($45 -> $40): the higher figure never stays in silence, on the shop's door", async () => {
+    const a = await bookRow();
+    expect((await shopMove(a.id, nextWeekday(SUNDAY, 10), { acceptPriceCents: 4500 })).status).toBe(200);
+    const back = await shopMove(a.id, nextWeekday(MONDAY, 12));
+    expect(back.status).toBe(409);
+    expect(back.body).toMatchObject({ error: "price_changes", fromCents: 4500, toCents: 4000 });
+    expect(await price(a.id)).toBe(45);
+    expect((await shopMove(a.id, nextWeekday(MONDAY, 12), { acceptPriceCents: 4000 })).status).toBe(200);
+    expect(await price(a.id)).toBe(40);
+  });
+
+  it("a hand edit after an accepted move is still a hand edit: it stays on the next move", async () => {
+    const a = await bookRow();
+    expect((await shopMove(a.id, nextWeekday(SUNDAY, 10), { acceptPriceCents: 4500 })).status).toBe(200);
+    expect((await agent.post(`/api/booking/appointments/${a.id}/price`).send({ amount: 42 })).status).toBe(200);
+    const res = await clientMove(a.manageToken, nextWeekday(MONDAY, 12));
+    expect(res.status).toBe(200);
+    expect(res.body.price).toEqual({ kind: "kept", totalCents: 4200 });
+    expect(await price(a.id)).toBe(42);
+    expect((await ledger(a.id)).map((r) => r.source)).toEqual(["move", null]);
+  });
+});
+
 describe("money already taken", () => {
   it("🔴 a deposit still covered by the new price: the move (once seen) goes through; a full prepayment that no longer matches is refused", async () => {
     const dep = await bookRow();
@@ -228,6 +273,24 @@ describe("money already taken", () => {
     const a = await bookRow();
     expect((await shopMove(a.id, nextWeekday(SUNDAY, 10), { acceptPriceCents: 4500 })).status).toBe(200);
     expect(await agreedPriceCents(shopId, a.id, 4500)).toBe(4000);
+  });
+
+  it("🔴 a lower figure accepted at a move caps the card: leaving a $150 special at $40, then the shop raising it to $150, the ceiling stays $40", async () => {
+    const { agreedPriceCents } = await import("../services/appointmentPriceLedger.js");
+    const a = await bookRow({ priceAtBooking: new Prisma.Decimal("150.00"), bookedVia: "targeted_slot" });
+    expect((await clientMove(a.manageToken, nextWeekday(MONDAY, 11), { acceptPriceCents: 4000 })).status).toBe(200);
+    expect((await agent.post(`/api/booking/appointments/${a.id}/price`).send({ amount: 150 })).status).toBe(200);
+    expect(await price(a.id)).toBe(150);
+    expect(await agreedPriceCents(shopId, a.id, 15000)).toBe(4000);
+  });
+
+  it("a card ceiling with only hand edits reads as before: the price before the first edit, capped by the current one", async () => {
+    const { agreedPriceCents } = await import("../services/appointmentPriceLedger.js");
+    const a = await bookRow();
+    expect((await agent.post(`/api/booking/appointments/${a.id}/price`).send({ amount: 50 })).status).toBe(200);
+    expect(await agreedPriceCents(shopId, a.id, 5000)).toBe(4000);
+    expect((await agent.post(`/api/booking/appointments/${a.id}/price`).send({ amount: 30 })).status).toBe(200);
+    expect(await agreedPriceCents(shopId, a.id, 3000)).toBe(3000);
   });
 });
 

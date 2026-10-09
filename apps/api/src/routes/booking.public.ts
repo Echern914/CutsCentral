@@ -42,7 +42,7 @@ import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { staffSpanBlocked } from "../engines/blockedTime.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { addOnCentsOf, dollarsToCents, movePrice } from "../engines/movePrice.js";
-import { recordPriceChange } from "../services/appointmentPriceLedger.js";
+import { handEditCount, recordPriceChange } from "../services/appointmentPriceLedger.js";
 import {
   completeReschedule,
   dispatchCreateAll,
@@ -4026,8 +4026,8 @@ bookingPublicRouter.post(
         timeWindows: appt.service.timeOverrides,
       },
     );
-    const handEdited =
-      (await prisma.appointmentPriceChange.count({ where: { shopId: appt.shopId, appointmentId: appt.id } })) > 0;
+    // By hand only: a previous move's accepted reprice is the menu's own figure.
+    const handEdited = (await handEditCount(appt.shopId, appt.id)) > 0;
     const move = movePrice({
       bookedCents: dollarsToCents(appt.priceAtBooking),
       addOnCents: addOnCentsOf(appt.addOns),
@@ -4167,6 +4167,7 @@ bookingPublicRouter.post(
             toPriceCents: move.toCents,
             fromCollectedCents: null,
             toCollectedCents: null,
+            source: "move",
           });
         }
         publicReschedOutboxIds = await swapForReschedule(tx, {
