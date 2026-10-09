@@ -125,7 +125,16 @@ describe("an open appointment sheet follows its booking", () => {
     expect(screen.getByTestId("sheet-start").textContent).toBe(at(TODAY, "15:00"));
   });
 
-  it("🔴 the 20-second poll moving it does not close it either", async () => {
+  it("🔴 the 20-second poll never closes it, and closing it shows the move", async () => {
+    // Holds with or without #609's poll pause (CalendarPollCatchUp.test.tsx),
+    // because the order the two merge in must not change what this proves:
+    //  - without the pause, the tick moves the booking under the open sheet
+    //    and the sheet follows it;
+    //  - with the pause, the tick is skipped while the sheet is open (nothing
+    //    is refreshed yet) and is paid within 500 ms of the sheet closing.
+    // Either way the sheet and its message survive the tick, the sheet never
+    // disagrees with the calendar behind it, and once it is closed the
+    // calendar shows the booking where it now is.
     vi.useRealTimers(); // re-install: a second useFakeTimers is ignored
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     vi.setSystemTime(new Date(at(TODAY, "09:00")));
@@ -139,9 +148,18 @@ describe("an open appointment sheet follows its booking", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20_000);
     });
-    await waitFor(() => expect(hourRow(16)?.textContent ?? "").toMatch(/Edit Fixture/));
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(screen.getByRole("status").textContent).toMatch(/still confirming the time on Acuity/);
-    expect(screen.getByTestId("sheet-start").textContent).toBe(at(TODAY, "16:00"));
+    const movedUnderTheSheet = /Edit Fixture/.test(hourRow(16)?.textContent ?? "");
+    if (!movedUnderTheSheet) expect(hourRow(14)?.textContent ?? "").toMatch(/Edit Fixture/);
+    expect(screen.getByTestId("sheet-start").textContent).toBe(at(TODAY, movedUnderTheSheet ? "16:00" : "14:00"));
+
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+    await waitFor(() => expect(hourRow(16)?.textContent ?? "").toMatch(/Edit Fixture/));
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("🔴 moved beyond the loaded weeks: the calendar fetches where it went, and the sheet follows", async () => {
