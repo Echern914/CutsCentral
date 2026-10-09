@@ -44,6 +44,8 @@ import {
   getMergedSlotsAction,
   getOpenDaysAction,
   getUpgradesAction,
+  checkCodeAction,
+  type CodeCheck,
   resumeCheckoutAction,
   requestSavedCardCodeAction,
   verifySavedCardCodeAction,
@@ -224,6 +226,14 @@ export function BookingClient({
   // skipped, several barbers may be free at the chosen instant; this is the one
   // we picked for the create POST (chosen when the slot is selected).
   const [pickedStaffId, setPickedStaffId] = useState<string | null>(null);
+  // "Have a code?" - a shop's PUBLIC offer, checked by the API against this
+  // exact booking. Anything that changes the booking clears it, so the total
+  // shown is never one worked out for a different visit.
+  const [codeOpen, setCodeOpen] = useState(false);
+  const [codeText, setCodeText] = useState("");
+  const [codeQuote, setCodeQuote] = useState<Extract<CodeCheck, { ok: true }> | null>(null);
+  const [codeNote, setCodeNote] = useState<string | null>(null);
+  const [checkingCode, setCheckingCode] = useState(false);
   // Set when the chosen slot is a barber-published TARGETED slot (fixed price,
   // no add-ons); its id goes on the booking POST so the server claims it.
   const [slotTargeted, setSlotTargeted] = useState<{
@@ -254,6 +264,10 @@ export function BookingClient({
   // and the total; validated at create (if they overflow the slot, the create
   // returns invalid_slot and the customer picks another time).
   const [addOnIds, setAddOnIds] = useState<string[]>([]);
+  const codeVisitKey = JSON.stringify([serviceId, staffId, pickedStaffId, slot, addOnIds]);
+  useEffect(() => {
+    setCodeQuote(null);
+  }, [codeVisitKey]);
   /**
    * A standing appointment: null = just once. Offered only when the API says
    * the shop allows it (recurringAvailable) and no add-ons or special are in
@@ -1642,6 +1656,8 @@ export function BookingClient({
         addOnIds:
           !slotTargeted && addOnIds.length > 0 ? addOnIds : undefined,
         targetedSlotId: slotTargeted?.id,
+        // Only a code checked against this very booking rides along.
+        ...(codeQuote ? { offerCode: codeQuote.code } : {}),
         // Only what the shop actually asks, and only what was answered - a
         // blank optional answer is nothing to send.
         intake: activeQuestions.length
@@ -1761,6 +1777,13 @@ export function BookingClient({
           forgetDeviceSavedCard(data.shop.slug);
           setDeviceCard(null);
           setError("That saved card can't be used for this booking. Confirm again to add a card.");
+          return;
+        }
+        // The code's last use went (or it changed) after it was checked.
+        // Nothing was booked; the total goes back to full.
+        if (res.error === "offer_refused") {
+          setCodeQuote(null);
+          setError(res.message ?? "That code can't be used on this booking.");
           return;
         }
         if (res.code === "CONTACT_SHOP") {
@@ -2133,6 +2156,28 @@ export function BookingClient({
   // for keyboard users (WCAG 2.4.7); the border tint alone is too weak.
   const input =
     "w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-white/40";
+
+  async function checkCode() {
+    const forStaff = pickedStaffId ?? staffId;
+    if (!codeText.trim() || !serviceId || !forStaff || !slot || checkingCode) return;
+    setCheckingCode(true);
+    setCodeNote(null);
+    try {
+      const q = await checkCodeAction(data.shop.slug, {
+        code: codeText,
+        serviceId,
+        staffId: forStaff,
+        startsAt: slot,
+        ...(addOnIds.length > 0 ? { addOnIds } : {}),
+      });
+      if (q.ok) setCodeQuote(q);
+      else setCodeNote(q.message);
+    } catch {
+      setCodeNote("No answer. Check your connection and try again.");
+    } finally {
+      setCheckingCode(false);
+    }
+  }
   // The invalid state is a RED BORDER PLUS A SENTENCE, never colour alone -
   // colour is not information for a customer who cannot see it, and the
   // message below is what actually says how to fix it.
@@ -3456,8 +3501,28 @@ export function BookingClient({
                     {selectedService?.name}
                     {addOnIds.length > 0 && ` + ${addOnIds.length} add-on${addOnIds.length > 1 ? "s" : ""}`}
                   </span>
-                  <span className="font-semibold">{formatPrice(grandTotal)}</span>
+                  <span className={codeQuote ? "line-through opacity-70" : "font-semibold"}>{formatPrice(grandTotal)}</span>
                 </div>
+              )}
+              {data.shop.offersEnabled && slot !== null && !slotTargeted && (
+                <CodeLine
+                  open={codeOpen}
+                  onOpen={() => setCodeOpen(true)}
+                  text={codeText}
+                  onText={(v) => {
+                    setCodeText(v);
+                    setCodeQuote(null);
+                    setCodeNote(null);
+                  }}
+                  checking={checkingCode}
+                  quote={codeQuote}
+                  note={codeNote}
+                  onApply={() => void checkCode()}
+                  onRemove={() => {
+                    setCodeQuote(null);
+                    setCodeText("");
+                  }}
+                />
               )}
               {/*
                 Whether that number already has a tip in it. Sits under the
@@ -4360,5 +4425,86 @@ function HoldCountdown({ expiresAt }: { expiresAt: string }) {
       </span>
       . Your appointment isn&rsquo;t confirmed until this payment goes through.
     </p>
+  );
+}
+
+/**
+ * "Have a code?" in the booking recap. Collapsed until asked for; once a code
+ * is applied it shows what it took off and what they pay, worked out by the
+ * shop's API for this exact booking.
+ */
+function CodeLine({
+  open,
+  onOpen,
+  text,
+  onText,
+  checking,
+  quote,
+  note,
+  onApply,
+  onRemove,
+}: {
+  open: boolean;
+  onOpen: () => void;
+  text: string;
+  onText: (v: string) => void;
+  checking: boolean;
+  quote: Extract<CodeCheck, { ok: true }> | null;
+  note: string | null;
+  onApply: () => void;
+  onRemove: () => void;
+}) {
+  if (quote) {
+    return (
+      <div className="flex flex-col gap-0.5" data-testid="code-applied">
+        <div className="flex items-center justify-between gap-3">
+          <span className="min-w-0 [overflow-wrap:anywhere]">
+            Code {quote.code} · {quote.words}
+          </span>
+          <span className="shrink-0">-{formatPrice(quote.discountCents / 100)}</span>
+        </div>
+        <div className="flex items-center justify-between font-semibold">
+          <span>You pay</span>
+          <span>{formatPrice(quote.totalCents / 100)}</span>
+        </div>
+        <button type="button" onClick={onRemove} className="self-start text-xs underline underline-offset-2 opacity-80">
+          Remove code
+        </button>
+      </div>
+    );
+  }
+  if (!open) {
+    return (
+      <button type="button" onClick={onOpen} className="self-start text-xs underline underline-offset-2 opacity-80">
+        Have a code?
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex min-w-0 gap-2">
+        <input
+          aria-label="Code"
+          className="min-w-0 flex-1 rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm uppercase text-offwhite placeholder:text-muted focus:border-white/40"
+          placeholder="Code"
+          autoCapitalize="characters"
+          value={text}
+          onChange={(e) => onText(e.target.value)}
+        />
+        <button
+          type="button"
+          onClick={onApply}
+          disabled={!text.trim() || checking}
+          className="shrink-0 rounded-lg border border-white/15 px-3 text-sm text-offwhite disabled:opacity-50"
+        >
+          {checking ? "Checking…" : "Apply"}
+        </button>
+      </div>
+      {note && (
+        <p role="alert" className="text-xs text-rose-300">
+          {note}
+        </p>
+      )}
+    </div>
   );
 }

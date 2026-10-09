@@ -457,6 +457,10 @@ model Shop {
   // anyone. Off for every shop, and no screen turns it on until the app build
   // that lets a member switch these pushes off ships.
   autoFillEnabled Boolean @default(false)
+  // OFFERS & CODES (engines/offers.ts): a shop's own discount codes and
+  // personal offers, applied to a booking's price. Off for every shop; only
+  // the platform turns a shop on, so merging the feature activates nothing.
+  offersEnabled Boolean @default(false)
   // Automatic appointment reminder PUSHES (24h + 2h before start), per tier.
   // Deliberately default TRUE (unlike every other toggle): reminders are
   // expected table-stakes behavior, push is free/uncapped, and the column
@@ -700,6 +704,8 @@ model Shop {
   cardGrants          CardGrant[]
   promotions          Promotion[]
   promoUses           PromotionRedemption[]
+  offers              Offer[]
+  offerRedemptions    OfferRedemption[]
   appointmentRequests AppointmentRequest[]
   waitlist            WaitlistEntry[]
   waitlistWindows     WaitlistWindow[]
@@ -957,6 +963,9 @@ model ShopMember {
   // The chair this member works (barbers). Null for office-only managers.
   staffId   String?  @unique
   staff     Staff?   @relation(fields: [staffId], references: [id], onDelete: SetNull)
+  // A BARBER seat may create offers only for these services, and only on its
+  // own chair. Empty = it can't create offers (owners and managers always can).
+  offerServiceIds String[] @default([])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1127,6 +1136,80 @@ model PromotionRedemption {
   redeemedAt  DateTime  @default(now())
 
   @@index([shopId, promotionId])
+  @@index([shopId, clientId])
+}
+
+// OFFERS & CODES (engines/offers.ts). Separate from Promotion on purpose: a
+// Promotion is shown on the shop's public pages and can be texted to every
+// client, and a PERSONAL offer's code must never be either. The arithmetic is
+// @chairback/config/promoPricing, shared with any surface that prices one.
+//
+// The stored offer is the value. A code's characters ("MIKEYG30") mean nothing.
+model Offer {
+  id               String    @id @default(cuid())
+  shopId           String
+  shop             Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  // normalizePromoCode(): upper case, A-Z 0-9 and "-", 3-24 characters.
+  code             String
+  kind             OfferKind
+  amountOffCents   Int?
+  percentOffBps    Int?
+  // FREE_SERVICE: the one service it pays for (its eligible service).
+  freeServiceId    String?
+  // Which services and providers it covers. Empty = any.
+  serviceIds       String[]  @default([])
+  staffIds         String[]  @default([])
+  // Set = a PERSONAL offer: only this client, and only where the client is
+  // proven (the shop booking it for them), never on a typed name or phone.
+  clientId         String?
+  client           Client?   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // Null = no limit. A use counts while its booking stands (engines/offers.ts).
+  maxUses          Int?
+  maxUsesPerClient Int?
+  // Visits must START before this. Null = no end date.
+  endsAt           DateTime?
+  active           Boolean   @default(true)
+  // Shop-only words ("Halloween, Drick's regulars").
+  note             String?
+  createdByUserId  String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  redemptions OfferRedemption[]
+
+  @@unique([shopId, code])
+  @@index([shopId, clientId])
+}
+
+enum OfferKind {
+  AMOUNT_OFF
+  PERCENT_OFF
+  FREE_SERVICE
+}
+
+// THE one record of an offer used on a booking - every surface writes it in the
+// same transaction as the booking, so a booking that fails leaves none. It is
+// never deleted when the booking is cancelled: whether it still COUNTS is read
+// from the booking (engines/offers.ts countsAsUse), which every cancel path
+// already writes.
+model OfferRedemption {
+  id             String      @id @default(cuid())
+  shopId         String
+  shop           Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  offerId        String
+  offer          Offer       @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  appointmentId  String      @unique
+  appointment    Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  clientId       String?
+  // What the visit cost before the offer, and what it took off (cents).
+  listPriceCents Int
+  discountCents  Int
+  // "dashboard" | "online"
+  via            String
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([shopId, offerId])
   @@index([shopId, clientId])
 }
 
@@ -1440,6 +1523,7 @@ model Client {
   ledger              PunchLedger[]
   nudges              Nudge[]
   promoUses           PromotionRedemption[]
+  offers              Offer[]
   appointments        Appointment[]
   recurringSeries     RecurringSeries[]
   appointmentGroups   AppointmentGroup[]
@@ -3517,6 +3601,8 @@ model Appointment {
   tierOpening   TierOpening?   @relation("TierOpeningClaim")
   // Auto-fill runs started by cancelling this appointment.
   autoFillRuns  AutoFillRun[]
+  // The offer this booking's price was discounted by (engines/offers.ts).
+  offerRedemption OfferRedemption?
   // Set when this appointment was created by starting a walk-in queue entry.
   walkInEntry   WalkInEntry?   @relation("WalkInStarted")
 

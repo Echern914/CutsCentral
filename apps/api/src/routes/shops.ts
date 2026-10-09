@@ -1818,6 +1818,7 @@ function serializeShop(shop: {
   rewardsSections: string[];
   takesRequests: boolean;
   waitlistEnabled: boolean;
+  offersEnabled: boolean;
   walkInEnabled: boolean;
   walkInAcceptingNow: boolean;
   slotOpenedTextsEnabled: boolean;
@@ -1887,6 +1888,8 @@ function serializeShop(shop: {
     rewardsSections: readRewardsSections(shop.rewardsSections),
     takesRequests: shop.takesRequests,
     waitlistEnabled: shop.waitlistEnabled,
+    // Offers & codes is switched on for this shop (engines/offers.ts).
+    offersEnabled: shop.offersEnabled,
     walkInEnabled: shop.walkInEnabled,
     walkInAcceptingNow: shop.walkInAcceptingNow,
     slotOpenedTextsEnabled: shop.slotOpenedTextsEnabled,

@@ -518,6 +518,8 @@ export interface CreateApptInput {
   staffId: string;
   serviceId: string;
   startsAt: string;
+  /** An offer code checked against this visit (apps/api engines/offers.ts). */
+  offerCode?: string;
   /**
    * Email the client their confirmation (+ a push if they use the app). Only
    * from "Didn't finish booking", whose clients tried to book online.

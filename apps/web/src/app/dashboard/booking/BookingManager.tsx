@@ -420,6 +420,7 @@ export function BookingManager({
               openAppointmentId={openAppointmentId}
               openDay={openDay}
               tierOpenings={shop.rewardsEnabled}
+              offersEnabled={Boolean(shop.offersEnabled)}
               pendingWaitlistBooking={waitlistHandoff.pending}
               onPendingWaitlistBookingTaken={waitlistHandoff.taken}
             />

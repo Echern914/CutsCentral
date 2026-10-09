@@ -58,6 +58,7 @@ import { bookingDashboardRouter } from "./routes/booking.dashboard.js";
 import { bookingConflictsRouter } from "./routes/booking.conflicts.js";
 import { loyaltyRouter } from "./routes/loyalty.js";
 import { promotionsRouter } from "./routes/promotions.js";
+import { offersRouter } from "./routes/offers.js";
 import { billingRouter } from "./routes/billing.js";
 import { affiliateClaimRouter } from "./routes/affiliate.claim.js";
 import { affiliateDashboardRouter } from "./routes/affiliate.dashboard.js";
@@ -306,6 +307,7 @@ export function createApp(): Express {
   app.use("/api/tier-openings", dashboardLimiter, tierOpeningsRouter);
   app.use("/api/loyalty", dashboardLimiter, loyaltyRouter);
   app.use("/api/promos", dashboardLimiter, promotionsRouter);
+  app.use("/api/offers", dashboardLimiter, offersRouter);
   app.use("/api/billing", dashboardLimiter, billingRouter);
   // Affiliate program (the NEW one - the legacy referral page stays on
   // /api/dashboard/referrals). Dark behind AFFILIATE_PROGRAM_ENABLED: while
