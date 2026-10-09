@@ -65,6 +65,25 @@ export function movePrice(f: MovePriceFacts): MovePrice {
   return { kind: "changes", fromCents: f.bookedCents, toCents };
 }
 
+/**
+ * The same answer for a booking made with an OFFER, whose price is the offer
+ * applied to the menu (engines/offers.ts quoteMovedVisit re-applies it to the
+ * new time, add-ons included). It changes on the same terms as a menu price:
+ * shown first, accepted, recorded as a move. A price a person set by hand
+ * still moves untouched.
+ */
+export function offerMovePrice(f: {
+  bookedCents: number | null;
+  handEdited: boolean;
+  /** The offer applied to the new time's price, add-ons included. */
+  appliedCents: number;
+}): MovePrice {
+  if (f.bookedCents === null) return { kind: "kept", totalCents: null };
+  if (f.handEdited) return { kind: "kept", totalCents: f.bookedCents };
+  if (f.appliedCents === f.bookedCents) return { kind: "same", totalCents: f.bookedCents };
+  return { kind: "changes", fromCents: f.bookedCents, toCents: f.appliedCents };
+}
+
 /** The add-ons a row was booked with, summed in cents, from its own snapshot. */
 export function addOnCentsOf(snapshot: unknown): number {
   if (!Array.isArray(snapshot)) return 0;

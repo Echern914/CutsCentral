@@ -33,6 +33,7 @@ async function loadForTip(manageToken: string) {
       clientId: true,
       groupId: true,
       priceAtBooking: true,
+      offerRedemption: { select: { listPriceCents: true } },
       visit: { select: { acuityAppointmentId: true } },
       service: { select: { name: true } },
     },

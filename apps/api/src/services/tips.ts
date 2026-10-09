@@ -25,6 +25,12 @@ export interface TipAppointmentFacts {
   groupId: string | null;
   priceAtBooking: { toString(): string } | number | null;
   visit: { acuityAppointmentId: string } | null;
+  /**
+   * The offer this visit was booked with, if any. Tip suggestions are taken
+   * from the price BEFORE the discount: a free haircut still suggests a
+   * normal tip (engines/offers.ts).
+   */
+  offerRedemption?: { listPriceCents: number } | null;
 }
 
 /** The facts the check reads about the shop. Read OUTSIDE runWithShop (Shop RLS). */
@@ -135,7 +141,11 @@ export function tipViewFor(
   if (tipClosedReason(appt, shop, now) !== null) return null;
   return {
     state: "open",
-    presets: tipPresets(priceCents(appt.priceAtBooking)),
+    presets: tipPresets(
+      appt.offerRedemption && appt.offerRedemption.listPriceCents > 0
+        ? appt.offerRedemption.listPriceCents
+        : priceCents(appt.priceAtBooking),
+    ),
     minCents: TIP_MIN_CENTS,
     maxCents: TIP_MAX_CENTS,
     closesAt: tipWindowClosesAt(appt.endsAt).toISOString(),

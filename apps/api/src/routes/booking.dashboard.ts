@@ -103,7 +103,17 @@ import {
   BackfillRefusedError,
 } from "../engines/acuityBackfill.js";
 import { toCents } from "../billing/payments.js";
-import { addOnCentsOf, dollarsToCents, movePrice } from "../engines/movePrice.js";
+import { addOnCentsOf, dollarsToCents, movePrice, offerMovePrice } from "../engines/movePrice.js";
+import {
+  claimOfferUse,
+  findOfferByCode,
+  OfferRefused,
+  quoteMovedVisit,
+  quoteOffer,
+  recordMovedPrice,
+  type OfferQuote,
+} from "../engines/offers.js";
+import { offerRefusalText } from "@chairback/config/offers";
 import { releaseCardOnFile } from "../billing/cardOnFile.js";
 import { attachClientSavedCard } from "../billing/savedCard.js";
 import { retireOpenTip, tipDescription } from "../billing/tips.js";
@@ -2907,6 +2917,12 @@ const createApptSchema = z
     // Chosen service add-ons (ids). Extend the appointment length + total; the
     // choice is snapshotted. Invalid/foreign ids are dropped server-side.
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
+    /**
+     * An offer or code the shop applies to this booking (engines/offers.ts).
+     * Its price is worked out here and its use claimed in the same
+     * transaction as the booking. Refused on a series or a special.
+     */
+    offerCode: z.string().trim().min(1).max(40).optional(),
     // Booking someone straight off the waitlist (phase E). The entry flips to
     // BOOKED and takes bookedAppointmentId INSIDE this transaction, so a
     // half-linked state cannot exist: either the appointment and the link are
@@ -3295,6 +3311,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       cancelWindowHours: true,
       cancelFeeBps: true,
       chargeCardOnFileFees: true,
+      offersEnabled: true,
     },
   });
   if (!shop) {
@@ -3512,6 +3529,41 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     return;
   }
 
+  // 🔴 AN OFFER IS PRICED HERE AND CLAIMED IN THE BOOKING'S OWN TRANSACTION.
+  // The shop is booking for `d.clientId`, which is how a PERSONAL offer is
+  // proven to be theirs. The discounted total is the agreed price; add-ons
+  // are charged in full (config/offers.ts).
+  let offerUse: { offerId: string; code: string; quote: OfferQuote; serviceCents: number | null } | null = null;
+  if (d.offerCode !== undefined) {
+    try {
+      const offer = shop.offersEnabled ? await findOfferByCode(prisma, shopId, d.offerCode) : null;
+      if (!offer) throw new OfferRefused("not_found");
+      const serviceCents = basePrice === null ? null : Math.round(basePrice * 100);
+      const quote = await quoteOffer(prisma, offer, {
+        serviceCents,
+        addOnCents: Math.round(addOns.extraPrice * 100),
+        clientId: d.clientId ?? null,
+        now,
+        visit: {
+          serviceId: d.serviceId,
+          staffId: d.staffId,
+          startsAt,
+          provenClientId: d.clientId ?? null,
+          special: Boolean(targeted),
+          series: Boolean(d.recurrence),
+        },
+      });
+      offerUse = { offerId: offer.id, code: offer.code, quote, serviceCents };
+    } catch (err) {
+      if (err instanceof OfferRefused) {
+        res.status(409).json(offerRefusedBody(err, shop.timezone));
+        return;
+      }
+      throw err;
+    }
+  }
+  const bookedPrice = offerUse ? offerUse.quote.totalCents / 100 : effectivePrice;
+
   let mirrorOutboxIds: string[] = [];
   try {
     // RECURRING: build the whole series (occurrence 0 included). The client is
@@ -3709,7 +3761,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
           status: "BOOKED",
           startsAt,
           endsAt,
-          priceAtBooking: effectivePrice ?? undefined,
+          priceAtBooking: bookedPrice ?? undefined,
           addOns: addOns.snapshot as unknown as Prisma.InputJsonValue,
           // The barber's own note from New appointment. It was accepted and
           // then dropped, so a note typed at booking simply vanished. Private
@@ -3739,6 +3791,28 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
           data: { bookedAppointmentId: appt.id },
         });
         if (claimed.count === 0) throw new SlotTakenError();
+      }
+
+      // The offer's use, in the same commit: a booking that rolls back takes
+      // its claim with it, and a use already gone refuses the whole booking.
+      if (offerUse) {
+        await claimOfferUse(tx, {
+          shopId,
+          offerId: offerUse.offerId,
+          appointmentId: appt.id,
+          via: "dashboard",
+          expected: offerUse.quote,
+          serviceCents: offerUse.serviceCents,
+          addOnCents: Math.round(addOns.extraPrice * 100),
+          clientId,
+          now,
+          visit: {
+            serviceId: d.serviceId,
+            staffId: d.staffId,
+            startsAt,
+            provenClientId: d.clientId ?? null,
+          },
+        });
       }
 
       // Outbound Acuity mirror intent, in the SAME transaction as the row.
@@ -3884,14 +3958,14 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       );
       await attachClientSavedCard({ shopId, appointmentId: result.id, clientId: result.clientId });
       const clientConfirmation = await confirmIfAsked(d.confirmClient, mirror, shopId, result.id);
-      res.status(201).json({ ok: true, id: result.id, ...savedTimes, forced: true, mirror, clientConfirmation });
+      res.status(201).json({ ok: true, id: result.id, ...savedTimes, forced: true, mirror, clientConfirmation, offer: offerSummary(offerUse) });
       return;
     }
     // The client saved a card here: this booking carries it too, so a no-show
     // on a booking made by phone is covered like one they made themselves.
     await attachClientSavedCard({ shopId, appointmentId: result.id, clientId: result.clientId });
     const clientConfirmation = await confirmIfAsked(d.confirmClient, mirror, shopId, result.id);
-    res.status(201).json({ ok: true, id: result.id, ...savedTimes, mirror, clientConfirmation });
+    res.status(201).json({ ok: true, id: result.id, ...savedTimes, mirror, clientConfirmation, offer: offerSummary(offerUse) });
   } catch (err) {
     // 🔴 THE RACE THE READ ABOVE CANNOT WIN. Two copies of one submission both
     // found nothing and both went in. The loser then waits on the barber's
@@ -3901,6 +3975,14 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     // that booking, never an error: a retry that reports failure is how a
     // barber taps again and books twice.
     if (d.operationId && (await answerReplay(res, shopId, d.operationId, replayAsk(d), now))) return;
+    // An offer whose last use went, or that changed, between the price and the
+    // write: nothing was booked, and the form says why. After the replay above:
+    // a second copy of one submission loses the last use to its own first
+    // copy, and the answer to it is that booking.
+    if (err instanceof OfferRefused) {
+      res.status(409).json(offerRefusedBody(err, shop.timezone));
+      return;
+    }
     // The one refusal that must be SHOWN, not just returned: which block, when,
     // and why - so the barber decides with the facts, then confirms.
     if (err instanceof ExternalBlockError) {
@@ -4658,9 +4740,28 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
   );
 
   // 🔴 WHAT THE MOVE DOES TO THE PRICE (engines/movePrice.ts). An agreed price
-  // - add-ons, a typed or hand-edited figure, a discount - moves with the
-  // booking untouched. Only a plain menu price may change with the time, and
-  // only after the barber has seen the new figure (acceptPriceCents).
+  // - add-ons, a typed or hand-edited figure - moves with the booking
+  // untouched. Only a plain menu price may change with the time, and only
+  // after the barber has seen the new figure (acceptPriceCents). A booking
+  // that used an offer keeps it - applied to the new time's price, add-ons
+  // included, on the same seen-first terms - or the move is refused and says
+  // why (engines/offers.ts quoteMovedVisit).
+  const moved = await quoteMovedVisit(prisma, {
+    appointmentId: appt.id,
+    serviceId: appt.serviceId,
+    staffId: appt.staffId,
+    startsAt,
+    serviceCents: dollarsToCents(effectivePrice),
+    addOnCents: addOnCentsOf(appt.addOns),
+  });
+  if (moved.kind === "refused") {
+    res.status(409).json({
+      error: "offer_refused",
+      reason: moved.reason,
+      message: `This booking used an offer. ${offerRefusalText(moved.reason, { endsAt: moved.endsAt, timeZone: shop.timezone })}`,
+    });
+    return;
+  }
   const menuAtOld = effectivePriceAt(
     appt.service.price === null ? null : Number(appt.service.price),
     {
@@ -4673,18 +4774,21 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
   );
   // By hand only: a previous move's accepted reprice is the menu's own figure.
   const handEdited = (await handEditCount(shopId, appt.id)) > 0;
-  const move = movePrice({
-    bookedCents: dollarsToCents(appt.priceAtBooking),
-    addOnCents: addOnCentsOf(appt.addOns),
-    menuAtOldCents: dollarsToCents(menuAtOld),
-    menuAtNewCents: dollarsToCents(effectivePrice),
-    handEdited,
-    // The shop moving its own special keeps the special - and its price: he
-    // is moving the special he sold, not leaving it. (The client's own move
-    // off a special, on the public route, is the one that offers the menu.)
-    special: false,
-    discounted: false,
-  });
+  const move =
+    moved.kind === "applied"
+      ? offerMovePrice({ bookedCents: dollarsToCents(appt.priceAtBooking), handEdited, appliedCents: moved.totalCents })
+      : movePrice({
+          bookedCents: dollarsToCents(appt.priceAtBooking),
+          addOnCents: addOnCentsOf(appt.addOns),
+          menuAtOldCents: dollarsToCents(menuAtOld),
+          menuAtNewCents: dollarsToCents(effectivePrice),
+          handEdited,
+          // The shop moving its own special keeps the special - and its price: he
+          // is moving the special he sold, not leaving it. (The client's own move
+          // off a special, on the public route, is the one that offers the menu.)
+          special: false,
+          discounted: false,
+        });
   const movedCents = move.kind === "changes" ? move.toCents : move.totalCents;
 
   // A PAID booking moving to a price it can't take can't be reconciled here
@@ -4790,6 +4894,7 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       // fresh reminders - including the PUSH stamps, or a moved appointment
       // silently never gets its 24h/2h push. Check-in state is cleared too: an
       // "en route" tapped for the OLD time says nothing about the new one.
+      if (moved.kind === "applied" && move.kind !== "kept") await recordMovedPrice(tx, moved);
       await tx.appointment.update({
         where: { id: appt.id },
         data: {
@@ -7670,4 +7775,23 @@ bookingDashboardRouter.post("/appointments/:id/price", async (req, res) => {
 function formatCentsPlain(cents: number | null): string {
   if (cents === null) return "no price";
   return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
+}
+
+/** An offer refusal, in the words every surface uses (config/offers.ts). */
+function offerRefusedBody(err: OfferRefused, timeZone: string, online = false) {
+  return {
+    error: "offer_refused",
+    reason: err.reason,
+    message:
+      err.reason === "changed"
+        ? "That offer changed while you were booking. Check it and try again."
+        : offerRefusalText(err.reason, { endsAt: err.endsAt, timeZone, online }),
+  };
+}
+
+/** What a booking's offer took off, for the screen that made it. */
+function offerSummary(use: { code: string; quote: OfferQuote } | null) {
+  return use
+    ? { code: use.code, listPriceCents: use.quote.listPriceCents, discountCents: use.quote.discountCents, totalCents: use.quote.totalCents }
+    : undefined;
 }

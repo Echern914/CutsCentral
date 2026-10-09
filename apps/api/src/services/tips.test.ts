@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { __resetEnvCacheForTests } from "@chairback/config";
+import { tipPresets } from "@chairback/config";
 import { tipClosedReason, tipViewFor, type TipAppointmentFacts, type TipShopFacts } from "./tips.js";
 
 /**
@@ -94,5 +95,19 @@ describe("may this visit be tipped", () => {
     expect(
       tipViewFor(appt(), shop(), { status: "succeeded", amount: 800, capturedAmount: 800, refundedAmount: 800 }, now),
     ).toEqual({ state: "refunded", amountCents: 800 });
+  });
+});
+
+describe("tip suggestions on a visit booked with an offer", () => {
+  it("🔴 start from the price BEFORE the discount: a free $40 haircut suggests a $40 haircut's tips", () => {
+    billingOn();
+    const view = tipViewFor(appt({ priceAtBooking: 0, offerRedemption: { listPriceCents: 4000 } }), shop(), null, now);
+    expect(view).toMatchObject({ state: "open", presets: tipPresets(4000) });
+  });
+
+  it("a half-price visit too", () => {
+    billingOn();
+    const view = tipViewFor(appt({ priceAtBooking: 20, offerRedemption: { listPriceCents: 4000 } }), shop(), null, now);
+    expect(view).toMatchObject({ presets: tipPresets(4000) });
   });
 });
