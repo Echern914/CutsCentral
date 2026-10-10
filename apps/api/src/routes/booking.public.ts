@@ -84,6 +84,7 @@ import {
   parseTimeWindows,
   priceRangeForService,
 } from "../engines/pricing.js";
+import { movedLengthMin } from "../engines/moveLength.js";
 import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
 import {
   createCardOnFileSetupIntent,
@@ -3906,6 +3907,9 @@ bookingPublicRouter.post(
         serviceId: true,
         status: true,
         startsAt: true,
+        // How long it runs now: add-on minutes and a length the shop set by
+        // hand move with it (engines/moveLength.ts).
+        endsAt: true,
         // Who it is for - a client the shop blocked can't move it online.
         clientId: true,
         phone: true,
@@ -3974,20 +3978,32 @@ bookingPublicRouter.post(
 
     const now = new Date();
     const startsAt = parsed.data.startsAt;
-    // The new slot may fall on a different-duration weekday OR inside a
-    // time-of-day window - re-measure, like the reprice below. (Add-on minutes
-    // aren't carried through a reschedule today - endsAt was already
-    // service-only on this path.)
-    const endsAt = new Date(
-      startsAt.getTime() +
-        effectiveDurationAt(appt.service.durationMin, {
-          at: startsAt,
-          timezone: appt.shop.timezone,
-          weekdayOverrides: appt.service.durationOverrides,
-          timeWindows: appt.service.timeOverrides,
-        }) *
-          60_000,
-    );
+    // 🔴 THE BOOKING KEEPS ITS LENGTH (engines/moveLength.ts). Its add-on
+    // minutes and any length the shop set by hand move with it; only the
+    // service's own part is re-measured, because the new slot may fall on a
+    // different-duration weekday or inside a time-of-day window. This used to
+    // be the service alone, so a cut + add-on came out of a move holding half
+    // its time and the booking page sold the rest.
+    const serviceMinAt = (at: Date) =>
+      effectiveDurationAt(appt.service.durationMin, {
+        at,
+        timezone: appt.shop.timezone,
+        weekdayOverrides: appt.service.durationOverrides,
+        timeWindows: appt.service.timeOverrides,
+      });
+    const serviceMinAtNew = serviceMinAt(startsAt);
+    // Except a special being LEFT: its length was the special's, and on the
+    // regular grid it becomes an ordinary booking - menu price (movePrice,
+    // below) and menu length. A special carries no add-ons.
+    const leavingSpecial = appt.bookedVia === TARGETED_SLOT_ORIGIN;
+    const length = leavingSpecial
+      ? { lengthMin: serviceMinAtNew, extraMin: 0 }
+      : movedLengthMin({
+          currentMin: Math.round((appt.endsAt.getTime() - appt.startsAt.getTime()) / 60_000),
+          serviceMinAtOld: serviceMinAt(appt.startsAt),
+          serviceMinAtNew,
+        });
+    const endsAt = new Date(startsAt.getTime() + length.lengthMin * 60_000);
     // The new slot may carry a different date/window/weekday MENU price.
     // Whether this booking takes it is movePrice's call, below.
     const effectivePrice = effectivePriceAt(
@@ -4072,7 +4088,8 @@ bookingPublicRouter.post(
     }
 
     // Re-validate the new time against availability (excluding this appointment's
-    // own current slot), same authoritative check as create.
+    // own current slot), same authoritative check as create - for the WHOLE
+    // booking, add-ons included, exactly as create checks its add-ons.
     if (
       !(await isSlotBookable({
         shopId: appt.shopId,
@@ -4080,6 +4097,7 @@ bookingPublicRouter.post(
         serviceId: appt.serviceId,
         startsAt,
         excludeAppointmentId: appt.id,
+        extraDurationMin: length.extraMin,
       }))
     ) {
       res.status(400).json({ error: "invalid_slot", code: "SLOT_UNAVAILABLE" });

@@ -117,6 +117,7 @@ import {
   openingSpansForWeekday,
   parseServiceHours,
 } from "../engines/pricing.js";
+import { movedLengthMin } from "../engines/moveLength.js";
 import {
   SLOT_SERVICES_SELECT,
   slotOffersService,
@@ -4693,6 +4694,9 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       serviceId: true,
       status: true,
       startsAt: true,
+      // How long it runs now - its add-on minutes and any length set by hand
+      // move with it (engines/moveLength.ts).
+      endsAt: true,
       // The BOOKING payment: this guard is about a prepaid booking whose price
       // would change on a new date.
       payments: { where: { purpose: "booking" }, select: { status: true, amount: true } },
@@ -4723,19 +4727,24 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
   }
 
   const shop = req.shop!;
-  // The new slot can land on a different weekday, date override or time-of-day
-  // window, so both length and price are re-measured for the NEW instant rather
-  // than carried over. Same layering the create path uses.
-  const endsAt = new Date(
-    startsAt.getTime() +
-      effectiveDurationAt(appt.service.durationMin, {
-        at: startsAt,
-        timezone: shop.timezone,
-        weekdayOverrides: appt.service.durationOverrides,
-        timeWindows: appt.service.timeOverrides,
-      }) *
-        60_000,
-  );
+  // 🔴 THE BOOKING KEEPS ITS LENGTH (engines/moveLength.ts): its add-on
+  // minutes, a length set by hand and a special's own length all move with it.
+  // Only the SERVICE's part is re-measured for the new instant, which can land
+  // on a different weekday or time-of-day window - the same layering the
+  // create path uses. (The price is the same idea: movePrice, below.)
+  const serviceMinAt = (at: Date) =>
+    effectiveDurationAt(appt.service.durationMin, {
+      at,
+      timezone: shop.timezone,
+      weekdayOverrides: appt.service.durationOverrides,
+      timeWindows: appt.service.timeOverrides,
+    });
+  const length = movedLengthMin({
+    currentMin: Math.round((appt.endsAt.getTime() - appt.startsAt.getTime()) / 60_000),
+    serviceMinAtOld: serviceMinAt(appt.startsAt),
+    serviceMinAtNew: serviceMinAt(startsAt),
+  });
+  const endsAt = new Date(startsAt.getTime() + length.lengthMin * 60_000);
   const effectivePrice = effectivePriceAt(
     appt.service.price === null ? null : Number(appt.service.price),
     {
@@ -4823,6 +4832,8 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       // Without this the appointment's own current slot reads as busy and the
       // barber can't move it 15 minutes - it would be hiding its own hour.
       excludeAppointmentId: appt.id,
+      // The WHOLE booking must fit the new time, add-ons included.
+      extraDurationMin: length.extraMin,
     }))
   ) {
     // Same rule as create: if blocked time is the whole obstacle, let the
@@ -4833,6 +4844,7 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       serviceId: appt.serviceId,
       startsAt,
       excludeAppointmentId: appt.id,
+      extraDurationMin: length.extraMin,
     });
     if (!onlyBlocked) {
       res.status(400).json({ error: "invalid_slot" });
