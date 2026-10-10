@@ -913,3 +913,12 @@ export const MOBILE_APP = {
   /** App Store listing; the id is `ascAppId` in apps/mobile/eas.json. */
   appStoreUrl: "https://apps.apple.com/app/id6783995804",
 } as const;
+
+/**
+ * How many days after a visit ENDED the shop may still mark it a no-show or
+ * cancel it, once the 15-minute completion sweep has already turned it into a
+ * completed visit (POST /appointments/:id/correct-completed). Long enough to
+ * catch a week's mistakes when the books are looked over; short enough that a
+ * month-old visit's punches and takings are not rewritten after the fact.
+ */
+export const COMPLETED_VISIT_CORRECTION_DAYS = 7;

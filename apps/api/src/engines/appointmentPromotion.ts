@@ -239,6 +239,11 @@ export async function cancelAppointment(
   //   payment, a Tap to Pay or card checkout, a tip) or a kept card throws
   //   CancelRefusedError inside the transaction, so nothing changes; and the
   //   refund / card-on-file steps below never run.
+  // refuseIfCheckedOut: a visit checked out at the chair (`paidAt` / a
+  //   recorded chair payment) throws CancelRefusedError("checked_out") the same
+  //   way. Used by the after-the-fact no-show / cancel of a completed visit
+  //   (POST /appointments/:id/correct-completed): money was recorded for it, so
+  //   it happened. Not set by remove-walk-in - a walk-in is born checked out.
   opts: {
     applyPolicyFee?: boolean;
     suppressSlotOpened?: boolean;
@@ -247,6 +252,7 @@ export async function cancelAppointment(
     silent?: boolean;
     dismiss?: boolean;
     refuseIfMoney?: boolean;
+    refuseIfCheckedOut?: boolean;
   } = {},
 ): Promise<boolean> {
   // Shop is owner-only, so this is read before the tenant transaction; the
@@ -323,12 +329,21 @@ export async function cancelAppointment(
     // client could still pay) that only the shop's own refund should touch.
     if (opts.refuseIfMoney) {
       const live = await tx.payment.findFirst({
-        where: { appointmentId: appt.id, shopId, status: { notIn: ["canceled", "failed"] } },
+        where: { appointmentId: appt.id, shopId, status: { notIn: [...DEAD_PAYMENT_STATUSES] } },
         select: { id: true },
       });
-      const keptCard =
-        appt.cardOnFile !== null && ["saved", "pending"].includes(appt.cardOnFile.status);
-      if (live || keptCard) throw new CancelRefusedError("money_taken");
+      if (live || cardIsKept(appt.cardOnFile)) throw new CancelRefusedError("money_taken");
+    }
+    // Same lock, same rollback: a chair checkout landing between the caller's
+    // read and this CAS is seen here (its claim is a write on this very row).
+    if (opts.refuseIfCheckedOut) {
+      const chair = await tx.appointment.findFirst({
+        where: { id: appt.id, shopId },
+        select: { paidAt: true, paidAmount: true },
+      });
+      if (chair && (chair.paidAt !== null || chair.paidAmount !== null)) {
+        throw new CancelRefusedError("checked_out");
+      }
     }
 
     // 🔴 A CANCELLED SPECIAL GOES BACK ON SALE. A targeted slot is capacity-1
@@ -525,11 +540,25 @@ export async function cancelAppointment(
 }
 
 /**
+ * Payment statuses that are NOT money: an attempt that died. Anything else - a
+ * collected, refunded, processing or still-payable row - is money (or a form a
+ * client could still pay) that `refuseIfMoney` will not move. One list, read by
+ * the cancel guard and by every route that decides beforehand whether to offer
+ * a no-money correction, so the offer and the guard cannot disagree.
+ */
+export const DEAD_PAYMENT_STATUSES = ["canceled", "failed"] as const;
+
+/** A card kept on this booking that could still be charged or is being filed. */
+export function cardIsKept(cardOnFile: { status: string } | null | undefined): boolean {
+  return cardOnFile != null && ["saved", "pending"].includes(cardOnFile.status);
+}
+
+/**
  * A cancel that refused to happen, rolled back with nothing changed. Thrown
  * only for callers that asked for the refusal (`refuseIfMoney`).
  */
 export class CancelRefusedError extends Error {
-  constructor(readonly reason: "money_taken") {
+  constructor(readonly reason: "money_taken" | "checked_out") {
     super(`cancel refused: ${reason}`);
     this.name = "CancelRefusedError";
   }

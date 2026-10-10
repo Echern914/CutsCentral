@@ -1549,6 +1549,25 @@ export async function removeWalkInAction(
   return { ok: true };
 }
 
+/**
+ * Mark a visit the completion sweep already finished as a no-show, or cancel
+ * it, after the fact. Tells nobody, charges and refunds nothing; a visit with
+ * money on it is refused and `message` carries the server's own sentence.
+ */
+export async function correctCompletedVisitAction(
+  id: string,
+  outcome: "no_show" | "canceled",
+): Promise<{ ok: boolean; error?: string; message?: string }> {
+  const res = await apiSend(
+    "POST",
+    `/api/booking/appointments/${encodeURIComponent(id)}/correct-completed`,
+    { outcome },
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed", message: res.message };
+  revalidatePath("/dashboard/booking");
+  return { ok: true };
+}
+
 export async function noShowAppointmentAction(id: string): Promise<Result> {
   return done(await apiSend("POST", `/api/booking/appointments/${id}/no-show`));
 }
@@ -1996,6 +2015,12 @@ export interface AppointmentDetail {
    * the service name. Optional so an older API reads as "not a walk-in".
    */
   walkIn?: boolean;
+  /**
+   * A completed visit that may still be marked a no-show or cancelled after
+   * the fact (no money on it, recent enough). The server decides; optional so
+   * an older API reads as "no".
+   */
+  correctable?: boolean;
 }
 
 /**

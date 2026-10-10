@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-10-no-show-after-completed",
+    date: "2026-10-10",
+    kind: "feature",
+    title: "Mark a no-show after the visit shows completed",
+    body:
+      "A booking whose time has passed counts as completed, even if nobody came. Open it, tap More, then Mark " +
+      "no-show or Cancel visit, up to 7 days later. It leaves your takings, any punch it earned comes off, and " +
+      "nobody is told or charged. A visit with a payment on it can't be changed.",
+  },
+  {
     id: "2026-10-09-remove-walk-in",
     date: "2026-10-09",
     kind: "feature",

@@ -10,6 +10,7 @@ import {
 import { CLOSED_BOOKING_STATUSES } from "../billing/depositRefund.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import { isRecordedWalkIn } from "../engines/walkInReceipt.js";
+import { correctionRefusal, hasLiveMoney } from "../engines/visitCorrection.js";
 import { readIntakeSnapshot, type IntakeAnswer } from "../engines/bookingIntake.js";
 import { readPolicySnapshot } from "../engines/bookingPolicy.js";
 import { serviceCheckoutEnabled } from "./booking.checkout.js";
@@ -227,6 +228,13 @@ export interface AppointmentDetail {
    * so the sheet never guesses from a service name.
    */
   walkIn: boolean;
+  /**
+   * A completed visit the shop may still mark a no-show or cancel after the
+   * fact (engines/visitCorrection.ts: ChairBack's own, not a walk-in, ended
+   * within the correction window, no money on it). The server decides, so the
+   * sheet never offers what the route would refuse.
+   */
+  correctable: boolean;
   /** Where to go and change it, when another system owns the schedule. */
   externalManageUrl: string | null;
 }
@@ -510,6 +518,7 @@ export function registerAppointmentDetail(router: Router): void {
         paidAmount: true,
         paidMethod: true,
         paidAt: true,
+        completedAt: true,
         cardOnFile: { select: { brand: true, last4: true, status: true } },
         service: { select: { name: true } },
         staff: { select: { name: true } },
@@ -548,6 +557,7 @@ export function registerAppointmentDetail(router: Router): void {
       paidAmount: Prisma.Decimal | null;
       paidMethod: string | null;
       paidAt: Date | null;
+      completedAt: Date | null;
       cardOnFile: { brand: string | null; last4: string | null; status: string } | null;
       service: { name: string } | null;
       staff: { name: string } | null;
@@ -621,6 +631,10 @@ export function registerAppointmentDetail(router: Router): void {
     const source = external
       ? await externalSource(shopId)
       : { label: "ChairBack", manageUrl: null };
+    // Only a completed visit can be corrected, so only then is money read.
+    const correctable =
+      appt.status === "COMPLETED" &&
+      correctionRefusal(appt, await hasLiveMoney(shopId, appt.id), new Date()) === null;
     const history = await clientHistory(
       shopId,
       appt.clientId,
@@ -686,6 +700,7 @@ export function registerAppointmentDetail(router: Router): void {
       readOnlyReason: editable ? null : external ? "external" : "not_editable",
       externalManageUrl: source.manageUrl,
       walkIn: isRecordedWalkIn(appt),
+      correctable,
     };
     res.json(detail);
   });
@@ -811,6 +826,7 @@ export function registerAppointmentDetail(router: Router): void {
       readOnlyReason: "external",
       externalManageUrl: source.manageUrl,
       walkIn: false,
+      correctable: false,
     };
     res.json(detail);
   });
