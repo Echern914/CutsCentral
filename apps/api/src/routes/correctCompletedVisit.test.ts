@@ -653,7 +653,7 @@ describe("mark a completed visit a no-show or cancelled, after the fact", () => 
     expect(await balance(s.shopId, v.clientId)).toBe(1);
   });
 
-  it("🔴 the checkout guard holds INSIDE the transaction, so a checkout racing the read still wins", async () => {
+  it("🔴 the engine re-checks the checkout INSIDE its own transaction: a checkout saved after the route read it still refuses", async () => {
     const s = await makeShop("CCV checkout race");
     const v = await autoCompleted(s);
     // The route's read saw it unpaid; the checkout landed after. The engine
