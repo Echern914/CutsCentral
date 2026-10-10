@@ -1,7 +1,16 @@
 import { Router } from "express";
 import { z } from "zod";
 import { Prisma, prisma } from "@chairback/db";
-import { checkTellApart, randomToken, tellApartRefusal } from "@chairback/config";
+import {
+  checkTellApart,
+  describeMovePriceChange,
+  paidBookingTakesPrice,
+  randomToken,
+  tellApartRefusal,
+} from "@chairback/config";
+import { addOnCentsOf, dollarsToCents, movePrice, type MovePrice } from "../engines/movePrice.js";
+import { effectivePriceAt } from "../engines/pricing.js";
+import { handEditCount, recordPriceChange } from "../services/appointmentPriceLedger.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { hasActiveAccess, connectEnabled } from "../billing/stripe.js";
 import { collectsAtBooking } from "../services/appointmentPaymentHold.js";
@@ -896,8 +905,24 @@ async function groupByToken(token: string | undefined) {
           groupPosition: true,
           manageToken: true,
           priceAtBooking: true,
+          // What a seat's price carries that the menu doesn't, and the menu's
+          // own figure at the seat's current time - how a move tells an agreed
+          // price from a plain menu one (engines/movePrice.ts).
+          addOns: true,
+          // A seat prepaid at booking (none in v1 - groups are pay at the
+          // shop - but the paid guard reads it rather than assuming).
+          payments: { where: { purpose: "booking" }, select: { status: true, amount: true } },
           serviceId: true,
-          service: { select: { name: true, durationMin: true } },
+          service: {
+            select: {
+              name: true,
+              durationMin: true,
+              price: true,
+              priceOverrides: true,
+              dateOverrides: true,
+              timeOverrides: true,
+            },
+          },
         },
       },
     },
@@ -954,7 +979,28 @@ bookingGroupRouter.get("/group/:token", rewardsLimiter, async (req, res) => {
   });
 });
 
-const rescheduleSchema = z.object({ startsAt: z.coerce.date() }).strict();
+const rescheduleSchema = z
+  .object({
+    startsAt: z.coerce.date(),
+    /**
+     * The new price of every seat whose price the move changes, exactly as a
+     * 409 `price_changes` listed them. Compared seat by seat with the figures
+     * derived again on this call - never written as sent. A stale or partial
+     * list is asked again.
+     */
+    acceptPrices: z
+      .array(
+        z
+          .object({
+            appointmentId: z.string().min(1).max(64),
+            cents: z.number().int().min(0),
+          })
+          .strict(),
+      )
+      .max(MAX_GROUP_ATTENDEES)
+      .optional(),
+  })
+  .strict();
 
 /**
  * Move the WHOLE group to a new start, atomically.
@@ -964,6 +1010,12 @@ const rescheduleSchema = z.object({ startsAt: z.coerce.date() }).strict();
  * a different service length reshapes the sequence correctly), checked as ONE
  * combined interval, and written in ONE transaction. A group half-moved is a
  * party told to arrive at two different times.
+ *
+ * 🔴 NO SEAT'S PRICE CHANGES IN SILENCE. Prices are per seat (engines/
+ * movePrice.ts decides each); if any seat's would change, NOBODY moves until
+ * the party has been shown the new total and each changed seat, and has sent
+ * that exact list back (`acceptPrices`). Every accepted change is written to
+ * the price ledger with the move, in the same transaction.
  *
  * 🔴 The group own rows are EXCLUDED from the conflict check, all of them.
  * Without that the run collides with itself the moment the new window overlaps
@@ -1028,6 +1080,104 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
   }
   const plan = result.plan;
 
+  // 🔴 WHAT THE MOVE DOES TO THE PRICE, SEAT BY SEAT - the same rule as every
+  // other reschedule (engines/movePrice.ts). Each attendee is their own
+  // appointment with their own price, ledger and (if any) payment, and is
+  // priced per seat at create; so each seat is measured on its own: an agreed
+  // price (add-ons, a typed or hand-edited figure) moves untouched, a plain
+  // menu price that is the same at its new time moves, and one that differs
+  // changes only after the party has seen it. This path used to keep every
+  // seat's old figure while answering with the new menu total.
+  const seats = await Promise.all(
+    live.map(async (row, i) => {
+      const svc = row.service;
+      const menuAtOld = effectivePriceAt(svc.price === null ? null : Number(svc.price), {
+        at: row.startsAt,
+        timezone: shop.timezone,
+        weekdayOverrides: svc.priceOverrides,
+        dateOverrides: svc.dateOverrides,
+        timeWindows: svc.timeOverrides,
+      });
+      const move: MovePrice = movePrice({
+        bookedCents: dollarsToCents(row.priceAtBooking),
+        addOnCents: addOnCentsOf(row.addOns),
+        menuAtOldCents: dollarsToCents(menuAtOld),
+        // The plan re-measured this seat's menu price at ITS new start.
+        menuAtNewCents: plan.members[i]!.priceCents,
+        // By hand only: a previous move's accepted reprice is the menu's own.
+        handEdited: (await handEditCount(shop.id, row.id)) > 0,
+        special: false,
+        discounted: false,
+      });
+      return {
+        row,
+        move,
+        bookedCents: dollarsToCents(row.priceAtBooking),
+        movedCents: move.kind === "changes" ? move.toCents : move.totalCents,
+      };
+    }),
+  );
+  const partyFromCents = seats.reduce((sum, s) => sum + (s.bookedCents ?? 0), 0);
+  const partyToCents = seats.reduce((sum, s) => sum + (s.movedCents ?? 0), 0);
+
+  // A seat PAID at booking that can't take its new price can't be reconciled
+  // here (no top-up or partial refund), so the WHOLE party is refused - one
+  // seat left behind would be the party told to arrive at two times. Same
+  // rule, and same order (before the question), as a single booking.
+  const unpayable = seats.find((s) => {
+    const paid = s.row.payments[0] ?? null;
+    return (
+      paid !== null &&
+      paid.status === "succeeded" &&
+      !paidBookingTakesPrice({
+        paidCents: paid.amount,
+        bookedPriceCents: s.bookedCents,
+        newPriceCents: s.movedCents,
+      })
+    );
+  });
+  if (unpayable) {
+    res.status(409).json({
+      error: "price_changed",
+      message: "That time has a different price and part of this booking is already paid. Please contact the shop to move it.",
+    });
+    return;
+  }
+
+  // The party must SEE the change before anyone moves: the new total and
+  // each seat that changes. A yes is the exact list sent back; a stale one
+  // (the menu changed, a member dropped out) or a partial one is asked again
+  // with the fresh figures, and nothing moves in the meantime.
+  const changing = seats.filter(
+    (s): s is typeof s & { move: Extract<MovePrice, { kind: "changes" }> } =>
+      s.move.kind === "changes",
+  );
+  if (changing.length > 0) {
+    const accepted = parsed.data.acceptPrices ?? [];
+    const matches =
+      accepted.length === changing.length &&
+      changing.every((s) =>
+        accepted.some((a) => a.appointmentId === s.row.id && a.cents === s.move.toCents),
+      );
+    if (!matches) {
+      res.status(409).json({
+        error: "price_changes",
+        code: "PRICE_CHANGES",
+        fromCents: partyFromCents,
+        toCents: partyToCents,
+        message: describeMovePriceChange({ fromCents: partyFromCents, toCents: partyToCents }),
+        seats: changing.map((s) => ({
+          appointmentId: s.row.id,
+          position: s.row.groupPosition,
+          firstName: s.row.firstName,
+          fromCents: s.move.fromCents,
+          toCents: s.move.toCents,
+        })),
+      });
+      return;
+    }
+  }
+
   try {
     await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
@@ -1072,10 +1222,32 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
         });
       }
       for (const [i, m] of plan.members.entries()) {
+        const seat = seats[i]!;
         await tx.appointment.update({
           where: { id: live[i]!.id },
-          data: { startsAt: m.startsAt, endsAt: m.endsAt },
+          data: {
+            startsAt: m.startsAt,
+            endsAt: m.endsAt,
+            // A seat's price moves with it. Only a change the party accepted
+            // rewrites it - recorded below, in this same transaction.
+            ...(seat.move.kind === "changes"
+              ? { priceAtBooking: new Prisma.Decimal((seat.move.toCents / 100).toFixed(2)) }
+              : {}),
+          },
         });
+        if (seat.move.kind === "changes") {
+          await recordPriceChange(tx, {
+            shopId: shop.id,
+            appointmentId: seat.row.id,
+            // The party moved it, through its own link: no shop actor.
+            actorUserId: null,
+            fromPriceCents: seat.move.fromCents,
+            toPriceCents: seat.move.toCents,
+            fromCollectedCents: null,
+            toCollectedCents: null,
+            source: "move",
+          });
+        }
       }
     });
   } catch (err) {
@@ -1087,7 +1259,18 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
     res.status(500).json({ error: "server_error" });
     return;
   }
-  res.json({ ok: true, plan: planPayload(plan) });
+  // The plan as it now stands - each seat at the price it now HOLDS, not the
+  // menu's figure for a seat whose agreed price was kept.
+  res.json({
+    ok: true,
+    plan: planPayload({
+      ...plan,
+      members: plan.members.map((m, i) => ({ ...m, priceCents: seats[i]!.movedCents })),
+      totalPriceCents: partyToCents,
+      unpricedCount: seats.filter((s) => s.movedCents === null).length,
+    }),
+    price: { fromCents: partyFromCents, toCents: partyToCents, repriced: changing.length },
+  });
 });
 
 /**

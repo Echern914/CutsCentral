@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-09-text-and-group-moves-ask-first",
+    date: "2026-10-09",
+    kind: "fix",
+    title: "Moves by text and group moves ask before a price changes",
+    body:
+      "Your text receptionist and the group booking page now move appointments the same way: add-ons and any price " +
+      "you set stay put. If the menu price differs at the new time, the client is shown both figures and nothing " +
+      "moves until they say yes.",
+  },
+  {
     id: "2026-10-09-server-hiccup-never-books-twice",
     date: "2026-10-09",
     kind: "fix",
