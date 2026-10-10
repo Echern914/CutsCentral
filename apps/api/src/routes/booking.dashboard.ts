@@ -23,7 +23,7 @@ import {
   CORRECTION_SELECT,
   correctionRefusal,
   correctionRefusalMessage,
-  hasLiveMoney,
+  correctionMoney,
   type CorrectionRefusal,
 } from "../engines/visitCorrection.js";
 import { recomputeCadence } from "../engines/cadence.js";
@@ -7318,7 +7318,10 @@ bookingDashboardRouter.post("/appointments/:id/remove-walk-in", async (req, res)
  *   - tell anybody: no cancellation email, text, push, Wallet poke,
  *     slot-opened alert or Auto-fill (`silent`);
  *   - move money: no refund, no card-on-file no-show fee, no release - a
- *     visit carrying a Payment or kept card is refused (`refuseIfMoney`), and
+ *     visit carrying a Payment or kept card is refused (`refuseIfMoney`) -
+ *     except that a NO-SHOW keeps a collected booking deposit exactly as it is
+ *     (`keepBookingPayment`), as any no-show does; Refund deposit can then
+ *     give it back if the shop chooses. A cancel refuses over one. And
  *     one checked out at the chair too (`refuseIfCheckedOut`), both inside the
  *     transaction, so a refusal changes nothing.
  * It is not dismissed: it stays on the day as a no-show / cancelled visit, the
@@ -7356,7 +7359,12 @@ bookingDashboardRouter.post("/appointments/:id/correct-completed", async (req, r
   }
   const refuse = (reason: CorrectionRefusal) =>
     res.status(409).json({ error: reason, message: correctionRefusalMessage(reason) });
-  const refusal = correctionRefusal(appt, await hasLiveMoney(shopId, appointmentId), now);
+  const refusal = correctionRefusal(
+    appt,
+    await correctionMoney(shopId, appointmentId),
+    now,
+    outcome,
+  );
   if (refusal) {
     refuse(refusal);
     return;
@@ -7370,6 +7378,9 @@ bookingDashboardRouter.post("/appointments/:id/correct-completed", async (req, r
       silent: true,
       refuseIfMoney: true,
       refuseIfCheckedOut: true,
+      // A no-show keeps a collected deposit as it is, like any no-show; a
+      // cancel was already refused over one above.
+      keepBookingPayment: true,
     });
   } catch (err) {
     if (err instanceof CancelRefusedError) {

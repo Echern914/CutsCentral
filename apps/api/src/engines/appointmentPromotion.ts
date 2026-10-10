@@ -244,6 +244,11 @@ export async function cancelAppointment(
   //   way. Used by the after-the-fact no-show / cancel of a completed visit
   //   (POST /appointments/:id/correct-completed): money was recorded for it, so
   //   it happened. Not set by remove-walk-in - a walk-in is born checked out.
+  // keepBookingPayment: with refuseIfMoney on a NO_SHOW, a SUCCEEDED booking
+  //   payment (the deposit / pay-ahead) is not a reason to refuse: a no-show
+  //   keeps it, exactly as an ordinary no-show does (only CANCELED refunds,
+  //   below, and refuseIfMoney skips that anyway). It is left untouched. Any
+  //   other live payment or a kept card still refuses.
   opts: {
     applyPolicyFee?: boolean;
     suppressSlotOpened?: boolean;
@@ -253,6 +258,7 @@ export async function cancelAppointment(
     dismiss?: boolean;
     refuseIfMoney?: boolean;
     refuseIfCheckedOut?: boolean;
+    keepBookingPayment?: boolean;
   } = {},
 ): Promise<boolean> {
   // Shop is owner-only, so this is read before the tenant transaction; the
@@ -329,7 +335,14 @@ export async function cancelAppointment(
     // client could still pay) that only the shop's own refund should touch.
     if (opts.refuseIfMoney) {
       const live = await tx.payment.findFirst({
-        where: { appointmentId: appt.id, shopId, status: { notIn: [...DEAD_PAYMENT_STATUSES] } },
+        where: {
+          appointmentId: appt.id,
+          shopId,
+          status: { notIn: [...DEAD_PAYMENT_STATUSES] },
+          ...(opts.keepBookingPayment && outcome === "NO_SHOW"
+            ? { NOT: KEPT_BY_A_NO_SHOW }
+            : {}),
+        },
         select: { id: true },
       });
       if (live || cardIsKept(appt.cardOnFile)) throw new CancelRefusedError("money_taken");
@@ -547,6 +560,13 @@ export async function cancelAppointment(
  * a no-money correction, so the offer and the guard cannot disagree.
  */
 export const DEAD_PAYMENT_STATUSES = ["canceled", "failed"] as const;
+
+/**
+ * The one payment a no-show keeps as it is: the booking payment (deposit /
+ * pay-ahead), collected. Read by the cancel guard (`keepBookingPayment`) and
+ * by engines/visitCorrection.ts, so the offer and the guard agree.
+ */
+export const KEPT_BY_A_NO_SHOW = { purpose: "booking", status: "succeeded" } as const;
 
 /** A card kept on this booking that could still be charged or is being filed. */
 export function cardIsKept(cardOnFile: { status: string } | null | undefined): boolean {

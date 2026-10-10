@@ -176,6 +176,19 @@ describe("No-show / cancel a completed visit after the fact", () => {
     expect(noShow).not.toHaveBeenCalled();
   });
 
+  it("a no-show with a deposit says the deposit stays, as it is", async () => {
+    const withDeposit = {
+      ...visit,
+      payment: { ...visit.payment, state: "deposit", collectedCents: 1000, onlineCents: 1000 },
+    } as AppointmentDetail;
+    await openMore(withDeposit);
+    fireEvent.click(await screen.findByText("Mark no-show"));
+    const confirm = await screen.findByTestId("correct-visit-confirm");
+    expect(confirm.textContent).toContain(
+      "It comes off your completed visits, and only its deposit stays in today's takings, kept as it is. Any punch it earned comes off. Nobody is told, and no fee is charged.",
+    );
+  });
+
   it("Cancel visit asks its own question", async () => {
     const confirm = await ask("Cancel visit");
     expect(confirm.textContent).toContain("Cancel this visit?");

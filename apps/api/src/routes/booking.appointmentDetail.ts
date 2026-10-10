@@ -10,7 +10,7 @@ import {
 import { CLOSED_BOOKING_STATUSES } from "../billing/depositRefund.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import { isRecordedWalkIn } from "../engines/walkInReceipt.js";
-import { correctionRefusal, hasLiveMoney } from "../engines/visitCorrection.js";
+import { correctionMoney, correctionRefusal } from "../engines/visitCorrection.js";
 import { readIntakeSnapshot, type IntakeAnswer } from "../engines/bookingIntake.js";
 import { readPolicySnapshot } from "../engines/bookingPolicy.js";
 import { serviceCheckoutEnabled } from "./booking.checkout.js";
@@ -634,7 +634,7 @@ export function registerAppointmentDetail(router: Router): void {
     // Only a completed visit can be corrected, so only then is money read.
     const correctable =
       appt.status === "COMPLETED" &&
-      correctionRefusal(appt, await hasLiveMoney(shopId, appt.id), new Date()) === null;
+      correctionRefusal(appt, await correctionMoney(shopId, appt.id), new Date(), "NO_SHOW") === null;
     const history = await clientHistory(
       shopId,
       appt.clientId,

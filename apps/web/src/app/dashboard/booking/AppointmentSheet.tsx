@@ -2624,14 +2624,19 @@ function CorrectVisitFooter({
     ? "today's takings"
     : "that day's takings";
   const action = outcome === "no_show" ? "Mark no-show" : "Cancel visit";
+  // A no-show keeps a deposit paid at booking exactly as it is (the server
+  // allows that one payment, and only for a no-show), so it stays counted.
+  const keepsDeposit = outcome === "no_show" && detail.payment.onlineCents > 0;
   return (
     <div className="flex w-full flex-col gap-2" data-testid="correct-visit-confirm">
       <p className="text-sm font-medium text-offwhite">
         {outcome === "no_show" ? "Mark this visit a no-show?" : "Cancel this visit?"}
       </p>
       <p className="text-xs leading-relaxed text-muted">
-        It comes off your completed visits and out of {day}. Any punch it earned comes off. Nobody
-        is told, and no fee is charged.
+        {keepsDeposit
+          ? `It comes off your completed visits, and only its deposit stays in ${day}, kept as it is.`
+          : `It comes off your completed visits and out of ${day}.`}{" "}
+        Any punch it earned comes off. Nobody is told, and no fee is charged.
       </p>
       {error && (
         <p role="alert" data-testid="correct-visit-error" className="text-sm text-danger-soft">

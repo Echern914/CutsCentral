@@ -1,6 +1,6 @@
 import { COMPLETED_VISIT_CORRECTION_DAYS } from "@chairback/config";
 import { prisma } from "@chairback/db";
-import { cardIsKept, DEAD_PAYMENT_STATUSES } from "./appointmentPromotion.js";
+import { cardIsKept, DEAD_PAYMENT_STATUSES, KEPT_BY_A_NO_SHOW } from "./appointmentPromotion.js";
 import { appointmentOwnedByPlatform } from "./visitOrigin.js";
 import { isRecordedWalkIn } from "./walkInReceipt.js";
 
@@ -24,6 +24,12 @@ import { isRecordedWalkIn } from "./walkInReceipt.js";
  * chair. A visit with money on it happened, or has money only the shop's own
  * refund should touch.
  *
+ * ONE EXCEPTION, NO-SHOW ONLY: a collected BOOKING payment (the deposit or
+ * pay-ahead) does not stop a no-show correction. An ordinary no-show keeps it
+ * too; it stays exactly as it is, and the shop's own Refund deposit can give it
+ * back afterwards. A CANCEL is still refused over it - an ordinary cancel would
+ * refund it, and this path never moves money.
+ *
  * Whether the SHOP finished it (Done / checkout: `completedByShop`) or the
  * sweep did is deliberately NOT a condition: a Done pressed on the wrong row is
  * the same mistake, and a checked-out visit is already refused above.
@@ -34,7 +40,8 @@ export type CorrectionRefusal =
   | "walk_in"
   | "too_old"
   | "checked_out"
-  | "money_taken";
+  | "money_taken"
+  | "deposit_paid";
 
 export const CORRECTION_WINDOW_MS = COMPLETED_VISIT_CORRECTION_DAYS * 24 * 60 * 60 * 1000;
 
@@ -67,31 +74,49 @@ export const CORRECTION_SELECT = {
   cardOnFile: { select: { status: true } },
 } as const;
 
-/** Why this visit cannot be corrected, or null when it can. Pure. */
+/** The money on a visit, split the way the correction rule needs it. */
+export interface CorrectionMoney {
+  /** A collected booking payment (deposit / pay-ahead): a no-show keeps it. */
+  bookingPaid: boolean;
+  /** Any OTHER live payment: a tip, a checkout, a payable form, a refund... */
+  other: boolean;
+}
+
+/**
+ * Why this visit cannot be corrected to `outcome`, or null when it can. Pure.
+ * The sheet's `correctable` asks it for NO_SHOW.
+ */
 export function correctionRefusal(
   appt: CorrectionFacts,
-  hasLiveMoney: boolean,
+  money: CorrectionMoney,
   now: Date,
+  outcome: "NO_SHOW" | "CANCELED",
 ): CorrectionRefusal | null {
   if (appt.status !== "COMPLETED") return "not_completed";
   if (appointmentOwnedByPlatform(appt)) return "external";
   if (isRecordedWalkIn(appt) || appt.bookedVia === "walk_in_queue") return "walk_in";
   if (now.getTime() - appt.endsAt.getTime() > CORRECTION_WINDOW_MS) return "too_old";
   if (appt.paidAt !== null || appt.paidAmount != null) return "checked_out";
-  if (hasLiveMoney || cardIsKept(appt.cardOnFile)) return "money_taken";
+  if (money.other || cardIsKept(appt.cardOnFile)) return "money_taken";
+  if (money.bookingPaid && outcome !== "NO_SHOW") return "deposit_paid";
   return null;
 }
 
 /**
- * Any Payment on this booking that is money - the SAME test the cancel
- * engine's refuseIfMoney guard runs inside its transaction.
+ * The Payments on this booking that are money - the SAME tests the cancel
+ * engine's refuseIfMoney / keepBookingPayment guard runs in its transaction.
  */
-export async function hasLiveMoney(shopId: string, appointmentId: string): Promise<boolean> {
-  const live = await prisma.payment.findFirst({
+export async function correctionMoney(
+  shopId: string,
+  appointmentId: string,
+): Promise<CorrectionMoney> {
+  const live = await prisma.payment.findMany({
     where: { appointmentId, shopId, status: { notIn: [...DEAD_PAYMENT_STATUSES] } },
-    select: { id: true },
+    select: { purpose: true, status: true },
   });
-  return live !== null;
+  const kept = (p: { purpose: string; status: string }) =>
+    p.purpose === KEPT_BY_A_NO_SHOW.purpose && p.status === KEPT_BY_A_NO_SHOW.status;
+  return { bookingPaid: live.some(kept), other: live.some((p) => !kept(p)) };
 }
 
 /** The sentence the shop reads for each refusal (the sheet shows it as-is). */
@@ -101,6 +126,8 @@ export function correctionRefusalMessage(reason: CorrectionRefusal): string {
       return "This visit was checked out, so a payment is recorded for it. It can't be marked a no-show or canceled.";
     case "money_taken":
       return "This visit has money on it through ChairBack (a deposit, card payment, tip or saved card), so it can't be changed here. If that money should go back, refund it first.";
+    case "deposit_paid":
+      return "This visit has a deposit paid through ChairBack, and canceling it here would not refund it. If the client didn't come, use Mark no-show instead: the deposit stays as it is, and you can refund it from the visit afterwards if you choose.";
     case "too_old":
       return `This visit ended more than ${COMPLETED_VISIT_CORRECTION_DAYS} days ago, so it can't be changed now.`;
     case "walk_in":

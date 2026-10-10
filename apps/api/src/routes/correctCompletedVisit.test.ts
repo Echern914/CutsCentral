@@ -464,10 +464,12 @@ describe("mark a completed visit a no-show or cancelled, after the fact", () => 
     expect((await row(queued.id)).status).toBe("COMPLETED");
   });
 
-  it("refuses a visit with money on it - a deposit, a tip, a payable form, a kept card - and changes nothing", async () => {
+  it("refuses a visit with money on it - a tip, a checkout, a payable form, a kept card - and changes nothing", async () => {
     const s = await makeShop("CCV money");
     const cases: Array<(id: string) => Promise<void>> = [
-      (id) => payment(s, id, "booking", "succeeded"),
+      (id) => payment(s, id, "service_checkout", "succeeded"),
+      // A deposit that has not settled is not the collected deposit a no-show keeps.
+      (id) => payment(s, id, "booking", "processing"),
       (id) => payment(s, id, "tip", "succeeded"),
       (id) => payment(s, id, "tip", "requires_payment_method"),
       async (id) => {
@@ -504,6 +506,126 @@ describe("mark a completed visit a no-show or cancelled, after the fact", () => 
     expect(settleCardOnFile).not.toHaveBeenCalled();
     expect(stripeClient).not.toHaveBeenCalled();
     await expectNobodyTold(s.shopId);
+  });
+
+  it("🔴 a deposit-paid no-show: NO_SHOW, the deposit row untouched, no Stripe, and Refund deposit opens", async () => {
+    const s = await makeShop("CCV deposit no-show");
+    const v = await autoCompleted(s);
+    await payment(s, v.id, "booking", "succeeded");
+    const deposit = () =>
+      prisma.payment.findFirstOrThrow({
+        where: { appointmentId: v.id, purpose: "booking" },
+        select: {
+          status: true,
+          amount: true,
+          capturedAmount: true,
+          refundedAmount: true,
+          applicationFeeAmount: true,
+          updatedAt: true,
+        },
+      });
+    const before = await deposit();
+    const refundDeposit = () =>
+      request(app)
+        .post(`/api/booking/appointments/${v.id}/deposit-refund`)
+        // Deliberately the wrong figure: the answer shows how far the refund
+        // got WITHOUT ever reaching Stripe.
+        .send({ amountCents: 1 })
+        .set("Cookie", s.cookie);
+
+    expect((await detail(s, v.id)).body.correctable).toBe(true);
+    // While it is completed, Refund deposit is closed to it.
+    const closed = await refundDeposit();
+    expect(closed.status).toBe(409);
+    expect(closed.body).toEqual({ error: "not_refundable", reason: "booking_open" });
+
+    const res = await correct(s, v.id, "no_show");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, alreadyCorrected: false });
+    expect((await row(v.id)).status).toBe("NO_SHOW");
+    expect(await balance(s.shopId, v.clientId)).toBe(0);
+    // Kept exactly as it was: no refund, no capture, no fee.
+    expect(await deposit()).toEqual(before);
+    expect(await prisma.payment.count({ where: { appointmentId: v.id } })).toBe(1);
+    // A no-show earns what it kept, and nothing for the cut.
+    expect(await takings(s.shopId)).toBe(1000);
+    expect((await detail(s, v.id)).body.keptDeposit).toEqual({
+      amountCents: 1000,
+      nonRefundable: false,
+    });
+    expect(refundForCancellation).not.toHaveBeenCalled();
+    expect(settleCardOnFile).not.toHaveBeenCalled();
+    expect(releaseCardOnFile).not.toHaveBeenCalled();
+    expect(stripeClient).not.toHaveBeenCalled();
+    await expectNobodyTold(s.shopId);
+
+    // Now the shop's own Refund deposit can give it back if it chooses: past
+    // the status gate, stopped only by the deliberately wrong figure.
+    const open = await refundDeposit();
+    expect(open.status).toBe(409);
+    expect(open.body).toEqual({ error: "amount_changed", refundableCents: 1000 });
+    expect(stripeClient).not.toHaveBeenCalled();
+    expect(await deposit()).toEqual(before);
+  });
+
+  it("🔴 a deposit-paid visit is NOT cancelled here (that would owe a refund) and says to use Mark no-show", async () => {
+    const s = await makeShop("CCV deposit cancel");
+    const v = await autoCompleted(s);
+    await payment(s, v.id, "booking", "succeeded");
+    const before = await prisma.payment.findFirstOrThrow({ where: { appointmentId: v.id } });
+    const res = await correct(s, v.id, "canceled");
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("deposit_paid");
+    expect(res.body.message).toMatch(/use Mark no-show instead/);
+    const r = await row(v.id);
+    expect(r.status).toBe("COMPLETED");
+    expect(r.canceledAt).toBeNull();
+    expect(r.cancellationRevision).toBe(0);
+    expect(await balance(s.shopId, v.clientId)).toBe(1);
+    expect(await prisma.payment.findFirstOrThrow({ where: { appointmentId: v.id } })).toEqual(before);
+    expect(refundForCancellation).not.toHaveBeenCalled();
+    expect(stripeClient).not.toHaveBeenCalled();
+    await expectNobodyTold(s.shopId);
+  });
+
+  it("a tip still refuses both corrections, deposit or not", async () => {
+    const s = await makeShop("CCV tip");
+    for (const withDeposit of [false, true]) {
+      const v = await autoCompleted(s);
+      if (withDeposit) await payment(s, v.id, "booking", "succeeded");
+      await payment(s, v.id, "tip", "succeeded");
+      expect((await detail(s, v.id)).body.correctable).toBe(false);
+      for (const outcome of ["no_show", "canceled"] as const) {
+        const res = await correct(s, v.id, outcome);
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe("money_taken");
+      }
+      expect((await row(v.id)).status).toBe("COMPLETED");
+      expect(await balance(s.shopId, v.clientId)).toBe(1);
+    }
+    expect(stripeClient).not.toHaveBeenCalled();
+  });
+
+  it("🔴 inside the transaction the deposit is kept only for a NO-SHOW that asked to keep it", async () => {
+    const s = await makeShop("CCV deposit engine");
+    const opts = { onlyFrom: ["COMPLETED" as const], silent: true, refuseIfMoney: true };
+    const v = await autoCompleted(s);
+    await payment(s, v.id, "booking", "succeeded");
+    // A cancel refuses over it even when told to keep a deposit...
+    await expect(
+      cancelAppointment(s.shopId, v.id, "CANCELED", new Date(), { ...opts, keepBookingPayment: true }),
+    ).rejects.toBeInstanceOf(CancelRefusedError);
+    // ...and a no-show that did not ask (remove-walk-in's shape) refuses too.
+    await expect(
+      cancelAppointment(s.shopId, v.id, "NO_SHOW", new Date(), opts),
+    ).rejects.toBeInstanceOf(CancelRefusedError);
+    expect((await row(v.id)).status).toBe("COMPLETED");
+    await expect(
+      cancelAppointment(s.shopId, v.id, "NO_SHOW", new Date(), { ...opts, keepBookingPayment: true }),
+    ).resolves.toBe(true);
+    expect((await row(v.id)).status).toBe("NO_SHOW");
+    expect(refundForCancellation).not.toHaveBeenCalled();
+    expect(stripeClient).not.toHaveBeenCalled();
   });
 
   it("lets a visit go whose only payment attempt died", async () => {
