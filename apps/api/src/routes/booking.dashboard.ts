@@ -133,6 +133,7 @@ import {
 } from "../engines/recurringSeries.js";
 import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairback/config";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
+import { fillBlankClientFields } from "../services/clientFill.js";
 import { logger } from "../logger.js";
 import { advanceEach, releaseRacedOffers, type OfferSpan } from "../engines/waitlistOffer.js";
 import {
@@ -3154,13 +3155,17 @@ async function resolveSeriesClient(input: {
       email: input.email,
       source: "manual",
     },
-    update: {
-      firstName: input.firstName || undefined,
-      lastName: input.lastName || undefined,
-      phone: input.phone ?? undefined,
-      email: input.email || undefined,
-    },
+    // 🔴 Never overwrite an existing client from a typed name - a shared phone
+    // is not the same person (services/clientFill.ts). Blanks fill below;
+    // every visit in the repeat carries the name that was typed (returned).
+    update: {},
     select: { id: true },
+  });
+  await fillBlankClientFields(prisma, client.id, {
+    firstName: input.firstName,
+    lastName: input.lastName,
+    phone: input.phone,
+    email: input.email,
   });
   return {
     clientId: client.id,
@@ -3770,13 +3775,22 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
             email: d.email || null,
             source: "manual",
           },
-          update: {
-            firstName: cFirst || undefined,
-            lastName: cLast || undefined,
-            phone: phone ?? undefined,
-            email: d.email || undefined,
-          },
+          // 🔴 NEVER RENAME WHOEVER ALREADY HOLDS THIS NUMBER. The key is the
+          // typed phone, and a phone is not a person: a son booked on his
+          // dad's number (the waitlist board's Book button sends a name and a
+          // phone, never a client) used to rename the dad and swap his email -
+          // which also cleared his marketing-email yes (the address changed).
+          // Same rule as every public form (services/clientFill.ts): blanks
+          // fill, nothing is replaced, and the booking row below keeps exactly
+          // what was typed. Correcting a client is the profile's job.
+          update: {},
           select: { id: true },
+        });
+        await fillBlankClientFields(tx, client.id, {
+          firstName: cFirst,
+          lastName: cLast,
+          phone,
+          email: d.email,
         });
         clientId = client.id;
       }
