@@ -9,6 +9,9 @@ import type { BookShopData } from "./page";
  *    base and never saw `dateOverrides`, while the create route resolves
  *    date > window > weekday > base and snapshots THAT onto priceAtBooking: a
  *    $45 cut with $75 on Christmas Eve was shown at $45 and booked at $75.
+ *  - 🔴 THE DEPOSIT LINE. It printed the shop's raw deposit setting; the server
+ *    charges min(deposit, price), and nothing at all for an unpriced visit.
+ *  - Money keeps its cents: "$22.5" is not a price.
  */
 
 vi.mock("next/navigation", () => ({
@@ -193,5 +196,64 @@ describe("a holiday price on the booking page", () => {
   it("an API older than the field prices exactly as before", async () => {
     await pickSoonest(shopData());
     expect(total()).toBe("$45");
+  });
+});
+
+describe("the deposit line states what Confirm charges", () => {
+  it("🔴 a $20 deposit on a $15 visit says $15 - the deposit is capped at the price", async () => {
+    dayBundles.mockResolvedValue(day(15) as never);
+    await pickSoonest(shopData({ price: 15, deposit: { mode: "deposit", cents: 2000 } }));
+    expect(terms()).toBe("A $15 deposit is taken when you book.");
+  });
+
+  it("a deposit under the price is the deposit", async () => {
+    await pickSoonest(shopData({ price: 45, deposit: { mode: "deposit", cents: 2000 } }));
+    expect(terms()).toBe("A $20 deposit is taken when you book.");
+  });
+
+  it("🔴 the deposit is capped at the HOLIDAY price, not the base one", async () => {
+    dayBundles.mockResolvedValue(day(15) as never);
+    await pickSoonest(
+      shopData({ price: 45, dateOverrides: { [DAY]: 15 }, deposit: { mode: "deposit", cents: 2000 } }),
+    );
+    expect(terms()).toBe("A $15 deposit is taken when you book.");
+  });
+
+  it("🔴 an unpriced visit takes nothing at booking, so the page doesn't claim a deposit", async () => {
+    dayBundles.mockResolvedValue(day(null) as never);
+    await pickSoonest(shopData({ price: null, deposit: { mode: "deposit", cents: 2000 } }));
+    expect(terms()).toBe("Nothing is taken when you book - you pay at the shop.");
+  });
+
+  it("an unpriced visit at a pay-ahead shop takes nothing either", async () => {
+    dayBundles.mockResolvedValue(day(null) as never);
+    await pickSoonest(shopData({ price: null, deposit: { mode: "ahead", cents: null } }));
+    expect(terms()).toBe("Nothing is taken when you book - you pay at the shop.");
+  });
+
+  it("a deposit shop with no amount set takes nothing", async () => {
+    await pickSoonest(shopData({ price: 45, deposit: { mode: "deposit", cents: null } }));
+    expect(terms()).toBe("Nothing is taken when you book - you pay at the shop.");
+  });
+});
+
+describe("prices keep their cents in the day view", () => {
+  it("🔴 the day price, a special's price and a window chip's price all read $22.50", async () => {
+    dayBundles.mockResolvedValue(
+      day(22.5, [
+        { startsAt: SLOT, staffIds: ["stf_1"], price: 22.5 },
+        {
+          startsAt: `${DAY}T17:00:00.000Z`,
+          staffIds: ["stf_1"],
+          targeted: { id: "tsl_1", price: 22.5, label: null },
+        },
+      ]) as never,
+    );
+    render(<BookingClient data={shopData({ price: 22.5 })} />);
+    await screen.findAllByText(/\$22\.50/, {}, { timeout: 3000 });
+    const text = document.body.textContent ?? "";
+    expect(text).not.toMatch(/\$22\.5(?!0)/);
+    // The day card's price, the window chip's and the special's.
+    expect((text.match(/\$22\.50/g) ?? []).length).toBeGreaterThanOrEqual(3);
   });
 });

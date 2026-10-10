@@ -112,7 +112,7 @@ import {
 } from "../wallet/appointmentPass.js";
 import {
   createAheadPaymentIntent,
-  depositChargeCents,
+  chargeAtBookingCents,
   toCents,
 } from "../billing/payments.js";
 import {
@@ -2416,11 +2416,13 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
   const fullCents = toCents(effectivePrice);
   // DEPOSIT charges a fixed amount now and leaves the rest for the chair; AHEAD
   // charges the whole ticket. Capped at the price either way, so a $20 deposit
-  // can never overcharge a $15 line-up.
-  const chargeCents =
-    shop.paymentsMode === "deposit"
-      ? depositChargeCents(shop.depositAmountCents, fullCents)
-      : fullCents;
+  // can never overcharge a $15 line-up. The booking page states the figure
+  // before Confirm with this same function (config/shopPolicy.ts).
+  const chargeCents = chargeAtBookingCents({
+    paymentsMode: shop.paymentsMode,
+    depositAmountCents: shop.depositAmountCents,
+    priceCents: fullCents,
+  });
   // "payment" (ahead/deposit), "card" (card on file: a SetupIntent, nothing
   // charged) or null. Either non-null answer means the row is written as a
   // HOLD; only the Stripe object it waits for differs.

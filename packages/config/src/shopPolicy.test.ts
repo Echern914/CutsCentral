@@ -12,6 +12,7 @@ import {
   depositIsNonRefundable,
   describeMovePriceChange,
   formatMovePriceCents,
+  chargeAtBookingCents,
 } from "./shopPolicy.js";
 
 describe("describeMovePriceChange - the one sentence a move at a new price asks with", () => {
@@ -511,3 +512,23 @@ describe("cardOnFileFeeCents - the fee for a kept card", () => {
   });
 });
 
+describe("chargeAtBookingCents - what Confirm charges, said and charged by one rule", () => {
+  it("a deposit under the price is the deposit", () => {
+    expect(chargeAtBookingCents({ paymentsMode: "deposit", depositAmountCents: 2000, priceCents: 4500 })).toBe(2000);
+  });
+  it("🔴 a deposit is capped at the price", () => {
+    expect(chargeAtBookingCents({ paymentsMode: "deposit", depositAmountCents: 2000, priceCents: 1500 })).toBe(1500);
+  });
+  it("🔴 an unpriced visit charges nothing, in every paying mode", () => {
+    expect(chargeAtBookingCents({ paymentsMode: "deposit", depositAmountCents: 2000, priceCents: null })).toBeNull();
+    expect(chargeAtBookingCents({ paymentsMode: "ahead", depositAmountCents: null, priceCents: null })).toBeNull();
+    expect(chargeAtBookingCents({ paymentsMode: "ahead", depositAmountCents: null, priceCents: 0 })).toBeNull();
+  });
+  it("a deposit shop with no amount set charges nothing", () => {
+    expect(chargeAtBookingCents({ paymentsMode: "deposit", depositAmountCents: null, priceCents: 4500 })).toBeNull();
+    expect(chargeAtBookingCents({ paymentsMode: "deposit", depositAmountCents: 0, priceCents: 4500 })).toBeNull();
+  });
+  it("paying ahead takes the whole price, whatever the deposit setting says", () => {
+    expect(chargeAtBookingCents({ paymentsMode: "ahead", depositAmountCents: 2000, priceCents: 4550 })).toBe(4550);
+  });
+});

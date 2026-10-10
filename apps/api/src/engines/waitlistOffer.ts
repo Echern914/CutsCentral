@@ -30,7 +30,7 @@ import { effectivePriceAt } from "./pricing.js";
 import { deriveAcuityClientKey } from "../acuity/clientKey.js";
 import { connectEnabled } from "../billing/stripe.js";
 import { hasPremiumAccess } from "../billing/entitlements.js";
-import { depositChargeCents, toCents } from "../billing/payments.js";
+import { chargeAtBookingCents, toCents } from "../billing/payments.js";
 import { collectsAtBooking } from "../services/appointmentPaymentHold.js";
 import {
   buildWaitlistOfferCustomerEmail,
@@ -186,10 +186,11 @@ export function claimWouldRequirePayment(
   price: number | null,
 ): boolean {
   const fullCents = toCents(price);
-  const chargeCents =
-    shop.paymentsMode === "deposit"
-      ? depositChargeCents(shop.depositAmountCents, fullCents)
-      : fullCents;
+  const chargeCents = chargeAtBookingCents({
+    paymentsMode: shop.paymentsMode,
+    depositAmountCents: shop.depositAmountCents,
+    priceCents: fullCents,
+  });
   // The public create's own question (services/appointmentPaymentHold.ts),
   // so a claim never books what the booking page would hold for money.
   const collects = collectsAtBooking({

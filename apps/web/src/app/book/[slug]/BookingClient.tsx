@@ -13,6 +13,7 @@ import { DEMO } from "@chairback/config/demo";
 import { serviceColorHex } from "@chairback/config/constants";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import { effectivePriceAt } from "@chairback/config/servicePricing";
+import { chargeAtBookingCents } from "@chairback/config/shopPolicy";
 import { lastNameHasLetter } from "@chairback/config/clientIdentity";
 import { addOnOffersService } from "@chairback/config/addOns";
 import {
@@ -1085,7 +1086,7 @@ export function BookingClient({
           <span className="flex items-baseline justify-between gap-3">
             <span className="text-sm font-medium">{svc.name}</span>
             {svc.price !== null && (
-              <span className="shrink-0 text-sm text-muted">${svc.price}</span>
+              <span className="shrink-0 text-sm text-muted">{formatPrice(svc.price)}</span>
             )}
           </span>
           <span className="mt-0.5 block text-xs text-muted">{svc.durationMin} min</span>
@@ -1154,7 +1155,7 @@ export function BookingClient({
                   {timeFmt.format(new Date(s.startsAt))}
                   {s.targeted && (
                     <span className="ml-1 opacity-80">
-                      · ${s.targeted.price}
+                      · {formatPrice(s.targeted.price)}
                       {s.targeted.label ? ` · ${s.targeted.label}` : ""}
                     </span>
                   )}
@@ -1162,7 +1163,7 @@ export function BookingClient({
                       these only when they differ from the day-level card). */}
                   {!s.targeted && (s.price !== undefined || s.durationMin !== undefined) && (
                     <span className="ml-1 opacity-80">
-                      {s.price !== undefined && s.price !== null ? ` · $${s.price}` : ""}
+                      {s.price !== undefined && s.price !== null ? ` · ${formatPrice(s.price)}` : ""}
                       {s.durationMin !== undefined ? ` · ${s.durationMin} min` : ""}
                     </span>
                   )}
@@ -2090,6 +2091,25 @@ export function BookingClient({
     .filter((a) => addOnIds.includes(a.id))
     .reduce((sum, a) => sum + (a.price ?? 0), 0);
   const grandTotal = selectedPrice === null ? null : selectedPrice + addOnsTotal;
+  /**
+   * What Confirm CHARGES, in cents, for a shop that takes a payment at booking
+   * - by the create route's own rule (config/shopPolicy chargeAtBookingCents):
+   * a deposit capped at the price, the whole price when paying ahead, and
+   * nothing at all for an unpriced visit (it is then paid at the shop). The
+   * price it is taken from is the server's too: the slot's price plus add-ons,
+   * the add-ons counting even when the service itself has no price.
+   */
+  const chargeAtConfirmCents =
+    paymentTerms?.collects === "payment" && slot !== null
+      ? chargeAtBookingCents({
+          paymentsMode: paymentTerms.mode,
+          depositAmountCents: paymentTerms.depositAmountCents,
+          priceCents:
+            selectedPrice === null && addOnsTotal === 0
+              ? null
+              : Math.round(((selectedPrice ?? 0) + addOnsTotal) * 100),
+        })
+      : null;
   /**
    * One short line telling the customer whether the price they are looking at
    * already has a tip in it.
@@ -3470,11 +3490,19 @@ export function BookingClient({
                     ? paymentTerms.cardOptional
                       ? "You'll be asked for a card to keep on file - no charge today. You're booked either way."
                       : "You'll save a card to confirm — no charge today."
-                    : paymentTerms.mode === "deposit" && paymentTerms.depositAmountCents
-                      ? `A ${formatCents(paymentTerms.depositAmountCents)} deposit is taken when you book.`
-                      : "Payment is taken when you book."}
-                  {/* Said BEFORE the time is held, not first on the card step. */}
-                  {paymentTerms.collects === "payment" && depositKept && (
+                    : // The figure the create route CHARGES, never the raw
+                      // setting: a $20 deposit on a $15 cut takes $15, and an
+                      // unpriced visit takes nothing and is paid at the shop.
+                      chargeAtConfirmCents === null
+                      ? slot === null
+                        ? "Payment is taken when you book."
+                        : "Nothing is taken when you book - you pay at the shop."
+                      : paymentTerms.mode === "deposit"
+                        ? `A ${formatCents(chargeAtConfirmCents)} deposit is taken when you book.`
+                        : "Payment is taken when you book."}
+                  {/* Said BEFORE the time is held, not first on the card step.
+                      Only about money that is actually taken. */}
+                  {paymentTerms.collects === "payment" && depositKept && chargeAtConfirmCents !== null && (
                     <> {DEPOSIT_KEPT_LINE}</>
                   )}
                 </p>

@@ -304,6 +304,54 @@ export function cancellationFeeCents(input: {
 }
 
 /**
+ * What a DEPOSIT-mode booking charges NOW, in cents.
+ *
+ * Two rules, both there to stop a deposit becoming a surprise:
+ *  - CAP AT THE PRICE. A shop-wide $20 deposit must not overcharge a $15
+ *    line-up. Capped, the customer pays $15 now and owes nothing at the chair,
+ *    which is honest; charging $20 for a $15 service is not.
+ *  - NO CHARGE WITHOUT BOTH NUMBERS. An unpriced service, or a shop that
+ *    switched to deposit mode without setting an amount, charges NOTHING and
+ *    falls back to paying in person. Guessing a deposit is worse than not
+ *    taking one.
+ *
+ * Lives here, not in the API's billing code, because the booking page states
+ * the deposit BEFORE Confirm and has to state the figure this charges - it
+ * used to print the shop's raw deposit setting, "$20 deposit" over a $15 cut
+ * that was then charged $15, and over an unpriced service charged nothing.
+ */
+export function depositChargeCents(
+  depositCents: number | null | undefined,
+  fullCents: number | null,
+): number | null {
+  if (fullCents === null || fullCents <= 0) return null;
+  if (depositCents === null || depositCents === undefined || depositCents <= 0) return null;
+  return Math.min(depositCents, fullCents);
+}
+
+/**
+ * What a booking that PAYS AT BOOKING (ahead or deposit) is charged at
+ * Confirm, in cents - null when nothing is charged, and the booking is then
+ * paid at the shop.
+ *
+ * `priceCents` is the booking's whole price (the slot's effective price plus
+ * add-ons), the figure that becomes priceAtBooking. Deposit mode takes
+ * `depositChargeCents`; every other paying mode takes the whole price. The
+ * create route charges with this and the booking page states it, so the line
+ * before Confirm and the charge after it are one number.
+ */
+export function chargeAtBookingCents(input: {
+  paymentsMode: string;
+  depositAmountCents: number | null | undefined;
+  priceCents: number | null;
+}): number | null {
+  const full = input.priceCents !== null && input.priceCents > 0 ? input.priceCents : null;
+  return input.paymentsMode === "deposit"
+    ? depositChargeCents(input.depositAmountCents, full)
+    : full;
+}
+
+/**
  * May a booking PAID AT BOOKING take this price?
  *
  * Asked when a paid booking moves to a new time (whose price can differ by
