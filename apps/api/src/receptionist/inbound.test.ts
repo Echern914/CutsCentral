@@ -721,24 +721,78 @@ describe("processInboundText", () => {
     expect(sms).toHaveLength(1);
   });
 
-  it("NEVER texts an opted-out number - even mid-conversation (send-time re-check)", async () => {
+  it("🔴 an opted-out client never starts a turn: no model call, no hold, no thread, no send", async () => {
+    // STOP is global and absolute. The turn used to run in full - paid model
+    // tokens, tools that place calendar holds - and only the SEND was refused,
+    // before any Nudge row, so the reply cap never counted it either.
     const shop = await makeShop();
+    const { staffId, serviceId } = await makeBookable(shop.id);
     const phone = freshPhone();
     await makeClient(shop.id, phone, { optedOut: true });
-    __setModelClientForTests(scriptedModel([textMsg("this must not send")]));
+    const slotId = `${staffId}~${serviceId}~2026-06-02T18:00:00.000Z`;
+    const model = scriptedModel([
+      toolUseMsg([{ id: "tu_1", name: "hold_slot", input: { slot_id: slotId } }]),
+      textMsg("this must not send"),
+    ]);
+    __setModelClientForTests(model);
+
+    await processInboundText({ phone, text: "one more question", now: NOW });
+
+    expect(model.requests).toHaveLength(0);
+    expect(sms).toHaveLength(0);
+    expect(await prisma.appointment.count({ where: { shopId: shop.id } })).toBe(0);
+    expect(await prisma.receptionistConversation.count({ where: { shopId: shop.id } })).toBe(0);
+    expect(await prisma.nudge.count({ where: { shopId: shop.id } })).toBe(0);
+  });
+
+  it("🔴 a number opted out at ANOTHER shop gets no turn on a live thread here either", async () => {
+    // STOP opts out by phone, everywhere. A live thread at this shop (opened
+    // before the opt-out landed on a different record) must not keep the AI
+    // talking - or spending.
+    const shop = await makeShop();
+    const otherShop = await makeShop();
+    await makeBookable(shop.id);
+    const phone = freshPhone();
+    await makeClient(shop.id, phone);
+    __setModelClientForTests(scriptedModel([textMsg("hey Marcus")]));
+    await processInboundText({ phone, text: "hi", now: NOW });
+    expect(sms).toHaveLength(1);
+    expect(await hasLiveConversation(phone)).toBe(true);
+
+    // Opted out on the other shop's record (not via the STOP keyword, so no
+    // thread was closed).
+    await makeClient(otherShop.id, phone, { optedOut: true });
+    sms = [];
+    const model = scriptedModel([textMsg("this must not send")]);
+    __setModelClientForTests(model);
+
+    await processInboundText({ phone, text: "one more question", now: NOW });
+
+    expect(model.requests).toHaveLength(0);
+    expect(sms).toHaveLength(0);
+    // Its YES is the carrier opt-in keyword now, not "book it" in a thread the
+    // AI can no longer answer.
+    expect(await hasLiveConversation(phone)).toBe(false);
+  });
+
+  it("NEVER texts a number that opts out mid-turn (send-time re-check)", async () => {
+    // The inbound gate cannot see a STOP that lands while the model is
+    // thinking; the send-time re-check in outbound.ts still must.
+    const shop = await makeShop();
+    const phone = freshPhone();
+    const client = await makeClient(shop.id, phone);
+    const model: ReceptionistModelClient = {
+      async create() {
+        await prisma.client.update({ where: { id: client.id }, data: { optedOut: true } });
+        return textMsg("this must not send");
+      },
+    };
+    __setModelClientForTests(model);
 
     await processInboundText({ phone, text: "one more question", now: NOW });
 
     expect(sms).toHaveLength(0);
-    // The turn still ran and is audited; only the send was blocked.
-    const convo = await prisma.receptionistConversation.findFirst({
-      where: { shopId: shop.id, phone },
-      include: { messages: true },
-    });
-    expect(convo).not.toBeNull();
-    expect(convo!.messages.some((m) => m.role === "assistant")).toBe(true);
-    const nudges = await prisma.nudge.findMany({ where: { shopId: shop.id } });
-    expect(nudges).toHaveLength(0);
+    expect(await prisma.nudge.count({ where: { shopId: shop.id } })).toBe(0);
   });
 
   it("escalate_to_human hands the thread off: status flips, barber alerted, AI goes silent on the follow-up", async () => {

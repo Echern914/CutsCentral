@@ -4,6 +4,21 @@ import { redactForAudit } from "../messaging/auditBody.js";
 import { getMessageProvider } from "../messaging/twilio.js";
 
 /**
+ * Has this number opted out ANYWHERE? STOP is global by phone: it opts out
+ * every Client row carrying the number, at every shop, so one opted-out row is
+ * enough. The one definition shared by the inbound gate (no model turn for an
+ * opted-out number), the live-thread check behind the webhook's YES routing,
+ * and the send-time re-check below.
+ */
+export async function phoneOptedOut(phone: string): Promise<boolean> {
+  const row = await prisma.client.findFirst({
+    where: { phone, optedOut: true },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+/**
  * The receptionist's one SMS exit. Every send is recorded on the Nudge ledger
  * (write-ahead PENDING -> SENT/FAILED, like every other send path) and re-checks
  * optedOut at SEND time - a STOP that lands mid-turn must win over an
@@ -27,11 +42,7 @@ export async function sendReceptionistSms(params: {
   from?: string | null;
 }): Promise<boolean> {
   // Send-time STOP re-check (global by phone - STOP opts out every match).
-  const optedOut = await prisma.client.findFirst({
-    where: { phone: params.phone, optedOut: true },
-    select: { id: true },
-  });
-  if (optedOut) {
+  if (await phoneOptedOut(params.phone)) {
     logger.info(
       { shopId: params.shopId, clientId: params.clientId },
       "receptionist send skipped: opted out",
