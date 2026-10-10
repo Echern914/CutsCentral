@@ -35,6 +35,12 @@ import { formatApptTime } from "../messaging/templates.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import type { ToolExecutionResult, ToolExecutor } from "./agent.js";
+import {
+  ESCALATED_REALERT_MS,
+  ESCALATION_NOTE_PREFIX,
+  FOLLOW_UP_ALERT_NOTE,
+  MANUAL_REPLY_NOTE,
+} from "./conversation.js";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 
 /**
@@ -1622,50 +1628,126 @@ export async function escalateConversation(params: {
         shopId: params.shopId,
         conversationId: params.conversationId,
         role: "system_note",
-        content: `escalated to barber: ${params.reason}`,
+        content: `${ESCALATION_NOTE_PREFIX}${params.reason}`,
       },
     });
 
-    const shop = await prisma.shop.findUnique({
-      where: { id: params.shopId },
-      select: { id: true, name: true, ownerId: true, notifyPhone: true },
+    await alertShopAboutThread({
+      shopId: params.shopId,
+      body: (shopName) =>
+        `${shopName}: the AI receptionist handed off a text thread with ${params.phone} - ${params.reason}`,
+      url: `${apiEnv().APP_BASE_URL}/dashboard`,
     });
-    if (!shop) return;
-
-    const title = "Client needs you";
-    const body = `${shop.name}: the AI receptionist handed off a text thread with ${params.phone} - ${params.reason}`;
-    await sendPushToUser({
-      userId: shop.ownerId,
-      shopId: shop.id,
-      payload: {
-        title,
-        body,
-        url: `${apiEnv().APP_BASE_URL}/dashboard`,
-        tag: "receptionist-escalation",
-      },
-    }).catch((err) =>
-      logger.error({ err, shopId: shop.id }, "escalation push failed"),
-    );
-
-    if (shop.notifyPhone) {
-      if (apiEnv().DRY_RUN || !smsEnabled()) {
-        logger.info(
-          { shopId: shop.id, to: shop.notifyPhone },
-          "escalation barber SMS not sent (dry-run or texting off)",
-        );
-      } else {
-        await getMessageProvider()
-          .send({ to: shop.notifyPhone, body })
-          .catch((err) =>
-            logger.error({ err, shopId: shop.id }, "escalation barber SMS failed"),
-          );
-      }
-    }
   } catch (err) {
     logger.error(
       { err, conversationId: params.conversationId },
       "escalateConversation failed",
     );
+  }
+}
+
+/**
+ * The client texted again on a thread the shop owns (escalated). The AI stays
+ * silent there, so without this nothing told the shop: one ping at handoff,
+ * then every later text - including the client's answer to the shop's own
+ * manual reply - sat unread in the inbox.
+ *
+ * At most one alert per thread per ESCALATED_REALERT_MS, so a client sending
+ * three texts in a row is one ping - except that a reply FROM the shop re-arms
+ * it at once: the client answering the shop is exactly what it is waiting for.
+ * The alert is recorded as a system_note, which is both the audit trail and
+ * the throttle's memory (no schema change). Never throws.
+ */
+export async function alertShopOfEscalatedFollowUp(params: {
+  shopId: string;
+  conversationId: string;
+  phone: string;
+  now: Date;
+}): Promise<boolean> {
+  try {
+    const last = await prisma.receptionistMessage.findFirst({
+      where: {
+        conversationId: params.conversationId,
+        role: "system_note",
+        OR: [
+          { content: { startsWith: ESCALATION_NOTE_PREFIX } },
+          { content: FOLLOW_UP_ALERT_NOTE },
+          { content: MANUAL_REPLY_NOTE },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+      select: { content: true, createdAt: true },
+    });
+    const alertedRecently =
+      last !== null &&
+      last.content !== MANUAL_REPLY_NOTE &&
+      last.createdAt.getTime() > params.now.getTime() - ESCALATED_REALERT_MS;
+    if (alertedRecently) return false;
+
+    await prisma.receptionistMessage.create({
+      data: {
+        shopId: params.shopId,
+        conversationId: params.conversationId,
+        role: "system_note",
+        content: FOLLOW_UP_ALERT_NOTE,
+        // Stamped on the clock the window above is measured on.
+        createdAt: params.now,
+      },
+    });
+    await alertShopAboutThread({
+      shopId: params.shopId,
+      body: (shopName) =>
+        `${shopName}: ${params.phone} texted again on a thread the AI receptionist handed to you - open your inbox to reply`,
+      url: `${apiEnv().APP_BASE_URL}/dashboard/inbox/${params.conversationId}`,
+    });
+    return true;
+  } catch (err) {
+    logger.error(
+      { err, conversationId: params.conversationId },
+      "escalated follow-up alert failed",
+    );
+    return false;
+  }
+}
+
+/**
+ * "Client needs you" to the shop owner: push to their devices, plus an SMS to
+ * the shop's notifyPhone while texting is on and not a dry run.
+ */
+async function alertShopAboutThread(params: {
+  shopId: string;
+  body: (shopName: string) => string;
+  url: string;
+}): Promise<void> {
+  const shop = await prisma.shop.findUnique({
+    where: { id: params.shopId },
+    select: { id: true, name: true, ownerId: true, notifyPhone: true },
+  });
+  if (!shop) return;
+
+  const title = "Client needs you";
+  const body = params.body(shop.name);
+  await sendPushToUser({
+    userId: shop.ownerId,
+    shopId: shop.id,
+    payload: { title, body, url: params.url, tag: "receptionist-escalation" },
+  }).catch((err) =>
+    logger.error({ err, shopId: shop.id }, "escalation push failed"),
+  );
+
+  if (shop.notifyPhone) {
+    if (apiEnv().DRY_RUN || !smsEnabled()) {
+      logger.info(
+        { shopId: shop.id, to: shop.notifyPhone },
+        "escalation barber SMS not sent (dry-run or texting off)",
+      );
+    } else {
+      await getMessageProvider()
+        .send({ to: shop.notifyPhone, body })
+        .catch((err) =>
+          logger.error({ err, shopId: shop.id }, "escalation barber SMS failed"),
+        );
+    }
   }
 }
 

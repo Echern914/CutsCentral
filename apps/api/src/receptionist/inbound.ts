@@ -6,6 +6,7 @@ import { renderPromptForShop } from "./prompt.js";
 import { runAgentTurn } from "./agent.js";
 import {
   RECEPTIONIST_TOOLS,
+  alertShopOfEscalatedFollowUp,
   describeActiveHolds,
   describeUpcomingAppointments,
   escalateConversation,
@@ -377,8 +378,24 @@ export async function processInboundText(params: {
       content: params.text,
     });
 
-    // Escalated = the barber owns this thread; the AI stays silent.
-    if (conversation.status === "escalated") return;
+    // Escalated = the barber owns this thread; the AI stays silent - but the
+    // shop hears that the client wrote again (throttled; see the function).
+    // The turn lock serialises two texts landing at once into one alert.
+    if (conversation.status === "escalated") {
+      if (await claimTurn(conversation.id, now)) {
+        try {
+          await alertShopOfEscalatedFollowUp({
+            shopId: shop.id,
+            conversationId: conversation.id,
+            phone: params.phone,
+            now,
+          });
+        } finally {
+          await releaseTurn(conversation.id);
+        }
+      }
+      return;
+    }
 
     // clientId can be null on a thread whose client was merged/archived
     // mid-conversation; the Nudge ledger needs one, so re-resolve or stop.
