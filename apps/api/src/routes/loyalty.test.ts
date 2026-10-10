@@ -247,7 +247,17 @@ describe("live extra-punch promotions on the earn settings", () => {
 
     const now = Date.now();
     const live = await prisma.promotion.create({
-      data: { shopId: shopB, kind: "EXTRA_PUNCHES", title: "Double punch", extraPunches: 1 },
+      // An explicit start in the past: left to the column default, startsAt is
+      // the DATABASE's now(), and the API asks "startsAt <= now" with its OWN
+      // clock - a database a millisecond ahead made the live promo "not
+      // started yet" and failed this test now and then.
+      data: {
+        shopId: shopB,
+        kind: "EXTRA_PUNCHES",
+        title: "Double punch",
+        extraPunches: 1,
+        startsAt: new Date(now - DAY),
+      },
       select: { id: true },
     });
     await prisma.promotion.createMany({
