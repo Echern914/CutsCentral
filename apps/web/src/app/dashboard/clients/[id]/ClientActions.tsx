@@ -2,6 +2,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useToast } from "@/components/ui/Toast";
+import { apiAnswered } from "@/lib/apiAnswered";
 import {
   bonusPunchAction,
   logVisitAction,
@@ -132,9 +133,11 @@ export function ClientActions({
           r = { ok: false, status: 0 };
         }
         setVisitPickerOpen(false);
-        // status 0 = the request never completed: keep the id, so trying
-        // again is the same visit, not a second one.
-        if (r.status !== 0) visitTap.current = null;
+        // No answer, or a 5xx (a gateway 502/504 can follow a visit the API
+        // already logged): the outcome is unknown, so keep the id - trying
+        // again is the same visit, not a second one (lib/apiAnswered.ts).
+        const answered = apiAnswered(r.status);
+        if (answered) visitTap.current = null;
         if (r.ok) {
           setOnBooks(null);
           toast(r.replayed ? "Already logged - nothing added" : "Visit logged. Punches added", "success");
@@ -143,7 +146,7 @@ export function ClientActions({
             message: r.message ?? "This client already has a visit on the books that day.",
             cardTypeId,
           });
-        } else if (r.status === 0) {
+        } else if (!answered) {
           toast("No answer from ChairBack - tap Log visit again. It won't log twice.", "error");
         } else toast("Could not log visit", "error");
       } finally {
