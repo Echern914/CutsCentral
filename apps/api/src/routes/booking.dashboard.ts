@@ -4896,6 +4896,8 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
           reminderEmailSentAt: null,
           reminder24hPushSentAt: null,
           reminder2hPushSentAt: null,
+          // The barber's "next up" alert was for the OLD time too.
+          barberNextUpSentAt: null,
           checkInStatus: null,
           checkedInAt: null,
           etaMinutes: null,

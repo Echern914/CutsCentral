@@ -487,13 +487,19 @@ describe("a moved booking and the client", () => {
     await prisma.appointment.update({
       where: { id: a.id },
       // No address: the confirmation can't go, so nothing re-stamps.
-      data: { confirmationEmailSentAt: new Date(), reminderEmailSentAt: new Date() },
+      data: {
+        confirmationEmailSentAt: new Date(),
+        reminderEmailSentAt: new Date(),
+        barberNextUpSentAt: new Date(),
+      },
     });
     await patch(a.id, { startsAt: slotAt(17).toISOString() });
     await settleBackgroundWork();
     const row = await prisma.appointment.findUniqueOrThrow({ where: { id: a.id } });
     expect(row.confirmationEmailSentAt).toBeNull();
     expect(row.reminderEmailSentAt).toBeNull();
+    // The barber's own "next up" alert re-arms for the new time too.
+    expect(row.barberNextUpSentAt).toBeNull();
   });
 
   it("a booking ChairBack never emailed about stays quiet when it moves", async () => {

@@ -558,6 +558,19 @@ describe("the client hears about it once", () => {
     expect(after.slice(1).every((r) => r.reminderEmailSentAt === null)).toBe(true);
   });
 
+  it("the barber's next-up alert re-arms for every visit whose time moved", async () => {
+    const { series, rows } = await makeSeries();
+    await prisma.appointment.updateMany({
+      where: { seriesId: series.id },
+      data: { barberNextUpSentAt: new Date() },
+    });
+    const res = await previewThenApply(series.id, { fromAppointmentId: rows[0]!.id, changes: { startMin: H(15) } });
+    expect(res.status).toBe(200);
+    await settleBackgroundWork();
+    const after = await rowsOf(series.id);
+    expect(after.every((r) => r.barberNextUpSentAt === null)).toBe(true);
+  });
+
   it("a repeat ChairBack never emailed about stays quiet", async () => {
     const { series, rows } = await makeSeries();
     const res = await previewThenApply(series.id, { fromAppointmentId: rows[0]!.id, changes: { startMin: H(15) } });

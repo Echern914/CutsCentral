@@ -300,6 +300,8 @@ describe("reschedule", () => {
     const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));
     const booked = await exec("book_appointment", { slot_id: slotIdAt(20, 0) });
     const apptId = JSON.parse(booked.result).appointment_id as string;
+    // The barber's "next up" alert already went out for 20:00.
+    await prisma.appointment.update({ where: { id: apptId }, data: { barberNextUpSentAt: new Date() } });
 
     const moved = await exec("reschedule", {
       appointment_id: apptId,
@@ -311,6 +313,7 @@ describe("reschedule", () => {
     expect(row!.startsAt.getTime()).toBe(T(21, 0).getTime());
     expect(row!.status).toBe("BOOKED");
     expect(row!.reminderSentAt).toBeNull();
+    expect(row!.barberNextUpSentAt).toBeNull();
     // A Wallet pass for this booking is told to re-fetch the new time.
     expect(wallet.poke).toHaveBeenCalledWith(apptId);
 
