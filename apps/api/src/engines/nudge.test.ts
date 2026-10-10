@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { addDays, randomToken } from "@chairback/config";
 import { forShop, prisma, type Shop } from "@chairback/db";
 import { __setMessageProviderForTests } from "../messaging/twilio.js";
+import { __setExpoSenderForTests, makeExpoSender } from "../messaging/push.js";
 import type { MessageProvider } from "../messaging/provider.js";
 import { sweepShop } from "./nudge.js";
 
@@ -462,5 +463,49 @@ describe("🔴 never to a client who is gone (eligibility.ts, R2's far edge)", (
     // Nothing written for the gone client either - not even a skipped row.
     const rows = await prisma.nudge.findMany({ where: { shopId: own.id }, select: { client: { select: { phone: true } } } });
     expect(rows.map((r) => r.client.phone)).toEqual(["+13025551502"]);
+  });
+});
+
+// 🔴 A push the SERVICE refused is not a delivery. The real Expo sender used
+// to read a 429/5xx as success, so the sweep skipped the SMS and recorded a
+// push nobody got. Exercised through the real sender over a fake fetch.
+describe("🔴 push refused by the push service -> the SMS fallback runs", () => {
+  it.each([429, 503])("Expo answering %i: the client is texted instead", async (httpStatus) => {
+    const own = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Push Fallback Shop",
+        bookingUrl: "https://nudge.test",
+        webhookSecret: randomToken(),
+        dailySendCap: 5,
+        nudgeBufferDays: 7,
+      },
+    });
+    const phone = `+1302555${httpStatus}9`;
+    const client = await makeOverdueClient(own.id, `tel:${phone}`, phone);
+    await prisma.pushSubscription.create({
+      data: { shopId: own.id, clientId: client.id, kind: "expo", expoPushToken: `ExponentPushToken[pf${httpStatus}]` },
+    });
+    let fetchCalls = 0;
+    const refusing = (async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ errors: [{ code: "UNAVAILABLE" }] }), { status: httpStatus });
+    }) as unknown as typeof fetch;
+    __setExpoSenderForTests(makeExpoSender({ fetchImpl: refusing }));
+    try {
+      const summary = await sweepShop(own, { now: NOW, dryRun: false });
+
+      expect(fetchCalls).toBe(1); // the push WAS tried first
+      expect(summary.sent).toBe(1);
+      expect(sent.map((s) => s.to)).toEqual([phone]);
+      const rows = await prisma.nudge.findMany({
+        where: { shopId: own.id },
+        select: { channel: true, status: true },
+      });
+      // One SENT text, and no WEB_PUSH row claiming a delivery.
+      expect(rows).toEqual([{ channel: "SMS", status: "SENT" }]);
+    } finally {
+      __setExpoSenderForTests(undefined);
+    }
   });
 });
