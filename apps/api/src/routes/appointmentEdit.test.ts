@@ -9,6 +9,7 @@ import {
   settleBackgroundWork,
 } from "../backgroundWork.js";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
+import { promotePaidHold } from "../services/appointmentPaymentHold.js";
 
 /**
  * Editing an appointment must reuse the booking engine, not become a second
@@ -275,6 +276,105 @@ describe("status is never silently changed", () => {
     const res = await patch(a.id, { notes: "x" });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("not_editable");
+  });
+});
+
+/**
+ * 🔴 A REQUEST THAT MOVES LANDS ON TIME IT DID NOT HOLD - so it is checked
+ * against the live holds and other requests there, like any other move.
+ *
+ * It used to be checked against BOOKED rows only (approve-path parity), which
+ * made every PENDING row invisible to it. A request dragged onto a customer's
+ * live payment hold then sat on that time, and when the customer's money
+ * landed, promotePaidHold found the request in the way and refunded them: a
+ * paid booking lost to a request the barber had not even approved yet.
+ * A request edited where it already sits keeps approve's rule.
+ */
+describe("🔴 a pending request that moves respects the holds and requests already there", () => {
+  async function liveHold(startsAt: Date, expiresInMin = 10, lengthMin = 30) {
+    return prisma.appointment.create({
+      data: {
+        shopId,
+        staffId: staffA,
+        serviceId: svcShort,
+        firstName: "Paying",
+        status: "PENDING",
+        holdReason: "payment",
+        holdExpiresAt: new Date(Date.now() + expiresInMin * 60_000),
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + lengthMin * 60_000),
+        manageToken: randomToken(),
+      },
+      select: { id: true },
+    });
+  }
+
+  it("moving a request onto a customer's live payment hold is refused - and the hold still becomes their booking", async () => {
+    // The customer is paying for 16:30-17:30; the request is dragged to 17:00.
+    const hold = await liveHold(new Date(slotAt(17).getTime() - 30 * 60_000), 10, 60);
+    const a = await makeAppt({ status: "PENDING", startsAt: slotAt(15) });
+    const res = await patch(a.id, { startsAt: slotAt(17).toISOString() });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ error: "slot_taken", code: "HELD", confirmable: false });
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id: a.id } });
+    expect(row.startsAt.toISOString()).toBe(slotAt(15).toISOString());
+    expect(row.status).toBe("PENDING");
+    // The customer's money lands: they get the chair they paid for.
+    expect(await promotePaidHold({ appointmentId: hold.id, notify: false })).toBe("promoted");
+  });
+
+  it("stretching a request into a live hold is refused too", async () => {
+    await liveHold(new Date(slotAt(15).getTime() + 30 * 60_000)); // 15:30
+    const a = await makeAppt({ status: "PENDING", startsAt: slotAt(15) }); // 15:00-15:30
+    const res = await patch(a.id, { durationMin: 60 });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("HELD");
+  });
+
+  it("moving a request onto another request is refused - and Book anyway can land it", async () => {
+    // Another client's request for 16:30-17:30; ours is dragged to 17:00.
+    const otherStart = new Date(slotAt(17).getTime() - 30 * 60_000);
+    await makeAppt({
+      status: "PENDING",
+      startsAt: otherStart,
+      endsAt: new Date(otherStart.getTime() + 60 * 60_000),
+    });
+    const a = await makeAppt({ status: "PENDING", startsAt: slotAt(15) });
+    const res = await patch(a.id, { startsAt: slotAt(17).toISOString() });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ error: "slot_taken", code: "OVERLAP", confirmable: true });
+    expect((await prisma.appointment.findUniqueOrThrow({ where: { id: a.id } })).startsAt.toISOString()).toBe(
+      slotAt(15).toISOString(),
+    );
+    const forced = await patch(a.id, {
+      startsAt: slotAt(17).toISOString(),
+      overlapConfirmation: res.body.confirmation,
+    });
+    expect(forced.status).toBe(200);
+  });
+
+  it("an EXPIRED hold no longer holds the time", async () => {
+    // 17:15-17:45, lapsed a minute ago. (Not at 17:00 itself: the exact-start
+    // unique index outlives a lapsed hold until the sweep cancels it.)
+    await liveHold(new Date(slotAt(17).getTime() + 15 * 60_000), -1);
+    const a = await makeAppt({ status: "PENDING", startsAt: slotAt(15) });
+    expect((await patch(a.id, { startsAt: slotAt(17).toISOString() })).status).toBe(200);
+  });
+
+  it("a request edited where it already sits keeps approve's rule: shortening it is not refused by a request it overlaps", async () => {
+    // Two requests that already overlap (made before this rule existed). The
+    // barber trims one; it takes no time it did not hold, so - like approving
+    // it where it is - other requests are not the question.
+    const a = await makeAppt({
+      status: "PENDING",
+      startsAt: slotAt(15),
+      endsAt: new Date(slotAt(15).getTime() + 60 * 60_000),
+    });
+    await makeAppt({ status: "PENDING", startsAt: new Date(slotAt(15).getTime() + 30 * 60_000) });
+    const res = await patch(a.id, { durationMin: 45 });
+    expect(res.status).toBe(200);
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id: a.id } });
+    expect(row.endsAt.toISOString()).toBe(new Date(slotAt(15).getTime() + 45 * 60_000).toISOString());
   });
 });
 
