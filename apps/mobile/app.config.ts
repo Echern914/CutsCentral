@@ -192,7 +192,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        opens that appointment (#545), and the Rewards tab with the timer
   //        and everything that left the shop page (#565). 1.1.4 (49) was
   //        released 2026-09-26, so the version string moves.
-  version: "1.1.5",
+  //
+  // 1.1.6 = build 51. The app changes merged since 50: push registration that
+  //        keeps trying until it lands, Tap to Pay reusing its reader, honest
+  //        retries and sign-in code timers (#615), and Home / Clients / Team
+  //        saying what really happened and fitting the phone (#606). 🔴 The
+  //        Lock Screen widget (#618) is NOT in this build: it ships only from
+  //        a Mac prebuild with NEXT_UP_WIDGET_ENABLED=true once its target has
+  //        compiled, signed with the App Group, and passed the device checks
+  //        in docs/lock-screen-widget.md. Without the flag, prebuild leaves the
+  //        target, the App Group entitlement and the names setting out.
+  version: "1.1.6",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
@@ -208,7 +218,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "50",
+    buildNumber: "51",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,

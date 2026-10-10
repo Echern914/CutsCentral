@@ -359,11 +359,22 @@ describe("reschedule", () => {
     const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));
     const booked = await exec("book_appointment", { slot_id: slotIdAt(15, 0) });
     const apptId = JSON.parse(booked.result).appointment_id as string;
-    // Paid $30 in full when booked at $30; every slot now costs $35.
-    await payAtBooking(apptId, 30, 3000);
-    const moved = await exec("reschedule", { appointment_id: apptId, new_slot_id: slotIdAt(15, 30) });
-    expect(moved.isError).toBe(true);
-    expect(moved.result).toContain("escalate_to_human");
+    // Paid $35 in full when booked at the menu's $35; the next day costs $45.
+    // (A price the menu doesn't explain - say $30 typed - is AGREED and moves
+    // untouched since #620, so a paid one no longer differs at all; the
+    // receptionist's own price rules are pinned in reschedulePrice.test.ts.)
+    await payAtBooking(apptId, 35, 3500);
+    await prisma.service.update({ where: { id: serviceId }, data: { dateOverrides: { "2026-06-03": 45 } } });
+    try {
+      const moved = await exec("reschedule", {
+        appointment_id: apptId,
+        new_slot_id: encodeSlotId(staffId, serviceId, new Date(Date.UTC(2026, 5, 3, 15, 0))),
+      });
+      expect(moved.isError).toBe(true);
+      expect(moved.result).toContain("escalate_to_human");
+    } finally {
+      await prisma.service.update({ where: { id: serviceId }, data: { dateOverrides: {} } });
+    }
   });
 
   it("refuses to touch ANOTHER client's appointment no matter what id the model passes", async () => {

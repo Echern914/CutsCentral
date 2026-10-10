@@ -264,6 +264,87 @@ describe("moving the whole party", () => {
     ).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/block/i);
   });
+
+  describe("🔴 a new time that changes what the party pays", () => {
+    const PRICE_CHANGE = {
+      fromCents: 6500,
+      toCents: 7500,
+      seats: [{ appointmentId: "a1", position: 0, firstName: "Eric", fromCents: 4000, toCents: 5000 }],
+    };
+    const oneSlot = () =>
+      slotsAction.mockResolvedValue({
+        ok: true,
+        data: {
+          timezone: TZ,
+          totalDurationMin: 50,
+          slots: [{ startsAt: "2026-03-14T20:00:00.000Z", endsAt: "2026-03-14T20:50:00.000Z" }],
+        },
+      });
+
+    it("shows the new total and each changed seat, and says nobody moved", async () => {
+      oneSlot();
+      rescheduleAction.mockResolvedValue({ ok: false, code: "price_changes", priceChange: PRICE_CHANGE });
+      show();
+      fireEvent.click(screen.getByRole("button", { name: "Move the whole group" }));
+      fireEvent.click(await screen.findByRole("button", { name: /4:00 PM/ }));
+      const ask = await screen.findByRole("alertdialog");
+      expect(ask.textContent).toContain("from $65 to $75");
+      expect(ask.textContent).toContain("Eric: $40 to $50");
+      expect(ask.textContent).toContain("Nobody has moved yet");
+      // The first call carried no acceptance.
+      expect(rescheduleAction).toHaveBeenCalledWith(TOKEN, "2026-03-14T20:00:00.000Z", undefined);
+      expect(screen.queryByText(/Everyone has been moved/)).toBeNull();
+    });
+
+    it("a yes sends exactly the listed seats back", async () => {
+      oneSlot();
+      rescheduleAction
+        .mockResolvedValueOnce({ ok: false, code: "price_changes", priceChange: PRICE_CHANGE })
+        .mockResolvedValueOnce({
+          ok: true,
+          plan: {
+            startsAt: "2026-03-14T20:00:00.000Z",
+            endsAt: "2026-03-14T20:50:00.000Z",
+            totalDurationMin: 50,
+            totalPriceCents: 7500,
+            unpricedCount: 0,
+            members: [],
+          },
+        });
+      show();
+      fireEvent.click(screen.getByRole("button", { name: "Move the whole group" }));
+      fireEvent.click(await screen.findByRole("button", { name: /4:00 PM/ }));
+      fireEvent.click(await screen.findByRole("button", { name: "Move everyone at $75" }));
+      await screen.findByText(/Everyone has been moved/);
+      expect(rescheduleAction).toHaveBeenLastCalledWith(
+        TOKEN,
+        "2026-03-14T20:00:00.000Z",
+        PRICE_CHANGE.seats,
+      );
+    });
+
+    it("Keep our time backs out: no second call, nothing moved", async () => {
+      oneSlot();
+      rescheduleAction.mockResolvedValue({ ok: false, code: "price_changes", priceChange: PRICE_CHANGE });
+      show();
+      fireEvent.click(screen.getByRole("button", { name: "Move the whole group" }));
+      fireEvent.click(await screen.findByRole("button", { name: /4:00 PM/ }));
+      fireEvent.click(await screen.findByRole("button", { name: "Keep our time" }));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(rescheduleAction).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/Everyone has been moved/)).toBeNull();
+    });
+
+    it("a paid party is sent to the shop, not asked", async () => {
+      oneSlot();
+      rescheduleAction.mockResolvedValue({ ok: false, code: "price_changed" });
+      show();
+      fireEvent.click(screen.getByRole("button", { name: "Move the whole group" }));
+      fireEvent.click(await screen.findByRole("button", { name: /4:00 PM/ }));
+      expect(await screen.findByText(/please contact the shop to move it/)).toBeTruthy();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+  });
 });
 
 describe("🔴 the token is a credential", () => {
