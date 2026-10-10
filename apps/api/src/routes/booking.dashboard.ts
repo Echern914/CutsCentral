@@ -6356,6 +6356,7 @@ bookingDashboardRouter.post("/appointments/:id/complete", async (req, res) => {
         startsAt: true,
         endsAt: true,
         priceAtBooking: true,
+        groupId: true,
         service: { select: { name: true } },
       },
     });
@@ -6370,6 +6371,7 @@ bookingDashboardRouter.post("/appointments/:id/complete", async (req, res) => {
         endsAt: appt.endsAt,
         priceAtBooking: appt.priceAtBooking,
         serviceName: appt.service?.name ?? null,
+        groupId: appt.groupId,
       },
       now,
       // The shop pressed Done: the visit happened (the tip ask's signal).
@@ -6550,6 +6552,7 @@ bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
         endsAt: true,
         priceAtBooking: true,
         paidAt: true,
+        groupId: true,
         service: { select: { name: true } },
       },
     });
@@ -6592,6 +6595,7 @@ bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
           endsAt: appt.endsAt,
           priceAtBooking: appt.priceAtBooking,
           serviceName: appt.service?.name ?? null,
+          groupId: appt.groupId,
         },
         now,
         // Checked out at the chair: the visit happened.
