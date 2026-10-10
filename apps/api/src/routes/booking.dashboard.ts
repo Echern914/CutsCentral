@@ -5044,8 +5044,20 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
     res.status(409).json({ ok: false, error: "not_booked" });
     return;
   }
-  const ok = await cancelAppointment(shopId, req.params.id!, "NO_SHOW");
-  res.status(ok ? 200 : 404).json({ ok });
+  // 🔴 ONLY FROM BOOKED, in the write itself. The read above is a moment
+  // older than the write: a client cancelling from their link in between used
+  // to be overwritten - the compare-and-set accepted anything but NO_SHOW, so
+  // their CANCELED booking became a no-show and a kept card was charged the
+  // no-show fee. Now that write moves nothing, and the answer is the same
+  // refusal as a booking that was never BOOKED.
+  const ok = await cancelAppointment(shopId, req.params.id!, "NO_SHOW", new Date(), {
+    onlyFrom: ["BOOKED"],
+  });
+  if (!ok) {
+    res.status(409).json({ ok: false, error: "not_booked" });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 //  Targeted slots (one-off special-priced bookable slots under a service)
