@@ -73,7 +73,7 @@ import {
 import { checkPolicyAcceptance, publicBookingPolicy } from "../engines/bookingPolicy.js";
 import { normalizeClientNote } from "@chairback/config/clientNote";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
-import { fillBlankClientFields } from "../services/clientFill.js";
+import { fillBlankClientNames } from "../services/clientFill.js";
 import { neverBooked, optionalCardStepFor, unfinishedCheckoutFor } from "../services/unfinishedCheckout.js";
 import {
   durationRangeForService,
@@ -2162,16 +2162,14 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         smsConsentSource: consented ? "booking" : null,
       },
       // 🔴 Never overwrite an existing client from a public form - a shared
-      // phone is not the same person (services/clientFill.ts). Blanks fill
-      // below; each booking row keeps exactly what was typed.
+      // phone is not the same person (services/clientFill.ts). A blank name
+      // fills below - never a contact; each booking row keeps what was typed.
       update: {},
       select: { id: true },
     });
-    await fillBlankClientFields(prisma, client.id, {
+    await fillBlankClientNames(prisma, client.id, {
       firstName: d.firstName,
       lastName: d.lastName,
-      phone,
-      email: d.email,
     });
     if (consented) {
       await prisma.client.updateMany({
@@ -2501,8 +2499,8 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           smsConsentSource: consented ? "booking" : null,
         },
         // 🔴 Never overwrite an existing client from a public form - a shared
-        // phone is not the same person (services/clientFill.ts). Blanks fill
-        // below; the booking row keeps exactly what was typed.
+        // phone is not the same person (services/clientFill.ts). A blank name
+        // fills below - never a contact; the booking row keeps what was typed.
         update: {},
         select: { id: true },
       });
@@ -2511,11 +2509,9 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       // another record, nothing is written and the page books with a card
       // step instead.
       if (savedCard && client.id !== savedCard.clientId) throw new SavedCardNotTheirsError();
-      await fillBlankClientFields(tx, client.id, {
+      await fillBlankClientNames(tx, client.id, {
         firstName: d.firstName,
         lastName: d.lastName,
-        phone,
-        email: d.email,
       });
       if (consented) {
         await tx.client.updateMany({

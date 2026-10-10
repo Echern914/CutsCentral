@@ -155,6 +155,36 @@ describe("🔴 a shared phone is not the same person", () => {
     const after = await prisma.client.findUniqueOrThrow({ where: { id: regular.id } });
     expect([after.firstName, after.lastName, after.email]).toEqual(["Maria", "Lopez", "maria@own.test"]);
   });
+
+  it("🔴 a typed email never fills a client who has none - it stays on the group", async () => {
+    // A contact on the record is what an app account links by
+    // (services/clientFill.ts), and this form proves nothing about the record.
+    const phone = "+12015550189";
+    const regular = await prisma.client.create({
+      data: {
+        shopId,
+        acuityClientKey: `tel:${phone}`,
+        magicToken: randomToken(),
+        firstName: "Maria",
+        phone,
+      },
+    });
+    const res = await createGroup(
+      [
+        { firstName: "Tony", serviceId: cutId },
+        { firstName: "Kid", serviceId: cutId },
+      ],
+      { firstName: "Tony", lastName: "Lopez", phone, email: "tony@other.test" },
+    );
+    expect(res.status).toBe(201);
+    const after = await prisma.client.findUniqueOrThrow({ where: { id: regular.id } });
+    expect([after.firstName, after.lastName, after.email]).toEqual(["Maria", "Lopez", null]);
+    const group = await prisma.appointmentGroup.findFirstOrThrow({
+      where: { shopId, clientId: regular.id },
+      select: { email: true },
+    });
+    expect(group.email).toBe("tony@other.test");
+  });
 });
 
 /** Everything on the barber calendar for the shared day, in order. */

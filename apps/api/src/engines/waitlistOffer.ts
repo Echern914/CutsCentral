@@ -39,7 +39,7 @@ import {
 } from "../messaging/templates.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { sendPushToClient } from "../messaging/push.js";
-import { fillBlankClientFields } from "../services/clientFill.js";
+import { fillBlankClientNames } from "../services/clientFill.js";
 import { loadBookingBlocks } from "../services/clientBookingBlock.js";
 
 /**
@@ -1215,7 +1215,9 @@ export async function claimOffer(params: {
         update: {},
         select: { id: true },
       });
-      await fillBlankClientFields(tx, client.id, { firstName, lastName, phone, email });
+      // A blank NAME fills; a contact never does (services/clientFill.ts) -
+      // the claim's phone and email are typed, not proven.
+      await fillBlankClientNames(tx, client.id, { firstName, lastName });
       // FILL a missing handle, never replace one: the claim's phone is typed,
       // not proven, and the barber is the one who corrects a handle.
       if (instagram) {
