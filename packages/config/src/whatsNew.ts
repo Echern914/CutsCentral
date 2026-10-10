@@ -46,6 +46,56 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "They take effect October 23.",
   },
   {
+    id: "2026-10-10-no-show-after-completed",
+    date: "2026-10-10",
+    kind: "feature",
+    title: "Mark a no-show after the visit shows completed",
+    body:
+      "A booking whose time passed counts as completed, even if nobody came. Open it, tap More, then Mark " +
+      "no-show or Cancel visit, up to 7 days later. Its punch comes off, and nobody is told or charged. " +
+      "A no-show keeps its deposit. A tipped or checked-out visit can't be changed.",
+  },
+  {
+    id: "2026-10-09-remove-walk-in",
+    date: "2026-10-09",
+    kind: "feature",
+    title: "Remove a walk-in you recorded by mistake",
+    body:
+      "Open the walk-in, tap More, then Remove walk-in. It comes off your schedule and out of your takings, and " +
+      "nobody is told. A walk-in paid by card or tipped through ChairBack needs that refunded first. To fix one, " +
+      "remove it and record it again.",
+  },
+  {
+    id: "2026-10-09-repeat-change-acuity-still-confirming",
+    date: "2026-10-09",
+    kind: "fix",
+    title: "Changing a long repeat no longer stalls on Acuity",
+    body:
+      "Edit this and future used to wait for Acuity on every date, and a long repeat could end in \"We couldn't " +
+      "confirm that went through\". It now shows the result right away, marks any date Acuity is still confirming, " +
+      "and checks again until each is confirmed or turned down.",
+  },
+  {
+    id: "2026-10-09-text-and-group-moves-ask-first",
+    date: "2026-10-09",
+    kind: "fix",
+    title: "Moves by text and group moves ask before a price changes",
+    body:
+      "Your text receptionist and the group booking page now move appointments the same way: add-ons and any price " +
+      "you set stay put. If the menu price differs at the new time, the client is shown both figures and nothing " +
+      "moves until they say yes.",
+  },
+  {
+    id: "2026-10-09-server-hiccup-never-books-twice",
+    date: "2026-10-09",
+    kind: "fix",
+    title: "A server hiccup never books or punches twice",
+    body:
+      "If ChairBack can't confirm a booking or a logged visit because of a server error, tapping again now finds " +
+      "what the first tap saved instead of adding a second one. Change the details meanwhile and it tells you " +
+      "what was saved.",
+  },
+  {
     id: "2026-10-08-moved-booking-keeps-its-price",
     date: "2026-10-08",
     kind: "fix",

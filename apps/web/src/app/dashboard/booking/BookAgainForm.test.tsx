@@ -7,6 +7,8 @@ type CreateReply = {
   ok: boolean;
   id?: string;
   startsAt?: string;
+  endsAt?: string;
+  replayed?: boolean;
   answered?: boolean;
   error?: string;
   reason?: string;
@@ -224,6 +226,67 @@ describe("🔴 one submission, one booking", () => {
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(sentAt(1).operationId).toBe(sentAt(0).operationId);
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "new1", startsAt: AT_11.startsAt }));
+  });
+
+  it("🔴 a gateway error after the server saved it: the retry is the SAME submission, same details, and books once", async () => {
+    const { onCreated, toast } = open();
+    fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));
+    // What the action returns for a 502/504 (lib/apiAnswered.ts): unknown.
+    create.mockResolvedValueOnce({ ok: false, answered: false, error: "failed" });
+    bookNext();
+    expect(await screen.findByText(/No answer from ChairBack, so it may or may not have booked/)).toBeInTheDocument();
+    expect(onCreated).not.toHaveBeenCalled();
+
+    create.mockResolvedValueOnce({ ok: true, id: "new1", startsAt: AT_11.startsAt, endsAt: AT_11.endsAt, replayed: true });
+    bookNext();
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(sentAt(1)).toEqual(sentAt(0));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+    expect(onCreated).toHaveBeenCalledWith({ id: "new1", startsAt: AT_11.startsAt });
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
+
+  it("🔴 changed while the outcome was unknown, and the server answers with the FIRST copy's booking: named as that, never as the new choice", async () => {
+    const { onCreated, toast } = open();
+    fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));
+    create.mockResolvedValueOnce({ ok: false, answered: false, error: "failed" });
+    bookNext();
+    await screen.findByText(/No answer from ChairBack/);
+
+    // The barber changes the details, then taps again.
+    fireEvent.change(screen.getByPlaceholderText("Optional note for this appointment"), { target: { value: "Bring the clippers" } });
+    create.mockResolvedValueOnce({ ok: true, id: "old1", startsAt: AT_11.startsAt, endsAt: AT_11.endsAt, replayed: true });
+    bookNext();
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    // Same attempt id - a new one could book a second appointment beside the
+    // first - but the changed details are what was sent.
+    expect(sentAt(1).operationId).toBe(sentAt(0).operationId);
+    expect(sentAt(1).note).toBe("Bring the clippers");
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent(
+      "Your first tap already booked Fri, Oct 2 at 11:00 AM, as it was before your changes. Nothing new was booked, and the changes weren't saved.",
+    );
+    expect(onCreated).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+
+    // Settled: whatever comes next is a new submission.
+    create.mockResolvedValueOnce({ ok: true, id: "new2", startsAt: AT_11.startsAt, endsAt: AT_11.endsAt });
+    bookNext();
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+    expect(sentAt(2).operationId).not.toBe(sentAt(1).operationId);
+  });
+
+  it("changed while unknown, and the first copy never landed: the new details book, once, as a normal success", async () => {
+    const { onCreated } = open();
+    fireEvent.click(await screen.findByRole("button", { name: "11:00 AM" }));
+    create.mockResolvedValueOnce({ ok: false, answered: false, error: "failed" });
+    bookNext();
+    await screen.findByText(/No answer from ChairBack/);
+    fireEvent.change(screen.getByPlaceholderText("Optional note for this appointment"), { target: { value: "Bring the clippers" } });
+    create.mockResolvedValueOnce({ ok: true, id: "new1", startsAt: AT_11.startsAt, endsAt: AT_11.endsAt });
+    bookNext();
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "new1", startsAt: AT_11.startsAt }));
+    expect(sentAt(1).operationId).toBe(sentAt(0).operationId);
   });
 
   it("a lost answer keeps the operationId for the retry; a real refusal starts a new one", async () => {

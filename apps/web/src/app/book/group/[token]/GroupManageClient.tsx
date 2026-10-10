@@ -7,6 +7,7 @@ import {
   cancelGroupAction,
   cancelMemberAction,
   groupRescheduleAction,
+  type GroupPriceChange,
   type GroupView,
 } from "./actions";
 
@@ -45,6 +46,10 @@ export function GroupManageClient({
   const [notice, setNotice] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
   const [slots, setSlots] = useState<{ startsAt: string }[]>([]);
+  // 🔴 A NEW TIME THAT CHANGES WHAT THE PARTY PAYS IS SHOWN BEFORE ANYONE
+  // MOVES. The API answers `price_changes` with the new total and each changed
+  // seat and moves nobody; a yes sends that exact list back.
+  const [priceAsk, setPriceAsk] = useState<({ iso: string } & GroupPriceChange) | null>(null);
 
   const tz = group.shop.timezone;
   const live = group.members.filter((m) => m.status === "BOOKED");
@@ -81,12 +86,18 @@ export function GroupManageClient({
     }
   }
 
-  async function move(iso: string) {
+  async function move(iso: string, accept?: GroupPriceChange) {
     setBusy(true);
     setNotice(null);
-    const res = await groupRescheduleAction(token, iso);
+    if (accept === undefined) setPriceAsk(null);
+    const res = await groupRescheduleAction(token, iso, accept?.seats);
     setBusy(false);
+    if (!res.ok && res.code === "price_changes") {
+      setPriceAsk({ iso, ...res.priceChange });
+      return;
+    }
     if (!res.ok) {
+      setPriceAsk(null);
       setNotice(
         res.code === "slot_taken"
           ? "That time was just taken. Nobody was moved - please pick another."
@@ -94,10 +105,13 @@ export function GroupManageClient({
             ? "This group has been cancelled."
             : res.code === "contact_shop"
               ? "This booking can't be moved online. Please contact the shop to change it."
-              : "That time did not work. Please pick another.",
+              : res.code === "price_changed"
+                ? "That time has a different price and part of this booking is already paid. Nobody was moved - please contact the shop to move it."
+                : "That time did not work. Please pick another.",
       );
       return;
     }
+    setPriceAsk(null);
     setMoving(false);
     setNotice("Everyone has been moved.");
     await refresh();
@@ -198,6 +212,49 @@ export function GroupManageClient({
           {moving ? (
             <section className="mt-6">
               <h2 className="mb-2 font-semibold text-offwhite">Move everyone to…</h2>
+              {priceAsk && (
+                <div
+                  role="alertdialog"
+                  aria-label="This time has a different price"
+                  data-qa="group-price-changes"
+                  className="mb-3 rounded-xl border border-gold/50 bg-gold/10 p-3 text-sm text-offwhite"
+                >
+                  <p className="font-semibold">
+                    {groupDateLabel(priceAsk.iso, tz)}, {time(priceAsk.iso, tz)} is priced differently.
+                  </p>
+                  <p className="mt-1">
+                    The group&apos;s total would change from{" "}
+                    <span className="font-semibold">{money(priceAsk.fromCents)}</span> to{" "}
+                    <span className="font-semibold">{money(priceAsk.toCents)}</span>. Nobody has moved yet.
+                  </p>
+                  <ul className="mt-2 space-y-0.5 text-muted">
+                    {priceAsk.seats.map((s) => (
+                      <li key={s.appointmentId}>
+                        {s.firstName ?? "Guest"}: {s.fromCents === null ? "no price" : money(s.fromCents)} to{" "}
+                        {money(s.toCents)}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void move(priceAsk.iso, priceAsk)}
+                      className="rounded-lg bg-gold px-3 py-1.5 text-xs font-semibold text-charcoal-900 disabled:opacity-40"
+                    >
+                      {busy ? "Moving…" : `Move everyone at ${money(priceAsk.toCents)}`}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setPriceAsk(null)}
+                      className="rounded-lg border border-subtle px-3 py-1.5 text-xs font-medium text-offwhite"
+                    >
+                      Keep our time
+                    </button>
+                  </div>
+                </div>
+              )}
               {busy ? (
                 <p className="text-muted">Finding times…</p>
               ) : (
@@ -216,7 +273,10 @@ export function GroupManageClient({
               )}
               <button
                 type="button"
-                onClick={() => setMoving(false)}
+                onClick={() => {
+                  setPriceAsk(null);
+                  setMoving(false);
+                }}
                 className="mt-3 text-sm text-muted underline"
               >
                 Never mind

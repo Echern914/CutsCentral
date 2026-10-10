@@ -4,6 +4,9 @@ import { Prisma, prisma } from "@chairback/db";
 import { __resetEnvCacheForTests, localMinutesOfDay, randomToken, zonedWallTimeToUtc } from "@chairback/config";
 import { AcuityError } from "../acuity/client.js";
 import { createApp } from "../app.js";
+import { reconcileShop } from "../engines/acuityMirror.js";
+import { blockReference } from "../engines/acuityMirrorRules.js";
+import { __setSeriesEditAnswerWithinForTests } from "./booking.seriesEdit.js";
 import {
   armBackgroundWorkTracking,
   disarmBackgroundWorkTracking,
@@ -623,5 +626,239 @@ describe("an Acuity-protected calendar", () => {
     const res = await previewThenApply(series.id, { fromAppointmentId: rows[2]!.id, changes: { startMin: H(15) } });
     expect(res.status).toBe(200);
     expect(res.body.changed.map((c: { mirror: string }) => c.mirror)).toEqual(["active", "unknown"]);
+  });
+
+  /**
+   * 🔴 ACUITY SLOWER THAN THE ANSWER. The dashboard gives up on a request after
+   * 12 s; telling Acuity about a long repeat one date at a time can take longer.
+   * The apply answers by its deadline with each date as the outbox has it, the
+   * slow dates carry on after the answer, and a re-check (or the reconciler,
+   * for an answer that never came) settles them - a date is never "moved" in
+   * Acuity until Acuity said so.
+   */
+  describe("🔴 an Acuity answer that arrives after the apply has answered", () => {
+    const ANSWER_MS = 1_000;
+    beforeAll(() => {
+      armBackgroundWorkTracking();
+      __setSeriesEditAnswerWithinForTests(ANSWER_MS);
+    });
+    afterAll(() => {
+      __setSeriesEditAnswerWithinForTests(undefined);
+      disarmBackgroundWorkTracking();
+    });
+
+    /** A fake Acuity call that answers only when the test says so. */
+    function later<T>() {
+      let resolve!: (v: T) => void;
+      let reject!: (e: unknown) => void;
+      const promise = new Promise<T>((a, b) => {
+        resolve = a;
+        reject = b;
+      });
+      return { promise, resolve, reject };
+    }
+    const newBlock = () => ({ id: `blk-${++blockSeq}` });
+    const mirrorsOf = (body: { changed: { mirror: string }[] }) => body.changed.map((c) => c.mirror);
+    const recheck = (seriesId: string, ids: string[]) =>
+      agent.get(`/api/booking/series/${seriesId}/edit/mirror`).query({ ids: ids.join(",") });
+
+    /** Each visit already holds its time on Acuity, as a protected repeat would. */
+    async function holdOldBlocks(rows: { id: string; startsAt: Date; endsAt: Date }[]) {
+      for (const row of rows) {
+        await prisma.acuityOutboundBlock.create({
+          data: {
+            shopId,
+            appointmentId: row.id,
+            staffId: staffA,
+            acuityCalendarId: "cal_main",
+            startsAt: row.startsAt,
+            endsAt: row.endsAt,
+            state: "ACTIVE",
+            acuityBlockId: `old-${row.id}`,
+            attempts: 1,
+          },
+        });
+      }
+    }
+    const oldBlock = (appointmentId: string) =>
+      prisma.acuityOutboundBlock.findFirstOrThrow({ where: { appointmentId, acuityBlockId: `old-${appointmentId}` } });
+    // By id, not `NOT: { acuityBlockId }` - a negative filter drops the NULL
+    // acuityBlockId every unconfirmed row has.
+    const newRow = async (appointmentId: string) =>
+      prisma.acuityOutboundBlock.findFirstOrThrow({
+        where: { appointmentId, id: { not: (await oldBlock(appointmentId)).id } },
+        orderBy: { createdAt: "desc" },
+      });
+    const deleted = () => acuityMock.deleteBlock.mock.calls.map((c) => String(c[0]));
+
+    async function timedApply(seriesId: string, body: Body) {
+      const p = await preview(seriesId, body);
+      expect(p.status).toBe(200);
+      const t0 = Date.now();
+      const res = await apply(seriesId, { ...body, digest: p.body.digest });
+      return { res, ms: Date.now() - t0 };
+    }
+
+    it("answers by its deadline; the slow date says still confirming, and clears once Acuity confirms", async () => {
+      const { series, rows } = await makeSeries();
+      await holdOldBlocks(rows.slice(2));
+      const slow = later<{ id: string }>();
+      acuityMock.createBlock.mockImplementationOnce(async () => newBlock()).mockImplementationOnce(() => slow.promise);
+
+      const { res, ms } = await timedApply(series.id, { fromAppointmentId: rows[2]!.id, changes: { startMin: H(15) } });
+      expect(res.status).toBe(200);
+      // Promptly: Acuity has still not answered for the second date.
+      expect(ms).toBeLessThan(ANSWER_MS + 2_500);
+      expect(mirrorsOf(res.body)).toEqual(["active", "unknown"]);
+      // The unconfirmed date's OLD time is still held on Acuity.
+      expect((await oldBlock(rows[3]!.id)).state).toBe("RELEASING");
+      expect(deleted()).not.toContain(`old-${rows[3]!.id}`);
+      expect((await recheck(series.id, [rows[2]!.id, rows[3]!.id])).body.changed.map((c: { mirror: string }) => c.mirror)).toEqual([
+        "active",
+        "unknown",
+      ]);
+
+      slow.resolve(newBlock());
+      await settleBackgroundWork();
+      const after = await recheck(series.id, [rows[2]!.id, rows[3]!.id]);
+      expect(after.status).toBe(200);
+      expect(mirrorsOf(after.body)).toEqual(["active", "active"]);
+      expect((await oldBlock(rows[3]!.id)).state).toBe("RELEASED");
+      expect(deleted()).toContain(`old-${rows[3]!.id}`);
+    });
+
+    it("🔴 Acuity refusing AFTER the answer: reported as refused on re-check, and the old time stays held", async () => {
+      const { series, rows } = await makeSeries();
+      await holdOldBlocks(rows.slice(2));
+      const slow = later<{ id: string }>();
+      acuityMock.createBlock.mockImplementationOnce(async () => newBlock()).mockImplementationOnce(() => slow.promise);
+
+      const { res } = await timedApply(series.id, { fromAppointmentId: rows[2]!.id, changes: { startMin: H(15) } });
+      expect(mirrorsOf(res.body)).toEqual(["active", "unknown"]);
+
+      slow.reject(new AcuityError(422, "refused"));
+      await settleBackgroundWork();
+      const after = await recheck(series.id, [rows[2]!.id, rows[3]!.id]);
+      expect(mirrorsOf(after.body)).toEqual(["active", "failed"]);
+      expect((await newRow(rows[3]!.id)).state).toBe("FAILED");
+      // Never freed: the old block is what still keeps that chair off Acuity's books.
+      expect((await oldBlock(rows[3]!.id)).state).toBe("ACTIVE");
+      expect(deleted()).not.toContain(`old-${rows[3]!.id}`);
+    });
+
+    it("🔴 no answer from Acuity at all: still confirming until the reconciler finds the block", async () => {
+      const { series, rows } = await makeSeries();
+      await holdOldBlocks(rows.slice(2));
+      const slow = later<{ id: string }>();
+      acuityMock.createBlock.mockImplementationOnce(async () => newBlock()).mockImplementationOnce(() => slow.promise);
+
+      const { res } = await timedApply(series.id, { fromAppointmentId: rows[2]!.id, changes: { startMin: H(15) } });
+      expect(mirrorsOf(res.body)).toEqual(["active", "unknown"]);
+      slow.reject(new AcuityError(504, "gateway timeout"));
+      await settleBackgroundWork();
+      const pending = await newRow(rows[3]!.id);
+      expect(pending.state).toBe("UNKNOWN");
+      expect(mirrorsOf((await recheck(series.id, [rows[3]!.id])).body)).toEqual(["unknown"]);
+
+      // The five-minute sweep looks the block up by its reference and adopts it,
+      // then frees the old time on its next pass.
+      acuityMock.listBlocks.mockResolvedValue([
+        {
+          id: "blk-found",
+          start: pending.startsAt.toISOString(),
+          end: pending.endsAt.toISOString(),
+          calendarID: "cal_main",
+          notes: blockReference(pending.id),
+        },
+      ]);
+      await reconcileShop(shopId);
+      await reconcileShop(shopId);
+      expect(mirrorsOf((await recheck(series.id, [rows[3]!.id])).body)).toEqual(["active"]);
+      expect((await oldBlock(rows[3]!.id)).state).toBe("RELEASED");
+    });
+
+    it("🔴 a mix across dates: each is reported as it stands, and nothing unconfirmed as done", async () => {
+      const { series, rows } = await makeSeries();
+      await holdOldBlocks(rows);
+      const third = later<{ id: string }>();
+      const fourth = later<{ id: string }>();
+      acuityMock.createBlock
+        .mockImplementationOnce(async () => newBlock())
+        .mockImplementationOnce(async () => {
+          throw new AcuityError(422, "refused");
+        })
+        .mockImplementationOnce(() => third.promise)
+        .mockImplementationOnce(() => fourth.promise);
+
+      const { res, ms } = await timedApply(series.id, { fromAppointmentId: rows[0]!.id, changes: { startMin: H(15) } });
+      expect(res.status).toBe(200);
+      expect(ms).toBeLessThan(ANSWER_MS + 2_500);
+      expect(mirrorsOf(res.body)).toEqual(["active", "failed", "unknown", "unknown"]);
+      // Every date the answer did not call confirmed is genuinely unconfirmed.
+      for (const [i, c] of (res.body.changed as { id: string; mirror: string }[]).entries()) {
+        if (c.mirror !== "active") expect((await newRow(rows[i]!.id)).state).not.toBe("ACTIVE");
+      }
+
+      third.resolve(newBlock());
+      await vi.waitFor(() => expect(acuityMock.createBlock).toHaveBeenCalledTimes(4));
+      fourth.reject(new AcuityError(400, "refused"));
+      await settleBackgroundWork();
+      const after = await recheck(
+        series.id,
+        rows.map((r) => r.id),
+      );
+      expect(mirrorsOf(after.body)).toEqual(["active", "failed", "active", "failed"]);
+      expect((await oldBlock(rows[1]!.id)).state).toBe("ACTIVE");
+      expect((await oldBlock(rows[3]!.id)).state).toBe("ACTIVE");
+    });
+
+    it("🔴 a refusal left over from an EARLIER move does not make this confirmed one read as refused", async () => {
+      const { series, rows } = await makeSeries();
+      await holdOldBlocks(rows.slice(3));
+      // Earlier moves of this visit that Acuity turned down: one to this very
+      // time on this calendar, and one to 4pm on a calendar the chair no longer
+      // sells through. Neither is the move being made now.
+      for (const [calendar, min] of [
+        ["cal_main", H(15)],
+        ["cal_retired", H(16)],
+      ] as const) {
+        await prisma.acuityOutboundBlock.create({
+          data: {
+            shopId,
+            appointmentId: rows[3]!.id,
+            staffId: staffA,
+            acuityCalendarId: calendar,
+            startsAt: local(3, min),
+            endsAt: local(3, min + 30),
+            state: "FAILED",
+            attempts: 1,
+            lastError: "acuity_422",
+          },
+        });
+      }
+      const { res } = await timedApply(series.id, { fromAppointmentId: rows[3]!.id, changes: { startMin: H(15) } });
+      expect(mirrorsOf(res.body)).toEqual(["active"]);
+      expect(mirrorsOf((await recheck(series.id, [rows[3]!.id])).body)).toEqual(["active"]);
+    });
+
+    it("a re-check reads only this repeat's visits in this shop", async () => {
+      const { series, rows } = await makeSeries();
+      const outsider = await prisma.appointment.create({
+        data: {
+          manageToken: randomToken(),
+          shopId,
+          staffId: staffA,
+          serviceId: svcShort,
+          firstName: "Pat",
+          status: "BOOKED",
+          startsAt: local(0, H(10)),
+          endsAt: local(0, H(10, 30)),
+        },
+      });
+      const res = await recheck(series.id, [rows[0]!.id, outsider.id]);
+      expect(res.status).toBe(200);
+      expect(res.body.changed.map((c: { id: string }) => c.id)).toEqual([rows[0]!.id]);
+      expect((await agent.get(`/api/booking/series/${series.id}/edit/mirror`)).status).toBe(400);
+    });
   });
 });

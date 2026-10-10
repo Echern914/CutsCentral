@@ -61,4 +61,33 @@ describe("Log visit and a lost answer", () => {
     expect(sentId(1)).toBe(sentId(0));
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Already logged - nothing added", "success"));
   });
+
+  it("🔴 a gateway 502 after the visit was logged: the retry is the same tap, and nothing is added twice", async () => {
+    render(
+      <ClientActions
+        clientId="c1"
+        rewardsUrl="https://x.test/r/t"
+        optedOut={false}
+        rewards={[]}
+        cards={[{ id: null, name: "Punch card", active: true } as never]}
+        promotions={[]}
+      />,
+    );
+    logVisitAction.mockResolvedValueOnce({ ok: false, status: 502 });
+    fireEvent.click(screen.getByRole("button", { name: "Log visit" }));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith("No answer from ChairBack - tap Log visit again. It won't log twice.", "error"),
+    );
+    logVisitAction.mockResolvedValueOnce({ ok: true, status: 200, replayed: true });
+    fireEvent.click(screen.getByRole("button", { name: "Log visit" }));
+    await waitFor(() => expect(logVisitAction).toHaveBeenCalledTimes(2));
+    expect(sentId(1)).toBe(sentId(0));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Already logged - nothing added", "success"));
+
+    // Settled: the next Log visit is a new visit.
+    logVisitAction.mockResolvedValueOnce({ ok: true, status: 201 });
+    fireEvent.click(screen.getByRole("button", { name: "Log visit" }));
+    await waitFor(() => expect(logVisitAction).toHaveBeenCalledTimes(3));
+    expect(sentId(2)).not.toBe(sentId(1));
+  });
 });

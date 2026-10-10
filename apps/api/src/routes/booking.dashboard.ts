@@ -12,11 +12,20 @@ import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import {
+  CancelRefusedError,
   cancelAppointment,
   cancelSeries,
   promoteOneAppointmentInTx,
   type CancelSeriesScope,
 } from "../engines/appointmentPromotion.js";
+import { isRecordedWalkIn, WALK_IN_SERVICE_NAME } from "../engines/walkInReceipt.js";
+import {
+  CORRECTION_SELECT,
+  correctionRefusal,
+  correctionRefusalMessage,
+  correctionMoney,
+  type CorrectionRefusal,
+} from "../engines/visitCorrection.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { collapseExternalBlocks } from "../engines/externalBlockCollapse.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
@@ -69,6 +78,7 @@ import {
   buildObserveReport,
   completeReschedule,
   dispatchAfterCommit,
+  mirrorOutcomeOfRows,
   releaseAllForShop,
   recordMirrorIntent,
   releaseForAppointment,
@@ -3363,16 +3373,7 @@ async function answerReplay(
   // Blocks that still stand for this booking (a moved booking's old ones are released).
   const blocks = prior.outboundBlocks.filter((b) => b.state !== "RELEASING" && b.state !== "RELEASED");
   const states = new Set(blocks.map((b) => b.state));
-  const mirror: DispatchOutcome =
-    blocks.length === 0
-      ? "skipped"
-      : states.has("FAILED")
-        ? "failed"
-        : states.has("UNKNOWN")
-          ? "unknown"
-          : states.has("PENDING")
-            ? "unknown"
-            : "active";
+  const mirror: DispatchOutcome = mirrorOutcomeOfRows(blocks);
   const settling =
     states.has("PENDING") ||
     (prior.overlapForcedAt !== null &&
@@ -4419,6 +4420,12 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
       endsAt: true,
       bookedVia: true,
       payments: { select: { id: true } },
+      firstName: true,
+      seriesId: true,
+      groupId: true,
+      service: { select: { name: true } },
+      visit: { select: { acuityAppointmentId: true } },
+      completedAt: true,
     },
   });
   if (!appt) {
@@ -4427,6 +4434,25 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
   }
   if (appt.status !== "CANCELED") {
     res.status(409).json({ error: "not_canceled" });
+    return;
+  }
+  // 🔴 NOR IS A VISIT THAT WAS ONCE COMPLETED - a completed visit cancelled
+  // after the fact (POST /appointments/:id/correct-completed, or /cancel on a
+  // finished cut). Its punch was reversed and its time is past; this route
+  // would bring it back as an upcoming BOOKED reservation. `visitId` below
+  // refuses nearly all of these too; completedAt (which a cancel never clears)
+  // also covers one that completed without a loyalty Visit.
+  if (appt.completedAt !== null) {
+    res.status(409).json({ error: "not_restorable" });
+    return;
+  }
+  // 🔴 A REMOVED WALK-IN IS NOT UNDONE HERE. This route brings a booking back
+  // as BOOKED - a reservation, re-checked against the chair - and a walk-in is
+  // a COMPLETED receipt for a cut that already happened: restored here it would
+  // come back as an upcoming booking with money already on it. Recording the
+  // walk-in again is the honest path, and is one tap.
+  if (isRecordedWalkIn(appt)) {
+    res.status(409).json({ error: "not_restorable" });
     return;
   }
   if (!appt.canceledAt || now.getTime() - appt.canceledAt.getTime() > RESTORE_WINDOW_MS) {
@@ -6711,8 +6737,6 @@ const walkInSchema = z
   })
   .strict();
 
-/** Name of the auto-provisioned service every walk-in is booked against. */
-const WALK_IN_SERVICE_NAME = "Walk-in";
 /** Chair time a walk-in is assumed to occupy when the shop has no signal. */
 const WALK_IN_FALLBACK_MIN = 30;
 
@@ -7169,6 +7193,206 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
     id: result.id,
     ...(result.conflict ? { conflict: result.conflict } : {}),
   });
+});
+
+/**
+ * POST /appointments/:id/remove-walk-in - take a walk-in recorded by mistake
+ * back off the books ("It doesn't let someone change a walk-in or cancel it").
+ *
+ * A walk-in is born COMPLETED and paid, so neither Edit (live bookings only)
+ * nor Cancel (upcoming visits) is offered for it, and the generic cancel is the
+ * wrong tool for a mistake: it emails a client, can offer the time to the
+ * waitlist, refunds booking money through Stripe and settles a kept card.
+ *
+ * This is the same teardown through the ONE cancel path (cancelAppointment),
+ * with the parts that speak or pay switched off:
+ *   - CANCELED + dismissed: off the day view, and out of revenue, Chair time
+ *     and Insights, which all read only live statuses (readChairEvents);
+ *   - any loyalty it earned is clawed back through the punch ledger;
+ *   - its Acuity block, if it holds one, is released;
+ *   - NOBODY is told: no email, no text, no push, no Auto-fill, no waitlist;
+ *   - NO MONEY MOVES: a walk-in carrying a live card payment or tip is
+ *     refused with nothing changed. The shop refunds it first, then removes it.
+ *
+ * Only a walk-in this shop recorded in ChairBack qualifies (isRecordedWalkIn);
+ * another shop's id is a 404, any other booking a 409. Removing it twice is a
+ * no-op answer, never an error.
+ */
+const REMOVE_WALK_IN_MONEY_MESSAGE =
+  "This walk-in has a card payment or tip taken through ChairBack. Refund it first, then remove the walk-in.";
+
+bookingDashboardRouter.post("/appointments/:id/remove-walk-in", async (req, res) => {
+  const shopId = req.shop!.id;
+  const appointmentId = req.params.id!;
+  const read = () =>
+    prisma.appointment.findFirst({
+      where: { id: appointmentId, shopId },
+      select: {
+        id: true,
+        status: true,
+        firstName: true,
+        bookedVia: true,
+        seriesId: true,
+        groupId: true,
+        service: { select: { name: true } },
+        visit: { select: { acuityAppointmentId: true } },
+      },
+    });
+  const appt = await read();
+  if (!appt) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (!isRecordedWalkIn(appt)) {
+    res.status(409).json({ error: "not_a_walk_in" });
+    return;
+  }
+  if (appt.status === "CANCELED") {
+    res.json({ ok: true, alreadyRemoved: true });
+    return;
+  }
+  if (appt.status !== "COMPLETED") {
+    res.status(409).json({ error: "not_removable" });
+    return;
+  }
+
+  let removed: boolean;
+  try {
+    removed = await cancelAppointment(shopId, appointmentId, "CANCELED", new Date(), {
+      initiator: "barber",
+      onlyFrom: ["COMPLETED"],
+      silent: true,
+      dismiss: true,
+      refuseIfMoney: true,
+    });
+  } catch (err) {
+    if (err instanceof CancelRefusedError) {
+      res.status(409).json({ error: "money_taken", message: REMOVE_WALK_IN_MONEY_MESSAGE });
+      return;
+    }
+    throw err;
+  }
+  if (!removed) {
+    // Lost a race: another tap (or device) moved it first. Removed is removed.
+    const now = await read();
+    if (now?.status === "CANCELED") {
+      res.json({ ok: true, alreadyRemoved: true });
+      return;
+    }
+    res.status(409).json({ error: "not_removable" });
+    return;
+  }
+  logger.info({ shopId, appointmentId }, "walk-in removed");
+  res.json({ ok: true, alreadyRemoved: false });
+});
+
+/**
+ * POST /appointments/:id/correct-completed - mark a visit the completion sweep
+ * already finished as a NO-SHOW, or cancel it, after the fact.
+ *
+ * A shop owner: an 8:00 booking whose client never came "shows Completed and I
+ * can't remove him from my schedule. Should have option to put him as a no
+ * show or canceled appt." The 15-minute sweep turns every BOOKED visit whose
+ * end has passed into a COMPLETED visit with a punch; /no-show then refuses
+ * (BOOKED only) and the sheet offered neither.
+ *
+ * Who may: engines/visitCorrection.ts - a ChairBack booking, not a walk-in,
+ * completed, ended within COMPLETED_VISIT_CORRECTION_DAYS, no money on it.
+ * Another shop's id is a 404; anything else ineligible a 409 with the reason
+ * and a sentence the sheet shows as-is.
+ *
+ * What it does is the ONE cancel path (cancelAppointment), which already
+ * handles an already-promoted visit: the Visit goes terminal, the punch it
+ * earned is reversed through the ledger, cadence is recomputed, and the visit
+ * leaves the takings (readChairEvents counts a no-show as earning nothing and
+ * a cancellation not at all). What it does NOT do, because the time has
+ * passed and this is a correction, not news:
+ *   - tell anybody: no cancellation email, text, push, Wallet poke,
+ *     slot-opened alert or Auto-fill (`silent`);
+ *   - move money: no refund, no card-on-file no-show fee, no release - a
+ *     visit carrying a Payment or kept card is refused (`refuseIfMoney`) -
+ *     except that a NO-SHOW keeps a collected booking deposit exactly as it is
+ *     (`keepBookingPayment`), as any no-show does; Refund deposit can then
+ *     give it back if the shop chooses. A cancel refuses over one. And
+ *     one checked out at the chair too (`refuseIfCheckedOut`), both inside the
+ *     transaction, so a refusal changes nothing.
+ * It is not dismissed: it stays on the day as a no-show / cancelled visit, the
+ * same as one marked in time, and Clear takes it off.
+ *
+ * A second correction to the same outcome answers ok with alreadyCorrected.
+ * Restore refuses the result (it was completed; see the restore route).
+ */
+const correctCompletedSchema = z.object({ outcome: z.enum(["no_show", "canceled"]) }).strict();
+
+bookingDashboardRouter.post("/appointments/:id/correct-completed", async (req, res) => {
+  const parsed = correctCompletedSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const appointmentId = req.params.id!;
+  const outcome = parsed.data.outcome === "no_show" ? "NO_SHOW" : "CANCELED";
+  const now = new Date();
+  const read = () =>
+    prisma.appointment.findFirst({
+      where: { id: appointmentId, shopId },
+      select: { ...CORRECTION_SELECT, completedAt: true },
+    });
+  const appt = await read();
+  if (!appt) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  // Already put right (it was completed once, and is now this outcome).
+  if (appt.status === outcome && appt.completedAt !== null) {
+    res.json({ ok: true, alreadyCorrected: true });
+    return;
+  }
+  const refuse = (reason: CorrectionRefusal) =>
+    res.status(409).json({ error: reason, message: correctionRefusalMessage(reason) });
+  const refusal = correctionRefusal(
+    appt,
+    await correctionMoney(shopId, appointmentId),
+    now,
+    outcome,
+  );
+  if (refusal) {
+    refuse(refusal);
+    return;
+  }
+
+  let corrected: boolean;
+  try {
+    corrected = await cancelAppointment(shopId, appointmentId, outcome, now, {
+      initiator: "barber",
+      onlyFrom: ["COMPLETED"],
+      silent: true,
+      refuseIfMoney: true,
+      refuseIfCheckedOut: true,
+      // A no-show keeps a collected deposit as it is, like any no-show; a
+      // cancel was already refused over one above.
+      keepBookingPayment: true,
+    });
+  } catch (err) {
+    if (err instanceof CancelRefusedError) {
+      refuse(err.reason);
+      return;
+    }
+    throw err;
+  }
+  if (!corrected) {
+    // Lost a race: another tap (or device) moved it first.
+    const after = await read();
+    if (after?.status === outcome) {
+      res.json({ ok: true, alreadyCorrected: true });
+      return;
+    }
+    refuse("not_completed");
+    return;
+  }
+  logger.info({ shopId, appointmentId, outcome }, "completed visit corrected");
+  res.json({ ok: true, alreadyCorrected: false });
 });
 
 /**

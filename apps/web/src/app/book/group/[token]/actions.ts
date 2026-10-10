@@ -47,6 +47,22 @@ export async function groupViewAction(
   return res.ok && res.data ? { ok: true, group: res.data } : { ok: false };
 }
 
+/** One seat whose price a move would change, as the API listed it. */
+export interface GroupPriceSeat {
+  appointmentId: string;
+  position?: number | null;
+  firstName?: string;
+  fromCents: number | null;
+  toCents: number;
+}
+
+/** A move that changes what the party pays: the totals and each changed seat. */
+export interface GroupPriceChange {
+  fromCents: number;
+  toCents: number;
+  seats: GroupPriceSeat[];
+}
+
 /**
  * Move the WHOLE party to a new start.
  *
@@ -57,16 +73,45 @@ export async function groupViewAction(
 export async function groupRescheduleAction(
   token: string,
   startsAt: string,
+  /** Every changed seat's new price, exactly as a `price_changes` answer listed it. */
+  acceptPrices?: GroupPriceSeat[],
 ): Promise<
   | { ok: true; plan: GroupPlanResult }
-  | { ok: false; code: "slot_taken" | "canceled" | "slot" | "contact_shop" | "error" }
+  | { ok: false; code: "price_changes"; priceChange: GroupPriceChange }
+  | {
+      ok: false;
+      code: "slot_taken" | "canceled" | "slot" | "contact_shop" | "price_changed" | "error";
+    }
 > {
   const res = await apiPublicSend<{ ok: boolean; plan: GroupPlanResult }>(
     "POST",
     `/api/book/group/${encodeURIComponent(token)}/reschedule`,
-    { startsAt },
+    {
+      startsAt,
+      ...(acceptPrices !== undefined
+        ? { acceptPrices: acceptPrices.map((s) => ({ appointmentId: s.appointmentId, cents: s.toCents })) }
+        : {}),
+    },
   );
   if (res.ok && res.data) return { ok: true, plan: res.data.plan };
+  // The new time changes what someone in the party pays. NOBODY moved: the
+  // page shows the new total and each changed seat, and a yes sends them back.
+  if (res.error === "price_changes") {
+    const body = res.body as
+      | { fromCents?: number; toCents?: number; seats?: GroupPriceSeat[] }
+      | undefined;
+    if (body && typeof body.toCents === "number" && Array.isArray(body.seats)) {
+      return {
+        ok: false,
+        code: "price_changes",
+        priceChange: { fromCents: body.fromCents ?? 0, toCents: body.toCents, seats: body.seats },
+      };
+    }
+    return { ok: false, code: "error" };
+  }
+  // Part of the party paid at booking, and the new time's price can't be
+  // reconciled online: the shop moves it.
+  if (res.error === "price_changed") return { ok: false, code: "price_changed" };
   // The shop arranges this booker's bookings itself; cancelling is still open.
   if (res.error === "contact_shop") return { ok: false, code: "contact_shop" };
   if (res.error === "slot_taken" || res.error === "slot_unavailable_external") {

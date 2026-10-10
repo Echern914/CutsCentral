@@ -22,6 +22,7 @@ import type { AppointmentDetail, SeriesEditPreview } from "./actions";
 
 const previewSeries = vi.hoisted(() => vi.fn());
 const applySeries = vi.hoisted(() => vi.fn());
+const recheckSeries = vi.hoisted(() => vi.fn());
 const getDetail = vi.hoisted(() => vi.fn());
 const getEditContext = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -52,6 +53,7 @@ vi.mock("./actions", () => ({
   getEditContextAction: getEditContext,
   previewSeriesEditAction: previewSeries,
   applySeriesEditAction: applySeries,
+  recheckSeriesEditMirrorAction: recheckSeries,
 }));
 vi.mock("@/components/VocabProvider", () => ({
   useVocab: () => NEUTRAL_VOCABULARY,
@@ -59,6 +61,7 @@ vi.mock("@/components/VocabProvider", () => ({
 }));
 
 const { AppointmentSheet } = await import("./AppointmentSheet");
+const { RECHECK_EVERY_MS } = await import("./SeriesEditView");
 
 const row: AgendaRow = {
   id: "appt1",
@@ -158,6 +161,8 @@ async function reviewElevenAm() {
 beforeEach(() => {
   previewSeries.mockReset();
   applySeries.mockReset();
+  recheckSeries.mockReset();
+  recheckSeries.mockResolvedValue({ ok: false, error: "network_error" });
   onChanged.mockReset();
   previewSeries.mockResolvedValue({ ok: true, data: PREVIEW });
 });
@@ -418,5 +423,89 @@ describe("apply", () => {
     );
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.getByTestId("series-edit-done").textContent).toContain("Changed 1 appointment.");
+  });
+});
+
+/**
+ * 🔴 ACUITY SLOWER THAN THE ANSWER. The apply no longer waits for every date's
+ * Acuity answer, so dates can come back "unknown". They read as still
+ * confirming - never as done there - and are read again until Acuity confirms
+ * or refuses them; a refusal that comes later is named like one that came at once.
+ */
+describe("dates Acuity is still confirming", () => {
+  const at = (i: number) => ({ startsAt: PREVIEW.change[i]!.to.startsAt, endsAt: PREVIEW.change[i]!.to.endsAt });
+  const result = (m1: string, m2: string) => ({
+    ok: true,
+    data: { changed: [{ id: "appt1", ...at(0), mirror: m1 }, { id: "appt2", ...at(1), mirror: m2 }] },
+  });
+  const statusLine = () => screen.queryByText(/Still confirming with Acuity/)?.textContent ?? "";
+
+  async function applyWith(m1: string, m2: string) {
+    applySeries.mockResolvedValue({ ok: true, data: { ...result(m1, m2).data, skipped: [] } });
+    await openSeriesEdit();
+    await reviewElevenAm();
+    fireEvent.click(screen.getByRole("button", { name: "Apply to 2 appointments" }));
+    return screen.findByTestId("series-edit-done");
+  }
+
+  it("🔴 says still confirming by date, never that Acuity has the new time, and clears on Check again", async () => {
+    const done = await applyWith("unknown", "unknown");
+    expect(statusLine()).toMatch(/Thu, Oct 22, Thu, Nov 5/);
+    expect(done.textContent).not.toMatch(/didn't take the new time/);
+
+    recheckSeries.mockResolvedValueOnce(result("active", "unknown"));
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(statusLine()).not.toMatch(/Oct 22/));
+    expect(recheckSeries).toHaveBeenCalledWith("ser1", ["appt1", "appt2"]);
+    expect(statusLine()).toMatch(/Thu, Nov 5/);
+
+    // Only what is still confirming is asked about again.
+    recheckSeries.mockResolvedValueOnce({ ok: true, data: { changed: [{ id: "appt2", ...at(1), mirror: "active" }] } });
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(screen.queryByText(/Still confirming with Acuity/)).toBeNull());
+    expect(recheckSeries).toHaveBeenLastCalledWith("ser1", ["appt2"]);
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+  });
+
+  it("🔴 a refusal that comes AFTER the answer is named, the same as one that came at once", async () => {
+    await applyWith("active", "unknown");
+    recheckSeries.mockResolvedValueOnce({ ok: true, data: { changed: [{ id: "appt2", ...at(1), mirror: "failed" }] } });
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    const refused = await screen.findByRole("alert");
+    expect(refused.textContent).toMatch(/Acuity didn't take the new time for Thu, Nov 5/);
+    expect(refused.textContent).not.toMatch(/Oct 22/);
+    expect(screen.queryByText(/Still confirming with Acuity/)).toBeNull();
+  });
+
+  it("a re-check that cannot be read leaves the dates as still confirming", async () => {
+    await applyWith("unknown", "active");
+    recheckSeries.mockRejectedValueOnce(new Error("connection reset"));
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(recheckSeries).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Check again" }) as HTMLButtonElement).disabled).toBe(false));
+    expect(statusLine()).toMatch(/Thu, Oct 22/);
+  });
+
+  it("reads them again on its own while they are still confirming", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await applyWith("unknown", "active");
+      expect(recheckSeries).not.toHaveBeenCalled();
+      recheckSeries.mockResolvedValueOnce({ ok: true, data: { changed: [{ id: "appt1", ...at(0), mirror: "active" }] } });
+      await act(async () => {
+        vi.advanceTimersByTime(RECHECK_EVERY_MS);
+      });
+      await waitFor(() => expect(screen.queryByText(/Still confirming with Acuity/)).toBeNull());
+      expect(recheckSeries).toHaveBeenCalledWith("ser1", ["appt1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("nothing still confirming: nothing is read again", async () => {
+    await applyWith("active", "skipped");
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(recheckSeries).not.toHaveBeenCalled();
   });
 });
