@@ -773,7 +773,11 @@ export interface SeriesEditPreview {
 
 export interface SeriesEditApplied {
   alreadyApplied?: boolean;
-  /** mirror: active | failed | unknown | skipped | observed, per visit. */
+  /**
+   * mirror: active | failed | unknown | skipped | observed, per visit.
+   * "unknown" = Acuity has not confirmed it YET (no answer by the time the API
+   * answered); never shown as done - see recheckSeriesEditMirrorAction.
+   */
   changed: { id: string; startsAt: string; endsAt: string; mirror: string }[];
   skipped: SeriesEditPreview["skipped"];
   clientNotified?: boolean;
@@ -820,6 +824,22 @@ export async function applySeriesEditAction(
       ? { preview: body as SeriesEditPreview }
       : {}),
   };
+}
+
+/**
+ * Where applied dates stand with Acuity NOW. The apply answers without waiting
+ * for a slow Acuity, so a date can come back "unknown" (still confirming); this
+ * reads the outcome the API recorded since. A read - nothing is re-sent.
+ */
+export async function recheckSeriesEditMirrorAction(
+  seriesId: string,
+  ids: string[],
+): Promise<{ ok: boolean; data?: Pick<SeriesEditApplied, "changed">; error?: string }> {
+  const res = await apiGet<Pick<SeriesEditApplied, "changed">>(
+    `/api/booking/series/${encodeURIComponent(seriesId)}/edit/mirror?ids=${ids.map(encodeURIComponent).join(",")}`,
+  );
+  if (!res.ok || !res.data || !Array.isArray(res.data.changed)) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
 }
 
 //  Service add-ons

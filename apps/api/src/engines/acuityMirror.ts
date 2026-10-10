@@ -353,6 +353,77 @@ export async function dispatchCreateAll(outboxIds: string[]): Promise<DispatchOu
 }
 
 /**
+ * WHAT ONE APPOINTMENT'S CALENDAR PROTECTION IS, read from its outbox rows -
+ * the answer a caller gives when it was not the one holding the dispatch (a
+ * replayed create, a response that could not wait for Acuity, a re-check).
+ *
+ * Only rows that still stand count: RELEASING and RELEASED are the OLD half of
+ * a move, on their way out. Then the same pessimistic order as
+ * `dispatchCreateAll`:
+ *
+ *   failed   any standing row Acuity definitively refused.
+ *   unknown  any row not yet confirmed - UNKNOWN (no answer came) or PENDING
+ *            (not sent yet, or still in flight). 🔴 Never "active": nothing
+ *            has confirmed the new time is held.
+ *   active   every standing row confirmed.
+ *   skipped  nothing stands (nothing mirrored).
+ */
+export function mirrorOutcomeOfRows(rows: { state: string }[]): DispatchOutcome {
+  const standing = rows.filter((r) => r.state !== "RELEASING" && r.state !== "RELEASED");
+  if (standing.length === 0) return "skipped";
+  const states = new Set(standing.map((r) => r.state));
+  if (states.has("FAILED")) return "failed";
+  if (states.has("UNKNOWN") || states.has("PENDING")) return "unknown";
+  return "active";
+}
+
+/**
+ * Where each appointment's LATEST move stands with Acuity, as the outbox has it
+ * now - for an answer that could not wait for the dispatch, and for a re-check
+ * after it. Nothing is dispatched or changed here.
+ *
+ * 🔴 ONLY THE ROWS FOR THE TIME IT IS AT NOW, newest per calendar - not every
+ * row. A move Acuity refused leaves its FAILED row behind for good (nothing
+ * retries a definitive refusal), so folding every row would report a LATER
+ * move that landed as failed for ever. And the old block a failed move put
+ * back to ACTIVE is for the OLD time: it says nothing about whether the new
+ * one is held, which the move's own FAILED row already answers.
+ */
+export async function readMirrorOutcomes(
+  shopId: string,
+  appointmentIds: string[],
+): Promise<Map<string, DispatchOutcome>> {
+  const out = new Map<string, DispatchOutcome>();
+  if (appointmentIds.length === 0) return out;
+  const [appts, rows] = await Promise.all([
+    prisma.appointment.findMany({
+      where: { shopId, id: { in: appointmentIds } },
+      select: { id: true, startsAt: true, endsAt: true },
+    }),
+    prisma.acuityOutboundBlock.findMany({
+      where: { shopId, appointmentId: { in: appointmentIds } },
+      select: { id: true, appointmentId: true, acuityCalendarId: true, state: true, startsAt: true, endsAt: true },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    }),
+  ]);
+  const span = new Map(appts.map((a) => [a.id, a] as const));
+  const current = new Map<string, { state: string }[]>();
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const at = span.get(row.appointmentId);
+    if (!at || row.startsAt.getTime() !== at.startsAt.getTime() || row.endsAt.getTime() !== at.endsAt.getTime()) {
+      continue;
+    }
+    const key = `${row.appointmentId}|${row.acuityCalendarId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    current.set(row.appointmentId, [...(current.get(row.appointmentId) ?? []), row]);
+  }
+  for (const id of appointmentIds) out.set(id, mirrorOutcomeOfRows(current.get(id) ?? []));
+  return out;
+}
+
+/**
  * Post-commit dispatch for BARBER-DRIVEN and conversational paths.
  *
  * Never throws and never unwinds the appointment. The public customer path
