@@ -149,6 +149,13 @@ export interface BookShopData {
       durationMin: number | null;
       opensHours?: boolean;
     }[];
+    /**
+     * Holiday prices ({"2026-12-24": 75}, SHOP-local dates) - the most specific
+     * layer, above the time windows. The page prices a slot with the same
+     * resolver the booking write snapshots (config/servicePricing.ts).
+     * Optional = an older API, which then prices exactly as it did before.
+     */
+    dateOverrides?: Record<string, number>;
     // Groups-first: which group card this files under (null = ungrouped) and
     // its saved position within that group.
     serviceGroupId: string | null;

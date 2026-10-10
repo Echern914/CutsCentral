@@ -79,6 +79,7 @@ import {
   durationRangeForService,
   effectiveDurationAt,
   effectivePriceAt,
+  parseDateOverrides,
   parseDurationOverrides,
   parsePriceOverrides,
   parseTimeWindows,
@@ -706,6 +707,12 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
         // every day) - the client resolves each slot's exact price/length from
         // the SLOT time so an evening special is shown before it's tapped.
         timeOverrides: timeWindows,
+        // Holiday prices ({"YYYY-MM-DD": price}, shop-local dates). The page
+        // prices a slot with the SAME resolver the create route snapshots onto
+        // priceAtBooking (config/servicePricing.ts), and that resolver puts a
+        // named date above every other layer. Without this the page showed a
+        // $45 cut at $45 on a $75 Christmas Eve, and the booking took $75.
+        dateOverrides: parseDateOverrides(s.dateOverrides),
         // Groups-first layout: which group card this files under + its saved
         // position inside that group.
         serviceGroupId: s.serviceGroupId,

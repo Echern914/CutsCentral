@@ -12,7 +12,7 @@ import Link from "next/link";
 import { DEMO } from "@chairback/config/demo";
 import { serviceColorHex } from "@chairback/config/constants";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
-import { zonedMinutesOfDay } from "@chairback/config/time";
+import { effectivePriceAt } from "@chairback/config/servicePricing";
 import { lastNameHasLetter } from "@chairback/config/clientIdentity";
 import { addOnOffersService } from "@chairback/config/addOns";
 import {
@@ -2049,48 +2049,25 @@ export function BookingClient({
     ? (data.staff.find((s) => s.id === pickedStaffId)?.name ?? null)
     : null;
 
-  /** Shop-tz weekday (0=Sun..6=Sat) for an ISO instant, matching the API. */
-  function weekdayInTz(iso: string): number {
-    const wd = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(
-      new Date(iso),
-    );
-    return { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[wd] ?? 0;
-  }
-
   /**
-   * The effective price for a service at a chosen SLOT instant, matching the
-   * API's layer order: the time-of-day window covering the slot's shop-local
-   * start minute, else that date's weekday override, else the base price.
+   * The effective price for a service at a chosen SLOT instant.
+   *
+   * 🔴 THE SERVER'S OWN RESOLVER (config/servicePricing.ts), never a copy of
+   * its layer order: holiday date > time-of-day window > weekday > base, in the
+   * shop's timezone. The page used to carry its own copy, which skipped the
+   * holiday layer - a $45 cut with $75 on Christmas Eve was shown at $45 and
+   * booked at $75. Whatever this returns is what priceAtBooking will say.
    */
-  function priceForSlot(
-    svc: {
-      price: number | null;
-      priceOverrides: Record<string, number>;
-      timeOverrides: {
-        s: number;
-        e: number;
-        /** Weekdays the window repeats on; [] = every day. */
-        days?: number[];
-        price: number | null;
-      }[];
-    },
-    iso: string,
-  ): number | null {
-    const minute = zonedMinutesOfDay(new Date(iso), tz);
-    const weekday = weekdayInTz(iso);
-    // A window matches on TIME **and** DAY. Matching on the minute alone would
-    // quote a Sunday-only evening rate on every night of the week - and this
-    // number is what the customer is shown before they book.
-    const win = svc.timeOverrides.find(
-      (w) =>
-        minute >= w.s &&
-        minute < w.e &&
-        (!w.days || w.days.length === 0 || w.days.includes(weekday)),
-    );
-    if (win && win.price !== null) return win.price;
-    const wd = String(weekday);
-    if (Object.prototype.hasOwnProperty.call(svc.priceOverrides, wd)) return svc.priceOverrides[wd]!;
-    return svc.price;
+  function priceForSlot(svc: BookShopData["services"][number], iso: string): number | null {
+    return effectivePriceAt(svc.price, {
+      at: new Date(iso),
+      timezone: tz,
+      weekdayOverrides: svc.priceOverrides,
+      timeWindows: svc.timeOverrides,
+      // Optional only for an API older than this field: it then prices as
+      // before rather than failing.
+      dateOverrides: svc.dateOverrides ?? null,
+    });
   }
 
   /** Menu label: "$45", "from $45", or "$45-$55" depending on the range. */
@@ -2347,14 +2324,15 @@ export function BookingClient({
           ) : (
             <PaymentStep
               clientSecret={paymentSecret}
+              // The SERVER's figure for this charge, or no figure at all ("Pay &
+              // confirm"). It used to fall back to the service price, which is
+              // not what a deposit, an add-on or a holiday price charges.
               amountLabel={
                 payCharge?.kind === "setup"
                   ? null
                   : payCharge
                     ? formatCents(payCharge.amountCents)
-                    : selectedPrice !== null
-                      ? formatPrice(selectedPrice)
-                      : null
+                    : null
               }
               intent={payCharge?.kind === "setup" ? "setup" : "payment"}
               accent={accent}
@@ -3468,7 +3446,9 @@ export function BookingClient({
                     {selectedService?.name}
                     {addOnIds.length > 0 && ` + ${addOnIds.length} add-on${addOnIds.length > 1 ? "s" : ""}`}
                   </span>
-                  <span className="font-semibold">{formatPrice(grandTotal)}</span>
+                  <span className="font-semibold" data-qa="booking-total">
+                    {formatPrice(grandTotal)}
+                  </span>
                 </div>
               )}
               {/*
