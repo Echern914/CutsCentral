@@ -225,12 +225,47 @@ export async function cancelAppointment(
   // Auto-fill (engines/autoFill.ts): a barber clearing a sick afternoon must
   // not have their best clients booked into time they will not be there. Default
   // "barber", so only the call sites that know better say otherwise.
-  opts: { applyPolicyFee?: boolean; suppressSlotOpened?: boolean; initiator?: "customer" | "barber" } = {},
+  //
+  // The last four exist for REMOVING a walk-in recorded by mistake (POST
+  // /appointments/:id/remove-walk-in) - a correction, not a cancellation, so
+  // it keeps this teardown (status, loyalty clawback, Acuity release, out of
+  // revenue) and drops everything that speaks or pays:
+  // onlyFrom: the CAS moves the row only out of these statuses; anything else
+  //   is the same idempotent no-op (false) as an already-cancelled row.
+  // silent: tell NOBODY - no cancellation email, no slot-opened alert, no
+  //   Auto-fill run, no Wallet pass poke.
+  // dismiss: clear it off the day view in the same write.
+  // refuseIfMoney: move no money. A live Payment row of ANY purpose (a booking
+  //   payment, a Tap to Pay or card checkout, a tip) or a kept card throws
+  //   CancelRefusedError inside the transaction, so nothing changes; and the
+  //   refund / card-on-file steps below never run.
+  // refuseIfCheckedOut: a visit checked out at the chair (`paidAt` / a
+  //   recorded chair payment) throws CancelRefusedError("checked_out") the same
+  //   way. Used by the after-the-fact no-show / cancel of a completed visit
+  //   (POST /appointments/:id/correct-completed): money was recorded for it, so
+  //   it happened. Not set by remove-walk-in - a walk-in is born checked out.
+  // keepBookingPayment: with refuseIfMoney on a NO_SHOW, a SUCCEEDED booking
+  //   payment (the deposit / pay-ahead) is not a reason to refuse: a no-show
+  //   keeps it, exactly as an ordinary no-show does (only CANCELED refunds,
+  //   below, and refuseIfMoney skips that anyway). It is left untouched. Any
+  //   other live payment or a kept card still refuses.
+  opts: {
+    applyPolicyFee?: boolean;
+    suppressSlotOpened?: boolean;
+    initiator?: "customer" | "barber";
+    onlyFrom?: Array<"PENDING" | "BOOKED" | "COMPLETED" | "NO_SHOW">;
+    silent?: boolean;
+    dismiss?: boolean;
+    refuseIfMoney?: boolean;
+    refuseIfCheckedOut?: boolean;
+    keepBookingPayment?: boolean;
+  } = {},
 ): Promise<boolean> {
   // Shop is owner-only, so this is read before the tenant transaction; the
   // run itself is written inside it, behind the CAS.
   const autoFill =
     outcome === "CANCELED" &&
+    !opts.silent &&
     opts.initiator === "customer" &&
     (await autoFillShouldQueue(shopId, now).catch((err: unknown) => {
       // Never the reason a cancellation fails: it just goes the ordinary way.
@@ -276,18 +311,53 @@ export async function cancelAppointment(
     // revision - a persisted counter, not a wall clock - becomes the identity
     // the email intent is bound to.
     const transitioned = await tx.appointment.updateMany({
-      where: { id: appt.id, shopId, status: { not: outcome } },
+      where: {
+        id: appt.id,
+        shopId,
+        status: opts.onlyFrom ? { in: opts.onlyFrom } : { not: outcome },
+      },
       data: {
         status: outcome,
         canceledAt: outcome === "CANCELED" ? now : undefined,
         ...(outcome === "CANCELED"
           ? { cancellationRevision: { increment: 1 } }
           : {}),
+        ...(opts.dismiss ? { dismissedAt: now } : {}),
       },
     });
     // Already in this state: an idempotent no-op. No second intent, no second
     // refund, no second teardown.
     if (transitioned.count === 0) return null;
+
+    // 🔴 MOVE NO MONEY. Read AFTER the CAS, while its row lock is held, and
+    // thrown so the whole transition rolls back: a refusal leaves the row
+    // exactly as it was. Any Payment that is not dead is money (or a form a
+    // client could still pay) that only the shop's own refund should touch.
+    if (opts.refuseIfMoney) {
+      const live = await tx.payment.findFirst({
+        where: {
+          appointmentId: appt.id,
+          shopId,
+          status: { notIn: [...DEAD_PAYMENT_STATUSES] },
+          ...(opts.keepBookingPayment && outcome === "NO_SHOW"
+            ? { NOT: KEPT_BY_A_NO_SHOW }
+            : {}),
+        },
+        select: { id: true },
+      });
+      if (live || cardIsKept(appt.cardOnFile)) throw new CancelRefusedError("money_taken");
+    }
+    // Same lock, same rollback: a chair checkout landing between the caller's
+    // read and this CAS is seen here (its claim is a write on this very row).
+    if (opts.refuseIfCheckedOut) {
+      const chair = await tx.appointment.findFirst({
+        where: { id: appt.id, shopId },
+        select: { paidAt: true, paidAmount: true },
+      });
+      if (chair && (chair.paidAt !== null || chair.paidAmount !== null)) {
+        throw new CancelRefusedError("checked_out");
+      }
+    }
 
     // 🔴 A CANCELLED SPECIAL GOES BACK ON SALE. A targeted slot is capacity-1
     // (bookedAppointmentId is unique), and nothing else ever cleared it: a
@@ -333,7 +403,8 @@ export async function cancelAppointment(
     // promise, and nobody is told about a cancellation that never happened.
     //
     // Resend is NEVER called from in here - only a row is written.
-    if (outcome === "CANCELED") {
+    // A silent cancel promises nobody anything, so it writes no row at all.
+    if (outcome === "CANCELED" && !opts.silent) {
       // Read back the revision this transition actually won, and key the
       // intent on it. Two racers cannot both get here, and the surviving
       // intent names a state change rather than a request.
@@ -377,8 +448,9 @@ export async function cancelAppointment(
   }
 
   // Refund a paid booking on cancellation, AFTER the tx (Stripe network call).
-  // Only on CANCELED (not NO_SHOW) and only when there's a payment row.
-  if (outcome === "CANCELED" && result.paymentId) {
+  // Only on CANCELED (not NO_SHOW) and only when there's a payment row - and
+  // never on a cancel that promised to move no money.
+  if (outcome === "CANCELED" && result.paymentId && !opts.refuseIfMoney) {
     let feeCents = 0;
     if (opts.applyPolicyFee) {
       const shop = await prisma.shop.findUnique({
@@ -416,7 +488,9 @@ export async function cancelAppointment(
   // AND it is on the customer (a no-show, or their own cancel inside the
   // window); everything else releases the card. Awaited like the refund above
   // and never throws - the mark itself already stands.
-  if (result.cardOnFile && result.cardOnFile.status === "saved") {
+  if (opts.refuseIfMoney) {
+    // Refused above if a card was kept; nothing to settle or release.
+  } else if (result.cardOnFile && result.cardOnFile.status === "saved") {
     await settleCardOnFile({
       shopId,
       appointmentId,
@@ -448,7 +522,7 @@ export async function cancelAppointment(
   // forget - a notify issue must never affect the cancel. NO_SHOW never fires
   // (that slot's time has already passed). Covers BOTH the barber-dashboard
   // cancel and the customer manage-page cancel, since both route through here.
-  if (outcome === "CANCELED" && !opts.suppressSlotOpened) {
+  if (outcome === "CANCELED" && !opts.suppressSlotOpened && !opts.silent) {
     // Tracked (backgroundWork.ts) so a test can know it has finished; inert
     // in production.
     void trackBackgroundWork(notifySlotOpened({ shopId, appointmentId, now }));
@@ -473,8 +547,41 @@ export async function cancelAppointment(
   // (the pass re-fetches as VOIDED). Post-commit and fire-and-forget like every
   // notify above: a wallet problem must never affect the cancel, and the poke
   // never throws by contract. Runs for NO_SHOW too - that pass is equally dead.
-  void pokeAppointmentPass(appointmentId);
+  // A silent cancel pokes nothing: a poke is a push to the client's device.
+  if (!opts.silent) void pokeAppointmentPass(appointmentId);
   return true;
+}
+
+/**
+ * Payment statuses that are NOT money: an attempt that died. Anything else - a
+ * collected, refunded, processing or still-payable row - is money (or a form a
+ * client could still pay) that `refuseIfMoney` will not move. One list, read by
+ * the cancel guard and by every route that decides beforehand whether to offer
+ * a no-money correction, so the offer and the guard cannot disagree.
+ */
+export const DEAD_PAYMENT_STATUSES = ["canceled", "failed"] as const;
+
+/**
+ * The one payment a no-show keeps as it is: the booking payment (deposit /
+ * pay-ahead), collected. Read by the cancel guard (`keepBookingPayment`) and
+ * by engines/visitCorrection.ts, so the offer and the guard agree.
+ */
+export const KEPT_BY_A_NO_SHOW = { purpose: "booking", status: "succeeded" } as const;
+
+/** A card kept on this booking that could still be charged or is being filed. */
+export function cardIsKept(cardOnFile: { status: string } | null | undefined): boolean {
+  return cardOnFile != null && ["saved", "pending"].includes(cardOnFile.status);
+}
+
+/**
+ * A cancel that refused to happen, rolled back with nothing changed. Thrown
+ * only for callers that asked for the refusal (`refuseIfMoney`).
+ */
+export class CancelRefusedError extends Error {
+  constructor(readonly reason: "money_taken" | "checked_out") {
+    super(`cancel refused: ${reason}`);
+    this.name = "CancelRefusedError";
+  }
 }
 
 export type CancelSeriesScope = "this" | "future" | "all";

@@ -28,10 +28,12 @@ import {
   cancelAppointmentAction,
   checkoutAppointmentAction,
   completeAppointmentAction,
+  correctCompletedVisitAction,
   updateAppointmentPriceAction,
   getAppointmentDetailAction,
   markArrivedAction,
   noShowAppointmentAction,
+  removeWalkInAction,
   type AppointmentDetail,
   type DetailHistoryItem,
 } from "./actions";
@@ -355,6 +357,98 @@ export function AppointmentSheet({
     });
   }
 
+  //  ── Remove walk-in: asked in the sheet, answered in the sheet ──
+  // The question sits in the footer, which never scrolls away, and so does a
+  // refusal: a toast draws beneath this dialog and is invisible on a phone.
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  // Its own busy flag, not useTransition: that one does not stay on across an
+  // awaited call, and a second tap would send a second request.
+  const [removing, setRemoving] = useState(false);
+  useEffect(() => {
+    if (rawView !== "detail") setConfirmRemove(false);
+  }, [rawView]);
+
+  function askRemoveWalkIn() {
+    setMenu(null);
+    setSavedNotice(null);
+    setRemoveError(null);
+    setConfirmCorrect(null);
+    setConfirmRemove(true);
+  }
+
+  function removeWalkIn() {
+    if (removing) return;
+    setRemoveError(null);
+    setRemoving(true);
+    void (async () => {
+      try {
+        let res: Awaited<ReturnType<typeof removeWalkInAction>>;
+        try {
+          res = await removeWalkInAction(row.id);
+        } catch {
+          res = { ok: false };
+        }
+        if (!res.ok) {
+          setRemoveError(res.message ?? "That didn't go through. Nothing changed, so try again.");
+          load();
+          return;
+        }
+        toast("Walk-in removed", "success");
+        onChanged();
+        onClose();
+      } finally {
+        setRemoving(false);
+      }
+    })();
+  }
+
+  //  ── A completed visit that never happened: no-show / cancel after the fact ──
+  // The 15-minute sweep completes every booking whose time has passed, so a
+  // no-show not marked in time reads as a finished visit. Same shape as Remove
+  // walk-in above: asked in the footer, refused in the footer, one request.
+  const [confirmCorrect, setConfirmCorrect] = useState<"no_show" | "canceled" | null>(null);
+  const [correctError, setCorrectError] = useState<string | null>(null);
+  const [correcting, setCorrecting] = useState(false);
+  useEffect(() => {
+    if (rawView !== "detail") setConfirmCorrect(null);
+  }, [rawView]);
+
+  function askCorrect(outcome: "no_show" | "canceled") {
+    setMenu(null);
+    setSavedNotice(null);
+    setCorrectError(null);
+    setConfirmRemove(false);
+    setConfirmCorrect(outcome);
+  }
+
+  function correctVisit() {
+    if (correcting || !confirmCorrect) return;
+    const outcome = confirmCorrect;
+    setCorrectError(null);
+    setCorrecting(true);
+    void (async () => {
+      try {
+        let res: Awaited<ReturnType<typeof correctCompletedVisitAction>>;
+        try {
+          res = await correctCompletedVisitAction(row.id, outcome);
+        } catch {
+          res = { ok: false };
+        }
+        if (!res.ok) {
+          setCorrectError(res.message ?? "That didn't go through. Nothing changed, so try again.");
+          load();
+          return;
+        }
+        toast(outcome === "no_show" ? "Marked no-show" : "Canceled", "success");
+        onChanged();
+        onClose();
+      } finally {
+        setCorrecting(false);
+      }
+    })();
+  }
+
   //  ── chrome ──────────────────────────────────────────────────────────────
   const title =
     view === "series"
@@ -441,6 +535,29 @@ export function AppointmentSheet({
           />
         </div>
       )
+    ) : confirmRemove && detail ? (
+      <RemoveWalkInFooter
+        detail={detail}
+        error={removeError}
+        removing={removing}
+        onKeep={() => {
+          setConfirmRemove(false);
+          setRemoveError(null);
+        }}
+        onRemove={removeWalkIn}
+      />
+    ) : confirmCorrect && detail ? (
+      <CorrectVisitFooter
+        detail={detail}
+        outcome={confirmCorrect}
+        error={correctError}
+        busy={correcting}
+        onKeep={() => {
+          setConfirmCorrect(null);
+          setCorrectError(null);
+        }}
+        onConfirm={correctVisit}
+      />
     ) : (
       <DetailFooter detail={detail} notice={savedNotice} onEdit={() => setView("edit")} />
     );
@@ -560,6 +677,8 @@ export function AppointmentSheet({
               : undefined
           }
           onAct={act}
+          onRemoveWalkIn={askRemoveWalkIn}
+          onCorrect={askCorrect}
           onPriceSaved={() => {
             onChanged();
             load();
@@ -598,6 +717,8 @@ function DetailView({
   onCheckout,
   onBookAgain,
   onAct,
+  onRemoveWalkIn,
+  onCorrect,
   onPriceSaved,
   showRefunds,
   onDepositRefunded,
@@ -626,6 +747,10 @@ function DetailView({
     label: string,
     closeAfter?: boolean,
   ) => void;
+  /** Ask, in the sheet, whether to remove this walk-in. */
+  onRemoveWalkIn: () => void;
+  /** Ask, in the sheet, whether to mark this completed visit a no-show or cancel it. */
+  onCorrect: (outcome: "no_show" | "canceled") => void;
   /** The price changed on the server: re-read the booking and the agenda. */
   onPriceSaved: () => void;
   /** The new checkout is live for this shop, so its card payments can be refunded here. */
@@ -829,6 +954,8 @@ function DetailView({
             onEditSeries();
           }}
           onAct={onAct}
+          onRemoveWalkIn={onRemoveWalkIn}
+          onCorrect={onCorrect}
         />
       )}
     </div>
@@ -2108,6 +2235,8 @@ function MoreMenu({
   onBookAgain,
   onEditSeries,
   onAct,
+  onRemoveWalkIn,
+  onCorrect,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail;
@@ -2120,6 +2249,8 @@ function MoreMenu({
     label: string,
     closeAfter?: boolean,
   ) => void;
+  onRemoveWalkIn: () => void;
+  onCorrect: (outcome: "no_show" | "canceled") => void;
 }) {
   const items: MenuItem[] = [];
   const native = detail.source === "appointment" && detail.origin === "chairback";
@@ -2186,6 +2317,40 @@ function MoreMenu({
       icon: <BanIcon />,
       tone: "danger",
       onClick: () => onAct(cancelAppointmentAction, "Canceled", true),
+    });
+  }
+  // A walk-in recorded by mistake - the only finished visit that can be taken
+  // back off the books. The SERVER says it is a walk-in (`walkIn`); a service
+  // that happens to be called "Walk-in" never decides it. It asks first, in
+  // the sheet.
+  if (native && detail.walkIn === true && detail.status === "completed") {
+    items.push({
+      key: "remove-walk-in",
+      divided: true,
+      label: "Remove walk-in",
+      icon: <BanIcon />,
+      tone: "danger",
+      onClick: onRemoveWalkIn,
+    });
+  }
+  // A completed visit that never happened - the 15-minute sweep finishes every
+  // booking whose time has passed, so a no-show not marked in time reads as
+  // done. The SERVER says it may still be put right (`correctable`: ChairBack's
+  // own, recent, no money on it). Each asks first, in the sheet.
+  if (native && detail.correctable === true && detail.status === "completed") {
+    items.push({
+      key: "correct-no-show",
+      divided: true,
+      label: "Mark no-show",
+      icon: <EmptyChairIcon />,
+      onClick: () => onCorrect("no_show"),
+    });
+    items.push({
+      key: "correct-cancel",
+      label: "Cancel visit",
+      icon: <BanIcon />,
+      tone: "danger",
+      onClick: () => onCorrect("canceled"),
     });
   }
   if (detail.externalManageUrl) {
@@ -2379,6 +2544,136 @@ function PayView({
 }
 
 //  ── footers ───────────────────────────────────────────────────────────────
+
+/**
+ * "Remove walk-in?" - asked in the footer, which never scrolls away, saying
+ * exactly what will happen before anything does. A refusal (a card payment or
+ * tip still on it) is read here too, in the server's own words.
+ */
+function RemoveWalkInFooter({
+  detail,
+  error,
+  removing,
+  onKeep,
+  onRemove,
+}: {
+  detail: AppointmentDetail;
+  error: string | null;
+  removing: boolean;
+  onKeep: () => void;
+  onRemove: () => void;
+}) {
+  const day = sameShopDay(detail.startsAt, new Date().toISOString(), detail.timezone)
+    ? "today's takings"
+    : "that day's takings";
+  return (
+    <div className="flex w-full flex-col gap-2" data-testid="remove-walk-in-confirm">
+      <p className="text-sm font-medium text-offwhite">Remove this walk-in?</p>
+      <p className="text-xs leading-relaxed text-muted">
+        It comes off your schedule and out of {day}. Any punches it earned come off. Nobody is told.
+      </p>
+      {error && (
+        <p role="alert" data-testid="remove-walk-in-error" className="text-sm text-danger-soft">
+          {error}
+        </p>
+      )}
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <button
+          type="button"
+          onClick={onKeep}
+          disabled={removing}
+          className="flex h-11 flex-1 items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+        >
+          Keep it
+        </button>
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={removing}
+          className="flex h-11 flex-1 items-center justify-center rounded-xl border border-danger-soft/50 px-4 text-sm font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50"
+        >
+          {removing ? "Removing…" : "Remove walk-in"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Mark this visit a no-show?" / "Cancel this visit?" - for a visit already
+ * counted as completed. Asked in the footer, saying exactly what happens and
+ * what does not, and a refusal (money on it, too long ago) is read here too,
+ * in the server's own words.
+ */
+function CorrectVisitFooter({
+  detail,
+  outcome,
+  error,
+  busy,
+  onKeep,
+  onConfirm,
+}: {
+  detail: AppointmentDetail;
+  outcome: "no_show" | "canceled";
+  error: string | null;
+  busy: boolean;
+  onKeep: () => void;
+  onConfirm: () => void;
+}) {
+  const day = sameShopDay(detail.startsAt, new Date().toISOString(), detail.timezone)
+    ? "today's takings"
+    : "that day's takings";
+  const action = outcome === "no_show" ? "Mark no-show" : "Cancel visit";
+  // A no-show keeps a deposit paid at booking exactly as it is (the server
+  // allows that one payment, and only for a no-show), so it stays counted.
+  const keepsDeposit = outcome === "no_show" && detail.payment.onlineCents > 0;
+  return (
+    <div className="flex w-full flex-col gap-2" data-testid="correct-visit-confirm">
+      <p className="text-sm font-medium text-offwhite">
+        {outcome === "no_show" ? "Mark this visit a no-show?" : "Cancel this visit?"}
+      </p>
+      <p className="text-xs leading-relaxed text-muted">
+        {keepsDeposit
+          ? `It comes off your completed visits, and only its deposit stays in ${day}, kept as it is.`
+          : `It comes off your completed visits and out of ${day}.`}{" "}
+        Any punch it earned comes off. Nobody is told, and no fee is charged.
+      </p>
+      {error && (
+        <p role="alert" data-testid="correct-visit-error" className="text-sm text-danger-soft">
+          {error}
+        </p>
+      )}
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <button
+          type="button"
+          onClick={onKeep}
+          disabled={busy}
+          className="flex h-11 flex-1 items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+        >
+          Keep it
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          disabled={busy}
+          className="flex h-11 flex-1 items-center justify-center rounded-xl border border-danger-soft/50 px-4 text-sm font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50"
+        >
+          {busy ? "Saving…" : action}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Whether two instants fall on the same calendar day in the shop's zone. */
+function sameShopDay(aIso: string, bIso: string, zone: string): boolean {
+  try {
+    const f = new Intl.DateTimeFormat("en-CA", { timeZone: zone, dateStyle: "short" });
+    return f.format(new Date(aIso)) === f.format(new Date(bIso));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The detail view's footer is deliberately QUIET: the sheet's one solid-brass

@@ -36,6 +36,26 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-10-no-show-after-completed",
+    date: "2026-10-10",
+    kind: "feature",
+    title: "Mark a no-show after the visit shows completed",
+    body:
+      "A booking whose time passed counts as completed, even if nobody came. Open it, tap More, then Mark " +
+      "no-show or Cancel visit, up to 7 days later. Its punch comes off, and nobody is told or charged. " +
+      "A no-show keeps its deposit. A tipped or checked-out visit can't be changed.",
+  },
+  {
+    id: "2026-10-09-remove-walk-in",
+    date: "2026-10-09",
+    kind: "feature",
+    title: "Remove a walk-in you recorded by mistake",
+    body:
+      "Open the walk-in, tap More, then Remove walk-in. It comes off your schedule and out of your takings, and " +
+      "nobody is told. A walk-in paid by card or tipped through ChairBack needs that refunded first. To fix one, " +
+      "remove it and record it again.",
+  },
+  {
     id: "2026-10-09-repeat-change-acuity-still-confirming",
     date: "2026-10-09",
     kind: "fix",

@@ -9,6 +9,8 @@ import {
 } from "../engines/appointmentPayment.js";
 import { CLOSED_BOOKING_STATUSES } from "../billing/depositRefund.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
+import { isRecordedWalkIn } from "../engines/walkInReceipt.js";
+import { correctionMoney, correctionRefusal } from "../engines/visitCorrection.js";
 import { readIntakeSnapshot, type IntakeAnswer } from "../engines/bookingIntake.js";
 import { readPolicySnapshot } from "../engines/bookingPolicy.js";
 import { serviceCheckoutEnabled } from "./booking.checkout.js";
@@ -220,6 +222,19 @@ export interface AppointmentDetail {
   editable: boolean;
   /** Why editing is off, so the sheet can say it instead of hiding a button. */
   readOnlyReason: "external" | "not_editable" | null;
+  /**
+   * A walk-in this shop recorded in ChairBack (engines/walkInReceipt.ts) - the
+   * one kind of finished visit the sheet offers to REMOVE. The server decides,
+   * so the sheet never guesses from a service name.
+   */
+  walkIn: boolean;
+  /**
+   * A completed visit the shop may still mark a no-show or cancel after the
+   * fact (engines/visitCorrection.ts: ChairBack's own, not a walk-in, ended
+   * within the correction window, no money on it). The server decides, so the
+   * sheet never offers what the route would refuse.
+   */
+  correctable: boolean;
   /** Where to go and change it, when another system owns the schedule. */
   externalManageUrl: string | null;
 }
@@ -494,6 +509,8 @@ export function registerAppointmentDetail(router: Router): void {
         policySnapshot: true,
         checkInStatus: true,
         groupId: true,
+        seriesId: true,
+        bookedVia: true,
         visitId: true,
         // The Visit's source namespace is what decides ownership (see
         // engines/visitOrigin.ts) - `visitId` alone never can.
@@ -501,6 +518,7 @@ export function registerAppointmentDetail(router: Router): void {
         paidAmount: true,
         paidMethod: true,
         paidAt: true,
+        completedAt: true,
         cardOnFile: { select: { brand: true, last4: true, status: true } },
         service: { select: { name: true } },
         staff: { select: { name: true } },
@@ -532,11 +550,14 @@ export function registerAppointmentDetail(router: Router): void {
       policySnapshot: Prisma.JsonValue | null;
       checkInStatus: string | null;
       groupId: string | null;
+      seriesId: string | null;
+      bookedVia: string | null;
       visitId: string | null;
       visit: { acuityAppointmentId: string } | null;
       paidAmount: Prisma.Decimal | null;
       paidMethod: string | null;
       paidAt: Date | null;
+      completedAt: Date | null;
       cardOnFile: { brand: string | null; last4: string | null; status: string } | null;
       service: { name: string } | null;
       staff: { name: string } | null;
@@ -610,6 +631,10 @@ export function registerAppointmentDetail(router: Router): void {
     const source = external
       ? await externalSource(shopId)
       : { label: "ChairBack", manageUrl: null };
+    // Only a completed visit can be corrected, so only then is money read.
+    const correctable =
+      appt.status === "COMPLETED" &&
+      correctionRefusal(appt, await correctionMoney(shopId, appt.id), new Date(), "NO_SHOW") === null;
     const history = await clientHistory(
       shopId,
       appt.clientId,
@@ -674,6 +699,8 @@ export function registerAppointmentDetail(router: Router): void {
       editable,
       readOnlyReason: editable ? null : external ? "external" : "not_editable",
       externalManageUrl: source.manageUrl,
+      walkIn: isRecordedWalkIn(appt),
+      correctable,
     };
     res.json(detail);
   });
@@ -798,6 +825,8 @@ export function registerAppointmentDetail(router: Router): void {
       editable: false,
       readOnlyReason: "external",
       externalManageUrl: source.manageUrl,
+      walkIn: false,
+      correctable: false,
     };
     res.json(detail);
   });
