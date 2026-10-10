@@ -3209,7 +3209,8 @@ dashboardRouter.post("/waitlist", async (req, res) => {
       //
       // 🔴 tierRank is READ HERE AND FROZEN. Reaching Gold tomorrow does not
       // move this row up today's queue; it counts the next time they join.
-      const { clientId, tierRank } = await resolveWaitlistClient(tx, shop.id, phone);
+      // The shop typed this number itself, so its client's tier counts.
+      const { clientId, tierRank } = await resolveWaitlistClient(tx, shop.id, phone, { contact: "vouched" });
       const created = await tx.waitlistEntry.create({
         data: {
           shopId: shop.id,

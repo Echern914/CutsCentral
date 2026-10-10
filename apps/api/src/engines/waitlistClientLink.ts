@@ -58,10 +58,28 @@ export interface WaitlistClientLink {
   tierRank: number;
 }
 
+/**
+ * Where the number came from - which decides whether it may carry a tier.
+ *
+ *   "vouched"  the shop typed it (dashboard), or the joiner proved it (the
+ *              walk-in kiosk's text code). The record it names is the person.
+ *   "typed"    a public form nobody signed into. Anyone can type a Gold
+ *              client's number, so it LINKS (reachability, which grants
+ *              nothing) but lends no standing: RANK_NONE, the rank everyone
+ *              without proof gets. Otherwise a stranger jumps the queue on a
+ *              regular's number and the offers go to the stranger's email.
+ *
+ * Required, with no default, so a new caller has to say which it is.
+ */
+export interface WaitlistContactSource {
+  contact: "typed" | "vouched";
+}
+
 export async function resolveWaitlistClient(
   tx: Prisma.TransactionClient,
   shopId: string,
   phone: string | null | undefined,
+  source: WaitlistContactSource,
 ): Promise<WaitlistClientLink> {
   if (!phone) return { clientId: null, tierRank: RANK_NONE };
   const matches = await tx.client.findMany({
@@ -79,5 +97,7 @@ export async function resolveWaitlistClient(
   // direction to be wrong in: guessing which of two live records is "the"
   // client would hand one person the other's standing in the queue.
   if (!only) return { clientId: null, tierRank: RANK_NONE };
+  // 🔴 A typed number names a record; it does not prove the joiner IS it.
+  if (source.contact !== "vouched") return { clientId: only.id, tierRank: RANK_NONE };
   return { clientId: only.id, tierRank: waitlistTierRank(only.loyaltyTier) };
 }
