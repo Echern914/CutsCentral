@@ -159,6 +159,12 @@ export function AppointmentForm({
   const [dayISO, setDayISO] = useState<string>(prefillISO);
   // Kept across retries of ONE submission; replaced once the API has answered.
   const operationId = useRef<string>(newOperationId());
+  // The details of the submission that got NO answer (its outcome unknown),
+  // pinned until an answer settles it. A retry with the same details is that
+  // submission; a retry after the barber changed something must never be
+  // reported as booking the changed details when the server answers it with
+  // the first copy's booking.
+  const unansweredAttempt = useRef<string | null>(null);
   const [customTime, setCustomTime] = useState(false);
   // Custom time's price, as typed. Empty = the service's own price.
   const [priceText, setPriceText] = useState("");
@@ -215,7 +221,9 @@ export function AppointmentForm({
    * the retry asked for something else ("mismatch"), or that booking's calendar
    * protection is still settling. Shown with the booking's SAVED time.
    */
-  const [earlier, setEarlier] = useState<{ kind: "mismatch" | "settling"; booked: SavedBooking } | null>(null);
+  const [earlier, setEarlier] = useState<{ kind: "mismatch" | "changed" | "settling"; booked: SavedBooking } | null>(
+    null,
+  );
   // The overlap he already said yes to, carried on the retry that follows - so
   // confirming an overlap and THEN an Acuity block sends both answers. Forgotten
   // the moment the time, service or provider changes (a different question).
@@ -516,32 +524,49 @@ export function AppointmentForm({
         }
       : undefined;
 
+    // Everything this submission asks for, minus its id: what a retry is
+    // compared on (unansweredAttempt).
+    const details = {
+      staffId,
+      serviceId,
+      startsAt,
+      clientId: clientId ?? undefined,
+      firstName: clientId ? undefined : newName.trim(),
+      phone: clientId ? undefined : newPhone.trim() || undefined,
+      note: note.trim() || undefined,
+      customTime,
+      // Custom time only (typedPrice is null otherwise); empty = menu price.
+      price: customPrice ?? undefined,
+      externalBlockConfirmation,
+      overlapConfirmation,
+      recurrence,
+      // Atomic waitlist link - see CreateApptInput.
+      waitlistEntryId: waitlist?.entryId,
+      // Claimed server-side in the same transaction, at its own price.
+      targetedSlotId: special?.id,
+      // What is ticked ON SCREEN - derived, so an add-on the form is no
+      // longer showing can never ride along.
+      addOnIds: chosenAddOns.length > 0 ? chosenAddOns.map((a) => a.id) : undefined,
+    };
+    const fingerprint = JSON.stringify(details);
+
     start(async () => {
       let res: Awaited<ReturnType<typeof createAppointmentAction>>;
+      // Pinned before the call: what the unanswered submission asked for, if
+      // there is one, and whether the form has changed since.
+      const changedSinceUnanswered =
+        unansweredAttempt.current !== null && unansweredAttempt.current !== fingerprint;
       try {
         res = await createAppointmentAction({
-          staffId,
-          serviceId,
-          startsAt,
-          clientId: clientId ?? undefined,
-          firstName: clientId ? undefined : newName.trim(),
-          phone: clientId ? undefined : newPhone.trim() || undefined,
-          note: note.trim() || undefined,
-          customTime,
-          // Custom time only (typedPrice is null otherwise); empty = menu price.
-          price: customPrice ?? undefined,
-          externalBlockConfirmation,
-          overlapConfirmation,
-          recurrence,
-          // Atomic waitlist link - see CreateApptInput.
-          waitlistEntryId: waitlist?.entryId,
-          // Claimed server-side in the same transaction, at its own price.
-          targetedSlotId: special?.id,
-          // What is ticked ON SCREEN - derived, so an add-on the form is no
-          // longer showing can never ride along.
-          addOnIds: chosenAddOns.length > 0 ? chosenAddOns.map((a) => a.id) : undefined,
+          ...details,
           // A retry of THIS submission (a lost answer) gets the booking it made,
           // not a second one. A series answers per visit, so it sends none.
+          // 🔴 Kept even when the barber changed something while the outcome
+          // was unknown: a NEW id could book a second appointment beside one
+          // the first copy already made. With the same id the server either
+          // books the new details (the first copy never landed), refuses
+          // naming what was booked, or answers with the first copy's booking -
+          // which is reported as exactly that, below.
           operationId: recurrence ? undefined : operationId.current,
         });
       } catch {
@@ -559,6 +584,26 @@ export function AppointmentForm({
       // the next tap must learn how it settled - not book a second one.
       if (!res.ok && res.answered !== false && res.error !== "operation_in_progress") {
         operationId.current = newOperationId();
+        unansweredAttempt.current = null;
+      }
+      // Unknown outcome: pin what THIS submission asked for (the first copy's
+      // details stay pinned across further unanswered tries).
+      if (!res.ok && res.answered === false && unansweredAttempt.current === null) {
+        unansweredAttempt.current = fingerprint;
+      }
+      // 🔴 The server answered a retry with the FIRST copy's booking, but the
+      // barber changed something since (a typed price, the note...). That
+      // booking is the old details, not the screen's: say so, book nothing
+      // new, and start a fresh submission for whatever comes next.
+      if (res.ok && res.replayed && changedSinceUnanswered) {
+        operationId.current = newOperationId();
+        unansweredAttempt.current = null;
+        if (res.id && res.startsAt && res.endsAt) {
+          setEarlier({ kind: "changed", booked: { id: res.id, startsAt: res.startsAt, endsAt: res.endsAt } });
+        } else {
+          setError("Your first tap already booked it as it was. The changes you made after it weren't saved - check the calendar.");
+        }
+        return;
       }
       if (!res.ok) {
         // 🔴 This submission's EARLIER try is what was saved. Say so, with its
@@ -619,7 +664,7 @@ export function AppointmentForm({
                     : res.error === "replay_not_booked"
                       ? (res.reason ?? "That booking didn't go through. Check the calendar before booking again.")
                       : res.answered === false
-                        ? "No answer from ChairBack - check your connection and tap again. It won't book twice."
+                        ? "No answer from ChairBack, so it may or may not have booked. Tap again to find out - it won't book twice."
                         : "Couldn't schedule. Please try again.",
         );
         return;
@@ -710,9 +755,11 @@ export function AppointmentForm({
             <p className="[overflow-wrap:anywhere] text-offwhite">
               {earlier.kind === "mismatch"
                 ? `Your first tap already booked ${dayFmt.format(new Date(earlier.booked.startsAt))} at ${timeFmt.format(new Date(earlier.booked.startsAt))}. Nothing new was booked.`
-                : `The booking for ${dayFmt.format(new Date(earlier.booked.startsAt))} at ${timeFmt.format(new Date(earlier.booked.startsAt))} is still being confirmed with your calendar. Check it in a moment before booking again.`}
+                : earlier.kind === "changed"
+                  ? `Your first tap already booked ${dayFmt.format(new Date(earlier.booked.startsAt))} at ${timeFmt.format(new Date(earlier.booked.startsAt))}, as it was before your changes. Nothing new was booked, and the changes weren't saved.`
+                  : `The booking for ${dayFmt.format(new Date(earlier.booked.startsAt))} at ${timeFmt.format(new Date(earlier.booked.startsAt))} is still being confirmed with your calendar. Check it in a moment before booking again.`}
             </p>
-            {earlier.kind === "mismatch" && rebook && (
+            {earlier.kind !== "settling" && rebook && (
               <button
                 type="button"
                 onClick={() => onCreated({ id: earlier.booked.id, startsAt: earlier.booked.startsAt })}

@@ -32,6 +32,41 @@ const input = {
 
 beforeEach(() => fetchMock.mockReset());
 
+describe("🔴 a gateway error is not a refusal", () => {
+  it("502, 503, 504 and a 500 come back as UNKNOWN (answered: false), a 409 as answered", async () => {
+    for (const status of [502, 503, 504, 500]) {
+      fetchMock.mockResolvedValueOnce(reply(status, {}));
+      expect(await createAppointmentAction(input)).toMatchObject({ ok: false, answered: false });
+    }
+    fetchMock.mockResolvedValueOnce(reply(409, { error: "slot_taken" }));
+    expect(await createAppointmentAction(input)).toMatchObject({ ok: false, answered: true, error: "slot_taken" });
+  });
+
+  it("🔴 the server saves the booking, the answer comes back 502, the retry with the same id: exactly ONE booking", async () => {
+    // A stand-in for the API's operationId rule: the first copy books and the
+    // proxy loses the answer; a copy with an id already used is answered from
+    // what that id booked.
+    const saved = new Map<string, { id: string; startsAt: string; endsAt: string }>();
+    let calls = 0;
+    fetchMock.mockImplementation(async (_url?: string, init?: RequestInit) => {
+      if (!init?.body) return reply(404, {}); // not the create call
+      calls += 1;
+      const body = JSON.parse(String(init.body)) as { operationId: string; startsAt: string };
+      const prior = saved.get(body.operationId);
+      if (prior) return reply(200, { ok: true, ...prior, replayed: true });
+      const booking = { id: `appt${saved.size + 1}`, startsAt: body.startsAt, endsAt: "2026-10-09T15:30:00.000Z" };
+      saved.set(body.operationId, booking);
+      return reply(502, "<html>Bad Gateway</html>");
+    });
+    const first = await createAppointmentAction(input);
+    expect(first).toMatchObject({ ok: false, answered: false });
+    const retry = await createAppointmentAction(input);
+    expect(retry).toMatchObject({ ok: true, id: "appt1", replayed: true });
+    expect(calls).toBe(2);
+    expect(saved.size).toBe(1);
+  });
+});
+
 describe("createAppointmentAction", () => {
   it("passes the saved times and the replay flag through", async () => {
     fetchMock.mockResolvedValueOnce(

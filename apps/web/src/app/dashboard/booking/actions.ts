@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { BookingModeKey } from "@chairback/config/constants";
 import type { ServiceVisibility } from "@chairback/config/serviceVisibility";
 import { apiGet, apiSend } from "@/lib/api";
+import { apiAnswered } from "@/lib/apiAnswered";
 import { refusedOnlyNewKeys } from "@/lib/apiCompat";
 import type { AgendaResponse } from "./page";
 
@@ -621,7 +622,10 @@ export type CreateApptResult = Result & {
    * booking's calendar protection has not settled yet).
    */
   booked?: SavedBooking;
-  /** False when the request never got an answer - safe to retry as-is. */
+  /**
+   * False when the outcome is UNKNOWN - no answer at all, or a 5xx (a gateway
+   * error can arrive after the API booked it). Retry the same submission.
+   */
   answered?: boolean;
   series?: SeriesSummary;
   /** For `external_block`: the block, in words, in the shop's zone. */
@@ -676,7 +680,9 @@ export async function createAppointmentAction(
     const booked = readSavedBooking(res.booked);
     return {
       ok: false,
-      answered: res.status !== 0,
+      // A gateway 502/504 (or any 5xx) can follow a booking the API already
+      // committed: unknown, not refused (lib/apiAnswered.ts).
+      answered: apiAnswered(res.status),
       error: res.error ?? "failed",
       ...(booked ? { booked } : {}),
       ...(res.reason ? { reason: res.reason } : {}),
