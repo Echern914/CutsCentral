@@ -2,7 +2,8 @@ import type { Router } from "express";
 import { z } from "zod";
 import { Prisma, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
-import { completeReschedule } from "../engines/acuityMirror.js";
+import { completeReschedule, readMirrorOutcomes } from "../engines/acuityMirror.js";
+import { trackBackgroundWork } from "../backgroundWork.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
 import {
@@ -21,6 +22,7 @@ import {
  *
  *   POST /series/:id/edit/preview  - what would change, and anything in the way
  *   POST /series/:id/edit          - apply exactly the preview that was shown
+ *   GET  /series/:id/edit/mirror   - where applied dates stand with Acuity now
  *
  * "This appointment" stays the ordinary single edit (PATCH /appointments/:id).
  * Both sit on the manager-only booking router, like every other edit.
@@ -120,6 +122,7 @@ export function registerSeriesEdit(router: Router, invalidateAvailability: (shop
   });
 
   router.post("/series/:id/edit", async (req, res) => {
+    const arrived = Date.now();
     const parsed = applySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
@@ -177,15 +180,27 @@ export function registerSeriesEdit(router: Router, invalidateAvailability: (shop
       return;
     }
 
-    // After commit, one visit at a time: the new block is placed before the old
-    // one is released, and each outcome is reported as it is - an Acuity
-    // calendar that did not confirm is never shown as moved.
+    // After commit, Acuity is told one date at a time: each new block is placed
+    // before its old one is released (completeReschedule). That runs ON ITS
+    // OWN and the answer does not wait for all of it - see ANSWER_WITHIN_MS.
+    // Each date is then reported as the outbox has it at answer time: a date
+    // Acuity has not confirmed yet is "unknown" (still confirming), never moved.
+    const moves = plan.change.filter((v) => outbox.has(v.id));
+    const syncing = trackBackgroundWork(placeMovesOnAcuity(r.shopId, moves.map((v) => [v.id, outbox.get(v.id)!])));
+    await settledOrDeadline(syncing, arrived + answerWithinMs);
+    const mirrors = await readMirrorOutcomes(
+      r.shopId,
+      moves.map((v) => v.id),
+    );
     const changed: { id: string; startsAt: string; endsAt: string; mirror: string }[] = [];
     for (const v of plan.change) {
-      const ids = outbox.get(v.id);
-      const mirror = ids ? await completeReschedule(r.shopId, v.id, ids) : "skipped";
       void pokeAppointmentPass(v.id);
-      changed.push({ id: v.id, startsAt: v.to.startsAt.toISOString(), endsAt: v.to.endsAt.toISOString(), mirror });
+      changed.push({
+        id: v.id,
+        startsAt: v.to.startsAt.toISOString(),
+        endsAt: v.to.endsAt.toISOString(),
+        mirror: outbox.has(v.id) ? (mirrors.get(v.id) ?? "unknown") : "skipped",
+      });
     }
 
     // ONE notice, never one per visit: the next visit that moved, if the client
@@ -210,4 +225,98 @@ export function registerSeriesEdit(router: Router, invalidateAvailability: (shop
     invalidateAvailability(r.shopId);
     res.json({ ok: true, changed, skipped: describePlan(plan).skipped, clientNotified: Boolean(next) });
   });
+
+  // Where the dates of an applied change stand with Acuity NOW - for a result
+  // that went out while some were still confirming. A read of the outbox the
+  // reconciler settles; nothing is sent to Acuity from here.
+  router.get("/series/:id/edit/mirror", async (req, res) => {
+    const parsed = mirrorQuerySchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_input" });
+      return;
+    }
+    const shopId = req.shop!.id;
+    const ids = [...new Set(parsed.data.ids.split(","))];
+    const rows = await prisma.appointment.findMany({
+      where: { shopId, seriesId: req.params.id!, id: { in: ids } },
+      select: { id: true, startsAt: true, endsAt: true },
+      orderBy: { startsAt: "asc" },
+    });
+    const mirrors = await readMirrorOutcomes(
+      shopId,
+      rows.map((a) => a.id),
+    );
+    res.json({
+      changed: rows.map((a) => ({
+        id: a.id,
+        startsAt: a.startsAt.toISOString(),
+        endsAt: a.endsAt.toISOString(),
+        mirror: mirrors.get(a.id) ?? "unknown",
+      })),
+    });
+  });
+}
+
+const mirrorQuerySchema = z.object({
+  ids: z
+    .string()
+    .min(1)
+    .max(64 * 64)
+    .refine((s) => {
+      const parts = s.split(",");
+      return parts.length <= 64 && parts.every((p) => p.length >= 1 && p.length <= 64);
+    }),
+});
+
+/**
+ * 🔴 HOW LONG AFTER IT ARRIVED THE APPLY ANSWERS, whatever Acuity is doing.
+ *
+ * The dashboard gives up on a request after 12 s (apps/web lib/api.ts) and then
+ * can only say "we couldn't confirm that went through" - losing the per-date
+ * result, the one place a date Acuity refused is named. Telling Acuity about a
+ * long repeat one date at a time can take longer than that on its own, so the
+ * answer goes out by this point with every date as the outbox has it: confirmed,
+ * refused, or still confirming. Counted from arrival, so a slow transaction
+ * eats into Acuity's share rather than pushing the answer past the deadline.
+ *
+ * NOT a timeout on Acuity: nothing is abandoned. The dates carry on after the
+ * answer (placeMovesOnAcuity), and if this process dies first their PENDING /
+ * UNKNOWN / RELEASING rows are the five-minute reconciler's, exactly as for
+ * any other booking. GET /series/:id/edit/mirror reads where they got to.
+ */
+const ANSWER_WITHIN_MS = 7_000;
+let answerWithinMs = ANSWER_WITHIN_MS;
+
+/** Tests only: answer sooner, so a slow fake Acuity does not cost seconds. */
+export function __setSeriesEditAnswerWithinForTests(ms: number | undefined): void {
+  answerWithinMs = ms ?? ANSWER_WITHIN_MS;
+}
+
+/**
+ * Place each moved date on Acuity, in order, after commit. Never throws: a date
+ * whose step errors is left in the outbox, where the reconciler finishes it.
+ */
+async function placeMovesOnAcuity(shopId: string, moves: [appointmentId: string, outboxIds: string[]][]): Promise<void> {
+  for (const [appointmentId, outboxIds] of moves) {
+    try {
+      await completeReschedule(shopId, appointmentId, outboxIds);
+    } catch (err) {
+      logger.error({ err, shopId, appointmentId }, "series edit: acuity step failed - reconciler owns it");
+    }
+  }
+}
+
+/** Resolve when `work` settles or at `deadline` (epoch ms), whichever is first. */
+async function settledOrDeadline(work: Promise<unknown>, deadline: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    work.then(
+      () => undefined,
+      () => undefined,
+    ),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, Math.max(0, deadline - Date.now()));
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
 }

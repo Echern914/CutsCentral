@@ -7,7 +7,16 @@ import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { bookingBlockedFor } from "../services/clientBookingBlock.js";
-import { cardOnFileFeeCents, clientCancelKeptCents, paidBookingTakesPrice } from "@chairback/config";
+import {
+  cardOnFileFeeCents,
+  clientCancelKeptCents,
+  describeMovePriceChange,
+  formatMovePriceCents,
+  paidBookingTakesPrice,
+} from "@chairback/config";
+import { addOnCentsOf, dollarsToCents, movePrice } from "../engines/movePrice.js";
+import { handEditCount, recordPriceChange } from "../services/appointmentPriceLedger.js";
+import { TARGETED_SLOT_ORIGIN } from "../engines/specialBooking.js";
 import {
   completeReschedule,
   dispatchAfterCommit,
@@ -131,12 +140,23 @@ export const RECEPTIONIST_TOOLS: Anthropic.Messages.Tool[] = [
     name: "reschedule",
     description:
       "Move an existing appointment to a new slot. appointment_id comes from " +
-      "get_client_history; new_slot_id from check_availability.",
+      "get_client_history; new_slot_id from check_availability. If the move would " +
+      "CHANGE THE PRICE, nothing moves: the result says needs_price_ok with " +
+      "current_price and new_price. Text the client both figures and get a clear yes " +
+      "before calling reschedule again with the same ids plus accept_price_cents = " +
+      "new_price_cents from that result. A no (or no answer) means leave it - their " +
+      "booking stays exactly as it is.",
     input_schema: {
       type: "object",
       properties: {
         appointment_id: { type: "string" },
         new_slot_id: { type: "string" },
+        accept_price_cents: {
+          type: "integer",
+          description:
+            "ONLY after the client said yes to a price change: new_price_cents exactly as " +
+            "the needs_price_ok result gave it. Never a figure of your own.",
+        },
       },
       required: ["appointment_id", "new_slot_id"],
     },
@@ -205,6 +225,12 @@ const bookInput = z.object({
 const rescheduleInput = z.object({
   appointment_id: z.string().min(1),
   new_slot_id: z.string().min(1),
+  /**
+   * The new price the client said yes to, as the needs_price_ok result gave
+   * it. Only ever COMPARED with the figure the server derives again on this
+   * call - never written. A model can't set a price through it.
+   */
+  accept_price_cents: z.number().int().min(0).optional(),
 });
 
 const cancelInput = z.object({ appointment_id: z.string().min(1) });
@@ -1170,6 +1196,14 @@ async function loadOwnAppointment(ctx: ToolContext, appointmentId: string) {
         payments: { where: { purpose: "booking" }, select: { status: true, amount: true } },
         // What it was booked at: a payment below this was a deposit.
         priceAtBooking: true,
+        // What that price carries that the menu doesn't (engines/movePrice.ts).
+        addOns: true,
+        bookedVia: true,
+        // The menu's figure at the OLD time - how a move tells an agreed price
+        // from a plain menu one.
+        service: {
+          select: { price: true, priceOverrides: true, dateOverrides: true, timeOverrides: true },
+        },
       },
     }),
   );
@@ -1202,24 +1236,112 @@ async function rescheduleTool(
     );
   }
 
-  // Paid booking + a price on the new date it can't take: self-serve can't
-  // reconcile the captured charge (same rule as the public manage page) - hand
-  // off. A deposit only needs the new price to still cover it.
+  // Already there: a retried call whose first attempt landed (the model
+  // re-sent it, or its reply never arrived). Nothing is written again - no
+  // second move, no second ledger row, no second calendar swap.
+  if (
+    appt.startsAt.getTime() === slot.startsAt.getTime() &&
+    appt.staffId === slot.staffId
+  ) {
+    return ok({
+      rescheduled: true,
+      already_at_that_time: true,
+      appointment_id: appt.id,
+      new_time: formatApptTime(slot.startsAt, slot.timezone),
+      barber: slot.staffName,
+      service: slot.serviceName,
+      price: formatMovePriceCents(dollarsToCents(appt.priceAtBooking)),
+      note: "it is already booked at this time - confirm it back, nothing else changed",
+    });
+  }
+
+  // 🔴 WHAT THE MOVE DOES TO THE PRICE - the same rule as both reschedule
+  // routes (engines/movePrice.ts). An agreed price (add-ons, a typed or
+  // hand-edited figure) moves untouched. A plain menu price that differs at
+  // the new time, or a special being left for a regular slot, changes ONLY
+  // after the client has heard both figures and said yes. This tool used to
+  // write the new slot's menu price in silence.
+  const menuAtOld = effectivePriceAt(
+    appt.service.price === null ? null : Number(appt.service.price),
+    {
+      at: appt.startsAt,
+      timezone: slot.timezone,
+      weekdayOverrides: appt.service.priceOverrides,
+      dateOverrides: appt.service.dateOverrides,
+      timeWindows: appt.service.timeOverrides,
+    },
+  );
+  // A client moving their own special leaves it: the slots this tool can move
+  // to are regular-grid ones, so it is offered the menu price - exactly as
+  // the manage page does.
+  const leavingSpecial = appt.bookedVia === TARGETED_SLOT_ORIGIN;
+  // By hand only: a previous move's accepted reprice is the menu's own figure.
+  const handEdited = (await handEditCount(ctx.shopId, appt.id)) > 0;
+  const move = movePrice({
+    bookedCents: dollarsToCents(appt.priceAtBooking),
+    addOnCents: addOnCentsOf(appt.addOns),
+    menuAtOldCents: dollarsToCents(menuAtOld),
+    // Re-derived on THIS call from the service row (loadSlotContext) - never
+    // from anything the model said.
+    menuAtNewCents: dollarsToCents(slot.price),
+    handEdited,
+    special: leavingSpecial,
+    discounted: false,
+  });
+  const movedCents = move.kind === "changes" ? move.toCents : move.totalCents;
+
+  // Paid booking + a price it can't take: self-serve can't reconcile the
+  // captured charge (same rule, and same ORDER, as the manage page) - hand
+  // off. A deposit only needs the new price to still cover it. Checked before
+  // the price question: there is no point asking a yes that can't be honoured.
   const bookingPayment = appt.payments[0] ?? null;
   if (
     bookingPayment &&
     bookingPayment.status === "succeeded" &&
     !paidBookingTakesPrice({
       paidCents: bookingPayment.amount,
-      bookedPriceCents:
-        appt.priceAtBooking === null ? null : Math.round(Number(appt.priceAtBooking) * 100),
-      newPriceCents: slot.price === null ? null : Math.round(slot.price * 100),
+      bookedPriceCents: dollarsToCents(appt.priceAtBooking),
+      newPriceCents: movedCents,
     })
   ) {
     return fail(
       "this booking is already paid and the new date has a different price - " +
         "escalate_to_human so the barber can move it",
     );
+  }
+
+  // The price changes: nothing moves until the client has said yes to THIS
+  // figure. A stale yes (the menu or slot changed since it was quoted) no
+  // longer matches and is asked again with the new figures.
+  if (move.kind === "changes" && parsed.data.accept_price_cents !== move.toCents) {
+    const stale = parsed.data.accept_price_cents !== undefined;
+    const sentence = describeMovePriceChange({
+      fromCents: move.fromCents,
+      toCents: move.toCents,
+      leavingSpecial,
+    });
+    return ok({
+      rescheduled: false,
+      needs_price_ok: true,
+      ...(stale ? { price_changed_since_quoted: true } : {}),
+      appointment_id: appt.id,
+      new_slot_id: parsed.data.new_slot_id,
+      new_time: formatApptTime(slot.startsAt, slot.timezone),
+      current_price: formatMovePriceCents(move.fromCents),
+      new_price: formatMovePriceCents(move.toCents),
+      current_price_cents: move.fromCents,
+      new_price_cents: move.toCents,
+      reason: sentence,
+      note:
+        (stale
+          ? "NOTHING MOVED. The figure you sent is no longer the price - it changed since you quoted it. "
+          : "NOTHING MOVED. ") +
+        `Text the client both figures - ${formatMovePriceCents(move.fromCents)} now, ` +
+        `${formatMovePriceCents(move.toCents)} at the new time - and ask if they want it moved at ` +
+        `the new price. Only after a clear yes, call reschedule again with the same ids and ` +
+        `accept_price_cents: ${move.toCents}. If they say no, their booking stays as it is - ` +
+        "don't call reschedule.",
+    });
   }
 
   const bookable = await isSlotBookable({
@@ -1269,7 +1391,15 @@ async function rescheduleTool(
           staffId: slot.staffId, // the new slot may be with a different barber
           startsAt: slot.startsAt,
           endsAt: slot.endsAt,
-          priceAtBooking: slot.price ?? null,
+          // The price moves with the booking. Only a change the client said
+          // yes to rewrites it - and it is recorded below, like any price
+          // change, in this same transaction.
+          ...(move.kind === "changes"
+            ? { priceAtBooking: new Prisma.Decimal((move.toCents / 100).toFixed(2)) }
+            : {}),
+          // Leaving a special: it is an ordinary booking now (see the manage
+          // page's reschedule for why the marker must not linger).
+          ...(leavingSpecial ? { bookedVia: null } : {}),
           // The agent's SMS is the fresh confirmation; the ~24h reminder
           // re-arms for the new time - including the PUSH reminder stamps.
           // Check-in state from the old time is cleared too.
@@ -1286,6 +1416,27 @@ async function rescheduleTool(
           runningLate: false,
         },
       });
+      // ...and the special itself goes back on sale, as on the manage page.
+      if (leavingSpecial) {
+        await tx.targetedSlot.updateMany({
+          where: { shopId: ctx.shopId, bookedAppointmentId: appt.id },
+          data: { bookedAppointmentId: null },
+        });
+      }
+      if (move.kind === "changes") {
+        // The client said yes to this figure (checked above). Recorded in the
+        // SAME transaction as the write, with no actor: the client moved it.
+        await recordPriceChange(tx, {
+          shopId: ctx.shopId,
+          appointmentId: appt.id,
+          actorUserId: null,
+          fromPriceCents: move.fromCents,
+          toPriceCents: move.toCents,
+          fromCollectedCents: null,
+          toCollectedCents: null,
+          source: "move",
+        });
+      }
       reschedOutboxIds = await swapForReschedule(tx, {
         shopId: ctx.shopId,
         now: ctx.now,
@@ -1325,7 +1476,13 @@ async function rescheduleTool(
     new_time: formatApptTime(slot.startsAt, slot.timezone),
     barber: slot.staffName,
     service: slot.serviceName,
-    note: "confirm the new date+time back to the client",
+    price: formatMovePriceCents(movedCents),
+    ...(move.kind === "changes"
+      ? {
+          price_changed: true,
+          note: `confirm the new date+time back to the client, and that it's now ${formatMovePriceCents(move.toCents)}`,
+        }
+      : { note: "confirm the new date+time back to the client" }),
   });
 }
 

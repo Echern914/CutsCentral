@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { BookingModeKey } from "@chairback/config/constants";
 import type { ServiceVisibility } from "@chairback/config/serviceVisibility";
 import { apiGet, apiSend } from "@/lib/api";
+import { apiAnswered } from "@/lib/apiAnswered";
 import { refusedOnlyNewKeys } from "@/lib/apiCompat";
 import type { AgendaResponse } from "./page";
 
@@ -621,7 +622,10 @@ export type CreateApptResult = Result & {
    * booking's calendar protection has not settled yet).
    */
   booked?: SavedBooking;
-  /** False when the request never got an answer - safe to retry as-is. */
+  /**
+   * False when the outcome is UNKNOWN - no answer at all, or a 5xx (a gateway
+   * error can arrive after the API booked it). Retry the same submission.
+   */
   answered?: boolean;
   series?: SeriesSummary;
   /** For `external_block`: the block, in words, in the shop's zone. */
@@ -676,7 +680,9 @@ export async function createAppointmentAction(
     const booked = readSavedBooking(res.booked);
     return {
       ok: false,
-      answered: res.status !== 0,
+      // A gateway 502/504 (or any 5xx) can follow a booking the API already
+      // committed: unknown, not refused (lib/apiAnswered.ts).
+      answered: apiAnswered(res.status),
       error: res.error ?? "failed",
       ...(booked ? { booked } : {}),
       ...(res.reason ? { reason: res.reason } : {}),
@@ -767,7 +773,11 @@ export interface SeriesEditPreview {
 
 export interface SeriesEditApplied {
   alreadyApplied?: boolean;
-  /** mirror: active | failed | unknown | skipped | observed, per visit. */
+  /**
+   * mirror: active | failed | unknown | skipped | observed, per visit.
+   * "unknown" = Acuity has not confirmed it YET (no answer by the time the API
+   * answered); never shown as done - see recheckSeriesEditMirrorAction.
+   */
   changed: { id: string; startsAt: string; endsAt: string; mirror: string }[];
   skipped: SeriesEditPreview["skipped"];
   clientNotified?: boolean;
@@ -814,6 +824,22 @@ export async function applySeriesEditAction(
       ? { preview: body as SeriesEditPreview }
       : {}),
   };
+}
+
+/**
+ * Where applied dates stand with Acuity NOW. The apply answers without waiting
+ * for a slow Acuity, so a date can come back "unknown" (still confirming); this
+ * reads the outcome the API recorded since. A read - nothing is re-sent.
+ */
+export async function recheckSeriesEditMirrorAction(
+  seriesId: string,
+  ids: string[],
+): Promise<{ ok: boolean; data?: Pick<SeriesEditApplied, "changed">; error?: string }> {
+  const res = await apiGet<Pick<SeriesEditApplied, "changed">>(
+    `/api/booking/series/${encodeURIComponent(seriesId)}/edit/mirror?ids=${ids.map(encodeURIComponent).join(",")}`,
+  );
+  if (!res.ok || !res.data || !Array.isArray(res.data.changed)) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, data: res.data };
 }
 
 //  Service add-ons

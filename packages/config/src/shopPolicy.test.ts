@@ -10,7 +10,25 @@ import {
   paidBookingTakesPrice,
   clientCancelKeptCents,
   depositIsNonRefundable,
+  describeMovePriceChange,
+  formatMovePriceCents,
 } from "./shopPolicy.js";
+
+describe("describeMovePriceChange - the one sentence a move at a new price asks with", () => {
+  it("names both figures, whole dollars plain and cents exact", () => {
+    expect(describeMovePriceChange({ fromCents: 4000, toCents: 4500 })).toBe(
+      "The new time has a different menu price. Moving it changes the price from $40 to $45.",
+    );
+    expect(formatMovePriceCents(1250)).toBe("$12.50");
+    expect(formatMovePriceCents(null)).toBe("no price");
+  });
+
+  it("says WHY when a special is being left for a regular slot", () => {
+    expect(describeMovePriceChange({ fromCents: 15000, toCents: 3500, leavingSpecial: true })).toBe(
+      "The current booking is a special at $150; the new time is a regular slot at $35. Moving it changes the price from $150 to $35.",
+    );
+  });
+});
 
 describe("paidBookingTakesPrice - may a booking paid at booking take a new price?", () => {
   it("🔴 a DEPOSIT takes any new price that still covers it - the rest is paid at the shop", () => {
