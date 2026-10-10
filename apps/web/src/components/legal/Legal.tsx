@@ -13,6 +13,15 @@ import { BackLink } from "./BackLink";
 export const LEGAL_ENTITY = "ChairBack, a product of Eric Supply LLC"; // Eric Supply LLC is the legal counterparty; ChairBack is its product/brand
 export const SUPPORT_EMAIL = "support@getchairback.com";
 export const LEGAL_EFFECTIVE_DATE = "June 12, 2026";
+/**
+ * The Privacy Policy and Terms of Service revised for what shipped after June:
+ * payments, the ChairBack app, email and app notifications, Square, paid plans.
+ * Both promise Shops notice BEFORE a material change takes effect, so the
+ * revision is published (and announced in What's New) ahead of its effective
+ * date. The owner sets the effective date; move both when publishing later.
+ */
+export const PRIVACY_TERMS_UPDATED_DATE = "October 10, 2026";
+export const PRIVACY_TERMS_EFFECTIVE_DATE = "October 23, 2026";
 
 export function LegalShell({
   title,
@@ -20,11 +29,16 @@ export function LegalShell({
   children,
   /** The legal pages show an effective date; a non-legal page (e.g. /support) can hide it. */
   hideDate = false,
+  effectiveDate = LEGAL_EFFECTIVE_DATE,
+  /** When a revision is published ahead of its effective date. */
+  updatedDate,
 }: {
   title: string;
   intro?: ReactNode;
   children: ReactNode;
   hideDate?: boolean;
+  effectiveDate?: string;
+  updatedDate?: string;
 }) {
   return (
     <main className="mx-auto w-full max-w-3xl px-6 py-14">
@@ -45,7 +59,9 @@ export function LegalShell({
       </p>
       <h1 className="font-display text-4xl tracking-tight text-offwhite">{title}</h1>
       {!hideDate && (
-        <p className="mt-2 text-sm text-muted">Effective date: {LEGAL_EFFECTIVE_DATE}</p>
+        <p className="mt-2 text-sm text-muted">
+          {updatedDate ? `Last updated: ${updatedDate} · ` : ""}Effective date: {effectiveDate}
+        </p>
       )}
       {intro && <div className="mt-6">{intro}</div>}
       <div className="mt-8 flex flex-col gap-2">{children}</div>

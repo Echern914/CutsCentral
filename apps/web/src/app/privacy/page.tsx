@@ -8,6 +8,8 @@ import {
   LegalShell,
   Notice,
   P,
+  PRIVACY_TERMS_EFFECTIVE_DATE,
+  PRIVACY_TERMS_UPDATED_DATE,
   Strong,
   SUPPORT_EMAIL,
   UL,
@@ -22,74 +24,98 @@ export default function PrivacyPage() {
   return (
     <LegalShell
       title="Privacy Policy"
+      effectiveDate={PRIVACY_TERMS_EFFECTIVE_DATE}
+      updatedDate={PRIVACY_TERMS_UPDATED_DATE}
       intro={
         <P>
           This Privacy Policy explains how {LEGAL_ENTITY} (“{APP_NAME}”, “we”,
           “us”) collects, uses, and shares personal information when you use our
-          websites, dashboards, public shop pages, rewards pages, text-message
-          programs, and related services (the “Service”). It is incorporated
-          into our <A href="/terms">Terms of Service</A>.
+          websites, dashboards, public shop and booking pages, rewards pages,
+          the {APP_NAME} mobile app, text-message and email programs, and
+          related services (the “Service”). It is incorporated into our{" "}
+          <A href="/terms">Terms of Service</A>.
         </P>
       }
     >
       <H2>1. The two hats we wear</H2>
       <P>
         {APP_NAME} is used by barbershops, salons, and similar personal-care
-        businesses (“<Strong>Shops</Strong>”) to run
-        loyalty and rebooking programs for their clients (“
+        businesses (“<Strong>Shops</Strong>”) to take bookings and payments and
+        to run loyalty and rebooking programs for their clients (“
         <Strong>Clients</Strong>”). We handle personal information in two
         distinct roles:
       </P>
       <UL>
         <li>
-          <Strong>For Shop accounts and our own websites</Strong>, we decide how
-          data is used — we act as the data controller / business.
+          <Strong>For Shop accounts, Client app accounts, and our own
+          websites</Strong>, we decide how data is used — we act as the data
+          controller / business.
         </li>
         <li>
           <Strong>For Client Data</Strong> (information about a Shop’s clients —
-          names, phone numbers, emails, visit history, punch balances, notes),
-          we process it <em>on behalf of the Shop</em> as a service provider /
-          processor. The Shop decides why and how that data is used; we follow
-          the Shop’s instructions as expressed through the Service.
+          names, phone numbers, emails, bookings, visit history, punch
+          balances, notes), we process it <em>on behalf of the Shop</em> as a
+          service provider / processor. The Shop decides why and how that data
+          is used; we follow the Shop’s instructions as expressed through the
+          Service.
         </li>
       </UL>
       <Notice>
         If you are a Shop&apos;s client and want your information corrected or
-        deleted, the fastest path is to contact that shop directly. You
-        can also email us at{" "}
+        deleted, the fastest path is to contact that shop directly, or use
+        “Delete my data” on the shop’s page. You can also email us at{" "}
         <A href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</A> and we will
         assist or forward your request to your shop.
       </Notice>
 
       <H2>2. Information we collect</H2>
-      <H3>From Shop owners</H3>
+      <H3>From Shop owners and their team</H3>
       <UL>
         <li>
           <Strong>Account data:</Strong> your name, email address, and a
           password (stored only as a salted hash — we cannot read it). If you
-          sign in with Google, we receive your name, email, and Google account
-          identifier instead of a password.
+          sign in with Google or Apple, we receive your name, email, and that
+          account’s identifier instead of a password.
         </li>
         <li>
           <Strong>Shop profile data:</Strong> shop name, booking link, timezone,
-          logo, photos, bio, hours, social handles, themes, reward and
-          promotion configuration, and SMS templates.
+          logo, photos, bio, hours, services and prices, booking policies,
+          social handles, themes, reward and promotion configuration, and
+          message templates.
+        </li>
+        <li>
+          <Strong>Billing and payout data:</Strong> your subscription is billed
+          by Stripe, and payments from your clients are paid out through your
+          own Stripe account. We receive your plan, subscription and payout
+          status from Stripe; we do not receive or store full card or bank
+          account numbers.
         </li>
         <li>
           <Strong>Scheduling integration data:</Strong> if you connect Acuity
-          Scheduling, we store encrypted access tokens and sync appointment and
-          client records from your Acuity account.
+          Scheduling or Square, we store encrypted access tokens and sync
+          appointment and client records from that account.
         </li>
       </UL>
       <H3>About Clients (on behalf of their Shop)</H3>
       <UL>
         <li>
-          Name, phone number, and email address (from the Shop’s scheduling
-          system or entered by the Shop).
+          Name, phone number, email address, and an optional Instagram handle
+          (from the Shop’s scheduling system, entered by the Shop, or entered by
+          the Client when booking).
         </li>
         <li>
-          Appointment and visit history: dates, status, service names, and
-          prices.
+          Bookings and visit history: dates, times, status, services, add-ons,
+          prices (including any price changes and who made them), answers to
+          the Shop’s own booking questions, which version of the Shop’s booking
+          policy the Client agreed to, waitlist requests, and, for a group
+          booking, the names the booker gives for the people in the party.
+        </li>
+        <li>
+          <Strong>Payments:</Strong> when a Client pays a deposit, pays ahead,
+          saves a card, leaves a tip, or pays a balance by card after a visit, the card is
+          handled by Stripe. We receive the amount, status, card brand and last
+          four digits, and refunds — never the full card number. A card is
+          saved only when the Client chooses to save it.
         </li>
         <li>
           Loyalty activity: punches earned and redeemed, reward redemptions,
@@ -97,10 +123,26 @@ export default function PrivacyPage() {
           history.
         </li>
         <li>
-          Messaging records: the content, time, and delivery status of texts
-          sent on the Shop’s behalf, and opt-out status.
+          Messaging records: the content, time, and delivery status of texts,
+          emails, and app notifications sent on the Shop’s behalf, and opt-in
+          and opt-out status.
         </li>
         <li>Private notes the Shop records about a client.</li>
+      </UL>
+      <H3>From Clients who use the {APP_NAME} app</H3>
+      <UL>
+        <li>
+          <Strong>App account:</Strong> the phone number or email address you
+          confirm with a one-time code, and the name you give. Your account is
+          linked to a Shop’s record of you only when the contact you confirmed
+          matches that record unambiguously, or when the Shop gives you your
+          own link.
+        </li>
+        <li>
+          <Strong>App data:</Strong> the shops you save or join, your waitlist
+          requests, and a notification token for your device if you allow
+          notifications.
+        </li>
       </UL>
       <H3>Automatically</H3>
       <UL>
@@ -109,8 +151,24 @@ export default function PrivacyPage() {
           and timestamps, used for security, rate limiting, and debugging.
         </li>
         <li>
-          <Strong>Cookies:</Strong> we use a single signed, httpOnly session
-          cookie to keep Shop owners logged in.{" "}
+          <Strong>Error reports:</Strong> when something breaks, a report of
+          the error is sent to our error-monitoring provider, with personal
+          details removed where we can.
+        </li>
+        <li>
+          <Strong>Cookies and on-device storage:</Strong> we use a small number
+          of first-party cookies that make the Service work — a signed,
+          httpOnly session cookie that keeps Shop accounts signed in, and
+          short-lived cookies for sign-in and invitation steps. Booking pages
+          can remember a Client’s contact details and the policy versions they
+          agreed to <em>in that browser only</em>, so they don’t retype them;
+          “Not you?” clears it. The app keeps its session in the device’s
+          secure storage.
+        </li>
+        <li>
+          <Strong>Site analytics:</Strong> we use Vercel Web Analytics to count
+          page views in aggregate. It does not use cookies or build a profile
+          of you.{" "}
           <Strong>
             We do not use advertising cookies or third-party tracking pixels.
           </Strong>
@@ -121,17 +179,29 @@ export default function PrivacyPage() {
       <UL>
         <li>Provide, operate, secure, and improve the Service.</li>
         <li>
-          Sync visits from scheduling providers, compute punch balances, and
-          render rewards and public pages.
+          Take and manage bookings, sync visits from scheduling providers,
+          compute punch balances, and render rewards, booking, and public
+          pages.
         </li>
         <li>
-          Send text messages that Shops initiate or configure (rebooking
-          nudges, promotion blasts), enforce opt-outs, and keep delivery
+          Process payments the Client agrees to — deposits, pay-ahead
+          bookings, tips, card-on-file charges under the Shop’s policy the
+          Client accepted, and refunds — through Stripe.
+        </li>
+        <li>
+          Send booking confirmations, reminders, receipts, and account emails;
+          send app notifications and Apple Wallet pass updates the Client
+          turned on; and send texts and promotions that Shops initiate or
+          configure, enforcing opt-ins and opt-outs and keeping delivery
           records.
         </li>
         <li>
-          Communicate with Shop owners about their account and important
-          Service changes.
+          Offer openings to Clients who joined a Shop’s waitlist or asked to
+          hear about them.
+        </li>
+        <li>
+          Communicate with Shop owners about their account, billing, and
+          important Service changes.
         </li>
         <li>
           Detect, prevent, and respond to fraud, abuse, and security incidents.
@@ -156,6 +226,12 @@ export default function PrivacyPage() {
         enforced platform-wide for the opted-out phone number. See the{" "}
         <A href="/sms">SMS Messaging Policy</A>.
       </P>
+      <P>
+        Promotional emails are sent only to Clients who agreed to receive
+        them, and each one carries an unsubscribe link. Emails about a booking
+        you made (confirmations, changes, receipts) are not promotional. App
+        notifications can be turned off in your phone’s settings at any time.
+      </P>
 
       <H2>5. How we share information</H2>
       <P>
@@ -167,17 +243,33 @@ export default function PrivacyPage() {
         <li>
           <Strong>Service providers (subprocessors)</Strong> that host and run
           the Service under contractual confidentiality obligations — currently:
-          Supabase (database hosting), Vercel (web hosting), Railway (API
-          hosting), Twilio (SMS delivery), Squarespace / Acuity Scheduling
-          (scheduling data sync, only for Shops that connect it), Anthropic
-          (AI model processing — only for Shops that enable the AI
-          receptionist, whose client text-message conversations are processed
-          to generate replies), and Google (only if you sign in with Google).
+          Supabase (database hosting), Vercel (web hosting and aggregate site
+          analytics), Railway (API hosting), Stripe (subscription billing,
+          payments, and payouts), Twilio (SMS delivery), Resend
+          (email delivery), Expo (delivering app notifications), Apple
+          (Apple Wallet passes, app notifications, and Sign in with Apple),
+          Google (only if you sign in with Google), Sentry (error monitoring),
+          Squarespace / Acuity Scheduling and Square (scheduling data sync,
+          only for Shops that connect them), and Anthropic (AI model
+          processing — only for Shops that enable the AI receptionist, whose
+          client text-message conversations are processed to generate
+          replies).
+        </li>
+        <li>
+          <Strong>AI tools a Shop connects:</Strong> a Shop can connect an AI
+          assistant of its own choosing to its {APP_NAME} account (for example
+          through our MCP connector). When it does, that assistant can read the
+          parts of the Shop’s account the Shop allowed when connecting it,
+          which can include Client Data, at the Shop’s direction and under that
+          provider’s own terms. The
+          assistant built into the {APP_NAME} dashboard answers from our help
+          content and does not send your data to an AI provider.
         </li>
         <li>
           <Strong>The Shop you patronize:</Strong> if you are a Client, your
-          information is visible to your barbershop — that is the point of the
-          Service.
+          information is visible to your shop — that is the point of the
+          Service. A Shop sees your app account’s details only for shops you
+          joined or that hold a matching record of you.
         </li>
         <li>
           <Strong>Legal and safety:</Strong> when required by law, subpoena, or
@@ -196,8 +288,10 @@ export default function PrivacyPage() {
         encryption in transit, encryption of scheduling-provider access tokens
         at rest (AES-256-GCM), password hashing with argon2id, signed httpOnly
         session cookies, per-tenant database isolation enforced at both the
-        application and database (row-level security) layers, and rate
-        limiting. No method of transmission or storage is 100% secure, so we
+        application and database (row-level security) layers, rate limiting,
+        and removal of personal details from our logs. Card numbers are
+        entered into Stripe’s own secure forms and never reach our
+        servers. No method of transmission or storage is 100% secure, so we
         cannot guarantee absolute security. If we learn of a breach affecting
         your personal information, we will notify affected parties as required
         by law.
@@ -214,12 +308,20 @@ export default function PrivacyPage() {
           data, including its Client Data, within a reasonable period, except
           where we must retain records to comply with law, resolve disputes, or
           enforce agreements (for example, opt-out records are kept so opt-outs
-          stay honored).
+          stay honored, and payment records are kept as tax and accounting law
+          requires).
         </li>
         <li>
-          Shops can delete individual client records from their dashboard;
-          Clients can request deletion through their Shop or via{" "}
+          Shops can delete individual client records from their dashboard.
+          Clients can erase a shop’s record of them with “Delete my data” on
+          that shop’s page, or request deletion through the shop or via{" "}
           <A href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</A>.
+        </li>
+        <li>
+          Clients can delete their {APP_NAME} app account at any time from the
+          app’s Profile screen. That removes the account, its links to shops,
+          its devices, and its pending sign-in codes. Each shop’s own record of
+          the Client stays with that shop and can be erased as described above.
         </li>
       </UL>
 
@@ -239,14 +341,16 @@ export default function PrivacyPage() {
           <A href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</A>.
         </li>
         <li>
-          <Strong>Clients:</Strong> because we process your data on your
-          barbershop’s behalf, we may refer your request to your shop, or
-          fulfill it with their direction. We will never discriminate against
-          you for exercising your rights.
+          <Strong>Clients:</Strong> because we process a shop’s records of you
+          on that shop’s behalf, we may refer your request to your shop, or
+          fulfill it with their direction. Your {APP_NAME} app account is ours
+          to answer for directly. We will never discriminate against you for
+          exercising your rights.
         </li>
         <li>
-          <Strong>Texts:</Strong> reply STOP to any message to stop receiving
-          texts.
+          <Strong>Messages:</Strong> reply STOP to any text, use the
+          unsubscribe link in any promotional email, or turn off notifications
+          in your phone’s settings.
         </li>
         <li>
           <Strong>Authentication of requests:</Strong> we may need to verify
@@ -275,8 +379,8 @@ export default function PrivacyPage() {
       <P>
         We may update this Policy from time to time. If a change is material,
         we will give notice (for example by email to Shop owners or a notice in
-        the dashboard) before it takes effect. The “Effective date” above shows
-        when this Policy was last revised.
+        the dashboard) before it takes effect. The dates above show when this
+        Policy was last updated and when that version takes effect.
       </P>
 
       <H2>12. Contact us</H2>
