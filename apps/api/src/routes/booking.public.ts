@@ -96,8 +96,8 @@ import {
   createSavedCardCode,
   formMatchesSavedCardClient,
   issueFirstDeviceToken,
-  liveSavedCardFor,
   removeSavedCard,
+  savedCardForAppointment,
   savedCardForToken,
   verifySavedCardCode,
 } from "../billing/savedCard.js";
@@ -3196,7 +3196,10 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
   const addCard = finish ? null : await optionalCardStepFor(appt, now);
   // The card the client asked this shop to keep, if any: shown here with the
   // way to take it off, as the consent promised (brand and last four only).
-  const savedCardOnFile = appt.clientId ? await liveSavedCardFor(appt.shopId, appt.clientId) : null;
+  // 🔴 Only a card THIS booking saved or was booked with - never just "the
+  // record's card": anyone who types the client's number lands on the record
+  // and holds a link like this one (billing/savedCard.ts).
+  const savedCardOnFile = await savedCardForAppointment(appt.shopId, appt.id);
   // A deposit (or payment) taken at booking that THIS booking's terms keep on
   // a cancel - its own snapshot, never the shop's switch today. Only money
   // actually in hand: an unfinished hold has nothing to keep.
@@ -3715,18 +3718,24 @@ bookingPublicRouter.post("/:slug/saved-card/verify", bookingWriteLimiter, async 
 
 // POST /api/book/manage/:token/saved-card/remove - the client takes their saved
 // card off this shop's file. The appointment link is the authorization, as for
-// every other change the client makes. Appointments already booked with it
-// keep it until they are done; it is never offered again.
+// every other change the client makes - and so it reaches only the card THIS
+// booking saved or was booked with, the one its page shows. Someone else who
+// booked on the client's number holds a link too; it removes nothing, and is
+// answered exactly as a booking with no card is. Appointments already booked
+// with the card keep it until they are done; it is never offered again.
 bookingPublicRouter.post("/manage/:token/saved-card/remove", bookingWriteLimiter, async (req, res) => {
   const appt = await prisma.appointment.findUnique({
     where: { manageToken: String(req.params.token) },
-    select: { shopId: true, clientId: true },
+    select: { id: true, shopId: true },
   });
-  if (!appt?.clientId) {
+  if (!appt) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const { removed } = await removeSavedCard({ shopId: appt.shopId, clientId: appt.clientId });
+  const card = await savedCardForAppointment(appt.shopId, appt.id);
+  const { removed } = card
+    ? await removeSavedCard({ shopId: appt.shopId, savedCardId: card.id })
+    : { removed: 0 };
   res.json({ ok: true, removed });
 });
 

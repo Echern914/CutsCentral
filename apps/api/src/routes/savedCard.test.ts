@@ -437,6 +437,55 @@ describe("taking it off the shop's file", () => {
   });
 });
 
+describe("🔴 the manage page: possession, never a phone number", () => {
+  // Anyone who books with the client's number lands on the client's record and
+  // gets a manage link of their own. That link may show and remove only a
+  // card its own booking saved or was booked with - the same rule the booking
+  // page lives by (billing/savedCard.ts).
+  it("someone else booking on the client's number sees no card, and cannot take it off", async () => {
+    const phone = "(302) 555-0162";
+    const { pm } = await bookAndSaveAs(phone, "owner.card@example.com");
+    const stranger = await book({}, { ...SAM, firstName: "Mallory", phone, email: "mallory@example.com" });
+    expect(stranger.status).toBe(201);
+    const card = await prisma.savedCard.findFirstOrThrow({ where: { stripePaymentMethodId: pm } });
+    // The same record - which is exactly why the record cannot be the test.
+    const strangerAppt = await prisma.appointment.findUniqueOrThrow({
+      where: { manageToken: stranger.body.manageToken },
+      select: { clientId: true },
+    });
+    expect(strangerAppt.clientId).toBe(card.clientId);
+
+    const page = await request(app).get(`/api/book/manage/${stranger.body.manageToken}`);
+    expect(page.status).toBe(200);
+    expect(page.body.savedCard).toBeNull();
+    expect(JSON.stringify(page.body)).not.toContain("4242");
+
+    const removed = await request(app).post(`/api/book/manage/${stranger.body.manageToken}/saved-card/remove`);
+    expect(removed.body).toEqual({ ok: true, removed: 0 });
+    const after = await prisma.savedCard.findUniqueOrThrow({ where: { id: card.id } });
+    expect(after.removedAt).toBeNull();
+    expect(await prisma.savedCardDevice.count({ where: { savedCardId: card.id, revokedAt: { not: null } } })).toBe(0);
+    expect(fake.calls.detached).not.toContain(pm);
+  });
+
+  it("the booking that saved it, and one booked with it, show it - and either can take it off", async () => {
+    const phone = "(302) 555-0163";
+    const mail = "shows.card@example.com";
+    const { key, manageToken } = await bookAndSaveAs(phone, mail);
+    const saving = await request(app).get(`/api/book/manage/${manageToken}`);
+    expect(saving.body.savedCard).toEqual({ brand: "visa", last4: "4242" });
+
+    const using = await book({ savedCardToken: key }, { ...SAM, phone, email: mail });
+    expect(using.body.payment).toBeNull();
+    const usingPage = await request(app).get(`/api/book/manage/${using.body.manageToken}`);
+    expect(usingPage.body.savedCard).toEqual({ brand: "visa", last4: "4242" });
+
+    const removed = await request(app).post(`/api/book/manage/${using.body.manageToken}/saved-card/remove`);
+    expect(removed.body).toEqual({ ok: true, removed: 1 });
+    expect((await request(app).get(`/api/book/manage/${manageToken}`)).body.savedCard).toBeNull();
+  });
+});
+
 describe("the card itself is the last word", () => {
   it("🔴 a card marked removed is refused even if a device key for it was somehow never revoked", async () => {
     const { key } = await bookAndSaveAs("(302) 555-0161", "second.wall@example.com");
