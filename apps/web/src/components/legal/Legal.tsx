@@ -20,7 +20,7 @@ export const LEGAL_EFFECTIVE_DATE = "June 12, 2026";
  * revision is published (and announced in What's New) ahead of its effective
  * date. The owner sets the effective date; move both when publishing later.
  */
-export const PRIVACY_TERMS_UPDATED_DATE = "October 9, 2026";
+export const PRIVACY_TERMS_UPDATED_DATE = "October 10, 2026";
 export const PRIVACY_TERMS_EFFECTIVE_DATE = "October 23, 2026";
 
 export function LegalShell({

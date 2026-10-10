@@ -36,8 +36,8 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
-    id: "2026-10-09-privacy-terms-updated",
-    date: "2026-10-09",
+    id: "2026-10-10-privacy-terms-updated",
+    date: "2026-10-10",
     kind: "feature",
     title: "Updated Privacy Policy and Terms",
     body:
