@@ -13,6 +13,7 @@ import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import {
   CancelRefusedError,
+  DEAD_PAYMENT_STATUSES,
   cancelAppointment,
   cancelSeries,
   promoteOneAppointmentInTx,
@@ -6520,6 +6521,33 @@ bookingDashboardRouter.post("/appointments/:id/terminal-intent", async (req, res
   // take the money twice for one cut.
   if (appt.paidAt) {
     res.status(409).json({ error: "paid_already" });
+    return;
+  }
+  // 🔴 A BOOKING PAYMENT ON FILE: REFUSED, NOT SUBTRACTED. This route charges
+  // the WHOLE ticket, so on a booking that took a deposit (or was paid ahead)
+  // it charged that money a second time. The balance after a deposit is the
+  // live checkout's job - POST /appointments/:id/tap-to-pay-intent
+  // (booking.checkout.ts) - where serviceCheckoutState subtracts everything
+  // already paid toward the service and the attempt ledger stops a second
+  // method collecting at the same time. Subtracting here would grow a second,
+  // weaker balance engine on a route nothing calls any more, and could not
+  // even say what an authorized-but-uncaptured deposit leaves owing. Any
+  // booking payment that did not die counts (the same line the cancel guard
+  // draws: DEAD_PAYMENT_STATUSES).
+  const bookingMoney = await prisma.payment.findFirst({
+    where: {
+      appointmentId: appt.id,
+      shopId,
+      purpose: "booking",
+      status: { notIn: [...DEAD_PAYMENT_STATUSES] },
+    },
+    select: { id: true },
+  });
+  if (bookingMoney) {
+    res.status(409).json({
+      error: "booking_payment_on_file",
+      message: "Part of this booking was paid when it was booked. Take the rest from checkout.",
+    });
     return;
   }
   const amountCents = toCents(
