@@ -76,7 +76,11 @@ import { normalizeClientNote } from "@chairback/config/clientNote";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { fillBlankClientFields } from "../services/clientFill.js";
 import { neverBooked, optionalCardStepFor, unfinishedCheckoutFor } from "../services/unfinishedCheckout.js";
-import { CANCELLATION_TERMS_SNAPSHOT_SELECT } from "../services/cancellationTerms.js";
+import {
+  CANCELLATION_TERMS_SNAPSHOT_SELECT,
+  termsForBooking,
+} from "../services/cancellationTerms.js";
+import { cardOnFileFeeFor } from "../services/cardOnFileSettle.js";
 import {
   durationRangeForService,
   effectiveDurationAt,
@@ -3147,10 +3151,68 @@ const MANAGE_SELECT = {
         where: { purpose: "booking" },
         select: { status: true, amount: true, capturedAmount: true, nonRefundable: true },
       },
-      // The cancellation terms this booking was made on - what a card added
-      // here is charged by (never sent to the page as is).
+      // The cancellation terms this booking was made on - what a late cancel
+      // charges a card kept on it, and the terms a card added here is told
+      // (never sent to the page as is).
       ...CANCELLATION_TERMS_SNAPSHOT_SELECT,
 } satisfies Prisma.AppointmentSelect;
+
+type ManageTermsRow = Pick<
+  Prisma.AppointmentGetPayload<{ select: typeof MANAGE_SELECT }>,
+  "id" | "shopId" | "startsAt" | "priceAtBooking" | keyof typeof CANCELLATION_TERMS_SNAPSHOT_SELECT
+>;
+
+/**
+ * What cancelling THIS booking charges the card kept on it - the server's
+ * figure, by the same function the settlement charges with (cardOnFileFeeFor),
+ * on this booking's own terms. Null when nothing can be charged: no card
+ * saved on it, card fees off in its terms, no window, or a zero fee.
+ *
+ * `from` is the instant the window opens. The fee is the same anywhere inside
+ * the window (a share of the agreed price), so the page can warn from that
+ * instant on even if it stays open across it; `inside` is the server's own
+ * answer for now, so a phone with a slow clock is warned too.
+ */
+async function lateCancelCardFee(
+  appt: ManageTermsRow,
+  now: Date,
+): Promise<{
+  cents: number;
+  from: string;
+  inside: boolean;
+  windowHours: number;
+  card: { brand: string | null; last4: string | null };
+} | null> {
+  // This booking's OWN card - the one the settlement charges (a later visit
+  // of a series has none of its own and is never charged).
+  const card = await prisma.cardOnFile.findUnique({
+    where: { appointmentId: appt.id },
+    select: { status: true, brand: true, last4: true },
+  });
+  if (card?.status !== "saved") return null;
+  const terms = await termsForBooking(appt.shopId, appt);
+  if (!terms.chargeCardOnFileFees || terms.cancelWindowHours <= 0) return null;
+  const from = new Date(appt.startsAt.getTime() - terms.cancelWindowHours * 3_600_000);
+  const inside = now.getTime() >= from.getTime();
+  const cents = await cardOnFileFeeFor({
+    shopId: appt.shopId,
+    appointmentId: appt.id,
+    priceAtBooking: appt.priceAtBooking,
+    startsAt: appt.startsAt,
+    // The figure INSIDE the window, asked at an instant inside it.
+    now: inside ? now : from,
+    reason: "late_cancel",
+    terms,
+  });
+  if (cents <= 0) return null;
+  return {
+    cents,
+    from: from.toISOString(),
+    inside,
+    windowHours: terms.cancelWindowHours,
+    card: { brand: card.brand, last4: card.last4 },
+  };
+}
 
 type ManageRow = Prisma.AppointmentGetPayload<{ select: typeof MANAGE_SELECT }>;
 
@@ -3227,6 +3289,9 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     bookingPayment && bookingPayment.nonRefundable && bookingPayment.status === "succeeded"
       ? { amountCents: bookingPayment.capturedAmount ?? bookingPayment.amount }
       : null;
+  // A card kept on file that a cancel inside the window charges: the page
+  // asks first, with the exact figure (and the card it lands on).
+  const lateCancelFee = canChange ? await lateCancelCardFee(appt, now) : null;
   // A tip after the visit: offered once it is COMPLETED, and a tip already
   // given is always shown. The shop's facts are read on their own - the
   // `shop` sent to the page below is spread from MANAGE_SELECT, and a Stripe
@@ -3281,6 +3346,9 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     // Non-null: cancelling keeps this much (a non-refundable deposit). The page
     // says so and asks before it cancels.
     nonRefundable: keptOnCancel,
+    // Non-null: cancelling from `from` on charges the saved card this much (a
+    // late cancellation). The page says so and asks before it cancels.
+    lateCancelFee,
     // The tip card after the visit (services/tips.ts TipView). Null = none.
     tip,
     series: appt.seriesId ? { remaining: remainingInSeries } : null,

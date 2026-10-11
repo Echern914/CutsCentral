@@ -436,6 +436,9 @@ describe("🔴 a booking keeps the cancellation terms it was made on", () => {
           cardOnFileFeesAtBooking: false,
         });
         await setShopTerms({ chargeCardOnFileFees: true });
+        // The page warns of nothing, because nothing will be charged.
+        const page = await request(app).get(`/api/book/manage/${b.token}`);
+        expect(page.body.lateCancelFee).toBeNull();
         const cancel = await request(app).post(`/api/book/manage/${b.token}/cancel`);
         expect(cancel.status).toBe(200);
         expect(fake.state.charges).toHaveLength(0);
@@ -508,5 +511,45 @@ describe("🔴 a booking keeps the cancellation terms it was made on", () => {
       cancelFeeBpsAtBooking: 5000,
       cardOnFileFeesAtBooking: true,
     });
+  });
+});
+
+describe("🔴 the appointment page states the late-cancel charge before Cancel", () => {
+  it("inside the window: the exact cents the cancel then charges, and the card it lands on", async () =>
+    insideTheWindow(async (start) => {
+      const b = await bookWithCardAt(later(start, 4), "Inside");
+      const page = await request(app).get(`/api/book/manage/${b.token}`);
+      expect(page.status).toBe(200);
+      expect(page.body.lateCancelFee).toMatchObject({
+        cents: 2000,
+        inside: true,
+        windowHours: 24,
+        card: { last4: "4242" },
+      });
+      await request(app).post(`/api/book/manage/${b.token}/cancel`);
+      expect(fake.state.charges).toHaveLength(1);
+      expect(fake.state.charges[0]!.params.amount).toBe(page.body.lateCancelFee.cents);
+    }));
+
+  it("outside the window: the same figure and the instant it starts to apply - not yet inside", async () => {
+    const b = await bookedWithCard(6, 14);
+    const page = await request(app).get(`/api/book/manage/${b.token}`);
+    const row = (await prisma.appointment.findUnique({ where: { id: b.appointmentId }, select: { startsAt: true } }))!;
+    expect(page.body.lateCancelFee).toMatchObject({ cents: 2000, inside: false });
+    expect(page.body.lateCancelFee.from).toBe(new Date(row.startsAt.getTime() - 24 * 3_600_000).toISOString());
+  });
+
+  it("no card kept on the booking: nothing to warn about", async () => {
+    const res = await request(app).post(`/api/book/${slug}`).send({
+      staffId,
+      serviceId,
+      startsAt: futureAtHour(7, 14).toISOString(),
+      firstName: "No",
+      lastName: "Card",
+      phone: "(302) 555-0195",
+      email: `nocard-${randomToken(4)}@example.com`,
+    });
+    const page = await request(app).get(`/api/book/manage/${res.body.manageToken}`);
+    expect(page.body.lateCancelFee).toBeNull();
   });
 });

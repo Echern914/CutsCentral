@@ -46,3 +46,19 @@ export function keptOnCancelQuestion(amountCents: number): string {
   const dollars = amountCents % 100 === 0 ? String(amountCents / 100) : (amountCents / 100).toFixed(2);
   return `Your $${dollars} deposit isn't refunded if you cancel. Cancel anyway?`;
 }
+
+/**
+ * On the appointment page, before Cancel takes effect, when a card is kept on
+ * the booking and the cancellation window has started: the exact charge, and
+ * the card it lands on. `cents` is the server's figure, never worked out here.
+ */
+export function lateCancelChargeQuestion(fee: {
+  cents: number;
+  windowHours: number;
+  card: { last4: string | null };
+}): string {
+  const dollars = fee.cents % 100 === 0 ? String(fee.cents / 100) : (fee.cents / 100).toFixed(2);
+  const card = fee.card.last4 ? `your card ending ${fee.card.last4}` : "the card you saved";
+  const within = fee.windowHours === 1 ? "1 hour" : `${fee.windowHours} hours`;
+  return `It's within ${within} of your appointment, so cancelling now charges $${dollars} to ${card}. Cancel anyway?`;
+}
