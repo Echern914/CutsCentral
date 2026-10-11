@@ -23,7 +23,11 @@ import {
   type GroupPlan,
   type GroupPlanService,
 } from "../engines/appointmentGroup.js";
-import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import {
+  lockStaffAndAssertSlotFree,
+  lockStaffsAndAssertPartyFree,
+  SlotTakenError,
+} from "../engines/bookingWrite.js";
 import { cancelGroup } from "../engines/appointmentPromotion.js";
 import {
   MirrorNotConfiguredError,
@@ -899,6 +903,10 @@ async function groupByToken(token: string | undefined) {
         select: {
           id: true,
           status: true,
+          // Each member's OWN chair. Usually the party's, but the dashboard can
+          // move one member to another provider, and a party move must check
+          // that member where it actually sits.
+          staffId: true,
           startsAt: true,
           endsAt: true,
           firstName: true,
@@ -1180,21 +1188,34 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
 
   try {
     await prisma.$transaction(async (tx) => {
-      await lockStaffAndAssertSlotFree(tx, {
-        walkInCapacity: "enforce",
-        staffId: group.staffId,
-        shopId: shop.id,
-        startsAt: plan.startsAt,
-        endsAt: plan.endsAt,
-        bufferMin: shop.bookingBufferMin,
-        // 🔴 All of them. See the header.
-        excludeAppointmentIds: live.map((a) => a.id),
-        // A reschedule is a MOVE, not a new sale: the per-service daily cap was
-        // already paid on the way in, and re-charging it would refuse a
-        // customer permission to move a booking they already hold.
-        serviceDayLimit: null,
-        now,
-      });
+      // 🔴 EVERY MEMBER ON ITS OWN CHAIR. This used to lock and check only
+      // the party's chair (group.staffId) and then rewrite every member's
+      // times - so a member the shop had moved to another provider was landed
+      // on THAT provider's calendar with nobody looking, over whatever was
+      // booked there. Each member keeps its own provider; every chair is
+      // locked (in one order) and checked before anyone moves, and a refusal
+      // on any of them moves nobody. Members together on one chair are still
+      // checked as one combined run, as before.
+      await lockStaffsAndAssertPartyFree(
+        tx,
+        live.map((row, i) => ({
+          staffId: row.staffId,
+          startsAt: plan.members[i]!.startsAt,
+          endsAt: plan.members[i]!.endsAt,
+        })),
+        {
+          walkInCapacity: "enforce",
+          shopId: shop.id,
+          bufferMin: shop.bookingBufferMin,
+          // 🔴 All of them. See the header.
+          excludeAppointmentIds: live.map((a) => a.id),
+          // A reschedule is a MOVE, not a new sale: the per-service daily cap
+          // was already paid on the way in, and re-charging it would refuse a
+          // customer permission to move a booking they already hold.
+          serviceDayLimit: null,
+          now,
+        },
+      );
       // 🔴 PARK, THEN PLACE - two passes, and the second one is not optional.
       //
       // The partial unique index on (staffId, startsAt) WHERE status='BOOKED'
