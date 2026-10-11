@@ -1,4 +1,4 @@
-import { prisma, runWithShop, type Prisma } from "@chairback/db";
+import { prisma, runWithShop, type Prisma, type PunchLedger } from "@chairback/db";
 
 /**
  * Punch ledger writes. Earning is idempotent via PunchLedger.visitId @unique:
@@ -302,6 +302,56 @@ export interface LedgerAudit {
 /** The system's own writes: no person, no stated reason. */
 const SYSTEM: LedgerAudit = { actorUserId: null, reason: null };
 
+/** A visit's earn, everything layered on it since, and what of that still counts. */
+export interface VisitEarnChain {
+  /** The entry linked to the visit by PunchLedger.visitId. */
+  earn: PunchLedger;
+  /** The earn, its corrections and regrants (see below). */
+  chain: PunchLedger[];
+  /** Entries still counting toward the balance, oldest first. */
+  standing: PunchLedger[];
+}
+
+/**
+ * Walk the ledger chain hanging off a visit's earn: any correction of it
+ * (reversalOfId = earn); any regrant written by "edit count" (correctionOfId =
+ * a correction); and the same again for each regrant, since a regrant can
+ * itself be edited. `standing` is every ORIGINAL entry (not a correction) that
+ * has not been reversed - what the visit still adds to the balance. Null when
+ * no earn is linked to the visit.
+ *
+ * One walk, shared by the claw-back and by every guard that has to know what
+ * a claw-back would take out (deleting a visit): the two cannot disagree about
+ * an edited punch's regrant.
+ */
+export async function visitEarnChain(
+  tx: Prisma.TransactionClient,
+  visitId: string,
+): Promise<VisitEarnChain | null> {
+  const earn = await tx.punchLedger.findUnique({ where: { visitId } });
+  if (!earn) return null;
+
+  // Bounded - a person edits a punch a handful of times.
+  const chain = [earn];
+  let frontier = [earn.id];
+  for (let depth = 0; depth < 10 && frontier.length > 0; depth++) {
+    const corrections = await tx.punchLedger.findMany({ where: { reversalOfId: { in: frontier } } });
+    const regrants =
+      corrections.length === 0
+        ? []
+        : await tx.punchLedger.findMany({
+            where: { correctionOfId: { in: corrections.map((c) => c.id) } },
+          });
+    chain.push(...corrections, ...regrants);
+    frontier = regrants.map((r) => r.id);
+  }
+
+  const standing = chain
+    .filter((e) => e.reversalOfId === null && e.reversedAt === null)
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  return { earn, chain, standing };
+}
+
 /**
  * Take a visit's ENTIRE punch-ledger footprint back out, inside an already-open
  * shop transaction. Used whenever a completed visit stops counting: a
@@ -335,29 +385,12 @@ export async function clawBackVisitEarn(
   visitId: string,
   audit: LedgerAudit = SYSTEM,
 ): Promise<void> {
-  const earn = await tx.punchLedger.findUnique({ where: { visitId } });
-  if (!earn) return;
-
-  // Walk the whole chain (bounded - a person edits a punch a handful of times).
-  const chain = [earn];
-  let frontier = [earn.id];
-  for (let depth = 0; depth < 10 && frontier.length > 0; depth++) {
-    const corrections = await tx.punchLedger.findMany({ where: { reversalOfId: { in: frontier } } });
-    const regrants =
-      corrections.length === 0
-        ? []
-        : await tx.punchLedger.findMany({
-            where: { correctionOfId: { in: corrections.map((c) => c.id) } },
-          });
-    chain.push(...corrections, ...regrants);
-    frontier = regrants.map((r) => r.id);
-  }
+  const found = await visitEarnChain(tx, visitId);
+  if (!found) return;
+  const { earn, standing } = found;
 
   // Everything still counting: an original entry (not a correction) that has
   // not been reversed. Offset each on its OWN card, in order.
-  const standing = chain
-    .filter((e) => e.reversalOfId === null && e.reversedAt === null)
-    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   for (const entry of standing) {
     const agg = await tx.punchLedger.aggregate({
       where: { shopId, clientId: entry.clientId, cardTypeId: entry.cardTypeId },
