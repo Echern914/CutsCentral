@@ -1346,6 +1346,21 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
             ...(seat.move.kind === "changes"
               ? { priceAtBooking: new Prisma.Decimal((seat.move.toCents / 100).toFixed(2)) }
               : {}),
+            // 🔴 SEND-STATE AND CHECK-IN BELONG TO THE OLD TIME. The same
+            // reset every other move makes (booking.public.ts reschedule): a
+            // reminder already sent for the old day left the new one with
+            // none, and an "on my way" tapped for the old time pinned a stale
+            // pill on the new one.
+            confirmationSentAt: null,
+            reminderSentAt: null,
+            confirmationEmailSentAt: null,
+            reminderEmailSentAt: null,
+            reminder24hPushSentAt: null,
+            reminder2hPushSentAt: null,
+            checkInStatus: null,
+            checkedInAt: null,
+            etaMinutes: null,
+            runningLate: false,
           },
         });
         if (seat.move.kind === "changes") {

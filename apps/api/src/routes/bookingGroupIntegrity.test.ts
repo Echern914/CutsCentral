@@ -473,3 +473,56 @@ describe("🔴 3. once the visit has started, the client cannot cancel or move e
     expect((await members(p.groupId)).map((r) => r.status)).toEqual(["CANCELED", "CANCELED"]);
   });
 });
+
+describe("🔴 4. a moved party starts its reminders and check-in over", () => {
+  it("every send-state and check-in stamp is cleared on the move", async () => {
+    const res = await createParty();
+    const stamp = new Date();
+    await prisma.appointment.updateMany({
+      where: { groupId: res.body.groupId },
+      data: {
+        confirmationSentAt: stamp,
+        reminderSentAt: stamp,
+        confirmationEmailSentAt: stamp,
+        reminderEmailSentAt: stamp,
+        reminder24hPushSentAt: stamp,
+        reminder2hPushSentAt: stamp,
+        checkInStatus: "en_route",
+        checkedInAt: stamp,
+        etaMinutes: 5,
+        runningLate: true,
+      },
+    });
+
+    const move = await request(app)
+      .post(`/api/book/group/${res.body.manageToken}/reschedule`)
+      .send({ startsAt: at(16 * 60).toISOString() });
+    expect(move.status).toBe(200);
+
+    for (const r of await members(res.body.groupId)) {
+      expect({
+        confirmationSentAt: r.confirmationSentAt,
+        reminderSentAt: r.reminderSentAt,
+        confirmationEmailSentAt: r.confirmationEmailSentAt,
+        reminderEmailSentAt: r.reminderEmailSentAt,
+        reminder24hPushSentAt: r.reminder24hPushSentAt,
+        reminder2hPushSentAt: r.reminder2hPushSentAt,
+        checkInStatus: r.checkInStatus,
+        checkedInAt: r.checkedInAt,
+        etaMinutes: r.etaMinutes,
+        runningLate: r.runningLate,
+      }).toEqual({
+        confirmationSentAt: null,
+        reminderSentAt: null,
+        confirmationEmailSentAt: null,
+        reminderEmailSentAt: null,
+        reminder24hPushSentAt: null,
+        reminder2hPushSentAt: null,
+        checkInStatus: null,
+        checkedInAt: null,
+        etaMinutes: null,
+        runningLate: false,
+      });
+    }
+  });
+});
