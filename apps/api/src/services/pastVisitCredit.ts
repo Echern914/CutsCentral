@@ -1,4 +1,4 @@
-import { prisma, runWithShop } from "@chairback/db";
+import { prisma, runWithShop, type Prisma } from "@chairback/db";
 import { earnPunchForVisitInTx, liveExtraPunches, routeVisitEarn } from "./punch.js";
 
 /**
@@ -63,20 +63,25 @@ export async function creditPastVisits(
   from.setUTCMonth(from.getUTCMonth() - months);
 
   // Completed visits that ENDED in the window and have never been punched.
+  // "Never punched" is any earn linked to the visit - one staff undid included:
+  // an undone punch keeps its link (services/visit.ts never detaches it), so a
+  // visit the shop decided should not earn is not credited behind its back.
+  const creditable: Prisma.VisitWhereInput = {
+    shopId: shop.id,
+    status: "COMPLETED",
+    canceledAt: null,
+    noShow: false,
+    punch: { is: null },
+    OR: [
+      { endAt: { gte: from, lt: startedAt } },
+      { endAt: null, scheduledAt: { gte: from, lt: startedAt } },
+    ],
+  };
+  const select = { id: true, clientId: true, serviceName: true, endAt: true, scheduledAt: true } as const;
   const visits = await runWithShop(shop.id, (tx) =>
     tx.visit.findMany({
-      where: {
-        shopId: shop.id,
-        status: "COMPLETED",
-        canceledAt: null,
-        noShow: false,
-        punch: { is: null },
-        OR: [
-          { endAt: { gte: from, lt: startedAt } },
-          { endAt: null, scheduledAt: { gte: from, lt: startedAt } },
-        ],
-      },
-      select: { id: true, clientId: true, serviceName: true, endAt: true, scheduledAt: true },
+      where: creditable,
+      select,
       orderBy: [{ clientId: "asc" }, { scheduledAt: "asc" }],
     }),
   );
@@ -106,9 +111,20 @@ export async function creditPastVisits(
     for (const [clientId, theirs] of byClient) {
       const done = await runWithShop(shop.id, async (tx) => {
         await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
+        // 🔴 ASK AGAIN UNDER THE LOCK. The list above was read before it, and
+        // a resync can cancel or no-show a visit (or change its service) in
+        // between. Crediting from that early list punched a visit that had
+        // just been cancelled. Only what is STILL creditable earns, as it
+        // stands now. (Ingest writes the client row before the visit, and a
+        // booking cancel locks it, so those wait here rather than slip past.)
+        const current = await tx.visit.findMany({
+          where: { AND: [creditable, { clientId, id: { in: theirs.map((v) => v.id) } }] },
+          select,
+          orderBy: { scheduledAt: "asc" },
+        });
         let n = 0;
         let p = 0;
-        for (const v of theirs) {
+        for (const v of current) {
           const earn = await earnPunchForVisitInTx(
             tx,
             shop,

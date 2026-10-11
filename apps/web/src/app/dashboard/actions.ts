@@ -58,11 +58,24 @@ export async function repairAcuitySyncAction(): Promise<{
 export async function redeemAction(
   clientId: string,
   rewardId: string,
-): Promise<{ ok: boolean; error?: string }> {
-  const res = await apiSend("POST", `/api/dashboard/redeem/${clientId}`, { rewardId });
+  opts: {
+    /** One per tap, re-sent unchanged on a retry: the API redeems it once. */
+    requestId?: string;
+  } = {},
+): Promise<{ ok: boolean; status: number; error?: string; replayed?: boolean }> {
+  const path = `/api/dashboard/redeem/${clientId}`;
+  let res = await apiSend<{ ok: boolean; replayed?: boolean }>("POST", path, {
+    rewardId,
+    ...(opts.requestId ? { requestId: opts.requestId } : {}),
+  });
+  // An API from before requestId (mid-deploy) refused it and redeemed
+  // nothing: redeem the way this screen used to (lib/apiCompat.ts).
+  if (opts.requestId && refusedOnlyNewKeys(res, ["requestId"])) {
+    res = await apiSend<{ ok: boolean; replayed?: boolean }>("POST", path, { rewardId });
+  }
   revalidatePath("/dashboard");
   revalidatePath(`/dashboard/clients/${clientId}`);
-  return { ok: res.ok, error: res.error };
+  return { ok: res.ok, status: res.status, error: res.error, replayed: res.data?.replayed };
 }
 
 /** Where a nudge went: their ChairBack app (push), only its bell (their

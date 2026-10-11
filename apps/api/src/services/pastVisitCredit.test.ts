@@ -4,7 +4,7 @@ import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 import { creditPastVisits } from "./pastVisitCredit.js";
-import { raceBehindRowLock, winners } from "../testing/raceBarrier.js";
+import { holdRowLock, raceBehindRowLock, winners } from "../testing/raceBarrier.js";
 
 /**
  * #516: CREDITING PAST VISITS IS THE OWNER'S CHOICE, PREVIEWED FIRST.
@@ -235,5 +235,59 @@ describe("two confirms at the same moment", () => {
         data: { shopId: shop.id, clientId: client.id, visitId: ids[0]!, punchesEarned: 1, runningBalance: 3, note: "visit" },
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe("🔴 a visit cancelled after the list was read", () => {
+  it("is not credited: each customer's visits are asked again under their lock", async () => {
+    const shop = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Cancelled Mid Credit",
+        slug: `pvc-mid-${randomToken(5)}`,
+        webhookSecret: randomToken(),
+        rewardsEnabled: true,
+        rewardsStartedAt: START,
+      },
+    });
+    const client = await prisma.client.create({
+      data: { shopId: shop.id, acuityClientKey: `pvc-mid-${randomToken(6)}`, magicToken: randomToken() },
+    });
+    const make = async (days: number) =>
+      (
+        await prisma.visit.create({
+          data: {
+            shopId: shop.id,
+            clientId: client.id,
+            acuityAppointmentId: `manual:${randomToken(8)}`,
+            status: "COMPLETED",
+            scheduledAt: before(days),
+            endAt: before(days),
+          },
+        })
+      ).id;
+    const kept = await make(10);
+    const cancelled = await make(20);
+
+    // Hold the customer's row: the credit reads its list (both visits), then
+    // waits here for the lock.
+    const barrier = await holdRowLock("Client", client.id);
+    let settled = false;
+    const credit = creditPastVisits(shop.id, 3, "credit").finally(() => {
+      settled = true;
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    expect(settled).toBe(false);
+
+    // A resync learns one of them was cancelled.
+    await prisma.visit.update({
+      where: { id: cancelled },
+      data: { status: "CANCELED", canceledAt: new Date() },
+    });
+
+    await barrier.release();
+    expect(await credit).toMatchObject({ visits: 1, punches: 1, customers: 1 });
+    expect(await rowsFor(kept)).toHaveLength(1);
+    expect(await rowsFor(cancelled)).toHaveLength(0);
   });
 });
