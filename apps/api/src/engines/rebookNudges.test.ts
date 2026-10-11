@@ -175,6 +175,8 @@ beforeEach(async () => {
 afterAll(async () => {
   __setPushSenderForTests(undefined);
   const user = await prisma.shop.findUnique({ where: { id: shopId }, select: { ownerId: true } });
+  // A party row holds its staff (Restrict): it goes first.
+  await prisma.appointmentGroup.deleteMany({ where: { shopId } });
   await prisma.shop.deleteMany({ where: { id: shopId } });
   if (user) await prisma.user.deleteMany({ where: { id: user.ownerId } });
   await prisma.$disconnect();
@@ -379,5 +381,36 @@ describe("the rebook push lands where the shop takes bookings now", () => {
     } finally {
       await restore();
     }
+  });
+
+  it("🔴 a back-to-back party thanks its booker ONCE, after the last chair empties", async () => {
+    // Every member of a party carries the BOOKER's client - one phone.
+    const clientId = await makeClient();
+    const group = await prisma.appointmentGroup.create({
+      data: { shopId, staffId, clientId, firstName: "Marcus", manageToken: randomToken() },
+      select: { id: true },
+    });
+    // The parent's cut ended 45 minutes ago; the kid's ended 10 minutes ago.
+    const first = await seedAppt({ endedMinAgo: 45, clientId });
+    const last = await seedAppt({ endedMinAgo: 10, clientId });
+    await prisma.appointment.updateMany({
+      where: { id: { in: [first, last] } },
+      data: { groupId: group.id },
+    });
+    const forParty = () =>
+      pushes.filter((p) => [`rebook-${first}`, `rebook-${last}`].includes(p.tag ?? ""));
+
+    // The family is still in the shop: nothing yet, and the first seat is done.
+    await runRebookNudges(NOW);
+    expect(forParty()).toHaveLength(0);
+    expect((await apptStamp(first))!.rebookPromptSentAt).not.toBeNull();
+
+    // Half an hour later the last chair has emptied: ONE nudge for the party.
+    await runRebookNudges(new Date(NOW.getTime() + 30 * MIN));
+    expect(forParty()).toHaveLength(1);
+    expect(forParty()[0]!.tag).toBe(`rebook-${last}`);
+
+    await runRebookNudges(new Date(NOW.getTime() + 40 * MIN));
+    expect(forParty()).toHaveLength(1);
   });
 });

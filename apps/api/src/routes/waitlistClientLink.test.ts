@@ -85,7 +85,7 @@ function freshPhone(): { raw: string; stored: string } {
 
 /** The link half of the rule, which is all the cases below care about. */
 const linkOf = async (phone: string | null | undefined): Promise<string | null> =>
-  (await resolveWaitlistClient(prisma, shopId, phone)).clientId;
+  (await resolveWaitlistClient(prisma, shopId, phone, { contact: "typed" })).clientId;
 
 beforeAll(async () => {
   const a = await signupAndShop("Link Cuts");
@@ -315,7 +315,7 @@ describe("🔴 the migration's backfill and the runtime rule are one rule", () =
 
 describe("resolveWaitlistClient: the rank", () => {
   const rankOf = async (phone: string | null | undefined): Promise<number> =>
-    (await resolveWaitlistClient(prisma, shopId, phone)).tierRank;
+    (await resolveWaitlistClient(prisma, shopId, phone, { contact: "vouched" })).tierRank;
 
   it("reads the linked client's tier", async () => {
     const g = freshPhone();
@@ -355,10 +355,22 @@ describe("resolveWaitlistClient: the rank", () => {
     await expect(rankOf(cross.stored)).resolves.toBe(RANK_NONE);
   });
 
+  it("🔴 a TYPED number links, but lends nobody its standing", async () => {
+    // A public form proves nothing about who is joining: anyone can type a
+    // Gold client's number. The link stays (it grants nothing - reachability
+    // only); the rank is the one everybody without proof gets.
+    const g = freshPhone();
+    const gold = await makeClient(shopId, g.stored, { loyaltyTier: "GOLD" });
+    const typed = await resolveWaitlistClient(prisma, shopId, g.stored, { contact: "typed" });
+    expect(typed).toEqual({ clientId: gold.id, tierRank: RANK_NONE });
+    const vouched = await resolveWaitlistClient(prisma, shopId, g.stored, { contact: "vouched" });
+    expect(vouched).toEqual({ clientId: gold.id, tierRank: RANK_GOLD });
+  });
+
   it("a linked client the loyalty engine has not tiered yet ranks with everyone else", async () => {
     const p = freshPhone();
     const c = await makeClient(shopId, p.stored); // loyaltyTier null
-    const res = await resolveWaitlistClient(prisma, shopId, p.stored);
+    const res = await resolveWaitlistClient(prisma, shopId, p.stored, { contact: "vouched" });
     expect(res.clientId).toBe(c.id); // linked …
     expect(res.tierRank).toBe(RANK_NONE); // … but no standing to rank by
   });
@@ -375,15 +387,34 @@ describe("joining stamps the rank", () => {
     expect(e.tierRank).toBe(RANK_NONE);
   });
 
-  it("public join: a Gold client's entry is stamped Gold", async () => {
+  it("🔴 public join: typing a Gold client's number borrows none of their standing", async () => {
+    // The form is unauthenticated - a stranger who knows a Gold client's
+    // number would otherwise jump the whole queue on it, and be emailed the
+    // offers at their own address.
     const hit = freshPhone();
-    await makeClient(shopId, hit.stored, { loyaltyTier: "GOLD" });
+    const gold = await makeClient(shopId, hit.stored, { loyaltyTier: "GOLD" });
     const res = await request(app)
       .post(`/api/page/${slug}/waitlist`)
-      .send({ lastName: "Test", firstName: "GoldJoin", phone: hit.raw });
+      .send({ lastName: "Stranger", firstName: "GoldJoin", phone: hit.raw, email: `gj-${randomToken(5)}@test.local` });
     expect(res.status).toBe(201);
     const e = await prisma.waitlistEntry.findFirst({
       where: { shopId, firstName: "GoldJoin" },
+      select: { tierRank: true, clientId: true },
+    });
+    expect(e?.tierRank).toBe(RANK_NONE);
+    expect(e?.clientId).toBe(gold.id); // reachability is unchanged
+  });
+
+  it("dashboard join: the barber entering a Gold client's number stamps Gold", async () => {
+    const hit = freshPhone();
+    await makeClient(shopId, hit.stored, { loyaltyTier: "GOLD" });
+    const res = await request(app)
+      .post("/api/dashboard/waitlist")
+      .set("Cookie", cookie)
+      .send({ lastName: "Test", firstName: "GoldCounter", phone: hit.raw });
+    expect(res.status).toBe(201);
+    const e = await prisma.waitlistEntry.findFirst({
+      where: { shopId, firstName: "GoldCounter" },
       select: { tierRank: true },
     });
     expect(e?.tierRank).toBe(RANK_GOLD);
@@ -429,11 +460,15 @@ describe("joining stamps the rank", () => {
     // freed slot and the next - the person ahead of you on Tuesday is behind
     // you on Friday for reasons neither of you can see - and the same
     // cancellation replayed an hour later would pick a different person.
+    //
+    // Both joins are the shop's own (the dashboard): a public join borrows no
+    // standing at all, so it could not show the snapshot either way.
     const hit = freshPhone();
     const client = await makeClient(shopId, hit.stored, { loyaltyTier: "BRONZE" });
 
     const res = await request(app)
-      .post(`/api/page/${slug}/waitlist`)
+      .post("/api/dashboard/waitlist")
+      .set("Cookie", cookie)
       .send({ lastName: "Test", firstName: "Promoted", phone: hit.raw });
     expect(res.status).toBe(201);
     const joined = await prisma.waitlistEntry.findFirstOrThrow({
@@ -451,7 +486,7 @@ describe("joining stamps the rank", () => {
 
     // The client is Gold now …
     await expect(
-      resolveWaitlistClient(prisma, shopId, hit.stored),
+      resolveWaitlistClient(prisma, shopId, hit.stored, { contact: "vouched" }),
     ).resolves.toMatchObject({ tierRank: RANK_GOLD });
     // … and the row they are waiting on has not moved.
     const after = await prisma.waitlistEntry.findUniqueOrThrow({
@@ -468,7 +503,8 @@ describe("joining stamps the rank", () => {
       data: { status: "REMOVED" },
     });
     const again = await request(app)
-      .post(`/api/page/${slug}/waitlist`)
+      .post("/api/dashboard/waitlist")
+      .set("Cookie", cookie)
       .send({ lastName: "Test", firstName: "PromotedAgain", phone: hit.raw });
     expect(again.status).toBe(201);
     const next = await prisma.waitlistEntry.findFirstOrThrow({

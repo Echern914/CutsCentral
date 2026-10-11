@@ -728,3 +728,92 @@ export async function lockStaffAndAssertSlotFree(
 
   return { externalBlocksCrossed, overlapsCrossed };
 }
+
+/** Everything `lockStaffAndAssertSlotFree` takes. */
+export type SlotGuardOptions = Parameters<typeof lockStaffAndAssertSlotFree>[1];
+
+/**
+ * Several chairs' advisory locks, in ONE order: distinct staff ids, sorted.
+ *
+ * Two writers that each need chairs A and B must take them in the same order,
+ * or each can end up holding one and waiting for the other. Sorting is that
+ * order. Advisory locks are re-entrant within a transaction, so a chair locked
+ * here and then checked by `lockStaffAndAssertSlotFree` costs nothing twice.
+ */
+export async function lockStaffCalendars(
+  tx: Prisma.TransactionClient,
+  staffIds: readonly string[],
+): Promise<void> {
+  for (const staffId of [...new Set(staffIds)].sort()) {
+    await lockStaffCalendar(tx, staffId);
+  }
+}
+
+/** One span a party member will occupy, on that member's OWN chair. */
+export interface PartySpan {
+  staffId: string;
+  startsAt: Date;
+  endsAt: Date;
+}
+
+/**
+ * THE guard for a write that places a whole party at once (moving it,
+ * approving its request) when its members may not all sit on one chair.
+ *
+ * 🔴 EACH MEMBER IS CHECKED ON ITS OWN PROVIDER. A party is booked onto one
+ * chair, but the dashboard's edit sheet can move one member to another. A
+ * party write that locked and checked only the party's original chair landed
+ * that member on the other provider's calendar with nobody looking - straight
+ * over whatever was booked there.
+ *
+ * 🔴 EVERY CHAIR IS LOCKED BEFORE ANY IS CHECKED, in sorted order. The check
+ * itself can release waitlist and tier holds (row locks), and the documented
+ * order is staff lock -> those rows; locking chair B after chair A's check had
+ * touched a hold row would invert it. Nothing is written until every chair has
+ * answered, so a refusal on any one of them moves nobody.
+ *
+ * Members that touch on the SAME chair are checked as ONE run, [first start,
+ * last end] - the create path's combined interval - so they are never compared
+ * with each other and no turnover buffer is wedged between them. The caller
+ * excludes every party row (`excludeAppointmentIds`), or the run collides with
+ * where it sits now.
+ *
+ * `serviceDayLimit` must be null: that cap's lock is taken BEFORE a staff lock,
+ * and every chair here is already locked. No party write charges the cap again.
+ */
+export async function lockStaffsAndAssertPartyFree(
+  tx: Prisma.TransactionClient,
+  spans: readonly PartySpan[],
+  guard: Omit<SlotGuardOptions, "staffId" | "startsAt" | "endsAt" | "serviceDayLimit"> & {
+    serviceDayLimit: null;
+  },
+): Promise<void> {
+  await lockStaffCalendars(
+    tx,
+    spans.map((s) => s.staffId),
+  );
+  const byStaff = new Map<string, PartySpan[]>();
+  for (const s of spans) byStaff.set(s.staffId, [...(byStaff.get(s.staffId) ?? []), s]);
+  for (const staffId of [...byStaff.keys()].sort()) {
+    const ordered = [...byStaff.get(staffId)!].sort(
+      (a, b) => a.startsAt.getTime() - b.startsAt.getTime(),
+    );
+    const runs: { startsAt: Date; endsAt: Date }[] = [];
+    for (const s of ordered) {
+      const last = runs[runs.length - 1];
+      if (last && s.startsAt.getTime() <= last.endsAt.getTime()) {
+        if (s.endsAt.getTime() > last.endsAt.getTime()) last.endsAt = s.endsAt;
+      } else {
+        runs.push({ startsAt: s.startsAt, endsAt: s.endsAt });
+      }
+    }
+    for (const run of runs) {
+      await lockStaffAndAssertSlotFree(tx, {
+        ...guard,
+        staffId,
+        startsAt: run.startsAt,
+        endsAt: run.endsAt,
+      });
+    }
+  }
+}

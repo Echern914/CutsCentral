@@ -150,7 +150,8 @@ export async function kioskCheckIn(opts: {
 
   // Associate an existing client ONLY within this shop, by the one link rule
   // the waitlist already uses (unambiguous, non-archived, exact phone).
-  const link = await resolveWaitlistClient(prisma, shopId, phone);
+  // The phone was proven with a text code before this ran.
+  const link = await resolveWaitlistClient(prisma, shopId, phone, { contact: "vouched" });
   const client = link.clientId
     ? await prisma.client.findFirst({
         where: { id: link.clientId, shopId },

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
 import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { prisma } from "@chairback/db";
@@ -10,8 +10,13 @@ import {
   type ReceptionistModelClient,
 } from "./agent.js";
 import { hasLiveConversation, processInboundText } from "./inbound.js";
-import { closeConversationsForPhone } from "./conversation.js";
+import {
+  MANUAL_REPLY_NOTE,
+  autoCloseIdleConversations,
+  closeConversationsForPhone,
+} from "./conversation.js";
 import { RECEPTIONIST_REPLY_LIMITS } from "./replyCap.js";
+import { logger } from "../logger.js";
 
 /**
  * End-to-end inbound pipeline with a SCRIPTED model (no API key, fully
@@ -721,24 +726,78 @@ describe("processInboundText", () => {
     expect(sms).toHaveLength(1);
   });
 
-  it("NEVER texts an opted-out number - even mid-conversation (send-time re-check)", async () => {
+  it("🔴 an opted-out client never starts a turn: no model call, no hold, no thread, no send", async () => {
+    // STOP is global and absolute. The turn used to run in full - paid model
+    // tokens, tools that place calendar holds - and only the SEND was refused,
+    // before any Nudge row, so the reply cap never counted it either.
     const shop = await makeShop();
+    const { staffId, serviceId } = await makeBookable(shop.id);
     const phone = freshPhone();
     await makeClient(shop.id, phone, { optedOut: true });
-    __setModelClientForTests(scriptedModel([textMsg("this must not send")]));
+    const slotId = `${staffId}~${serviceId}~2026-06-02T18:00:00.000Z`;
+    const model = scriptedModel([
+      toolUseMsg([{ id: "tu_1", name: "hold_slot", input: { slot_id: slotId } }]),
+      textMsg("this must not send"),
+    ]);
+    __setModelClientForTests(model);
+
+    await processInboundText({ phone, text: "one more question", now: NOW });
+
+    expect(model.requests).toHaveLength(0);
+    expect(sms).toHaveLength(0);
+    expect(await prisma.appointment.count({ where: { shopId: shop.id } })).toBe(0);
+    expect(await prisma.receptionistConversation.count({ where: { shopId: shop.id } })).toBe(0);
+    expect(await prisma.nudge.count({ where: { shopId: shop.id } })).toBe(0);
+  });
+
+  it("🔴 a number opted out at ANOTHER shop gets no turn on a live thread here either", async () => {
+    // STOP opts out by phone, everywhere. A live thread at this shop (opened
+    // before the opt-out landed on a different record) must not keep the AI
+    // talking - or spending.
+    const shop = await makeShop();
+    const otherShop = await makeShop();
+    await makeBookable(shop.id);
+    const phone = freshPhone();
+    await makeClient(shop.id, phone);
+    __setModelClientForTests(scriptedModel([textMsg("hey Marcus")]));
+    await processInboundText({ phone, text: "hi", now: NOW });
+    expect(sms).toHaveLength(1);
+    expect(await hasLiveConversation(phone)).toBe(true);
+
+    // Opted out on the other shop's record (not via the STOP keyword, so no
+    // thread was closed).
+    await makeClient(otherShop.id, phone, { optedOut: true });
+    sms = [];
+    const model = scriptedModel([textMsg("this must not send")]);
+    __setModelClientForTests(model);
+
+    await processInboundText({ phone, text: "one more question", now: NOW });
+
+    expect(model.requests).toHaveLength(0);
+    expect(sms).toHaveLength(0);
+    // Its YES is the carrier opt-in keyword now, not "book it" in a thread the
+    // AI can no longer answer.
+    expect(await hasLiveConversation(phone)).toBe(false);
+  });
+
+  it("NEVER texts a number that opts out mid-turn (send-time re-check)", async () => {
+    // The inbound gate cannot see a STOP that lands while the model is
+    // thinking; the send-time re-check in outbound.ts still must.
+    const shop = await makeShop();
+    const phone = freshPhone();
+    const client = await makeClient(shop.id, phone);
+    const model: ReceptionistModelClient = {
+      async create() {
+        await prisma.client.update({ where: { id: client.id }, data: { optedOut: true } });
+        return textMsg("this must not send");
+      },
+    };
+    __setModelClientForTests(model);
 
     await processInboundText({ phone, text: "one more question", now: NOW });
 
     expect(sms).toHaveLength(0);
-    // The turn still ran and is audited; only the send was blocked.
-    const convo = await prisma.receptionistConversation.findFirst({
-      where: { shopId: shop.id, phone },
-      include: { messages: true },
-    });
-    expect(convo).not.toBeNull();
-    expect(convo!.messages.some((m) => m.role === "assistant")).toBe(true);
-    const nudges = await prisma.nudge.findMany({ where: { shopId: shop.id } });
-    expect(nudges).toHaveLength(0);
+    expect(await prisma.nudge.count({ where: { shopId: shop.id } })).toBe(0);
   });
 
   it("escalate_to_human hands the thread off: status flips, barber alerted, AI goes silent on the follow-up", async () => {
@@ -809,6 +868,141 @@ describe("processInboundText", () => {
 
     const convo = await prisma.receptionistConversation.findFirst({ where: { phone } });
     expect(convo!.shopId).toBe(newShop.id);
+  });
+});
+
+describe("escalated threads come back", () => {
+  const HOUR = 60 * 60_000;
+
+  it("🔴 the shop hears when a client keeps texting into an escalated thread - once an hour, and again after its own reply", async () => {
+    const notifyPhone = "+13025550188";
+    const shop = await makeShop({ notifyPhone });
+    const phone = freshPhone();
+    const client = await makeClient(shop.id, phone);
+    const convo = await prisma.receptionistConversation.create({
+      data: { shopId: shop.id, phone, clientId: client.id, status: "escalated" },
+    });
+    const t0 = Date.now();
+    // The handoff alert went out two hours ago, and nobody has answered.
+    await prisma.receptionistMessage.create({
+      data: {
+        shopId: shop.id,
+        conversationId: convo.id,
+        role: "system_note",
+        content: "escalated to barber: refund dispute",
+        createdAt: new Date(t0 - 2 * HOUR),
+      },
+    });
+    const model = scriptedModel([textMsg("the AI must stay silent here")]);
+    __setModelClientForTests(model);
+    const shopAlerts = () => sms.filter((s) => s.to === notifyPhone);
+
+    await processInboundText({ phone, text: "any update?", now: new Date(t0) });
+
+    expect(shopAlerts()).toHaveLength(1);
+    expect(shopAlerts()[0]!.body).toContain("texted again");
+    // The AI stays out of a thread the shop owns.
+    expect(model.requests).toHaveLength(0);
+    expect(sms.find((s) => s.to === phone)).toBeUndefined();
+
+    // Two more texts straight after: still one ping, not three.
+    await processInboundText({ phone, text: "hello?", now: new Date(t0 + 60_000) });
+    await processInboundText({ phone, text: "??", now: new Date(t0 + 120_000) });
+    expect(shopAlerts()).toHaveLength(1);
+
+    // Still unanswered an hour on: the shop is told again.
+    await processInboundText({ phone, text: "hello??", now: new Date(t0 + HOUR + 60_000) });
+    expect(shopAlerts()).toHaveLength(2);
+
+    // The shop replies by hand (what the dashboard reply route writes); the
+    // client answering it a minute later is news at once, inside the hour.
+    await prisma.receptionistMessage.create({
+      data: {
+        shopId: shop.id,
+        conversationId: convo.id,
+        role: "system_note",
+        content: MANUAL_REPLY_NOTE,
+        createdAt: new Date(t0 + HOUR + 90_000),
+      },
+    });
+    await processInboundText({ phone, text: "thanks!", now: new Date(t0 + HOUR + 120_000) });
+    expect(shopAlerts()).toHaveLength(3);
+
+    // Every inbound text is on the transcript, and the thread is still the shop's.
+    const after = await prisma.receptionistConversation.findUniqueOrThrow({
+      where: { id: convo.id },
+      include: { messages: true },
+    });
+    expect(after.status).toBe("escalated");
+    expect(after.messages.filter((m) => m.role === "user")).toHaveLength(5);
+    expect(after.messages.some((m) => m.role === "assistant")).toBe(false);
+  });
+
+  it("with texting off, a text into an escalated thread changes nothing and texts nobody", async () => {
+    // Production today: SMS_ENABLED unset. The whole inbound pipeline is off
+    // (nothing could be answered by text, by the AI or by the shop), so the
+    // follow-up alert must not fire either.
+    const notifyPhone = "+13025550177";
+    const shop = await makeShop({ notifyPhone });
+    const phone = freshPhone();
+    const client = await makeClient(shop.id, phone);
+    const convo = await prisma.receptionistConversation.create({
+      data: { shopId: shop.id, phone, clientId: client.id, status: "escalated" },
+    });
+    process.env.SMS_ENABLED = "false";
+    __resetEnvCacheForTests();
+    try {
+      await processInboundText({ phone, text: "any update?", now: new Date() });
+    } finally {
+      process.env.SMS_ENABLED = "true";
+      __resetEnvCacheForTests();
+    }
+    expect(sms).toHaveLength(0);
+    expect(await prisma.receptionistMessage.count({ where: { conversationId: convo.id } })).toBe(0);
+  });
+
+  it("🔴 an escalated thread idle for a day closes, and the client's next text gets the AI back", async () => {
+    const shop = await makeShop();
+    const phone = freshPhone();
+    const client = await makeClient(shop.id, phone);
+    const busyPhone = freshPhone();
+    const busyClient = await makeClient(shop.id, busyPhone);
+    const stale = await prisma.receptionistConversation.create({
+      data: {
+        shopId: shop.id,
+        phone,
+        clientId: client.id,
+        status: "escalated",
+        lastMessageAt: new Date(Date.now() - 25 * HOUR),
+      },
+    });
+    // Escalated but still being written in: the shop still owns it.
+    const busy = await prisma.receptionistConversation.create({
+      data: {
+        shopId: shop.id,
+        phone: busyPhone,
+        clientId: busyClient.id,
+        status: "escalated",
+        lastMessageAt: new Date(Date.now() - 2 * HOUR),
+      },
+    });
+
+    await autoCloseIdleConversations(new Date());
+
+    expect((await prisma.receptionistConversation.findUniqueOrThrow({ where: { id: stale.id } })).status).toBe("closed");
+    expect((await prisma.receptionistConversation.findUniqueOrThrow({ where: { id: busy.id } })).status).toBe("escalated");
+
+    const model = scriptedModel([textMsg("hey Marcus - what can I get you?")]);
+    __setModelClientForTests(model);
+    await processInboundText({ phone, text: "can I get in this week", now: NOW });
+
+    expect(model.requests).toHaveLength(1);
+    expect(sms.find((s) => s.to === phone)).toBeDefined();
+    const threads = await prisma.receptionistConversation.findMany({
+      where: { shopId: shop.id, phone },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(threads.map((t) => t.status)).toEqual(["closed", "active"]);
   });
 });
 
@@ -919,6 +1113,25 @@ describe("STOP + live-thread helpers", () => {
     await processInboundText({ phone, text: "im back", now: NOW });
     const convos = await prisma.receptionistConversation.findMany({ where: { phone } });
     expect(convos).toHaveLength(2);
+  });
+});
+
+describe("a turn that fails", () => {
+  it("🔴 logs the failure without the customer's number", async () => {
+    const phone = freshPhone();
+    const error = vi.spyOn(logger, "error");
+    const lookup = vi
+      .spyOn(prisma.client, "findFirst")
+      .mockRejectedValueOnce(new Error("database went away"));
+    try {
+      await processInboundText({ phone, text: "hi", now: NOW });
+      const failed = error.mock.calls.filter((c) => c[1] === "processInboundText failed");
+      expect(failed).toHaveLength(1);
+      expect(JSON.stringify(failed)).not.toContain(phone.slice(2));
+    } finally {
+      lookup.mockRestore();
+      error.mockRestore();
+    }
   });
 });
 

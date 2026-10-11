@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { requestedDetail } from "@chairback/config/customerStatus";
 import { groupSlotsAction } from "../../[slug]/group/actions";
 import { groupDateLabel, money } from "../../[slug]/group/GroupSequence";
 import {
@@ -28,6 +29,13 @@ const time = (iso: string, tz: string) =>
     minute: "2-digit",
   }).format(new Date(iso));
 
+/** The visit is under way - the same past-time rule as a single booking. */
+export const STARTED_NOTICE =
+  "Your visit has already started, so the whole group can't be moved or cancelled here. Please talk to the shop.";
+/** A request the shop has not answered yet. */
+export const REQUESTED_NOTICE =
+  "The shop hasn't confirmed this request yet. You can change or cancel it once they do.";
+
 type Confirming =
   | { kind: "none" }
   | { kind: "member"; token: string; name: string }
@@ -53,7 +61,14 @@ export function GroupManageClient({
 
   const tz = group.shop.timezone;
   const live = group.members.filter((m) => m.status === "BOOKED");
-  const canceledAll = group.status === "CANCELED" || live.length === 0;
+  // 🔴 A REQUEST IS NOT A CANCELLED GROUP. At a shop that approves bookings,
+  // every member is PENDING until the shop answers; reading only BOOKED rows
+  // called that "Group cancelled". Nothing here can change it until then -
+  // the same as a single request.
+  const requested = group.requested === true && group.status === "ACTIVE";
+  const canceledAll = !requested && (group.status === "CANCELED" || live.length === 0);
+  // The visit is under way: everyone can no longer be moved or cancelled here.
+  const started = group.started === true;
 
   async function refresh() {
     const { groupViewAction } = await import("./actions");
@@ -107,7 +122,11 @@ export function GroupManageClient({
               ? "This booking can't be moved online. Please contact the shop to change it."
               : res.code === "price_changed"
                 ? "That time has a different price and part of this booking is already paid. Nobody was moved - please contact the shop to move it."
-                : "That time did not work. Please pick another.",
+                : res.code === "started"
+                  ? STARTED_NOTICE
+                  : res.code === "requested"
+                    ? REQUESTED_NOTICE
+                    : "That time did not work. Please pick another.",
       );
       return;
     }
@@ -127,7 +146,15 @@ export function GroupManageClient({
     setBusy(false);
     setConfirming({ kind: "none" });
     if (!res.ok) {
-      setNotice("That could not be cancelled. Please try again.");
+      const code = "code" in res ? res.code : undefined;
+      setNotice(
+        code === "started"
+          ? STARTED_NOTICE
+          : code === "requested"
+            ? REQUESTED_NOTICE
+            : "That could not be cancelled. Please try again.",
+      );
+      await refresh();
       return;
     }
     setNotice(
@@ -141,11 +168,16 @@ export function GroupManageClient({
   return (
     <main className="mx-auto w-full max-w-2xl px-4 py-8">
       <h1 className="text-2xl font-semibold text-offwhite">
-        {canceledAll ? "Group cancelled" : "Your group"}
+        {requested ? "Your group request" : canceledAll ? "Group cancelled" : "Your group"}
       </h1>
       <p className="mt-1 text-muted">
         {group.shop.name} · with {group.staff.name}
       </p>
+      {requested && (
+        <p data-qa="group-requested" className="mt-2 text-sm font-semibold text-gold">
+          {requestedDetail("approval", group.shop.name)}
+        </p>
+      )}
 
       {notice && (
         <p
@@ -164,7 +196,8 @@ export function GroupManageClient({
 
       <ul className="mt-2 divide-y divide-white/5 rounded-2xl border border-subtle bg-charcoal-800/60">
         {group.members.map((m) => {
-          const gone = m.status !== "BOOKED";
+          // A member of an unanswered request is waiting, not gone.
+          const gone = m.status !== "BOOKED" && !(requested && m.status === "PENDING");
           return (
             <li key={m.appointmentId} className="flex items-baseline gap-3 p-4">
               <span className="min-w-0 flex-1">
@@ -189,7 +222,9 @@ export function GroupManageClient({
                   {m.priceCents === null ? "Priced in shop" : money(m.priceCents)}
                 </span>
               </span>
-              {!gone && !canceledAll && (
+              {/* Not for a request (the shop has not answered), and not for a
+                  member whose time has come - their own cancel refuses it. */}
+              {!gone && !canceledAll && !requested && !m.started && (
                 <button
                   type="button"
                   onClick={() =>
@@ -209,7 +244,11 @@ export function GroupManageClient({
         <>
           <p className="mt-3 text-sm text-muted">Pay at the shop.</p>
 
-          {moving ? (
+          {requested || started ? (
+            <p data-qa="group-locked" className="mt-6 text-sm text-muted">
+              {requested ? REQUESTED_NOTICE : STARTED_NOTICE}
+            </p>
+          ) : moving ? (
             <section className="mt-6">
               <h2 className="mb-2 font-semibold text-offwhite">Move everyone to…</h2>
               {priceAsk && (

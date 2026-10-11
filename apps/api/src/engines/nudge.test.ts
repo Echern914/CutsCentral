@@ -2,8 +2,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { addDays, randomToken } from "@chairback/config";
 import { forShop, prisma, type Shop } from "@chairback/db";
 import { __setMessageProviderForTests } from "../messaging/twilio.js";
+import { __setExpoSenderForTests, makeExpoSender } from "../messaging/push.js";
 import type { MessageProvider } from "../messaging/provider.js";
-import { sweepShop } from "./nudge.js";
+import { NUDGE_SEND_LOCAL_HOUR, runNudgeSweep, sweepShop } from "./nudge.js";
 
 /**
  * Nudge sweep: write-ahead ledger, real send via a FAKE provider, per-shop cap,
@@ -462,5 +463,142 @@ describe("🔴 never to a client who is gone (eligibility.ts, R2's far edge)", (
     // Nothing written for the gone client either - not even a skipped row.
     const rows = await prisma.nudge.findMany({ where: { shopId: own.id }, select: { client: { select: { phone: true } } } });
     expect(rows.map((r) => r.client.phone)).toEqual(["+13025551502"]);
+  });
+});
+
+// 🔴 A push the SERVICE refused is not a delivery. The real Expo sender used
+// to read a 429/5xx as success, so the sweep skipped the SMS and recorded a
+// push nobody got. Exercised through the real sender over a fake fetch.
+describe("🔴 push refused by the push service -> the SMS fallback runs", () => {
+  it.each([429, 503])("Expo answering %i: the client is texted instead", async (httpStatus) => {
+    const own = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Push Fallback Shop",
+        bookingUrl: "https://nudge.test",
+        webhookSecret: randomToken(),
+        dailySendCap: 5,
+        nudgeBufferDays: 7,
+      },
+    });
+    const phone = `+1302555${httpStatus}9`;
+    const client = await makeOverdueClient(own.id, `tel:${phone}`, phone);
+    await prisma.pushSubscription.create({
+      data: { shopId: own.id, clientId: client.id, kind: "expo", expoPushToken: `ExponentPushToken[pf${httpStatus}]` },
+    });
+    let fetchCalls = 0;
+    const refusing = (async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ errors: [{ code: "UNAVAILABLE" }] }), { status: httpStatus });
+    }) as unknown as typeof fetch;
+    __setExpoSenderForTests(makeExpoSender({ fetchImpl: refusing }));
+    try {
+      const summary = await sweepShop(own, { now: NOW, dryRun: false });
+
+      expect(fetchCalls).toBe(1); // the push WAS tried first
+      expect(summary.sent).toBe(1);
+      expect(sent.map((s) => s.to)).toEqual([phone]);
+      const rows = await prisma.nudge.findMany({
+        where: { shopId: own.id },
+        select: { channel: true, status: true },
+      });
+      // One SENT text, and no WEB_PUSH row claiming a delivery.
+      expect(rows).toEqual([{ channel: "SMS", status: "SENT" }]);
+    } finally {
+      __setExpoSenderForTests(undefined);
+    }
+  });
+});
+
+// 🔴 SHOP-LOCAL SENDING HOURS BOUND THE PUSH TOO. The cron ran at 10:00 UTC -
+// 3 to 7 AM across the US - so the SMS leg (quiet-hours gated) never texted,
+// and every nudge that went out was a push buzzing a phone before dawn.
+describe("🔴 nudges go out inside shop-local sending hours - push included", () => {
+  it("a real run at 2 AM shop time sends no push either; at 10 AM it does", async () => {
+    const own = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Hours Shop",
+        bookingUrl: "https://nudge.test",
+        webhookSecret: randomToken(),
+        timezone: "America/New_York",
+        dailySendCap: 5,
+        nudgeBufferDays: 7,
+      },
+    });
+    const client = await makeOverdueClient(own.id, "tel:+13025557101", "+13025557101");
+    await prisma.pushSubscription.create({
+      data: { shopId: own.id, clientId: client.id, kind: "expo", expoPushToken: "ExponentPushToken[hours]" },
+    });
+    const pushed: string[] = [];
+    __setExpoSenderForTests({
+      async send(token) {
+        pushed.push(token);
+      },
+    });
+    try {
+      // 06:00 UTC = 02:00 in New York.
+      const night = await sweepShop(own, { now: new Date("2026-06-01T06:00:00Z"), dryRun: false });
+      expect(pushed).toHaveLength(0);
+      expect(sent).toHaveLength(0);
+      expect(night.sent).toBe(0);
+      expect(await prisma.nudge.count({ where: { shopId: own.id } })).toBe(0);
+
+      // 14:00 UTC = 10:00 in New York: the push goes (and no text is needed).
+      const morning = await sweepShop(own, { now: new Date("2026-06-01T14:00:00Z"), dryRun: false });
+      expect(pushed).toEqual(["ExponentPushToken[hours]"]);
+      expect(morning.sent).toBe(1);
+      expect(sent).toHaveLength(0);
+    } finally {
+      __setExpoSenderForTests(undefined);
+    }
+  });
+
+  it("🔴 the hourly tick sweeps each shop at ITS OWN 10 AM, and the Acuity-only shop filter is unchanged", async () => {
+    const connected = (name: string, timezone: string) =>
+      prisma.shop.create({
+        data: {
+          ownerId: userId,
+          name,
+          bookingUrl: "https://nudge.test",
+          webhookSecret: randomToken(),
+          timezone,
+          acuity: { create: { acuityAccountId: `acct-${randomToken(5)}`, accessToken: "enc" } },
+        },
+      });
+    const ny = await connected("New York Cuts", "America/New_York");
+    const la = await connected("LA Cuts", "America/Los_Angeles");
+    // Not Acuity-connected: never swept, at any hour (the owner's call, untouched here).
+    const native = await prisma.shop.create({
+      data: {
+        ownerId: userId,
+        name: "Native Cuts",
+        bookingUrl: "https://nudge.test",
+        webhookSecret: randomToken(),
+        timezone: "America/New_York",
+      },
+    });
+    const mine = (summaries: { shopId: string }[]) =>
+      summaries.map((s) => s.shopId).filter((id) => [ny.id, la.id, native.id].includes(id));
+
+    // A preview (dryRun) so no other suite's shop in the shared DB is sent to.
+    // 14:00 UTC: 10 AM in New York, 7 AM in Los Angeles.
+    const at14 = await runNudgeSweep({
+      now: new Date("2026-06-01T14:00:00Z"),
+      dryRun: true,
+      localHour: NUDGE_SEND_LOCAL_HOUR,
+    });
+    expect(mine(at14)).toEqual([ny.id]);
+    // 17:00 UTC: 1 PM in New York, 10 AM in Los Angeles.
+    const at17 = await runNudgeSweep({
+      now: new Date("2026-06-01T17:00:00Z"),
+      dryRun: true,
+      localHour: NUDGE_SEND_LOCAL_HOUR,
+    });
+    expect(mine(at17)).toEqual([la.id]);
+    // 10 AM is inside the sending window, or the tick would pick a shop only
+    // for the gate to refuse it.
+    expect(NUDGE_SEND_LOCAL_HOUR).toBeGreaterThanOrEqual(8);
+    expect(NUDGE_SEND_LOCAL_HOUR).toBeLessThan(21);
   });
 });

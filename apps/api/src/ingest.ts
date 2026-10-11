@@ -116,8 +116,16 @@ export async function ingestAppointment(
       where: {
         shopId_acuityAppointmentId: { shopId: shop.id, acuityAppointmentId: acuityId },
       },
-      select: { status: true },
+      select: { status: true, scheduledAt: true },
     });
+    // 🔴 MOVED IN THE CALENDAR = REMINDED AGAIN. The synced reminder sweep only
+    // picks rows whose stamps are null, so a visit moved after its day-before
+    // reminder went out was never reminded about the NEW time. Same rule as
+    // the native reschedule paths: the stamps re-arm only when the time
+    // actually changed, so the half-hourly resync re-reading an unchanged
+    // appointment never re-sends anything.
+    const timeMoved =
+      existing !== null && existing.scheduledAt.getTime() !== scheduledAt.getTime();
     const keepCompleted =
       existing?.status === "COMPLETED" &&
       status !== "CANCELED" &&
@@ -164,6 +172,7 @@ export async function ingestAppointment(
         noShow: appt.noShow ?? false,
         canceledAt: status === "CANCELED" ? new Date() : null,
         completedAt: revokeCompleted ? null : undefined,
+        ...(timeMoved ? { reminderSentAt: null, reminderEmailSentAt: null } : {}),
         // Refreshed on EVERY pass, which is also the backfill: the half-hourly
         // resync re-ingests a 365-day window, so existing appointments pick the
         // link up on the next sweep with no data migration. It also means a
