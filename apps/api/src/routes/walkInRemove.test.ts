@@ -280,7 +280,7 @@ describe("remove a walk-in", () => {
       where: { id },
       select: { startsAt: true, endsAt: true },
     });
-    const earn = await runWithShop(s.shopId, (tx) =>
+    const outcome = await runWithShop(s.shopId, (tx) =>
       promoteOneAppointmentInTx(
         tx,
         { id: s.shopId, punchesPerVisit: 1 },
@@ -296,7 +296,7 @@ describe("remove a walk-in", () => {
         { byShop: true },
       ),
     );
-    expect(earn?.earned).toBe(1);
+    expect(outcome.promoted && outcome.earn?.earned).toBe(1);
     expect(await balance(s.shopId, client.id)).toBe(1);
     const visitId = (await row(id)).visitId!;
     expect(visitId).toBeTruthy();

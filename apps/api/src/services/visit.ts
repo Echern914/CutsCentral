@@ -8,6 +8,7 @@ import {
   earnPunchForVisitInTx,
   liveExtraPunches,
   routeVisitEarn,
+  visitEarnChain,
 } from "./punch.js";
 
 /**
@@ -43,6 +44,11 @@ async function balanceOf(
   return (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
 }
 
+/** Net punches a set of standing ledger entries adds to their card. */
+function standingPunches(entries: { punchesEarned: number; punchesRedeemed: number }[]): number {
+  return entries.reduce((n, e) => n + e.punchesEarned - e.punchesRedeemed, 0);
+}
+
 export type DeleteVisitResult =
   | { ok: true; balance: number; wasCompleted: boolean }
   | { ok: false; reason: "not_found" }
@@ -70,13 +76,14 @@ export async function deleteVisit(
     const wasCompleted = visit.status === "COMPLETED";
     let cardTypeId: string | null = null;
     if (wasCompleted) {
-      // The live (non-reversed) earn for this visit, if any.
-      const earn = await tx.punchLedger.findUnique({
-        where: { visitId },
-        select: { punchesEarned: true, reversedAt: true, cardTypeId: true },
-      });
-      const liveEarned = earn && earn.reversedAt === null ? earn.punchesEarned : 0;
-      cardTypeId = earn?.cardTypeId ?? null;
+      // What the claw-back below will take out: everything of this visit's
+      // earn that still counts. 🔴 Not just the earn row - an earn whose count
+      // was edited is itself reversed, and its REGRANT is what stands. Reading
+      // the earn alone counted that as 0, so the guard passed and the
+      // claw-back then drove a spent balance negative.
+      const found = await visitEarnChain(tx, visitId);
+      const liveEarned = standingPunches(found?.standing ?? []);
+      cardTypeId = found?.earn.cardTypeId ?? null;
       // Guard the earn's OWN card - the claw-back only touches that balance.
       const balance = await balanceOf(tx, shopId, clientId, cardTypeId);
       if (balance - liveEarned < 0) {
@@ -115,7 +122,9 @@ export interface EditVisitInput {
 export type EditVisitResult =
   | { ok: true; balance: number }
   | { ok: false; reason: "not_found" }
-  | { ok: false; reason: "would_go_negative"; balance: number };
+  | { ok: false; reason: "would_go_negative"; balance: number }
+  /** Asked to move a punch a person undid or re-counted: change it in the punch history. */
+  | { ok: false; reason: "punch_set_by_hand"; balance: number };
 
 /**
  * Edit a past visit's date and/or service. For a COMPLETED visit, the new service
@@ -125,6 +134,13 @@ export type EditVisitResult =
  * re-earn at the new amount via the SAME path ingest uses), keeping "one
  * idempotent earn per visit" intact. Unchanged amount = update fields only, no
  * ledger churn. Refuses if the corrected balance would go negative.
+ *
+ * Two things an edit never does to the ledger:
+ *  - touch a punch a PERSON already decided - undone, or its count edited.
+ *    The fields change; the punch stays exactly as they left it.
+ *  - re-price a punch on a date-only edit. Only a promotion window can move
+ *    with the date, so only that re-earns; otherwise the punch is left alone,
+ *    and a visit with no punch does not get one from a date fix.
  */
 export async function editVisit(
   shop: EarnShopSlice,
@@ -190,10 +206,53 @@ export async function editVisit(
       where: { visitId },
       select: { punchesEarned: true, reversedAt: true, cardTypeId: true },
     });
-    const currentLiveAmount = earn && earn.reversedAt === null ? earn.punchesEarned : 0;
     const earnCardTypeId = earn?.cardTypeId ?? null;
+
+    // 🔴 A PUNCH A PERSON UNDID OR RE-COUNTED IS THEIRS, NOT THE RULES'.
+    //
+    // An earn still linked to its visit is stamped reversed by a person only:
+    // Undo (reverseLedgerEntry) or Edit count (adjustLedgerEntry). The
+    // system's own take-back (clawBackVisitEarn) detaches the link in the same
+    // write, so it never lands here. This branch used to read such an earn as
+    // "0 punches live", see the rule amount differ, claw back and earn again -
+    // so ANY edit, even fixing the date, brought back a duplicate punch the
+    // shop had undone, and replaced an edited count with the rule's. (Its
+    // guard also counted the edited count's regrant as nothing.) Now the
+    // fields change and the ledger stays exactly as the person left it; the
+    // link stays too, so crediting past visits still sees this visit as
+    // punched (pastVisitCredit.ts).
+    if (earn && earn.reversedAt !== null) {
+      if (input.cardTypeId !== undefined && input.cardTypeId !== earnCardTypeId) {
+        const balance = await balanceOf(tx, shop.id, clientId, earnCardTypeId);
+        return { ok: false as const, reason: "punch_set_by_hand" as const, balance };
+      }
+      await tx.visit.update({ where: { id: visit.id }, data: fieldUpdate });
+      const balance = await balanceOf(tx, shop.id, clientId, earnCardTypeId);
+      return { ok: true as const, balance, dateChanged: Boolean(input.when) };
+    }
+
+    const currentLiveAmount = earn ? earn.punchesEarned : 0;
     const serviceChanged =
       input.serviceName !== undefined && newService !== visit.serviceName;
+
+    // A DATE-ONLY EDIT KEEPS THE PUNCH IT HAS. The service and card that set
+    // the amount are unchanged; the one thing a date can move is which
+    // promotion window the visit falls in. Unless it crosses one, the ledger
+    // is left alone - re-pricing the punch under today's settings, or handing
+    // a never-punched visit its first one, is not what fixing a date means.
+    if (!serviceChanged && input.cardTypeId === undefined) {
+      const oldWhen = visit.completedAt ?? visit.scheduledAt;
+      const promoWindowMoved =
+        earn !== null &&
+        input.when !== undefined &&
+        (await liveExtraPunches(tx, shop.id, oldWhen)) !==
+          (await liveExtraPunches(tx, shop.id, newWhen));
+      if (!promoWindowMoved) {
+        await tx.visit.update({ where: { id: visit.id }, data: fieldUpdate });
+        const balance = await balanceOf(tx, shop.id, clientId, earnCardTypeId);
+        return { ok: true as const, balance, dateChanged: Boolean(input.when) };
+      }
+    }
     // Which card should the edited visit earn on? An explicit input wins; a
     // service change re-routes (the service is the routing signal); a date-only
     // edit keeps the earn's current card (it may have been a barber override).

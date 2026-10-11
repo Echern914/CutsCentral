@@ -2490,6 +2490,10 @@ export function AppointmentBlock({
   // Skip = dismiss for THIS render only; the reward stays ready and the prompt
   // returns on reload (deliberate - skipping never consumes anything).
   const [rewardSkipped, setRewardSkipped] = useState(false);
+  // 🔴 ONE APPLY, ONE REDEMPTION. Kept across an unknown outcome (no answer,
+  // a 5xx), so tapping Apply again is the same redemption - never a second
+  // reward off a client holding punches for two. Bound to the reward.
+  const applyTap = useRef<{ rewardId: string; id: string } | null>(null);
   // Non-null = this row was cancelled in THIS session and the way back is still
   // on offer. A timestamp rather than a boolean so a re-render can't extend it.
   const [undoUntil, setUndoUntil] = useState<number | null>(null);
@@ -2895,12 +2899,26 @@ export function AppointmentBlock({
               disabled={pending}
               onClick={() =>
                 start(async () => {
-                  const res = await applyRewardAction(
-                    row.clientId!,
-                    row.rewardReady!.rewardId,
+                  const rewardId = row.rewardReady!.rewardId;
+                  if (applyTap.current?.rewardId !== rewardId) {
+                    applyTap.current = {
+                      rewardId,
+                      id:
+                        globalThis.crypto?.randomUUID?.() ??
+                        `rd-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                    };
+                  }
+                  const res = await applyRewardAction(row.clientId!, rewardId, applyTap.current.id).catch(
+                    // The phone lost the answer: unknown, like a 5xx.
+                    () => ({ ok: false, answered: false }),
                   );
+                  if (res.answered) applyTap.current = null;
                   toast(
-                    res.ok ? `${row.rewardReady!.rewardName} applied` : "Couldn't apply",
+                    res.ok
+                      ? `${row.rewardReady!.rewardName} applied`
+                      : res.answered
+                        ? "Couldn't apply"
+                        : "No answer from ChairBack - tap Apply again. It won't apply twice.",
                     res.ok ? "success" : "error",
                   );
                   if (res.ok) onChanged();

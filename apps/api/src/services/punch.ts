@@ -1,4 +1,4 @@
-import { prisma, runWithShop, type Prisma } from "@chairback/db";
+import { Prisma, prisma, runWithShop, type PunchLedger } from "@chairback/db";
 
 /**
  * Punch ledger writes. Earning is idempotent via PunchLedger.visitId @unique:
@@ -302,6 +302,56 @@ export interface LedgerAudit {
 /** The system's own writes: no person, no stated reason. */
 const SYSTEM: LedgerAudit = { actorUserId: null, reason: null };
 
+/** A visit's earn, everything layered on it since, and what of that still counts. */
+export interface VisitEarnChain {
+  /** The entry linked to the visit by PunchLedger.visitId. */
+  earn: PunchLedger;
+  /** The earn, its corrections and regrants (see below). */
+  chain: PunchLedger[];
+  /** Entries still counting toward the balance, oldest first. */
+  standing: PunchLedger[];
+}
+
+/**
+ * Walk the ledger chain hanging off a visit's earn: any correction of it
+ * (reversalOfId = earn); any regrant written by "edit count" (correctionOfId =
+ * a correction); and the same again for each regrant, since a regrant can
+ * itself be edited. `standing` is every ORIGINAL entry (not a correction) that
+ * has not been reversed - what the visit still adds to the balance. Null when
+ * no earn is linked to the visit.
+ *
+ * One walk, shared by the claw-back and by every guard that has to know what
+ * a claw-back would take out (deleting a visit): the two cannot disagree about
+ * an edited punch's regrant.
+ */
+export async function visitEarnChain(
+  tx: Prisma.TransactionClient,
+  visitId: string,
+): Promise<VisitEarnChain | null> {
+  const earn = await tx.punchLedger.findUnique({ where: { visitId } });
+  if (!earn) return null;
+
+  // Bounded - a person edits a punch a handful of times.
+  const chain = [earn];
+  let frontier = [earn.id];
+  for (let depth = 0; depth < 10 && frontier.length > 0; depth++) {
+    const corrections = await tx.punchLedger.findMany({ where: { reversalOfId: { in: frontier } } });
+    const regrants =
+      corrections.length === 0
+        ? []
+        : await tx.punchLedger.findMany({
+            where: { correctionOfId: { in: corrections.map((c) => c.id) } },
+          });
+    chain.push(...corrections, ...regrants);
+    frontier = regrants.map((r) => r.id);
+  }
+
+  const standing = chain
+    .filter((e) => e.reversalOfId === null && e.reversedAt === null)
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  return { earn, chain, standing };
+}
+
 /**
  * Take a visit's ENTIRE punch-ledger footprint back out, inside an already-open
  * shop transaction. Used whenever a completed visit stops counting: a
@@ -335,29 +385,12 @@ export async function clawBackVisitEarn(
   visitId: string,
   audit: LedgerAudit = SYSTEM,
 ): Promise<void> {
-  const earn = await tx.punchLedger.findUnique({ where: { visitId } });
-  if (!earn) return;
-
-  // Walk the whole chain (bounded - a person edits a punch a handful of times).
-  const chain = [earn];
-  let frontier = [earn.id];
-  for (let depth = 0; depth < 10 && frontier.length > 0; depth++) {
-    const corrections = await tx.punchLedger.findMany({ where: { reversalOfId: { in: frontier } } });
-    const regrants =
-      corrections.length === 0
-        ? []
-        : await tx.punchLedger.findMany({
-            where: { correctionOfId: { in: corrections.map((c) => c.id) } },
-          });
-    chain.push(...corrections, ...regrants);
-    frontier = regrants.map((r) => r.id);
-  }
+  const found = await visitEarnChain(tx, visitId);
+  if (!found) return;
+  const { earn, standing } = found;
 
   // Everything still counting: an original entry (not a correction) that has
   // not been reversed. Offset each on its OWN card, in order.
-  const standing = chain
-    .filter((e) => e.reversalOfId === null && e.reversedAt === null)
-    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   for (const entry of standing) {
     const agg = await tx.punchLedger.aggregate({
       where: { shopId, clientId: entry.clientId, cardTypeId: entry.cardTypeId },
@@ -409,10 +442,14 @@ export type RedeemResult =
       reward: { id: string; name: string; punchCost: number };
       cardTypeId: string | null;
       cardName: string | null;
+      /** Answered from an earlier try of the same tap: nothing was written now. */
+      replayed?: true;
     }
   | { ok: false; reason: "reward_not_found" }
   | { ok: false; reason: "rewards_disabled" }
-  | { ok: false; reason: "insufficient_punches"; balance: number; required: number };
+  | { ok: false; reason: "insufficient_punches"; balance: number; required: number }
+  /** The tap's id is already a different client's or reward's redemption. */
+  | { ok: false; reason: "request_reused" };
 
 /**
  * Redeem a specific menu reward from the dashboard. Atomic: the reward lookup
@@ -422,6 +459,15 @@ export type RedeemResult =
  *
  * The balance checked (and deducted from) is the reward's OWN card: a client
  * with 8 punches on the default card can't spend them on a VIP-card reward.
+ *
+ * 🔴 ONE TAP, ONE REDEMPTION. The row lock stops two taps racing; it cannot
+ * tell a RETRY from a second redemption. A Redeem whose answer was lost (no
+ * signal, a gateway 502 after the write) and was tapped again redeemed a
+ * second reward for a client holding punches for two. `requestId` is minted
+ * once per tap and re-sent unchanged on a retry: inside the same lock, a
+ * request already written is answered from its row, and the (shopId,
+ * requestId) unique refuses a second one outright. Without one (an older
+ * screen) a redeem behaves exactly as before.
  */
 export async function redeemReward(
   shopId: string,
@@ -429,6 +475,7 @@ export async function redeemReward(
   rewardId: string,
   /** Who redeemed it (the dashboard passes the signed-in staff member). */
   audit: LedgerAudit = SYSTEM,
+  opts: { requestId?: string } = {},
 ): Promise<RedeemResult> {
   // Same master gate as earning: no redemptions while rewards are off (the
   // balance is untouched either way - redeeming is just refused).
@@ -438,8 +485,39 @@ export async function redeemReward(
   });
   if (!gate?.rewardsEnabled) return { ok: false, reason: "rewards_disabled" as const };
 
-  return runWithShop(shopId, async (tx) => {
+  const requestId = opts.requestId;
+  return runWithShop<RedeemResult>(shopId, async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
+
+    if (requestId) {
+      // A retry of this same tap waits on the lock above, then finds this.
+      const prior = await tx.punchLedger.findUnique({
+        where: { shopId_requestId: { shopId, requestId } },
+        include: { cardType: { select: { name: true } } },
+      });
+      if (prior) {
+        // The same id for another client or reward is never a retry, and is
+        // never served as one. (A reward deleted since leaves rewardId null.)
+        if (prior.clientId !== clientId || (prior.rewardId !== null && prior.rewardId !== rewardId)) {
+          return { ok: false as const, reason: "request_reused" as const };
+        }
+        // Already redeemed by the first try: report it, write nothing. The
+        // balance is the card's as it stands now.
+        const agg = await tx.punchLedger.aggregate({
+          where: { shopId, clientId, cardTypeId: prior.cardTypeId },
+          _sum: { punchesEarned: true, punchesRedeemed: true },
+        });
+        return {
+          ok: true as const,
+          newBalance: (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0),
+          reward: { id: rewardId, name: prior.note ?? "Reward", punchCost: prior.punchesRedeemed },
+          cardTypeId: prior.cardTypeId,
+          cardName: prior.cardType?.name ?? null,
+          replayed: true as const,
+        };
+      }
+    }
+
     // findFirst with shopId (not findUnique by id) so a foreign reward id 404s.
     const reward = await tx.reward.findFirst({
       where: { id: rewardId, shopId },
@@ -477,6 +555,7 @@ export async function redeemReward(
         note: reward.name,
         actorUserId: audit.actorUserId,
         reason: audit.reason,
+        requestId: requestId ?? null,
       },
     });
     return {
@@ -486,6 +565,17 @@ export async function redeemReward(
       cardTypeId: reward.cardTypeId,
       cardName: reward.cardType?.name ?? null,
     };
+  }).catch((err: unknown): RedeemResult => {
+    // Two DIFFERENT clients sent the same id at once (the lock above is per
+    // client): the unique let one write; the other is a reuse, not a retry.
+    if (
+      requestId &&
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      return { ok: false, reason: "request_reused" };
+    }
+    throw err;
   });
 }
 

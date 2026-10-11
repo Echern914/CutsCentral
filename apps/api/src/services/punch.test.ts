@@ -9,6 +9,7 @@ import {
   redeemReward,
   reverseLedgerEntry,
 } from "./punch.js";
+import { raceBehindRowLock, winners } from "../testing/raceBarrier.js";
 
 /**
  * Earn-rule engine at the service level: base rate, service overrides,
@@ -468,5 +469,100 @@ describe("adjustLedgerEntry (edit an earn's punch count)", () => {
     const result = await adjustLedgerEntry(shopId, clientId, earn!.id, 1);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("would_go_negative");
+  });
+});
+
+describe("🔴 one tap, one redemption (requestId)", () => {
+  // Each test gets its own client, so the punches in play are exactly its own.
+  async function freshClient(punches: number): Promise<string> {
+    const c = await prisma.client.create({
+      data: { shopId, acuityClientKey: `rq-${randomToken(8)}`, magicToken: randomToken() },
+    });
+    await grantBonusPunches(shopId, c.id, punches);
+    return c.id;
+  }
+  async function balanceOf(id: string): Promise<number> {
+    const agg = await prisma.punchLedger.aggregate({
+      where: { shopId, clientId: id },
+      _sum: { punchesEarned: true, punchesRedeemed: true },
+    });
+    return (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0);
+  }
+  const redemptions = (id: string) =>
+    prisma.punchLedger.count({ where: { shopId, clientId: id, punchesRedeemed: { gt: 0 } } });
+  const tapId = () => `tap-${randomToken(16)}`.slice(0, 32);
+  let reward = "";
+  beforeAll(async () => {
+    reward = (await forShop(shopId).reward.create({ data: { name: "Free Lineup", punchCost: 5 } })).id;
+  });
+
+  it("a retry with the same requestId returns the first redemption - one ledger row", async () => {
+    const c = await freshClient(10); // enough for two
+    const id = tapId();
+    const first = await redeemReward(shopId, c, reward, undefined, { requestId: id });
+    expect(first).toMatchObject({ ok: true, newBalance: 5 });
+    expect(first.ok && first.replayed).toBeFalsy();
+
+    const retry = await redeemReward(shopId, c, reward, undefined, { requestId: id });
+    expect(retry).toMatchObject({
+      ok: true,
+      replayed: true,
+      newBalance: 5,
+      reward: { id: reward, name: "Free Lineup", punchCost: 5 },
+    });
+    expect(await redemptions(c)).toBe(1);
+    expect(await balanceOf(c)).toBe(5);
+  });
+
+  it("the same id for another reward or another client is refused, and writes nothing", async () => {
+    const c = await freshClient(10);
+    const other = await freshClient(10);
+    const id = tapId();
+    await redeemReward(shopId, c, reward, undefined, { requestId: id });
+    const second = (await forShop(shopId).reward.create({ data: { name: "Free Beard", punchCost: 3 } })).id;
+
+    expect(await redeemReward(shopId, c, second, undefined, { requestId: id })).toEqual({
+      ok: false,
+      reason: "request_reused",
+    });
+    expect(await redeemReward(shopId, other, reward, undefined, { requestId: id })).toEqual({
+      ok: false,
+      reason: "request_reused",
+    });
+    expect(await redemptions(c)).toBe(1);
+    expect(await redemptions(other)).toBe(0);
+  });
+
+  it("without a requestId (an older screen) each redeem redeems, as before", async () => {
+    const c = await freshClient(10);
+    expect(await redeemReward(shopId, c, reward)).toMatchObject({ ok: true, newBalance: 5 });
+    expect(await redeemReward(shopId, c, reward)).toMatchObject({ ok: true, newBalance: 0 });
+    expect(await redemptions(c)).toBe(2);
+  });
+
+  it("the ledger itself refuses a second row for one request", async () => {
+    const c = await freshClient(10);
+    const id = tapId();
+    await redeemReward(shopId, c, reward, undefined, { requestId: id });
+    await expect(
+      prisma.punchLedger.create({
+        data: { shopId, clientId: c, rewardId: reward, punchesRedeemed: 5, runningBalance: 0, note: "x", requestId: id },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("two copies of one tap racing each other redeem once; the second is answered from the first", async () => {
+    const c = await freshClient(10);
+    const id = tapId();
+    const { results, settledEarly } = await raceBehindRowLock("Client", c, [
+      () => redeemReward(shopId, c, reward, undefined, { requestId: id }),
+      () => redeemReward(shopId, c, reward, undefined, { requestId: id }),
+    ]);
+    expect(settledEarly).toBe(0);
+    const done = winners(results);
+    expect(done.map((r) => r.ok)).toEqual([true, true]);
+    expect(done.filter((r) => r.ok && r.replayed)).toHaveLength(1);
+    expect(await redemptions(c)).toBe(1);
+    expect(await balanceOf(c)).toBe(5);
   });
 });

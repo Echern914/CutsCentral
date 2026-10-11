@@ -6394,7 +6394,7 @@ bookingDashboardRouter.post("/appointments/:id/complete", async (req, res) => {
       },
     });
     if (!appt || !appt.clientId) return null;
-    const earn = await promoteOneAppointmentInTx(
+    const outcome = await promoteOneAppointmentInTx(
       tx,
       shop,
       {
@@ -6409,7 +6409,10 @@ bookingDashboardRouter.post("/appointments/:id/complete", async (req, res) => {
       // The shop pressed Done: the visit happened (the tip ask's signal).
       { byShop: true },
     );
-    return { clientId: appt.clientId, earn };
+    // Marked a no-show or cancelled between the read above and now: the same
+    // answer as a row that was never BOOKED.
+    if (!outcome.promoted) return null;
+    return { clientId: appt.clientId, earn: outcome.earn };
   });
 
   if (!result) {
@@ -6549,6 +6552,8 @@ const checkoutSchema = z
 
 /** Rolls back a chair checkout's paidAt claim; caught right below. */
 class CollectionInProgress extends Error {}
+/** Rolls back the claim when a no-show / cancel landed first; caught right below. */
+class NoLongerCheckable extends Error {}
 
 bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
   const parsed = checkoutSchema.safeParse(req.body ?? {});
@@ -6616,7 +6621,7 @@ bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
     // there is just no loyalty to earn.
     let earn = null;
     if (appt.clientId) {
-      earn = await promoteOneAppointmentInTx(
+      const outcome = await promoteOneAppointmentInTx(
         tx,
         shop,
         {
@@ -6631,10 +6636,15 @@ bookingDashboardRouter.post("/appointments/:id/checkout", async (req, res) => {
         // Checked out at the chair: the visit happened.
         { byShop: true },
       );
+      // Marked a no-show or cancelled since the read above: no chair moment
+      // to pay for (the rule this route reads by). Roll the claim back.
+      if (!outcome.promoted) throw new NoLongerCheckable();
+      earn = outcome.earn;
     }
     return { kind: "ok" as const, clientId: appt.clientId, earn };
   }).catch((err: unknown) => {
     if (err instanceof CollectionInProgress) return { kind: "collection_in_progress" as const };
+    if (err instanceof NoLongerCheckable) return { kind: "not_found" as const };
     throw err;
   });
 

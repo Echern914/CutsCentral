@@ -4,6 +4,7 @@ import { prisma } from "@chairback/db";
 import { randomToken, rulesFromThresholds } from "@chairback/config";
 import { createApp } from "../app.js";
 import { recomputeLoyaltyTiers } from "./loyaltyTierRecompute.js";
+import { raceBehindBarrier, winners, type HeldBarrier } from "../testing/raceBarrier.js";
 
 /**
  * 🔴 CHANGING WHAT A TIER TAKES MUST RE-STAMP EVERY CLIENT.
@@ -201,3 +202,97 @@ describe("a new completed visit keeps using the shop's numbers", () => {
     expect(await tierOf(silver)).toBe("SILVER");
   });
 });
+
+describe("🔴 a tier a visit stamps while the recompute counts is not overwritten", () => {
+  let ownerId = "";
+  afterAll(async () => {
+    if (ownerId) {
+      await prisma.shop.deleteMany({ where: { ownerId } });
+      await prisma.user.deleteMany({ where: { id: ownerId } });
+    }
+  });
+
+  it("the row that moved under the recompute is skipped, then re-decided from a fresh count", async () => {
+    ownerId = (
+      await prisma.user.create({
+        data: { email: `tiers-mid-${randomToken(6)}@test.local`, passwordHash: "x", name: "Mid" },
+      })
+    ).id;
+    const shop = await prisma.shop.create({
+      data: { ownerId, name: "Mid Count", slug: `tiers-mid-${randomToken(5)}`, webhookSecret: randomToken() },
+    });
+    // Four visits, stamped SILVER under the OLD rules (Silver at 2, Gold at 5).
+    const client = await prisma.client.create({
+      data: {
+        shopId: shop.id,
+        acuityClientKey: `k-${randomToken(8)}`,
+        magicToken: randomToken(),
+        firstName: "Four",
+        loyaltyTier: "SILVER",
+      },
+    });
+    const visit = (i: number) => ({
+      shopId: shop.id,
+      clientId: client.id,
+      acuityAppointmentId: `a-${randomToken(8)}`,
+      scheduledAt: new Date(Date.UTC(2026, 0, 1) + i * 7 * 86_400_000),
+      status: "COMPLETED" as const,
+    });
+    for (let i = 0; i < 4; i++) await prisma.visit.create({ data: visit(i) });
+    // The NEW rules this recompute applies.
+    const rules = rulesFromThresholds({ BRONZE: 1, SILVER: 5, GOLD: 12 });
+
+    // The fifth visit completing, open and uncommitted: its own stamp, worked
+    // out under the old rules, has written GOLD and holds the client's row.
+    const barrier = await holdFifthVisit(shop.id, client.id, visit(4));
+
+    // The recompute counts four (the fifth is not committed), wants BRONZE,
+    // and queues at its write behind the visit's stamp.
+    const { results, settledEarly } = await raceBehindBarrier(barrier, [
+      () => recomputeLoyaltyTiers(shop.id, rules),
+    ]);
+    expect(settledEarly).toBe(0);
+    expect(winners(results)).toHaveLength(1);
+    // Five visits under the new rules: SILVER. Not the BRONZE counted from
+    // four (the stale write), and not the GOLD the old rules stamped (a skip
+    // with no fresh look).
+    expect(await tierOf(client.id)).toBe("SILVER");
+  });
+});
+
+/** A visit's completion and its tier stamp, held open until released. */
+async function holdFifthVisit(
+  shopId: string,
+  clientId: string,
+  data: Parameters<typeof prisma.visit.create>[0]["data"],
+): Promise<HeldBarrier> {
+  let release!: () => void;
+  let acquired!: () => void;
+  let failed!: (err: unknown) => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const ready = new Promise<void>((r, j) => {
+    acquired = r;
+    failed = j;
+  });
+  const held = prisma
+    .$transaction(
+      async (tx) => {
+        await tx.visit.create({ data });
+        await tx.client.update({ where: { id: clientId, shopId }, data: { loyaltyTier: "GOLD" } });
+        acquired();
+        await gate;
+      },
+      { timeout: 30_000, maxWait: 30_000 },
+    )
+    .catch((err: unknown) => {
+      failed(err);
+      throw err;
+    });
+  await ready;
+  return {
+    async release() {
+      release();
+      await held;
+    },
+  };
+}

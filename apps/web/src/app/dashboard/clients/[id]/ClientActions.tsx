@@ -16,7 +16,7 @@ import { ReasonPicker } from "./ReasonPicker";
 /** Why a bonus punch - one tap for the usual reasons, a few words otherwise. */
 const BONUS_REASONS = ["Referral", "Made up for a problem", "Promotion", "Loyal regular"];
 
-/** A fresh id for one "Log visit" tap (the API's requestId: 16-64 of [A-Za-z0-9_-]). */
+/** A fresh id for one "Log visit" or Redeem tap (the API's requestId: 16-64 of [A-Za-z0-9_-]). */
 function newTapId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -151,6 +151,55 @@ export function ClientActions({
         } else toast("Could not log visit", "error");
       } finally {
         inFlight.current = false;
+      }
+    });
+  }
+
+  // 🔴 ONE TAP, ONE REDEMPTION - the Log visit shape again. The id is minted
+  // when a Redeem starts and kept until the API answers, so a retry after a
+  // lost answer (no signal, a gateway 502 after it was written) is the SAME
+  // redemption, not a second reward off a client who had punches for two.
+  // Bound to the reward: picking a different one is a different redemption.
+  const redeemTap = useRef<{ rewardId: string; id: string } | null>(null);
+  const redeemInFlight = useRef(false);
+
+  function redeem(reward: RedeemableReward) {
+    if (redeemInFlight.current) return;
+    redeemInFlight.current = true;
+    if (redeemTap.current?.rewardId !== reward.id) {
+      redeemTap.current = { rewardId: reward.id, id: newTapId() };
+    }
+    const requestId = redeemTap.current.id;
+    startTransition(async () => {
+      try {
+        let r: Awaited<ReturnType<typeof redeemAction>>;
+        try {
+          r = await redeemAction(clientId, reward.id, { requestId });
+        } catch {
+          // The PHONE lost the answer - it may well have redeemed. Same as no
+          // answer from the API: keep the id for the next tap.
+          r = { ok: false, status: 0 };
+        }
+        // No answer, or a 5xx: the outcome is unknown, so keep the id - trying
+        // again is the same redemption, not a second one (lib/apiAnswered.ts).
+        const answered = apiAnswered(r.status);
+        if (answered) redeemTap.current = null;
+        if (r.ok) {
+          setPickerOpen(false);
+          setRedeemedName(reward.name);
+          toast(
+            r.replayed ? `${reward.name} was already redeemed - nothing taken twice` : `${reward.name} redeemed`,
+            "success",
+          );
+        } else if (!answered) {
+          // The picker stays open: the retry is one tap on the same reward.
+          toast("No answer from ChairBack - tap the reward again. It won't redeem twice.", "error");
+        } else {
+          setPickerOpen(false);
+          toast("Could not redeem", "error");
+        }
+      } finally {
+        redeemInFlight.current = false;
       }
     });
   }
@@ -364,16 +413,7 @@ export function ClientActions({
                     )}
                     <button
                       disabled={pending}
-                      onClick={() =>
-                        startTransition(async () => {
-                          const r = await redeemAction(clientId, reward.id);
-                          setPickerOpen(false);
-                          if (r.ok) {
-                            setRedeemedName(reward.name);
-                            toast(`${reward.name} redeemed`, "success");
-                          } else toast("Could not redeem", "error");
-                        })
-                      }
+                      onClick={() => redeem(reward)}
                       className="flex w-full items-center justify-between gap-2 rounded-xl px-2 py-2 text-left text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
                     >
                       <span className="truncate">

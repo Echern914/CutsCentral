@@ -569,7 +569,19 @@ const ledgerReason = z.string().trim().min(2).max(200);
 dashboardRouter.post("/redeem/:clientId", async (req, res) => {
   const shop = req.shop!;
   const parsed = z
-    .object({ rewardId: z.string().min(1), reason: ledgerReason.optional() })
+    .object({
+      rewardId: z.string().min(1),
+      reason: ledgerReason.optional(),
+      // 🔴 ONE TAP, ONE REDEMPTION (services/punch.ts redeemReward). Minted
+      // once per Redeem and re-sent unchanged on a retry, so a retry after a
+      // lost answer is answered from the first redemption instead of
+      // redeeming a second reward. Optional only so an older screen keeps
+      // working exactly as it did.
+      requestId: z
+        .string()
+        .regex(/^[A-Za-z0-9_-]{16,64}$/)
+        .optional(),
+    })
     .strict()
     .safeParse(req.body);
   if (!parsed.success) {
@@ -583,10 +595,13 @@ dashboardRouter.post("/redeem/:clientId", async (req, res) => {
     return;
   }
   // Atomic check-and-redeem (double-click / two tabs can't redeem twice).
-  const result = await redeemReward(shop.id, client.id, parsed.data.rewardId, {
-    actorUserId: req.userId ?? null,
-    reason: parsed.data.reason ?? null,
-  });
+  const result = await redeemReward(
+    shop.id,
+    client.id,
+    parsed.data.rewardId,
+    { actorUserId: req.userId ?? null, reason: parsed.data.reason ?? null },
+    { requestId: parsed.data.requestId },
+  );
   if (!result.ok) {
     if (result.reason === "reward_not_found") {
       res.status(404).json({ error: "reward_not_found" });
@@ -596,11 +611,21 @@ dashboardRouter.post("/redeem/:clientId", async (req, res) => {
       res.status(403).json({ error: "rewards_disabled" });
       return;
     }
+    if (result.reason === "request_reused") {
+      res.status(409).json({ error: "request_reused" });
+      return;
+    }
     res.status(400).json({
       error: "insufficient_punches",
       balance: result.balance,
       required: result.required,
     });
+    return;
+  }
+  if (result.replayed) {
+    // Already redeemed by an earlier try of this same tap: report it, write
+    // nothing, and text nobody a second confirmation.
+    res.json({ ok: true, newBalance: result.newBalance, reward: result.reward, replayed: true });
     return;
   }
   // Text the client their redemption confirmation (gated by the shop toggle +
