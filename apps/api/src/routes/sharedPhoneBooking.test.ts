@@ -130,3 +130,90 @@ describe("booking on a phone already on file", () => {
     expect([after.firstName, after.lastName, after.email]).toEqual(["Maria", "Lopez", "maria@own.test"]);
   });
 });
+
+/**
+ * The SHOP booking someone new on a number already on file: New appointment
+ * with a typed name and phone and no client picked - which is exactly what the
+ * waitlist board's Book button sends, every time. A son booked on his dad's
+ * number used to rename the dad, swap his email and, through the email
+ * trigger, drop his marketing-email yes. Same rule as the booking page now.
+ */
+describe("the shop booking someone new on a phone already on file", () => {
+  const shopBook = (phone: string, startsAt: string, extra: Record<string, unknown> = {}) =>
+    request(app)
+      .post("/api/booking/appointments")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        startsAt,
+        firstName: "Marcus",
+        lastName: "Junior",
+        phone,
+        email: "marcus@other.test",
+        ...extra,
+      });
+
+  it("🔴 keeps the client's own name, email and email yes; the appointment shows who was typed", async () => {
+    const phone = "+13025550144";
+    const andre = await holder(phone, { lastName: "Senior", email: "andre@own.test" });
+    await prisma.client.update({
+      where: { id: andre.id },
+      data: { emailMarketingConsentAt: new Date(), emailMarketingConsentSource: "booking_page" },
+    });
+
+    const res = await shopBook(phone, tomorrowAt(13));
+    expect(res.status).toBe(201);
+
+    const after = await prisma.client.findUniqueOrThrow({ where: { id: andre.id } });
+    expect([after.firstName, after.lastName, after.email]).toEqual(["Maria", "Senior", "andre@own.test"]);
+    expect(after.emailMarketingConsentAt).not.toBeNull();
+
+    const appt = await prisma.appointment.findUniqueOrThrow({
+      where: { id: res.body.id },
+      select: { clientId: true, firstName: true, lastName: true, phone: true, email: true },
+    });
+    expect(appt).toEqual({
+      clientId: andre.id,
+      firstName: "Marcus",
+      lastName: "Junior",
+      phone,
+      email: "marcus@other.test",
+    });
+  });
+
+  it("fills what the client is missing, and only that", async () => {
+    const phone = "+13025550155";
+    const andre = await holder(phone, { lastName: null, email: null });
+    const res = await shopBook(phone, tomorrowAt(14));
+    expect(res.status).toBe(201);
+    const after = await prisma.client.findUniqueOrThrow({ where: { id: andre.id } });
+    expect([after.firstName, after.lastName, after.email]).toEqual(["Maria", "Junior", "marcus@other.test"]);
+  });
+
+  it("🔴 a repeating booking on it keeps the client's own name and email too, and every visit shows who was typed", async () => {
+    const phone = "+13025550166";
+    const andre = await holder(phone, { lastName: "Senior", email: "andre@own.test" });
+    const res = await shopBook(phone, tomorrowAt(15), { recurrence: { interval: 1, count: 2 } });
+    expect(res.status).toBe(201);
+    const after = await prisma.client.findUniqueOrThrow({ where: { id: andre.id } });
+    expect([after.firstName, after.lastName, after.email]).toEqual(["Maria", "Senior", "andre@own.test"]);
+    const visits = await prisma.appointment.findMany({
+      where: { shopId, clientId: andre.id },
+      select: { firstName: true, lastName: true },
+    });
+    expect(visits).toHaveLength(2);
+    for (const v of visits) expect(v).toEqual({ firstName: "Marcus", lastName: "Junior" });
+  });
+
+  it("a brand-new number still makes a brand-new client from what was typed", async () => {
+    const phone = "+13025550188";
+    const res = await shopBook(phone, tomorrowAt(16));
+    expect(res.status).toBe(201);
+    const made = await prisma.client.findFirstOrThrow({
+      where: { shopId, acuityClientKey: `tel:${phone}` },
+      select: { firstName: true, lastName: true, email: true },
+    });
+    expect(made).toEqual({ firstName: "Marcus", lastName: "Junior", email: "marcus@other.test" });
+  });
+});
