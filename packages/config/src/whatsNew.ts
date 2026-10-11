@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-11-confirm-buttons-fit",
+    date: "2026-10-11",
+    kind: "fix",
+    title: "Confirm buttons fit on your phone",
+    body:
+      "The Keep it and Cancel visit buttons (and Mark no-show, Remove walk-in) now sit side by side at full size, " +
+      "instead of squeezing off the bottom of the appointment on a phone.",
+  },
+  {
     id: "2026-10-10-punches-stay-as-set",
     date: "2026-10-10",
     kind: "fix",
