@@ -24,6 +24,7 @@ import { registerBarberPush } from "@/src/push";
 import { ModeSwitchBar } from "@/src/ModeSwitchBar";
 import { announceScript, TapToPayHost } from "@/src/tapToPay/TapToPayHost";
 import { safeDashboardPath } from "@/src/pushTap";
+import { isSignedOutMessage, isSignedOutUrl, once, URL_WATCH_SCRIPT } from "@/src/dashboardSignOut";
 
 /**
  * Barber mode: a WebView of the existing /dashboard. The barber reaches here via
@@ -150,7 +151,31 @@ export default function BarberScreen() {
     if (next) setSource({ uri: `${WEB_ORIGIN}${next}` });
   }, [next, at]);
 
+  // The app's sign-out. The dashboard WebView must stay authenticated via the
+  // NATIVE session: once the page is on the signed-out side, clear the stale
+  // token (so /login shows its buttons and doesn't auto-skip straight back
+  // here), clear the Lock Screen widget (it must stop showing this shop's
+  // clients), and show the NATIVE sign-in screen - never the web /login, whose
+  // Google button is the embedded-WebView OAuth Google blocks.
+  // Several signals can report one sign-out (src/dashboardSignOut.ts); it runs once.
+  const leaveToSignIn = useRef(
+    once(() => {
+      clearSession().catch(() => {});
+      setWidgetBearer(null);
+      const store = nextUpWidgetStore();
+      if (store) clearNextUpWidget(store);
+      router.replace("/login");
+    }),
+  ).current;
+  const signOutOpts = { webOrigin: WEB_ORIGIN, isDemo };
+
   function onMessage(e: WebViewMessageEvent) {
+    // The dashboard's own Sign out, Exit demo, or a session that died
+    // mid-dashboard: an in-page navigation the injected watcher reported.
+    if (isSignedOutMessage(e.nativeEvent.data, signOutOpts)) {
+      leaveToSignIn();
+      return;
+    }
     try {
       const msg = JSON.parse(e.nativeEvent.data) as { type?: string; bearer?: string };
       if (msg.type === "cb:auth" && msg.bearer && !registered.current) {
@@ -162,24 +187,21 @@ export default function BarberScreen() {
     }
   }
 
-  // The dashboard WebView must stay authenticated via the NATIVE session. If it
-  // ever 401s (iOS dropped the WKWebView cookie on app suspension/relaunch, or
-  // the session was revoked), the web layout redirects to the WEB /login page -
-  // whose "Sign in with Google" is the embedded-WebView OAuth that Google BLOCKS
-  // ("Access blocked"). Intercept that navigation and bounce to the NATIVE
-  // sign-in screen instead of dead-ending there. Clear the stale token so /login
-  // shows its buttons and doesn't auto-skip straight back here.
+  // A REAL navigation to the signed-out side: the edge middleware or a cold
+  // load bouncing a dead cookie to /login (iOS dropped the WKWebView cookie on
+  // suspension/relaunch, or the session was revoked). Refused, and the app
+  // signs out instead of dead-ending on the web form.
   function onShouldStartLoad(req: WebViewNavigation): boolean {
-    if (req.url.startsWith(`${WEB_ORIGIN}/login`)) {
-      clearSession().catch(() => {});
-      // Signed out: the lock screen must stop showing this shop's clients.
-      setWidgetBearer(null);
-      const store = nextUpWidgetStore();
-      if (store) clearNextUpWidget(store);
-      router.replace("/login");
+    if (isSignedOutUrl(req.url, signOutOpts)) {
+      leaveToSignIn();
       return false;
     }
     return true;
+  }
+
+  // Belt and braces: WebKit reports some in-page URL changes here as well.
+  function onNavigationStateChange(nav: WebViewNavigation) {
+    if (isSignedOutUrl(nav.url, signOutOpts)) leaveToSignIn();
   }
 
   if (!source) {
@@ -214,6 +236,9 @@ export default function BarberScreen() {
           thirdPartyCookiesEnabled
           onMessage={onMessage}
           onShouldStartLoadWithRequest={onShouldStartLoad}
+          onNavigationStateChange={onNavigationStateChange}
+          // Reports in-page URL changes, so an in-page sign-out reaches us.
+          extraBeforeContentLoaded={URL_WATCH_SCRIPT}
         />
       ) : (
         <TapToPayHost inject={inject}>
@@ -230,13 +255,16 @@ export default function BarberScreen() {
               // corrects itself. A page that never hears it shows exactly that,
               // which is the right answer on the web, on Android, and in a
               // build whose entitlement was never granted.
-              extraBeforeContentLoaded={announceScript}
+              // ...and report in-page URL changes, so an in-page sign-out
+              // reaches us.
+              extraBeforeContentLoaded={announceScript + URL_WATCH_SCRIPT}
               onMessage={(e) => {
                 // Tap to Pay first; anything it does not recognise falls
-                // through to the existing push handshake.
+                // through to the sign-out watcher and the push handshake.
                 if (!handleMessage(e.nativeEvent.data)) onMessage(e);
               }}
               onShouldStartLoadWithRequest={onShouldStartLoad}
+              onNavigationStateChange={onNavigationStateChange}
             />
           )}
         </TapToPayHost>
