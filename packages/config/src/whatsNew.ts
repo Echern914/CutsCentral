@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-10-messages-at-the-right-time",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "Client messages and alerts now arrive at the right time",
+    body:
+      "Rebooking and win-back messages now go out mid-morning your time, never before 8 AM. A visit moved in Acuity " +
+      "or Square gets a reminder for its new time, and a moved booking gives you a fresh next-up alert. A client " +
+      "who keeps texting a thread the AI handed you now alerts you.",
+  },
+  {
     id: "2026-10-10-moved-bookings-keep-length",
     date: "2026-10-10",
     kind: "fix",

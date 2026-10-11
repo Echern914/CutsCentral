@@ -558,6 +558,58 @@ describe("authorization is rechecked at delivery, not trusted from enqueue", () 
   });
 });
 
+describe("texting switched off (SMS_ENABLED=false, production today)", () => {
+  async function withTextingOff<T>(fn: () => Promise<T>): Promise<T> {
+    process.env.SMS_ENABLED = "false";
+    __resetEnvCacheForTests();
+    try {
+      return await fn();
+    } finally {
+      process.env.SMS_ENABLED = "true";
+      __resetEnvCacheForTests();
+    }
+  }
+
+  it("🔴 settles a queued SMS as skipped - no attempt spent, never 'abandoned, may have arrived'", async () => {
+    // A row enqueued while texting was on, drained after it went off. A send
+    // the provider would refuse must not reserve an attempt, retry four times
+    // and settle as `abandoned` - which reads as "it may have arrived" about a
+    // text that could never leave.
+    await prisma.shop.update({ where: { id: shopId }, data: { notifyPhone: BARBER_PHONE } });
+    const row = await pendingRow("sms");
+
+    const res = await withTextingOff(() => runReviewNotifyOutbox({ batch: 10 }));
+
+    expect(sentSms).toHaveLength(0);
+    expect(res.skipped).toBe(1);
+    const after = await reload(row.id);
+    expect(after.status).toBe("skipped");
+    expect(after.attempts).toBe(0);
+    expect(after.lastAttemptAmbiguous).toBe(false);
+    expect(after.nextAttemptAt).toBeNull();
+    // Terminal: the next pass has nothing to claim.
+    expect((await withTextingOff(() => runReviewNotifyOutbox({ batch: 10 }))).claimed).toBe(0);
+  });
+
+  it("still sends the push for the same review while texting is off", async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { notifyPhone: BARBER_PHONE } });
+    await registerDevice();
+    const review = await prisma.review.create({ data: { shopId, rating: 4 } });
+    for (const channel of ["sms", "push"] as const) {
+      await prisma.reviewNotification.create({
+        data: { shopId, reviewId: review.id, userId: ownerId, channel },
+      });
+    }
+
+    const res = await withTextingOff(() => runReviewNotifyOutbox({ batch: 10 }));
+
+    expect(sentSms).toHaveLength(0);
+    expect(pushed).toHaveLength(1);
+    expect(res.sent).toBe(1);
+    expect(res.skipped).toBe(1);
+  });
+});
+
 describe("every row in a batch is delivered on its own clock", () => {
   it("does not stamp the whole batch with the moment the batch started", async () => {
     // 🔴 WHY THIS MATTERS, AND IT IS NOT COSMETIC. A pass claims up to 50 rows

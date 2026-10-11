@@ -96,7 +96,7 @@ import {
   type OfferSpan,
 } from "../engines/waitlistOffer.js";
 import { sendReceptionistSms } from "../receptionist/outbound.js";
-import { appendMessage } from "../receptionist/conversation.js";
+import { MANUAL_REPLY_NOTE, appendMessage } from "../receptionist/conversation.js";
 import { logger } from "../logger.js";
 import { becomeClient } from "../services/joinShop.js";
 
@@ -3711,7 +3711,7 @@ dashboardRouter.post(
         shopId: shop.id,
         conversationId: convo.id,
         role: "system_note",
-        content: "manual reply sent by the shop",
+        content: MANUAL_REPLY_NOTE, // also re-arms the "texted again" alert
       });
       await appendMessage({
         shopId: shop.id,

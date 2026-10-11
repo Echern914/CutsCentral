@@ -2,8 +2,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { addDays, randomToken } from "@chairback/config";
 import { forShop, prisma, type Shop } from "@chairback/db";
 import { __setMessageProviderForTests } from "../messaging/twilio.js";
+import { __setExpoSenderForTests } from "../messaging/push.js";
 import type { MessageProvider } from "../messaging/provider.js";
-import { sweepShopWinback, runWinbackSweep } from "./winback.js";
+import { WINBACK_SEND_LOCAL_HOUR, sweepShopWinback, runWinbackSweep } from "./winback.js";
 
 /**
  * Win-back sweep: opt-in gate, the DEEPER overdue bar (a merely-overdue client is
@@ -263,5 +264,61 @@ describe("runWinbackSweep (shop gate)", () => {
     expect(summaries.some((s) => s.shopId === offShop.id)).toBe(false);
     const nudges = await prisma.nudge.count({ where: { shopId: offShop.id } });
     expect(nudges).toBe(0);
+  });
+});
+
+// 🔴 SHOP-LOCAL SENDING HOURS BOUND THE PUSH TOO (see nudge.test.ts): the
+// 11:00 UTC cron put every US shop's win-back push at 4 to 8 AM.
+describe("🔴 win-backs go out inside shop-local sending hours - push included", () => {
+  it("a real run at 2 AM shop time sends no push either; at 11 AM it does", async () => {
+    const shop = await makeShop({ timezone: "America/New_York" });
+    const client = await makeLapsedClient(shop.id, "tel:+13025552401", "+13025552401", 120);
+    await prisma.pushSubscription.create({
+      data: { shopId: shop.id, clientId: client.id, kind: "expo", expoPushToken: "ExponentPushToken[wbhours]" },
+    });
+    const pushed: string[] = [];
+    __setExpoSenderForTests({
+      async send(token) {
+        pushed.push(token);
+      },
+    });
+    try {
+      // 06:00 UTC = 02:00 in New York.
+      const night = await sweepShopWinback(shop, { now: new Date("2026-06-01T06:00:00Z"), dryRun: false });
+      expect(pushed).toHaveLength(0);
+      expect(sent).toHaveLength(0);
+      expect(night.sent).toBe(0);
+      expect(await prisma.nudge.count({ where: { shopId: shop.id } })).toBe(0);
+
+      // 15:00 UTC = 11:00 in New York.
+      const day = await sweepShopWinback(shop, { now: new Date("2026-06-01T15:00:00Z"), dryRun: false });
+      expect(pushed).toEqual(["ExponentPushToken[wbhours]"]);
+      expect(day.sent).toBe(1);
+    } finally {
+      __setExpoSenderForTests(undefined);
+    }
+  });
+
+  it("the hourly tick sweeps each shop at ITS OWN 11 AM", async () => {
+    const ny = await makeShop({ name: "WB New York", timezone: "America/New_York" });
+    const la = await makeShop({ name: "WB LA", timezone: "America/Los_Angeles" });
+    const mine = (summaries: { shopId: string }[]) =>
+      summaries.map((s) => s.shopId).filter((id) => id === ny.id || id === la.id);
+
+    // Previews (dryRun), so no other suite's shop in the shared DB is sent to.
+    // 15:00 UTC: 11 AM in New York, 8 AM in Los Angeles.
+    const at15 = await runWinbackSweep({
+      now: new Date("2026-06-01T15:00:00Z"),
+      dryRun: true,
+      localHour: WINBACK_SEND_LOCAL_HOUR,
+    });
+    expect(mine(at15)).toEqual([ny.id]);
+    // 18:00 UTC: 2 PM in New York, 11 AM in Los Angeles.
+    const at18 = await runWinbackSweep({
+      now: new Date("2026-06-01T18:00:00Z"),
+      dryRun: true,
+      localHour: WINBACK_SEND_LOCAL_HOUR,
+    });
+    expect(mine(at18)).toEqual([la.id]);
   });
 });

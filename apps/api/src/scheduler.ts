@@ -5,8 +5,8 @@ import { logger } from "./logger.js";
 import { captureError } from "./sentry.js";
 import { withLease } from "./scheduler/lease.js";
 import { promoteCompletedVisits } from "./engines/statusPromotion.js";
-import { runNudgeSweep } from "./engines/nudge.js";
-import { runWinbackSweep } from "./engines/winback.js";
+import { NUDGE_SEND_LOCAL_HOUR, runNudgeSweep } from "./engines/nudge.js";
+import { WINBACK_SEND_LOCAL_HOUR, runWinbackSweep } from "./engines/winback.js";
 import { auditReferralGrants } from "./services/referral.js";
 import { linkBookingsToNudges } from "./engines/attribution.js";
 import { promoteFulfilledAppointments } from "./engines/appointmentPromotion.js";
@@ -91,28 +91,34 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     run: () => promoteCompletedVisits(),
     failMsg: "promotion job failed",
   },
-  // Daily nudge sweep at 10:00 (server time). Respects per-shop caps + DRY_RUN.
+  // Daily nudge sweep at 10:00 SHOP-LOCAL time. 🔴 The cron itself has no
+  // timezone (UTC on Railway), and "0 10 * * *" landed at 3-7 AM for every US
+  // shop - inside quiet hours, so no nudge ever texted and every one that went
+  // out was a pre-dawn push. So it ticks HOURLY and each tick sweeps only the
+  // shops whose own clock reads NUDGE_SEND_LOCAL_HOUR: once a day per shop, at
+  // 10 AM where the shop is. Respects per-shop caps, sending hours + DRY_RUN.
   // Highest-stakes job (mass SMS) — the lease is what makes it safe on N
   // replicas. TTL is generous (30min): the sweep sends SMS sequentially across
-  // all shops, so a large multi-shop account's worst-case runtime stays
+  // its shops, so a large multi-shop account's worst-case runtime stays
   // comfortably under TTL, keeping the at-most-one-winner invariant.
   {
-    cronExpr: "0 10 * * *",
+    cronExpr: "0 * * * *",
     name: "nudge-sweep",
     ttlMs: 30 * MINUTE,
-    run: () => runNudgeSweep(),
+    run: () => runNudgeSweep({ localHour: NUDGE_SEND_LOCAL_HOUR }),
     failMsg: "nudge sweep failed",
   },
-  // Daily win-back ("Growth Agent") sweep at 11:00 — one hour AFTER the nudge
-  // sweep so the two SMS blasts don't overlap (they share the per-shop daily
-  // cap; running nudge first lets win-back see the remaining budget). Opt-in
-  // per shop (winbackTextsEnabled), respects DRY_RUN + caps + quiet hours.
-  // Same generous TTL as the nudge sweep — it's the other mass-SMS job.
+  // Daily win-back ("Growth Agent") sweep at 11:00 shop-local — one hour AFTER
+  // that shop's nudge sweep so the two blasts don't overlap (they share the
+  // per-shop daily cap; running nudge first lets win-back see the remaining
+  // budget). Hourly tick, same per-shop local-hour selection as the nudge.
+  // Opt-in per shop (winbackTextsEnabled), respects DRY_RUN + caps + sending
+  // hours. Same generous TTL as the nudge sweep — it's the other mass-SMS job.
   {
-    cronExpr: "0 11 * * *",
+    cronExpr: "0 * * * *",
     name: "winback-sweep",
     ttlMs: 30 * MINUTE,
-    run: () => runWinbackSweep(),
+    run: () => runWinbackSweep({ localHour: WINBACK_SEND_LOCAL_HOUR }),
     failMsg: "winback sweep failed",
   },
   // Referral grants that committed but never paid. Hourly, off the top of the

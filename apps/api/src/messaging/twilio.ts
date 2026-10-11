@@ -1,6 +1,7 @@
 import twilio from "twilio";
 import { apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
+import { maskPhone } from "../logRedaction.js";
 import { platformSwitch } from "../services/platformSwitches.js";
 import type { MessageProvider, SendMessageInput, SendMessageResult } from "./provider.js";
 
@@ -36,7 +37,7 @@ export class TwilioMessageProvider implements MessageProvider {
 export class NoopMessageProvider implements MessageProvider {
   readonly channel = "SMS" as const;
   async send(input: SendMessageInput): Promise<SendMessageResult> {
-    logger.info({ to: input.to }, "[dry-run] suppressed SMS send");
+    logger.info({ to: maskPhone(input.to) }, "[dry-run] suppressed SMS send");
     return { sid: "DRYRUN", status: "dry_run" };
   }
 }
@@ -105,7 +106,7 @@ export class SmsDisabledError extends Error {
 export class SmsDisabledProvider implements MessageProvider {
   readonly channel = "SMS" as const;
   async send(input: SendMessageInput): Promise<SendMessageResult> {
-    logger.warn({ to: input.to }, "SMS send refused: texting is turned off");
+    logger.warn({ to: maskPhone(input.to) }, "SMS send refused: texting is turned off");
     throw new SmsDisabledError();
   }
 }

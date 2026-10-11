@@ -290,6 +290,8 @@ describe("reschedule resets check-in + push-reminder state", () => {
         runningLate: true,
         reminder24hPushSentAt: new Date(),
         reminder2hPushSentAt: new Date(),
+        // The barber's "next up" alert already went out for the old time.
+        barberNextUpSentAt: new Date(),
       },
       select: { id: true },
     });
@@ -322,6 +324,7 @@ describe("reschedule resets check-in + push-reminder state", () => {
         runningLate: true,
         reminder24hPushSentAt: true,
         reminder2hPushSentAt: true,
+        barberNextUpSentAt: true,
       },
     });
     expect(row).toEqual({
@@ -331,6 +334,8 @@ describe("reschedule resets check-in + push-reminder state", () => {
       runningLate: false,
       reminder24hPushSentAt: null,
       reminder2hPushSentAt: null,
+      // Re-armed: the barber is told "next up" again for the NEW time.
+      barberNextUpSentAt: null,
     });
   });
 });

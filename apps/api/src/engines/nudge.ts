@@ -1,4 +1,4 @@
-import { NUDGE, apiEnv } from "@chairback/config";
+import { NUDGE, apiEnv, hourInTimeZone } from "@chairback/config";
 import { messageBookingUrl } from "@chairback/config/bookingLinks";
 import { forShop, prisma, runWithShop, type Shop } from "@chairback/db";
 import { logger } from "../logger.js";
@@ -15,9 +15,23 @@ import { clientsWithUpcomingBooking } from "./upcomingBooking.js";
 const env = apiEnv();
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
+/**
+ * The shop-local hour the daily nudge sweep runs at. The cron ticks hourly and
+ * each shop is swept on the one tick where its OWN clock reads this hour - so
+ * a shop in Los Angeles and one in New York both hear at 10 AM, not at
+ * whatever one UTC instant made of them.
+ */
+export const NUDGE_SEND_LOCAL_HOUR = 10;
+
 export interface SweepOptions {
   now?: Date;
   dryRun?: boolean;
+  /**
+   * Sweep only the shops whose local hour at `now` is this (the scheduler's
+   * hourly tick passes NUDGE_SEND_LOCAL_HOUR). Omitted = every shop, as the
+   * admin route does; the per-shop sending-hours gate still applies.
+   */
+  localHour?: number;
 }
 
 export interface SweepSummary {
@@ -39,6 +53,10 @@ export async function runNudgeSweep(opts: SweepOptions = {}): Promise<SweepSumma
   const shops = await prisma.shop.findMany({ where: { acuity: { isNot: null } } });
   const summaries: SweepSummary[] = [];
   for (const shop of shops) {
+    // The hourly tick: only the shops whose own clock reads the send hour.
+    if (opts.localHour !== undefined && hourInTimeZone(now, shop.timezone) !== opts.localHour) {
+      continue;
+    }
     // Trial over + no subscription, or a plan without texts (Starter) = no
     // scheduled sends (SMS costs real money and is a Premium feature).
     if (!hasPremiumAccess(shop, { now })) {
@@ -142,19 +160,30 @@ async function doSweepShop(
   const dryRun = opts.dryRun ?? env.DRY_RUN;
   const db = forShop(shop.id);
 
-  // TCPA quiet hours gate the SMS leg ONLY: never send real SMS outside 8am-9pm
-  // shop-local time. Web Push is a silent-capable notification, not a call/text,
-  // so it is NOT bound by TCPA quiet hours and still fires (this is also what
-  // lets a push-only client be rebooked at any hour). A dry-run preview is exempt
-  // - it sends nothing and the barber may preview at any hour. Previously this
-  // short-circuited the WHOLE sweep; now it only suppresses the SMS fallback.
+  // 🔴 SHOP-LOCAL SENDING HOURS BOUND BOTH LEGS of a real run, push included.
+  // The push leg used to be exempt ("silent-capable, not a text") - but a
+  // "time for a fresh cut" notification buzzing a phone at 6 AM is exactly
+  // the intrusion quiet hours exist to prevent, and with the cron on UTC the
+  // daily sweep landed at 3-7 AM for every US shop: the SMS leg never sent at
+  // all, and every nudge that went out was a pre-dawn push. Same 8am-9pm
+  // window as texts (one rule, inQuietHours). The scheduler now runs each
+  // shop at NUDGE_SEND_LOCAL_HOUR; this gate also covers the manual and
+  // admin runs. A dry-run preview sends nothing and may run at any hour.
+  if (!dryRun && inQuietHours(shop.timezone, now)) {
+    logger.info(
+      { shopId: shop.id, reason: "quiet_hours" },
+      "sweep: outside shop-local sending hours, nothing sent",
+    );
+    return { shopId: shop.id, considered: 0, sent: 0, skipped: 0, failed: 0, dryRun };
+  }
+
   // Texting switched off blocks the SMS leg in the PREVIEW too, so a barber
   // is never asked "Send 12 texts now?" about texts that cannot go out.
   const textsOff = !smsEnabled();
-  const smsBlocked = textsOff || (!dryRun && inQuietHours(shop.timezone, now));
+  const smsBlocked = textsOff;
   if (smsBlocked) {
     logger.info(
-      { shopId: shop.id, reason: textsOff ? "texting_off" : "quiet_hours" },
+      { shopId: shop.id, reason: "texting_off" },
       "sweep: SMS leg suppressed, push still active",
     );
   }
@@ -285,8 +314,8 @@ async function doSweepShop(
       }
     }
 
-    // SMS fallback. Quiet hours suppress it (push above already ran); the daily
-    // cap bounds it. A push-only client (no SMS consent/phone) fails isNudgeEligible
+    // SMS fallback. Texting switched off suppresses it (push above already
+    // ran); the daily cap bounds it. A push-only client (no SMS consent/phone) fails isNudgeEligible
     // here and is simply skipped - they were reached by push or not at all.
     // NOTE: `continue` (not `break`) on an exhausted budget - the SMS cap must not
     // stop the loop, or later push-reachable candidates would never get their
