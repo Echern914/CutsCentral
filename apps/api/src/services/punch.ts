@@ -1,4 +1,4 @@
-import { prisma, runWithShop, type Prisma, type PunchLedger } from "@chairback/db";
+import { Prisma, prisma, runWithShop, type PunchLedger } from "@chairback/db";
 
 /**
  * Punch ledger writes. Earning is idempotent via PunchLedger.visitId @unique:
@@ -442,10 +442,14 @@ export type RedeemResult =
       reward: { id: string; name: string; punchCost: number };
       cardTypeId: string | null;
       cardName: string | null;
+      /** Answered from an earlier try of the same tap: nothing was written now. */
+      replayed?: true;
     }
   | { ok: false; reason: "reward_not_found" }
   | { ok: false; reason: "rewards_disabled" }
-  | { ok: false; reason: "insufficient_punches"; balance: number; required: number };
+  | { ok: false; reason: "insufficient_punches"; balance: number; required: number }
+  /** The tap's id is already a different client's or reward's redemption. */
+  | { ok: false; reason: "request_reused" };
 
 /**
  * Redeem a specific menu reward from the dashboard. Atomic: the reward lookup
@@ -455,6 +459,15 @@ export type RedeemResult =
  *
  * The balance checked (and deducted from) is the reward's OWN card: a client
  * with 8 punches on the default card can't spend them on a VIP-card reward.
+ *
+ * 🔴 ONE TAP, ONE REDEMPTION. The row lock stops two taps racing; it cannot
+ * tell a RETRY from a second redemption. A Redeem whose answer was lost (no
+ * signal, a gateway 502 after the write) and was tapped again redeemed a
+ * second reward for a client holding punches for two. `requestId` is minted
+ * once per tap and re-sent unchanged on a retry: inside the same lock, a
+ * request already written is answered from its row, and the (shopId,
+ * requestId) unique refuses a second one outright. Without one (an older
+ * screen) a redeem behaves exactly as before.
  */
 export async function redeemReward(
   shopId: string,
@@ -462,6 +475,7 @@ export async function redeemReward(
   rewardId: string,
   /** Who redeemed it (the dashboard passes the signed-in staff member). */
   audit: LedgerAudit = SYSTEM,
+  opts: { requestId?: string } = {},
 ): Promise<RedeemResult> {
   // Same master gate as earning: no redemptions while rewards are off (the
   // balance is untouched either way - redeeming is just refused).
@@ -471,8 +485,39 @@ export async function redeemReward(
   });
   if (!gate?.rewardsEnabled) return { ok: false, reason: "rewards_disabled" as const };
 
-  return runWithShop(shopId, async (tx) => {
+  const requestId = opts.requestId;
+  return runWithShop<RedeemResult>(shopId, async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
+
+    if (requestId) {
+      // A retry of this same tap waits on the lock above, then finds this.
+      const prior = await tx.punchLedger.findUnique({
+        where: { shopId_requestId: { shopId, requestId } },
+        include: { cardType: { select: { name: true } } },
+      });
+      if (prior) {
+        // The same id for another client or reward is never a retry, and is
+        // never served as one. (A reward deleted since leaves rewardId null.)
+        if (prior.clientId !== clientId || (prior.rewardId !== null && prior.rewardId !== rewardId)) {
+          return { ok: false as const, reason: "request_reused" as const };
+        }
+        // Already redeemed by the first try: report it, write nothing. The
+        // balance is the card's as it stands now.
+        const agg = await tx.punchLedger.aggregate({
+          where: { shopId, clientId, cardTypeId: prior.cardTypeId },
+          _sum: { punchesEarned: true, punchesRedeemed: true },
+        });
+        return {
+          ok: true as const,
+          newBalance: (agg._sum.punchesEarned ?? 0) - (agg._sum.punchesRedeemed ?? 0),
+          reward: { id: rewardId, name: prior.note ?? "Reward", punchCost: prior.punchesRedeemed },
+          cardTypeId: prior.cardTypeId,
+          cardName: prior.cardType?.name ?? null,
+          replayed: true as const,
+        };
+      }
+    }
+
     // findFirst with shopId (not findUnique by id) so a foreign reward id 404s.
     const reward = await tx.reward.findFirst({
       where: { id: rewardId, shopId },
@@ -510,6 +555,7 @@ export async function redeemReward(
         note: reward.name,
         actorUserId: audit.actorUserId,
         reason: audit.reason,
+        requestId: requestId ?? null,
       },
     });
     return {
@@ -519,6 +565,17 @@ export async function redeemReward(
       cardTypeId: reward.cardTypeId,
       cardName: reward.cardType?.name ?? null,
     };
+  }).catch((err: unknown): RedeemResult => {
+    // Two DIFFERENT clients sent the same id at once (the lock above is per
+    // client): the unique let one write; the other is a reuse, not a retry.
+    if (
+      requestId &&
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      return { ok: false, reason: "request_reused" };
+    }
+    throw err;
   });
 }
 

@@ -2353,6 +2353,14 @@ model PunchLedger {
   correctionOf   PunchLedger?  @relation("LedgerCorrection", fields: [correctionOfId], references: [id], onDelete: SetNull)
   correctedBy    PunchLedger[] @relation("LedgerCorrection")
 
+  // 🔴 ONE TAP, ONE REDEMPTION. The dashboard mints this once per Redeem and
+  // re-sends the SAME value when it retries after a lost answer, so the retry
+  // finds this row instead of redeeming a second reward. NULL for every other
+  // entry and for older screens (Postgres allows many NULLs under the unique).
+  // Frozen by the append-only trigger like the amounts.
+  requestId      String?
+
+  @@unique([shopId, requestId])
   @@index([shopId, clientId])
   @@index([rewardId])
   @@index([cardTypeId])

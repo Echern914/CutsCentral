@@ -1659,10 +1659,19 @@ export async function markArrivedAction(id: string): Promise<Result> {
 export async function applyRewardAction(
   clientId: string,
   rewardId: string,
-): Promise<Result> {
-  return done(
-    await apiSend("POST", `/api/dashboard/redeem/${clientId}`, { rewardId }),
-  );
+  /** One per tap, re-sent unchanged on a retry: the API redeems it once. */
+  requestId?: string,
+): Promise<Result & { answered: boolean }> {
+  const path = `/api/dashboard/redeem/${clientId}`;
+  let res = await apiSend("POST", path, { rewardId, ...(requestId ? { requestId } : {}) });
+  // An API from before requestId (mid-deploy) refused it and redeemed
+  // nothing: redeem the way this screen used to (lib/apiCompat.ts).
+  if (requestId && refusedOnlyNewKeys(res, ["requestId"])) {
+    res = await apiSend("POST", path, { rewardId });
+  }
+  // No answer or a 5xx can follow a redemption the API already wrote: the
+  // outcome is unknown, not refused (lib/apiAnswered.ts).
+  return { ...done(res), answered: apiAnswered(res.status) };
 }
 
 //  Targeted slots (one-off special-priced bookable slots)
