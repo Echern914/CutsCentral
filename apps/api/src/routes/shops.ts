@@ -1508,7 +1508,11 @@ publicPageRouter.post("/:slug/waitlist", waitlistLimiter, async (req, res) => {
       //
       // 🔴 tierRank is READ HERE AND FROZEN. Reaching Gold tomorrow does not
       // move this row up today's queue; it counts the next time they join.
-      const { clientId, tierRank } = await resolveWaitlistClient(tx, shop.id, phone);
+      //
+      // 🔴 AND A TYPED NUMBER CARRIES NO TIER. This form is unauthenticated:
+      // anyone can type a Gold client's number. It still links (that grants
+      // nothing); the rank is the no-standing one.
+      const { clientId, tierRank } = await resolveWaitlistClient(tx, shop.id, phone, { contact: "typed" });
       const entry = await tx.waitlistEntry.create({
         data: {
           shopId: shop.id,

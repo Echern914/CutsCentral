@@ -108,6 +108,37 @@ export async function liveSavedCardFor(shopId: string, clientId: string): Promis
 }
 
 /**
+ * The live saved card ONE appointment's manage link may show and take off: the
+ * card this booking saved, or the one it was booked with (its card row points
+ * at it - which a shop's own booking for the client also does, see
+ * attachClientSavedCard). Null for anything else.
+ *
+ * 🔴 NOT "the client's card". The booking page finds its client by the TYPED
+ * phone, so anyone who books with a client's number lands on the client's
+ * record and is sent a manage link of their own. The record proves nothing
+ * about who holds that link; the booking it belongs to does. Possession again,
+ * never a phone number.
+ */
+export async function savedCardForAppointment(
+  shopId: string,
+  appointmentId: string,
+): Promise<SavedCardView | null> {
+  const card = await runWithShop(shopId, (tx) =>
+    tx.savedCard.findFirst({
+      where: {
+        shopId,
+        removedAt: null,
+        detachedAt: null,
+        OR: [{ sourceAppointmentId: appointmentId }, { cardsOnFile: { some: { appointmentId } } }],
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, brand: true, last4: true, expMonth: true, expYear: true, createdAt: true },
+    }),
+  );
+  return card ? view(card) : null;
+}
+
+/**
  * The booking's card was saved and the client ticked "save it for my future
  * appointments": keep it. Called once the hold has become a booking.
  *
@@ -373,16 +404,20 @@ export async function attachClientSavedCard(params: {
  * The client takes the card off the shop's file. It is never offered again;
  * appointments already booked with it keep their protection until they are
  * done, and the method is detached when the last of them lets go.
+ *
+ * ONE card, named by id - the one the caller proved a right to (the manage
+ * page: savedCardForAppointment). Never "every card this client has": the
+ * client record is reached by a typed phone number.
  */
 export async function removeSavedCard(params: {
   shopId: string;
-  clientId: string;
+  savedCardId: string;
   now?: Date;
 }): Promise<{ removed: number }> {
   const now = params.now ?? new Date();
   const ids = await runWithShop(params.shopId, async (tx) => {
     const live = await tx.savedCard.findMany({
-      where: { shopId: params.shopId, clientId: params.clientId, removedAt: null },
+      where: { id: params.savedCardId, shopId: params.shopId, removedAt: null },
       select: { id: true },
     });
     if (live.length === 0) return [];
