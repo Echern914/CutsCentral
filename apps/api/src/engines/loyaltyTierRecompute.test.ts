@@ -221,8 +221,15 @@ describe("🔴 a tier a visit stamps while the recompute counts is not overwritt
     const shop = await prisma.shop.create({
       data: { ownerId, name: "Mid Count", slug: `tiers-mid-${randomToken(5)}`, webhookSecret: randomToken() },
     });
+    // Four visits, stamped SILVER under the OLD rules (Silver at 2, Gold at 5).
     const client = await prisma.client.create({
-      data: { shopId: shop.id, acuityClientKey: `k-${randomToken(8)}`, magicToken: randomToken(), firstName: "Five" },
+      data: {
+        shopId: shop.id,
+        acuityClientKey: `k-${randomToken(8)}`,
+        magicToken: randomToken(),
+        firstName: "Four",
+        loyaltyTier: "SILVER",
+      },
     });
     const visit = (i: number) => ({
       shopId: shop.id,
@@ -231,28 +238,30 @@ describe("🔴 a tier a visit stamps while the recompute counts is not overwritt
       scheduledAt: new Date(Date.UTC(2026, 0, 1) + i * 7 * 86_400_000),
       status: "COMPLETED" as const,
     });
-    for (let i = 0; i < 5; i++) await prisma.visit.create({ data: visit(i) });
-    // Five visits, stamped with no tier (written under older, harder rules).
-    const rules = rulesFromThresholds({ BRONZE: 1, SILVER: 6, GOLD: 12 });
+    for (let i = 0; i < 4; i++) await prisma.visit.create({ data: visit(i) });
+    // The NEW rules this recompute applies.
+    const rules = rulesFromThresholds({ BRONZE: 1, SILVER: 5, GOLD: 12 });
 
-    // The sixth visit completing, open and uncommitted: its own stamp has
-    // written SILVER (6 visits) and holds the client's row.
-    const barrier = await holdSixthVisit(shop.id, client.id, visit(5));
+    // The fifth visit completing, open and uncommitted: its own stamp, worked
+    // out under the old rules, has written GOLD and holds the client's row.
+    const barrier = await holdFifthVisit(shop.id, client.id, visit(4));
 
-    // The recompute counts five (the sixth is not committed), wants BRONZE,
+    // The recompute counts four (the fifth is not committed), wants BRONZE,
     // and queues at its write behind the visit's stamp.
     const { results, settledEarly } = await raceBehindBarrier(barrier, [
       () => recomputeLoyaltyTiers(shop.id, rules),
     ]);
     expect(settledEarly).toBe(0);
     expect(winners(results)).toHaveLength(1);
-    // Six visits under these rules: SILVER. Not the BRONZE counted from five.
+    // Five visits under the new rules: SILVER. Not the BRONZE counted from
+    // four (the stale write), and not the GOLD the old rules stamped (a skip
+    // with no fresh look).
     expect(await tierOf(client.id)).toBe("SILVER");
   });
 });
 
 /** A visit's completion and its tier stamp, held open until released. */
-async function holdSixthVisit(
+async function holdFifthVisit(
   shopId: string,
   clientId: string,
   data: Parameters<typeof prisma.visit.create>[0]["data"],
@@ -269,7 +278,7 @@ async function holdSixthVisit(
     .$transaction(
       async (tx) => {
         await tx.visit.create({ data });
-        await tx.client.update({ where: { id: clientId, shopId }, data: { loyaltyTier: "SILVER" } });
+        await tx.client.update({ where: { id: clientId, shopId }, data: { loyaltyTier: "GOLD" } });
         acquired();
         await gate;
       },
