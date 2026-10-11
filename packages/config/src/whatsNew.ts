@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-10-moved-bookings-keep-length",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "Moved bookings keep their full length",
+    body:
+      "A booking with an add-on, or one you lengthened, now keeps all its time when you or the client move it. " +
+      "Booking someone new on a number you already have no longer renames that client. And Mark no-show can't " +
+      "overwrite a client's own cancel or charge them for it.",
+  },
+  {
     id: "2026-10-10-privacy-terms-updated",
     date: "2026-10-10",
     kind: "feature",
