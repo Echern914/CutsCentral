@@ -359,8 +359,16 @@ export async function settleAmbiguousGroups(
       }
 
       // Everything that exists is ACTIVE (or there is nothing, because the
-      // shop's mirroring is off). The chairs are protected: confirm once.
-      const sent = await sendGroupConfirmationOnce(shopId, group.id, now);
+      // shop's mirroring is off). The chairs are protected: confirm once -
+      // unless the party is still a REQUEST. Then the shop's approval is what
+      // confirms it (engines/appointmentGroupApproval.ts); claiming the
+      // once-only marker here would spend it on a party nobody has accepted,
+      // and the approval would find it taken and tell the client nothing.
+      const awaitingShop = await prisma.appointment.count({
+        where: { shopId, groupId: group.id, status: "PENDING", holdExpiresAt: null },
+      });
+      const sent =
+        awaitingShop > 0 ? false : await sendGroupConfirmationOnce(shopId, group.id, now);
       await prisma.appointmentGroup.updateMany({
         where: { id: group.id, shopId },
         data: { mirrorPendingSince: null },

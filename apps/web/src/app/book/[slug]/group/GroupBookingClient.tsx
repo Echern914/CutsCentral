@@ -47,7 +47,7 @@ interface PendingGroup {
   slug: string;
   groupId: string;
   manageToken: string;
-  kind: "booked" | "confirming";
+  kind: "booked" | "confirming" | "requested";
   /** When it was saved. Reload protection only needs the confirming window. */
   savedAt?: number;
 }
@@ -137,11 +137,12 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
   useEffect(() => {
     const pending = readPending(slug);
     if (!pending) return;
-    setOutcome(
-      pending.kind === "confirming"
-        ? { kind: "confirming", groupId: pending.groupId, manageToken: pending.manageToken }
-        : { kind: "booked", groupId: pending.groupId, manageToken: pending.manageToken },
-    );
+    setOutcome({
+      kind:
+        pending.kind === "confirming" || pending.kind === "requested" ? pending.kind : "booked",
+      groupId: pending.groupId,
+      manageToken: pending.manageToken,
+    });
     setStep("done");
   }, [slug]);
 
@@ -254,7 +255,7 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
     });
     setSubmitting(false);
 
-    if (res.kind === "booked" || res.kind === "confirming") {
+    if (res.kind === "booked" || res.kind === "confirming" || res.kind === "requested") {
       writePending({
         slug,
         groupId: res.groupId,
@@ -313,13 +314,35 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
     );
   }
 
-  if (step === "done" && outcome && (outcome.kind === "booked" || outcome.kind === "confirming")) {
+  if (
+    step === "done" &&
+    outcome &&
+    (outcome.kind === "booked" || outcome.kind === "confirming" || outcome.kind === "requested")
+  ) {
+    const requested = outcome.kind === "requested";
     return (
-      <Shell title={outcome.kind === "booked" ? "You're booked" : "Almost there"}>
+      <Shell
+        title={
+          outcome.kind === "booked"
+            ? "You're booked"
+            : requested
+              ? "Request sent"
+              : "Almost there"
+        }
+      >
         {outcome.kind === "confirming" ? (
           <p className="text-muted">
             Your appointments are held and we&apos;re confirming with the shop&apos;s calendar.
             You don&apos;t need to do anything - this page is safe to close.
+          </p>
+        ) : requested ? (
+          // 🔴 NOT "BOOKED". The shop approves every online booking, and has
+          // not said yes to this one - the same words a single request gets.
+          <p className="text-muted">
+            {data.shop.name} will review your request and confirm the whole group.
+            {email.trim()
+              ? " We'll email you as soon as it's approved."
+              : " Save this page's link to check the status."}
           </p>
         ) : (
           <p className="text-muted">
@@ -341,6 +364,7 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
         <div className="mt-6 rounded-2xl border border-subtle p-4">
           <p className="font-semibold text-offwhite">What happens next</p>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
+            {requested && <li>{data.shop.name} confirms your times, or lets you know.</li>}
             <li>Arrive a few minutes before the first appointment.</li>
             <li>Everyone is seen one after the other, in the order above.</li>
             <li>Pay at the shop.</li>
@@ -351,7 +375,7 @@ export function GroupBookingClient({ data }: { data: BookShopData }) {
           href={`/book/group/${outcome.manageToken}`}
           className="mt-5 inline-block rounded-xl bg-gold px-5 py-2.5 font-semibold text-charcoal-900"
         >
-          View or change this group
+          {requested ? "View this request" : "View or change this group"}
         </Link>
         <button
           type="button"

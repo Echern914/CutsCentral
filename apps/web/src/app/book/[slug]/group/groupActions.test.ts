@@ -38,4 +38,26 @@ describe("groupCreateAction", () => {
     apiPublicSend.mockResolvedValue({ ok: false, status: 500, data: null, error: "internal" });
     expect((await groupCreateAction("cherncuts", input)).kind).toBe("error");
   });
+
+  it("🔴 a party sent as a REQUEST (the shop approves bookings) is never 'booked'", async () => {
+    apiPublicSend.mockResolvedValue({
+      ok: true,
+      status: 201,
+      data: { groupId: "grp_1", manageToken: "tok_1", pending: true },
+    });
+    expect(await groupCreateAction("cherncuts", input)).toEqual({
+      kind: "requested",
+      groupId: "grp_1",
+      manageToken: "tok_1",
+    });
+  });
+
+  it("an ordinary party is booked", async () => {
+    apiPublicSend.mockResolvedValue({
+      ok: true,
+      status: 201,
+      data: { groupId: "grp_1", manageToken: "tok_1", pending: false },
+    });
+    expect((await groupCreateAction("cherncuts", input)).kind).toBe("booked");
+  });
 });
