@@ -65,3 +65,18 @@ export function customerSessionFromToken(token: string | undefined): CustomerSes
   if (!payload) return null;
   return { accountId: payload.userId, version: payload.v ?? 0, demo: payload.demo === true };
 }
+
+/**
+ * The account a customer token was SIGNED for, live or not - expired, or from
+ * before a tokenVersion bump. This authenticates NOTHING. Its one use is
+ * letting a phone whose session has died take its own push registration off
+ * that account (routes/customerAuth.ts, POST /devices/release): the signature
+ * proves the phone once held that account's session, and the only thing it
+ * can do with that is stop hearing from it.
+ */
+export function customerAccountFromSignedToken(token: string | undefined): string | null {
+  // verifySession's only clock check is `exp <= now`, so "now = 0" skips the
+  // expiry and keeps the signature and session-shape checks.
+  const payload = verifySession(token, customerKey(), 0);
+  return payload ? payload.userId : null;
+}
