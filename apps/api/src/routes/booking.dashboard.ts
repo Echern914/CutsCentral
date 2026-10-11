@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import {
   businessType,
+  cancellationTermsSnapshot,
   normalizeServiceName,
   paidBookingTakesPrice,
   randomToken,
@@ -3424,10 +3425,19 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     return;
   }
   const shopId = req.shop!.id;
-  // Read shop as owner (RLS: Shop has no policy) for bookingMode/timezone/bounds.
+  // Read shop as owner (RLS: Shop has no policy) for bookingMode/timezone/bounds,
+  // and the cancellation terms the booking is made on (snapshotted below).
   const shop = await prisma.shop.findUnique({
     where: { id: shopId },
-    select: { id: true, bookingMode: true, timezone: true, bookingBufferMin: true },
+    select: {
+      id: true,
+      bookingMode: true,
+      timezone: true,
+      bookingBufferMin: true,
+      cancelWindowHours: true,
+      cancelFeeBps: true,
+      chargeCardOnFileFees: true,
+    },
   });
   if (!shop) {
     res.status(404).json({ error: "not_found" });
@@ -3688,6 +3698,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         dateOverrides: service.dateOverrides,
         timezone: shop.timezone,
         bookingBufferMin: shop.bookingBufferMin,
+        cancellationTerms: shop,
         // customTime bypasses the per-occurrence availability gate (barber force).
         checkAvailability: !d.customTime,
         // The barber's own repeat: never cut short by the ONLINE horizon.
@@ -3843,6 +3854,8 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
           notes: d.note || null,
           manageToken: randomToken(),
           bookedVia: targeted ? "targeted_slot" : undefined,
+          // The cancellation terms this booking is made on (config/shopPolicy).
+          ...cancellationTermsSnapshot(shop),
           ...(d.operationId ? { operationId: d.operationId } : {}),
           // A deliberate double is recorded as one: who confirmed it, and when.
           ...(guard.overlapsCrossed
@@ -6910,7 +6923,13 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
   // role, so this select returns null inside the tenant transaction.
   const shop = await prisma.shop.findUnique({
     where: { id: shopId },
-    select: { bookingBufferMin: true, timezone: true },
+    select: {
+      bookingBufferMin: true,
+      timezone: true,
+      cancelWindowHours: true,
+      cancelFeeBps: true,
+      chargeCardOnFileFees: true,
+    },
   });
   if (!shop) {
     res.status(404).json({ error: "not_found" });
@@ -7112,6 +7131,9 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
         // it happened, not when somebody remembered it.
         paidAt: walkInStart,
         manageToken: randomToken(),
+        // Every appointment carries the terms it was made on - a receipt too,
+        // should it ever be corrected into a cancellation or a no-show.
+        ...cancellationTermsSnapshot(shop),
         // The partial unique index on (shopId, operationId) is what actually
         // enforces this; the read above is the fast path, this is the wall.
         ...(parsed.data.operationId ? { operationId: parsed.data.operationId } : {}),

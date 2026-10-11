@@ -20,7 +20,7 @@ import { ClientNoteBlock } from "../../ClientNoteBlock";
 import { FinishCheckout } from "./FinishCheckout";
 import { AddCard } from "./AddCard";
 import { TipCard } from "./TipCard";
-import { keptOnCancelQuestion } from "../../[slug]/depositTerms";
+import { keptOnCancelQuestion, lateCancelChargeQuestion } from "../../[slug]/depositTerms";
 import {
   cancelBookingAction,
   checkInAction,
@@ -105,13 +105,22 @@ export function ManageClient({
   }, []);
   const until = untilLabel(new Date(movedTo ?? data.startsAt), now, data.shop.timezone);
 
-  // A non-refundable deposit: the first tap asks, so nobody loses money to a
-  // stray tap or without being told. Null = not asking.
+  // A non-refundable deposit, or a kept card a cancel would now charge: the
+  // first tap asks, so nobody loses money to a stray tap or without being
+  // told. Null = not asking.
   const [confirmKept, setConfirmKept] = useState<"this" | "future" | null>(null);
+  // The card charge applies from the moment the window opens - the server's
+  // `inside` (its clock, at render) or this page's clock, which ticks while the
+  // page stays open. The figure is the server's either way.
+  const lateCancelFee =
+    data.lateCancelFee && (data.lateCancelFee.inside || now >= new Date(data.lateCancelFee.from))
+      ? data.lateCancelFee
+      : null;
+  const cancelCostsMoney = Boolean(data.nonRefundable) || lateCancelFee !== null;
 
   function cancel(scope: "this" | "future") {
     setError(null);
-    if (data.nonRefundable && confirmKept !== scope) {
+    if (cancelCostsMoney && confirmKept !== scope) {
       setConfirmKept(scope);
       return;
     }
@@ -318,14 +327,18 @@ export function ManageClient({
                 To move this appointment, please contact the shop.
               </p>
             )}
-            {data.canCancel && !demoTour && data.nonRefundable && confirmKept !== null && (
+            {data.canCancel && !demoTour && cancelCostsMoney && confirmKept !== null && (
               <div
                 role="alertdialog"
                 aria-labelledby="kept-on-cancel"
                 className="flex flex-col gap-2 rounded-xl border border-red-500/40 bg-red-500/5 p-3"
               >
                 <p id="kept-on-cancel" className="text-sm text-offwhite">
-                  {keptOnCancelQuestion(data.nonRefundable.amountCents)}
+                  {data.nonRefundable
+                    ? keptOnCancelQuestion(data.nonRefundable.amountCents)
+                    : lateCancelFee
+                      ? lateCancelChargeQuestion(lateCancelFee)
+                      : null}
                 </p>
                 <div className="grid grid-cols-2 gap-2">
                   <button

@@ -12,7 +12,8 @@ import Link from "next/link";
 import { DEMO } from "@chairback/config/demo";
 import { serviceColorHex } from "@chairback/config/constants";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
-import { zonedMinutesOfDay } from "@chairback/config/time";
+import { effectivePriceAt } from "@chairback/config/servicePricing";
+import { chargeAtBookingCents } from "@chairback/config/shopPolicy";
 import { lastNameHasLetter } from "@chairback/config/clientIdentity";
 import { addOnOffersService } from "@chairback/config/addOns";
 import {
@@ -1085,7 +1086,7 @@ export function BookingClient({
           <span className="flex items-baseline justify-between gap-3">
             <span className="text-sm font-medium">{svc.name}</span>
             {svc.price !== null && (
-              <span className="shrink-0 text-sm text-muted">${svc.price}</span>
+              <span className="shrink-0 text-sm text-muted">{formatPrice(svc.price)}</span>
             )}
           </span>
           <span className="mt-0.5 block text-xs text-muted">{svc.durationMin} min</span>
@@ -1154,7 +1155,7 @@ export function BookingClient({
                   {timeFmt.format(new Date(s.startsAt))}
                   {s.targeted && (
                     <span className="ml-1 opacity-80">
-                      · ${s.targeted.price}
+                      · {formatPrice(s.targeted.price)}
                       {s.targeted.label ? ` · ${s.targeted.label}` : ""}
                     </span>
                   )}
@@ -1162,7 +1163,7 @@ export function BookingClient({
                       these only when they differ from the day-level card). */}
                   {!s.targeted && (s.price !== undefined || s.durationMin !== undefined) && (
                     <span className="ml-1 opacity-80">
-                      {s.price !== undefined && s.price !== null ? ` · $${s.price}` : ""}
+                      {s.price !== undefined && s.price !== null ? ` · ${formatPrice(s.price)}` : ""}
                       {s.durationMin !== undefined ? ` · ${s.durationMin} min` : ""}
                     </span>
                   )}
@@ -2049,48 +2050,25 @@ export function BookingClient({
     ? (data.staff.find((s) => s.id === pickedStaffId)?.name ?? null)
     : null;
 
-  /** Shop-tz weekday (0=Sun..6=Sat) for an ISO instant, matching the API. */
-  function weekdayInTz(iso: string): number {
-    const wd = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(
-      new Date(iso),
-    );
-    return { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[wd] ?? 0;
-  }
-
   /**
-   * The effective price for a service at a chosen SLOT instant, matching the
-   * API's layer order: the time-of-day window covering the slot's shop-local
-   * start minute, else that date's weekday override, else the base price.
+   * The effective price for a service at a chosen SLOT instant.
+   *
+   * 🔴 THE SERVER'S OWN RESOLVER (config/servicePricing.ts), never a copy of
+   * its layer order: holiday date > time-of-day window > weekday > base, in the
+   * shop's timezone. The page used to carry its own copy, which skipped the
+   * holiday layer - a $45 cut with $75 on Christmas Eve was shown at $45 and
+   * booked at $75. Whatever this returns is what priceAtBooking will say.
    */
-  function priceForSlot(
-    svc: {
-      price: number | null;
-      priceOverrides: Record<string, number>;
-      timeOverrides: {
-        s: number;
-        e: number;
-        /** Weekdays the window repeats on; [] = every day. */
-        days?: number[];
-        price: number | null;
-      }[];
-    },
-    iso: string,
-  ): number | null {
-    const minute = zonedMinutesOfDay(new Date(iso), tz);
-    const weekday = weekdayInTz(iso);
-    // A window matches on TIME **and** DAY. Matching on the minute alone would
-    // quote a Sunday-only evening rate on every night of the week - and this
-    // number is what the customer is shown before they book.
-    const win = svc.timeOverrides.find(
-      (w) =>
-        minute >= w.s &&
-        minute < w.e &&
-        (!w.days || w.days.length === 0 || w.days.includes(weekday)),
-    );
-    if (win && win.price !== null) return win.price;
-    const wd = String(weekday);
-    if (Object.prototype.hasOwnProperty.call(svc.priceOverrides, wd)) return svc.priceOverrides[wd]!;
-    return svc.price;
+  function priceForSlot(svc: BookShopData["services"][number], iso: string): number | null {
+    return effectivePriceAt(svc.price, {
+      at: new Date(iso),
+      timezone: tz,
+      weekdayOverrides: svc.priceOverrides,
+      timeWindows: svc.timeOverrides,
+      // Optional only for an API older than this field: it then prices as
+      // before rather than failing.
+      dateOverrides: svc.dateOverrides ?? null,
+    });
   }
 
   /** Menu label: "$45", "from $45", or "$45-$55" depending on the range. */
@@ -2113,6 +2091,25 @@ export function BookingClient({
     .filter((a) => addOnIds.includes(a.id))
     .reduce((sum, a) => sum + (a.price ?? 0), 0);
   const grandTotal = selectedPrice === null ? null : selectedPrice + addOnsTotal;
+  /**
+   * What Confirm CHARGES, in cents, for a shop that takes a payment at booking
+   * - by the create route's own rule (config/shopPolicy chargeAtBookingCents):
+   * a deposit capped at the price, the whole price when paying ahead, and
+   * nothing at all for an unpriced visit (it is then paid at the shop). The
+   * price it is taken from is the server's too: the slot's price plus add-ons,
+   * the add-ons counting even when the service itself has no price.
+   */
+  const chargeAtConfirmCents =
+    paymentTerms?.collects === "payment" && slot !== null
+      ? chargeAtBookingCents({
+          paymentsMode: paymentTerms.mode,
+          depositAmountCents: paymentTerms.depositAmountCents,
+          priceCents:
+            selectedPrice === null && addOnsTotal === 0
+              ? null
+              : Math.round(((selectedPrice ?? 0) + addOnsTotal) * 100),
+        })
+      : null;
   /**
    * One short line telling the customer whether the price they are looking at
    * already has a tip in it.
@@ -2347,14 +2344,15 @@ export function BookingClient({
           ) : (
             <PaymentStep
               clientSecret={paymentSecret}
+              // The SERVER's figure for this charge, or no figure at all ("Pay &
+              // confirm"). It used to fall back to the service price, which is
+              // not what a deposit, an add-on or a holiday price charges.
               amountLabel={
                 payCharge?.kind === "setup"
                   ? null
                   : payCharge
                     ? formatCents(payCharge.amountCents)
-                    : selectedPrice !== null
-                      ? formatPrice(selectedPrice)
-                      : null
+                    : null
               }
               intent={payCharge?.kind === "setup" ? "setup" : "payment"}
               accent={accent}
@@ -3468,7 +3466,9 @@ export function BookingClient({
                     {selectedService?.name}
                     {addOnIds.length > 0 && ` + ${addOnIds.length} add-on${addOnIds.length > 1 ? "s" : ""}`}
                   </span>
-                  <span className="font-semibold">{formatPrice(grandTotal)}</span>
+                  <span className="font-semibold" data-qa="booking-total">
+                    {formatPrice(grandTotal)}
+                  </span>
                 </div>
               )}
               {/*
@@ -3490,11 +3490,19 @@ export function BookingClient({
                     ? paymentTerms.cardOptional
                       ? "You'll be asked for a card to keep on file - no charge today. You're booked either way."
                       : "You'll save a card to confirm — no charge today."
-                    : paymentTerms.mode === "deposit" && paymentTerms.depositAmountCents
-                      ? `A ${formatCents(paymentTerms.depositAmountCents)} deposit is taken when you book.`
-                      : "Payment is taken when you book."}
-                  {/* Said BEFORE the time is held, not first on the card step. */}
-                  {paymentTerms.collects === "payment" && depositKept && (
+                    : // The figure the create route CHARGES, never the raw
+                      // setting: a $20 deposit on a $15 cut takes $15, and an
+                      // unpriced visit takes nothing and is paid at the shop.
+                      chargeAtConfirmCents === null
+                      ? slot === null
+                        ? "Payment is taken when you book."
+                        : "Nothing is taken when you book - you pay at the shop."
+                      : paymentTerms.mode === "deposit"
+                        ? `A ${formatCents(chargeAtConfirmCents)} deposit is taken when you book.`
+                        : "Payment is taken when you book."}
+                  {/* Said BEFORE the time is held, not first on the card step.
+                      Only about money that is actually taken. */}
+                  {paymentTerms.collects === "payment" && depositKept && chargeAtConfirmCents !== null && (
                     <> {DEPOSIT_KEPT_LINE}</>
                   )}
                 </p>

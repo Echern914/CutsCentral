@@ -1,5 +1,5 @@
 import { Prisma, prisma, runAsOwner } from "@chairback/db";
-import { apiEnv, randomToken } from "@chairback/config";
+import { apiEnv, cancellationTermsSnapshot, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { AUTO_FILL_MIN_WAITLIST_HOLD_MS, AUTO_FILL_STAGE_MS, autoFillDeadline } from "./autoFillRules.js";
 import { ACTIVE_WAITLIST_STATUSES, sha256Hex } from "./waitlistJoin.js";
@@ -30,7 +30,7 @@ import { effectivePriceAt } from "./pricing.js";
 import { deriveAcuityClientKey } from "../acuity/clientKey.js";
 import { connectEnabled } from "../billing/stripe.js";
 import { hasPremiumAccess } from "../billing/entitlements.js";
-import { depositChargeCents, toCents } from "../billing/payments.js";
+import { chargeAtBookingCents, toCents } from "../billing/payments.js";
 import { collectsAtBooking } from "../services/appointmentPaymentHold.js";
 import {
   buildWaitlistOfferCustomerEmail,
@@ -186,10 +186,11 @@ export function claimWouldRequirePayment(
   price: number | null,
 ): boolean {
   const fullCents = toCents(price);
-  const chargeCents =
-    shop.paymentsMode === "deposit"
-      ? depositChargeCents(shop.depositAmountCents, fullCents)
-      : fullCents;
+  const chargeCents = chargeAtBookingCents({
+    paymentsMode: shop.paymentsMode,
+    depositAmountCents: shop.depositAmountCents,
+    priceCents: fullCents,
+  });
   // The public create's own question (services/appointmentPaymentHold.ts),
   // so a claim never books what the booking page would hold for money.
   const collects = collectsAtBooking({
@@ -1087,6 +1088,10 @@ export async function claimOffer(params: {
             stripeConnectAccountId: true,
             depositAmountCents: true,
             requireCardToBook: true,
+            // The cancellation terms the claimed booking is made on.
+            cancelWindowHours: true,
+            cancelFeeBps: true,
+            chargeCardOnFileFees: true,
           },
         }),
         tx.service.findFirst({
@@ -1258,6 +1263,7 @@ export async function claimOffer(params: {
           priceAtBooking: priceAtBooking ?? undefined,
           manageToken,
           bookedVia: "waitlist_offer",
+          ...cancellationTermsSnapshot(shop),
         },
         select: { id: true, manageToken: true },
       });

@@ -258,6 +258,83 @@ describe("a booking left at its card step, from its own link", () => {
   });
 });
 
+describe("🔴 a card kept on file, before a late Cancel", () => {
+  // The server's figure (services/cardOnFileSettle.ts cardOnFileFeeFor) - the
+  // page only decides WHEN to say it, never how much.
+  function fee(over: { inside: boolean; from: string }) {
+    return { cents: 2000, windowHours: 24, card: { brand: "visa", last4: "4242" }, ...over };
+  }
+
+  it("inside the window: asks first with the exact charge and the card - Keep cancels nothing", async () => {
+    vi.useRealTimers();
+    cancelBookingAction.mockClear();
+    const from = new Date(Date.now() - 3_600_000).toISOString();
+    render(<ManageClient token="tok" data={data({ lateCancelFee: fee({ inside: true, from }) })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel appointment" }));
+    expect(cancelBookingAction).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        "It's within 24 hours of your appointment, so cancelling now charges $20 to your card ending 4242. Cancel anyway?",
+      ),
+    ).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep my appointment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep my appointment" }));
+    expect(cancelBookingAction).not.toHaveBeenCalled();
+  });
+
+  it("cancels only on Cancel anyway - for this visit and for the rest of a series alike", async () => {
+    vi.useRealTimers();
+    cancelBookingAction.mockClear();
+    const from = new Date(Date.now() - 3_600_000).toISOString();
+    render(
+      <ManageClient
+        token="tok"
+        data={data({ lateCancelFee: fee({ inside: true, from }), series: { remaining: 2 } })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel this and the 2 later visits" }));
+    expect(cancelBookingAction).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel anyway" }));
+    });
+    expect(cancelBookingAction).toHaveBeenCalledTimes(1);
+    expect(cancelBookingAction).toHaveBeenCalledWith("tok", "future");
+  });
+
+  it("outside the window: cancels on the first tap - nothing is charged yet", async () => {
+    vi.useRealTimers();
+    cancelBookingAction.mockClear();
+    const from = new Date(Date.now() + 48 * 3_600_000).toISOString();
+    render(<ManageClient token="tok" data={data({ lateCancelFee: fee({ inside: false, from }) })} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel appointment" }));
+    });
+    expect(cancelBookingAction).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/cancelling now charges/)).toBeNull();
+  });
+
+  it("🔴 a page left open past the window's start asks - it does not trust the moment it was rendered", async () => {
+    vi.useRealTimers();
+    cancelBookingAction.mockClear();
+    // Rendered outside (server said so), but the window has opened since.
+    const from = new Date(Date.now() - 60_000).toISOString();
+    render(<ManageClient token="tok" data={data({ lateCancelFee: fee({ inside: false, from }) })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel appointment" }));
+    expect(cancelBookingAction).not.toHaveBeenCalled();
+    expect(screen.getByText(/cancelling now charges \$20 to your card ending 4242/)).toBeTruthy();
+  });
+
+  it("the server says inside even when this phone's clock is behind", async () => {
+    vi.useRealTimers();
+    cancelBookingAction.mockClear();
+    const from = new Date(Date.now() + 3_600_000).toISOString();
+    render(<ManageClient token="tok" data={data({ lateCancelFee: fee({ inside: true, from }) })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel appointment" }));
+    expect(cancelBookingAction).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+  });
+});
+
 describe("🔴 a non-refundable deposit, before Cancel", () => {
   it("asks first, naming what stays - and Keep my appointment cancels nothing", async () => {
     vi.useRealTimers();

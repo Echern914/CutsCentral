@@ -43,7 +43,8 @@
     "./serviceVisibility": "./src/serviceVisibility.ts",
     "./addOns": "./src/addOns.ts",
     "./tips": "./src/tips.ts",
-    "./promoPricing": "./src/promoPricing.ts"
+    "./promoPricing": "./src/promoPricing.ts",
+    "./servicePricing": "./src/servicePricing.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -1,4 +1,4 @@
-import { LOYALTY_TIERS, apiEnv, randomToken } from "@chairback/config";
+import { LOYALTY_TIERS, apiEnv, cancellationTermsSnapshot, randomToken } from "@chairback/config";
 import { Prisma, prisma, runAsOwner, runWithShop, type LoyaltyTier } from "@chairback/db";
 import { logger } from "../logger.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
@@ -749,6 +749,10 @@ export async function claimTierOpening(params: {
             stripeConnectAccountId: true,
             depositAmountCents: true,
             requireCardToBook: true,
+            // The cancellation terms the claimed booking is made on.
+            cancelWindowHours: true,
+            cancelFeeBps: true,
+            chargeCardOnFileFees: true,
           },
         }),
         tx.service.findFirst({
@@ -823,6 +827,7 @@ export async function claimTierOpening(params: {
           priceAtBooking: priceAtBooking ?? undefined,
           manageToken: randomToken(),
           bookedVia: "tier_opening",
+          ...cancellationTermsSnapshot(shop),
         },
         select: { id: true, manageToken: true },
       });
