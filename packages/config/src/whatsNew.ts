@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-10-punches-stay-as-set",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "Punches you undo or re-count stay that way",
+    body:
+      "Editing a visit's date or service no longer brings back a punch you undid, or resets a count you " +
+      "changed. A no-show or cancel tapped just as a visit completes now takes its punch back. And tapping " +
+      "Redeem again after a lost connection no longer redeems twice.",
+  },
+  {
     id: "2026-10-10-privacy-terms-updated",
     date: "2026-10-10",
     kind: "feature",
