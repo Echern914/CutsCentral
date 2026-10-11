@@ -1,6 +1,7 @@
 import { effectiveTier, tierForStats, type LoyaltyTierKey, type TierRules } from "@chairback/config";
 import { Prisma, runWithShop } from "@chairback/db";
-import { loadTierStats, zeroTierStats } from "./tierStats.js";
+import { lockClientTierFloor } from "../services/clientTier.js";
+import { loadClientTierStats, loadTierStats, zeroTierStats } from "./tierStats.js";
 
 /**
  * Re-stamp every client's loyalty tier at one shop.
@@ -55,36 +56,74 @@ export async function recomputeLoyaltyTiers(
       select: { id: true, loyaltyTier: true, loyaltyTierFloor: true },
     });
 
-    // Bucket by the tier each client should now hold AND the floor it was
-    // decided with, so the write is a handful of updateMany calls rather than
-    // one per client.
+    // Bucket by the tier each client should now hold, the floor it was decided
+    // with AND the tier read, so the write is a handful of updateMany calls
+    // rather than one per client.
     //
     // 🔴 THE TIER HELD, NOT THE TIER EARNED. A tier the shop raised a client to
     // by hand (loyaltyTierFloor) sticks: harder rules, or visits ageing out of
     // a window, can take them down TO it and never below it.
     const zero = zeroTierStats(rules);
-    const wanted = new Map<string, { tier: LoyaltyTierKey | null; floor: LoyaltyTierKey | null; ids: string[] }>();
+    const wanted = new Map<
+      string,
+      { tier: LoyaltyTierKey | null; floor: LoyaltyTierKey | null; was: LoyaltyTierKey | null; ids: string[] }
+    >();
     for (const c of clients) {
       const tier = effectiveTier(tierForStats(stats.get(c.id) ?? zero, rules), c.loyaltyTierFloor);
       if (tier === c.loyaltyTier) continue;
-      const key = `${tier ?? "NONE"}|${c.loyaltyTierFloor ?? "NONE"}`;
+      const key = `${tier ?? "NONE"}|${c.loyaltyTierFloor ?? "NONE"}|${c.loyaltyTier ?? "NONE"}`;
       const bucket = wanted.get(key);
       if (bucket) bucket.ids.push(c.id);
-      else wanted.set(key, { tier, floor: c.loyaltyTierFloor, ids: [c.id] });
+      else wanted.set(key, { tier, floor: c.loyaltyTierFloor, was: c.loyaltyTier, ids: [c.id] });
     }
 
     let changed = 0;
-    for (const { tier, floor, ids } of wanted.values()) {
+    const movedUnderUs: string[] = [];
+    for (const { tier, floor, was, ids } of wanted.values()) {
       for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK);
         // The floor is part of the WHERE: a client whose floor was set or
         // cleared since the read above (services/clientTier.ts, which stamps
         // their tier itself) is skipped, never overwritten with a tier worked
         // out from the floor they no longer have.
+        //
+        // 🔴 AND SO IS THE TIER READ. The numbers above were counted before
+        // this write; a visit completing in between stamps the client's tier
+        // itself (cadence.ts) from numbers that include it. Guarded by the
+        // floor alone, this then overwrote that fresh tier with one worked out
+        // from the count WITHOUT the visit - Gold just earned, Silver shown.
+        // A row whose tier moved under us is skipped here and re-decided
+        // below from a fresh count.
         const r = await db.client.updateMany({
-          where: { shopId, id: { in: ids.slice(i, i + CHUNK) }, loyaltyTierFloor: floor },
+          where: { shopId, id: { in: chunk }, loyaltyTierFloor: floor, loyaltyTier: was },
           data: { loyaltyTier: tier },
         });
         changed += r.count;
+        if (r.count < chunk.length) {
+          const after = await db.client.findMany({
+            where: { shopId, id: { in: chunk } },
+            select: { id: true, loyaltyTier: true },
+          });
+          for (const c of after) if (c.loyaltyTier !== tier) movedUnderUs.push(c.id);
+        }
+      }
+    }
+
+    // The few that changed while we counted: one at a time, under the same
+    // row lock the visit's own stamp takes, from numbers counted now - by
+    // THESE rules, which a stamp written under the old ones would not use.
+    for (const clientId of movedUnderUs) {
+      const locked = await lockClientTierFloor(db, shopId, clientId);
+      if (!locked) continue; // deleted meanwhile
+      const fresh = await loadClientTierStats(db, shopId, clientId, rules, now);
+      const tier = effectiveTier(tierForStats(fresh, rules), locked.floor);
+      const held = await db.client.findFirst({
+        where: { shopId, id: clientId },
+        select: { loyaltyTier: true },
+      });
+      if (held && held.loyaltyTier !== tier) {
+        await db.client.update({ where: { id: clientId, shopId }, data: { loyaltyTier: tier } });
+        changed += 1;
       }
     }
     return { clients: clients.length, changed };
