@@ -84,7 +84,7 @@ import {
   parseTimeWindows,
   priceRangeForService,
 } from "../engines/pricing.js";
-import { movedLengthMin } from "../engines/moveLength.js";
+import { carriedExtraMin, movedLengthMin } from "../engines/moveLength.js";
 import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
 import {
   createCardOnFileSetupIntent,
@@ -3834,6 +3834,11 @@ bookingPublicRouter.get(
         serviceId: true,
         status: true,
         startsAt: true,
+        // The booking's own length and origin: the list offers only times the
+        // WHOLE booking fits, exactly as the move checks (engines/moveLength.ts).
+        endsAt: true,
+        bookedVia: true,
+        service: { select: { durationMin: true, durationOverrides: true, timeOverrides: true } },
         shop: { select: { timezone: true, bookingMaxDays: true } },
       },
     });
@@ -3848,6 +3853,22 @@ bookingPublicRouter.get(
       res.json({ timezone: appt.shop.timezone, slots: [] });
       return;
     }
+    // 🔴 THE SAME QUESTION THE MOVE ASKS. A cut + add-on needs its add-on's
+    // minutes free at the new time too; a list built for the bare service
+    // would offer the day's last half hour and the move would refuse it at the
+    // final tap. A special being left takes the menu's length (no extra).
+    const extraDurationMin =
+      appt.bookedVia === TARGETED_SLOT_ORIGIN
+        ? 0
+        : carriedExtraMin({
+            currentMin: Math.round((appt.endsAt.getTime() - appt.startsAt.getTime()) / 60_000),
+            serviceMinAtOld: effectiveDurationAt(appt.service.durationMin, {
+              at: appt.startsAt,
+              timezone: appt.shop.timezone,
+              weekdayOverrides: appt.service.durationOverrides,
+              timeWindows: appt.service.timeOverrides,
+            }),
+          });
     // WINDOW, not the whole booking horizon. Sweeping all bookingMaxDays (45 by
     // default) returned ~960 slots on a normal 9-5 week - a payload nobody
     // reads and a picker nobody can scroll, where the last chip sat two months
@@ -3868,6 +3889,7 @@ bookingPublicRouter.get(
       toDate: new Date(horizon),
       now,
       excludeAppointmentId: appt.id,
+      extraDurationMin,
     });
     res.json({
       timezone: appt.shop.timezone,

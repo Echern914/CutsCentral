@@ -37,5 +37,21 @@ export function movedLengthMin(input: {
   const own = input.currentMin - input.serviceMinAtOld;
   const floor = Math.min(input.currentMin, input.serviceMinAtNew);
   const lengthMin = Math.max(floor, input.serviceMinAtNew + own);
-  return { lengthMin, extraMin: Math.max(0, lengthMin - input.serviceMinAtNew) };
+  // Equal to max(0, lengthMin - serviceMinAtNew) in every case - stated
+  // through the shared helper so the list and the write cannot drift apart.
+  return { lengthMin, extraMin: carriedExtraMin(input) };
+}
+
+/**
+ * The minutes beyond its service a booking takes wherever it moves - what the
+ * slot grid must ALSO find free (`extraDurationMin`).
+ *
+ * 🔴 THE LIST MUST ASK WHAT THE WRITE ASKS. The manage page offers the times a
+ * booking can move to (GET /manage/:token/slots); a list built for the bare
+ * service would offer the last half hour of the day to a cut + add-on, and the
+ * move would then be refused at the final tap. It does not depend on the new
+ * time, so the list can pass it for every candidate at once.
+ */
+export function carriedExtraMin(input: { currentMin: number; serviceMinAtOld: number }): number {
+  return Math.max(0, input.currentMin - input.serviceMinAtOld);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { movedLengthMin } from "./moveLength.js";
+import { carriedExtraMin, movedLengthMin } from "./moveLength.js";
 
 describe("movedLengthMin - a moved booking keeps its own minutes", () => {
   it("no overrides: the booking keeps its length exactly, add-on minutes included", () => {
@@ -35,5 +35,18 @@ describe("movedLengthMin - a moved booking keeps its own minutes", () => {
     // A 60-minute service trimmed to 25, moved where the service is 20.
     const { lengthMin } = movedLengthMin({ currentMin: 25, serviceMinAtOld: 60, serviceMinAtNew: 20 });
     expect(lengthMin).toBe(20);
+  });
+
+  it("🔴 the extra the write checks is the extra the list asks for, at every new time", () => {
+    for (const currentMin of [15, 20, 30, 45, 60, 90]) {
+      for (const serviceMinAtOld of [20, 30, 60]) {
+        const listAsks = carriedExtraMin({ currentMin, serviceMinAtOld });
+        for (const serviceMinAtNew of [10, 20, 30, 60]) {
+          const { lengthMin, extraMin } = movedLengthMin({ currentMin, serviceMinAtOld, serviceMinAtNew });
+          expect(extraMin).toBe(listAsks);
+          expect(extraMin).toBe(Math.max(0, lengthMin - serviceMinAtNew));
+        }
+      }
+    }
   });
 });

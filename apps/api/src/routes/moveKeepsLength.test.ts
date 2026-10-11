@@ -179,6 +179,31 @@ describe("🔴 a moved booking keeps every minute it was booked for", () => {
     expect(await span(a.id)).toEqual(before);
   });
 
+  it("🔴 the client's list of times asks what the move asks: no last half hour for a cut + add-on", async () => {
+    const a = await bookRow();
+    const plain = await bookRow({
+      lengthMin: 30,
+      addOns: [],
+      priceAtBooking: new Prisma.Decimal("40.00"),
+      startsAt: nextWeekday(MONDAY, 9),
+    });
+    const offered = async (token: string): Promise<string[]> => {
+      const res = await request(app).get(`/api/book/manage/${token}/slots`);
+      expect(res.status).toBe(200);
+      return (res.body.slots as { startsAt: string }[]).map((s) => s.startsAt);
+    };
+    const lastHalfHour = nextWeekday(MONDAY, 16, 30).toISOString();
+    const forA = await offered(a.manageToken);
+    expect(forA).not.toContain(lastHalfHour);
+    expect(forA).toContain(nextWeekday(MONDAY, 16).toISOString());
+    // A plain 30-minute cut is still offered it.
+    expect(await offered(plain.manageToken)).toContain(lastHalfHour);
+    // And the latest time the list offers is one the move accepts.
+    const mondayDate = nextWeekday(MONDAY, 0).toISOString().slice(0, 10);
+    const latest = forA.filter((iso) => iso.startsWith(mondayDate)).sort().at(-1)!;
+    expect((await clientMove(a.manageToken, new Date(latest))).status).toBe(200);
+  });
+
   it("the shop's Custom time still moves it there, whole", async () => {
     const a = await bookRow();
     const res = await shopMove(a.id, nextWeekday(MONDAY, 16, 30), { customTime: true });
