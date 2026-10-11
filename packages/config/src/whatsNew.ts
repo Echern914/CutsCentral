@@ -36,6 +36,14 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-11-app-sign-out-and-group-links",
+    date: "2026-10-11",
+    kind: "fix",
+    title: "Signing out in the app takes you to its sign-in",
+    body:
+      "In the iPhone app, Sign out now ends your session on the phone and returns you to the app's own sign-in screen, instead of leaving a web form open. Group booking links your clients tap also open in the app now, rather than spinning.",
+  },
+  {
     id: "2026-10-10-punches-stay-as-set",
     date: "2026-10-10",
     kind: "fix",
