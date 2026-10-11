@@ -315,6 +315,74 @@ export function describeShopPolicy(shop: ShopPolicyInput): string {
 }
 
 /**
+ * The three settings a cancellation or a no-show is SETTLED by - the window,
+ * the fee rate, and whether a kept card may be charged at all.
+ */
+export interface CancellationTerms {
+  cancelWindowHours: number;
+  cancelFeeBps: number;
+  chargeCardOnFileFees: boolean;
+}
+
+/** Those terms as a booking carries them (Appointment.*AtBooking). */
+export interface CancellationTermsSnapshot {
+  cancelWindowHoursAtBooking: number | null;
+  cancelFeeBpsAtBooking: number | null;
+  cardOnFileFeesAtBooking: boolean | null;
+}
+
+/**
+ * The cancellation terms a NEW booking is made on, as the columns it stores.
+ *
+ * 🔴 A BOOKING KEEPS THE TERMS IT WAS MADE ON. The cancel engine and the
+ * card-on-file settlement used to read the shop's CURRENT window, rate and
+ * fee switch, so a client who booked under "free cancellation" could be
+ * charged after the owner tightened it. The non-refundable deposit was
+ * already frozen per booking (Payment.nonRefundable); these three are now
+ * frozen the same way, on every path that creates an appointment.
+ */
+export function cancellationTermsSnapshot(shop: CancellationTerms): {
+  cancelWindowHoursAtBooking: number;
+  cancelFeeBpsAtBooking: number;
+  cardOnFileFeesAtBooking: boolean;
+} {
+  return {
+    cancelWindowHoursAtBooking: shop.cancelWindowHours,
+    cancelFeeBpsAtBooking: shop.cancelFeeBps,
+    cardOnFileFeesAtBooking: shop.chargeCardOnFileFees,
+  };
+}
+
+/**
+ * The terms an EXISTING booking is settled and described by: its own
+ * snapshot. A booking made before snapshots existed has none (all three NULL -
+ * a CHECK keeps them all-or-nothing) and is settled by the shop's CURRENT
+ * settings, exactly as every booking was before; that is the one case where a
+ * policy change still reaches an existing booking.
+ */
+export function bookingCancellationTerms(
+  appt: CancellationTermsSnapshot,
+  shop: CancellationTerms,
+): CancellationTerms {
+  if (
+    appt.cancelWindowHoursAtBooking === null ||
+    appt.cancelFeeBpsAtBooking === null ||
+    appt.cardOnFileFeesAtBooking === null
+  ) {
+    return {
+      cancelWindowHours: shop.cancelWindowHours,
+      cancelFeeBps: shop.cancelFeeBps,
+      chargeCardOnFileFees: shop.chargeCardOnFileFees,
+    };
+  }
+  return {
+    cancelWindowHours: appt.cancelWindowHoursAtBooking,
+    cancelFeeBps: appt.cancelFeeBpsAtBooking,
+    chargeCardOnFileFees: appt.cardOnFileFeesAtBooking,
+  };
+}
+
+/**
  * The cancellation fee in cents, given what was actually collected.
  *
  * 🔴 THIS FORMULA USED TO LIVE INLINE IN THE CANCEL ENGINE, where nothing else

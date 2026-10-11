@@ -13,6 +13,8 @@ import {
   describeMovePriceChange,
   formatMovePriceCents,
   chargeAtBookingCents,
+  bookingCancellationTerms,
+  cancellationTermsSnapshot,
 } from "./shopPolicy.js";
 
 describe("describeMovePriceChange - the one sentence a move at a new price asks with", () => {
@@ -613,5 +615,32 @@ describe("🔴 a card-on-file shop's cancellation sentence says what the card is
         }
       }
     }
+  });
+});
+
+describe("🔴 a booking keeps the cancellation terms it was made on", () => {
+  const shopThen = { cancelWindowHours: 0, cancelFeeBps: 0, chargeCardOnFileFees: false };
+  const shopNow = { cancelWindowHours: 24, cancelFeeBps: 5000, chargeCardOnFileFees: true };
+
+  it("the snapshot is the shop's terms at booking, as the columns store them", () => {
+    expect(cancellationTermsSnapshot(shopThen)).toEqual({
+      cancelWindowHoursAtBooking: 0,
+      cancelFeeBpsAtBooking: 0,
+      cardOnFileFeesAtBooking: false,
+    });
+  });
+
+  it("booked under free cancellation, the owner tightens it: the booking still settles free", () => {
+    expect(bookingCancellationTerms(cancellationTermsSnapshot(shopThen), shopNow)).toEqual(shopThen);
+  });
+
+  it("a booking from before snapshots (all NULL) settles by the shop's current terms, as before", () => {
+    const legacy = { cancelWindowHoursAtBooking: null, cancelFeeBpsAtBooking: null, cardOnFileFeesAtBooking: null };
+    expect(bookingCancellationTerms(legacy, shopNow)).toEqual(shopNow);
+  });
+
+  it("a half-written snapshot is never half-trusted", () => {
+    const half = { cancelWindowHoursAtBooking: 0, cancelFeeBpsAtBooking: null, cardOnFileFeesAtBooking: false };
+    expect(bookingCancellationTerms(half, shopNow)).toEqual(shopNow);
   });
 });

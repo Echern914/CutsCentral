@@ -65,6 +65,10 @@ const SHOP_SELECT = {
   receptionistCompAccess: true,
   receptionistTermsAcceptedAt: true,
   twilioNumber: true,
+  // The cancellation terms a gap-fill hold is made on (config/shopPolicy).
+  cancelWindowHours: true,
+  cancelFeeBps: true,
+  chargeCardOnFileFees: true,
 } as const;
 
 export async function notifySlotOpened(params: {
@@ -191,6 +195,11 @@ export async function notifySlotOpened(params: {
           timezone: shop.timezone,
           dailySendCap: shop.dailySendCap,
           twilioNumber: shop.twilioNumber,
+          cancellationTerms: {
+            cancelWindowHours: shop.cancelWindowHours,
+            cancelFeeBps: shop.cancelFeeBps,
+            chargeCardOnFileFees: shop.chargeCardOnFileFees,
+          },
         },
         appt: {
           id: appt.id,

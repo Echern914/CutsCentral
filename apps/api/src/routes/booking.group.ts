@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { Prisma, prisma } from "@chairback/db";
 import {
+  cancellationTermsSnapshot,
   checkTellApart,
   describeMovePriceChange,
   paidBookingTakesPrice,
@@ -706,6 +707,8 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
             manageToken: randomToken(),
             groupId: group.id,
             groupPosition: m.position,
+            // The cancellation terms every member is booked on.
+            ...cancellationTermsSnapshot(shop),
             // The booker's tick, frozen onto every member's booking.
             ...(policy.record
               ? {

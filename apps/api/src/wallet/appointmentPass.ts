@@ -1,9 +1,15 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { PKPass } from "passkit-generator";
 import { apiEnv } from "@chairback/config";
-import { describeCancellationPolicy, KEPT_ON_CANCELLATION } from "@chairback/config/shopPolicy";
+import {
+  bookingCancellationTerms,
+  describeCancellationPolicy,
+  KEPT_ON_CANCELLATION,
+  type CancellationTermsSnapshot,
+} from "@chairback/config/shopPolicy";
 import { formatShopAddress } from "@chairback/config/shopAddress";
 import { runAsOwner } from "@chairback/db";
+import { CANCELLATION_TERMS_SNAPSHOT_SELECT } from "../services/cancellationTerms.js";
 import { connectEnabled } from "../billing/stripe.js";
 import { logger } from "../logger.js";
 import {
@@ -214,7 +220,13 @@ export function confirmationReference(appointmentId: string): string {
  * Apple certificate - the fields a customer reads are the part with all the
  * requirements in it, and signing is a separate concern.
  */
-export interface AppointmentPassSource {
+/**
+ * The three `*AtBooking` columns are THIS booking's cancellation terms - what a
+ * cancel or no-show of it is settled by. A pass outlives a change of settings,
+ * so it states those, not the shop's terms today (all three NULL = a booking
+ * from before snapshots, described by the shop's current settings as before).
+ */
+export interface AppointmentPassSource extends CancellationTermsSnapshot {
   /**
    * CAN this shop actually take a card right now (Connect live + charges
    * enabled + an account)? An INPUT rather than something computed here,
@@ -301,15 +313,19 @@ export function buildAppointmentPassJson(
   // has switched to since (another mode, approval, Stripe disconnected) - the
   // engine reads the same snapshot - so that sentence does not ask what the
   // shop collects today.
+  //
+  // The window, the fee and the card-fee switch are this booking's own
+  // snapshot - the terms its cancellation is settled by.
+  const terms = bookingCancellationTerms(appt, appt.shop);
   const cancellationPolicy = appt.nonRefundable
     ? KEPT_ON_CANCELLATION
     : describeCancellationPolicy({
         paymentsMode: appt.shop.paymentsMode,
-        cancelWindowHours: appt.shop.cancelWindowHours,
-        cancelFeeBps: appt.shop.cancelFeeBps,
+        cancelWindowHours: terms.cancelWindowHours,
+        cancelFeeBps: terms.cancelFeeBps,
         depositAmountCents: appt.shop.depositAmountCents,
         requiresApproval: appt.shop.requireBookingApproval,
-        chargeCardOnFileFees: appt.shop.chargeCardOnFileFees,
+        chargeCardOnFileFees: terms.chargeCardOnFileFees,
         paymentsLive: appt.paymentsLive,
       });
 
@@ -414,6 +430,8 @@ export async function buildPassForAppointment(
         updatedAt: true,
         firstName: true,
         manageToken: true,
+        // This booking's own cancellation terms (window, fee, card fees).
+        ...CANCELLATION_TERMS_SNAPSHOT_SELECT,
         service: { select: { name: true } },
         staff: { select: { name: true } },
         // This booking's own refund terms, snapshotted when it was paid for.

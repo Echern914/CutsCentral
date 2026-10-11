@@ -17,6 +17,7 @@ import {
   isLikelyEmail,
   type BookingErrorCode,
   type BookingErrorField,
+  cancellationTermsSnapshot,
   depositIsNonRefundable,
   describeCancellationPolicy,
   describeDepositPolicy,
@@ -75,6 +76,7 @@ import { normalizeClientNote } from "@chairback/config/clientNote";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { fillBlankClientFields } from "../services/clientFill.js";
 import { neverBooked, optionalCardStepFor, unfinishedCheckoutFor } from "../services/unfinishedCheckout.js";
+import { CANCELLATION_TERMS_SNAPSHOT_SELECT } from "../services/cancellationTerms.js";
 import {
   durationRangeForService,
   effectiveDurationAt,
@@ -2246,6 +2248,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       dateOverrides: service.dateOverrides,
       timezone: shop.timezone,
       bookingBufferMin: shop.bookingBufferMin,
+      cancellationTerms: shop,
       // A customer never gets the barber's "force it" - hours and exceptions
       // gate every occurrence.
       checkAvailability: true,
@@ -2577,6 +2580,9 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
             : {}),
           manageToken: token,
           bookedVia: targeted ? "targeted_slot" : undefined,
+          // The cancellation terms this booking is made on - what a cancel or
+          // a no-show is settled by, whatever the shop changes them to later.
+          ...cancellationTermsSnapshot(shop),
         },
         select: { id: true, manageToken: true },
       });
@@ -3141,6 +3147,9 @@ const MANAGE_SELECT = {
         where: { purpose: "booking" },
         select: { status: true, amount: true, capturedAmount: true, nonRefundable: true },
       },
+      // The cancellation terms this booking was made on - what a card added
+      // here is charged by (never sent to the page as is).
+      ...CANCELLATION_TERMS_SNAPSHOT_SELECT,
 } satisfies Prisma.AppointmentSelect;
 
 type ManageRow = Prisma.AppointmentGetPayload<{ select: typeof MANAGE_SELECT }>;

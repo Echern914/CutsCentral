@@ -8,7 +8,28 @@ import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWr
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { bookingBlockedFor } from "../services/clientBookingBlock.js";
 import {
-  cardOnFileFeeCents,
+  CANCELLATION_TERMS_SNAPSHOT_SELECT,
+  SHOP_CANCELLATION_TERMS_SELECT,
+  termsForBooking,
+} from "../services/cancellationTerms.js";
+import { cardOnFileFeeFor } from "../services/cardOnFileSettle.js";
+
+/** No shop row: no fee can be quoted on terms nobody can read. */
+const NO_CANCELLATION_TERMS: CancellationTerms = {
+  cancelWindowHours: 0,
+  cancelFeeBps: 0,
+  chargeCardOnFileFees: false,
+};
+/** A booking that could not be read back: settle it by the shop, as before snapshots. */
+const NO_SNAPSHOT = {
+  cancelWindowHoursAtBooking: null,
+  cancelFeeBpsAtBooking: null,
+  cardOnFileFeesAtBooking: null,
+};
+import {
+  bookingCancellationTerms,
+  cancellationTermsSnapshot,
+  type CancellationTerms,
   clientCancelKeptCents,
   describeMovePriceChange,
   formatMovePriceCents,
@@ -569,7 +590,7 @@ async function getClientHistory(ctx: ToolContext): Promise<ToolExecutionResult> 
 
   const shop = await prisma.shop.findUnique({
     where: { id: ctx.shopId },
-    select: { timezone: true, cancelWindowHours: true, cancelFeeBps: true },
+    select: { timezone: true, ...SHOP_CANCELLATION_TERMS_SELECT },
   });
   const tz = shop?.timezone ?? "America/New_York";
 
@@ -608,6 +629,10 @@ async function getClientHistory(ctx: ToolContext): Promise<ToolExecutionResult> 
             where: { purpose: "booking" },
             select: { amount: true, capturedAmount: true, status: true, nonRefundable: true },
           },
+          // ...or charge to a card kept on it (services/cardOnFileSettle.ts).
+          priceAtBooking: true,
+          cardOnFile: { select: { status: true } },
+          ...CANCELLATION_TERMS_SNAPSHOT_SELECT,
         },
       }),
     ),
@@ -640,19 +665,34 @@ async function getClientHistory(ctx: ToolContext): Promise<ToolExecutionResult> 
       when: formatApptTime(v.scheduledAt, tz),
       service: v.serviceName,
     })),
-    upcoming_appointments: upcoming.map((a) => {
-      // The SAME rule and inputs the cancel tool quotes and the engine keeps.
+    upcoming_appointments: await Promise.all(upcoming.map(async (a) => {
+      // The SAME rule and inputs the cancel tool quotes and the engine keeps:
+      // THIS booking's own terms, never the shop's settings today.
+      const terms = bookingCancellationTerms(a, shop ?? NO_CANCELLATION_TERMS);
       const paid = a.payments[0] ?? null;
       const collectedCents =
         paid && paid.status === "succeeded" ? (paid.capturedAmount ?? paid.amount) : 0;
       const keptCents = clientCancelKeptCents({
         collectedCents,
         nonRefundable: paid?.nonRefundable === true,
-        cancelWindowHours: shop?.cancelWindowHours ?? 0,
-        cancelFeeBps: shop?.cancelFeeBps ?? 0,
+        cancelWindowHours: terms.cancelWindowHours,
+        cancelFeeBps: terms.cancelFeeBps,
         startsAt: a.startsAt,
         now: ctx.now,
       });
+      // A card kept on it, with nothing paid: what cancelling NOW charges it.
+      const cardCents =
+        collectedCents === 0 && a.cardOnFile?.status === "saved"
+          ? await cardOnFileFeeFor({
+              shopId: ctx.shopId,
+              appointmentId: a.id,
+              priceAtBooking: a.priceAtBooking,
+              startsAt: a.startsAt,
+              now: ctx.now,
+              reason: "late_cancel",
+              terms,
+            })
+          : 0;
       return {
         appointment_id: a.id,
         status: a.status,
@@ -673,8 +713,16 @@ async function getClientHistory(ctx: ToolContext): Promise<ToolExecutionResult> 
                 : {}),
             }
           : {}),
+        // Card kept on file: what cancelling it NOW charges that card. Say it
+        // before cancelling.
+        ...(cardCents > 0
+          ? {
+              if_cancelled_card_charged_cents: cardCents,
+              if_cancelled_why: "it is inside the cancellation window - the card on file is charged",
+            }
+          : {}),
       };
-    }),
+    })),
   });
 }
 
@@ -693,6 +741,8 @@ async function loadSlotContext(
       timezone: string;
       serviceName: string;
       staffName: string;
+      /** The shop's cancellation terms now - what a booking made here keeps. */
+      cancellationTerms: CancellationTerms;
     }
   | string
 > {
@@ -703,7 +753,13 @@ async function loadSlotContext(
   }
   const shop = await prisma.shop.findUnique({
     where: { id: ctx.shopId },
-    select: { timezone: true, bookingBufferMin: true },
+    select: {
+      timezone: true,
+      bookingBufferMin: true,
+      cancelWindowHours: true,
+      cancelFeeBps: true,
+      chargeCardOnFileFees: true,
+    },
   });
   if (!shop) return "shop not found";
   const db = forShop(ctx.shopId);
@@ -757,6 +813,7 @@ async function loadSlotContext(
     timezone: shop.timezone,
     serviceName: service.name,
     staffName: staff.name,
+    cancellationTerms: shop,
   };
 }
 
@@ -863,6 +920,8 @@ async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecut
           endsAt: slot.endsAt,
           priceAtBooking: slot.price ?? undefined,
           manageToken: randomToken(),
+          // Kept when the hold becomes the booking: the terms it is made on.
+          ...cancellationTermsSnapshot(slot.cancellationTerms),
         },
         select: { id: true },
       });
@@ -1095,6 +1154,7 @@ async function bookAppointment(
           priceAtBooking: slot.price ?? undefined,
           manageToken: randomToken(),
           confirmationSentAt: ctx.now,
+          ...cancellationTermsSnapshot(slot.cancellationTerms),
         },
         select: { id: true },
       });
@@ -1504,8 +1564,15 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
   // have paid on the website and be cancelling by text.
   const shop = await prisma.shop.findUnique({
     where: { id: ctx.shopId },
-    select: { timezone: true, cancelWindowHours: true, cancelFeeBps: true, chargeCardOnFileFees: true },
+    select: { timezone: true },
   });
+  // 🔴 THIS BOOKING'S cancellation terms - its own snapshot, the terms the
+  // engine settles by - never the shop's settings today.
+  const booked = await prisma.appointment.findUnique({
+    where: { id: appt.id },
+    select: { priceAtBooking: true, ...CANCELLATION_TERMS_SNAPSHOT_SELECT },
+  });
+  const terms = await termsForBooking(ctx.shopId, booked ?? NO_SNAPSHOT);
   // What was collected AT BOOKING - the base the cancellation fee is quoted
   // against. Never a balance collected at the chair: a cut that was paid for
   // after it happened cannot also be cancelled.
@@ -1523,35 +1590,30 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
   let feeCents = clientCancelKeptCents({
     collectedCents,
     nonRefundable,
-    cancelWindowHours: shop?.cancelWindowHours ?? 0,
-    cancelFeeBps: shop?.cancelFeeBps ?? 0,
+    cancelWindowHours: terms.cancelWindowHours,
+    cancelFeeBps: terms.cancelFeeBps,
     startsAt: appt.startsAt,
     now: ctx.now,
   });
   // A card KEPT at booking (nothing collected) is charged on a late cancel only
-  // when the shop switched fees on - the same rule and the same formula the
-  // engine settles with (services/cardOnFileSettle.ts), so what this tool tells
-  // the client is exactly what their card is about to be charged.
-  if (feeCents === 0 && shop?.chargeCardOnFileFees) {
+  // when this booking's terms switched fees on - the same function the engine
+  // settles with (services/cardOnFileSettle.ts cardOnFileFeeFor), agreed price
+  // and all, so what this tool tells the client is exactly what their card is
+  // about to be charged.
+  if (feeCents === 0 && terms.chargeCardOnFileFees) {
     const kept = await prisma.cardOnFile.findUnique({
       where: { appointmentId: appt.id },
       select: { status: true },
     });
     if (kept?.status === "saved") {
-      const priced = await prisma.appointment.findUnique({
-        where: { id: appt.id },
-        select: { priceAtBooking: true },
-      });
-      const price = priced?.priceAtBooking === null || priced?.priceAtBooking === undefined
-        ? null
-        : Number(priced.priceAtBooking);
-      feeCents = cardOnFileFeeCents({
-        priceCents: price === null || !Number.isFinite(price) ? null : Math.round(price * 100),
-        cancelWindowHours: shop.cancelWindowHours,
-        cancelFeeBps: shop.cancelFeeBps,
+      feeCents = await cardOnFileFeeFor({
+        shopId: ctx.shopId,
+        appointmentId: appt.id,
+        priceAtBooking: booked?.priceAtBooking ?? null,
         startsAt: appt.startsAt,
         now: ctx.now,
         reason: "late_cancel",
+        terms,
       });
     }
   }

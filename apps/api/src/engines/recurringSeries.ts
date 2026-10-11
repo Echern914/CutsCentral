@@ -4,7 +4,7 @@ import {
   zonedWallTimeToUtc,
 } from "@chairback/config";
 import { prisma, Prisma, runWithShop } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { cancellationTermsSnapshot, randomToken, type CancellationTerms } from "@chairback/config";
 import { logger } from "../logger.js";
 import { isSlotBookable } from "./slots.js";
 import { blockedRangesByStaff, spanIsBlocked } from "./blockedTime.js";
@@ -145,6 +145,13 @@ export interface MaterializeInput {
   // Shop facts.
   timezone: string;
   bookingBufferMin: number;
+  /**
+   * The shop's cancellation terms NOW, frozen onto every occurrence
+   * (config/shopPolicy cancellationTermsSnapshot): each visit of a standing
+   * appointment is settled by the terms the series was made on. Required, so
+   * a caller that forgets it does not compile.
+   */
+  cancellationTerms: CancellationTerms;
   // Gate each occurrence on isSlotBookable (hours/exceptions). false = barber
   // customTime force (overlap is ALWAYS enforced regardless), which still
   // skips time the barber BLOCKED OFF (reason "blocked").
@@ -344,6 +351,7 @@ export async function materializeSeries(
             manageToken: randomToken(),
             seriesId: series.id,
             seriesOccurrenceIndex: occ.index,
+            ...cancellationTermsSnapshot(input.cancellationTerms),
             ...(input.policy
               ? {
                   policyAcceptedAt: input.policy.policyAcceptedAt,
