@@ -413,6 +413,28 @@ describe("claiming", () => {
     expect(e!.bookedAppointmentId).toBe(claim.appointmentId);
   });
 
+  it("🔴 a claim on a number already on file never fills that client's email", async () => {
+    // The entry's email was typed on a public form. On a record the claim did
+    // not create it would be a way for an app account into someone else's
+    // profile (services/clientFill.ts); it stays on the appointment.
+    const phone = `+1201555${String(7000 + Math.floor(Math.random() * 2000)).padStart(4, "0")}`;
+    const regular = await prisma.client.create({
+      data: { shopId, acuityClientKey: `tel:${phone}`, magicToken: randomToken(), firstName: "Reg", phone },
+      select: { id: true },
+    });
+    const entry = await makeEntry({ phone });
+    const res = await offerTo(freshSlot());
+    const claim = await claimOffer({ token: res.token, now: new Date() });
+    expect(claim.outcome).toBe("claimed");
+    if (claim.outcome !== "claimed") throw new Error("unreachable");
+    const appt = await prisma.appointment.findUniqueOrThrow({
+      where: { id: claim.appointmentId },
+      select: { clientId: true, email: true },
+    });
+    expect(appt).toEqual({ clientId: regular.id, email: entry.email });
+    expect((await prisma.client.findUniqueOrThrow({ where: { id: regular.id } })).email).toBeNull();
+  });
+
   it("an unknown token is just not_found - no oracle", async () => {
     const res = await claimOffer({ token: "not-a-real-token", now: new Date() });
     expect(res.outcome).toBe("invalid");
