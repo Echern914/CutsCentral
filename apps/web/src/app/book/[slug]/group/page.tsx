@@ -4,6 +4,7 @@ import Link from "next/link";
 import { APP_NAME } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
 import { appleItunesApp } from "@/lib/appBanner";
+import { NativeReadySignal } from "@/components/NativeReadySignal";
 import type { BookShopData } from "../page";
 import { GroupBookingClient } from "./GroupBookingClient";
 
@@ -43,6 +44,9 @@ export default async function GroupBookPage({ params }: { params: { slug: string
   if (collectsAtBooking) {
     return (
       <main className="mx-auto w-full max-w-2xl px-4 py-8">
+        {/* These two answers have no client component of their own, and the
+            app's WebView waits for cb:ready before it stops spinning. */}
+        <NativeReadySignal />
         <h1 className="mb-3 text-2xl font-semibold text-offwhite">Group booking</h1>
         <p className="text-muted">
           Group booking isn&apos;t available online for {data.shop.name}. You can still
@@ -62,6 +66,7 @@ export default async function GroupBookPage({ params }: { params: { slug: string
   if (data.shop.bookingPaused) {
     return (
       <main className="mx-auto w-full max-w-2xl px-4 py-8">
+        <NativeReadySignal />
         <h1 className="mb-3 text-2xl font-semibold text-offwhite">Booking paused</h1>
         <p className="text-muted">
           {data.shop.name} isn&apos;t taking online bookings right now.
