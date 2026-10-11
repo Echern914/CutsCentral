@@ -2577,12 +2577,12 @@ function RemoveWalkInFooter({
           {error}
         </p>
       )}
-      <div className="flex flex-col gap-2 sm:flex-row">
+      <div className="flex gap-2">
         <button
           type="button"
           onClick={onKeep}
           disabled={removing}
-          className="flex h-11 flex-1 items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+          className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
         >
           Keep it
         </button>
@@ -2590,7 +2590,7 @@ function RemoveWalkInFooter({
           type="button"
           onClick={onRemove}
           disabled={removing}
-          className="flex h-11 flex-1 items-center justify-center rounded-xl border border-danger-soft/50 px-4 text-sm font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50"
+          className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl border border-danger-soft/50 px-4 text-sm font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50"
         >
           {removing ? "Removing…" : "Remove walk-in"}
         </button>
@@ -2643,12 +2643,12 @@ function CorrectVisitFooter({
           {error}
         </p>
       )}
-      <div className="flex flex-col gap-2 sm:flex-row">
+      <div className="flex gap-2">
         <button
           type="button"
           onClick={onKeep}
           disabled={busy}
-          className="flex h-11 flex-1 items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+          className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
         >
           Keep it
         </button>
@@ -2656,7 +2656,7 @@ function CorrectVisitFooter({
           type="button"
           onClick={onConfirm}
           disabled={busy}
-          className="flex h-11 flex-1 items-center justify-center rounded-xl border border-danger-soft/50 px-4 text-sm font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50"
+          className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl border border-danger-soft/50 px-4 text-sm font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50"
         >
           {busy ? "Saving…" : action}
         </button>

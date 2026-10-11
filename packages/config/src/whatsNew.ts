@@ -44,6 +44,15 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "In the iPhone app, Sign out now ends your session on the phone and returns you to the app's own sign-in screen, instead of leaving a web form open. Group booking links your clients tap also open in the app now, rather than spinning.",
   },
   {
+    id: "2026-10-11-confirm-buttons-fit",
+    date: "2026-10-11",
+    kind: "fix",
+    title: "Confirm buttons fit on your phone",
+    body:
+      "The Keep it and Cancel visit buttons (and Mark no-show, Remove walk-in) now sit side by side at full size, " +
+      "instead of squeezing off the bottom of the appointment on a phone.",
+  },
+  {
     id: "2026-10-10-punches-stay-as-set",
     date: "2026-10-10",
     kind: "fix",

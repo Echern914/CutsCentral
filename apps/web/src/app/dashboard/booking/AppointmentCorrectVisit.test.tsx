@@ -197,6 +197,19 @@ describe("No-show / cancel a completed visit after the fact", () => {
     expect(cancel).not.toHaveBeenCalled();
   });
 
+  it("🔴 the two buttons sit side by side at full height (stacked, they were squashed off the bottom of a phone)", async () => {
+    const confirm = await ask("Cancel visit");
+    const keep = confirmButton(confirm, "Keep it");
+    const go = confirmButton(confirm, "Cancel visit");
+    expect(keep.parentElement).toBe(go.parentElement);
+    const row = keep.parentElement!;
+    expect(row.className.split(/\s+/)).not.toContain("flex-col");
+    for (const b of [keep, go]) {
+      expect(b.className).toContain("h-11");
+      expect(b.className).toContain("shrink-0");
+    }
+  });
+
   it("Keep it changes nothing", async () => {
     await ask("Cancel visit");
     fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
