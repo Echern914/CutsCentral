@@ -49,3 +49,38 @@ export async function fillBlankClientNames(
   if (firstName) await db.client.updateMany({ where: blank("firstName"), data: { firstName } });
   if (lastName) await db.client.updateMany({ where: blank("lastName"), data: { lastName } });
 }
+
+/**
+ * The SHOP's own booking form (dashboard New appointment, repeats): blank
+ * fields fill - names AND contacts - and nothing already there is replaced.
+ *
+ * Different from the public forms above on purpose. A contact the shop typed
+ * is the shop's own record-keeping, the same authority as editing the client
+ * profile, and the identity rules already treat shop-entered contacts as the
+ * record's own. What stays true for both: a set field is never overwritten
+ * (two people on one family phone keep their own names), so this can never
+ * rename a client or move their email out from under them.
+ *
+ * 🔴 NEVER call this from a public, client-facing or waitlist path - those use
+ * fillBlankClientNames.
+ */
+export async function fillBlankClientFieldsFromShop(
+  db: Pick<Prisma.TransactionClient, "client">,
+  clientId: string,
+  typed: {
+    firstName?: string | null;
+    lastName?: string | null;
+    phone?: string | null;
+    email?: string | null;
+  },
+): Promise<void> {
+  await fillBlankClientNames(db, clientId, typed);
+  const blank = (field: "phone" | "email") => ({
+    id: clientId,
+    OR: [{ [field]: null }, { [field]: "" }],
+  });
+  const phone = typed.phone?.trim();
+  const email = typed.email?.trim();
+  if (phone) await db.client.updateMany({ where: blank("phone"), data: { phone } });
+  if (email) await db.client.updateMany({ where: blank("email"), data: { email } });
+}
