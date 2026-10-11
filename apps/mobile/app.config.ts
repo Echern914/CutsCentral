@@ -196,7 +196,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // 1.1.6 = build 51. The app changes merged since 50: push registration that
   //        keeps trying until it lands, Tap to Pay reusing its reader, honest
   //        retries and sign-in code timers (#615), and Home / Clients / Team
-  //        saying what really happened and fitting the phone (#606). 🔴 The
+  //        saying what really happened and fitting the phone (#606), one tap
+  //        opens a visit once so Back works first time (#634), and dashboard
+  //        sign-out reaching the app, signed-out phones dropping their pushes,
+  //        join links showing only the real shop and party links loading
+  //        (#636). 🔴 The
   //        Lock Screen widget (#618) is NOT in this build: it ships only from
   //        a Mac prebuild with NEXT_UP_WIDGET_ENABLED=true once its target has
   //        compiled, signed with the App Group, and passed the device checks
