@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-10-group-requests-need-approval",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "Group bookings now wait for your approval",
+    body:
+      "With Request-before-booking on, a group booked online arrives as one request instead of booking straight " +
+      "away. Approve or decline anyone in it and the whole group gets your answer, with one confirmation. Clients " +
+      "can no longer cancel or move a whole group online once it starts.",
+  },
+  {
     id: "2026-10-10-privacy-terms-updated",
     date: "2026-10-10",
     kind: "feature",
