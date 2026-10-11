@@ -938,6 +938,29 @@ describe("escalated threads come back", () => {
     expect(after.messages.some((m) => m.role === "assistant")).toBe(false);
   });
 
+  it("with texting off, a text into an escalated thread changes nothing and texts nobody", async () => {
+    // Production today: SMS_ENABLED unset. The whole inbound pipeline is off
+    // (nothing could be answered by text, by the AI or by the shop), so the
+    // follow-up alert must not fire either.
+    const notifyPhone = "+13025550177";
+    const shop = await makeShop({ notifyPhone });
+    const phone = freshPhone();
+    const client = await makeClient(shop.id, phone);
+    const convo = await prisma.receptionistConversation.create({
+      data: { shopId: shop.id, phone, clientId: client.id, status: "escalated" },
+    });
+    process.env.SMS_ENABLED = "false";
+    __resetEnvCacheForTests();
+    try {
+      await processInboundText({ phone, text: "any update?", now: new Date() });
+    } finally {
+      process.env.SMS_ENABLED = "true";
+      __resetEnvCacheForTests();
+    }
+    expect(sms).toHaveLength(0);
+    expect(await prisma.receptionistMessage.count({ where: { conversationId: convo.id } })).toBe(0);
+  });
+
   it("🔴 an escalated thread idle for a day closes, and the client's next text gets the AI back", async () => {
     const shop = await makeShop();
     const phone = freshPhone();

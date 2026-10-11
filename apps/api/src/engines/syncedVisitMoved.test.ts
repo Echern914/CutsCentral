@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { prisma, type Shop } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { ingestAppointment } from "../ingest.js";
 import { ingestSquareBooking } from "../square/ingest.js";
 import type { SquareClient } from "../square/client.js";
@@ -159,6 +159,34 @@ describe("Acuity: a visit moved after its reminder", () => {
     const after = await stamps(shop.id, id);
     expect(after.reminderSentAt).not.toBeNull();
     expect(after.reminderEmailSentAt).not.toBeNull();
+  });
+});
+
+describe("Acuity, texting switched off (production today)", () => {
+  it("🔴 the EMAIL reminder is re-armed and sent again for the new time; nothing is texted", async () => {
+    const id = String(Math.floor(1e9 + Math.random() * 9e8));
+    const phone = `+1302555${Math.floor(1000 + Math.random() * 8999)}`;
+    const email = `acuoff-${randomToken(5)}@example.com`.toLowerCase();
+    const appt = (at: Date): AcuityAppointment =>
+      ({ id, firstName: "Off", lastName: "Moved", email, phone, datetime: at.toISOString(), type: "Cut" }) as AcuityAppointment;
+
+    process.env.SMS_ENABLED = "false";
+    __resetEnvCacheForTests();
+    try {
+      await ingestAppointment(shop, "scheduled", id, appt(inHours(4)));
+      await consent((await stamps(shop.id, id)).clientId);
+      await runSyncedVisitReminders(NOW);
+      expect(emails.filter((e) => e.to === email)).toHaveLength(1);
+
+      await ingestAppointment(shop, "scheduled", id, appt(inHours(7)));
+      expect((await stamps(shop.id, id)).reminderEmailSentAt).toBeNull();
+      await runSyncedVisitReminders(NOW);
+      expect(emails.filter((e) => e.to === email)).toHaveLength(2);
+      expect(texts.filter((t) => t.to === phone)).toHaveLength(0);
+    } finally {
+      process.env.SMS_ENABLED = "true";
+      __resetEnvCacheForTests();
+    }
   });
 });
 
