@@ -365,7 +365,7 @@ export async function completeEntry(opts: {
     if (!appt) throw new WalkInNotFoundError();
 
     if (appt.clientId) {
-      const earn = await promoteOneAppointmentInTx(
+      const outcome = await promoteOneAppointmentInTx(
         tx,
         shop,
         {
@@ -380,7 +380,10 @@ export async function completeEntry(opts: {
         // The shop completed this walk-in: they were in the chair.
         { byShop: true },
       );
-      return { earn, clientId: appt.clientId, appointmentId: appt.id };
+      // Its appointment was ended some other way first (no-show, cancel,
+      // removed): the same stale answer the entry's own CAS gives.
+      if (!outcome.promoted) throw new WalkInStaleTransitionError();
+      return { earn: outcome.earn, clientId: appt.clientId, appointmentId: appt.id };
     }
 
     // Clientless: no visit, no loyalty - flip the appointment (idempotent on

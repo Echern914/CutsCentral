@@ -46,9 +46,9 @@ async function nativeBooking(startsAt: Date, minutes = 45) {
   });
 }
 
-/** Done, the way the barber's Done button does it. */
+/** Done, the way the barber's Done button does it. Returns what it earned. */
 async function markDone(a: { id: string; startsAt: Date; endsAt: Date }) {
-  return runWithShop(shopId, (tx) =>
+  const outcome = await runWithShop(shopId, (tx) =>
     promoteOneAppointmentInTx(
       tx,
       { id: shopId, punchesPerVisit: 1 },
@@ -57,6 +57,7 @@ async function markDone(a: { id: string; startsAt: Date; endsAt: Date }) {
       { byShop: true },
     ),
   );
+  return outcome.promoted ? outcome.earn : null;
 }
 
 /** An Acuity appointment as ingest stores it: digits for an id, scheduled. */

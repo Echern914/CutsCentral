@@ -45,6 +45,15 @@ interface PromoteAppt {
 }
 
 /**
+ * What promoting one appointment did. `promoted: false` = it was no longer
+ * BOOKED (or COMPLETED) when the transaction got to it - a No-show or Cancel
+ * landed first - and NOTHING was written: no visit, no punch, no completion.
+ * The caller must then skip everything that follows a completion (cadence,
+ * the punch text, letting a kept card go).
+ */
+export type PromoteResult = { promoted: true; earn: EarnResult } | { promoted: false };
+
+/**
  * Promote ONE appointment inside an already-open shop transaction. Shared by the
  * scheduled scan and the dashboard "mark done" action so the two can never
  * drift. Returns the earn result (null if the visit had already earned), so the
@@ -63,7 +72,32 @@ export async function promoteOneAppointmentInTx(
    * ask goes only to visits the shop finished.
    */
   opts: { byShop?: boolean } = {},
-): Promise<EarnResult> {
+): Promise<PromoteResult> {
+  // 🔴 COMPLETE IT ONLY IF IT IS STILL BOOKED - A COMPARE-AND-SET, FIRST.
+  //
+  // `appt` is the caller's snapshot, and the sweep reads all its BOOKED rows
+  // once and then promotes them one by one. This used to upsert the visit,
+  // earn, and then set COMPLETED unconditionally - so a No-show or Cancel the
+  // barber tapped in that gap was overwritten: the cut that never happened
+  // went back to Completed, earned a punch, and texted it. Now the status
+  // moves here, at the top, only from BOOKED; whatever else is on the row was
+  // decided by someone else and stands. COMPLETED is let through as the
+  // idempotent re-run it always was (a checkout of a cut marked Done earlier):
+  // the visit and earn below are keyed, so it adds nothing.
+  //
+  // It also takes the appointment's row lock BEFORE the client's, the same
+  // order cancelAppointment takes them in, so the two serialise cleanly: a
+  // cancel arriving now waits for this commit, then reverses what it wrote.
+  const claimed = await tx.appointment.updateMany({
+    where: { id: appt.id, shopId: shop.id, status: { in: ["BOOKED", "COMPLETED"] } },
+    data: {
+      status: "COMPLETED",
+      completedAt: now,
+      ...(opts.byShop ? { completedByShop: true } : {}),
+    },
+  });
+  if (claimed.count === 0) return { promoted: false };
+
   // A walk-in queue entry riding this appointment goes terminal in the SAME
   // commit as the completion - and BEFORE the clientId guard, because the
   // entry's lifecycle doesn't depend on whether there is loyalty to earn.
@@ -71,7 +105,7 @@ export async function promoteOneAppointmentInTx(
   // appointment.
   await completeWalkInEntryForAppointmentInTx(tx, shop.id, appt.id, now);
 
-  if (!appt.clientId) return null; // no client to credit (defensive)
+  if (!appt.clientId) return { promoted: true, earn: null }; // no client to credit (defensive)
 
   // Lock the client row like every other ledger write (serializes earns).
   await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${appt.clientId} FOR UPDATE`;
@@ -110,17 +144,13 @@ export async function promoteOneAppointmentInTx(
     appt.endsAt,
   );
 
+  // The status already moved above, under this row's lock; link the visit.
   await tx.appointment.update({
     where: { id: appt.id },
-    data: {
-      status: "COMPLETED",
-      completedAt: now,
-      visitId: visit.id,
-      ...(opts.byShop ? { completedByShop: true } : {}),
-    },
+    data: { visitId: visit.id },
   });
 
-  return earn;
+  return { promoted: true, earn };
 }
 
 /**
@@ -132,9 +162,19 @@ export async function promoteOneAppointmentInTx(
  */
 export async function promoteFulfilledAppointments(
   now = new Date(),
+  /** Test-only scope, so a test never promotes another file's appointments. */
+  opts: { shopId?: string } = {},
 ): Promise<number> {
+  // A snapshot: each row is re-checked inside its own transaction
+  // (promoteOneAppointmentInTx), so one marked a no-show or cancelled after
+  // this read is left as the barber set it.
   const due = await prisma.appointment.findMany({
-    where: { status: "BOOKED", endsAt: { lt: now }, canceledAt: null },
+    where: {
+      ...(opts.shopId ? { shopId: opts.shopId } : {}),
+      status: "BOOKED",
+      endsAt: { lt: now },
+      canceledAt: null,
+    },
     select: {
       id: true,
       shopId: true,
@@ -158,7 +198,7 @@ export async function promoteFulfilledAppointments(
     const shop = shopById.get(a.shopId);
     if (!shop || !a.clientId) continue;
     try {
-      const earn = await runWithShop(a.shopId, (tx) =>
+      const outcome = await runWithShop(a.shopId, (tx) =>
         promoteOneAppointmentInTx(
           tx,
           shop,
@@ -173,6 +213,10 @@ export async function promoteFulfilledAppointments(
           now,
         ),
       );
+      // Marked a no-show or cancelled since the read above: that stands, and
+      // nothing that follows a completion happens.
+      if (!outcome.promoted) continue;
+      const earn = outcome.earn;
       await recomputeCadence(a.shopId, a.clientId);
       // The visit happened: nothing left to protect. Let the kept card go.
       void releaseCardOnFile({ shopId: a.shopId, appointmentId: a.id, reason: "completed" });
@@ -379,13 +423,28 @@ export async function cancelAppointment(
       });
     }
 
+    // 🔴 WHICH VISIT, READ AFTER THE CAS - not from the read at the top.
+    //
+    // That read can predate a completion: the sweep (or Done) promoting this
+    // booking commits between it and the CAS, the CAS then moves the now
+    // COMPLETED row to NO_SHOW, and the stale `visitId: null` skipped the
+    // teardown below - leaving a completed visit and its punch standing on a
+    // no-show. The CAS holds this row's lock, so what is read now is final:
+    // any promotion has either committed (and is torn down here) or will find
+    // the row no longer BOOKED and write nothing.
+    const linked = await tx.appointment.findFirst({
+      where: { id: appt.id, shopId },
+      select: { visitId: true },
+    });
+    const visitId = linked?.visitId ?? null;
+
     // Already promoted: tear down the Visit's loyalty footprint.
-    if (appt.visitId) {
+    if (visitId) {
       if (appt.clientId) {
         await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${appt.clientId} FOR UPDATE`;
       }
       await tx.visit.update({
-        where: { id: appt.visitId },
+        where: { id: visitId },
         data: {
           status: outcome,
           completedAt: null,
@@ -393,7 +452,7 @@ export async function cancelAppointment(
           noShow: outcome === "NO_SHOW",
         },
       });
-      await clawBackVisitEarn(tx, shopId, appt.visitId);
+      await clawBackVisitEarn(tx, shopId, visitId);
     }
 
     // 🔴 THE PROMISE TO EMAIL COMMITS WITH THE CANCELLATION, in this same
@@ -432,7 +491,7 @@ export async function cancelAppointment(
 
     return {
       clientId: appt.clientId,
-      hadVisit: Boolean(appt.visitId),
+      hadVisit: Boolean(visitId),
       paymentId: appt.payments[0]?.id ?? null,
       startsAt: appt.startsAt,
       priceAtBooking: appt.priceAtBooking,

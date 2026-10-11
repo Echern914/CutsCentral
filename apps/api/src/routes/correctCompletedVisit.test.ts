@@ -188,7 +188,7 @@ async function autoCompleted(
     },
     select: { id: true },
   });
-  const earn = await runWithShop(s.shopId, (tx) =>
+  const outcome = await runWithShop(s.shopId, (tx) =>
     promoteOneAppointmentInTx(
       tx,
       { id: s.shopId, punchesPerVisit: 1 },
@@ -204,7 +204,7 @@ async function autoCompleted(
       { byShop: opts.byShop === true },
     ),
   );
-  expect(earn?.earned).toBe(1);
+  expect(outcome.promoted && outcome.earn?.earned).toBe(1);
   const r = await row(appt.id);
   expect(r.status).toBe("COMPLETED");
   return { id: appt.id, clientId: client.id, visitId: r.visitId! };
