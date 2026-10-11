@@ -21,6 +21,12 @@ import {
 } from "../engines/appointmentPromotion.js";
 import { isRecordedWalkIn, WALK_IN_SERVICE_NAME } from "../engines/walkInReceipt.js";
 import {
+  approvePartyInTx,
+  confirmApprovedParty,
+  declineParty,
+  PartyChangedError,
+} from "../engines/appointmentGroupApproval.js";
+import {
   CORRECTION_SELECT,
   correctionRefusal,
   correctionRefusalMessage,
@@ -6277,9 +6283,21 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
         // not a request - it must never be approvable (it's already excluded
         // from the requests list; this is the belt-and-suspenders).
         where: { id: req.params.id!, shopId, status: "PENDING", holdExpiresAt: null },
-        select: { id: true, staffId: true, startsAt: true, endsAt: true },
+        select: { id: true, staffId: true, startsAt: true, endsAt: true, groupId: true },
       });
       if (!appt) return null; // not found / already handled (idempotent)
+
+      // 🔴 A PARTY IS ONE REQUEST: approving any member approves all of them,
+      // checked together on each member's own chair, or none of them. See
+      // engines/appointmentGroupApproval.ts for why it cannot be per member.
+      if (appt.groupId) {
+        const ids = await approvePartyInTx(tx, {
+          shopId,
+          groupId: appt.groupId,
+          bufferMin: shop.bookingBufferMin,
+        });
+        return ids.length > 0 ? { groupId: appt.groupId, party: ids.length } : null;
+      }
 
       // Re-verify under the shared guard, excluding self. BOOKED-only: the row
       // being approved is itself PENDING, and any conflicting PENDING would
@@ -6318,10 +6336,22 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
       res.status(404).json({ ok: false });
       return;
     }
+    if (typeof approved === "object") {
+      // ONE confirmation for the whole party, through the party's own
+      // once-only marker - never one per member.
+      await confirmApprovedParty(shopId, approved.groupId);
+      // `party`: how many people this approved, so the dashboard can say so.
+      res.status(200).json({ ok: true, party: approved.party });
+      return;
+    }
     // First customer confirmation fires now (approval is the confirm event).
     void notifyAppointmentConfirmation({ shopId, appointmentId: approved });
     res.status(200).json({ ok: true });
   } catch (err) {
+    if (err instanceof PartyChangedError) {
+      res.status(409).json({ ok: false, error: "party_changed" });
+      return;
+    }
     if (err instanceof ExternalBlockError) {
       // No override on approve: the request now sits on time the barber
       // blocked in Acuity. Decline it, or clear the block there.
@@ -6350,6 +6380,20 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
 // blast for a slot no one really held would be wrong.
 bookingDashboardRouter.post("/appointments/:id/decline", async (req, res) => {
   const shopId = req.shop!.id;
+  // 🔴 A PARTY IS ONE REQUEST: declining any member declines all of them,
+  // the same light flip, and ends the party (engines/appointmentGroupApproval.ts).
+  const party = await forShop(shopId).appointment.findFirst({
+    where: { id: req.params.id!, shopId, status: "PENDING", holdExpiresAt: null },
+    select: { groupId: true },
+  });
+  if (party?.groupId) {
+    const declined = await declineParty(shopId, party.groupId);
+    if (declined.length > 0) await noteAvailabilityChanged(shopId);
+    res
+      .status(declined.length > 0 ? 200 : 404)
+      .json(declined.length > 0 ? { ok: true, party: declined.length } : { ok: false });
+    return;
+  }
   const updated = await forShop(shopId).appointment.updateMany({
     where: { id: req.params.id!, shopId, status: "PENDING" },
     data: { status: "CANCELED", canceledAt: new Date() },

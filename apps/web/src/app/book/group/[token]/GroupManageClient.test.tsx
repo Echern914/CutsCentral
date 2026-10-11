@@ -364,3 +364,52 @@ describe("🔴 the token is a credential", () => {
     expect(document.body.textContent).not.toContain("mt_2");
   });
 });
+
+describe("🔴 a request the shop has not answered is waiting, not cancelled", () => {
+  const REQUESTED: GroupView = {
+    ...GROUP,
+    requested: true,
+    members: GROUP.members.map((m) => ({ ...m, status: "PENDING" })),
+  };
+
+  it("says it is waiting for the shop, and offers nothing it would refuse", () => {
+    show(REQUESTED);
+    expect(screen.getByText("Your group request")).toBeTruthy();
+    expect(screen.getByText("Waiting for Chern Cuts to confirm")).toBeTruthy();
+    expect(screen.queryByText("Group cancelled")).toBeNull();
+    // Nobody is shown struck through as cancelled.
+    expect(screen.queryByText(/· cancelled/)).toBeNull();
+    // Like a single request: no cancel and no move until the shop answers.
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel the whole group" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Move the whole group" })).toBeNull();
+  });
+});
+
+describe("🔴 once the visit has started, everyone can no longer be moved or cancelled here", () => {
+  const STARTED: GroupView = {
+    ...GROUP,
+    started: true,
+    members: GROUP.members.map((m, i) => ({ ...m, started: i === 0 })),
+  };
+
+  it("hides cancel-everyone and move-everyone, and the cancel of the member in the chair", () => {
+    show(STARTED);
+    expect(screen.queryByRole("button", { name: "Cancel the whole group" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Move the whole group" })).toBeNull();
+    expect(screen.getByText(/already started/)).toBeTruthy();
+    // Brother is still to come: his own cancel is still offered.
+    const cancels = screen.getAllByRole("button", { name: "Cancel" });
+    expect(cancels).toHaveLength(1);
+    fireEvent.click(cancels[0]!);
+    expect(screen.getByRole("dialog").textContent).toContain("Cancel only Brother's appointment?");
+  });
+
+  it("a refusal from the server (the page was left open) says why", async () => {
+    cancelAll.mockResolvedValue({ ok: false, code: "started" });
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel the whole group" }));
+    fireEvent.click(screen.getByRole("button", { name: /Yes, cancel everyone/ }));
+    expect(await screen.findByText(/already started/)).toBeTruthy();
+  });
+});

@@ -108,6 +108,11 @@ export async function groupPlanAction(
 /** Every distinguishable outcome of trying to book a party. */
 export type GroupCreateOutcome =
   | { kind: "booked"; groupId: string; manageToken: string }
+  /**
+   * The shop approves every online booking (Request-before-booking): the party
+   * was sent as ONE request and nobody is booked until the shop says yes.
+   */
+  | { kind: "requested"; groupId: string; manageToken: string }
   /** The chairs are held; the calendar mirror has not answered yet. */
   | { kind: "confirming"; groupId: string; manageToken: string }
   | { kind: "slot_taken" }
@@ -163,7 +168,13 @@ export async function groupCreateAction(
 ): Promise<GroupCreateOutcome> {
   let res;
   try {
-    res = await apiPublicSend<{ groupId: string; manageToken: string; status?: string }>(
+    res = await apiPublicSend<{
+      groupId: string;
+      manageToken: string;
+      status?: string;
+      /** true = a REQUEST awaiting the shop's approval, not a booking. */
+      pending?: boolean;
+    }>(
       "POST",
       `/api/book/${encodeURIComponent(slug)}/group`,
       input,
@@ -185,6 +196,10 @@ export async function groupCreateAction(
         groupId: res.data.groupId,
         manageToken: res.data.manageToken,
       };
+    }
+    // 🔴 A REQUEST IS NEVER "YOU'RE BOOKED". The shop has not said yes.
+    if (res.data.pending === true) {
+      return { kind: "requested", groupId: res.data.groupId, manageToken: res.data.manageToken };
     }
     return { kind: "booked", groupId: res.data.groupId, manageToken: res.data.manageToken };
   }
