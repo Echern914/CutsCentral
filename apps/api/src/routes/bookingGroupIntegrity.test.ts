@@ -526,3 +526,22 @@ describe("🔴 4. a moved party starts its reminders and check-in over", () => {
     }
   });
 });
+
+describe("🔴 5. an attendee's contact stays on the attendee's appointment", () => {
+  it("editing the brother's phone and email never rewrites the booker's record", async () => {
+    const res = await createParty();
+    const [, second] = await members(res.body.groupId);
+    const bookerClientId = second!.clientId!;
+
+    const edit = await request(app)
+      .patch(`/api/booking/appointments/${second!.id}`)
+      .set("Cookie", cookie)
+      .send({ phone: "+12015550199", email: "brother@test.chairback" });
+    expect(edit.status).toBe(200);
+
+    const row = await prisma.appointment.findUniqueOrThrow({ where: { id: second!.id } });
+    expect([row.phone, row.email]).toEqual(["+12015550199", "brother@test.chairback"]);
+    const client = await prisma.client.findUniqueOrThrow({ where: { id: bookerClientId } });
+    expect([client.phone, client.email]).toEqual([booker.phone, booker.email]);
+  });
+});
