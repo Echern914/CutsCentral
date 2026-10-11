@@ -131,10 +131,9 @@ function FindShop({ home }: { home: Home | undefined }) {
       router.push({ pathname: "/customer/link", params: { url: found.pageUrl, name: found.name } });
       return;
     }
-    router.push({
-      pathname: "/customer/join",
-      params: { handle: found.handle, name: found.name, logo: found.logoUrl ?? "", town: found.town ?? "" },
-    });
+    // The handle only: the Join screen looks the shop up itself and never
+    // shows a name or logo that rode in on a link (src/customer/joinShop.ts).
+    router.push({ pathname: "/customer/join", params: { handle: found.handle } });
   }
 
   return (
