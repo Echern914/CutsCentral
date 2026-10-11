@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-10-prices-and-policy-match-charges",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "Booking page and policies now match what's charged",
+    body:
+      "Your booking page now shows holiday prices and the deposit actually taken. With a card on file and fees " +
+      "on, your cancellation policy says the card is charged, and clients see the amount before a late cancel. " +
+      "Each booking keeps the cancellation terms it was made under.",
+  },
+  {
     id: "2026-10-10-privacy-terms-updated",
     date: "2026-10-10",
     kind: "feature",
