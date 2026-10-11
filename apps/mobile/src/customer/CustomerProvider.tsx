@@ -15,8 +15,9 @@ import { useFocusEffect } from "expo-router";
 import { API_ORIGIN, STORAGE } from "@/src/config";
 import { getExpoPushToken } from "@/src/push";
 import { ApiError, createApiClient, type ApiClient } from "./api";
-import { clearCustomerSession, loadCustomerSession, saveCustomerSession } from "./sessionStore";
+import { clearCustomerSession, loadCustomerSession, pushDeviceMemory, saveCustomerSession } from "./sessionStore";
 import { createDeviceRegistrar, type DeviceRegistrar } from "./deviceRegistration";
+import { createDeviceRelease, releaseSender, type DeviceRelease } from "./deviceRelease";
 
 /**
  * Who is signed in to My ChairBack, and the API client that speaks for them.
@@ -56,17 +57,34 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
   // while iOS is still answering - state would be a stale closure.
   const canRegister = useRef(false);
   canRegister.current = status === "signedIn" && !isDemo;
+  // Read by the 401 handler, which is created once and would see a stale state.
+  const isDemoRef = useRef(false);
+  isDemoRef.current = isDemo;
   const registrarRef = useRef<DeviceRegistrar | null>(null);
 
-  const dropLocal = useCallback(async () => {
+  // Taking the phone off an account's push, remembered across launches until
+  // the server confirms it (deviceRelease.ts).
+  const releaseRef = useRef<DeviceRelease | null>(null);
+  if (!releaseRef.current) {
+    releaseRef.current = createDeviceRelease({ ...pushDeviceMemory, send: releaseSender({ origin: API_ORIGIN }) });
+  }
+  const deviceRelease = releaseRef.current;
+  // The removal in flight, if any. A registration waits for it: one landing
+  // after the other's registration could take the live sign-in off.
+  const releasing = useRef<Promise<unknown>>(Promise.resolve());
+
+  /** Forget the session here. Answers the push token this phone may still be registered under. */
+  const dropLocal = useCallback(async (): Promise<string | null> => {
     canRegister.current = false;
-    void registrarRef.current?.stop();
+    const stopping = registrarRef.current?.stop() ?? Promise.resolve(null);
+    const device = pushToken.current;
     token.current = null;
     pushToken.current = null;
     clearCache();
     setIsDemo(false);
     setStatus("signedOut");
     await clearCustomerSession();
+    return (await stopping.catch(() => null)) ?? device;
   }, []);
 
   const api = useMemo(
@@ -75,23 +93,44 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
         origin: API_ORIGIN,
         token: () => token.current,
         onUnauthorized: () => {
-          void dropLocal();
+          // A dead session (60 days old, or revoked) signs out on the spot -
+          // and must not leave this phone hearing from that account. Its
+          // token can no longer reach /api/me, but the release route takes it.
+          const bearer = token.current;
+          const demo = isDemoRef.current;
+          const dropping = dropLocal();
+          if (bearer && !demo) {
+            const prior = releasing.current;
+            releasing.current = (async () => {
+              await prior.catch(() => {});
+              const device = await dropping;
+              await deviceRelease.release({ bearer, expoPushToken: device });
+            })().catch(() => {});
+          }
         },
       }),
-    [dropLocal],
+    [deviceRelease, dropLocal],
   );
 
   if (!registrarRef.current) {
     registrarRef.current = createDeviceRegistrar({
       getToken: getExpoPushToken,
       register: async (expoPushToken) => {
+        await releasing.current.catch(() => {});
         await api.send("POST", "/api/me/devices", { expoPushToken, platform: Platform.OS === "ios" ? "ios" : "android" });
         pushToken.current = expoPushToken;
+        await deviceRelease.registered(expoPushToken);
       },
       canRegister: () => canRegister.current && token.current !== null,
     });
   }
   const registrar = registrarRef.current;
+
+  // A removal an earlier launch could not send (offline, app killed) goes
+  // first thing, before this launch registers anything.
+  useEffect(() => {
+    releasing.current = deviceRelease.retryPending().catch(() => {});
+  }, [deviceRelease]);
 
   useEffect(() => {
     let alive = true;
@@ -120,16 +159,22 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
     // first: no new registration starts, and one already in flight is waited
     // for, so it can't land after this and leave the phone registered.
     canRegister.current = false;
+    const bearer = token.current;
     const device = (await registrar.stop()) ?? pushToken.current;
-    if (device && token.current && !isDemo) {
-      await api.send("POST", "/api/me/devices/remove", { expoPushToken: device }).catch(() => {});
+    if (bearer && !isDemo) {
+      // Written down before it is sent, and retried next launch if it doesn't
+      // land; with no token from this launch, the one remembered from an
+      // earlier launch is removed.
+      const job = deviceRelease.release({ bearer, expoPushToken: device });
+      releasing.current = job.catch(() => {});
+      await job.catch(() => {});
     }
     // The last shop link opened here is somebody's own record. Signing out is
     // "I'm done on this phone": the next person must not get it in one tap
     // from the sign-in screen.
     await AsyncStorage.removeItem(STORAGE.lastToken).catch(() => {});
     await dropLocal();
-  }, [api, dropLocal, isDemo, registrar]);
+  }, [deviceRelease, dropLocal, isDemo, registrar]);
 
   const value = useMemo<CustomerContext>(
     () => ({ status, isDemo, api, signIn, signOut, pushToken, registrar }),

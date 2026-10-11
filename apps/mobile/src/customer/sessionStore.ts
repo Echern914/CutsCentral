@@ -1,4 +1,5 @@
 import * as SecureStore from "expo-secure-store";
+import type { KeyValue } from "./deviceRelease";
 
 /**
  * The My ChairBack session, in the KEYCHAIN.
@@ -41,3 +42,40 @@ export async function clearCustomerSession(): Promise<void> {
     /* nothing stored, or nothing we can do */
   }
 }
+
+/** One keychain value, failures swallowed like the session's. */
+function keychainValue(key: string): KeyValue {
+  return {
+    async get() {
+      try {
+        return await SecureStore.getItemAsync(key, OPTIONS);
+      } catch {
+        return null;
+      }
+    },
+    async set(value) {
+      try {
+        await SecureStore.setItemAsync(key, value, OPTIONS);
+      } catch {
+        /* best-effort, as every push step is */
+      }
+    },
+    async clear() {
+      try {
+        await SecureStore.deleteItemAsync(key, OPTIONS);
+      } catch {
+        /* nothing stored */
+      }
+    },
+  };
+}
+
+/**
+ * What this phone remembers about its push registration across launches (see
+ * deviceRelease.ts). In the keychain because a pending removal carries the
+ * account's session token.
+ */
+export const pushDeviceMemory = {
+  device: keychainValue("cb.customerPushDevice"),
+  pending: keychainValue("cb.customerPushRelease"),
+};

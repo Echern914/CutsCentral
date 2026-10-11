@@ -14,6 +14,7 @@ import {
   type GroupPlanResult,
 } from "./actions";
 import { GroupSequence, groupDateLabel } from "./GroupSequence";
+import { useSignalNativeReady } from "@/lib/nativeReady";
 import {
   BookingPolicyPanel,
   POLICY_CHANGED_MESSAGE,
@@ -94,6 +95,9 @@ function newIdempotencyKey(): string {
 }
 
 export function GroupBookingClient({ data }: { data: BookShopData }) {
+  // The app opens /book/* links in a WebView that waits for this before it
+  // drops its spinner; without it a group link hung 20 s, then "Couldn't load".
+  useSignalNativeReady();
   const slug = data.shop.slug;
   const tz = data.shop.timezone;
   // 🔴 NEVER the literal "barber". This page renders for nail studios and

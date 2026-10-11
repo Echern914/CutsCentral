@@ -4,6 +4,7 @@ import { useState } from "react";
 import { requestedDetail } from "@chairback/config/customerStatus";
 import { groupSlotsAction } from "../../[slug]/group/actions";
 import { groupDateLabel, money } from "../../[slug]/group/GroupSequence";
+import { useSignalNativeReady } from "@/lib/nativeReady";
 import {
   cancelGroupAction,
   cancelMemberAction,
@@ -48,6 +49,9 @@ export function GroupManageClient({
   token: string;
   initial: GroupView;
 }) {
+  // The app's WebView waits for this before it drops its spinner (see
+  // GroupBookingClient).
+  useSignalNativeReady();
   const [group, setGroup] = useState(initial);
   const [confirming, setConfirming] = useState<Confirming>({ kind: "none" });
   const [busy, setBusy] = useState(false);

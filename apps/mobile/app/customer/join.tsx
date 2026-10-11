@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { API_ORIGIN } from "@/src/config";
 import { useResource } from "@/src/customer/CustomerProvider";
 import { ApiError, errorCopy } from "@/src/customer/api";
 import { displayPhone } from "@/src/customer/format";
 import { joinDetailsMessage } from "@/src/customer/joinDetails";
+import { joinScreenShop, lookUpJoinShop, type JoinShopLookup } from "@/src/customer/joinShop";
 import { useSavedShopActions } from "@/src/customer/savedShops";
 import { color, radius, space, type } from "@/src/customer/theme";
 import type { Profile } from "@/src/customer/types";
@@ -24,19 +26,30 @@ import { Avatar, Button, ErrorState, Group, Placeholder, Row, Separator, Tap, Tx
  *
  * Joined: back to Book, where the shop now has its Book button. A shop that
  * approves new clients: back to Book, where it says Pending until they answer.
+ *
+ * 🔴 ONLY THE HANDLE IS READ FROM THE LINK. This is a route, so any link can
+ * open it with any name and logo; the shop shown - and the one joined - is the
+ * find-shop lookup's answer for that handle (src/customer/joinShop.ts), and
+ * there is no Join button until it arrives.
  */
 export default function JoinScreen() {
   const router = useRouter();
-  const { handle, name, logo, town } = useLocalSearchParams<{
-    handle: string;
-    name?: string;
-    logo?: string;
-    town?: string;
-  }>();
+  const { handle } = useLocalSearchParams<{ handle: string }>();
   const me = useResource<{ profile: Profile }>("/api/me");
   const actions = useSavedShopActions();
-  const shopName = name || "this shop";
+  const [lookup, setLookup] = useState<JoinShopLookup>({ kind: "loading" });
+  const shop = joinScreenShop(lookup);
+  const shopName = shop.name;
   const profile = me.data?.profile;
+
+  const findShop = useCallback(async () => {
+    setLookup({ kind: "loading" });
+    setLookup(await lookUpJoinShop(handle, { origin: API_ORIGIN, fetchImpl: (input, init) => fetch(input, init) }));
+  }, [handle]);
+
+  useEffect(() => {
+    void findShop();
+  }, [findShop]);
 
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
@@ -61,6 +74,9 @@ export default function JoinScreen() {
 
   async function join() {
     if (busy) return;
+    // The server's handle for the shop on screen - never the link's.
+    const joinHandle = shop.joinHandle;
+    if (!joinHandle) return;
     // Both names, always: the shop sees who joined, and a first name alone
     // ("Jaylon") told the barber nothing. Instagram stays optional.
     if (!first.trim() || !last.trim()) {
@@ -70,7 +86,7 @@ export default function JoinScreen() {
     setBusy(true);
     setMessage(null);
     try {
-      const status = await actions.join(handle, first.trim(), last.trim(), instagram.trim());
+      const status = await actions.join(joinHandle, first.trim(), last.trim(), instagram.trim());
       if (status === "needs_connecting") {
         setMessage(
           `${shopName} already has your number or email on file. Open the link they texted or emailed you to connect it, or ask them to send it.`,
@@ -113,24 +129,45 @@ export default function JoinScreen() {
         }}
       />
       <ScrollView style={styles.flex} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <View style={styles.shop}>
-          <Avatar uri={logo || null} name={shopName} size={56} />
-          <View style={styles.shopText}>
+        {lookup.kind === "loading" ? (
+          <Placeholder height={56} />
+        ) : lookup.kind === "not_found" ? (
+          <>
             <Txt variant="title2" accessibilityRole="header">
-              {`Join ${shopName}`}
+              No shop to join
             </Txt>
-            {town ? (
-              <Txt variant="subhead" tone="secondary">
-                {town}
-              </Txt>
-            ) : null}
-          </View>
-        </View>
-        <Txt variant="body" tone="secondary" style={styles.lede}>
-          You'll be on their client list, and they'll be in your shops, ready to book.
-        </Txt>
+            <Txt variant="body" tone="secondary" style={styles.lede}>
+              We can't find a shop for this link. Check the name with them, or use the link they sent.
+            </Txt>
+          </>
+        ) : lookup.kind === "unavailable" ? (
+          <ErrorState
+            title="We couldn't check this shop"
+            body="Check your connection and try again."
+            onRetry={() => void findShop()}
+          />
+        ) : (
+          <>
+            <View style={styles.shop}>
+              <Avatar uri={shop.logo} name={shopName} size={56} />
+              <View style={styles.shopText}>
+                <Txt variant="title2" accessibilityRole="header">
+                  {`Join ${shopName}`}
+                </Txt>
+                {shop.town ? (
+                  <Txt variant="subhead" tone="secondary">
+                    {shop.town}
+                  </Txt>
+                ) : null}
+              </View>
+            </View>
+            <Txt variant="body" tone="secondary" style={styles.lede}>
+              You'll be on their client list, and they'll be in your shops, ready to book.
+            </Txt>
+          </>
+        )}
 
-        {!profile && me.loading ? (
+        {lookup.kind !== "found" ? null : !profile && me.loading ? (
           <Placeholder height={260} style={styles.gapLarge} />
         ) : !profile ? (
           <ErrorState {...errorCopy(me.error)} onRetry={me.refresh} />
@@ -206,7 +243,13 @@ export default function JoinScreen() {
                 {message}
               </Txt>
             ) : null}
-            <Button label="Join shop" busy={busy} onPress={() => void join()} style={styles.primary} />
+            <Button
+              label="Join shop"
+              busy={busy}
+              disabled={!shop.joinHandle}
+              onPress={() => void join()}
+              style={styles.primary}
+            />
             <Txt variant="caption" tone="tertiary" style={styles.gapSmall}>
               {`${shopName} gets your ${shared}. Joining doesn't sign you up for marketing texts.`}
             </Txt>

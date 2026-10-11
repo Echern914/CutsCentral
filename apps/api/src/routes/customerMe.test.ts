@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { __resetEnvCacheForTests, apiEnv, randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
@@ -821,6 +821,71 @@ describe("push reaches the customer from every shop", () => {
     __setExpoSenderForTests({ send: async (t) => void delivered.push(t) });
     await sendPushToClient({ shopId: shopA, clientId: a1.id, payload: { title: "t", body: "b", url: "u" } });
     expect(delivered).toEqual([]);
+  });
+});
+
+describe("a phone whose session died can still stop hearing from the account", () => {
+  const release = (bearer: string | null, body: object) => {
+    const r = request(app).post("/api/customer-auth/devices/release");
+    return (bearer ? r.set("Authorization", `Bearer ${bearer}`) : r).send(body);
+  };
+
+  /** A token signed for `id` 61 days ago - expired, as a 60-day session is. */
+  function expiredTokenFor(id: string): string {
+    const realNow = Date.now();
+    const spy = vi.spyOn(Date, "now").mockReturnValue(realNow - 61 * DAY);
+    try {
+      return mintCustomerSession(id, 0);
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("🔴 an EXPIRED session releases its own phone - /api/me refuses it, release does not", async () => {
+    const { me, a1 } = await regular();
+    const token = `ExponentPushToken[${randomToken(12)}]`;
+    await send("post", "/api/me/devices", me.token, { expoPushToken: token, platform: "ios" });
+    await get("/api/me/home", me.token);
+    const dead = expiredTokenFor(me.id);
+    expect((await get("/api/me/home", dead)).status).toBe(401);
+
+    expect((await release(dead, { expoPushToken: token })).status).toBe(200);
+    expect(await prisma.customerDevice.count({ where: { expoPushToken: token } })).toBe(0);
+
+    const delivered: string[] = [];
+    __setExpoSenderForTests({ send: async (t) => void delivered.push(t) });
+    await sendPushToClient({ shopId: shopA, clientId: a1.id, payload: { title: "t", body: "b", url: "u" } });
+    expect(delivered).toEqual([]);
+  });
+
+  it("a revoked session (tokenVersion bumped) releases its phone too", async () => {
+    const me = await account({ phone: randomPhone() });
+    const token = `ExponentPushToken[${randomToken(12)}]`;
+    await send("post", "/api/me/devices", me.token, { expoPushToken: token, platform: "ios" });
+    await prisma.customerAccount.update({ where: { id: me.id }, data: { tokenVersion: 1 } });
+    expect((await release(me.token, { expoPushToken: token })).status).toBe(200);
+    expect(await prisma.customerDevice.count({ where: { expoPushToken: token } })).toBe(0);
+  });
+
+  it("🔴 one account's token cannot take a phone off ANOTHER account", async () => {
+    const owner = await account({ phone: randomPhone() });
+    const other = await account({ phone: randomPhone() });
+    const token = `ExponentPushToken[${randomToken(12)}]`;
+    await send("post", "/api/me/devices", owner.token, { expoPushToken: token, platform: "ios" });
+    expect((await release(other.token, { expoPushToken: token })).status).toBe(200);
+    expect(await prisma.customerDevice.count({ where: { expoPushToken: token, accountId: owner.id } })).toBe(1);
+  });
+
+  it("no token, or a forged one, is refused and removes nothing", async () => {
+    const me = await account({ phone: randomPhone() });
+    const token = `ExponentPushToken[${randomToken(12)}]`;
+    await send("post", "/api/me/devices", me.token, { expoPushToken: token, platform: "ios" });
+    expect((await release(null, { expoPushToken: token })).status).toBe(401);
+    const [payload] = me.token.split(".");
+    expect((await release(`${payload}.forged`, { expoPushToken: token })).status).toBe(401);
+    // A BUSINESS session is signed with a different key: not a customer token.
+    expect((await release(mintSessionToken(ownerId, 0), { expoPushToken: token })).status).toBe(401);
+    expect(await prisma.customerDevice.count({ where: { expoPushToken: token } })).toBe(1);
   });
 });
 

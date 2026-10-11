@@ -3,7 +3,7 @@ import { z } from "zod";
 import { runAsOwner } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
 import { signInTextsEnabled } from "../messaging/twilio.js";
-import { mintCustomerSession } from "../auth/customerSession.js";
+import { customerAccountFromSignedToken, mintCustomerSession } from "../auth/customerSession.js";
 import { customerAuthLimiter } from "../middleware/rateLimit.js";
 import { requireCustomerAccounts } from "../middleware/requireCustomer.js";
 import {
@@ -133,4 +133,40 @@ customerAuthRouter.post("/demo", customerAuthLimiter, async (_req, res) => {
     return;
   }
   res.json({ token: mintCustomerSession(account.id, account.tokenVersion, { demo: true }) });
+});
+
+const releaseSchema = z.object({ expoPushToken: z.string().min(10).max(200) }).strict();
+
+/**
+ * Take THIS phone off an account's push, with that account's session even if
+ * it has died.
+ *
+ * /api/me/devices/remove needs a live session, and the app's sign-out is not
+ * the only way a session ends: one 60 days old, or revoked, answers 401 and
+ * the app signs out on the spot - with nothing left to authenticate the
+ * remove. The device row stayed, and the account's shops kept reaching a
+ * signed-out phone. The app now calls this on every sign-out, retries it on
+ * the next launch until it lands, and calls it after a 401 too.
+ *
+ * A signed token is required, expired or not (customerAccountFromSignedToken),
+ * and the delete is scoped to the account it names AND the push token sent:
+ * holding one phone's old session lets you silence that phone for that
+ * account, and nothing else. Same answer whether or not a row was there.
+ */
+customerAuthRouter.post("/devices/release", customerAuthLimiter, async (req, res) => {
+  const parsed = releaseSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const header = req.header("Authorization");
+  const accountId = customerAccountFromSignedToken(header?.startsWith("Bearer ") ? header.slice(7) : undefined);
+  if (!accountId) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  await runAsOwner((tx) =>
+    tx.customerDevice.deleteMany({ where: { accountId, expoPushToken: parsed.data.expoPushToken } }),
+  );
+  res.json({ ok: true });
 });
