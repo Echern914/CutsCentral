@@ -1,6 +1,6 @@
-import { prisma } from "@chairback/db";
+import { prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
-import { earnPunchForVisit } from "../services/punch.js";
+import { earnPunchForVisitInTx, type EarnResult } from "../services/punch.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
 import { recomputeCadence } from "./cadence.js";
 import { mayAnnounceCompletedVisit, visitsWithoutLiveSource } from "./syncedVisitTrust.js";
@@ -68,44 +68,100 @@ export async function promoteCompletedVisits(
   const shopById = new Map(shops.map((s) => [s.id, s]));
 
   let promoted = 0;
+  let failed = 0;
   for (const v of due) {
-    promoted++;
-    await prisma.visit.update({
-      where: { id: v.id },
-      data: { status: "COMPLETED", completedAt: now },
-    });
-    // The shop must exist - visits cascade-delete with their shop. The visit
-    // "happened" when it ended, which is what promo windows check against.
-    const earn = await earnPunchForVisit(
-      shopById.get(v.shopId)!,
-      v.clientId,
-      v.id,
-      v.serviceName,
-      v.endAt ?? now,
-    );
-    await recomputeCadence(v.shopId, v.clientId);
-    // Tell the client they earned punches (gated by the shop toggle + consent +
-    // quiet hours inside notify). Only on a genuine first earn - a re-run of this
-    // job returns null and stays silent. Awaited but never throws.
-    // 🔴 NEVER FOR IMPORTED HISTORY (syncedVisitTrust.ts, rule 2): a visit
-    // ChairBack learned about after it ended keeps its punch but announces
-    // nothing - one message per old cut was the connect-time flood.
-    if (earn && mayAnnounceCompletedVisit(v, now)) {
-      await notifyPunchEarned({
-        shopId: v.shopId,
-        clientId: v.clientId,
-        earned: earn.earned,
-        balance: earn.balance,
-        cardTypeId: earn.cardTypeId,
-        cardName: earn.cardName,
-        now,
+    // The shop must exist - visits cascade-delete with their shop.
+    const shop = shopById.get(v.shopId);
+    if (!shop) continue;
+
+    // 🔴 ONE TRANSACTION PER VISIT: COMPLETE IT AND EARN, OR NEITHER.
+    //
+    // This used to set COMPLETED in one write and earn in a separate
+    // transaction, unconditionally and with nothing catching a failure:
+    //  - a resync that cancelled (or no-showed) the visit after the list
+    //    above was read was overwritten back to COMPLETED, and earned;
+    //  - an earn that failed left the visit COMPLETED with no punch - never
+    //    retried, since completed visits drop out of this query - and threw
+    //    out of the loop, so every visit after it waited for the next run.
+    // Now the status moves only while the visit is STILL due (a compare-and-
+    // set on what made it due), in the same commit as its punch; a failure
+    // rolls both back, so the next run simply tries it again, and the loop
+    // moves on. The client row is locked first, as ingest's own write takes
+    // it before the visit's, so a resync of this visit waits for this commit
+    // (and then claws back what it must) rather than slipping past it.
+    let outcome: { completed: false } | { completed: true; earn: EarnResult };
+    try {
+      outcome = await runWithShop(v.shopId, async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${v.clientId} FOR UPDATE`;
+        const moved = await tx.visit.updateMany({
+          where: {
+            id: v.id,
+            shopId: v.shopId,
+            status: { in: ["SCHEDULED", "RESCHEDULED"] },
+            endAt: { lt: now },
+            canceledAt: null,
+            noShow: false,
+          },
+          data: { status: "COMPLETED", completedAt: now },
+        });
+        if (moved.count === 0) return { completed: false as const };
+        // As it stands now - a resync may have changed the service since.
+        const current = await tx.visit.findUniqueOrThrow({
+          where: { id: v.id },
+          select: { serviceName: true, endAt: true },
+        });
+        // The visit "happened" when it ended, which is what promo windows
+        // check against.
+        const earn = await earnPunchForVisitInTx(
+          tx,
+          shop,
+          v.clientId,
+          v.id,
+          current.serviceName,
+          current.endAt ?? now,
+        );
+        return { completed: true as const, earn };
       });
+    } catch (err) {
+      failed++;
+      logger.error({ err, visitId: v.id, shopId: v.shopId }, "visit completion failed; retried next run");
+      continue;
+    }
+    // Cancelled, no-showed or moved since the read above: left as it is.
+    if (!outcome.completed) continue;
+    promoted++;
+
+    try {
+      await recomputeCadence(v.shopId, v.clientId);
+      // Tell the client they earned punches (gated by the shop toggle + consent +
+      // quiet hours inside notify). Only on a genuine first earn - a re-run of this
+      // job returns null and stays silent. Awaited but never throws.
+      // 🔴 NEVER FOR IMPORTED HISTORY (syncedVisitTrust.ts, rule 2): a visit
+      // ChairBack learned about after it ended keeps its punch but announces
+      // nothing - one message per old cut was the connect-time flood.
+      const earn = outcome.earn;
+      if (earn && mayAnnounceCompletedVisit(v, now)) {
+        await notifyPunchEarned({
+          shopId: v.shopId,
+          clientId: v.clientId,
+          earned: earn.earned,
+          balance: earn.balance,
+          cardTypeId: earn.cardTypeId,
+          cardName: earn.cardName,
+          now,
+        });
+      }
+    } catch (err) {
+      // The visit and its punch are committed; only the follow-up failed.
+      // Cadence is recomputed again on this client's next visit change.
+      logger.error({ err, visitId: v.id, shopId: v.shopId }, "visit completed; cadence/notify failed");
     }
   }
 
   logger.info(
     {
       promoted,
+      failed,
       leftUnverified: unverifiable.size,
       // Still due after this batch: a backlog drains over the next runs.
       backlog: dueAll.length - unverifiable.size - promoted,
