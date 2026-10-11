@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
 import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { prisma } from "@chairback/db";
@@ -16,6 +16,7 @@ import {
   closeConversationsForPhone,
 } from "./conversation.js";
 import { RECEPTIONIST_REPLY_LIMITS } from "./replyCap.js";
+import { logger } from "../logger.js";
 
 /**
  * End-to-end inbound pipeline with a SCRIPTED model (no API key, fully
@@ -1089,6 +1090,25 @@ describe("STOP + live-thread helpers", () => {
     await processInboundText({ phone, text: "im back", now: NOW });
     const convos = await prisma.receptionistConversation.findMany({ where: { phone } });
     expect(convos).toHaveLength(2);
+  });
+});
+
+describe("a turn that fails", () => {
+  it("🔴 logs the failure without the customer's number", async () => {
+    const phone = freshPhone();
+    const error = vi.spyOn(logger, "error");
+    const lookup = vi
+      .spyOn(prisma.client, "findFirst")
+      .mockRejectedValueOnce(new Error("database went away"));
+    try {
+      await processInboundText({ phone, text: "hi", now: NOW });
+      const failed = error.mock.calls.filter((c) => c[1] === "processInboundText failed");
+      expect(failed).toHaveLength(1);
+      expect(JSON.stringify(failed)).not.toContain(phone.slice(2));
+    } finally {
+      lookup.mockRestore();
+      error.mockRestore();
+    }
   });
 });
 

@@ -1,6 +1,7 @@
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
+import { maskPhone } from "../logRedaction.js";
 import { receptionistEnabledForShop, receptionistConfigured } from "./config.js";
 import { renderPromptForShop } from "./prompt.js";
 import { runAgentTurn } from "./agent.js";
@@ -535,6 +536,6 @@ export async function processInboundText(params: {
       await releaseTurn(conversation.id);
     }
   } catch (err) {
-    logger.error({ err, phone: params.phone }, "processInboundText failed");
+    logger.error({ err, phone: maskPhone(params.phone) }, "processInboundText failed");
   }
 }
