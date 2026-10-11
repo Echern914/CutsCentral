@@ -121,6 +121,25 @@ function collectsMoney(shop: ShopPolicyInput, channel: PolicyChannel): boolean {
   );
 }
 
+/**
+ * Will a LATE CANCEL actually charge a card kept on file? The same gates the
+ * card's settlement charges through (services/cardOnFileSettle.ts +
+ * cardOnFileFeeCents): card on file mode with the fee switch ON, a window AND
+ * a rate (a window of 0 never charges a cancellation, only a no-show), and a
+ * shop that can take a card at all (Stripe live, no approval step - an
+ * approval shop never saves a card at booking).
+ */
+function cardFeeIsReal(shop: ShopPolicyInput): boolean {
+  return (
+    shop.paymentsMode === "card_on_file" &&
+    shop.chargeCardOnFileFees === true &&
+    shop.cancelWindowHours > 0 &&
+    shop.cancelFeeBps > 0 &&
+    shop.paymentsLive !== false &&
+    shop.requiresApproval !== true
+  );
+}
+
 /** `4050` -> "40.5", `5000` -> "50". Never invents precision it does not have. */
 function percentFromBps(bps: number): string {
   const pct = bps / 100;
@@ -168,6 +187,23 @@ export function describeCancellationPolicy(
     // Per booking, not shop-wide: a booking made before the shop switched this
     // on keeps its refundable terms. get_client_history says what each keeps.
     return "free cancellation any time for a booking made in this conversation; a deposit paid online may be kept on a cancellation - check that booking (get_client_history) and say what it keeps before cancelling";
+  }
+  // 🔴 A KEPT CARD IS CHARGED ON A LATE CANCEL. Nothing is collected in card
+  // on file mode, so the collected-money rule below reads it as "free" - and
+  // that is what the Wallet pass and the receptionist said, while
+  // services/cardOnFileSettle.ts charged the saved card inside the window.
+  // Same window and rate, but the base is the price the booking was made at
+  // (cardOnFileFeeCents), not money in hand.
+  if (cardFeeIsReal(shop)) {
+    const pct = percentFromBps(shop.cancelFeeBps);
+    const hours = shop.cancelWindowHours;
+    // By text no card is saved, so a booking made HERE is free to cancel - but
+    // a client who booked online and saved a card, cancelling by text, is
+    // charged. Said before the cancel, not discovered on a statement.
+    if (channel.collectsAtBooking === false) {
+      return `free cancellation any time for a booking made in this conversation (no card is saved by text); a booking made online with a card kept on file is charged ${pct}% of its booked price for a cancellation inside ${hours}h of the start - check that booking (get_client_history) and say the charge before cancelling`;
+    }
+    return `free up to ${hours}h before; inside that window ${pct}% of the booked price is charged to a card kept on file`;
   }
   // A fee needs something to take it FROM. cancelAppointment computes it as a
   // share of what was COLLECTED, so with no payment row the fee is zero
@@ -268,8 +304,9 @@ export function describeShopPolicy(shop: ShopPolicyInput): string {
   // CUSTOMER-facing sentence above says free, because free is what will
   // actually happen to them.
   const feeConfigured = shop.cancelWindowHours > 0 && shop.cancelFeeBps > 0;
+  // A kept card with fees on IS charged, so its fee is not inert.
   const inert =
-    feeConfigured && !collectsMoney(shop, {})
+    feeConfigured && !collectsMoney(shop, {}) && !cardFeeIsReal(shop)
       ? ` Note: you have a ${percentFromBps(shop.cancelFeeBps)}% fee set inside ` +
         `${shop.cancelWindowHours}h, but nothing collects money at booking right now, ` +
         `so it cannot actually be charged.`
@@ -456,9 +493,11 @@ export function describeNoShowPolicy(
 ): string {
   // A saved card changes the answer only when the shop has actually switched
   // fees on; a kept card with the switch off is exactly "nothing collected".
+  // A 0% fee charges nothing (cardOnFileFeeCents), so it is not said either.
   if (
     shop.paymentsMode === "card_on_file" &&
     shop.chargeCardOnFileFees &&
+    shop.cancelFeeBps > 0 &&
     channel.collectsAtBooking !== false &&
     shop.paymentsLive !== false &&
     !shop.requiresApproval

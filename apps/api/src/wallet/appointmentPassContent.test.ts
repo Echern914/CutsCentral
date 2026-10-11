@@ -210,6 +210,18 @@ describe("the cancellation policy on the back", () => {
     expect(f.policy).toBe("free cancellation any time before the appointment");
   });
 
+  it("🔴 a card-on-file shop with fees ON says what the card is charged - never 'free cancellation'", () => {
+    // Nothing is COLLECTED in this mode, so the pass said "free cancellation
+    // any time" while services/cardOnFileSettle.ts charged the saved card.
+    const cof = { paymentsMode: "card_on_file" as const, cancelWindowHours: 24, cancelFeeBps: 5000 };
+    const on = fields(buildAppointmentPassJson(source({ paymentsLive: true }, { ...cof, chargeCardOnFileFees: true })));
+    expect(on.policy).toBe(
+      "free up to 24h before; inside that window 50% of the booked price is charged to a card kept on file",
+    );
+    const off = fields(buildAppointmentPassJson(source({ paymentsLive: true }, { ...cof, chargeCardOnFileFees: false })));
+    expect(off.policy).toBe("free cancellation any time before the appointment");
+  });
+
   it("🔴 a booking paid on NON-REFUNDABLE terms says so - its own terms, not the shop's today", () => {
     const deposit = { paymentsMode: "deposit" as const, cancelWindowHours: 24, cancelFeeBps: 5000, depositAmountCents: 2000 };
     const kept = fields(buildAppointmentPassJson(source({ paymentsLive: true, nonRefundable: true }, deposit)));

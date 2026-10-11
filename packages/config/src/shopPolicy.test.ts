@@ -532,3 +532,86 @@ describe("chargeAtBookingCents - what Confirm charges, said and charged by one r
     expect(chargeAtBookingCents({ paymentsMode: "ahead", depositAmountCents: 2000, priceCents: 4550 })).toBe(4550);
   });
 });
+
+describe("🔴 a card-on-file shop's cancellation sentence says what the card is charged", () => {
+  // What services/cardOnFileSettle.ts charges a kept card on a late cancel:
+  // the shop's switch ON, a window and a rate, the base the booked price.
+  const on = {
+    paymentsMode: "card_on_file" as const,
+    cancelWindowHours: 24,
+    cancelFeeBps: 5000,
+    chargeCardOnFileFees: true,
+    paymentsLive: true,
+  };
+
+  it("fees ON: free up to the window, then the rate of the booked price, charged to the card", () => {
+    expect(describeCancellationPolicy(on)).toBe(
+      "free up to 24h before; inside that window 50% of the booked price is charged to a card kept on file",
+    );
+  });
+
+  it("fees OFF: free - the card is never charged", () => {
+    expect(describeCancellationPolicy({ ...on, chargeCardOnFileFees: false })).toBe(
+      "free cancellation any time before the appointment",
+    );
+  });
+
+  it("no window, or no rate: a cancellation is free (a no-show is a separate sentence)", () => {
+    expect(describeCancellationPolicy({ ...on, cancelWindowHours: 0 })).toBe(
+      "free cancellation any time before the appointment",
+    );
+    expect(describeCancellationPolicy({ ...on, cancelFeeBps: 0 })).toBe(
+      "free cancellation any time before the appointment",
+    );
+    expect(describeNoShowPolicy({ ...on, cancelFeeBps: 0 })).toMatch(/no charge for a no-show/);
+  });
+
+  it("a shop that cannot keep a card (Stripe not live, or approval first) says free", () => {
+    expect(describeCancellationPolicy({ ...on, paymentsLive: false })).toBe(
+      "free cancellation any time before the appointment",
+    );
+    expect(describeCancellationPolicy({ ...on, requiresApproval: true })).toBe(
+      "free cancellation any time before the appointment",
+    );
+  });
+
+  it("🔴 by text: a booking made there is free, an online one with a card is charged - and is checked first", () => {
+    const line = describeCancellationPolicy(on, { collectsAtBooking: false });
+    expect(line).toContain("free cancellation any time for a booking made in this conversation");
+    expect(line).toContain("charged 50% of its booked price for a cancellation inside 24h of the start");
+    expect(line).toContain("get_client_history");
+    expect(describeCancellationPolicy({ ...on, chargeCardOnFileFees: false }, { collectsAtBooking: false })).toBe(
+      "free cancellation any time before the appointment",
+    );
+  });
+
+  it("the owner's summary no longer calls a charged card fee inert", () => {
+    expect(describeShopPolicy(on)).not.toContain("cannot actually be charged");
+    expect(describeShopPolicy({ ...on, chargeCardOnFileFees: false })).toContain("cannot actually be charged");
+  });
+
+  it("🔴 the sentence quotes a fee exactly when the card's own formula charges one", () => {
+    const start = new Date("2026-09-12T15:00:00Z");
+    for (const cancelWindowHours of [0, 2, 24]) {
+      for (const cancelFeeBps of [0, 2500, 10000]) {
+        for (const chargeCardOnFileFees of [false, true]) {
+          const terms = { ...on, cancelWindowHours, cancelFeeBps, chargeCardOnFileFees };
+          // One minute inside the window - the case the sentence is about.
+          const inside = new Date(start.getTime() - Math.max(1, cancelWindowHours * 60 - 1) * 60_000);
+          const charged =
+            chargeCardOnFileFees &&
+            cardOnFileFeeCents({
+              priceCents: 4000,
+              cancelWindowHours,
+              cancelFeeBps,
+              startsAt: start,
+              now: inside,
+              reason: "late_cancel",
+            }) > 0;
+          const line = describeCancellationPolicy(terms);
+          expect(line.includes("charged to a card kept on file"), JSON.stringify(terms)).toBe(charged);
+        }
+      }
+    }
+  });
+});
