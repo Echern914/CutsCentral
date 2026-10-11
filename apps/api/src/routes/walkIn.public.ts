@@ -333,7 +333,7 @@ walkInPublicRouter.post("/kiosk/verify", kioskSmsLimiter, async (req, res) => {
     res.json({ ok: true, verified: false });
     return;
   }
-  const link = await resolveWaitlistClient(prisma, shop.id, phone);
+  const link = await resolveWaitlistClient(prisma, shop.id, phone, { contact: "vouched" });
   const client = link.clientId
     ? await prisma.client.findFirst({
         where: { id: link.clientId, shopId: shop.id },
@@ -423,7 +423,7 @@ walkInPublicRouter.post("/kiosk/check-in", kioskWriteLimiter, async (req, res) =
         });
         // A ledger row only when a client exists (Nudge.clientId is NOT
         // NULL) and NEVER the body - the URL carries the credential.
-        const link = await resolveWaitlistClient(prisma, shop.id, phone);
+        const link = await resolveWaitlistClient(prisma, shop.id, phone, { contact: "vouched" });
         if (link.clientId) {
           await prisma.nudge.create({
             data: {

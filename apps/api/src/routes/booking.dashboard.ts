@@ -134,7 +134,7 @@ import {
 } from "../engines/recurringSeries.js";
 import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairback/config";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
-import { fillBlankClientFields } from "../services/clientFill.js";
+import { fillBlankClientFieldsFromShop } from "../services/clientFill.js";
 import { logger } from "../logger.js";
 import { advanceEach, releaseRacedOffers, type OfferSpan } from "../engines/waitlistOffer.js";
 import {
@@ -3162,7 +3162,7 @@ async function resolveSeriesClient(input: {
     update: {},
     select: { id: true },
   });
-  await fillBlankClientFields(prisma, client.id, {
+  await fillBlankClientFieldsFromShop(prisma, client.id, {
     firstName: input.firstName,
     lastName: input.lastName,
     phone: input.phone,
@@ -3787,7 +3787,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
           update: {},
           select: { id: true },
         });
-        await fillBlankClientFields(tx, client.id, {
+        await fillBlankClientFieldsFromShop(tx, client.id, {
           firstName: cFirst,
           lastName: cLast,
           phone,

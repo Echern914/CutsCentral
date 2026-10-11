@@ -46,6 +46,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "overwrite a client's own cancel or charge them for it.",
   },
   {
+    id: "2026-10-10-typed-number-proves-nothing",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "A typed phone number no longer opens a client's profile",
+    body:
+      "A number typed on your booking page or waitlist no longer adds an email to that client, opens their profile " +
+      "in the app, or earns their Gold or Silver waitlist place. The booking keeps what was typed. Add emails from " +
+      "the client's profile; add tier clients to the waitlist yourself.",
+  },
+  {
     id: "2026-10-10-privacy-terms-updated",
     date: "2026-10-10",
     kind: "feature",

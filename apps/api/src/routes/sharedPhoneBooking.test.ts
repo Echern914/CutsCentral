@@ -112,13 +112,21 @@ describe("booking on a phone already on file", () => {
     expect(appt).toEqual({ firstName: "Tony", lastName: "Other", email: "tony@other.test" });
   });
 
-  it("fills what the client is missing, and only that", async () => {
+  it("fills a missing name, and only that - 🔴 never a missing email", async () => {
+    // A typed email on someone else's record is what My ChairBack would link
+    // an account by (typedContactTakeover.test.ts), so it stays on the
+    // booking row and off the client.
     const phone = "+13025550122";
     const maria = await holder(phone, { lastName: null, email: null });
     const res = await book(phone, tomorrowAt(11));
     expect(res.status).toBe(201);
     const after = await prisma.client.findUniqueOrThrow({ where: { id: maria.id } });
-    expect([after.firstName, after.lastName, after.email]).toEqual(["Maria", "Other", "tony@other.test"]);
+    expect([after.firstName, after.lastName, after.email]).toEqual(["Maria", "Other", null]);
+    const appt = await prisma.appointment.findUniqueOrThrow({
+      where: { manageToken: res.body.manageToken },
+      select: { email: true },
+    });
+    expect(appt.email).toBe("tony@other.test");
   });
 
   it("🔴 a weekly booking on it keeps the client's own name and email too", async () => {

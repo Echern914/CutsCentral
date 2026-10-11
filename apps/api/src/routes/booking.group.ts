@@ -40,7 +40,7 @@ import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { bookingReadLimiter, bookingWriteLimiter, rewardsLimiter } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
-import { fillBlankClientFields } from "../services/clientFill.js";
+import { fillBlankClientNames } from "../services/clientFill.js";
 import { bookingBlockedFor, CONTACT_SHOP_ERROR } from "../services/clientBookingBlock.js";
 
 /**
@@ -644,11 +644,10 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
         update: {},
         select: { id: true },
       });
-      await fillBlankClientFields(tx, client.id, {
+      // A blank NAME fills; a contact never does (services/clientFill.ts).
+      await fillBlankClientNames(tx, client.id, {
         firstName: d.firstName,
         lastName: who.lastName,
-        phone,
-        email: d.email,
       });
       // A typed phone FILLS a missing handle and never replaces one: this form
       // is unauthenticated, and the barber is the one who corrects a handle.
