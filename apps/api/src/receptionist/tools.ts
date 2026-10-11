@@ -8,7 +8,28 @@ import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWr
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { bookingBlockedFor } from "../services/clientBookingBlock.js";
 import {
-  cardOnFileFeeCents,
+  CANCELLATION_TERMS_SNAPSHOT_SELECT,
+  SHOP_CANCELLATION_TERMS_SELECT,
+  termsForBooking,
+} from "../services/cancellationTerms.js";
+import { cardOnFileFeeFor } from "../services/cardOnFileSettle.js";
+
+/** No shop row: no fee can be quoted on terms nobody can read. */
+const NO_CANCELLATION_TERMS: CancellationTerms = {
+  cancelWindowHours: 0,
+  cancelFeeBps: 0,
+  chargeCardOnFileFees: false,
+};
+/** A booking that could not be read back: settle it by the shop, as before snapshots. */
+const NO_SNAPSHOT = {
+  cancelWindowHoursAtBooking: null,
+  cancelFeeBpsAtBooking: null,
+  cardOnFileFeesAtBooking: null,
+};
+import {
+  bookingCancellationTerms,
+  cancellationTermsSnapshot,
+  type CancellationTerms,
   clientCancelKeptCents,
   describeMovePriceChange,
   formatMovePriceCents,
@@ -35,6 +56,12 @@ import { formatApptTime } from "../messaging/templates.js";
 import { sendPushToUser } from "../messaging/push.js";
 import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import type { ToolExecutionResult, ToolExecutor } from "./agent.js";
+import {
+  ESCALATED_REALERT_MS,
+  ESCALATION_NOTE_PREFIX,
+  FOLLOW_UP_ALERT_NOTE,
+  MANUAL_REPLY_NOTE,
+} from "./conversation.js";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 
 /**
@@ -569,7 +596,7 @@ async function getClientHistory(ctx: ToolContext): Promise<ToolExecutionResult> 
 
   const shop = await prisma.shop.findUnique({
     where: { id: ctx.shopId },
-    select: { timezone: true, cancelWindowHours: true, cancelFeeBps: true },
+    select: { timezone: true, ...SHOP_CANCELLATION_TERMS_SELECT },
   });
   const tz = shop?.timezone ?? "America/New_York";
 
@@ -608,6 +635,10 @@ async function getClientHistory(ctx: ToolContext): Promise<ToolExecutionResult> 
             where: { purpose: "booking" },
             select: { amount: true, capturedAmount: true, status: true, nonRefundable: true },
           },
+          // ...or charge to a card kept on it (services/cardOnFileSettle.ts).
+          priceAtBooking: true,
+          cardOnFile: { select: { status: true } },
+          ...CANCELLATION_TERMS_SNAPSHOT_SELECT,
         },
       }),
     ),
@@ -640,19 +671,34 @@ async function getClientHistory(ctx: ToolContext): Promise<ToolExecutionResult> 
       when: formatApptTime(v.scheduledAt, tz),
       service: v.serviceName,
     })),
-    upcoming_appointments: upcoming.map((a) => {
-      // The SAME rule and inputs the cancel tool quotes and the engine keeps.
+    upcoming_appointments: await Promise.all(upcoming.map(async (a) => {
+      // The SAME rule and inputs the cancel tool quotes and the engine keeps:
+      // THIS booking's own terms, never the shop's settings today.
+      const terms = bookingCancellationTerms(a, shop ?? NO_CANCELLATION_TERMS);
       const paid = a.payments[0] ?? null;
       const collectedCents =
         paid && paid.status === "succeeded" ? (paid.capturedAmount ?? paid.amount) : 0;
       const keptCents = clientCancelKeptCents({
         collectedCents,
         nonRefundable: paid?.nonRefundable === true,
-        cancelWindowHours: shop?.cancelWindowHours ?? 0,
-        cancelFeeBps: shop?.cancelFeeBps ?? 0,
+        cancelWindowHours: terms.cancelWindowHours,
+        cancelFeeBps: terms.cancelFeeBps,
         startsAt: a.startsAt,
         now: ctx.now,
       });
+      // A card kept on it, with nothing paid: what cancelling NOW charges it.
+      const cardCents =
+        collectedCents === 0 && a.cardOnFile?.status === "saved"
+          ? await cardOnFileFeeFor({
+              shopId: ctx.shopId,
+              appointmentId: a.id,
+              priceAtBooking: a.priceAtBooking,
+              startsAt: a.startsAt,
+              now: ctx.now,
+              reason: "late_cancel",
+              terms,
+            })
+          : 0;
       return {
         appointment_id: a.id,
         status: a.status,
@@ -673,8 +719,16 @@ async function getClientHistory(ctx: ToolContext): Promise<ToolExecutionResult> 
                 : {}),
             }
           : {}),
+        // Card kept on file: what cancelling it NOW charges that card. Say it
+        // before cancelling.
+        ...(cardCents > 0
+          ? {
+              if_cancelled_card_charged_cents: cardCents,
+              if_cancelled_why: "it is inside the cancellation window - the card on file is charged",
+            }
+          : {}),
       };
-    }),
+    })),
   });
 }
 
@@ -693,6 +747,8 @@ async function loadSlotContext(
       timezone: string;
       serviceName: string;
       staffName: string;
+      /** The shop's cancellation terms now - what a booking made here keeps. */
+      cancellationTerms: CancellationTerms;
     }
   | string
 > {
@@ -703,7 +759,13 @@ async function loadSlotContext(
   }
   const shop = await prisma.shop.findUnique({
     where: { id: ctx.shopId },
-    select: { timezone: true, bookingBufferMin: true },
+    select: {
+      timezone: true,
+      bookingBufferMin: true,
+      cancelWindowHours: true,
+      cancelFeeBps: true,
+      chargeCardOnFileFees: true,
+    },
   });
   if (!shop) return "shop not found";
   const db = forShop(ctx.shopId);
@@ -757,6 +819,7 @@ async function loadSlotContext(
     timezone: shop.timezone,
     serviceName: service.name,
     staffName: staff.name,
+    cancellationTerms: shop,
   };
 }
 
@@ -863,6 +926,8 @@ async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecut
           endsAt: slot.endsAt,
           priceAtBooking: slot.price ?? undefined,
           manageToken: randomToken(),
+          // Kept when the hold becomes the booking: the terms it is made on.
+          ...cancellationTermsSnapshot(slot.cancellationTerms),
         },
         select: { id: true },
       });
@@ -1095,6 +1160,7 @@ async function bookAppointment(
           priceAtBooking: slot.price ?? undefined,
           manageToken: randomToken(),
           confirmationSentAt: ctx.now,
+          ...cancellationTermsSnapshot(slot.cancellationTerms),
         },
         select: { id: true },
       });
@@ -1410,6 +1476,8 @@ async function rescheduleTool(
           reminderEmailSentAt: null,
           reminder24hPushSentAt: null,
           reminder2hPushSentAt: null,
+          // The barber's "next up" alert was for the OLD time too.
+          barberNextUpSentAt: null,
           checkInStatus: null,
           checkedInAt: null,
           etaMinutes: null,
@@ -1504,8 +1572,15 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
   // have paid on the website and be cancelling by text.
   const shop = await prisma.shop.findUnique({
     where: { id: ctx.shopId },
-    select: { timezone: true, cancelWindowHours: true, cancelFeeBps: true, chargeCardOnFileFees: true },
+    select: { timezone: true },
   });
+  // 🔴 THIS BOOKING'S cancellation terms - its own snapshot, the terms the
+  // engine settles by - never the shop's settings today.
+  const booked = await prisma.appointment.findUnique({
+    where: { id: appt.id },
+    select: { priceAtBooking: true, ...CANCELLATION_TERMS_SNAPSHOT_SELECT },
+  });
+  const terms = await termsForBooking(ctx.shopId, booked ?? NO_SNAPSHOT);
   // What was collected AT BOOKING - the base the cancellation fee is quoted
   // against. Never a balance collected at the chair: a cut that was paid for
   // after it happened cannot also be cancelled.
@@ -1523,35 +1598,30 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
   let feeCents = clientCancelKeptCents({
     collectedCents,
     nonRefundable,
-    cancelWindowHours: shop?.cancelWindowHours ?? 0,
-    cancelFeeBps: shop?.cancelFeeBps ?? 0,
+    cancelWindowHours: terms.cancelWindowHours,
+    cancelFeeBps: terms.cancelFeeBps,
     startsAt: appt.startsAt,
     now: ctx.now,
   });
   // A card KEPT at booking (nothing collected) is charged on a late cancel only
-  // when the shop switched fees on - the same rule and the same formula the
-  // engine settles with (services/cardOnFileSettle.ts), so what this tool tells
-  // the client is exactly what their card is about to be charged.
-  if (feeCents === 0 && shop?.chargeCardOnFileFees) {
+  // when this booking's terms switched fees on - the same function the engine
+  // settles with (services/cardOnFileSettle.ts cardOnFileFeeFor), agreed price
+  // and all, so what this tool tells the client is exactly what their card is
+  // about to be charged.
+  if (feeCents === 0 && terms.chargeCardOnFileFees) {
     const kept = await prisma.cardOnFile.findUnique({
       where: { appointmentId: appt.id },
       select: { status: true },
     });
     if (kept?.status === "saved") {
-      const priced = await prisma.appointment.findUnique({
-        where: { id: appt.id },
-        select: { priceAtBooking: true },
-      });
-      const price = priced?.priceAtBooking === null || priced?.priceAtBooking === undefined
-        ? null
-        : Number(priced.priceAtBooking);
-      feeCents = cardOnFileFeeCents({
-        priceCents: price === null || !Number.isFinite(price) ? null : Math.round(price * 100),
-        cancelWindowHours: shop.cancelWindowHours,
-        cancelFeeBps: shop.cancelFeeBps,
+      feeCents = await cardOnFileFeeFor({
+        shopId: ctx.shopId,
+        appointmentId: appt.id,
+        priceAtBooking: booked?.priceAtBooking ?? null,
         startsAt: appt.startsAt,
         now: ctx.now,
         reason: "late_cancel",
+        terms,
       });
     }
   }
@@ -1622,50 +1692,126 @@ export async function escalateConversation(params: {
         shopId: params.shopId,
         conversationId: params.conversationId,
         role: "system_note",
-        content: `escalated to barber: ${params.reason}`,
+        content: `${ESCALATION_NOTE_PREFIX}${params.reason}`,
       },
     });
 
-    const shop = await prisma.shop.findUnique({
-      where: { id: params.shopId },
-      select: { id: true, name: true, ownerId: true, notifyPhone: true },
+    await alertShopAboutThread({
+      shopId: params.shopId,
+      body: (shopName) =>
+        `${shopName}: the AI receptionist handed off a text thread with ${params.phone} - ${params.reason}`,
+      url: `${apiEnv().APP_BASE_URL}/dashboard`,
     });
-    if (!shop) return;
-
-    const title = "Client needs you";
-    const body = `${shop.name}: the AI receptionist handed off a text thread with ${params.phone} - ${params.reason}`;
-    await sendPushToUser({
-      userId: shop.ownerId,
-      shopId: shop.id,
-      payload: {
-        title,
-        body,
-        url: `${apiEnv().APP_BASE_URL}/dashboard`,
-        tag: "receptionist-escalation",
-      },
-    }).catch((err) =>
-      logger.error({ err, shopId: shop.id }, "escalation push failed"),
-    );
-
-    if (shop.notifyPhone) {
-      if (apiEnv().DRY_RUN || !smsEnabled()) {
-        logger.info(
-          { shopId: shop.id, to: shop.notifyPhone },
-          "escalation barber SMS not sent (dry-run or texting off)",
-        );
-      } else {
-        await getMessageProvider()
-          .send({ to: shop.notifyPhone, body })
-          .catch((err) =>
-            logger.error({ err, shopId: shop.id }, "escalation barber SMS failed"),
-          );
-      }
-    }
   } catch (err) {
     logger.error(
       { err, conversationId: params.conversationId },
       "escalateConversation failed",
     );
+  }
+}
+
+/**
+ * The client texted again on a thread the shop owns (escalated). The AI stays
+ * silent there, so without this nothing told the shop: one ping at handoff,
+ * then every later text - including the client's answer to the shop's own
+ * manual reply - sat unread in the inbox.
+ *
+ * At most one alert per thread per ESCALATED_REALERT_MS, so a client sending
+ * three texts in a row is one ping - except that a reply FROM the shop re-arms
+ * it at once: the client answering the shop is exactly what it is waiting for.
+ * The alert is recorded as a system_note, which is both the audit trail and
+ * the throttle's memory (no schema change). Never throws.
+ */
+export async function alertShopOfEscalatedFollowUp(params: {
+  shopId: string;
+  conversationId: string;
+  phone: string;
+  now: Date;
+}): Promise<boolean> {
+  try {
+    const last = await prisma.receptionistMessage.findFirst({
+      where: {
+        conversationId: params.conversationId,
+        role: "system_note",
+        OR: [
+          { content: { startsWith: ESCALATION_NOTE_PREFIX } },
+          { content: FOLLOW_UP_ALERT_NOTE },
+          { content: MANUAL_REPLY_NOTE },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+      select: { content: true, createdAt: true },
+    });
+    const alertedRecently =
+      last !== null &&
+      last.content !== MANUAL_REPLY_NOTE &&
+      last.createdAt.getTime() > params.now.getTime() - ESCALATED_REALERT_MS;
+    if (alertedRecently) return false;
+
+    await prisma.receptionistMessage.create({
+      data: {
+        shopId: params.shopId,
+        conversationId: params.conversationId,
+        role: "system_note",
+        content: FOLLOW_UP_ALERT_NOTE,
+        // Stamped on the clock the window above is measured on.
+        createdAt: params.now,
+      },
+    });
+    await alertShopAboutThread({
+      shopId: params.shopId,
+      body: (shopName) =>
+        `${shopName}: ${params.phone} texted again on a thread the AI receptionist handed to you - open your inbox to reply`,
+      url: `${apiEnv().APP_BASE_URL}/dashboard/inbox/${params.conversationId}`,
+    });
+    return true;
+  } catch (err) {
+    logger.error(
+      { err, conversationId: params.conversationId },
+      "escalated follow-up alert failed",
+    );
+    return false;
+  }
+}
+
+/**
+ * "Client needs you" to the shop owner: push to their devices, plus an SMS to
+ * the shop's notifyPhone while texting is on and not a dry run.
+ */
+async function alertShopAboutThread(params: {
+  shopId: string;
+  body: (shopName: string) => string;
+  url: string;
+}): Promise<void> {
+  const shop = await prisma.shop.findUnique({
+    where: { id: params.shopId },
+    select: { id: true, name: true, ownerId: true, notifyPhone: true },
+  });
+  if (!shop) return;
+
+  const title = "Client needs you";
+  const body = params.body(shop.name);
+  await sendPushToUser({
+    userId: shop.ownerId,
+    shopId: shop.id,
+    payload: { title, body, url: params.url, tag: "receptionist-escalation" },
+  }).catch((err) =>
+    logger.error({ err, shopId: shop.id }, "escalation push failed"),
+  );
+
+  if (shop.notifyPhone) {
+    if (apiEnv().DRY_RUN || !smsEnabled()) {
+      logger.info(
+        { shopId: shop.id, to: shop.notifyPhone },
+        "escalation barber SMS not sent (dry-run or texting off)",
+      );
+    } else {
+      await getMessageProvider()
+        .send({ to: shop.notifyPhone, body })
+        .catch((err) =>
+          logger.error({ err, shopId: shop.id }, "escalation barber SMS failed"),
+        );
+    }
   }
 }
 

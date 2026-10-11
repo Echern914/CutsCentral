@@ -53,6 +53,10 @@ function source(over: Partial<Source> = {}, shopOver: Partial<Source["shop"]> = 
     manageToken: "mt_abc123",
     service: { name: "Skin Fade" },
     staff: { name: "Sam" },
+    // No snapshot (a booking from before snapshots): the shop's terms apply.
+    cancelWindowHoursAtBooking: null,
+    cancelFeeBpsAtBooking: null,
+    cardOnFileFeesAtBooking: null,
     ...over,
     shop: {
       name: "Chern Cuts",
@@ -208,6 +212,59 @@ describe("the cancellation policy on the back", () => {
       ),
     );
     expect(f.policy).toBe("free cancellation any time before the appointment");
+  });
+
+  it("🔴 a card-on-file shop with fees ON says what the card is charged - never 'free cancellation'", () => {
+    // Nothing is COLLECTED in this mode, so the pass said "free cancellation
+    // any time" while services/cardOnFileSettle.ts charged the saved card.
+    const cof = { paymentsMode: "card_on_file" as const, cancelWindowHours: 24, cancelFeeBps: 5000 };
+    const on = fields(buildAppointmentPassJson(source({ paymentsLive: true }, { ...cof, chargeCardOnFileFees: true })));
+    expect(on.policy).toBe(
+      "free up to 24h before; inside that window 50% of the booked price is charged to a card kept on file",
+    );
+    const off = fields(buildAppointmentPassJson(source({ paymentsLive: true }, { ...cof, chargeCardOnFileFees: false })));
+    expect(off.policy).toBe("free cancellation any time before the appointment");
+  });
+
+  it("🔴 states THIS booking's terms (its snapshot), not the shop's today", () => {
+    const cofNow = {
+      paymentsMode: "card_on_file" as const,
+      cancelWindowHours: 24,
+      cancelFeeBps: 5000,
+      chargeCardOnFileFees: true,
+    };
+    // Booked under free cancellation; the shop has since turned fees on.
+    const bookedFree = fields(
+      buildAppointmentPassJson(
+        source(
+          {
+            paymentsLive: true,
+            cancelWindowHoursAtBooking: 0,
+            cancelFeeBpsAtBooking: 0,
+            cardOnFileFeesAtBooking: false,
+          },
+          cofNow,
+        ),
+      ),
+    );
+    expect(bookedFree.policy).toBe("free cancellation any time before the appointment");
+    // Booked under a 12h / 25% card fee; the shop has since switched fees off.
+    const bookedWithFee = fields(
+      buildAppointmentPassJson(
+        source(
+          {
+            paymentsLive: true,
+            cancelWindowHoursAtBooking: 12,
+            cancelFeeBpsAtBooking: 2500,
+            cardOnFileFeesAtBooking: true,
+          },
+          { ...cofNow, chargeCardOnFileFees: false },
+        ),
+      ),
+    );
+    expect(bookedWithFee.policy).toBe(
+      "free up to 12h before; inside that window 25% of the booked price is charged to a card kept on file",
+    );
   });
 
   it("🔴 a booking paid on NON-REFUNDABLE terms says so - its own terms, not the shop's today", () => {

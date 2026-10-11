@@ -65,25 +65,12 @@ export function validateCharge(amountCents: number, currency: string): string | 
 }
 
 /**
- * What a DEPOSIT-mode booking charges NOW, in cents.
- *
- * Two rules, both there to stop a deposit becoming a surprise:
- *  - CAP AT THE PRICE. A shop-wide $20 deposit must not overcharge a $15
- *    line-up. Capped, the customer pays $15 now and owes nothing at the chair,
- *    which is honest; charging $20 for a $15 service is not.
- *  - NO CHARGE WITHOUT BOTH NUMBERS. An unpriced service, or a shop that
- *    switched to deposit mode without setting an amount, charges NOTHING and
- *    falls back to paying in person. Guessing a deposit is worse than not
- *    taking one.
+ * What a DEPOSIT-mode booking charges NOW, in cents - capped at the price,
+ * nothing without both numbers. The rule lives in @chairback/config/shopPolicy
+ * so the booking page states the same figure before Confirm that this charges
+ * after it; re-exported here for the server's existing callers.
  */
-export function depositChargeCents(
-  depositCents: number | null | undefined,
-  fullCents: number | null,
-): number | null {
-  if (fullCents === null || fullCents <= 0) return null;
-  if (depositCents === null || depositCents === undefined || depositCents <= 0) return null;
-  return Math.min(depositCents, fullCents);
-}
+export { chargeAtBookingCents, depositChargeCents } from "@chairback/config/shopPolicy";
 
 interface CreateIntentInput {
   shopId: string;

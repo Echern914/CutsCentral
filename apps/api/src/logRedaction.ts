@@ -171,3 +171,19 @@ export function redactedResSerializer(res: {
   }
   return { statusCode: res.statusCode ?? null, headers };
 }
+
+/**
+ * 🔴 A CUSTOMER'S PHONE NUMBER, AS A LOG MAY CARRY IT: the last two digits.
+ *
+ * A phone number is the one identifier every customer has, it names a person
+ * outright, and STOP / START / dry-run lines used to log it in full - on every
+ * keyword and every suppressed send, into a stream that is forwarded on and
+ * kept long after the customer asked to be forgotten. Two digits are enough to
+ * tell two lines in one incident apart and identify nobody; anything that has
+ * to be traced further is traced by its client or shop id.
+ */
+export function maskPhone(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, "");
+  return digits.length >= 2 ? `***${digits.slice(-2)}` : "***";
+}

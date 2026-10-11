@@ -1,4 +1,8 @@
-import { cardOnFileFeeCents, type CardOnFileChargeReason } from "@chairback/config";
+import {
+  cardOnFileFeeCents,
+  type CancellationTerms,
+  type CardOnFileChargeReason,
+} from "@chairback/config";
 import { prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { chargeCardOnFile, releaseCardOnFile } from "../billing/cardOnFile.js";
@@ -15,11 +19,14 @@ import { sendToBarber } from "./barberNotify.js";
  * 🔴 THE RULE, IN ERIC'S WORDS: "card on file doesn't get charged unless the
  * barber is set and it's on them." Both halves are checked here and nowhere
  * else:
- *   - "the barber is set": Shop.chargeCardOnFileFees is ON and a fee is
- *     configured (the fee formula returns 0 otherwise);
+ *   - "the barber is set": card fees were ON and a fee configured in the terms
+ *     THIS BOOKING was made on (the fee formula returns 0 otherwise) - its own
+ *     snapshot, so switching fees on later never reaches a booking made while
+ *     they were off; a booking from before snapshots reads the shop's current
+ *     settings, as it always did (services/cancellationTerms.ts);
  *   - "it's on them": the outcome is a NO_SHOW, or a cancellation the CUSTOMER
- *     made inside the shop's cancellation window (`applyPolicyFee`, which only
- *     the customer-facing cancel paths pass). A barber cancelling never charges.
+ *     made inside that cancellation window (`applyPolicyFee`, which only the
+ *     customer-facing cancel paths pass). A barber cancelling never charges.
  * Anything else RELEASES the card - it is detached and can never be charged.
  *
  * Runs after the cancel/no-show transaction has committed (Stripe is a network
@@ -41,6 +48,12 @@ export async function settleCardOnFile(params: {
   serviceName: string | null;
   startsAt: Date;
   now: Date;
+  /**
+   * The cancellation terms THIS booking was made on (services/
+   * cancellationTerms.ts termsForBooking) - never the shop's settings today.
+   * Required: a caller that forgets it does not compile.
+   */
+  terms: CancellationTerms;
 }): Promise<SettleResult> {
   try {
     const shop = await prisma.shop.findUnique({
@@ -49,10 +62,6 @@ export async function settleCardOnFile(params: {
         name: true,
         timezone: true,
         ownerId: true,
-        paymentsMode: true,
-        chargeCardOnFileFees: true,
-        cancelWindowHours: true,
-        cancelFeeBps: true,
       },
     });
     if (!shop) return { action: "none" };
@@ -60,27 +69,20 @@ export async function settleCardOnFile(params: {
     const onThem =
       params.outcome === "NO_SHOW" || (params.outcome === "CANCELED" && params.applyPolicyFee);
     const reason: CardOnFileChargeReason = params.outcome === "NO_SHOW" ? "no_show" : "late_cancel";
-    // THE FEE BASIS IS WHAT THE CUSTOMER AGREED TO. The ticket can be corrected
-    // by hand after booking (POST /appointments/:id/price); a ticket RAISED
-    // after the customer saved their card must never raise the fee they
-    // consented to at the old one. The ledger's first entry remembers the
-    // price before any edit; a lowered ticket lowers the fee.
-    const currentCents = configToCents(numberOrNull(params.priceAtBooking));
-    const priceCents = await agreedPriceCents(params.shopId, params.appointmentId, currentCents);
-    const cents =
-      shop.chargeCardOnFileFees && onThem
-        ? cardOnFileFeeCents({
-            priceCents,
-            cancelWindowHours: shop.cancelWindowHours,
-            cancelFeeBps: shop.cancelFeeBps,
-            startsAt: params.startsAt,
-            now: params.now,
-            reason,
-          })
-        : 0;
+    const cents = onThem
+      ? await cardOnFileFeeFor({
+          shopId: params.shopId,
+          appointmentId: params.appointmentId,
+          priceAtBooking: params.priceAtBooking,
+          startsAt: params.startsAt,
+          now: params.now,
+          reason,
+          terms: params.terms,
+        })
+      : 0;
 
     if (cents <= 0) {
-      const why = !shop.chargeCardOnFileFees
+      const why = !params.terms.chargeCardOnFileFees
         ? "fees_off"
         : !onThem
           ? "not_on_customer"
@@ -135,6 +137,40 @@ export async function settleCardOnFile(params: {
     logger.error({ err, appointmentId: params.appointmentId }, "settleCardOnFile failed");
     return { action: "none" };
   }
+}
+
+/**
+ * What a card kept on THIS booking is charged for `reason` at `now`, in cents
+ * - the figure settleCardOnFile charges, for every surface that has to SAY it
+ * first (the client's appointment page before Cancel, the receptionist).
+ * Zero when this booking's terms switch card fees off or set no fee.
+ *
+ * THE FEE BASIS IS WHAT THE CUSTOMER AGREED TO. The ticket can be corrected
+ * by hand after booking (POST /appointments/:id/price); a ticket RAISED after
+ * the customer saved their card must never raise the fee they consented to at
+ * the old one. The ledger's first entry remembers the price before any edit;
+ * a lowered ticket lowers the fee.
+ */
+export async function cardOnFileFeeFor(params: {
+  shopId: string;
+  appointmentId: string;
+  priceAtBooking: unknown;
+  startsAt: Date;
+  now: Date;
+  reason: CardOnFileChargeReason;
+  terms: CancellationTerms;
+}): Promise<number> {
+  if (!params.terms.chargeCardOnFileFees) return 0;
+  const currentCents = configToCents(numberOrNull(params.priceAtBooking));
+  const priceCents = await agreedPriceCents(params.shopId, params.appointmentId, currentCents);
+  return cardOnFileFeeCents({
+    priceCents,
+    cancelWindowHours: params.terms.cancelWindowHours,
+    cancelFeeBps: params.terms.cancelFeeBps,
+    startsAt: params.startsAt,
+    now: params.now,
+    reason: params.reason,
+  });
 }
 
 function numberOrNull(v: unknown): number | null {

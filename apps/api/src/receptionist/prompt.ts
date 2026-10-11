@@ -206,6 +206,10 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       // A deposit paid online and kept on a cancel - the client must hear it
       // BEFORE they text "cancel", not after.
       depositNonRefundable: true,
+      // Whether a card kept on file is charged for a late cancel. It was never
+      // read here, so a card-on-file shop's receptionist said "free
+      // cancellation" while services/cardOnFileSettle.ts charged the card.
+      chargeCardOnFileFees: true,
       // CAPABILITY, not intent. paymentsMode says what the shop WANTS; these
       // say whether a card can actually be taken. A shop can sit in deposit
       // mode through all of Connect onboarding and collect nothing.

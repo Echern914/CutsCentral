@@ -3345,6 +3345,16 @@ model Appointment {
   startsAt           DateTime // UTC instant
   endsAt             DateTime // startsAt + service.durationMin
   priceAtBooking     Decimal?          @db.Decimal(10, 2)
+  // The cancellation terms this booking was MADE on - Shop.cancelWindowHours,
+  // Shop.cancelFeeBps and Shop.chargeCardOnFileFees as they stood at creation
+  // (config/shopPolicy.ts cancellationTermsSnapshot). A cancel or no-show is
+  // settled by these, so an owner tightening the policy never reaches a
+  // booking made under the old one. All three NULL (a CHECK keeps them
+  // all-or-nothing) = a booking from before the snapshot existed, settled by
+  // the shop's CURRENT settings exactly as it always was.
+  cancelWindowHoursAtBooking Int?
+  cancelFeeBpsAtBooking      Int?
+  cardOnFileFeesAtBooking    Boolean?
   // Snapshot of the add-ons chosen at booking: [{name, durationMin, price}].
   // endsAt already includes their duration and priceAtBooking already includes
   // their price; this JSON preserves the itemized list for display even if an

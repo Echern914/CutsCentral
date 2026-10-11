@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { Prisma, prisma } from "@chairback/db";
 import {
+  cancellationTermsSnapshot,
   checkTellApart,
   describeMovePriceChange,
   paidBookingTakesPrice,
@@ -23,7 +24,11 @@ import {
   type GroupPlan,
   type GroupPlanService,
 } from "../engines/appointmentGroup.js";
-import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
+import {
+  lockStaffAndAssertSlotFree,
+  lockStaffsAndAssertPartyFree,
+  SlotTakenError,
+} from "../engines/bookingWrite.js";
 import { cancelGroup } from "../engines/appointmentPromotion.js";
 import {
   MirrorNotConfiguredError,
@@ -40,8 +45,9 @@ import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { bookingReadLimiter, bookingWriteLimiter, rewardsLimiter } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
-import { fillBlankClientFields } from "../services/clientFill.js";
+import { fillBlankClientNames } from "../services/clientFill.js";
 import { bookingBlockedFor, CONTACT_SHOP_ERROR } from "../services/clientBookingBlock.js";
+import { notifyBarberBookingEvent } from "../services/appointmentNotify.js";
 
 /**
  * Back-to-back group booking: "me and my brother, one after the other".
@@ -161,6 +167,18 @@ function collectsMoneyAtBooking(shop: {
       chargeCents: 1,
     }) !== null
   );
+}
+
+/**
+ * Is this party still a REQUEST the shop has not answered? Read from the rows,
+ * never from the shop's current setting: a party requested yesterday is still
+ * a request today even if the shop has since switched approval off.
+ */
+async function partyAwaitsShop(groupId: string): Promise<boolean> {
+  const waiting = await prisma.appointment.count({
+    where: { groupId, status: "PENDING", holdExpiresAt: null },
+  });
+  return waiting > 0;
 }
 
 /** The wire shape of a plan - times as ISO, money in cents. */
@@ -560,7 +578,12 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
         res.status(409).json({ error: "idempotency_conflict" });
         return;
       }
-      res.status(200).json({ groupId: existing.id, manageToken: existing.manageToken, retried: true });
+      res.status(200).json({
+        groupId: existing.id,
+        manageToken: existing.manageToken,
+        retried: true,
+        pending: await partyAwaitsShop(existing.id),
+      });
       return;
     }
   }
@@ -603,6 +626,16 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
     return;
   }
 
+  // 🔴 REQUEST-BEFORE-BOOKING APPLIES TO A PARTY TOO. At a shop that approves
+  // every online booking, the party arrives as ONE request: every member
+  // PENDING (no hold - it waits for the shop, not a payment), no confirmation,
+  // and the shop is alerted to answer it. Approving or declining any member
+  // answers for the whole party (engines/appointmentGroupApproval.ts). This
+  // used to write BOOKED unconditionally and confirm at once, so a party
+  // walked straight past the approval the single booking page honours.
+  const asRequest = shop.requireBookingApproval;
+  const memberStatus = asRequest ? ("PENDING" as const) : ("BOOKED" as const);
+
   // Collected inside the transaction, acted on after it commits.
   const appointmentIds: string[] = [];
   const mirrorOutboxIds: string[] = [];
@@ -644,11 +677,10 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
         update: {},
         select: { id: true },
       });
-      await fillBlankClientFields(tx, client.id, {
+      // A blank NAME fills; a contact never does (services/clientFill.ts).
+      await fillBlankClientNames(tx, client.id, {
         firstName: d.firstName,
         lastName: who.lastName,
-        phone,
-        email: d.email,
       });
       // A typed phone FILLS a missing handle and never replaces one: this form
       // is unauthenticated, and the barber is the one who corrects a handle.
@@ -694,9 +726,10 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
             lastName: null,
             phone,
             email: d.email || null,
-            // Pay-at-shop only in v1 (see the header), so there is no hold and
-            // no approval branch: these are real bookings the moment they commit.
-            status: "BOOKED",
+            // Pay-at-shop only in v1 (see the header), so there is never a
+            // payment hold: a real booking the moment it commits, or - at an
+            // approval shop - a request with no expiry that the shop answers.
+            status: memberStatus,
             startsAt: m.startsAt,
             endsAt: m.endsAt,
             priceAtBooking:
@@ -706,6 +739,8 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
             manageToken: randomToken(),
             groupId: group.id,
             groupPosition: m.position,
+            // The cancellation terms every member is booked on.
+            ...cancellationTermsSnapshot(shop),
             // The booker's tick, frozen onto every member's booking.
             ...(policy.record
               ? {
@@ -740,9 +775,10 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
           startsAt: m.startsAt,
           endsAt: m.endsAt,
           occupancy: {
-            // Pay-at-shop only in v1, so a group member is always a real
-            // booking - never a payment hold and never an approval request.
-            status: "BOOKED",
+            // Pay-at-shop only in v1, so never a payment hold. An approval
+            // request IS mirrored, exactly as a single one is: it holds the
+            // chairs while it waits for the shop.
+            status: memberStatus,
             startsAt: m.startsAt,
             endsAt: m.endsAt,
             holdExpiresAt: null,
@@ -811,6 +847,23 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
     }
     await noteAvailabilityChanged(shop.id);
 
+    // A REQUEST: no confirmation - that is sent when the shop approves, once,
+    // for everybody (engines/appointmentGroupApproval.ts). The shop is told
+    // ONCE that a party is waiting, on the first member, the way a single
+    // request alerts it; three alerts for one decision would be noise.
+    if (asRequest) {
+      if (appointmentIds[0]) {
+        void notifyBarberBookingEvent({
+          shopId: shop.id,
+          appointmentId: appointmentIds[0],
+          kind: "requested",
+        });
+      }
+      // `pending`: the page says "Request sent", never "You're booked".
+      res.status(201).json({ groupId: created.id, manageToken: created.manageToken, pending: true });
+      return;
+    }
+
     // 🔴 ONE CONFIRMATION FOR THE WHOLE PARTY, not one per chair, and claimed
     // through the SAME durable marker the settlement sweep uses. Whichever
     // route reaches a party first wins; the other reads count === 0 and sends
@@ -826,7 +879,7 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
     // that is already saved.
     await sendGroupConfirmationOnce(shop.id, created.id, now);
 
-    res.status(201).json({ groupId: created.id, manageToken: created.manageToken });
+    res.status(201).json({ groupId: created.id, manageToken: created.manageToken, pending: false });
   } catch (err) {
     // 🔴 ASK THE IDEMPOTENCY KEY FIRST, BEFORE BELIEVING THE ERROR.
     //
@@ -847,9 +900,12 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
         select: { id: true, shopId: true, manageToken: true },
       });
       if (winner && winner.shopId === shop.id) {
-        res
-          .status(200)
-          .json({ groupId: winner.id, manageToken: winner.manageToken, retried: true });
+        res.status(200).json({
+          groupId: winner.id,
+          manageToken: winner.manageToken,
+          retried: true,
+          pending: await partyAwaitsShop(winner.id),
+        });
         return;
       }
     }
@@ -899,6 +955,12 @@ async function groupByToken(token: string | undefined) {
         select: {
           id: true,
           status: true,
+          // A request waits for the shop; a payment hold (none in v1) does not.
+          holdExpiresAt: true,
+          // Each member's OWN chair. Usually the party's, but the dashboard can
+          // move one member to another provider, and a party move must check
+          // that member where it actually sits.
+          staffId: true,
           startsAt: true,
           endsAt: true,
           firstName: true,
@@ -930,6 +992,18 @@ async function groupByToken(token: string | undefined) {
 }
 
 /**
+ * Has the party's visit started? The same past-time rule a single booking's
+ * own cancel and move apply (booking.public.ts: `startsAt <= now` refuses),
+ * asked of the party: once anybody's appointment has begun, the visit is
+ * under way and "cancel everyone" or "move everyone" is no longer the
+ * client's to do online. Members still to come can each be cancelled on
+ * their own, under that same single rule.
+ */
+function partyStarted(live: readonly { startsAt: Date }[], now: Date): boolean {
+  return live.some((a) => a.startsAt.getTime() <= now.getTime());
+}
+
+/**
  * The whole visit behind one group token.
  *
  * 🔴 Each member OWN manage token is included, and that is the point: it is
@@ -943,9 +1017,22 @@ bookingGroupRouter.get("/group/:token", rewardsLimiter, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
+  const now = new Date();
   const live = group.appointments.filter((a) => a.status === "BOOKED");
+  // 🔴 A REQUEST IS NOT A CANCELLED PARTY. Its members are PENDING until the
+  // shop answers, and a page reading only BOOKED rows called it "Group
+  // cancelled". `requested` lets it say "waiting for the shop to confirm".
+  const requested =
+    group.status === "ACTIVE" &&
+    group.appointments.some((a) => a.status === "PENDING" && a.holdExpiresAt === null);
+  const span = requested
+    ? group.appointments.filter((a) => a.status === "BOOKED" || a.status === "PENDING")
+    : live;
   res.json({
     status: group.status,
+    requested,
+    // The visit is under way: no cancel-everyone and no move-everyone online.
+    started: partyStarted(live, now),
     bookedBy: group.firstName,
     // slug is the PUBLIC shop handle - the same segment already in this page's
     // own URL. It is here so reschedule-all can reuse /:slug/group/slots and
@@ -957,16 +1044,18 @@ bookingGroupRouter.get("/group/:token", rewardsLimiter, async (req, res) => {
     // identifier and nothing more: no mirror state, no Acuity id, no customer
     // data beyond what this token already authorises.
     staff: { id: group.staffId, name: group.staff.name },
-    // The party span, from what is still BOOKED. A cancelled member shrinks
-    // the visit rather than leaving a hole in the middle of it.
-    startsAt: live[0]?.startsAt.toISOString() ?? null,
-    endsAt: live[live.length - 1]?.endsAt.toISOString() ?? null,
+    // The party span, from what is still BOOKED (or still requested). A
+    // cancelled member shrinks the visit rather than leaving a hole in it.
+    startsAt: span[0]?.startsAt.toISOString() ?? null,
+    endsAt: span[span.length - 1]?.endsAt.toISOString() ?? null,
     members: group.appointments.map((a) => ({
       appointmentId: a.id,
       manageToken: a.manageToken,
       position: a.groupPosition,
       firstName: a.firstName,
       status: a.status,
+      // This member's own time has come: their single cancel refuses it.
+      started: a.startsAt.getTime() <= now.getTime(),
       // Same reason as staff.id above: reschedule-all rebuilds the party's
       // service list to re-ask for times. The NAME alone cannot do that.
       serviceId: a.serviceId,
@@ -1037,9 +1126,23 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
     res.status(409).json({ error: "group_canceled" });
     return;
   }
+  const now = new Date();
+  // A request the shop has not answered is not the client's to move, exactly
+  // as a single request is not (its manage route refuses anything but BOOKED).
+  if (group.appointments.some((a) => a.status === "PENDING" && a.holdExpiresAt === null)) {
+    res.status(409).json({ error: "not_reschedulable", code: "REQUESTED" });
+    return;
+  }
   const live = group.appointments.filter((a) => a.status === "BOOKED");
   if (live.length === 0) {
     res.status(409).json({ error: "nothing_to_move" });
+    return;
+  }
+  // 🔴 THE SAME PAST-TIME RULE AS A SINGLE BOOKING'S MOVE. Once the visit has
+  // started, moving "everyone" would drag the person already in the chair to
+  // another day. The shop's own tools are unaffected.
+  if (partyStarted(live, now)) {
+    res.status(409).json({ error: "not_reschedulable", code: "STARTED" });
     return;
   }
   const shop = await prisma.shop.findUnique({ where: { id: group.shopId } });
@@ -1060,7 +1163,6 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
     return;
   }
 
-  const now = new Date();
   // Re-plan from the new start, keeping each member attendee and service.
   const result = await preflight(
     shop,
@@ -1180,21 +1282,34 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
 
   try {
     await prisma.$transaction(async (tx) => {
-      await lockStaffAndAssertSlotFree(tx, {
-        walkInCapacity: "enforce",
-        staffId: group.staffId,
-        shopId: shop.id,
-        startsAt: plan.startsAt,
-        endsAt: plan.endsAt,
-        bufferMin: shop.bookingBufferMin,
-        // 🔴 All of them. See the header.
-        excludeAppointmentIds: live.map((a) => a.id),
-        // A reschedule is a MOVE, not a new sale: the per-service daily cap was
-        // already paid on the way in, and re-charging it would refuse a
-        // customer permission to move a booking they already hold.
-        serviceDayLimit: null,
-        now,
-      });
+      // 🔴 EVERY MEMBER ON ITS OWN CHAIR. This used to lock and check only
+      // the party's chair (group.staffId) and then rewrite every member's
+      // times - so a member the shop had moved to another provider was landed
+      // on THAT provider's calendar with nobody looking, over whatever was
+      // booked there. Each member keeps its own provider; every chair is
+      // locked (in one order) and checked before anyone moves, and a refusal
+      // on any of them moves nobody. Members together on one chair are still
+      // checked as one combined run, as before.
+      await lockStaffsAndAssertPartyFree(
+        tx,
+        live.map((row, i) => ({
+          staffId: row.staffId,
+          startsAt: plan.members[i]!.startsAt,
+          endsAt: plan.members[i]!.endsAt,
+        })),
+        {
+          walkInCapacity: "enforce",
+          shopId: shop.id,
+          bufferMin: shop.bookingBufferMin,
+          // 🔴 All of them. See the header.
+          excludeAppointmentIds: live.map((a) => a.id),
+          // A reschedule is a MOVE, not a new sale: the per-service daily cap
+          // was already paid on the way in, and re-charging it would refuse a
+          // customer permission to move a booking they already hold.
+          serviceDayLimit: null,
+          now,
+        },
+      );
       // 🔴 PARK, THEN PLACE - two passes, and the second one is not optional.
       //
       // The partial unique index on (staffId, startsAt) WHERE status='BOOKED'
@@ -1233,6 +1348,21 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
             ...(seat.move.kind === "changes"
               ? { priceAtBooking: new Prisma.Decimal((seat.move.toCents / 100).toFixed(2)) }
               : {}),
+            // 🔴 SEND-STATE AND CHECK-IN BELONG TO THE OLD TIME. The same
+            // reset every other move makes (booking.public.ts reschedule): a
+            // reminder already sent for the old day left the new one with
+            // none, and an "on my way" tapped for the old time pinned a stale
+            // pill on the new one.
+            confirmationSentAt: null,
+            reminderSentAt: null,
+            confirmationEmailSentAt: null,
+            reminderEmailSentAt: null,
+            reminder24hPushSentAt: null,
+            reminder2hPushSentAt: null,
+            checkInStatus: null,
+            checkedInAt: null,
+            etaMinutes: null,
+            runningLate: false,
           },
         });
         if (seat.move.kind === "changes") {
@@ -1288,7 +1418,26 @@ bookingGroupRouter.post("/group/:token/cancel", bookingWriteLimiter, async (req,
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const result = await cancelGroup(group.shopId, group.id, new Date(), {
+  const now = new Date();
+  // 🔴 THE CLIENT'S CANCEL FOLLOWS THE SINGLE BOOKING'S RULES (booking.public.ts
+  // manage cancel: anything but BOOKED, or a time already come, is refused).
+  //  - A request the shop has not answered stays the shop's to answer - and
+  //    cancelGroup only touches BOOKED rows, so it would have marked the party
+  //    cancelled while its members sat in the shop's requests, still waiting.
+  //  - Once the visit has started, "cancel everyone" would cancel the person
+  //    in the chair. Members still to come can each be cancelled on their own.
+  // An already-cancelled party still answers 200 below (idempotent).
+  if (group.status === "ACTIVE") {
+    if (group.appointments.some((a) => a.status === "PENDING" && a.holdExpiresAt === null)) {
+      res.status(409).json({ error: "not_cancelable", code: "REQUESTED" });
+      return;
+    }
+    if (partyStarted(group.appointments.filter((a) => a.status === "BOOKED"), now)) {
+      res.status(409).json({ error: "not_cancelable", code: "STARTED" });
+      return;
+    }
+  }
+  const result = await cancelGroup(group.shopId, group.id, now, {
     // Customer-initiated: the shop cancellation policy applies per member,
     // exactly as it would one visit at a time.
     applyPolicyFee: true,

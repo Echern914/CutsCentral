@@ -26,10 +26,19 @@ export interface GroupMemberView {
   startsAt: string;
   endsAt: string;
   priceCents: number | null;
+  /** This member's time has come: their own cancel is refused, so it is not offered. */
+  started?: boolean;
 }
 
 export interface GroupView {
   status: string;
+  /**
+   * A request the shop has not answered yet (Request-before-booking): every
+   * member is PENDING. Not cancelled, not booked - waiting.
+   */
+  requested?: boolean;
+  /** The visit is under way: cancel-everyone and move-everyone are refused. */
+  started?: boolean;
   bookedBy: string;
   shop: { slug: string; name: string; timezone: string };
   staff: { id: string; name: string };
@@ -80,7 +89,15 @@ export async function groupRescheduleAction(
   | { ok: false; code: "price_changes"; priceChange: GroupPriceChange }
   | {
       ok: false;
-      code: "slot_taken" | "canceled" | "slot" | "contact_shop" | "price_changed" | "error";
+      code:
+        | "slot_taken"
+        | "canceled"
+        | "slot"
+        | "contact_shop"
+        | "price_changed"
+        | "started"
+        | "requested"
+        | "error";
     }
 > {
   const res = await apiPublicSend<{ ok: boolean; plan: GroupPlanResult }>(
@@ -120,6 +137,10 @@ export async function groupRescheduleAction(
   if (res.error === "group_canceled" || res.error === "nothing_to_move") {
     return { ok: false, code: "canceled" };
   }
+  // The visit has started, or the shop has not answered the request yet.
+  if (res.error === "not_reschedulable") {
+    return { ok: false, code: res.code === "REQUESTED" ? "requested" : "started" };
+  }
   if (res.status === 400) return { ok: false, code: "slot" };
   return { ok: false, code: "error" };
 }
@@ -142,16 +163,23 @@ export async function cancelMemberAction(
   return { ok: res.ok };
 }
 
-/** Cancel the ENTIRE party. A separate, explicit action. */
+/**
+ * Cancel the ENTIRE party. A separate, explicit action.
+ *
+ * Refused (`code`) once the visit has started, or while the shop has not yet
+ * answered the request - the same rules a single booking's cancel follows.
+ */
 export async function cancelGroupAction(
   token: string,
-): Promise<{ ok: boolean; canceled?: number }> {
+): Promise<{ ok: boolean; canceled?: number; code?: "started" | "requested" }> {
   const res = await apiPublicSend<{ ok: boolean; canceled: number }>(
     "POST",
     `/api/book/group/${encodeURIComponent(token)}/cancel`,
     {},
   );
-  return res.ok && res.data
-    ? { ok: true, canceled: res.data.canceled }
-    : { ok: false };
+  if (res.ok && res.data) return { ok: true, canceled: res.data.canceled };
+  if (res.error === "not_cancelable") {
+    return { ok: false, code: res.code === "REQUESTED" ? "requested" : "started" };
+  }
+  return { ok: false };
 }

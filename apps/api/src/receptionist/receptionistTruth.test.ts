@@ -307,6 +307,44 @@ describe("cancel", () => {
     expect(row?.status).toBe("CANCELED");
   });
 
+  it("🔴 a booking made under FREE cancellation stays free after the shop tightens it - quoted and refunded", async () => {
+    // Booked while the shop had no window (its snapshot says so). The shop now
+    // keeps 50% inside 24h; this booking was never told that, and is refunded
+    // in full - the quote and the refund agree.
+    const inTwoHours = new Date(NOW.getTime() + 4 * 60 * 60 * 1000);
+    const apptId = await bookedAt(inTwoHours, 40);
+    await prisma.appointment.update({
+      where: { id: apptId },
+      data: { cancelWindowHoursAtBooking: 0, cancelFeeBpsAtBooking: 0, cardOnFileFeesAtBooking: false },
+    });
+    await prisma.payment.create({
+      data: {
+        shopId,
+        appointmentId: apptId,
+        stripePaymentIntentId: `pi_${randomToken(10)}`,
+        stripeConnectAccountId: "acct_test",
+        mode: "ahead",
+        amount: 4000,
+        status: "succeeded",
+      },
+    });
+    refundSpy.mockClear();
+
+    const exec = makeToolExecutor(ctx());
+    const history = JSON.parse((await exec("get_client_history", {})).result) as {
+      upcoming_appointments: { appointment_id: string; if_cancelled_kept_cents?: number }[];
+    };
+    expect(history.upcoming_appointments.find((a) => a.appointment_id === apptId)?.if_cancelled_kept_cents).toBe(0);
+
+    const res = await exec("cancel", { appointment_id: apptId });
+    expect(res.isError).toBe(false);
+    const body = JSON.parse(res.result) as { fee_cents: number; fee_note: string };
+    expect(body.fee_cents).toBe(0);
+    expect(body.fee_note).toBe("no fee - nothing kept");
+    expect(refundSpy).toHaveBeenCalledTimes(1);
+    expect(refundSpy.mock.calls[0]![0].feeCents).toBe(0);
+  });
+
   it("is a clean zero when nothing was paid - a fee needs money to take it from", async () => {
     const inTwoHours = new Date(NOW.getTime() + 3 * 60 * 60 * 1000);
     const apptId = await bookedAt(inTwoHours, 35);

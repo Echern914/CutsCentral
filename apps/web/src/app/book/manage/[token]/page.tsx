@@ -90,6 +90,20 @@ export interface ManageData {
    */
   nonRefundable?: { amountCents: number } | null;
   /**
+   * Non-null: a card is kept on this booking and a cancel from `from` on
+   * charges it `cents` (a late cancellation) - the SERVER's figure, by the
+   * function the charge itself uses. `inside` is the server's answer for the
+   * moment the page was rendered. The page asks before it cancels. Optional =
+   * an older API.
+   */
+  lateCancelFee?: {
+    cents: number;
+    from: string;
+    inside: boolean;
+    windowHours: number;
+    card: { brand: string | null; last4: string | null };
+  } | null;
+  /**
    * A tip after the visit (the API's services/tips.ts TipView). Null or
    * absent = no tip card: the visit is not finished, the shop does not take
    * tips online, or an older API. The server decides; the page only renders.

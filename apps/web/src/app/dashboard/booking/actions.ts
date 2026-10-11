@@ -705,14 +705,25 @@ export async function createAppointmentAction(
   };
 }
 
+/**
+ * A group booking is ONE request: approving or declining any member answers
+ * for the whole group, and `party` says how many people that was.
+ */
+type PartyResult = Result & { party?: number };
+
+function withParty(res: { ok: boolean; error?: string; data: { party?: number } | null }): PartyResult {
+  const out = done(res);
+  return out.ok && typeof res.data?.party === "number" ? { ...out, party: res.data.party } : out;
+}
+
 /** Approve a PENDING request → BOOKED (fires the customer confirmation). */
-export async function approveAppointmentAction(id: string): Promise<Result> {
-  return done(await apiSend("POST", `/api/booking/appointments/${id}/approve`));
+export async function approveAppointmentAction(id: string): Promise<PartyResult> {
+  return withParty(await apiSend<{ party?: number }>("POST", `/api/booking/appointments/${id}/approve`));
 }
 
 /** Decline a PENDING request → CANCELED (light flip, no refund/clawback). */
-export async function declineAppointmentAction(id: string): Promise<Result> {
-  return done(await apiSend("POST", `/api/booking/appointments/${id}/decline`));
+export async function declineAppointmentAction(id: string): Promise<PartyResult> {
+  return withParty(await apiSend<{ party?: number }>("POST", `/api/booking/appointments/${id}/decline`));
 }
 
 /**

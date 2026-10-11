@@ -1,4 +1,6 @@
+import type { CancellationTermsSnapshot } from "@chairback/config";
 import { prisma, runWithShop } from "@chairback/db";
+import { termsForBooking } from "./cancellationTerms.js";
 import { stripeClient } from "../billing/stripe.js";
 import { isPendingIntentId } from "../billing/payments.js";
 import { logger } from "../logger.js";
@@ -130,7 +132,13 @@ export async function unfinishedCheckoutFor(
  * page. Only for a booking still ahead, whose card never arrived.
  */
 export async function optionalCardStepFor(
-  appt: { id: string; shopId: string; status: string; startsAt: Date; seriesId: string | null },
+  appt: {
+    id: string;
+    shopId: string;
+    status: string;
+    startsAt: Date;
+    seriesId: string | null;
+  } & CancellationTermsSnapshot,
   now: Date,
 ): Promise<{ clientSecret: string; serviceChargeConsent: boolean; chargesFees: boolean } | null> {
   if (appt.status !== "BOOKED" || appt.startsAt.getTime() <= now.getTime()) return null;
@@ -155,17 +163,15 @@ export async function optionalCardStepFor(
     if (!card || card.status !== "pending") return null;
     const si = await stripeClient().setupIntents.retrieve(card.stripeSetupIntentId);
     if (!si.client_secret || !AWAITING.has(si.status)) return null;
-    // Shop has RLS with no policy: read directly, never inside runWithShop.
-    const shop = await prisma.shop.findUnique({
-      where: { id: appt.shopId },
-      select: { chargeCardOnFileFees: true },
-    });
+    // The fee terms THIS booking was made on - a card added now is charged
+    // (or not) by those, never by the shop's switch today.
+    const terms = await termsForBooking(appt.shopId, appt);
     return {
       clientSecret: si.client_secret,
       // Taken back on the appointment page: the panel must not repeat it.
       serviceChargeConsent: card.serviceChargeConsentAt !== null && card.serviceChargeWithdrawnAt === null,
       // The same fee terms the booking page's card step states.
-      chargesFees: shop?.chargeCardOnFileFees === true,
+      chargesFees: terms.chargeCardOnFileFees,
     };
   } catch (err) {
     // Stripe unreachable: the booking stands; the page just can't offer the card this time.

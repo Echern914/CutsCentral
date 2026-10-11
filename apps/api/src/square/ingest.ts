@@ -196,8 +196,12 @@ export async function ingestSquareBooking(
     // override (a retroactive cancel is real and must claw back the punch).
     const existing = await tx.visit.findUnique({
       where: { shopId_acuityAppointmentId: { shopId: shop.id, acuityAppointmentId: sourceId } },
-      select: { status: true, canceledAt: true },
+      select: { status: true, canceledAt: true, scheduledAt: true },
     });
+    // Moved in Square after its reminder went out: re-arm the reminder stamps
+    // so the new time is reminded too (see ingest.ts - the same rule).
+    const timeMoved =
+      existing !== null && existing.scheduledAt.getTime() !== scheduledAt.getTime();
     const keepCompleted =
       existing?.status === "COMPLETED" && status !== "CANCELED" && status !== "NO_SHOW";
     const revokeCompleted =
@@ -225,6 +229,7 @@ export async function ingestSquareBooking(
         // cancelled (re-accepted in Square) has none.
         canceledAt: cancelledAt ? (existing?.canceledAt ?? cancelledAt) : null,
         completedAt: revokeCompleted ? null : undefined,
+        ...(timeMoved ? { reminderSentAt: null, reminderEmailSentAt: null } : {}),
       },
     });
 

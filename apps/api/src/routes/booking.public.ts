@@ -17,6 +17,7 @@ import {
   isLikelyEmail,
   type BookingErrorCode,
   type BookingErrorField,
+  cancellationTermsSnapshot,
   depositIsNonRefundable,
   describeCancellationPolicy,
   describeDepositPolicy,
@@ -73,17 +74,24 @@ import {
 import { checkPolicyAcceptance, publicBookingPolicy } from "../engines/bookingPolicy.js";
 import { normalizeClientNote } from "@chairback/config/clientNote";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
-import { fillBlankClientFields } from "../services/clientFill.js";
+import { fillBlankClientNames } from "../services/clientFill.js";
 import { neverBooked, optionalCardStepFor, unfinishedCheckoutFor } from "../services/unfinishedCheckout.js";
+import {
+  CANCELLATION_TERMS_SNAPSHOT_SELECT,
+  termsForBooking,
+} from "../services/cancellationTerms.js";
+import { cardOnFileFeeFor } from "../services/cardOnFileSettle.js";
 import {
   durationRangeForService,
   effectiveDurationAt,
   effectivePriceAt,
+  parseDateOverrides,
   parseDurationOverrides,
   parsePriceOverrides,
   parseTimeWindows,
   priceRangeForService,
 } from "../engines/pricing.js";
+import { carriedExtraMin, movedLengthMin } from "../engines/moveLength.js";
 import { connectEnabled, hasActiveAccess } from "../billing/stripe.js";
 import {
   createCardOnFileSetupIntent,
@@ -96,8 +104,8 @@ import {
   createSavedCardCode,
   formMatchesSavedCardClient,
   issueFirstDeviceToken,
-  liveSavedCardFor,
   removeSavedCard,
+  savedCardForAppointment,
   savedCardForToken,
   verifySavedCardCode,
 } from "../billing/savedCard.js";
@@ -111,7 +119,7 @@ import {
 } from "../wallet/appointmentPass.js";
 import {
   createAheadPaymentIntent,
-  depositChargeCents,
+  chargeAtBookingCents,
   toCents,
 } from "../billing/payments.js";
 import {
@@ -706,6 +714,12 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
         // every day) - the client resolves each slot's exact price/length from
         // the SLOT time so an evening special is shown before it's tapped.
         timeOverrides: timeWindows,
+        // Holiday prices ({"YYYY-MM-DD": price}, shop-local dates). The page
+        // prices a slot with the SAME resolver the create route snapshots onto
+        // priceAtBooking (config/servicePricing.ts), and that resolver puts a
+        // named date above every other layer. Without this the page showed a
+        // $45 cut at $45 on a $75 Christmas Eve, and the booking took $75.
+        dateOverrides: parseDateOverrides(s.dateOverrides),
         // Groups-first layout: which group card this files under + its saved
         // position inside that group.
         serviceGroupId: s.serviceGroupId,
@@ -2162,16 +2176,14 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         smsConsentSource: consented ? "booking" : null,
       },
       // 🔴 Never overwrite an existing client from a public form - a shared
-      // phone is not the same person (services/clientFill.ts). Blanks fill
-      // below; each booking row keeps exactly what was typed.
+      // phone is not the same person (services/clientFill.ts). A blank name
+      // fills below - never a contact; each booking row keeps what was typed.
       update: {},
       select: { id: true },
     });
-    await fillBlankClientFields(prisma, client.id, {
+    await fillBlankClientNames(prisma, client.id, {
       firstName: d.firstName,
       lastName: d.lastName,
-      phone,
-      email: d.email,
     });
     if (consented) {
       await prisma.client.updateMany({
@@ -2239,6 +2251,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       dateOverrides: service.dateOverrides,
       timezone: shop.timezone,
       bookingBufferMin: shop.bookingBufferMin,
+      cancellationTerms: shop,
       // A customer never gets the barber's "force it" - hours and exceptions
       // gate every occurrence.
       checkAvailability: true,
@@ -2409,11 +2422,13 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
   const fullCents = toCents(effectivePrice);
   // DEPOSIT charges a fixed amount now and leaves the rest for the chair; AHEAD
   // charges the whole ticket. Capped at the price either way, so a $20 deposit
-  // can never overcharge a $15 line-up.
-  const chargeCents =
-    shop.paymentsMode === "deposit"
-      ? depositChargeCents(shop.depositAmountCents, fullCents)
-      : fullCents;
+  // can never overcharge a $15 line-up. The booking page states the figure
+  // before Confirm with this same function (config/shopPolicy.ts).
+  const chargeCents = chargeAtBookingCents({
+    paymentsMode: shop.paymentsMode,
+    depositAmountCents: shop.depositAmountCents,
+    priceCents: fullCents,
+  });
   // "payment" (ahead/deposit), "card" (card on file: a SetupIntent, nothing
   // charged) or null. Either non-null answer means the row is written as a
   // HOLD; only the Stripe object it waits for differs.
@@ -2501,8 +2516,8 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           smsConsentSource: consented ? "booking" : null,
         },
         // 🔴 Never overwrite an existing client from a public form - a shared
-        // phone is not the same person (services/clientFill.ts). Blanks fill
-        // below; the booking row keeps exactly what was typed.
+        // phone is not the same person (services/clientFill.ts). A blank name
+        // fills below - never a contact; the booking row keeps what was typed.
         update: {},
         select: { id: true },
       });
@@ -2511,11 +2526,9 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       // another record, nothing is written and the page books with a card
       // step instead.
       if (savedCard && client.id !== savedCard.clientId) throw new SavedCardNotTheirsError();
-      await fillBlankClientFields(tx, client.id, {
+      await fillBlankClientNames(tx, client.id, {
         firstName: d.firstName,
         lastName: d.lastName,
-        phone,
-        email: d.email,
       });
       if (consented) {
         await tx.client.updateMany({
@@ -2568,6 +2581,9 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
             : {}),
           manageToken: token,
           bookedVia: targeted ? "targeted_slot" : undefined,
+          // The cancellation terms this booking is made on - what a cancel or
+          // a no-show is settled by, whatever the shop changes them to later.
+          ...cancellationTermsSnapshot(shop),
         },
         select: { id: true, manageToken: true },
       });
@@ -3132,7 +3148,68 @@ const MANAGE_SELECT = {
         where: { purpose: "booking" },
         select: { status: true, amount: true, capturedAmount: true, nonRefundable: true },
       },
+      // The cancellation terms this booking was made on - what a late cancel
+      // charges a card kept on it, and the terms a card added here is told
+      // (never sent to the page as is).
+      ...CANCELLATION_TERMS_SNAPSHOT_SELECT,
 } satisfies Prisma.AppointmentSelect;
+
+type ManageTermsRow = Pick<
+  Prisma.AppointmentGetPayload<{ select: typeof MANAGE_SELECT }>,
+  "id" | "shopId" | "startsAt" | "priceAtBooking" | keyof typeof CANCELLATION_TERMS_SNAPSHOT_SELECT
+>;
+
+/**
+ * What cancelling THIS booking charges the card kept on it - the server's
+ * figure, by the same function the settlement charges with (cardOnFileFeeFor),
+ * on this booking's own terms. Null when nothing can be charged: no card
+ * saved on it, card fees off in its terms, no window, or a zero fee.
+ *
+ * `from` is the instant the window opens. The fee is the same anywhere inside
+ * the window (a share of the agreed price), so the page can warn from that
+ * instant on even if it stays open across it; `inside` is the server's own
+ * answer for now, so a phone with a slow clock is warned too.
+ */
+async function lateCancelCardFee(
+  appt: ManageTermsRow,
+  now: Date,
+): Promise<{
+  cents: number;
+  from: string;
+  inside: boolean;
+  windowHours: number;
+  card: { brand: string | null; last4: string | null };
+} | null> {
+  // This booking's OWN card - the one the settlement charges (a later visit
+  // of a series has none of its own and is never charged).
+  const card = await prisma.cardOnFile.findUnique({
+    where: { appointmentId: appt.id },
+    select: { status: true, brand: true, last4: true },
+  });
+  if (card?.status !== "saved") return null;
+  const terms = await termsForBooking(appt.shopId, appt);
+  if (!terms.chargeCardOnFileFees || terms.cancelWindowHours <= 0) return null;
+  const from = new Date(appt.startsAt.getTime() - terms.cancelWindowHours * 3_600_000);
+  const inside = now.getTime() >= from.getTime();
+  const cents = await cardOnFileFeeFor({
+    shopId: appt.shopId,
+    appointmentId: appt.id,
+    priceAtBooking: appt.priceAtBooking,
+    startsAt: appt.startsAt,
+    // The figure INSIDE the window, asked at an instant inside it.
+    now: inside ? now : from,
+    reason: "late_cancel",
+    terms,
+  });
+  if (cents <= 0) return null;
+  return {
+    cents,
+    from: from.toISOString(),
+    inside,
+    windowHours: terms.cancelWindowHours,
+    card: { brand: card.brand, last4: card.last4 },
+  };
+}
 
 type ManageRow = Prisma.AppointmentGetPayload<{ select: typeof MANAGE_SELECT }>;
 
@@ -3200,7 +3277,10 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
   const addCard = finish ? null : await optionalCardStepFor(appt, now);
   // The card the client asked this shop to keep, if any: shown here with the
   // way to take it off, as the consent promised (brand and last four only).
-  const savedCardOnFile = appt.clientId ? await liveSavedCardFor(appt.shopId, appt.clientId) : null;
+  // 🔴 Only a card THIS booking saved or was booked with - never just "the
+  // record's card": anyone who types the client's number lands on the record
+  // and holds a link like this one (billing/savedCard.ts).
+  const savedCardOnFile = await savedCardForAppointment(appt.shopId, appt.id);
   // A deposit (or payment) taken at booking that THIS booking's terms keep on
   // a cancel - its own snapshot, never the shop's switch today. Only money
   // actually in hand: an unfinished hold has nothing to keep.
@@ -3209,6 +3289,9 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     bookingPayment && bookingPayment.nonRefundable && bookingPayment.status === "succeeded"
       ? { amountCents: bookingPayment.capturedAmount ?? bookingPayment.amount }
       : null;
+  // A card kept on file that a cancel inside the window charges: the page
+  // asks first, with the exact figure (and the card it lands on).
+  const lateCancelFee = canChange ? await lateCancelCardFee(appt, now) : null;
   // A tip after the visit: offered once it is COMPLETED, and a tip already
   // given is always shown. The shop's facts are read on their own - the
   // `shop` sent to the page below is spread from MANAGE_SELECT, and a Stripe
@@ -3263,6 +3346,9 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     // Non-null: cancelling keeps this much (a non-refundable deposit). The page
     // says so and asks before it cancels.
     nonRefundable: keptOnCancel,
+    // Non-null: cancelling from `from` on charges the saved card this much (a
+    // late cancellation). The page says so and asks before it cancels.
+    lateCancelFee,
     // The tip card after the visit (services/tips.ts TipView). Null = none.
     tip,
     series: appt.seriesId ? { remaining: remainingInSeries } : null,
@@ -3719,18 +3805,24 @@ bookingPublicRouter.post("/:slug/saved-card/verify", bookingWriteLimiter, async 
 
 // POST /api/book/manage/:token/saved-card/remove - the client takes their saved
 // card off this shop's file. The appointment link is the authorization, as for
-// every other change the client makes. Appointments already booked with it
-// keep it until they are done; it is never offered again.
+// every other change the client makes - and so it reaches only the card THIS
+// booking saved or was booked with, the one its page shows. Someone else who
+// booked on the client's number holds a link too; it removes nothing, and is
+// answered exactly as a booking with no card is. Appointments already booked
+// with the card keep it until they are done; it is never offered again.
 bookingPublicRouter.post("/manage/:token/saved-card/remove", bookingWriteLimiter, async (req, res) => {
   const appt = await prisma.appointment.findUnique({
     where: { manageToken: String(req.params.token) },
-    select: { shopId: true, clientId: true },
+    select: { id: true, shopId: true },
   });
-  if (!appt?.clientId) {
+  if (!appt) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const { removed } = await removeSavedCard({ shopId: appt.shopId, clientId: appt.clientId });
+  const card = await savedCardForAppointment(appt.shopId, appt.id);
+  const { removed } = card
+    ? await removeSavedCard({ shopId: appt.shopId, savedCardId: card.id })
+    : { removed: 0 };
   res.json({ ok: true, removed });
 });
 
@@ -3833,6 +3925,11 @@ bookingPublicRouter.get(
         serviceId: true,
         status: true,
         startsAt: true,
+        // The booking's own length and origin: the list offers only times the
+        // WHOLE booking fits, exactly as the move checks (engines/moveLength.ts).
+        endsAt: true,
+        bookedVia: true,
+        service: { select: { durationMin: true, durationOverrides: true, timeOverrides: true } },
         shop: { select: { timezone: true, bookingMaxDays: true } },
       },
     });
@@ -3847,6 +3944,22 @@ bookingPublicRouter.get(
       res.json({ timezone: appt.shop.timezone, slots: [] });
       return;
     }
+    // 🔴 THE SAME QUESTION THE MOVE ASKS. A cut + add-on needs its add-on's
+    // minutes free at the new time too; a list built for the bare service
+    // would offer the day's last half hour and the move would refuse it at the
+    // final tap. A special being left takes the menu's length (no extra).
+    const extraDurationMin =
+      appt.bookedVia === TARGETED_SLOT_ORIGIN
+        ? 0
+        : carriedExtraMin({
+            currentMin: Math.round((appt.endsAt.getTime() - appt.startsAt.getTime()) / 60_000),
+            serviceMinAtOld: effectiveDurationAt(appt.service.durationMin, {
+              at: appt.startsAt,
+              timezone: appt.shop.timezone,
+              weekdayOverrides: appt.service.durationOverrides,
+              timeWindows: appt.service.timeOverrides,
+            }),
+          });
     // WINDOW, not the whole booking horizon. Sweeping all bookingMaxDays (45 by
     // default) returned ~960 slots on a normal 9-5 week - a payload nobody
     // reads and a picker nobody can scroll, where the last chip sat two months
@@ -3867,6 +3980,7 @@ bookingPublicRouter.get(
       toDate: new Date(horizon),
       now,
       excludeAppointmentId: appt.id,
+      extraDurationMin,
     });
     res.json({
       timezone: appt.shop.timezone,
@@ -3906,6 +4020,9 @@ bookingPublicRouter.post(
         serviceId: true,
         status: true,
         startsAt: true,
+        // How long it runs now: add-on minutes and a length the shop set by
+        // hand move with it (engines/moveLength.ts).
+        endsAt: true,
         // Who it is for - a client the shop blocked can't move it online.
         clientId: true,
         phone: true,
@@ -3974,20 +4091,32 @@ bookingPublicRouter.post(
 
     const now = new Date();
     const startsAt = parsed.data.startsAt;
-    // The new slot may fall on a different-duration weekday OR inside a
-    // time-of-day window - re-measure, like the reprice below. (Add-on minutes
-    // aren't carried through a reschedule today - endsAt was already
-    // service-only on this path.)
-    const endsAt = new Date(
-      startsAt.getTime() +
-        effectiveDurationAt(appt.service.durationMin, {
-          at: startsAt,
-          timezone: appt.shop.timezone,
-          weekdayOverrides: appt.service.durationOverrides,
-          timeWindows: appt.service.timeOverrides,
-        }) *
-          60_000,
-    );
+    // 🔴 THE BOOKING KEEPS ITS LENGTH (engines/moveLength.ts). Its add-on
+    // minutes and any length the shop set by hand move with it; only the
+    // service's own part is re-measured, because the new slot may fall on a
+    // different-duration weekday or inside a time-of-day window. This used to
+    // be the service alone, so a cut + add-on came out of a move holding half
+    // its time and the booking page sold the rest.
+    const serviceMinAt = (at: Date) =>
+      effectiveDurationAt(appt.service.durationMin, {
+        at,
+        timezone: appt.shop.timezone,
+        weekdayOverrides: appt.service.durationOverrides,
+        timeWindows: appt.service.timeOverrides,
+      });
+    const serviceMinAtNew = serviceMinAt(startsAt);
+    // Except a special being LEFT: its length was the special's, and on the
+    // regular grid it becomes an ordinary booking - menu price (movePrice,
+    // below) and menu length. A special carries no add-ons.
+    const leavingSpecial = appt.bookedVia === TARGETED_SLOT_ORIGIN;
+    const length = leavingSpecial
+      ? { lengthMin: serviceMinAtNew, extraMin: 0 }
+      : movedLengthMin({
+          currentMin: Math.round((appt.endsAt.getTime() - appt.startsAt.getTime()) / 60_000),
+          serviceMinAtOld: serviceMinAt(appt.startsAt),
+          serviceMinAtNew,
+        });
+    const endsAt = new Date(startsAt.getTime() + length.lengthMin * 60_000);
     // The new slot may carry a different date/window/weekday MENU price.
     // Whether this booking takes it is movePrice's call, below.
     const effectivePrice = effectivePriceAt(
@@ -4072,7 +4201,8 @@ bookingPublicRouter.post(
     }
 
     // Re-validate the new time against availability (excluding this appointment's
-    // own current slot), same authoritative check as create.
+    // own current slot), same authoritative check as create - for the WHOLE
+    // booking, add-ons included, exactly as create checks its add-ons.
     if (
       !(await isSlotBookable({
         shopId: appt.shopId,
@@ -4080,6 +4210,7 @@ bookingPublicRouter.post(
         serviceId: appt.serviceId,
         startsAt,
         excludeAppointmentId: appt.id,
+        extraDurationMin: length.extraMin,
       }))
     ) {
       res.status(400).json({ error: "invalid_slot", code: "SLOT_UNAVAILABLE" });
@@ -4134,6 +4265,8 @@ bookingPublicRouter.post(
             reminderEmailSentAt: null,
             reminder24hPushSentAt: null,
             reminder2hPushSentAt: null,
+            // The barber's "next up" alert was for the OLD time too.
+            barberNextUpSentAt: null,
             checkInStatus: null,
             checkedInAt: null,
             etaMinutes: null,

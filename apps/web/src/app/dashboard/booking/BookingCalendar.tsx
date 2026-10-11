@@ -1150,6 +1150,7 @@ const ACT_REFUSAL: Record<string, string> = {
   slot_taken: "That time is booked now. Decline the request or offer another time.",
   external_block: "That time is blocked in Acuity. Decline the request, or clear the block there first.",
   not_found: "That request is gone. It may have been approved or cancelled elsewhere.",
+  party_changed: "That group request changed while you were looking. Refresh and try again.",
 };
 
 function isoForDayHour(dayKey: string, hour: number, tz: string, minute = 0): string {
@@ -2599,11 +2600,17 @@ export function AppointmentBlock({
     );
   }
 
-  function act(fn: (id: string) => Promise<{ ok: boolean; error?: string }>, label: string) {
+  function act(
+    fn: (id: string) => Promise<{ ok: boolean; error?: string; party?: number }>,
+    label: string,
+  ) {
     start(async () => {
       const res = await fn(row.id);
+      // A group request is answered as one: say that it was everyone.
+      const said =
+        res.party !== undefined && res.party > 1 ? `${label} the whole group (${res.party})` : label;
       toast(
-        res.ok ? label : (ACT_REFUSAL[res.error ?? ""] ?? "Couldn't update"),
+        res.ok ? said : (ACT_REFUSAL[res.error ?? ""] ?? "Couldn't update"),
         res.ok ? "success" : "error",
       );
       if (res.ok) onChanged();

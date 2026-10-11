@@ -46,6 +46,56 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "Redeem again after a lost connection no longer redeems twice.",
   },
   {
+    id: "2026-10-10-prices-and-policy-match-charges",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "Booking page and policies now match what's charged",
+    body:
+      "Your booking page now shows holiday prices and the deposit actually taken. With a card on file and fees " +
+      "on, your cancellation policy says the card is charged, and clients see the amount before a late cancel. " +
+      "Each booking keeps the cancellation terms it was made under.",
+  },
+  {
+    id: "2026-10-10-group-requests-need-approval",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "Group bookings now wait for your approval",
+    body:
+      "With Request-before-booking on, a group booked online arrives as one request instead of booking straight " +
+      "away. Approve or decline anyone in it and the whole group gets your answer, with one confirmation. Clients " +
+      "can no longer cancel or move a whole group online once it starts.",
+  },
+  {
+    id: "2026-10-10-messages-at-the-right-time",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "Client messages and alerts now arrive at the right time",
+    body:
+      "Rebooking and win-back messages now go out mid-morning your time, never before 8 AM. A visit moved in Acuity " +
+      "or Square gets a reminder for its new time, and a moved booking gives you a fresh next-up alert. A client " +
+      "who keeps texting a thread the AI handed you now alerts you.",
+  },
+  {
+    id: "2026-10-10-moved-bookings-keep-length",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "Moved bookings keep their full length",
+    body:
+      "A booking with an add-on, or one you lengthened, now keeps all its time when you or the client move it. " +
+      "Booking someone new on a number you already have no longer renames that client. And Mark no-show can't " +
+      "overwrite a client's own cancel or charge them for it.",
+  },
+  {
+    id: "2026-10-10-typed-number-proves-nothing",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "A typed phone number no longer opens a client's profile",
+    body:
+      "A number typed on your booking page or waitlist no longer adds an email to that client, opens their profile " +
+      "in the app, or earns their Gold or Silver waitlist place. The booking keeps what was typed. Add emails from " +
+      "the client's profile; add tier clients to the waitlist yourself.",
+  },
+  {
     id: "2026-10-10-privacy-terms-updated",
     date: "2026-10-10",
     kind: "feature",

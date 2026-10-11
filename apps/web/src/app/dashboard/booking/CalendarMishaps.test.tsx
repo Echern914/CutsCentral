@@ -140,4 +140,20 @@ describe("approving a request", () => {
     await waitFor(() => expect(toast).toHaveBeenCalled());
     expect(toast.mock.calls[0]![0]).toMatch(/booked now\. Decline the request/);
   });
+
+  it("🔴 a group request is answered as one, and the toast says it was everyone", async () => {
+    approve.mockResolvedValue({ ok: true, party: 3 });
+    renderDay([booking("Req", "16:00", "16:30", { status: "pending" })]);
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(toast).toHaveBeenCalled());
+    expect(toast.mock.calls[0]![0]).toBe("Approved the whole group (3)");
+  });
+
+  it("a single request still just says Approved", async () => {
+    approve.mockResolvedValue({ ok: true });
+    renderDay([booking("Req", "16:00", "16:30", { status: "pending" })]);
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(toast).toHaveBeenCalled());
+    expect(toast.mock.calls[0]![0]).toBe("Approved");
+  });
 });

@@ -161,6 +161,49 @@ describe("renderPromptForShop", () => {
     expect(text).not.toMatch(/\{\{(SHOP_NAME|BARBER_NAMES|TIMEZONE|HOURS|SERVICE_MENU|BOOKING_URL|DEPOSIT_POLICY|CANCELLATION_POLICY|NO_SHOW_POLICY|TONE|FIRST_BARBER|OTHER_BARBER_OFFER|ADDRESS)\}\}/);
   });
 
+  it("🔴 a card-on-file shop with fees ON: the receptionist never says 'free cancellation' for a card it will charge", async () => {
+    // services/cardOnFileSettle.ts charges a kept card for a late cancel. The
+    // prompt said "free cancellation any time" because nothing is COLLECTED in
+    // this mode - while the client who booked online with a card was charged.
+    process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+    process.env.STRIPE_CONNECT_WEBHOOK_SECRET = "whsec_test_dummy";
+    __resetEnvCacheForTests();
+    try {
+      const shop = await prisma.shop.create({
+        data: {
+          ownerId: userId,
+          name: "Card Cuts",
+          slug: `card-${randomToken(5)}`,
+          webhookSecret: randomToken(),
+          bookingMode: "native",
+          timezone: "America/Chicago",
+          paymentsMode: "card_on_file",
+          chargeCardOnFileFees: true,
+          cancelWindowHours: 24,
+          cancelFeeBps: 5000,
+          connectChargesEnabled: true,
+          stripeConnectAccountId: `acct_${randomToken(6)}`,
+        },
+        select: { id: true },
+      });
+      const text = (await renderPromptForShop(shop.id))!;
+      expect(text).not.toContain("free cancellation any time before the appointment");
+      expect(text).toContain("charged 50% of its booked price for a cancellation inside 24h of the start");
+      // A booking made by text keeps no card, so it IS free - and that is said too.
+      expect(text).toContain("free cancellation any time for a booking made in this conversation");
+
+      // Fees OFF: the card is never charged, and the prompt says free.
+      await prisma.shop.update({ where: { id: shop.id }, data: { chargeCardOnFileFees: false } });
+      const off = (await renderPromptForShop(shop.id))!;
+      expect(off).toContain("free cancellation any time before the appointment");
+      expect(off).not.toContain("50%");
+    } finally {
+      delete process.env.STRIPE_SECRET_KEY;
+      delete process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
+      __resetEnvCacheForTests();
+    }
+  });
+
   it("🔴 an Acuity-booking shop's receptionist sends its Acuity link, never a ChairBack page that refuses it", async () => {
     const shop = await prisma.shop.create({
       data: {

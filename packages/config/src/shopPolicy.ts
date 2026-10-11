@@ -121,6 +121,25 @@ function collectsMoney(shop: ShopPolicyInput, channel: PolicyChannel): boolean {
   );
 }
 
+/**
+ * Will a LATE CANCEL actually charge a card kept on file? The same gates the
+ * card's settlement charges through (services/cardOnFileSettle.ts +
+ * cardOnFileFeeCents): card on file mode with the fee switch ON, a window AND
+ * a rate (a window of 0 never charges a cancellation, only a no-show), and a
+ * shop that can take a card at all (Stripe live, no approval step - an
+ * approval shop never saves a card at booking).
+ */
+function cardFeeIsReal(shop: ShopPolicyInput): boolean {
+  return (
+    shop.paymentsMode === "card_on_file" &&
+    shop.chargeCardOnFileFees === true &&
+    shop.cancelWindowHours > 0 &&
+    shop.cancelFeeBps > 0 &&
+    shop.paymentsLive !== false &&
+    shop.requiresApproval !== true
+  );
+}
+
 /** `4050` -> "40.5", `5000` -> "50". Never invents precision it does not have. */
 function percentFromBps(bps: number): string {
   const pct = bps / 100;
@@ -168,6 +187,23 @@ export function describeCancellationPolicy(
     // Per booking, not shop-wide: a booking made before the shop switched this
     // on keeps its refundable terms. get_client_history says what each keeps.
     return "free cancellation any time for a booking made in this conversation; a deposit paid online may be kept on a cancellation - check that booking (get_client_history) and say what it keeps before cancelling";
+  }
+  // 🔴 A KEPT CARD IS CHARGED ON A LATE CANCEL. Nothing is collected in card
+  // on file mode, so the collected-money rule below reads it as "free" - and
+  // that is what the Wallet pass and the receptionist said, while
+  // services/cardOnFileSettle.ts charged the saved card inside the window.
+  // Same window and rate, but the base is the price the booking was made at
+  // (cardOnFileFeeCents), not money in hand.
+  if (cardFeeIsReal(shop)) {
+    const pct = percentFromBps(shop.cancelFeeBps);
+    const hours = shop.cancelWindowHours;
+    // By text no card is saved, so a booking made HERE is free to cancel - but
+    // a client who booked online and saved a card, cancelling by text, is
+    // charged. Said before the cancel, not discovered on a statement.
+    if (channel.collectsAtBooking === false) {
+      return `free cancellation any time for a booking made in this conversation (no card is saved by text); a booking made online with a card kept on file is charged ${pct}% of its booked price for a cancellation inside ${hours}h of the start - check that booking (get_client_history) and say the charge before cancelling`;
+    }
+    return `free up to ${hours}h before; inside that window ${pct}% of the booked price is charged to a card kept on file`;
   }
   // A fee needs something to take it FROM. cancelAppointment computes it as a
   // share of what was COLLECTED, so with no payment row the fee is zero
@@ -268,13 +304,82 @@ export function describeShopPolicy(shop: ShopPolicyInput): string {
   // CUSTOMER-facing sentence above says free, because free is what will
   // actually happen to them.
   const feeConfigured = shop.cancelWindowHours > 0 && shop.cancelFeeBps > 0;
+  // A kept card with fees on IS charged, so its fee is not inert.
   const inert =
-    feeConfigured && !collectsMoney(shop, {})
+    feeConfigured && !collectsMoney(shop, {}) && !cardFeeIsReal(shop)
       ? ` Note: you have a ${percentFromBps(shop.cancelFeeBps)}% fee set inside ` +
         `${shop.cancelWindowHours}h, but nothing collects money at booking right now, ` +
         `so it cannot actually be charged.`
       : "";
   return `Your policy right now: ${cancellation}. Payment: ${deposit}.${inert}`;
+}
+
+/**
+ * The three settings a cancellation or a no-show is SETTLED by - the window,
+ * the fee rate, and whether a kept card may be charged at all.
+ */
+export interface CancellationTerms {
+  cancelWindowHours: number;
+  cancelFeeBps: number;
+  chargeCardOnFileFees: boolean;
+}
+
+/** Those terms as a booking carries them (Appointment.*AtBooking). */
+export interface CancellationTermsSnapshot {
+  cancelWindowHoursAtBooking: number | null;
+  cancelFeeBpsAtBooking: number | null;
+  cardOnFileFeesAtBooking: boolean | null;
+}
+
+/**
+ * The cancellation terms a NEW booking is made on, as the columns it stores.
+ *
+ * 🔴 A BOOKING KEEPS THE TERMS IT WAS MADE ON. The cancel engine and the
+ * card-on-file settlement used to read the shop's CURRENT window, rate and
+ * fee switch, so a client who booked under "free cancellation" could be
+ * charged after the owner tightened it. The non-refundable deposit was
+ * already frozen per booking (Payment.nonRefundable); these three are now
+ * frozen the same way, on every path that creates an appointment.
+ */
+export function cancellationTermsSnapshot(shop: CancellationTerms): {
+  cancelWindowHoursAtBooking: number;
+  cancelFeeBpsAtBooking: number;
+  cardOnFileFeesAtBooking: boolean;
+} {
+  return {
+    cancelWindowHoursAtBooking: shop.cancelWindowHours,
+    cancelFeeBpsAtBooking: shop.cancelFeeBps,
+    cardOnFileFeesAtBooking: shop.chargeCardOnFileFees,
+  };
+}
+
+/**
+ * The terms an EXISTING booking is settled and described by: its own
+ * snapshot. A booking made before snapshots existed has none (all three NULL -
+ * a CHECK keeps them all-or-nothing) and is settled by the shop's CURRENT
+ * settings, exactly as every booking was before; that is the one case where a
+ * policy change still reaches an existing booking.
+ */
+export function bookingCancellationTerms(
+  appt: CancellationTermsSnapshot,
+  shop: CancellationTerms,
+): CancellationTerms {
+  if (
+    appt.cancelWindowHoursAtBooking === null ||
+    appt.cancelFeeBpsAtBooking === null ||
+    appt.cardOnFileFeesAtBooking === null
+  ) {
+    return {
+      cancelWindowHours: shop.cancelWindowHours,
+      cancelFeeBps: shop.cancelFeeBps,
+      chargeCardOnFileFees: shop.chargeCardOnFileFees,
+    };
+  }
+  return {
+    cancelWindowHours: appt.cancelWindowHoursAtBooking,
+    cancelFeeBps: appt.cancelFeeBpsAtBooking,
+    chargeCardOnFileFees: appt.cardOnFileFeesAtBooking,
+  };
 }
 
 /**
@@ -301,6 +406,54 @@ export function cancellationFeeCents(input: {
   const insideWindow = input.startsAt.getTime() - input.now.getTime() < windowMs;
   if (!insideWindow) return 0;
   return Math.floor((input.collectedCents * input.cancelFeeBps) / 10000);
+}
+
+/**
+ * What a DEPOSIT-mode booking charges NOW, in cents.
+ *
+ * Two rules, both there to stop a deposit becoming a surprise:
+ *  - CAP AT THE PRICE. A shop-wide $20 deposit must not overcharge a $15
+ *    line-up. Capped, the customer pays $15 now and owes nothing at the chair,
+ *    which is honest; charging $20 for a $15 service is not.
+ *  - NO CHARGE WITHOUT BOTH NUMBERS. An unpriced service, or a shop that
+ *    switched to deposit mode without setting an amount, charges NOTHING and
+ *    falls back to paying in person. Guessing a deposit is worse than not
+ *    taking one.
+ *
+ * Lives here, not in the API's billing code, because the booking page states
+ * the deposit BEFORE Confirm and has to state the figure this charges - it
+ * used to print the shop's raw deposit setting, "$20 deposit" over a $15 cut
+ * that was then charged $15, and over an unpriced service charged nothing.
+ */
+export function depositChargeCents(
+  depositCents: number | null | undefined,
+  fullCents: number | null,
+): number | null {
+  if (fullCents === null || fullCents <= 0) return null;
+  if (depositCents === null || depositCents === undefined || depositCents <= 0) return null;
+  return Math.min(depositCents, fullCents);
+}
+
+/**
+ * What a booking that PAYS AT BOOKING (ahead or deposit) is charged at
+ * Confirm, in cents - null when nothing is charged, and the booking is then
+ * paid at the shop.
+ *
+ * `priceCents` is the booking's whole price (the slot's effective price plus
+ * add-ons), the figure that becomes priceAtBooking. Deposit mode takes
+ * `depositChargeCents`; every other paying mode takes the whole price. The
+ * create route charges with this and the booking page states it, so the line
+ * before Confirm and the charge after it are one number.
+ */
+export function chargeAtBookingCents(input: {
+  paymentsMode: string;
+  depositAmountCents: number | null | undefined;
+  priceCents: number | null;
+}): number | null {
+  const full = input.priceCents !== null && input.priceCents > 0 ? input.priceCents : null;
+  return input.paymentsMode === "deposit"
+    ? depositChargeCents(input.depositAmountCents, full)
+    : full;
 }
 
 /**
@@ -408,9 +561,11 @@ export function describeNoShowPolicy(
 ): string {
   // A saved card changes the answer only when the shop has actually switched
   // fees on; a kept card with the switch off is exactly "nothing collected".
+  // A 0% fee charges nothing (cardOnFileFeeCents), so it is not said either.
   if (
     shop.paymentsMode === "card_on_file" &&
     shop.chargeCardOnFileFees &&
+    shop.cancelFeeBps > 0 &&
     channel.collectsAtBooking !== false &&
     shop.paymentsLive !== false &&
     !shop.requiresApproval

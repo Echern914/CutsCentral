@@ -1,4 +1,4 @@
-import { randomToken } from "@chairback/config";
+import { cancellationTermsSnapshot, randomToken, type CancellationTerms } from "@chairback/config";
 import { forShop, prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { inQuietHours } from "../engines/quietHours.js";
@@ -52,6 +52,8 @@ export interface GapFillInput {
     dailySendCap: number;
     /** The shop's own line (Shop.twilioNumber); null = shared platform number. */
     twilioNumber: string | null;
+    /** The shop's cancellation terms now - frozen onto the offered hold. */
+    cancellationTerms: CancellationTerms;
   };
   appt: {
     id: string; // the just-canceled appointment (its slot is what we offer)
@@ -313,6 +315,8 @@ export async function runGapFill(input: GapFillInput): Promise<void> {
             startsAt: appt.startsAt,
             endsAt,
             manageToken: randomToken(),
+            // Kept when the hold becomes the booking: the terms it is made on.
+            ...cancellationTermsSnapshot(shop.cancellationTerms),
           },
           select: { id: true },
         });

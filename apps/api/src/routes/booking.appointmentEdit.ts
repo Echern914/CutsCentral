@@ -179,6 +179,9 @@ export function registerAppointmentEdit(
         visitId: true,
         visit: { select: { acuityAppointmentId: true } },
         clientId: true,
+        // A party member: its client is the BOOKER's (see the contact carry
+        // below), whoever is actually sitting in this chair.
+        groupId: true,
         priceAtBooking: true,
         // Whether ChairBack ever emailed this client the CURRENT time - the
         // test for telling them the new one (after commit, below).
@@ -291,6 +294,13 @@ export function registerAppointmentEdit(
     // so re-sending them would be the same email twice.
     const clientVisibleMove =
       startsAt.getTime() !== appt.startsAt.getTime() || staffId !== appt.staffId;
+    // Does the edit put this row on time it did not hold before - another
+    // chair, an earlier start, a later end? Only a trim inside its own span
+    // does not. Decides which rows a PENDING request is checked against, below.
+    const takesNewTime =
+      staffId !== appt.staffId ||
+      startsAt.getTime() < appt.startsAt.getTime() ||
+      endsAt.getTime() > appt.endsAt.getTime();
 
     // Money never moves as a side effect of an edit. Read separately: the
     // forShop() tenant wrapper erases nested-relation types.
@@ -377,9 +387,16 @@ export function registerAppointmentEdit(
             bufferMin: shop.bookingBufferMin,
             // Only THIS row is excluded; everything else still blocks.
             excludeAppointmentId: appt.id,
-            // Approve-path parity: our own row is the PENDING one, and any
-            // conflicting PENDING already failed its own create guard.
-            statuses: appt.status === "PENDING" ? ["BOOKED"] : ["BOOKED", "PENDING"],
+            // 🔴 A PENDING REQUEST THAT MOVES IS CHECKED LIKE ANY MOVE: other
+            // requests and customers' LIVE HOLDS block it too. It used to be
+            // checked against BOOKED rows only (approve parity), so a request
+            // dragged onto a customer's payment hold landed there - and when
+            // their money arrived, promotePaidHold found the request in the
+            // way and refunded them. Only a request trimmed where it already
+            // sits keeps approve's rule: it takes no time it did not hold, and
+            // approving it there would not ask about other requests either.
+            statuses:
+              appt.status === "PENDING" && !takesNewTime ? ["BOOKED"] : ["BOOKED", "PENDING"],
             // A barber editing their own calendar overrides their own cap.
             serviceDayLimit: null,
             overrideWaitlistHolds: true,
@@ -432,6 +449,8 @@ export function registerAppointmentEdit(
                   reminderSentAt: null,
                   reminder24hPushSentAt: null,
                   reminder2hPushSentAt: null,
+                  // The barber's "next up" alert was for the OLD time too.
+                  barberNextUpSentAt: null,
                   checkInStatus: null,
                   checkedInAt: null,
                   etaMinutes: null,
@@ -557,9 +576,23 @@ export function registerAppointmentEdit(
     //
     // After commit: the values were validated above, so the only reachable
     // outcome here is success, and the schedule change is already durable.
+    //
+    // 🔴 EXCEPT ONTO A PARTY'S BOOKER. Every member of a party is written with
+    // the BOOKER's client (booking.group.ts), so "this appointment's client"
+    // is the parent who booked, not the brother in this chair. Copying the
+    // brother's number from his own appointment onto that record moved the
+    // parent's reminders and texts to the brother's phone. The contact stays
+    // on this appointment's own row; the booker's record is corrected from
+    // their own profile. Choosing a DIFFERENT client for this appointment is
+    // the barber saying whose it is, and that still carries as before.
     const contactClientId = d.clientId !== undefined ? d.clientId : appt.clientId;
+    const partyBooker = appt.groupId !== null && contactClientId === appt.clientId;
     let contactSynced = false;
-    if (contactClientId && (normalizedPhone !== undefined || normalizedEmail !== undefined)) {
+    if (
+      contactClientId &&
+      !partyBooker &&
+      (normalizedPhone !== undefined || normalizedEmail !== undefined)
+    ) {
       const synced = await editClient(shopId, contactClientId, {
         ...(normalizedPhone !== undefined ? { phone: normalizedPhone } : {}),
         ...(normalizedEmail !== undefined ? { email: normalizedEmail } : {}),

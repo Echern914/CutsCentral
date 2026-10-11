@@ -387,3 +387,169 @@ describe("the receptionist's cancel tool", () => {
       expect(fake.state.charges[0]!.params.amount).toBe(2000);
     }));
 });
+
+/**
+ * Each test its own half hour inside the window (13:30, 14:00...), so one
+ * test's booking can never be another's slot conflict.
+ */
+const later = (start: Date, halfHours: number) => new Date(start.getTime() + halfHours * 30 * 60_000);
+
+/** Book at an exact instant with a card on file, card confirmed. */
+async function bookWithCardAt(start: Date, lastName: string) {
+  const res = await request(app).post(`/api/book/${slug}`).send({
+    staffId,
+    serviceId,
+    startsAt: start.toISOString(),
+    firstName: "Terms",
+    lastName,
+    phone: "(302) 555-0196",
+    email: `terms-${randomToken(4)}@example.com`,
+  });
+  expect(res.status).toBe(201);
+  const token = res.body.manageToken as string;
+  const appt = (await prisma.appointment.findUnique({ where: { manageToken: token }, select: { id: true } }))!;
+  const row = (await prisma.cardOnFile.findUnique({ where: { appointmentId: appt.id } }))!;
+  fake.succeed(row.stripeSetupIntentId);
+  await request(app).post(`/api/book/manage/${token}/card-saved`);
+  return { token, appointmentId: appt.id };
+}
+
+const termsOf = (appointmentId: string) =>
+  prisma.appointment.findUnique({
+    where: { id: appointmentId },
+    select: { cancelWindowHoursAtBooking: true, cancelFeeBpsAtBooking: true, cardOnFileFeesAtBooking: true },
+  });
+const setShopTerms = (data: { cancelWindowHours?: number; cancelFeeBps?: number; chargeCardOnFileFees?: boolean }) =>
+  prisma.shop.update({ where: { id: shopId }, data });
+const POLICY = { cancelWindowHours: 24, cancelFeeBps: 5000, chargeCardOnFileFees: true };
+
+describe("🔴 a booking keeps the cancellation terms it was made on", () => {
+  it("booked while card fees were OFF, switched ON after: the late cancel charges nothing", async () =>
+    insideTheWindow(async (start) => {
+      await setShopTerms({ chargeCardOnFileFees: false });
+      try {
+        const b = await bookWithCardAt(later(start, 1), "Before");
+        // The booking froze the terms it was made on.
+        expect(await termsOf(b.appointmentId)).toEqual({
+          cancelWindowHoursAtBooking: 24,
+          cancelFeeBpsAtBooking: 5000,
+          cardOnFileFeesAtBooking: false,
+        });
+        await setShopTerms({ chargeCardOnFileFees: true });
+        // The page warns of nothing, because nothing will be charged.
+        const page = await request(app).get(`/api/book/manage/${b.token}`);
+        expect(page.body.lateCancelFee).toBeNull();
+        const cancel = await request(app).post(`/api/book/manage/${b.token}/cancel`);
+        expect(cancel.status).toBe(200);
+        expect(fake.state.charges).toHaveLength(0);
+        expect(await cardStatus(b.appointmentId)).toBe("released");
+      } finally {
+        await setShopTerms(POLICY);
+      }
+    }));
+
+  it("booked under free cancellation (no window), the owner adds a 24h one: still free", async () =>
+    insideTheWindow(async (start) => {
+      await setShopTerms({ cancelWindowHours: 0 });
+      try {
+        const b = await bookWithCardAt(later(start, 2), "NoWindow");
+        await setShopTerms({ cancelWindowHours: 24 });
+        await request(app).post(`/api/book/manage/${b.token}/cancel`);
+        expect(fake.state.charges).toHaveLength(0);
+        expect(await cardStatus(b.appointmentId)).toBe("released");
+      } finally {
+        await setShopTerms(POLICY);
+      }
+    }));
+
+  it("a no-show of a booking made while fees were off charges nothing, whatever the shop says now", async () => {
+    await setShopTerms({ chargeCardOnFileFees: false });
+    try {
+      const b = await bookedWithCard(5, 15);
+      await setShopTerms({ chargeCardOnFileFees: true });
+      await request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie);
+      expect(fake.state.charges).toHaveLength(0);
+      expect(await cardStatus(b.appointmentId)).toBe("released");
+    } finally {
+      await setShopTerms(POLICY);
+    }
+  });
+
+  it("a booking from before snapshots (no terms recorded) settles by the shop's settings today, as it always did", async () =>
+    insideTheWindow(async (start) => {
+      await setShopTerms({ chargeCardOnFileFees: false });
+      try {
+        const b = await bookWithCardAt(later(start, 3), "Legacy");
+        await prisma.appointment.update({
+          where: { id: b.appointmentId },
+          data: { cancelWindowHoursAtBooking: null, cancelFeeBpsAtBooking: null, cardOnFileFeesAtBooking: null },
+        });
+        await setShopTerms({ chargeCardOnFileFees: true });
+        await request(app).post(`/api/book/manage/${b.token}/cancel`);
+        expect(fake.state.charges).toHaveLength(1);
+        expect(fake.state.charges[0]!.params.amount).toBe(2000);
+      } finally {
+        await setShopTerms(POLICY);
+      }
+    }));
+
+  it("the shop's own booking from the dashboard records the terms too", async () => {
+    const res = await request(app)
+      .post("/api/booking/appointments")
+      .set("Cookie", cookie)
+      .send({
+        staffId,
+        serviceId,
+        startsAt: futureAtHour(9, 14).toISOString(),
+        firstName: "Desk",
+        lastName: "Booked",
+        email: `desk-${randomToken(4)}@example.com`,
+      });
+    expect(res.status).toBe(201);
+    expect(await termsOf(res.body.id)).toEqual({
+      cancelWindowHoursAtBooking: 24,
+      cancelFeeBpsAtBooking: 5000,
+      cardOnFileFeesAtBooking: true,
+    });
+  });
+});
+
+describe("🔴 the appointment page states the late-cancel charge before Cancel", () => {
+  it("inside the window: the exact cents the cancel then charges, and the card it lands on", async () =>
+    insideTheWindow(async (start) => {
+      const b = await bookWithCardAt(later(start, 4), "Inside");
+      const page = await request(app).get(`/api/book/manage/${b.token}`);
+      expect(page.status).toBe(200);
+      expect(page.body.lateCancelFee).toMatchObject({
+        cents: 2000,
+        inside: true,
+        windowHours: 24,
+        card: { last4: "4242" },
+      });
+      await request(app).post(`/api/book/manage/${b.token}/cancel`);
+      expect(fake.state.charges).toHaveLength(1);
+      expect(fake.state.charges[0]!.params.amount).toBe(page.body.lateCancelFee.cents);
+    }));
+
+  it("outside the window: the same figure and the instant it starts to apply - not yet inside", async () => {
+    const b = await bookedWithCard(6, 14);
+    const page = await request(app).get(`/api/book/manage/${b.token}`);
+    const row = (await prisma.appointment.findUnique({ where: { id: b.appointmentId }, select: { startsAt: true } }))!;
+    expect(page.body.lateCancelFee).toMatchObject({ cents: 2000, inside: false });
+    expect(page.body.lateCancelFee.from).toBe(new Date(row.startsAt.getTime() - 24 * 3_600_000).toISOString());
+  });
+
+  it("no card kept on the booking: nothing to warn about", async () => {
+    const res = await request(app).post(`/api/book/${slug}`).send({
+      staffId,
+      serviceId,
+      startsAt: futureAtHour(7, 14).toISOString(),
+      firstName: "No",
+      lastName: "Card",
+      phone: "(302) 555-0195",
+      email: `nocard-${randomToken(4)}@example.com`,
+    });
+    const page = await request(app).get(`/api/book/manage/${res.body.manageToken}`);
+    expect(page.body.lateCancelFee).toBeNull();
+  });
+});

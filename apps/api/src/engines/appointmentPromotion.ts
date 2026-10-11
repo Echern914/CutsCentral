@@ -1,5 +1,9 @@
 import { releaseCardOnFile } from "../billing/cardOnFile.js";
 import { settleCardOnFile } from "../services/cardOnFileSettle.js";
+import {
+  CANCELLATION_TERMS_SNAPSHOT_SELECT,
+  termsForBooking,
+} from "../services/cancellationTerms.js";
 import { clientCancelKeptCents } from "@chairback/config";
 import { prisma, runWithShop, type Prisma } from "@chairback/db";
 import { logger } from "../logger.js";
@@ -336,6 +340,9 @@ export async function cancelAppointment(
         payments: { where: { purpose: "booking" }, select: { id: true } },
         // Card on file: what to charge or let go of AFTER the tx (Stripe call).
         cardOnFile: { select: { id: true, status: true } },
+        // The cancellation terms this booking was made on - what any fee
+        // below is computed by, never the shop's settings today.
+        ...CANCELLATION_TERMS_SNAPSHOT_SELECT,
       },
     });
     if (!appt) return null;
@@ -497,6 +504,11 @@ export async function cancelAppointment(
       priceAtBooking: appt.priceAtBooking,
       serviceName: appt.service?.name ?? null,
       cardOnFile: appt.cardOnFile,
+      termsSnapshot: {
+        cancelWindowHoursAtBooking: appt.cancelWindowHoursAtBooking,
+        cancelFeeBpsAtBooking: appt.cancelFeeBpsAtBooking,
+        cardOnFileFeesAtBooking: appt.cardOnFileFeesAtBooking,
+      },
     };
   });
 
@@ -512,10 +524,11 @@ export async function cancelAppointment(
   if (outcome === "CANCELED" && result.paymentId && !opts.refuseIfMoney) {
     let feeCents = 0;
     if (opts.applyPolicyFee) {
-      const shop = await prisma.shop.findUnique({
-        where: { id: shopId },
-        select: { cancelWindowHours: true, cancelFeeBps: true },
-      });
+      // 🔴 THIS BOOKING'S TERMS (its snapshot), not the shop's today: a client
+      // who booked under free cancellation is refunded in full even after the
+      // owner tightens the policy. Only a booking from before snapshots reads
+      // the shop's current window and fee, exactly as it always did.
+      const terms = await termsForBooking(shopId, result.termsSnapshot);
       const payment = await prisma.payment.findUnique({
         where: { id: result.paymentId },
         select: { amount: true, capturedAmount: true, nonRefundable: true },
@@ -532,8 +545,8 @@ export async function cancelAppointment(
       feeCents = clientCancelKeptCents({
         collectedCents: payment?.capturedAmount ?? payment?.amount ?? 0,
         nonRefundable: payment?.nonRefundable === true,
-        cancelWindowHours: shop?.cancelWindowHours ?? 0,
-        cancelFeeBps: shop?.cancelFeeBps ?? 0,
+        cancelWindowHours: terms.cancelWindowHours,
+        cancelFeeBps: terms.cancelFeeBps,
         startsAt: result.startsAt,
         now,
       });
@@ -559,6 +572,7 @@ export async function cancelAppointment(
       serviceName: result.serviceName,
       startsAt: result.startsAt,
       now,
+      terms: await termsForBooking(shopId, result.termsSnapshot),
     });
   } else if (result.cardOnFile && result.cardOnFile.status === "pending") {
     // A booking made WITHOUT a card (the card step is optional) whose card

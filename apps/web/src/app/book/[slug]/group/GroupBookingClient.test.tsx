@@ -308,6 +308,26 @@ describe("🔴 202 is not a failure", () => {
   });
 });
 
+describe("🔴 a shop that approves every booking: a party is a REQUEST", () => {
+  it("says the request was sent - never 'You're booked' - and survives a reload as one", async () => {
+    createAction.mockResolvedValue({ kind: "requested", groupId: "grp_1", manageToken: "tok_1" });
+    await reachReview();
+    fillBooker();
+    fireEvent.click(screen.getByRole("button", { name: /Confirm 2 appointments/ }));
+
+    await screen.findByText("Request sent");
+    expect(screen.getByText(/will review your request and confirm the whole group/)).toBeTruthy();
+    expect(screen.queryByText(/You're booked/)).toBeNull();
+    expect(screen.getByRole("link", { name: "View this request" })).toBeTruthy();
+
+    // The reload: still a request, not promoted to "booked" by the restore.
+    cleanup();
+    render(<GroupBookingClient data={data} />);
+    expect(await screen.findByText("Request sent")).toBeTruthy();
+    expect(screen.queryByText(/You're booked/)).toBeNull();
+  });
+});
+
 describe("a conflict books nothing", () => {
   it("says nothing was booked and sends them back to the times", async () => {
     createAction.mockResolvedValue({ kind: "slot_taken" });

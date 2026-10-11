@@ -224,4 +224,44 @@ describe("runPushReminders", () => {
     expect(a! + b!).toBe(2);
     expect(pushes).toHaveLength(2);
   });
+
+  it("🔴 a back-to-back party buzzes its booker ONCE, not once per chair", async () => {
+    // Every member of a party carries the BOOKER's client - one phone.
+    const groupToken = randomToken();
+    const group = await prisma.appointmentGroup.create({
+      data: { shopId, staffId, clientId, firstName: "Marcus", manageToken: groupToken },
+      select: { id: true },
+    });
+    const first = await seedAppt({ startsInHours: 20 });
+    const second = await seedAppt({ startsInHours: 20.5 });
+    await prisma.appointment.update({
+      where: { id: first },
+      data: { groupId: group.id, groupPosition: 0, firstName: "Marcus" },
+    });
+    await prisma.appointment.update({
+      where: { id: second },
+      data: { groupId: group.id, groupPosition: 1, firstName: "Kid" },
+    });
+
+    await runPushReminders(NOW);
+    // Other tests' rows can drift into this window: count THIS party's tags.
+    const forParty = pushes.filter((p) =>
+      [`reminder-group-${group.id}`, `reminder-${first}`, `reminder-${second}`].includes(p.tag ?? ""),
+    );
+    expect(forParty).toHaveLength(1);
+    expect(forParty[0]!.tag).toBe(`reminder-group-${group.id}`);
+    // The party's own page - everyone in it, one link.
+    expect(forParty[0]!.url).toContain(`/book/group/${groupToken}`);
+    // Both seats count as reminded for this tier, so nothing follows.
+    expect((await stamps(first))!.reminder24hPushSentAt).not.toBeNull();
+    expect((await stamps(second))!.reminder24hPushSentAt).not.toBeNull();
+
+    pushes = [];
+    await runPushReminders(new Date(NOW.getTime() + 30 * 60_000));
+    expect(
+      pushes.filter((p) =>
+        [`reminder-group-${group.id}`, `reminder-${first}`, `reminder-${second}`].includes(p.tag ?? ""),
+      ),
+    ).toHaveLength(0);
+  });
 });

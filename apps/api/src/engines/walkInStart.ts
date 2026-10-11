@@ -1,5 +1,5 @@
 import { Prisma, prisma, runWithShop } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { cancellationTermsSnapshot, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import { lockStaffAndAssertSlotFree } from "./bookingWrite.js";
 import {
@@ -84,7 +84,14 @@ export async function startEntry(opts: {
   // inside runWithShop).
   const shop = await prisma.shop.findUnique({
     where: { id: shopId },
-    select: { id: true, bookingBufferMin: true },
+    select: {
+      id: true,
+      bookingBufferMin: true,
+      // The cancellation terms the walk-in's appointment is made on.
+      cancelWindowHours: true,
+      cancelFeeBps: true,
+      chargeCardOnFileFees: true,
+    },
   });
   if (!shop) throw new WalkInNotFoundError();
 
@@ -198,6 +205,7 @@ export async function startEntry(opts: {
         notes: entry.note,
         bookedVia: "walk_in_queue",
         manageToken: randomToken(),
+        ...cancellationTermsSnapshot(shop),
       },
       select: { id: true },
     });

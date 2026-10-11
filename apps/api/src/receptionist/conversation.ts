@@ -15,8 +15,24 @@ import { prisma } from "@chairback/db";
 /** A crashed turn's claim goes stale after this; the next inbound reclaims. */
 const CLAIM_STALE_MS = 2 * 60 * 1000;
 
-/** Threads auto-close after this much silence (see the scheduler sweep). */
+/**
+ * Threads auto-close after this much silence (see the scheduler sweep) -
+ * active AND escalated ones. Silence means nobody wrote anything: a client text
+ * and a shop reply both move lastMessageAt.
+ */
 export const CONVERSATION_IDLE_CLOSE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The system_note lines the escalated-thread alert reads back. Exported so the
+ * writers (escalation, the dashboard's manual reply, the follow-up alert) and
+ * the reader can never drift apart on a string.
+ */
+export const ESCALATION_NOTE_PREFIX = "escalated to barber: ";
+export const MANUAL_REPLY_NOTE = "manual reply sent by the shop";
+export const FOLLOW_UP_ALERT_NOTE = "client texted again - shop alerted";
+
+/** At most one "texted again" alert per escalated thread per this window. */
+export const ESCALATED_REALERT_MS = 60 * 60 * 1000;
 
 /** How much history feeds the model per turn (text turns only). */
 const HISTORY_LIMIT = 40;
@@ -141,11 +157,18 @@ export async function closeConversationsForPhone(phone: string): Promise<number>
 /**
  * Cron sweep: close threads idle past the window so a months-later text starts
  * a fresh conversation (get_client_history re-establishes who they are).
+ *
+ * 🔴 ESCALATED THREADS TOO. Routing pins a phone to its live thread, and the
+ * AI is silent on an escalated one - so an escalated thread that never closed
+ * swallowed that client's every later text, for ever, with the AI never coming
+ * back. Same window as an active thread: a day in which neither the client nor
+ * the shop wrote a word. A shop that answers later still can - its manual reply
+ * reopens a closed thread under its own control (dashboard reply route).
  */
 export async function autoCloseIdleConversations(now: Date = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - CONVERSATION_IDLE_CLOSE_MS);
   const { count } = await prisma.receptionistConversation.updateMany({
-    where: { status: "active", lastMessageAt: { lt: cutoff } },
+    where: { status: { in: ["active", "escalated"] }, lastMessageAt: { lt: cutoff } },
     data: { status: "closed", processingSince: null },
   });
   return count;

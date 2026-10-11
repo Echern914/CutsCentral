@@ -81,11 +81,36 @@ export interface PushSender {
   ): Promise<void>;
 }
 
+/**
+ * How long one push request may take. A hung push service must not hold a
+ * sweep - every client after this one waits behind it - and an answer that
+ * never came is not a delivery.
+ */
+export const PUSH_SEND_TIMEOUT_MS = 10_000;
+
 const realSender: PushSender = {
   async send(sub, payload) {
-    await webpush.sendNotification(sub, payload);
+    // A socket timeout (web-push's own option): the request is destroyed and
+    // the promise rejects, which the delivery loop counts as a failure.
+    await webpush.sendNotification(sub, payload, { timeout: PUSH_SEND_TIMEOUT_MS });
   },
 };
+
+/**
+ * The PUSH SERVICE failed - Expo rate-limited us (429), errored (5xx), timed
+ * out, or answered with something that is not a push ticket. Nothing says the
+ * device got it, so it is NOT delivered and the caller falls back (SMS, email)
+ * exactly as if there were no device. But it is not the device's fault either:
+ * it takes no strike toward pruning, or one long Expo outage would delete
+ * every healthy phone's registration.
+ */
+export class PushServiceError extends Error {
+  readonly serviceFailure = true;
+  constructor(message: string) {
+    super(message);
+    this.name = "PushServiceError";
+  }
+}
 
 let testSender: PushSender | undefined;
 
@@ -127,33 +152,76 @@ export interface ExpoSender {
 
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 
-const realExpoSender: ExpoSender = {
-  async send(expoPushToken, payload) {
-    const res = await fetch(EXPO_PUSH_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        to: expoPushToken,
-        title: payload.title,
-        body: payload.body,
-        data: { url: payload.url },
-        ...(payload.tag ? { collapseId: payload.tag } : {}),
-      }),
-    });
-    const json = (await res.json().catch(() => ({}))) as {
-      data?: { status?: string; details?: { error?: string } };
-    };
-    const status = json.data?.status;
-    if (status === "error") {
-      const detail = json.data?.details?.error;
-      // A gone device: surface as 410 so the caller prunes it.
-      if (detail === "DeviceNotRegistered") {
-        throw Object.assign(new Error("DeviceNotRegistered"), { statusCode: 410 });
+type ExpoTicket = { status?: string; details?: { error?: string } };
+
+/**
+ * The real Expo sender, built over an injectable fetch so the HTTP handling
+ * itself is testable (the __setExpoSenderForTests seam replaces all of it).
+ *
+ * 🔴 ONLY A TICKET THAT SAYS "ok" IS A DELIVERY. This used to treat anything
+ * that was not an explicit error ticket as success - so a 429, a 502, an HTML
+ * error page or a hung request all came back "delivered", and every caller
+ * skipped its SMS fallback and wrote a SENT row for a notification nobody got.
+ */
+export function makeExpoSender(
+  opts: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+): ExpoSender {
+  return {
+    async send(expoPushToken, payload) {
+      const doFetch = opts.fetchImpl ?? fetch;
+      let res: Response;
+      let json: { data?: ExpoTicket | ExpoTicket[] };
+      try {
+        res = await doFetch(EXPO_PUSH_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({
+            to: expoPushToken,
+            title: payload.title,
+            body: payload.body,
+            data: { url: payload.url },
+            ...(payload.tag ? { collapseId: payload.tag } : {}),
+          }),
+          // Covers reading the body too, not just the headers.
+          signal: AbortSignal.timeout(opts.timeoutMs ?? PUSH_SEND_TIMEOUT_MS),
+        });
+      } catch (err) {
+        // Timed out, or never connected: the outcome is unknown, and unknown
+        // is not delivered.
+        throw new PushServiceError(`expo push unreachable (${(err as Error).name})`);
       }
-      throw new Error(`expo push error: ${detail ?? "unknown"}`);
-    }
-  },
-};
+      if (!res.ok) {
+        // 429 / 5xx: the service, not the device. Any other 4xx is a request
+        // Expo refused for THIS message - a strike against the row like any
+        // ordinary send error (no statusCode, so never mistaken for "gone").
+        if (res.status === 429 || res.status >= 500) {
+          throw new PushServiceError(`expo push http ${res.status}`);
+        }
+        throw new Error(`expo push http ${res.status}`);
+      }
+      try {
+        json = (await res.json()) as typeof json;
+      } catch {
+        throw new PushServiceError("expo push: unreadable response");
+      }
+      // One message in, one ticket out (an array only if a batch was sent).
+      const ticket = Array.isArray(json?.data) ? json.data[0] : json?.data;
+      const status = ticket?.status;
+      if (status === "ok") return;
+      if (status === "error") {
+        const detail = ticket?.details?.error;
+        // A gone device: surface as 410 so the caller prunes it.
+        if (detail === "DeviceNotRegistered") {
+          throw Object.assign(new Error("DeviceNotRegistered"), { statusCode: 410 });
+        }
+        throw new Error(`expo push error: ${detail ?? "unknown"}`);
+      }
+      throw new PushServiceError("expo push: no ticket in the response");
+    },
+  };
+}
+
+const realExpoSender: ExpoSender = makeExpoSender();
 
 let testExpoSender: ExpoSender | undefined;
 
@@ -259,6 +327,14 @@ async function deliverToSubs(
         // DeviceNotRegistered): delete it.
         result.pruned += 1;
         await db.deleteMany({ where: { id: sub.id } }).catch(() => {});
+      } else if ((err as { serviceFailure?: boolean }).serviceFailure) {
+        // The push SERVICE failed (see PushServiceError): not delivered, so
+        // the caller falls back - but no strike against a healthy device.
+        result.failed += 1;
+        logger.warn(
+          { reason: (err as Error).message, ...logCtx },
+          "push service failed; counted as not delivered",
+        );
       } else {
         // Transient: bump the failure count, then prune once it's clearly dead.
         result.failed += 1;

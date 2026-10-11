@@ -73,8 +73,9 @@ public booking page, dashboard, and recurring series.
 
 ## Guardrails
 
-- **STOP always wins**: opt-out closes every live thread instantly; sends
-  re-check `optedOut` at send time.
+- **STOP always wins**: opt-out closes every live thread instantly; a text
+  from a number opted out anywhere never starts a model turn (no tokens, no
+  holds, no thread); sends re-check `optedOut` at send time.
 - Inbound replies (client texted first) bypass quiet hours and the daily cap
   but never opt-out. Proactive gap-fill honors the FULL rails: consent
   (`smsConsentAt`), quiet hours (skip, not queue), `dailySendCap` (kind
@@ -84,7 +85,10 @@ public booking page, dashboard, and recurring series.
   rows (incl. every tool call's input/result) and a `Nudge` ledger row per SMS.
 - Anything abnormal (API error, refusal, runaway loop, upset client) →
   escalate: barber gets push+SMS with the reason, thread flips to `escalated`,
-  the AI goes silent on it.
+  the AI goes silent on it. Each later client text there re-alerts the shop
+  (at most once an hour per thread; a manual reply re-arms it at once), and
+  an escalated thread closes after 24h with no message either way, like an
+  active one - so the client's next text gets the AI back.
 - `DRY_RUN=true` suppresses receptionist SMS like every other send path.
 
 ## Gating (all must hold — evaluated in `receptionist/config.ts`)
