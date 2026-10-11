@@ -24,6 +24,14 @@ import { sendPushToClient } from "../messaging/push.js";
  *
  * ZERO SMS anywhere in this file; no quiet-hours gate (matches every other
  * push path - the OS notification tray is not a 2am text).
+ *
+ * 🔴 ONE PUSH PER PARTY, NOT PER CHAIR. Every member of a back-to-back party
+ * carries the BOOKER's client (booking.group.ts), so a per-appointment push
+ * buzzed the same phone once per family member, minutes apart, for one visit.
+ * The party's FIRST booked member speaks for it - its time is when the family
+ * has to be there - and links the party's own page. Every other member is
+ * claimed and stamped like any reminder, but sends nothing, so the same tier
+ * never reaches the booker twice whatever order the rows come in.
  */
 
 const HOUR_MS = 60 * 60_000;
@@ -76,6 +84,8 @@ export async function runPushReminders(now = new Date()): Promise<number> {
         clientId: true,
         startsAt: true,
         manageToken: true,
+        groupId: true,
+        group: { select: { manageToken: true } },
         service: { select: { name: true } },
       },
     });
@@ -97,12 +107,24 @@ export async function runPushReminders(now = new Date()): Promise<number> {
       // Toggle off -> skip WITHOUT stamping (see header).
       if (!shop || !shop[tier.toggle]) continue;
 
+      // A party member that is not the party's first booked member: stamped,
+      // never sent - the first member's push covers the whole party.
+      const speaksForParty =
+        a.groupId === null ||
+        (
+          await prisma.appointment.findFirst({
+            where: { groupId: a.groupId, shopId: a.shopId, status: "BOOKED" },
+            orderBy: [{ startsAt: "asc" }, { id: "asc" }],
+            select: { id: true },
+          })
+        )?.id === a.id;
+
       // Atomic claim: only the run that flips null -> now sends.
       const claimed = await prisma.appointment.updateMany({
         where: { id: a.id, [tier.stamp]: null },
         data: { [tier.stamp]: now },
       });
-      if (claimed.count === 0) continue;
+      if (claimed.count === 0 || !speaksForParty) continue;
 
       const when = new Intl.DateTimeFormat("en-US", {
         timeZone: shop.timezone,
@@ -110,15 +132,21 @@ export async function runPushReminders(now = new Date()): Promise<number> {
         hour: "numeric",
         minute: "2-digit",
       }).format(a.startsAt);
+      const party = a.groupId !== null && a.group !== null;
       const res = await sendPushToClient({
         shopId: a.shopId,
         clientId: a.clientId!,
         kind: "appointment",
         payload: {
-          title: `Reminder: ${a.service?.name ?? "your appointment"} ${when}`,
+          title: party
+            ? `Reminder: your group ${when}`
+            : `Reminder: ${a.service?.name ?? "your appointment"} ${when}`,
           body: `See you at ${shop.name}.`,
-          url: `${apiEnv().APP_BASE_URL}/book/manage/${a.manageToken}`,
-          tag: `reminder-${a.id}`,
+          // A party opens its OWN page - everyone in it, one link.
+          url: party
+            ? `${apiEnv().APP_BASE_URL}/book/group/${a.group!.manageToken}`
+            : `${apiEnv().APP_BASE_URL}/book/manage/${a.manageToken}`,
+          tag: party ? `reminder-group-${a.groupId}` : `reminder-${a.id}`,
         },
       });
       if (res.anyDelivered) sent++;

@@ -40,6 +40,12 @@ import { importedAfterItEnded } from "./syncedVisitTrust.js";
  * Push only - no SMS, no email, no quiet-hours gate (matches every other push
  * path; a 30-minutes-after-your-4pm push lands at 4:30pm by construction, and
  * shops do not cut hair at 3am).
+ *
+ * 🔴 ONE NUDGE PER PARTY. Every member of a back-to-back party carries the
+ * BOOKER's client, so a per-appointment nudge thanked the same parent once per
+ * child, twenty minutes apart. The party's LAST member to finish speaks for it
+ * (the family leaves when the last chair empties); every other member is
+ * stamped silently. Same choice tipRequests.ts makes, by excluding parties.
  */
 
 const MINUTE_MS = 60_000;
@@ -57,6 +63,8 @@ interface Candidate {
   serviceName: string | null;
   /** For the fallback link - read with the candidate, never between claim and send. */
   magicToken: string | null;
+  /** A native booking in a back-to-back party, or null. */
+  groupId: string | null;
 }
 
 /** Shop slice the nudge needs (owner read - Shop is default-deny in tenant tx). */
@@ -89,6 +97,7 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
         id: true,
         shopId: true,
         clientId: true,
+        groupId: true,
         service: { select: { name: true } },
         client: { select: { magicToken: true } },
       },
@@ -125,6 +134,7 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
       clientId: a.clientId!,
       serviceName: a.service?.name ?? null,
       magicToken: a.client?.magicToken ?? null,
+      groupId: a.groupId,
     })),
     // 🔴 Never for imported history (syncedVisitTrust.ts, rule 2): a cut
     // ChairBack first heard about after it ended - however recently - is not
@@ -136,6 +146,7 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
       clientId: v.clientId,
       serviceName: v.serviceName,
       magicToken: v.client.magicToken,
+      groupId: null,
     })),
   ];
   if (candidates.length === 0) return 0;
@@ -161,6 +172,27 @@ export async function runRebookNudges(now = new Date()): Promise<number> {
     }
     // Toggle off -> skip WITHOUT stamping (see header).
     if (!shop || !shop.rebookPushEnabled) continue;
+
+    // A party member that is not the last to finish: stamped, never sent.
+    if (c.groupId !== null) {
+      const last = await prisma.appointment.findFirst({
+        where: {
+          groupId: c.groupId,
+          shopId: c.shopId,
+          status: { in: ["BOOKED", "COMPLETED"] },
+          canceledAt: null,
+        },
+        orderBy: [{ endsAt: "desc" }, { id: "desc" }],
+        select: { id: true },
+      });
+      if (last?.id !== c.id) {
+        await prisma.appointment.updateMany({
+          where: { id: c.id, rebookPromptSentAt: null },
+          data: { rebookPromptSentAt: now },
+        });
+        continue;
+      }
+    }
 
     // Already rebooked? Then this nudge is noise. Checked per candidate rather
     // than batched: the set is small, and a client who books during the sweep
