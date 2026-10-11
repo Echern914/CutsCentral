@@ -11,16 +11,60 @@ import type { Prisma } from "@chairback/db";
  * whoever booked last, and a new email address also cleared their
  * marketing-email yes (the address changed - #527's trigger).
  *
- * So public forms only FILL what is missing and never replace what is there.
+ * So public forms only FILL a missing NAME and never replace what is there.
  * Nothing is lost: the booking row itself keeps exactly what was typed
- * (Appointment.firstName / lastName / email), and the confirmation goes to the
- * booking's own email first. Correcting a client's name or email is the
- * barber's job, from the client profile (services/client.ts editClient).
+ * (Appointment.firstName / lastName / phone / email), and the confirmation
+ * goes to the booking's own email first. Correcting a client's name or email
+ * is the barber's job, from the client profile (services/client.ts
+ * editClient).
+ *
+ * 🔴 AND NEVER A CONTACT - not even into a blank. A phone or email on a
+ * record is what My ChairBack links an app account by
+ * (services/customerIdentity.ts): one record carrying a contact the account
+ * proved, nobody else holding it, and the account gets the record's visits,
+ * rewards link and manage links. Filling a typed email into a regular's empty
+ * email field let a stranger who knew their number book once with it and
+ * their own address, sign in with that address, and own the profile. A form
+ * nobody signed into proves nothing about the record it lands on, so it adds
+ * no way into it. A record the booking CREATES still carries what was typed
+ * (the upsert's create) - that record holds nobody's history but the booker's.
  *
  * Each field is its own conditional update, so a blank one fills even when
- * another is already set, and a set one is never touched.
+ * the other is already set, and a set one is never touched.
  */
-export async function fillBlankClientFields(
+export async function fillBlankClientNames(
+  db: Pick<Prisma.TransactionClient, "client">,
+  clientId: string,
+  typed: {
+    firstName?: string | null;
+    lastName?: string | null;
+  },
+): Promise<void> {
+  const blank = (field: "firstName" | "lastName") => ({
+    id: clientId,
+    OR: [{ [field]: null }, { [field]: "" }],
+  });
+  const firstName = typed.firstName?.trim();
+  const lastName = typed.lastName?.trim();
+  if (firstName) await db.client.updateMany({ where: blank("firstName"), data: { firstName } });
+  if (lastName) await db.client.updateMany({ where: blank("lastName"), data: { lastName } });
+}
+
+/**
+ * The SHOP's own booking form (dashboard New appointment, repeats): blank
+ * fields fill - names AND contacts - and nothing already there is replaced.
+ *
+ * Different from the public forms above on purpose. A contact the shop typed
+ * is the shop's own record-keeping, the same authority as editing the client
+ * profile, and the identity rules already treat shop-entered contacts as the
+ * record's own. What stays true for both: a set field is never overwritten
+ * (two people on one family phone keep their own names), so this can never
+ * rename a client or move their email out from under them.
+ *
+ * 🔴 NEVER call this from a public, client-facing or waitlist path - those use
+ * fillBlankClientNames.
+ */
+export async function fillBlankClientFieldsFromShop(
   db: Pick<Prisma.TransactionClient, "client">,
   clientId: string,
   typed: {
@@ -30,16 +74,13 @@ export async function fillBlankClientFields(
     email?: string | null;
   },
 ): Promise<void> {
-  const blank = (field: "firstName" | "lastName" | "phone" | "email") => ({
+  await fillBlankClientNames(db, clientId, typed);
+  const blank = (field: "phone" | "email") => ({
     id: clientId,
     OR: [{ [field]: null }, { [field]: "" }],
   });
-  const firstName = typed.firstName?.trim();
-  const lastName = typed.lastName?.trim();
   const phone = typed.phone?.trim();
   const email = typed.email?.trim();
-  if (firstName) await db.client.updateMany({ where: blank("firstName"), data: { firstName } });
-  if (lastName) await db.client.updateMany({ where: blank("lastName"), data: { lastName } });
   if (phone) await db.client.updateMany({ where: blank("phone"), data: { phone } });
   if (email) await db.client.updateMany({ where: blank("email"), data: { email } });
 }

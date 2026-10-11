@@ -294,6 +294,13 @@ export function registerAppointmentEdit(
     // so re-sending them would be the same email twice.
     const clientVisibleMove =
       startsAt.getTime() !== appt.startsAt.getTime() || staffId !== appt.staffId;
+    // Does the edit put this row on time it did not hold before - another
+    // chair, an earlier start, a later end? Only a trim inside its own span
+    // does not. Decides which rows a PENDING request is checked against, below.
+    const takesNewTime =
+      staffId !== appt.staffId ||
+      startsAt.getTime() < appt.startsAt.getTime() ||
+      endsAt.getTime() > appt.endsAt.getTime();
 
     // Money never moves as a side effect of an edit. Read separately: the
     // forShop() tenant wrapper erases nested-relation types.
@@ -380,9 +387,16 @@ export function registerAppointmentEdit(
             bufferMin: shop.bookingBufferMin,
             // Only THIS row is excluded; everything else still blocks.
             excludeAppointmentId: appt.id,
-            // Approve-path parity: our own row is the PENDING one, and any
-            // conflicting PENDING already failed its own create guard.
-            statuses: appt.status === "PENDING" ? ["BOOKED"] : ["BOOKED", "PENDING"],
+            // 🔴 A PENDING REQUEST THAT MOVES IS CHECKED LIKE ANY MOVE: other
+            // requests and customers' LIVE HOLDS block it too. It used to be
+            // checked against BOOKED rows only (approve parity), so a request
+            // dragged onto a customer's payment hold landed there - and when
+            // their money arrived, promotePaidHold found the request in the
+            // way and refunded them. Only a request trimmed where it already
+            // sits keeps approve's rule: it takes no time it did not hold, and
+            // approving it there would not ask about other requests either.
+            statuses:
+              appt.status === "PENDING" && !takesNewTime ? ["BOOKED"] : ["BOOKED", "PENDING"],
             // A barber editing their own calendar overrides their own cap.
             serviceDayLimit: null,
             overrideWaitlistHolds: true,
@@ -435,6 +449,8 @@ export function registerAppointmentEdit(
                   reminderSentAt: null,
                   reminder24hPushSentAt: null,
                   reminder2hPushSentAt: null,
+                  // The barber's "next up" alert was for the OLD time too.
+                  barberNextUpSentAt: null,
                   checkInStatus: null,
                   checkedInAt: null,
                   etaMinutes: null,

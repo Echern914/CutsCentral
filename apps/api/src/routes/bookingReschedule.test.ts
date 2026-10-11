@@ -122,7 +122,7 @@ describe("barber reschedule", () => {
     const id = await book(S, at(10));
     await prisma.appointment.update({
       where: { id },
-      data: { confirmationSentAt: new Date(), checkInStatus: "en_route" },
+      data: { confirmationSentAt: new Date(), checkInStatus: "en_route", barberNextUpSentAt: new Date() },
     });
     const res = await request(app)
       .post(url(id))
@@ -137,6 +137,8 @@ describe("barber reschedule", () => {
     // fires its 24h/2h reminders.
     expect(row!.confirmationSentAt).toBeNull();
     expect(row!.reminder24hPushSentAt).toBeNull();
+    // The barber's own "next up" alert re-arms for the new time too.
+    expect(row!.barberNextUpSentAt).toBeNull();
     // An "en route" tapped for the OLD time says nothing about the new one.
     expect(row!.checkInStatus).toBeNull();
   });

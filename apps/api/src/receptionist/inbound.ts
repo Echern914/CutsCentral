@@ -1,11 +1,13 @@
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
+import { maskPhone } from "../logRedaction.js";
 import { receptionistEnabledForShop, receptionistConfigured } from "./config.js";
 import { renderPromptForShop } from "./prompt.js";
 import { runAgentTurn } from "./agent.js";
 import {
   RECEPTIONIST_TOOLS,
+  alertShopOfEscalatedFollowUp,
   describeActiveHolds,
   describeUpcomingAppointments,
   escalateConversation,
@@ -19,7 +21,7 @@ import {
   releaseTurn,
   type ConversationRow,
 } from "./conversation.js";
-import { sendReceptionistSms } from "./outbound.js";
+import { phoneOptedOut, sendReceptionistSms } from "./outbound.js";
 import { smsEnabled } from "../messaging/twilio.js";
 import { alertShopCapTripped } from "./capAlert.js";
 import { receptionistReplyCapReason } from "./replyCap.js";
@@ -46,8 +48,9 @@ import { receptionistReplyCapReason } from "./replyCap.js";
  *      signal we can't know which shop they meant.)
  *
  * Consent semantics: replying to a consumer-initiated text needs no
- * smsConsentAt and ignores quiet hours/caps, but optedOut ALWAYS wins
- * (re-checked at send time in outbound.ts). An SMS walk-in gets NO
+ * smsConsentAt and ignores quiet hours/caps, but optedOut ALWAYS wins - an
+ * opted-out number never starts a turn at all, and the send re-checks it in
+ * case a STOP lands mid-turn (outbound.ts). An SMS walk-in gets NO
  * smsConsentAt - texting to book is not consent to be marketed to, so the row
  * is unreachable by nudges/gap-fill/promos until it opts in elsewhere.
  */
@@ -316,9 +319,15 @@ function buildContextTurn(
 const HANDOFF_LINE =
   "let me get the barber on this one - someone will text you back shortly";
 
-/** True when an active receptionist thread exists for this phone (webhook YES routing). */
+/**
+ * True when an active receptionist thread exists for this phone (webhook YES
+ * routing). Never for an opted-out number: the AI cannot answer it, so its YES
+ * can only be the carrier opt-in keyword - read as "book it", it would vanish
+ * into a turn that never runs.
+ */
 export async function hasLiveConversation(phone: string): Promise<boolean> {
   if (!receptionistConfigured()) return false;
+  if (await phoneOptedOut(phone)) return false;
   const live = await prisma.receptionistConversation.findFirst({
     where: { phone, status: "active" },
     select: { id: true },
@@ -344,6 +353,18 @@ export async function processInboundText(params: {
     // model for an answer that could never be sent.
     if (!smsEnabled()) return;
     if (!receptionistConfigured()) return;
+    // 🔴 STOP IS GLOBAL AND ABSOLUTE, so an opted-out number never starts a
+    // turn - not just "the reply is refused at send time". The turn itself
+    // costs model tokens, its tools can place calendar holds and bookings,
+    // and a refused send writes no Nudge row, so the reply cap would never
+    // count it: an opted-out number could run paid turns without limit.
+    // Checked before routing so no thread or walk-in row is created either.
+    // (STOP/START are answered by the webhook before this is ever called;
+    // HELP is the carrier's to answer.)
+    if (await phoneOptedOut(params.phone)) {
+      logger.info("receptionist: inbound from an opted-out number; no turn");
+      return;
+    }
     const resolved = await resolveInbound(params.phone, now, params.to);
     if (!resolved) return; // unknown number / no enabled shop -> no AI (v1)
 
@@ -358,8 +379,24 @@ export async function processInboundText(params: {
       content: params.text,
     });
 
-    // Escalated = the barber owns this thread; the AI stays silent.
-    if (conversation.status === "escalated") return;
+    // Escalated = the barber owns this thread; the AI stays silent - but the
+    // shop hears that the client wrote again (throttled; see the function).
+    // The turn lock serialises two texts landing at once into one alert.
+    if (conversation.status === "escalated") {
+      if (await claimTurn(conversation.id, now)) {
+        try {
+          await alertShopOfEscalatedFollowUp({
+            shopId: shop.id,
+            conversationId: conversation.id,
+            phone: params.phone,
+            now,
+          });
+        } finally {
+          await releaseTurn(conversation.id);
+        }
+      }
+      return;
+    }
 
     // clientId can be null on a thread whose client was merged/archived
     // mid-conversation; the Nudge ledger needs one, so re-resolve or stop.
@@ -499,6 +536,6 @@ export async function processInboundText(params: {
       await releaseTurn(conversation.id);
     }
   } catch (err) {
-    logger.error({ err, phone: params.phone }, "processInboundText failed");
+    logger.error({ err, phone: maskPhone(params.phone) }, "processInboundText failed");
   }
 }

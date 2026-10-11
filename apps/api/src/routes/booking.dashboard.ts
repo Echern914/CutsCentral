@@ -13,6 +13,7 @@ import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import {
   CancelRefusedError,
+  DEAD_PAYMENT_STATUSES,
   cancelAppointment,
   cancelSeries,
   promoteOneAppointmentInTx,
@@ -123,6 +124,7 @@ import {
   openingSpansForWeekday,
   parseServiceHours,
 } from "../engines/pricing.js";
+import { movedLengthMin } from "../engines/moveLength.js";
 import {
   SLOT_SERVICES_SELECT,
   slotOffersService,
@@ -138,6 +140,7 @@ import {
 } from "../engines/recurringSeries.js";
 import { zonedDateParts, zonedWallTimeToUtc, localMinutesOfDay } from "@chairback/config";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
+import { fillBlankClientFieldsFromShop } from "../services/clientFill.js";
 import { logger } from "../logger.js";
 import { advanceEach, releaseRacedOffers, type OfferSpan } from "../engines/waitlistOffer.js";
 import {
@@ -3159,13 +3162,17 @@ async function resolveSeriesClient(input: {
       email: input.email,
       source: "manual",
     },
-    update: {
-      firstName: input.firstName || undefined,
-      lastName: input.lastName || undefined,
-      phone: input.phone ?? undefined,
-      email: input.email || undefined,
-    },
+    // 🔴 Never overwrite an existing client from a typed name - a shared phone
+    // is not the same person (services/clientFill.ts). Blanks fill below;
+    // every visit in the repeat carries the name that was typed (returned).
+    update: {},
     select: { id: true },
+  });
+  await fillBlankClientFieldsFromShop(prisma, client.id, {
+    firstName: input.firstName,
+    lastName: input.lastName,
+    phone: input.phone,
+    email: input.email,
   });
   return {
     clientId: client.id,
@@ -3775,13 +3782,22 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
             email: d.email || null,
             source: "manual",
           },
-          update: {
-            firstName: cFirst || undefined,
-            lastName: cLast || undefined,
-            phone: phone ?? undefined,
-            email: d.email || undefined,
-          },
+          // 🔴 NEVER RENAME WHOEVER ALREADY HOLDS THIS NUMBER. The key is the
+          // typed phone, and a phone is not a person: a son booked on his
+          // dad's number (the waitlist board's Book button sends a name and a
+          // phone, never a client) used to rename the dad and swap his email -
+          // which also cleared his marketing-email yes (the address changed).
+          // Same rule as every public form (services/clientFill.ts): blanks
+          // fill, nothing is replaced, and the booking row below keeps exactly
+          // what was typed. Correcting a client is the profile's job.
+          update: {},
           select: { id: true },
+        });
+        await fillBlankClientFieldsFromShop(tx, client.id, {
+          firstName: cFirst,
+          lastName: cLast,
+          phone,
+          email: d.email,
         });
         clientId = client.id;
       }
@@ -4699,6 +4715,9 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       serviceId: true,
       status: true,
       startsAt: true,
+      // How long it runs now - its add-on minutes and any length set by hand
+      // move with it (engines/moveLength.ts).
+      endsAt: true,
       // The BOOKING payment: this guard is about a prepaid booking whose price
       // would change on a new date.
       payments: { where: { purpose: "booking" }, select: { status: true, amount: true } },
@@ -4729,19 +4748,24 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
   }
 
   const shop = req.shop!;
-  // The new slot can land on a different weekday, date override or time-of-day
-  // window, so both length and price are re-measured for the NEW instant rather
-  // than carried over. Same layering the create path uses.
-  const endsAt = new Date(
-    startsAt.getTime() +
-      effectiveDurationAt(appt.service.durationMin, {
-        at: startsAt,
-        timezone: shop.timezone,
-        weekdayOverrides: appt.service.durationOverrides,
-        timeWindows: appt.service.timeOverrides,
-      }) *
-        60_000,
-  );
+  // 🔴 THE BOOKING KEEPS ITS LENGTH (engines/moveLength.ts): its add-on
+  // minutes, a length set by hand and a special's own length all move with it.
+  // Only the SERVICE's part is re-measured for the new instant, which can land
+  // on a different weekday or time-of-day window - the same layering the
+  // create path uses. (The price is the same idea: movePrice, below.)
+  const serviceMinAt = (at: Date) =>
+    effectiveDurationAt(appt.service.durationMin, {
+      at,
+      timezone: shop.timezone,
+      weekdayOverrides: appt.service.durationOverrides,
+      timeWindows: appt.service.timeOverrides,
+    });
+  const length = movedLengthMin({
+    currentMin: Math.round((appt.endsAt.getTime() - appt.startsAt.getTime()) / 60_000),
+    serviceMinAtOld: serviceMinAt(appt.startsAt),
+    serviceMinAtNew: serviceMinAt(startsAt),
+  });
+  const endsAt = new Date(startsAt.getTime() + length.lengthMin * 60_000);
   const effectivePrice = effectivePriceAt(
     appt.service.price === null ? null : Number(appt.service.price),
     {
@@ -4829,6 +4853,8 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       // Without this the appointment's own current slot reads as busy and the
       // barber can't move it 15 minutes - it would be hiding its own hour.
       excludeAppointmentId: appt.id,
+      // The WHOLE booking must fit the new time, add-ons included.
+      extraDurationMin: length.extraMin,
     }))
   ) {
     // Same rule as create: if blocked time is the whole obstacle, let the
@@ -4839,6 +4865,7 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
       serviceId: appt.serviceId,
       startsAt,
       excludeAppointmentId: appt.id,
+      extraDurationMin: length.extraMin,
     });
     if (!onlyBlocked) {
       res.status(400).json({ error: "invalid_slot" });
@@ -4902,6 +4929,8 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
           reminderEmailSentAt: null,
           reminder24hPushSentAt: null,
           reminder2hPushSentAt: null,
+          // The barber's "next up" alert was for the OLD time too.
+          barberNextUpSentAt: null,
           checkInStatus: null,
           checkedInAt: null,
           etaMinutes: null,
@@ -5024,8 +5053,20 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
     res.status(409).json({ ok: false, error: "not_booked" });
     return;
   }
-  const ok = await cancelAppointment(shopId, req.params.id!, "NO_SHOW");
-  res.status(ok ? 200 : 404).json({ ok });
+  // 🔴 ONLY FROM BOOKED, in the write itself. The read above is a moment
+  // older than the write: a client cancelling from their link in between used
+  // to be overwritten - the compare-and-set accepted anything but NO_SHOW, so
+  // their CANCELED booking became a no-show and a kept card was charged the
+  // no-show fee. Now that write moves nothing, and the answer is the same
+  // refusal as a booking that was never BOOKED.
+  const ok = await cancelAppointment(shopId, req.params.id!, "NO_SHOW", new Date(), {
+    onlyFrom: ["BOOKED"],
+  });
+  if (!ok) {
+    res.status(409).json({ ok: false, error: "not_booked" });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 //  Targeted slots (one-off special-priced bookable slots under a service)
@@ -6526,6 +6567,33 @@ bookingDashboardRouter.post("/appointments/:id/terminal-intent", async (req, res
   // take the money twice for one cut.
   if (appt.paidAt) {
     res.status(409).json({ error: "paid_already" });
+    return;
+  }
+  // 🔴 A BOOKING PAYMENT ON FILE: REFUSED, NOT SUBTRACTED. This route charges
+  // the WHOLE ticket, so on a booking that took a deposit (or was paid ahead)
+  // it charged that money a second time. The balance after a deposit is the
+  // live checkout's job - POST /appointments/:id/tap-to-pay-intent
+  // (booking.checkout.ts) - where serviceCheckoutState subtracts everything
+  // already paid toward the service and the attempt ledger stops a second
+  // method collecting at the same time. Subtracting here would grow a second,
+  // weaker balance engine on a route nothing calls any more, and could not
+  // even say what an authorized-but-uncaptured deposit leaves owing. Any
+  // booking payment that did not die counts (the same line the cancel guard
+  // draws: DEAD_PAYMENT_STATUSES).
+  const bookingMoney = await prisma.payment.findFirst({
+    where: {
+      appointmentId: appt.id,
+      shopId,
+      purpose: "booking",
+      status: { notIn: [...DEAD_PAYMENT_STATUSES] },
+    },
+    select: { id: true },
+  });
+  if (bookingMoney) {
+    res.status(409).json({
+      error: "booking_payment_on_file",
+      message: "Part of this booking was paid when it was booked. Take the rest from checkout.",
+    });
     return;
   }
   const amountCents = toCents(

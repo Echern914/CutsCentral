@@ -4,6 +4,7 @@ import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
 import { logger } from "../logger.js";
+import { maskPhone } from "../logRedaction.js";
 import { closeConversationsForPhone } from "../receptionist/conversation.js";
 import { hasLiveConversation, processInboundText } from "../receptionist/inbound.js";
 import { smsEnabled } from "../messaging/twilio.js";
@@ -76,14 +77,17 @@ twilioWebhookRouter.post(
       });
       // The AI goes silent on every live thread for this number, immediately.
       const closed = await closeConversationsForPhone(from).catch(() => 0);
-      logger.info({ from, count, closedConversations: closed }, "twilio STOP - opted out");
+      logger.info(
+        { from: maskPhone(from), count, closedConversations: closed },
+        "twilio STOP - opted out",
+      );
       // No app reply: the carrier auto-sends the mandatory opt-out confirmation.
     } else if (from && START_WORDS.has(text) && !yesInConversation) {
       const { count } = await prisma.client.updateMany({
         where: { phone: from },
         data: { optedOut: false, optOutSource: null },
       });
-      logger.info({ from, count }, "twilio START - opted in");
+      logger.info({ from: maskPhone(from), count }, "twilio START - opted in");
       // Confirm the opt-in (carriers do NOT auto-reply to START).
       // The confirmation is itself a text: none while texting is off.
       if (count > 0 && smsEnabled()) reply = OPT_IN_REPLY;

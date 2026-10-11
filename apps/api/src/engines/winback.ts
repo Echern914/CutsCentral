@@ -1,4 +1,4 @@
-import { WINBACK, apiEnv } from "@chairback/config";
+import { WINBACK, apiEnv, hourInTimeZone } from "@chairback/config";
 import { messageBookingUrl } from "@chairback/config/bookingLinks";
 import { forShop, prisma, runWithShop, type Shop } from "@chairback/db";
 import { logger } from "../logger.js";
@@ -15,9 +15,18 @@ import { clientsWithUpcomingBooking } from "./upcomingBooking.js";
 const env = apiEnv();
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
+/**
+ * The shop-local hour the daily win-back sweep runs at: an hour after the
+ * nudge sweep (NUDGE_SEND_LOCAL_HOUR) for the same shop, so win-back sees what
+ * is left of the shared daily cap. The cron ticks hourly; see nudge.ts.
+ */
+export const WINBACK_SEND_LOCAL_HOUR = 11;
+
 export interface WinbackOptions {
   now?: Date;
   dryRun?: boolean;
+  /** Sweep only the shops whose local hour at `now` is this (the hourly tick). */
+  localHour?: number;
 }
 
 /** One previewed client a dry-run win-back WOULD text (for the dashboard list). */
@@ -63,6 +72,10 @@ export async function runWinbackSweep(opts: WinbackOptions = {}): Promise<Winbac
   const shops = await prisma.shop.findMany({ where: { winbackTextsEnabled: true } });
   const summaries: WinbackSummary[] = [];
   for (const shop of shops) {
+    // The hourly tick: only the shops whose own clock reads the send hour.
+    if (opts.localHour !== undefined && hourInTimeZone(now, shop.timezone) !== opts.localHour) {
+      continue;
+    }
     if (!hasPremiumAccess(shop, { now })) {
       logger.info({ shopId: shop.id }, "winback skipped: texts not included");
       continue;
@@ -164,15 +177,24 @@ async function doSweepShopWinback(
   const dryRun = opts.dryRun ?? env.DRY_RUN;
   const db = forShop(shop.id);
 
-  // TCPA quiet hours gate the SMS leg ONLY (push is a silent-capable
-  // notification, not a call/text). A dry-run preview sends nothing, so it is
-  // exempt and may run at any hour.
+  // 🔴 Shop-local sending hours bound BOTH legs of a real run, the push too -
+  // a "we've missed you" buzzing a phone at 6 AM is the intrusion quiet hours
+  // exist to prevent (see nudge.ts for the whole story). A dry-run preview
+  // sends nothing, so it is exempt and may run at any hour.
+  if (!dryRun && inQuietHours(shop.timezone, now)) {
+    logger.info(
+      { shopId: shop.id, reason: "quiet_hours" },
+      "winback: outside shop-local sending hours, nothing sent",
+    );
+    return { shopId: shop.id, considered: 0, sent: 0, skipped: 0, failed: 0, dryRun };
+  }
+
   // Texting switched off blocks the SMS leg in the preview too (see nudge.ts).
   const textsOff = !smsEnabled();
-  const smsBlocked = textsOff || (!dryRun && inQuietHours(shop.timezone, now));
+  const smsBlocked = textsOff;
   if (smsBlocked) {
     logger.info(
-      { shopId: shop.id, reason: textsOff ? "texting_off" : "quiet_hours" },
+      { shopId: shop.id, reason: "texting_off" },
       "winback: SMS leg suppressed, push still active",
     );
   }
@@ -287,7 +309,7 @@ async function doSweepShopWinback(
       }
     }
 
-    // SMS fallback. Quiet hours suppress it; the daily cap bounds it. `continue`
+    // SMS fallback. Texting switched off suppresses it; the daily cap bounds it. `continue`
     // (not `break`) on an exhausted budget so later push-reachable candidates
     // still get their free push attempt above.
     if (smsBlocked) continue;

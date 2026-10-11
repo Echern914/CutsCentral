@@ -46,6 +46,36 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "can no longer cancel or move a whole group online once it starts.",
   },
   {
+    id: "2026-10-10-messages-at-the-right-time",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "Client messages and alerts now arrive at the right time",
+    body:
+      "Rebooking and win-back messages now go out mid-morning your time, never before 8 AM. A visit moved in Acuity " +
+      "or Square gets a reminder for its new time, and a moved booking gives you a fresh next-up alert. A client " +
+      "who keeps texting a thread the AI handed you now alerts you.",
+  },
+  {
+    id: "2026-10-10-moved-bookings-keep-length",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "Moved bookings keep their full length",
+    body:
+      "A booking with an add-on, or one you lengthened, now keeps all its time when you or the client move it. " +
+      "Booking someone new on a number you already have no longer renames that client. And Mark no-show can't " +
+      "overwrite a client's own cancel or charge them for it.",
+  },
+  {
+    id: "2026-10-10-typed-number-proves-nothing",
+    date: "2026-10-10",
+    kind: "fix",
+    title: "A typed phone number no longer opens a client's profile",
+    body:
+      "A number typed on your booking page or waitlist no longer adds an email to that client, opens their profile " +
+      "in the app, or earns their Gold or Silver waitlist place. The booking keeps what was typed. Add emails from " +
+      "the client's profile; add tier clients to the waitlist yourself.",
+  },
+  {
     id: "2026-10-10-privacy-terms-updated",
     date: "2026-10-10",
     kind: "feature",

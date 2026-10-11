@@ -7,6 +7,7 @@ import {
   __setExpoSenderForTests,
   type PushSender,
   type ExpoSender,
+  makeExpoSender,
 } from "./push.js";
 
 /**
@@ -283,5 +284,112 @@ describe("sendPushToClient - native (expo)", () => {
     expect(expoCalls.length).toBe(1);
     // One audit Nudge for the whole delivery, not one per device.
     expect(await prisma.nudge.count({ where: { shopId: shop.id } })).toBe(1);
+  });
+});
+
+/**
+ * The REAL Expo sender's HTTP handling, over a fake fetch. The other suites
+ * inject a whole fake sender, so nothing else ever exercises this - which is
+ * how a 429 or a 502 came to be counted as delivered: the response was never
+ * checked, an unreadable body parsed as {}, and "no error ticket" read as
+ * success. Callers then skipped their SMS fallback and wrote a SENT row.
+ */
+describe("sendPushToClient - the real Expo sender (HTTP outcomes)", () => {
+  let fetchCalls = 0;
+
+  function respondWith(make: () => Response): typeof fetch {
+    return (async () => {
+      fetchCalls += 1;
+      return make();
+    }) as unknown as typeof fetch;
+  }
+
+  /** A push service that never answers - only the abort signal ends it. */
+  const hanging = ((_url: unknown, init?: RequestInit) => {
+    fetchCalls += 1;
+    return new Promise((_resolve, reject) => {
+      const signal = init?.signal;
+      if (!signal) return; // no timeout: hangs for ever (the old behaviour)
+      signal.addEventListener("abort", () => reject(signal.reason));
+    });
+  }) as unknown as typeof fetch;
+
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+
+  async function sendWith(fetchImpl: typeof fetch) {
+    __setExpoSenderForTests(makeExpoSender({ fetchImpl, timeoutMs: 50 }));
+    const shop = await makeShop();
+    const client = await makeClient(shop.id);
+    const sub = await addExpoSub(shop.id, client.id, `ExponentPushToken[${randomToken(6)}]`);
+    const res = await sendPushToClient({
+      shopId: shop.id,
+      clientId: client.id,
+      kind: "nudge",
+      payload,
+    });
+    const after = await prisma.pushSubscription.findUnique({ where: { id: sub.id } });
+    const nudges = await prisma.nudge.count({ where: { shopId: shop.id } });
+    return { res, after, nudges };
+  }
+
+  beforeEach(() => {
+    fetchCalls = 0;
+  });
+
+  afterEach(() => {
+    __setExpoSenderForTests(fakeExpoSender);
+  });
+
+  it("an ok ticket is a delivery", async () => {
+    const { res, nudges } = await sendWith(respondWith(() => json({ data: { status: "ok", id: "t1" } })));
+    expect(res).toMatchObject({ sent: 1, anyDelivered: true });
+    expect(nudges).toBe(1);
+  });
+
+  it.each([
+    ["429 rate limited", () => json({ errors: [{ code: "RATE_LIMIT_ERROR" }] }, 429)],
+    ["500 server error", () => json({ errors: [{ code: "INTERNAL_SERVER_ERROR" }] }, 500)],
+    ["502 with an HTML page", () => new Response("<html>Bad Gateway</html>", { status: 502 })],
+    ["200 with a body that is not JSON", () => new Response("upstream reset", { status: 200 })],
+    ["200 with no ticket in it", () => json({})],
+  ])("🔴 %s is NOT delivered, and is no strike against the device", async (_label, make) => {
+    const { res, after, nudges } = await sendWith(respondWith(make));
+    expect(fetchCalls).toBe(1);
+    // Not delivered: the caller must fall back, and no SENT row is written.
+    expect(res).toMatchObject({ sent: 0, failed: 1, anyDelivered: false });
+    expect(nudges).toBe(0);
+    // The service failed, not the phone: it keeps its registration intact.
+    expect(after).not.toBeNull();
+    expect(after!.failureCount).toBe(0);
+  });
+
+  it("🔴 a push service that never answers times out as NOT delivered", async () => {
+    const started = Date.now();
+    const { res, after } = await sendWith(hanging);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(res).toMatchObject({ sent: 0, failed: 1, anyDelivered: false });
+    expect(after!.failureCount).toBe(0);
+  }, 10_000);
+
+  it("a 400 Expo refused for this message is a strike against the row, never a prune", async () => {
+    const { res, after } = await sendWith(
+      respondWith(() => json({ errors: [{ code: "VALIDATION_ERROR" }] }, 400)),
+    );
+    expect(res).toMatchObject({ sent: 0, failed: 1, pruned: 0, anyDelivered: false });
+    expect(after!.failureCount).toBe(1);
+  });
+
+  it("a DeviceNotRegistered ticket still prunes the device", async () => {
+    const { res, after } = await sendWith(
+      respondWith(() =>
+        json({ data: { status: "error", details: { error: "DeviceNotRegistered" } } }),
+      ),
+    );
+    expect(res).toMatchObject({ sent: 0, pruned: 1, anyDelivered: false });
+    expect(after).toBeNull();
   });
 });
