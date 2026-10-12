@@ -124,7 +124,9 @@ beforeAll(async () => {
   await request(app)
     .patch("/api/shops/me")
     .set("Cookie", cookie)
-    .send({ bookingMode: "native", timezone: "UTC", bookingLeadHours: 1 });
+    // No reschedule cutoff: this suite moves bookings under a day out; the
+    // cutoff has its own tests (routes/rescheduleCutoff.test.ts).
+    .send({ bookingMode: "native", timezone: "UTC", bookingLeadHours: 1, rescheduleCutoffHours: 0 });
   const me = await request(app).get("/api/shops/me").set("Cookie", cookie);
   slug = me.body.slug;
   shopId = me.body.id;

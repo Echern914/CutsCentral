@@ -71,7 +71,15 @@ beforeAll(async () => {
   const email = `resched-${randomToken(6)}@test.local`;
   await agent.post("/api/auth/signup").send({ email, password: "supersecret123", name: "Mover", smsAttested: true });
   await agent.post("/api/shops").send({ name: "Move Cuts", bookingUrl: "https://move.test", smsAttested: true });
-  const patched = await agent.patch("/api/shops/me").send({ bookingMode: "native", timezone: TZ, bookingLeadHours: 1, bookingMaxDays: 60 });
+  // No reschedule cutoff: this suite moves bookings under a day out; the
+  // cutoff has its own tests (routes/rescheduleCutoff.test.ts).
+  const patched = await agent.patch("/api/shops/me").send({
+    bookingMode: "native",
+    timezone: TZ,
+    bookingLeadHours: 1,
+    bookingMaxDays: 60,
+    rescheduleCutoffHours: 0,
+  });
   expect(patched.status).toBe(200);
   const me = await agent.get("/api/shops/me");
   shopId = me.body.id;

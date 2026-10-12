@@ -88,7 +88,16 @@ beforeAll(async () => {
   slug = shopRes.body.slug;
   await prisma.shop.update({
     where: { id: shopId },
-    data: { timezone: "UTC", bookingMode: "native", publicPageEnabled: true, waitlistEnabled: true, bookingLeadHours: 0 },
+    data: {
+      timezone: "UTC",
+      bookingMode: "native",
+      publicPageEnabled: true,
+      waitlistEnabled: true,
+      bookingLeadHours: 0,
+      // The next open slot can be under a day away; the client reschedule
+      // cutoff has its own tests (routes/rescheduleCutoff.test.ts).
+      rescheduleCutoffHours: 0,
+    },
   });
   staffId = (await prisma.staff.create({ data: { shopId, name: "Sam" }, select: { id: true } })).id;
   serviceId = (
