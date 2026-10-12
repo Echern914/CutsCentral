@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-12-reschedule-cutoff",
+    date: "2026-10-12",
+    kind: "feature",
+    title: "No more last-minute reschedules",
+    body:
+      "Clients can no longer move an appointment online or by text in its last 24 hours. They're asked to " +
+      "contact you, and can still cancel. Change the hours (0 = no limit) in Booking → Settings → Booking rules.",
+  },
+  {
     id: "2026-10-11-app-sign-out-and-group-links",
     date: "2026-10-11",
     kind: "fix",

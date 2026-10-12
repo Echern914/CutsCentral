@@ -17,6 +17,8 @@ export interface BookingShop {
   bookingLeadHours: number;
   bookingMaxDays: number;
   bookingBufferMin: number;
+  /** How close to the start a client may still move it themselves. Optional = older API. */
+  rescheduleCutoffHours?: number;
   waitlistEnabled: boolean;
   slotOpenedTextsEnabled: boolean;
   requireBookingApproval: boolean;

@@ -320,11 +320,21 @@ export function ManageClient({
                 }}
               />
             )}
-            {/* Cancellable but not movable: only a client the shop takes
-                bookings from itself. Who to ask, never why. */}
+            {/* Before the shop's cutoff: say until when it can be moved
+                here, so nobody finds out by trying an hour before. */}
+            {data.canReschedule && !demoTour && !movedTo && data.reschedule && !data.reschedule.closed && (
+              <p className="text-center text-xs text-muted" data-testid="reschedule-closes">
+                You can move this online until {whenFmt.format(new Date(data.reschedule.closesAt))}.
+              </p>
+            )}
+            {/* Cancellable but not movable. Too close to the start: the shop's
+                own sentence. A client the shop takes bookings from itself:
+                who to ask, never why. */}
             {data.canCancel && !data.canReschedule && !demoTour && (
-              <p className="text-center text-xs text-muted">
-                To move this appointment, please contact the shop.
+              <p className="text-center text-xs text-muted" data-testid="reschedule-unavailable">
+                {data.reschedule?.closed && data.reschedule.message
+                  ? data.reschedule.message
+                  : "To move this appointment, please contact the shop."}
               </p>
             )}
             {data.canCancel && !demoTour && cancelCostsMoney && confirmKept !== null && (
@@ -919,6 +929,17 @@ function ReschedulePicker({
       }
       if (!res.ok && res.error === "price_changes" && res.priceChange) {
         setPriceAsk({ iso, ...res.priceChange });
+        return;
+      }
+      if (!res.ok && res.error === "reschedule_closed") {
+        // The page sat open past the shop's cutoff. Every other time gets the
+        // same answer, so no refreshed list: the reason, and who to ask.
+        setSelected(null);
+        setSlots(null);
+        setErr(
+          res.message ??
+            "It's too close to your appointment to move it online. Please contact the shop.",
+        );
         return;
       }
       if (!res.ok && res.error === "contact_shop") {

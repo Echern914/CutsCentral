@@ -54,6 +54,7 @@ import {
   normalizeBookingPolicy,
 } from "@chairback/config/bookingPolicy";
 import { CLIENT_NOTE_MAX, normalizeClientNote } from "@chairback/config/clientNote";
+import { RESCHEDULE_CUTOFF_MAX_HOURS } from "@chairback/config/rescheduleCutoff";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { livePromotions } from "../services/livePromotions.js";
 import { bookingBlockedFor, CONTACT_SHOP_ERROR } from "../services/clientBookingBlock.js";
@@ -392,6 +393,9 @@ const updateShopSchema = createShopSchema
     bookingLeadHours: z.number().int().min(0).max(720),
     bookingMaxDays: z.number().int().min(1).max(365),
     bookingBufferMin: z.number().int().min(0).max(240),
+    // How close to the start a CLIENT may still move a booking themselves
+    // (config/rescheduleCutoff.ts). 0 = no cutoff; the DB CHECK holds the same range.
+    rescheduleCutoffHours: z.number().int().min(0).max(RESCHEDULE_CUTOFF_MAX_HOURS),
     // Public booking menu: group cards first (only meaningful with groups).
     bookingGroupsFirst: z.boolean(),
     // The shop's own policies + the checklist a customer ticks before booking
@@ -1836,6 +1840,7 @@ function serializeShop(shop: {
   bookingLeadHours: number;
   bookingMaxDays: number;
   bookingBufferMin: number;
+  rescheduleCutoffHours: number;
   bookingGroupsFirst: boolean;
   bookingPolicyText: string | null;
   bookingPolicyChecklist: string[];
@@ -1913,6 +1918,7 @@ function serializeShop(shop: {
     bookingLeadHours: shop.bookingLeadHours,
     bookingMaxDays: shop.bookingMaxDays,
     bookingBufferMin: shop.bookingBufferMin,
+    rescheduleCutoffHours: shop.rescheduleCutoffHours,
     bookingGroupsFirst: shop.bookingGroupsFirst,
     bookingPolicyText: shop.bookingPolicyText,
     bookingPolicyChecklist: shop.bookingPolicyChecklist,

@@ -85,6 +85,17 @@ export interface ManageData {
   canCancel: boolean;
   canReschedule: boolean;
   /**
+   * The shop's cutoff for moving it online (config/rescheduleCutoff.ts).
+   * `closed`: too close to the start now, and `message` says who to contact.
+   * Null = no cutoff, or it can't be moved online anyway. Optional = older API.
+   */
+  reschedule?: {
+    cutoffHours: number;
+    closesAt: string;
+    closed: boolean;
+    message: string | null;
+  } | null;
+  /**
    * Non-null: cancelling keeps this much - a deposit taken on non-refundable
    * terms. The page asks before it cancels. Optional = an older API.
    */

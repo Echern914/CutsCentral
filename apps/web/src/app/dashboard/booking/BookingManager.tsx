@@ -89,6 +89,7 @@ import {
 import { TargetedSlotCard } from "./TargetedSlotCard";
 import { EyeIcon, ServiceCard, serviceSummary } from "./ServiceCard";
 import { isHiddenService } from "@chairback/config/serviceVisibility";
+import { RESCHEDULE_CUTOFF_MAX_HOURS, formatCutoffHours } from "@chairback/config/rescheduleCutoff";
 import { UpgradeRules } from "./UpgradeRules";
 import {
   MAX_ADD_ON_MINUTES,
@@ -458,6 +459,8 @@ export function SettingsTab({
   const [lead, setLead] = useState(shop.bookingLeadHours);
   const [maxDays, setMaxDays] = useState(shop.bookingMaxDays);
   const [buffer, setBuffer] = useState(shop.bookingBufferMin);
+  // Null = an older API that never answered it: nothing shown, nothing sent.
+  const [cutoff, setCutoff] = useState<number | null>(shop.rescheduleCutoffHours ?? null);
   const [slotOpened, setSlotOpened] = useState(shop.slotOpenedTextsEnabled);
   const [requireApproval, setRequireApproval] = useState(shop.requireBookingApproval);
   // Older API answers lack the field: that is "off", the default.
@@ -491,6 +494,7 @@ export function SettingsTab({
         bookingLeadHours: lead,
         bookingMaxDays: maxDays,
         bookingBufferMin: buffer,
+        ...(cutoff !== null ? { rescheduleCutoffHours: cutoff } : {}),
         slotOpenedTextsEnabled: next.slotOpened ?? slotOpened,
         requireBookingApproval: next.requireApproval ?? requireApproval,
         // Only its own toggle sends it, like the booking link: an unrelated
@@ -673,6 +677,30 @@ export function SettingsTab({
               </p>
             </label>
           </div>
+          {cutoff !== null && (
+            <label className="mt-4 block sm:max-w-sm">
+              <span className={labelCls}>
+                Clients can reschedule up to (hours before, 0 to {RESCHEDULE_CUTOFF_MAX_HOURS})
+              </span>
+              <NumberField
+                min={0}
+                max={RESCHEDULE_CUTOFF_MAX_HOURS}
+                integer
+                className={field}
+                value={cutoff}
+                onChange={setCutoff}
+                aria-describedby="cutoff-help"
+              />
+              {/* What actually happens inside the cutoff, in the one place
+                  the number is set (config/rescheduleCutoff.ts). */}
+              <p id="cutoff-help" className="mt-1 text-[11px] text-muted">
+                {cutoff > 0
+                  ? `Closer than ${formatCutoffHours(cutoff)} to the appointment, clients can't move it from their link or by text. They're asked to contact you, and can still cancel.`
+                  : "No limit: clients can move their appointment any time before it starts."}{" "}
+                You can always move any appointment yourself.
+              </p>
+            </label>
+          )}
           <p className="mt-3 text-xs text-muted">
             Your booking page:{" "}
             <a

@@ -451,3 +451,75 @@ describe("a client the shop takes bookings from itself (blocked from booking)", 
     expect(options).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("the shop's reschedule cutoff (too close to the appointment to move it online)", () => {
+  const closedMessage =
+    "Chern Cuts takes changes online up to 24 hours before your appointment. To move it now, contact Chern Cuts directly.";
+
+  it("before the cutoff: Reschedule is offered, with when it closes", () => {
+    render(
+      <ManageClient
+        token="tok"
+        data={data({
+          reschedule: {
+            cutoffHours: 24,
+            closesAt: "2026-09-10T15:00:00Z",
+            closed: false,
+            message: null,
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText("Reschedule")).toBeTruthy();
+    expect(screen.getByTestId("reschedule-closes").textContent).toBe(
+      "You can move this online until Thursday, September 10 at 11:00 AM.",
+    );
+  });
+
+  it("🔴 inside the cutoff: no Reschedule, the shop's reason instead, and Cancel stays", () => {
+    render(
+      <ManageClient
+        token="tok"
+        data={data({
+          canReschedule: false,
+          reschedule: {
+            cutoffHours: 24,
+            closesAt: "2026-09-07T15:00:00Z",
+            closed: true,
+            message: closedMessage,
+          },
+        })}
+      />,
+    );
+    expect(screen.queryByText("Reschedule")).toBeNull();
+    expect(screen.queryByTestId("reschedule-closes")).toBeNull();
+    expect(screen.getByTestId("reschedule-unavailable").textContent).toBe(closedMessage);
+    expect(screen.getByText("Cancel appointment")).toBeTruthy();
+  });
+
+  it("an older API with no cutoff answer shows neither line", () => {
+    render(<ManageClient token="tok" data={data()} />);
+    expect(screen.queryByTestId("reschedule-closes")).toBeNull();
+    expect(screen.queryByTestId("reschedule-unavailable")).toBeNull();
+  });
+
+  it("left open past the cutoff: the move is refused with the shop's reason, and the times go away", async () => {
+    const actions = await import("./actions");
+    const options = vi.mocked(actions.rescheduleOptionsAction);
+    options.mockReset();
+    options.mockResolvedValue({ timezone: "America/New_York", slots: ["2026-09-12T15:00:00Z"] });
+    vi.mocked(actions.rescheduleBookingAction).mockResolvedValue({
+      ok: false,
+      error: "reschedule_closed",
+      message: closedMessage,
+    });
+
+    render(<ManageClient token="tok" data={data()} />);
+    await act(async () => fireEvent.click(screen.getByText("Reschedule")));
+    await act(async () => fireEvent.click(await screen.findByText("11:00 AM")));
+
+    expect(screen.getByRole("alert").textContent).toBe(closedMessage);
+    expect(screen.queryByText("11:00 AM")).toBeNull();
+    expect(options).toHaveBeenCalledTimes(1);
+  });
+});

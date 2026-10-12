@@ -6,6 +6,7 @@ import {
   describeCancellationPolicy,
   describeDepositPolicy,
   describeNoShowPolicy,
+  describeReschedulePolicy,
   formatShopAddress,
   formatShopLocality,
 } from "@chairback/config";
@@ -98,6 +99,8 @@ export interface ShopPromptConfig {
   bookingUrl: string;
   depositPolicy: string;
   cancellationPolicy: string;
+  /** Who may move a booking, and until when (config/rescheduleCutoff.ts). */
+  reschedulePolicy: string;
   noShowPolicy: string;
   tone: string;
 }
@@ -202,6 +205,7 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       paymentsMode: true,
       cancelWindowHours: true,
       cancelFeeBps: true,
+      rescheduleCutoffHours: true,
       depositAmountCents: true,
       // A deposit paid online and kept on a cancel - the client must hear it
       // BEFORE they text "cancel", not after.
@@ -375,6 +379,9 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       "no online booking page - book through this conversation",
     depositPolicy: deposit,
     cancellationPolicy: cancellation,
+    // The same cutoff the reschedule tool enforces, so the receptionist can
+    // say so BEFORE it tries, not only after the tool refuses.
+    reschedulePolicy: describeReschedulePolicy(shop.rescheduleCutoffHours),
     noShowPolicy: noShow,
     tone: shop.receptionistTone ?? "relaxed & friendly",
   };
@@ -396,6 +403,7 @@ export function renderTemplate(template: string, config: ShopPromptConfig): stri
     BOOKING_URL: config.bookingUrl,
     DEPOSIT_POLICY: config.depositPolicy,
     CANCELLATION_POLICY: config.cancellationPolicy,
+    RESCHEDULE_POLICY: config.reschedulePolicy,
     NO_SHOW_POLICY: config.noShowPolicy,
     TONE: config.tone,
   };
