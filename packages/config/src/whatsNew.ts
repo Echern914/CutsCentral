@@ -64,6 +64,15 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "says any fee it charges, and only shows once the appointment has started.",
   },
   {
+    id: "2026-10-13-tier-average-ticket",
+    date: "2026-10-13",
+    kind: "feature",
+    title: "Tiers by average ticket, with a preview",
+    body:
+      "A tier can now ask for an average ticket - money divided by completed visits - beside visits and money spent. " +
+      "Before you save, Preview shows how many clients would land in each tier. Find it in Rewards → Tiers.",
+  },
+  {
     id: "2026-10-12-reschedule-cutoff",
     date: "2026-10-12",
     kind: "feature",

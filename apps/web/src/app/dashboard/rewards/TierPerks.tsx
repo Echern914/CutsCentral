@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 // 🔴 SUBPATH IMPORTS, NOT THE BARREL. "@chairback/config" re-exports
 // crypto.ts and session.ts, so importing it from a client component drags
@@ -20,7 +20,9 @@ import {
   type TierPerks as TierPerksMap,
 } from "@chairback/config/tierPerks";
 import {
+  TIER_MAX_AVG_TICKET_CENTS,
   TIER_MAX_SPEND_CENTS,
+  TIER_MIN_AVG_TICKET_CENTS,
   TIER_MIN_SPEND_CENTS,
   TIER_WINDOWS,
   describeTierRule,
@@ -28,20 +30,24 @@ import {
   rulesFromThresholds,
   tierWindowPhrase,
   validateTierRules,
+  type TierRule,
   type TierRuleError,
   type TierRules,
   type TierWindowDays,
 } from "@chairback/config/tierRules";
 import { cap, useVocab } from "@/components/VocabProvider";
-import { saveTierPerksAction } from "./actions";
+import { previewTierRulesAction, saveTierPerksAction, type TierRulesPreview } from "./actions";
 
 /**
  * What each loyalty tier TAKES at this shop, and what it is WORTH.
  *
- * A tier can ask for visits, money, or both - each over its own stretch of
- * time ("2 visits in the last 30 days and $200 spent") - and say whether it
- * needs both or either one. The page runs validateTierRules, the same function
- * the API does, so Save is off for exactly what the server would refuse.
+ * A tier can ask for visits, money, an average ticket, or any mix - each over
+ * its own stretch of time ("2 visits in the last 30 days and $200 spent") -
+ * and say whether it needs all of them or any one. The page runs
+ * validateTierRules, the same function the API does, so Save is off for
+ * exactly what the server would refuse. Before saving, the owner can preview
+ * how many clients would hold each tier (a read-only count from the API, the
+ * save's own evaluation).
  *
  * 🔴 WHY THIS CARD EXISTS AT ALL. The tiers shipped as a rank and nothing
  * else: a client was told they were Silver and never told what Silver got
@@ -62,6 +68,10 @@ interface Draft {
   /** Whole dollars, as typed. */
   spend: string;
   spendWindow: TierWindowDays;
+  avgOn: boolean;
+  /** Whole dollars, as typed. */
+  avg: string;
+  avgWindow: TierWindowDays;
   match: "all" | "any";
 }
 
@@ -69,6 +79,7 @@ function toDraft(rules: TierRules): Record<LoyaltyTierKey, Draft> {
   const out = {} as Record<LoyaltyTierKey, Draft>;
   for (const key of LOYALTY_TIER_KEYS) {
     const r = rules[key];
+    const avg = r.avgTicket ?? null;
     out[key] = {
       visitsOn: r.visits !== null,
       visits: r.visits ? String(r.visits.min) : "",
@@ -76,6 +87,9 @@ function toDraft(rules: TierRules): Record<LoyaltyTierKey, Draft> {
       spendOn: r.spend !== null,
       spend: r.spend ? String(r.spend.minCents / 100) : "",
       spendWindow: r.spend?.windowDays ?? 0,
+      avgOn: avg !== null,
+      avg: avg ? String(avg.minCents / 100) : "",
+      avgWindow: avg?.windowDays ?? 0,
       match: r.match,
     };
   }
@@ -88,11 +102,15 @@ function fromDraft(drafts: Record<LoyaltyTierKey, Draft>): TierRules {
   const out = {} as TierRules;
   for (const key of LOYALTY_TIER_KEYS) {
     const d = drafts[key];
-    out[key] = {
+    const rule: TierRule = {
       visits: d.visitsOn ? { min: parsed(d.visits), windowDays: d.visitsWindow } : null,
       spend: d.spendOn ? { minCents: Math.round(parsed(d.spend) * 100), windowDays: d.spendWindow } : null,
       match: d.match,
     };
+    // Only when on: a tier without an average is sent - and stored - exactly
+    // as it was before the measure existed.
+    if (d.avgOn) rule.avgTicket = { minCents: Math.round(parsed(d.avg) * 100), windowDays: d.avgWindow };
+    out[key] = rule;
   }
   return out;
 }
@@ -101,11 +119,13 @@ function errorCopy(error: TierRuleError, tier: LoyaltyTierKey): string {
   const label = LOYALTY_TIERS[tier].label;
   switch (error) {
     case "no_requirement":
-      return `${label} needs something to earn it - visits, money spent, or both.`;
+      return `${label} needs something to earn it - visits, money spent, or an average ticket.`;
     case "visits_out_of_range":
       return `${label} has to take between ${TIER_MIN_VISITS} and ${TIER_MAX_VISITS} visits.`;
     case "spend_out_of_range":
       return `${label} has to take between ${formatTierMoney(TIER_MIN_SPEND_CENTS)} and ${formatTierMoney(TIER_MAX_SPEND_CENTS)}.`;
+    case "avg_ticket_out_of_range":
+      return `${label}'s average ticket has to be between ${formatTierMoney(TIER_MIN_AVG_TICKET_CENTS)} and ${formatTierMoney(TIER_MAX_AVG_TICKET_CENTS)}.`;
     case "easier_than_below":
       return `${label} can't ask for less than the tier below it over the same stretch of time.`;
     case "same_as_below":
@@ -169,10 +189,18 @@ export function TierPerks({
   const [pending, setPending] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The preview is keyed by the exact rules it was counted for: edit anything
+  // and it disappears rather than describing rules no longer on screen.
+  const [preview, setPreview] = useState<{ key: string; data: TierRulesPreview } | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const previewBusy = useRef(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const rules = fromDraft(drafts);
   const checked = validateTierRules(rules);
-  const rulesDirty = JSON.stringify(rules) !== JSON.stringify(fromDraft(toDraft(startRules)));
+  const rulesKey = JSON.stringify(rules);
+  const rulesDirty = rulesKey !== JSON.stringify(fromDraft(toDraft(startRules)));
+  const shownPreview = preview && preview.key === rulesKey ? preview.data : null;
   // Compared as the server stores it (trimmed): iOS predictive text adds a
   // trailing space, and the save never showed Saved for that perk.
   const perksDirty = LOYALTY_TIER_KEYS.some((k) => (perks[k] ?? "").trim() !== (initial[k] ?? ""));
@@ -181,8 +209,30 @@ export function TierPerks({
 
   const edit = (key: LoyaltyTierKey, patch: Partial<Draft>) => {
     setSaved(null);
+    setPreviewError(null);
     setDrafts((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
   };
+
+  // Counts only - the API saves nothing for a preview. A ref as the busy flag
+  // rather than `disabled` alone, so a double tap cannot send two.
+  async function runPreview() {
+    if (!checked.ok || previewBusy.current) return;
+    previewBusy.current = true;
+    const key = rulesKey;
+    setPreviewError(null);
+    setPreviewing(true);
+    try {
+      const res = await previewTierRulesAction(checked.value);
+      if (res.ok) setPreview({ key, data: res.data });
+      else setPreviewError(res.error);
+    } catch {
+      // A lost server-action response throws; say so rather than spin.
+      setPreviewError("Could not preview these tiers. Try again.");
+    } finally {
+      previewBusy.current = false;
+      setPreviewing(false);
+    }
+  }
 
   // Plain async rather than useTransition: passing an async callback to
   // startTransition is what produces the repo's inherited @types/react error,
@@ -219,30 +269,40 @@ export function TierPerks({
       <h2 className="font-display text-xl tracking-tight">Tiers</h2>
       <p className="mt-1 text-sm text-muted">
         {cap(vocab.clientNounPlural)} earn Bronze, Silver and Gold. Decide what each one takes -
-        visits, money spent, or both, over whatever stretch of time you like - and what it is
-        worth. Both show on their rewards page, under their badge.
+        visits, money spent, an average ticket, or a mix, over whatever stretch of time you like -
+        and what it is worth. Both show on their rewards page, under their badge.
       </p>
       <p className="mt-2 text-xs text-muted">
-        Money counts what they actually paid: refunds come off and a no-show counts nothing.
-        ChairBack shows the promise; you keep it at the {vocab.stationNoun}.
+        Money is the amount paid when it went through ChairBack or was entered at checkout,
+        otherwise the ticket price. Refunds come off, tips never count, and a no-show counts only
+        a fee you kept. Average
+        ticket is money divided by completed visits - an imported visit with no price is left out
+        of averages. ChairBack shows the promise; you keep it at the {vocab.stationNoun}.
       </p>
 
       <div className="mt-5 space-y-4">
         {LOYALTY_TIER_KEYS.map((key) => {
           const tier = LOYALTY_TIERS[key];
           const d = drafts[key];
-          const both = d.visitsOn && d.spendOn;
+          // How many measures are on decides the all/any wording: "Needs both"
+          // and "Either one" with two, "Needs all three" and "Any one" with three.
+          const measuresOn = [d.visitsOn, d.spendOn, d.avgOn].filter(Boolean).length;
           // The sentence previews this tier on its own numbers; how it ranks
           // against its neighbours is the alert below the list.
           const r = rules[key];
+          const avg = r.avgTicket ?? null;
           const ownOk =
-            (r.visits !== null || r.spend !== null) &&
+            (r.visits !== null || r.spend !== null || avg !== null) &&
             (!r.visits ||
               (Number.isInteger(r.visits.min) && r.visits.min >= TIER_MIN_VISITS && r.visits.min <= TIER_MAX_VISITS)) &&
             (!r.spend ||
               (Number.isInteger(r.spend.minCents) &&
                 r.spend.minCents >= TIER_MIN_SPEND_CENTS &&
-                r.spend.minCents <= TIER_MAX_SPEND_CENTS));
+                r.spend.minCents <= TIER_MAX_SPEND_CENTS)) &&
+            (!avg ||
+              (Number.isInteger(avg.minCents) &&
+                avg.minCents >= TIER_MIN_AVG_TICKET_CENTS &&
+                avg.minCents <= TIER_MAX_AVG_TICKET_CENTS));
           return (
             <fieldset key={key} className="min-w-0 rounded-xl border border-subtle p-4">
               <legend className="flex items-center gap-2 px-1 text-sm font-semibold">
@@ -317,8 +377,42 @@ export function TierPerks({
                   label={`How far back ${tier.label} counts money spent`}
                 />
               </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={d.avgOn}
+                    onChange={(e) => edit(key, { avgOn: e.target.checked, avg: d.avg || "40" })}
+                    className="h-4 w-4 accent-gold"
+                  />
+                  Average ticket
+                </label>
+                <span className="flex items-center gap-1">
+                  <span className="text-sm text-muted" aria-hidden>
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min={TIER_MIN_AVG_TICKET_CENTS / 100}
+                    max={TIER_MAX_AVG_TICKET_CENTS / 100}
+                    step="1"
+                    value={d.avg}
+                    disabled={!d.avgOn}
+                    onChange={(e) => edit(key, { avg: e.target.value })}
+                    aria-label={`Average ticket in dollars for ${tier.label}`}
+                    className={`w-24 ${inputClass} disabled:opacity-50`}
+                  />
+                </span>
+                <WindowSelect
+                  value={d.avgWindow}
+                  disabled={!d.avgOn}
+                  onChange={(v) => edit(key, { avgWindow: v })}
+                  label={`How far back ${tier.label} averages tickets`}
+                />
+              </div>
 
-              {both && (
+              {measuresOn >= 2 && (
                 <div
                   role="radiogroup"
                   aria-label={`What ${tier.label} needs`}
@@ -335,7 +429,13 @@ export function TierPerks({
                         d.match === m ? "bg-gold text-charcoal" : "text-muted hover:text-offwhite"
                       }`}
                     >
-                      {m === "all" ? "Needs both" : "Either one"}
+                      {measuresOn === 2
+                        ? m === "all"
+                          ? "Needs both"
+                          : "Either one"
+                        : m === "all"
+                          ? "Needs all three"
+                          : "Any one"}
                     </button>
                   ))}
                 </div>
@@ -378,9 +478,62 @@ export function TierPerks({
         </p>
       )}
       {rulesDirty && checked.ok && (
-        <p className="mt-4 text-xs text-muted">
-          Saving moves every {vocab.clientNoun} to the tier these rules give them, right away.
-        </p>
+        <div className="mt-4">
+          <p className="text-xs text-muted">
+            Saving moves every {vocab.clientNoun} to the tier these rules give them, right away.
+            Nobody is sent anything, and punches stay as they are.
+          </p>
+          <button
+            type="button"
+            onClick={() => void runPreview()}
+            disabled={previewing}
+            className="mt-2 rounded-full border border-subtle px-4 py-1.5 text-xs font-semibold text-offwhite transition-colors duration-150 ease-out hover:border-gold/50 disabled:opacity-50"
+          >
+            {previewing ? "Counting…" : shownPreview ? "Count again" : "Preview before saving"}
+          </button>
+          {previewError && (
+            <p role="alert" className="mt-2 text-xs text-red-400">
+              {previewError}
+            </p>
+          )}
+          {shownPreview && (
+            <div className="mt-3 min-w-0 overflow-x-auto">
+              <table className="w-full text-left text-xs" aria-label="Tier preview">
+                <thead>
+                  <tr className="text-muted">
+                    <th scope="col" className="py-1 pr-3 font-normal">
+                      Tier
+                    </th>
+                    <th scope="col" className="py-1 pr-3 font-normal">
+                      Now
+                    </th>
+                    <th scope="col" className="py-1 font-normal">
+                      With these rules
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {([...[...LOYALTY_TIER_KEYS].reverse(), "NONE"] as const).map((k) => (
+                    <tr key={k} className="border-t border-subtle">
+                      <th scope="row" className="py-1 pr-3 font-normal">
+                        {k === "NONE" ? "No tier" : LOYALTY_TIERS[k].label}
+                      </th>
+                      <td className="py-1 pr-3">{shownPreview.current[k]}</td>
+                      <td className="py-1">{shownPreview.proposed[k]}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-2 text-xs text-muted" aria-live="polite">
+                {shownPreview.wouldMove === 0
+                  ? "Nobody would change tier."
+                  : `${shownPreview.wouldMove} ${
+                      shownPreview.wouldMove === 1 ? vocab.clientNoun : vocab.clientNounPlural
+                    } would change tier. Nothing is saved until you press Save tiers.`}
+              </p>
+            </div>
+          )}
+        </div>
       )}
 
       <div className="mt-5 flex flex-wrap items-center gap-3">

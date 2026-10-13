@@ -590,7 +590,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "loyalty-tier-rules",
     q: "How do loyalty tiers work, and can I change what they take?",
-    a: "Clients climb tiers automatically, and you set the bar for each one. A tier can require visits, money spent, or both together — and you choose whether that's counted over a month or across their whole history with you.\n\nSo “Gold = 3 cuts a month” and “Gold = $300 a month” and “Gold = 3 cuts AND $300 a month” are all expressible, per tier, in your rewards settings.\n\nMoney counts what a client has actually earned you. Nothing is retroactive in a way that demotes someone unfairly — a client sees their current tier and exactly what the next one takes.",
+    a: "Clients climb tiers automatically, and you set the bar for each one. A tier can require visits, money spent, an average ticket per visit, or a mix — and you choose whether that's counted over a month or across their whole history with you.\n\nSo “Gold = 3 cuts a month” and “Gold = $300 a month” and “Gold = 3 cuts AND $300 a month” are all expressible, per tier, in your rewards settings.\n\nMoney counts what a client has actually earned you. Before you save, a preview shows how many clients would land in each tier. Nothing is retroactive in a way that demotes someone unfairly — a client sees their current tier and exactly what the next one takes.",
     keywords: [
       "tiers", "tier", "bronze", "silver", "gold", "status", "levels",
       "tier rules", "change tiers", "customize", "requirements", "how to reach",
