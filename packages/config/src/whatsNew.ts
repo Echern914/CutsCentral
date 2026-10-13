@@ -45,6 +45,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "You see the dates and any booked appointments before saving. Tap a block to change its hours or note, or remove it. It asks first.",
   },
   {
+    id: "2026-10-13-client-change-rules",
+    date: "2026-10-13",
+    kind: "feature",
+    title: "Choose whether clients can cancel or move online",
+    body:
+      "Booking → Settings → Booking rules now has a switch for clients rescheduling and one for cancelling " +
+      "online, plus how many hours before they close. Clients see who to contact instead. You can still " +
+      "change anything yourself; cancellation fees stay in Payments.",
+  },
+  {
     id: "2026-10-12-reschedule-cutoff",
     date: "2026-10-12",
     kind: "feature",

@@ -73,11 +73,12 @@ import {
 } from "../engines/bookingIntake.js";
 import { checkPolicyAcceptance, publicBookingPolicy } from "../engines/bookingPolicy.js";
 import { normalizeClientNote } from "@chairback/config/clientNote";
+import { rescheduleClosesAt } from "@chairback/config/rescheduleCutoff";
 import {
-  rescheduleClosedMessage,
-  rescheduleClosesAt,
-  rescheduleCutoffPassed,
-} from "@chairback/config/rescheduleCutoff";
+  customerChange,
+  customerChangeClosesAt,
+  type CustomerChangeVerdict,
+} from "@chairback/config/customerChangeRules";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { fillBlankClientNames } from "../services/clientFill.js";
 import { neverBooked, optionalCardStepFor, unfinishedCheckoutFor } from "../services/unfinishedCheckout.js";
@@ -3143,9 +3144,14 @@ const MANAGE_SELECT = {
           addressPostal: true,
           // The owner's note for clients ("Please arrive 10 minutes early").
           clientNote: true,
-          // How close to the start the client may still move it themselves.
-          // Read here, answered below as `reschedule` - never sent as is.
+          // How close to the start the client may still move it themselves,
+          // and whether they may move / cancel it online at all
+          // (config/customerChangeRules.ts). Read here, answered below as
+          // `reschedule` and `cancel` - never sent as is.
           rescheduleCutoffHours: true,
+          customerCanReschedule: true,
+          customerCanCancel: true,
+          cancelCutoffHours: true,
         },
       },
       service: { select: { name: true, durationMin: true } },
@@ -3237,11 +3243,50 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
   // 🔴 TOO CLOSE TO THE CUT TO MOVE IT ONLINE (config/rescheduleCutoff.ts).
   // A client moving an 8:00 cut at 7:05 left the barber an hour nobody could
   // book. Inside the shop's cutoff the page stops offering Reschedule and
-  // says who to contact; Cancel stays exactly as it was.
-  const { rescheduleCutoffHours: cutoffHours, ...shopForPage } = appt.shop;
-  const cutoffPassed =
-    canMove && rescheduleCutoffPassed({ startsAt: appt.startsAt, now, cutoffHours });
-  const closesAt = rescheduleClosesAt(appt.startsAt, cutoffHours);
+  // says who to contact.
+  // 🔴 AND WHAT THE SHOP LETS CLIENTS DO ONLINE AT ALL, plus how close to the
+  // start they may still cancel (config/customerChangeRules.ts). The page
+  // shows the shop's sentence INSTEAD of a button it would refuse; the
+  // routes below refuse the same, for a page left open across the line.
+  const {
+    rescheduleCutoffHours: cutoffHours,
+    customerCanReschedule,
+    customerCanCancel,
+    cancelCutoffHours,
+    ...shopForPage
+  } = appt.shop;
+  const moveRule = customerChange({
+    action: "reschedule",
+    allowed: customerCanReschedule,
+    cutoffHours,
+    startsAt: appt.startsAt,
+    now,
+    shopName: appt.shop.name,
+  });
+  const cancelRule = customerChange({
+    action: "cancel",
+    allowed: customerCanCancel,
+    cutoffHours: cancelCutoffHours,
+    startsAt: appt.startsAt,
+    now,
+    shopName: appt.shop.name,
+  });
+  const cutoffPassed = canMove && !moveRule.allowed;
+  const closesAt = customerCanReschedule ? rescheduleClosesAt(appt.startsAt, cutoffHours) : null;
+  const cancelClosesAt = customerCanCancel
+    ? customerChangeClosesAt(appt.startsAt, cancelCutoffHours)
+    : null;
+  /** The page's answer for one action: null = nothing to say (open, no cutoff). */
+  const ruleView = (rule: CustomerChangeVerdict, hours: number, closes: Date | null) =>
+    closes || !rule.allowed
+      ? {
+          cutoffHours: hours,
+          closesAt: closes?.toISOString() ?? null,
+          closed: !rule.allowed,
+          reason: rule.allowed ? null : rule.reason,
+          message: rule.allowed ? null : rule.message,
+        }
+      : null;
 
   // A standing appointment: how many LATER visits are still on the books, so
   // the page can offer "cancel this and the rest" instead of making the
@@ -3308,7 +3353,7 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
       : null;
   // A card kept on file that a cancel inside the window charges: the page
   // asks first, with the exact figure (and the card it lands on).
-  const lateCancelFee = canChange ? await lateCancelCardFee(appt, now) : null;
+  const lateCancelFee = canChange && cancelRule.allowed ? await lateCancelCardFee(appt, now) : null;
   // A tip after the visit: offered once it is COMPLETED, and a tip already
   // given is always shown. The shop's facts are read on their own - the
   // `shop` sent to the page below is spread from MANAGE_SELECT, and a Stripe
@@ -3358,20 +3403,16 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     },
     service: appt.service,
     staff: appt.staff,
-    canCancel: canChange,
+    canCancel: canChange && cancelRule.allowed,
     canReschedule: canMove && !cutoffPassed,
-    // The shop's cutoff for moving it online, for a booking the client could
-    // otherwise move. `closed`: too late now, and `message` says who to ask.
-    // Null when it can't be moved online at all, or the shop set no cutoff.
-    reschedule:
-      canMove && closesAt
-        ? {
-            cutoffHours,
-            closesAt: closesAt.toISOString(),
-            closed: cutoffPassed,
-            message: cutoffPassed ? rescheduleClosedMessage(cutoffHours, appt.shop.name) : null,
-          }
-        : null,
+    // The shop's rule for moving it online, for a booking the client could
+    // otherwise move. `closed`: not now (`reason` "cutoff": too late;
+    // "disabled": the shop takes no moves online), and `message` says who to
+    // ask. `closesAt` null = no cutoff. Null when there is nothing to say, or
+    // it can't be moved online for another reason (a blocked client).
+    reschedule: canMove ? ruleView(moveRule, cutoffHours, closesAt) : null,
+    // The same for cancelling it online (config/customerChangeRules.ts).
+    cancel: canChange ? ruleView(cancelRule, cancelCutoffHours, cancelClosesAt) : null,
     // Non-null: cancelling keeps this much (a non-refundable deposit). The page
     // says so and asks before it cancels.
     nonRefundable: keptOnCancel,
@@ -3876,14 +3917,45 @@ bookingPublicRouter.post(
     const scope = parsed.data.scope ?? "this";
     const appt = await prisma.appointment.findUnique({
       where: { manageToken: String(req.params.token) },
-      select: { id: true, shopId: true, status: true, startsAt: true, seriesId: true },
+      select: {
+        id: true,
+        shopId: true,
+        status: true,
+        startsAt: true,
+        seriesId: true,
+        // Whether the shop lets clients cancel online, and until when.
+        shop: { select: { name: true, customerCanCancel: true, cancelCutoffHours: true } },
+      },
     });
     if (!appt) {
       res.status(404).json({ error: "not_found" });
       return;
     }
-    if (appt.status !== "BOOKED" || appt.startsAt <= new Date()) {
+    const now = new Date();
+    if (appt.status !== "BOOKED" || appt.startsAt <= now) {
       res.status(409).json({ error: "not_cancelable" });
+      return;
+    }
+    // 🔴 THE SHOP'S RULE FOR A CLIENT'S OWN CANCEL (config/customerChangeRules.ts):
+    // off, or too close to the start, and the client is told who to contact.
+    // Checked against THIS booking's own start - for "this and the rest" too,
+    // since every later visit starts after it. Refused before anything is
+    // touched: no cancel, no fee, no refund, no alert. The barber's dashboard
+    // cancel is a different route and is never limited by this.
+    const cancelRule = customerChange({
+      action: "cancel",
+      allowed: appt.shop.customerCanCancel,
+      cutoffHours: appt.shop.cancelCutoffHours,
+      startsAt: appt.startsAt,
+      now,
+      shopName: appt.shop.name,
+    });
+    if (!cancelRule.allowed) {
+      res.status(409).json({
+        error: "cancel_closed",
+        reason: cancelRule.reason,
+        message: cancelRule.message,
+      });
       return;
     }
     if (scope === "future") {
@@ -3959,7 +4031,15 @@ bookingPublicRouter.get(
         endsAt: true,
         bookedVia: true,
         service: { select: { durationMin: true, durationOverrides: true, timeOverrides: true } },
-        shop: { select: { timezone: true, bookingMaxDays: true, rescheduleCutoffHours: true } },
+        shop: {
+          select: {
+            name: true,
+            timezone: true,
+            bookingMaxDays: true,
+            rescheduleCutoffHours: true,
+            customerCanReschedule: true,
+          },
+        },
       },
     });
     if (!appt) {
@@ -3972,12 +4052,16 @@ bookingPublicRouter.get(
     if (
       appt.status !== "BOOKED" ||
       appt.startsAt <= now ||
-      // Inside the shop's cutoff there is nothing the client may move it to.
-      rescheduleCutoffPassed({
+      // Inside the shop's cutoff, or at a shop that takes no moves online,
+      // there is nothing the client may move it to.
+      !customerChange({
+        action: "reschedule",
+        allowed: appt.shop.customerCanReschedule,
+        cutoffHours: appt.shop.rescheduleCutoffHours,
         startsAt: appt.startsAt,
         now,
-        cutoffHours: appt.shop.rescheduleCutoffHours,
-      })
+        shopName: appt.shop.name,
+      }).allowed
     ) {
       res.json({ timezone: appt.shop.timezone, slots: [] });
       return;
@@ -4093,6 +4177,7 @@ bookingPublicRouter.post(
             bookingMaxDays: true,
             bookingBufferMin: true,
             rescheduleCutoffHours: true,
+            customerCanReschedule: true,
             bookingMode: true,
             publicPageEnabled: true,
             subscriptionStatus: true,
@@ -4130,19 +4215,24 @@ bookingPublicRouter.post(
     }
 
     const now = new Date();
-    // 🔴 TOO CLOSE TO THE CUT (config/rescheduleCutoff.ts). The page stops
-    // offering the move inside the shop's cutoff; this refuses one from a
-    // page left open across it. Cancelling is a separate route, untouched.
-    if (
-      rescheduleCutoffPassed({
-        startsAt: appt.startsAt,
-        now,
-        cutoffHours: appt.shop.rescheduleCutoffHours,
-      })
-    ) {
+    // 🔴 TOO CLOSE TO THE CUT, OR NOT ONLINE AT ALL
+    // (config/customerChangeRules.ts). The page stops offering the move
+    // inside the shop's cutoff or when the shop takes no moves online; this
+    // refuses one from a page left open across it. The barber's dashboard
+    // move is a different route and is never limited by this.
+    const moveRule = customerChange({
+      action: "reschedule",
+      allowed: appt.shop.customerCanReschedule,
+      cutoffHours: appt.shop.rescheduleCutoffHours,
+      startsAt: appt.startsAt,
+      now,
+      shopName: appt.shop.name,
+    });
+    if (!moveRule.allowed) {
       res.status(409).json({
         error: "reschedule_closed",
-        message: rescheduleClosedMessage(appt.shop.rescheduleCutoffHours, appt.shop.name),
+        reason: moveRule.reason,
+        message: moveRule.message,
       });
       return;
     }

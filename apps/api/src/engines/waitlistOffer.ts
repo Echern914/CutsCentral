@@ -991,6 +991,12 @@ export type ClaimResult =
  * concurrent claim of the same token, the expiry worker's compare-and-set, a
  * leave and an admin release all serialize on the row: exactly one of them
  * decides the offer's fate.
+ *
+ * NOT limited by the shop's client-change rules (config/customerChangeRules.ts)
+ * or by its minimum notice at claim time: an offer is a time the SHOP put in front of this
+ * client (barber- or Auto-fill-initiated), often a freed slot an hour out on
+ * purpose. Whether a claim should honor min notice is an open owner decision
+ * (feat/booking-rules report) - left as is deliberately.
  */
 export async function claimOffer(params: {
   token: string;

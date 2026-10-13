@@ -18,6 +18,7 @@ Booking link:     {{BOOKING_URL}}
 Deposit policy:   {{DEPOSIT_POLICY}}
 Cancellation:     {{CANCELLATION_POLICY}}
 Rescheduling:     {{RESCHEDULE_POLICY}}
+Client cancels:   {{CLIENT_CANCEL_POLICY}}
 No-show:          {{NO_SHOW_POLICY}}
 Vibe:             {{TONE}}
 ```

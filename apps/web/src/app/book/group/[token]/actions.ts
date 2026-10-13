@@ -28,6 +28,18 @@ export interface GroupMemberView {
   priceCents: number | null;
   /** This member's time has come: their own cancel is refused, so it is not offered. */
   started?: boolean;
+  /**
+   * The shop's rule lets this member's own cancel go through right now
+   * (config/customerChangeRules.ts). Optional = an older API (offered).
+   */
+  canCancel?: boolean;
+}
+
+/** The shop's rule for one change to the whole party, right now. */
+export interface GroupRuleView {
+  allowed: boolean;
+  /** The shop's sentence when not allowed: why, and who to contact. */
+  message: string | null;
 }
 
 export interface GroupView {
@@ -41,11 +53,20 @@ export interface GroupView {
   started?: boolean;
   bookedBy: string;
   shop: { slug: string; name: string; timezone: string };
+  /**
+   * What the shop lets this client change online right now, for the party as
+   * a whole. Null = nobody still booked; optional = an older API.
+   */
+  rules?: { reschedule: GroupRuleView; cancel: GroupRuleView } | null;
   staff: { id: string; name: string };
   startsAt: string | null;
   endsAt: string | null;
   members: GroupMemberView[];
 }
+
+/** The shop refused a change without its own sentence (an older API). */
+const GROUP_CLOSED_FALLBACK =
+  "This can't be changed online right now. Please contact the shop directly.";
 
 export async function groupViewAction(
   token: string,
@@ -99,6 +120,7 @@ export async function groupRescheduleAction(
         | "requested"
         | "error";
     }
+  | { ok: false; code: "closed"; message: string }
 > {
   const res = await apiPublicSend<{ ok: boolean; plan: GroupPlanResult }>(
     "POST",
@@ -131,6 +153,12 @@ export async function groupRescheduleAction(
   if (res.error === "price_changed") return { ok: false, code: "price_changed" };
   // The shop arranges this booker's bookings itself; cancelling is still open.
   if (res.error === "contact_shop") return { ok: false, code: "contact_shop" };
+  // The shop's rule: no moves online, or too close to the visit. Its own
+  // sentence says who to contact.
+  if (res.error === "reschedule_closed") {
+    const body = res.body as { message?: string } | undefined;
+    return { ok: false, code: "closed", message: body?.message ?? GROUP_CLOSED_FALLBACK };
+  }
   if (res.error === "slot_taken" || res.error === "slot_unavailable_external") {
     return { ok: false, code: "slot_taken" };
   }
@@ -154,12 +182,16 @@ export async function groupRescheduleAction(
  */
 export async function cancelMemberAction(
   memberToken: string,
-): Promise<{ ok: boolean }> {
+): Promise<{ ok: boolean; code?: "closed"; message?: string }> {
   const res = await apiPublicSend<{ ok: boolean }>(
     "POST",
     `/api/book/manage/${encodeURIComponent(memberToken)}/cancel`,
     {},
   );
+  if (!res.ok && res.error === "cancel_closed") {
+    const body = res.body as { message?: string } | undefined;
+    return { ok: false, code: "closed", message: body?.message ?? GROUP_CLOSED_FALLBACK };
+  }
   return { ok: res.ok };
 }
 
@@ -171,7 +203,13 @@ export async function cancelMemberAction(
  */
 export async function cancelGroupAction(
   token: string,
-): Promise<{ ok: boolean; canceled?: number; code?: "started" | "requested" }> {
+): Promise<{
+  ok: boolean;
+  canceled?: number;
+  code?: "started" | "requested" | "closed";
+  /** `closed`: the shop's own sentence. */
+  message?: string;
+}> {
   const res = await apiPublicSend<{ ok: boolean; canceled: number }>(
     "POST",
     `/api/book/group/${encodeURIComponent(token)}/cancel`,
@@ -180,6 +218,11 @@ export async function cancelGroupAction(
   if (res.ok && res.data) return { ok: true, canceled: res.data.canceled };
   if (res.error === "not_cancelable") {
     return { ok: false, code: res.code === "REQUESTED" ? "requested" : "started" };
+  }
+  // The shop's rule: no cancels online, or too close to the visit.
+  if (res.error === "cancel_closed") {
+    const body = res.body as { message?: string } | undefined;
+    return { ok: false, code: "closed", message: body?.message ?? GROUP_CLOSED_FALLBACK };
   }
   return { ok: false };
 }

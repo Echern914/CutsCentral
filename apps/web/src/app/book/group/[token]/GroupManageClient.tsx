@@ -73,6 +73,13 @@ export function GroupManageClient({
   const canceledAll = !requested && (group.status === "CANCELED" || live.length === 0);
   // The visit is under way: everyone can no longer be moved or cancelled here.
   const started = group.started === true;
+  // 🔴 THE SHOP'S RULE (config/customerChangeRules.ts): no moves / cancels
+  // online, or too close to the visit. The shop's sentence replaces the
+  // button the API would refuse. Absent = an older API: offered as before.
+  const moveRule = group.rules?.reschedule ?? null;
+  const cancelRule = group.rules?.cancel ?? null;
+  const canMoveAll = moveRule?.allowed !== false;
+  const canCancelAll = cancelRule?.allowed !== false;
 
   async function refresh() {
     const { groupViewAction } = await import("./actions");
@@ -115,6 +122,14 @@ export function GroupManageClient({
       setPriceAsk({ iso, ...res.priceChange });
       return;
     }
+    if (!res.ok && res.code === "closed") {
+      // Nobody moved. The shop's reason, and the move button goes away.
+      setPriceAsk(null);
+      setMoving(false);
+      setNotice(res.message);
+      await refresh();
+      return;
+    }
     if (!res.ok) {
       setPriceAsk(null);
       setNotice(
@@ -152,11 +167,13 @@ export function GroupManageClient({
     if (!res.ok) {
       const code = "code" in res ? res.code : undefined;
       setNotice(
-        code === "started"
-          ? STARTED_NOTICE
-          : code === "requested"
-            ? REQUESTED_NOTICE
-            : "That could not be cancelled. Please try again.",
+        code === "closed" && res.message
+          ? res.message
+          : code === "started"
+            ? STARTED_NOTICE
+            : code === "requested"
+              ? REQUESTED_NOTICE
+              : "That could not be cancelled. Please try again.",
       );
       await refresh();
       return;
@@ -228,7 +245,7 @@ export function GroupManageClient({
               </span>
               {/* Not for a request (the shop has not answered), and not for a
                   member whose time has come - their own cancel refuses it. */}
-              {!gone && !canceledAll && !requested && !m.started && (
+              {!gone && !canceledAll && !requested && !m.started && m.canCancel !== false && (
                 <button
                   type="button"
                   onClick={() =>
@@ -327,21 +344,33 @@ export function GroupManageClient({
             </section>
           ) : (
             <div className="mt-6 flex flex-col gap-2">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void loadTimes()}
-                className="w-full rounded-xl border border-subtle px-5 py-3 font-semibold text-offwhite disabled:opacity-50"
-              >
-                Move the whole group
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirming({ kind: "all" })}
-                className="w-full rounded-xl border border-subtle px-5 py-3 font-semibold text-offwhite"
-              >
-                Cancel the whole group
-              </button>
+              {canMoveAll ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void loadTimes()}
+                  className="w-full rounded-xl border border-subtle px-5 py-3 font-semibold text-offwhite disabled:opacity-50"
+                >
+                  Move the whole group
+                </button>
+              ) : (
+                <p data-qa="group-move-closed" className="text-sm text-muted">
+                  {moveRule?.message}
+                </p>
+              )}
+              {canCancelAll ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirming({ kind: "all" })}
+                  className="w-full rounded-xl border border-subtle px-5 py-3 font-semibold text-offwhite"
+                >
+                  Cancel the whole group
+                </button>
+              ) : (
+                <p data-qa="group-cancel-closed" className="text-sm text-muted">
+                  {cancelRule?.message}
+                </p>
+              )}
             </div>
           )}
         </>

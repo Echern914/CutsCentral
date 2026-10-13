@@ -19,6 +19,7 @@ import {
   type RewardsSectionKey,
 } from "@chairback/config";
 import { createHmac } from "node:crypto";
+import { customerChange } from "@chairback/config/customerChangeRules";
 import { buildLoyaltyView, loadLoyaltyInputs, type LoyaltyView } from "./loyaltyView.js";
 import { livePromotions, type PublicPromotion } from "./livePromotions.js";
 import { syncCustomerLinks, syncCustomerView, type ActiveLink } from "./customerIdentity.js";
@@ -80,6 +81,16 @@ export interface PortalAppointment {
   shop: PortalShopRef;
   /** Reschedule/cancel are available through the shop's own manage page. */
   canManage: boolean;
+  /**
+   * Per action: whether the shop lets the client do it online right now
+   * (config/customerChangeRules.ts - its switch and its cutoff). For a future
+   * app build to hide a button the manage page would only explain. Today's
+   * app opens the manage page, which shows the shop's sentence instead.
+   * The manage page still has the last word (e.g. a client the shop blocked
+   * from booking can't move it).
+   */
+  canReschedule: boolean;
+  canCancel: boolean;
   /** Said instead, when this booking lives in another system. */
   manageNote: string | null;
 }
@@ -186,6 +197,11 @@ interface ShopRow {
   rewardsSections: string[];
   /** Picks the words for an unfinished checkout: save a card, or pay. */
   paymentsMode: string | null;
+  /** What a client may change online, and until when (config/customerChangeRules.ts). */
+  customerCanReschedule: boolean;
+  customerCanCancel: boolean;
+  rescheduleCutoffHours: number;
+  cancelCutoffHours: number;
 }
 
 interface ClientRow {
@@ -313,6 +329,10 @@ export async function loadPortalView(accountId: string, now = new Date()): Promi
         rebookWindowDays: true,
         rewardsSections: true,
         paymentsMode: true,
+        customerCanReschedule: true,
+        customerCanCancel: true,
+        rescheduleCutoffHours: true,
+        cancelCutoffHours: true,
       },
     }),
   );
@@ -435,6 +455,24 @@ async function ambiguousShops(
   }));
 }
 
+/** May the client make this change online now? The shop's rule, for a booked upcoming visit. */
+function clientMay(
+  shop: ShopRow,
+  action: "reschedule" | "cancel",
+  a: { status: string; startsAt: Date },
+  now: Date,
+): boolean {
+  if (a.status !== "BOOKED" || a.startsAt.getTime() <= now.getTime()) return false;
+  return customerChange({
+    action,
+    allowed: action === "reschedule" ? shop.customerCanReschedule : shop.customerCanCancel,
+    cutoffHours: action === "reschedule" ? shop.rescheduleCutoffHours : shop.cancelCutoffHours,
+    startsAt: a.startsAt,
+    now,
+    shopName: shop.name,
+  }).allowed;
+}
+
 function normalizeEvents(
   shop: ShopRow,
   ref: PortalShopRef,
@@ -494,6 +532,10 @@ function normalizeEvents(
       // ManageClient FinishCheckout). The app's Reschedule button opens it;
       // the note says which button that is.
       canManage: (a.status === "BOOKED" || unfinished !== null) && a.startsAt.getTime() > now.getTime(),
+      // The shop's own rule per action, for a booked, upcoming appointment
+      // (an unfinished checkout's page is its card step, not a change).
+      canReschedule: clientMay(shop, "reschedule", a, now),
+      canCancel: clientMay(shop, "cancel", a, now),
       manageNote: unfinished?.note ?? null,
       address,
       durationMin: a.service?.durationMin ?? null,
@@ -527,6 +569,8 @@ function normalizeEvents(
       providerImageUrl: null,
       shop: ref,
       canManage: false,
+      canReschedule: false,
+      canCancel: false,
       manageNote:
         upcoming && (source === "acuity" || source === "square")
           ? `To change this visit, contact ${shop.name}.`
@@ -555,6 +599,8 @@ function listRow(e: PortalAppointmentDetail & { clientId: string }): PortalAppoi
     providerImageUrl: e.providerImageUrl,
     shop: e.shop,
     canManage: e.canManage,
+    canReschedule: e.canReschedule,
+    canCancel: e.canCancel,
     manageNote: e.manageNote,
   };
 }

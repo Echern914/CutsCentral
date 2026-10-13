@@ -77,6 +77,10 @@ export async function saveBookingSettingsAction(input: {
   bookingBufferMin: number;
   /** Sent only when the API answered it (an older API refuses an unknown field). */
   rescheduleCutoffHours?: number;
+  /** Each sent only when the API answered it (config/customerChangeRules.ts). */
+  customerCanReschedule?: boolean;
+  customerCanCancel?: boolean;
+  cancelCutoffHours?: number;
   slotOpenedTextsEnabled?: boolean;
   requireBookingApproval?: boolean;
   approveNewClients?: boolean;
