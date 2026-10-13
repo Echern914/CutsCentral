@@ -3112,10 +3112,26 @@ model AvailabilityException {
   endsAt    DateTime
   isBlock   Boolean  @default(true)
   reason    String?
+  // The rows one "Block off time" save wrote, across every barber and day it
+  // covered: edited or removed together ("the whole group"). NULL on rows
+  // written before groups existed - each is then a group of one.
+  groupId   String?
+  // The form's once-per-Save id. A retried save (lost answer, double tap)
+  // finds the rows the first try wrote and answers from them instead of
+  // writing a second copy. See services/blockOff.ts.
+  requestId String?
+  // What the barber asked for, so the rows read back the way he wrote them:
+  // "single" one span; "daily" the same hours on each day of a range (rows
+  // with gaps between them); "continuous" one unbroken absence from a start
+  // instant to an end instant, stored as touching per-day rows; "weekly" the
+  // same day-of-week block repeated a bounded number of times.
+  pattern   String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([shopId, requestId, staffId, startsAt])
   @@index([shopId, staffId, startsAt])
+  @@index([shopId, groupId])
 }
 
 // A barber-published ONE-OFF bookable slot with its own time/duration/price,
