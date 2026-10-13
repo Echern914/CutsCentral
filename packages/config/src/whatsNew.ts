@@ -55,6 +55,15 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "change anything yourself; cancellation fees stay in Payments.",
   },
   {
+    id: "2026-10-13-undo-no-show",
+    date: "2026-10-13",
+    kind: "fix",
+    title: "Undo a no-show marked by mistake",
+    body:
+      "Open the appointment, tap More, then Undo no-show to put it back on your calendar. No-show now asks first, " +
+      "says any fee it charges, and only shows once the appointment has started.",
+  },
+  {
     id: "2026-10-12-reschedule-cutoff",
     date: "2026-10-12",
     kind: "feature",

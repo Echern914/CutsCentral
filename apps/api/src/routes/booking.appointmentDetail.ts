@@ -11,6 +11,9 @@ import { CLOSED_BOOKING_STATUSES } from "../billing/depositRefund.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import { isRecordedWalkIn } from "../engines/walkInReceipt.js";
 import { correctionMoney, correctionRefusal } from "../engines/visitCorrection.js";
+import { UNDO_NO_SHOW_SELECT, noShowTooEarly, undoNoShowRefusal } from "../engines/noShowUndo.js";
+import { cardOnFileFeeFor } from "../services/cardOnFileSettle.js";
+import { CANCELLATION_TERMS_SNAPSHOT_SELECT, termsForBooking } from "../services/cancellationTerms.js";
 import { readIntakeSnapshot, type IntakeAnswer } from "../engines/bookingIntake.js";
 import { readPolicySnapshot } from "../engines/bookingPolicy.js";
 import { serviceCheckoutEnabled } from "./booking.checkout.js";
@@ -235,6 +238,21 @@ export interface AppointmentDetail {
    * sheet never offers what the route would refuse.
    */
   correctable: boolean;
+  /**
+   * Mark no-show may be offered now: a confirmed ChairBack booking whose start
+   * has come (engines/noShowUndo.ts). Before the start the route refuses, so
+   * the sheet offers Cancel instead. Optional = an older API.
+   */
+  noShowAllowed?: boolean;
+  /** A no-show the shop may put back on the calendar (engines/noShowUndo.ts). */
+  undoNoShow?: boolean;
+  /**
+   * What marking it a no-show NOW charges the card kept on it - the server's
+   * figure, from the function the charge itself uses (cardOnFileFeeFor), on
+   * this booking's own terms. Null when nothing would be charged. The sheet
+   * asks before it marks, with this figure.
+   */
+  noShowFee?: { cents: number; last4: string | null } | null;
   /** Where to go and change it, when another system owns the schedule. */
   externalManageUrl: string | null;
 }
@@ -635,6 +653,38 @@ export function registerAppointmentDetail(router: Router): void {
     const correctable =
       appt.status === "COMPLETED" &&
       correctionRefusal(appt, await correctionMoney(shopId, appt.id), new Date(), "NO_SHOW") === null;
+    const noShowAllowed =
+      !external && appt.status === "BOOKED" && !noShowTooEarly(appt.startsAt, new Date());
+    // Only a no-show can be undone, so only then are its facts read.
+    const undoFacts =
+      appt.status === "NO_SHOW"
+        ? await prisma.appointment.findFirst({
+            where: { id: appt.id, shopId },
+            select: UNDO_NO_SHOW_SELECT,
+          })
+        : null;
+    const undoNoShow = undoFacts !== null && undoNoShowRefusal(undoFacts, new Date()) === null;
+    const noShowFee =
+      noShowAllowed && appt.cardOnFile?.status === "saved"
+        ? await (async () => {
+            const snap = await prisma.appointment.findFirst({
+              where: { id: appt.id, shopId },
+              select: { priceAtBooking: true, startsAt: true, ...CANCELLATION_TERMS_SNAPSHOT_SELECT },
+            });
+            if (!snap) return null;
+            const now = new Date();
+            const cents = await cardOnFileFeeFor({
+              shopId,
+              appointmentId: appt.id,
+              priceAtBooking: snap.priceAtBooking,
+              startsAt: snap.startsAt,
+              now,
+              reason: "no_show",
+              terms: await termsForBooking(shopId, snap),
+            });
+            return cents > 0 ? { cents, last4: appt.cardOnFile?.last4 ?? null } : null;
+          })()
+        : null;
     const history = await clientHistory(
       shopId,
       appt.clientId,
@@ -701,6 +751,9 @@ export function registerAppointmentDetail(router: Router): void {
       externalManageUrl: source.manageUrl,
       walkIn: isRecordedWalkIn(appt),
       correctable,
+      noShowAllowed,
+      undoNoShow,
+      noShowFee,
     };
     res.json(detail);
   });
