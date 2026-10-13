@@ -258,6 +258,26 @@ describe("undo no-show", () => {
     expect(await statusOf(id)).toBe("BOOKED");
   });
 
+  it("🔴 a barber with a weekly break can still undo (the undo is the shop's own hand, like a restore)", async () => {
+    const T = await makeShop("Break Cuts");
+    // A lunch break every day, nowhere near the booking - and one that covers
+    // it on another day of the week would not stop the shop either.
+    await prisma.recurringBlock.createMany({
+      data: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({
+        shopId: T.shopId,
+        staffId: T.staffId,
+        weekday,
+        startMin: 12 * 60,
+        endMin: 13 * 60,
+      })),
+    });
+    const id = await book(T, new Date(Date.now() - 3 * 60 * MIN));
+    await prisma.appointment.update({ where: { id }, data: { status: "NO_SHOW" } });
+    const res = await undo(T, id);
+    expect(res.status).toBe(200);
+    expect(await statusOf(id)).toBe("BOOKED");
+  });
+
   it("another shop's appointment is not found", async () => {
     const T = await makeShop("Other Cuts");
     const id = await book(S, new Date(Date.now() - 3 * 60 * MIN));
