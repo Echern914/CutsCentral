@@ -225,8 +225,11 @@ export async function undoNoShow(input: {
       endsAt: appt.endsAt,
       bufferMin: input.bufferMin,
       excludeAppointmentId: appt.id,
-      // Staff-driven, like restore and the dashboard reschedule.
+      // Staff-driven, like restore and the dashboard reschedule: the
+      // barber's own blocked time does not stop him (bookingWrite.ts
+      // `nativeBlocks`), exactly as a restored cancel.
       serviceDayLimit: null,
+      nativeBlocks: "ignore",
       overrideWaitlistHolds: true,
       targetedSlotIdToIgnore: special?.id,
     });
