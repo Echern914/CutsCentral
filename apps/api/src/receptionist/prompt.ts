@@ -6,10 +6,10 @@ import {
   describeCancellationPolicy,
   describeDepositPolicy,
   describeNoShowPolicy,
-  describeReschedulePolicy,
   formatShopAddress,
   formatShopLocality,
 } from "@chairback/config";
+import { describeCustomerChangePolicy } from "@chairback/config/customerChangeRules";
 import { bookNowUrl } from "@chairback/config/bookingLinks";
 import {
   durationRangeForService,
@@ -99,8 +99,10 @@ export interface ShopPromptConfig {
   bookingUrl: string;
   depositPolicy: string;
   cancellationPolicy: string;
-  /** Who may move a booking, and until when (config/rescheduleCutoff.ts). */
+  /** Who may move a booking, and until when (config/customerChangeRules.ts). */
   reschedulePolicy: string;
+  /** Who may cancel a booking themselves, and until when (same rule). */
+  clientCancelPolicy: string;
   noShowPolicy: string;
   tone: string;
 }
@@ -206,6 +208,9 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       cancelWindowHours: true,
       cancelFeeBps: true,
       rescheduleCutoffHours: true,
+      customerCanReschedule: true,
+      customerCanCancel: true,
+      cancelCutoffHours: true,
       depositAmountCents: true,
       // A deposit paid online and kept on a cancel - the client must hear it
       // BEFORE they text "cancel", not after.
@@ -381,7 +386,18 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
     cancellationPolicy: cancellation,
     // The same cutoff the reschedule tool enforces, so the receptionist can
     // say so BEFORE it tries, not only after the tool refuses.
-    reschedulePolicy: describeReschedulePolicy(shop.rescheduleCutoffHours),
+    reschedulePolicy: describeCustomerChangePolicy(
+      "reschedule",
+      shop.customerCanReschedule,
+      shop.rescheduleCutoffHours,
+    ),
+    // Whether the client may cancel by text at all, and until when - the rule
+    // the cancel tool enforces. The FEE is the Cancellation line above.
+    clientCancelPolicy: describeCustomerChangePolicy(
+      "cancel",
+      shop.customerCanCancel,
+      shop.cancelCutoffHours,
+    ),
     noShowPolicy: noShow,
     tone: shop.receptionistTone ?? "relaxed & friendly",
   };
@@ -404,6 +420,7 @@ export function renderTemplate(template: string, config: ShopPromptConfig): stri
     DEPOSIT_POLICY: config.depositPolicy,
     CANCELLATION_POLICY: config.cancellationPolicy,
     RESCHEDULE_POLICY: config.reschedulePolicy,
+    CLIENT_CANCEL_POLICY: config.clientCancelPolicy,
     NO_SHOW_POLICY: config.noShowPolicy,
     TONE: config.tone,
   };

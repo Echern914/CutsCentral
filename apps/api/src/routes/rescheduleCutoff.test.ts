@@ -181,6 +181,7 @@ describe("outside the cutoff", () => {
       cutoffHours: 24,
       closesAt: new Date(starts.getTime() - 24 * HOUR).toISOString(),
       closed: false,
+      reason: null,
       message: null,
     });
     const target = dayAt10(5);

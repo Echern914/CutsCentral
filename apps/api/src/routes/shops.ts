@@ -55,6 +55,7 @@ import {
 } from "@chairback/config/bookingPolicy";
 import { CLIENT_NOTE_MAX, normalizeClientNote } from "@chairback/config/clientNote";
 import { RESCHEDULE_CUTOFF_MAX_HOURS } from "@chairback/config/rescheduleCutoff";
+import { CANCEL_CUTOFF_MAX_HOURS } from "@chairback/config/customerChangeRules";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { livePromotions } from "../services/livePromotions.js";
 import { bookingBlockedFor, CONTACT_SHOP_ERROR } from "../services/clientBookingBlock.js";
@@ -396,6 +397,13 @@ const updateShopSchema = createShopSchema
     // How close to the start a CLIENT may still move a booking themselves
     // (config/rescheduleCutoff.ts). 0 = no cutoff; the DB CHECK holds the same range.
     rescheduleCutoffHours: z.number().int().min(0).max(RESCHEDULE_CUTOFF_MAX_HOURS),
+    // Whether a CLIENT may move / cancel a booking themselves at all, and how
+    // close to the start they may still cancel (config/customerChangeRules.ts).
+    // 0 = until it starts; the DB CHECK holds the same range. The barber's
+    // own changes are never limited; the late-cancel FEE is a Payments setting.
+    customerCanReschedule: z.boolean(),
+    customerCanCancel: z.boolean(),
+    cancelCutoffHours: z.number().int().min(0).max(CANCEL_CUTOFF_MAX_HOURS),
     // Public booking menu: group cards first (only meaningful with groups).
     bookingGroupsFirst: z.boolean(),
     // The shop's own policies + the checklist a customer ticks before booking
@@ -1841,6 +1849,9 @@ function serializeShop(shop: {
   bookingMaxDays: number;
   bookingBufferMin: number;
   rescheduleCutoffHours: number;
+  customerCanReschedule: boolean;
+  customerCanCancel: boolean;
+  cancelCutoffHours: number;
   bookingGroupsFirst: boolean;
   bookingPolicyText: string | null;
   bookingPolicyChecklist: string[];
@@ -1919,6 +1930,9 @@ function serializeShop(shop: {
     bookingMaxDays: shop.bookingMaxDays,
     bookingBufferMin: shop.bookingBufferMin,
     rescheduleCutoffHours: shop.rescheduleCutoffHours,
+    customerCanReschedule: shop.customerCanReschedule,
+    customerCanCancel: shop.customerCanCancel,
+    cancelCutoffHours: shop.cancelCutoffHours,
     bookingGroupsFirst: shop.bookingGroupsFirst,
     bookingPolicyText: shop.bookingPolicyText,
     bookingPolicyChecklist: shop.bookingPolicyChecklist,

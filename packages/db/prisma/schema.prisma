@@ -563,6 +563,15 @@ model Shop {
   // contact the shop; cancelling stays open. 0 = no cutoff. The barber moves
   // anything from the dashboard. Rule: config/rescheduleCutoff.ts.
   rescheduleCutoffHours Int    @default(24)
+  // Whether a CLIENT may move / cancel a booking themselves at all (the manage
+  // link, the group link, a text to the receptionist). Off = they are told to
+  // contact the shop. The barber always can, from the dashboard. And how close
+  // to the start a client may still cancel (0 = until it starts). The FEE for
+  // a late cancel is the Payments setting, not this. Rule:
+  // config/customerChangeRules.ts.
+  customerCanReschedule Boolean @default(true)
+  customerCanCancel     Boolean @default(true)
+  cancelCutoffHours     Int     @default(0)
   bookingBufferMin Int         @default(0) // turnover gap added after each appointment
   // 🔴 THE AVAILABILITY GENERATION. Advanced (by one, atomically, AFTER commit)
   // by every write that can change what is bookable - a booking, a hold, a

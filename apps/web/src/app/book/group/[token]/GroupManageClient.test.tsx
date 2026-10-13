@@ -413,3 +413,39 @@ describe("🔴 once the visit has started, everyone can no longer be moved or ca
     expect(await screen.findByText(/already started/)).toBeTruthy();
   });
 });
+
+describe("🔴 the shop's rules for changing online (config/customerChangeRules.ts)", () => {
+  const noMoves = "Chern Cuts doesn't take reschedules online. To move your appointment, contact Chern Cuts directly.";
+  const lateCancel =
+    "Chern Cuts takes cancellations online up to 24 hours before your appointment. To cancel now, contact Chern Cuts directly.";
+
+  it("no moves and too late to cancel: the shop's sentences instead of the buttons", () => {
+    show({
+      ...GROUP,
+      rules: {
+        reschedule: { allowed: false, message: noMoves },
+        cancel: { allowed: false, message: lateCancel },
+      },
+      members: GROUP.members.map((m) => ({ ...m, canCancel: false })),
+    });
+    expect(screen.queryByRole("button", { name: "Move the whole group" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel the whole group" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.getByText(noMoves)).toBeTruthy();
+    expect(screen.getByText(lateCancel)).toBeTruthy();
+  });
+
+  it("an older API with no rules: offered as before", () => {
+    show();
+    expect(screen.getByRole("button", { name: "Move the whole group" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel the whole group" })).toBeTruthy();
+  });
+
+  it("a page left open past the cutoff: the refusal shows the shop's sentence", async () => {
+    cancelAll.mockResolvedValue({ ok: false, code: "closed", message: lateCancel });
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel the whole group" }));
+    fireEvent.click(screen.getByRole("button", { name: /Yes, cancel everyone/ }));
+    expect(await screen.findByText(lateCancel)).toBeTruthy();
+  });
+});
