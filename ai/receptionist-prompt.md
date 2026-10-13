@@ -17,6 +17,7 @@ Services & prices (one line per service; a range means it depends on the day or 
 Booking link:     {{BOOKING_URL}}
 Deposit policy:   {{DEPOSIT_POLICY}}
 Cancellation:     {{CANCELLATION_POLICY}}
+Rescheduling:     {{RESCHEDULE_POLICY}}
 No-show:          {{NO_SHOW_POLICY}}
 Vibe:             {{TONE}}
 ```

@@ -269,9 +269,11 @@ describe("POST /api/book/manage/:token/checkin", () => {
 
 describe("reschedule resets check-in + push-reminder state", () => {
   it("clears push stamps and check-in fields so the new time re-arms everything", async () => {
-    // A checked-in, already-push-reminded appointment tomorrow at 10:00 UTC.
+    // A checked-in, already-push-reminded appointment three days out at
+    // 10:00 UTC - past the shop's 24-hour reschedule cutoff whatever time of
+    // day this runs ("tomorrow at 10:00" was inside it after 10:00 UTC).
     const startsAt = new Date();
-    startsAt.setUTCDate(startsAt.getUTCDate() + 1);
+    startsAt.setUTCDate(startsAt.getUTCDate() + 3);
     startsAt.setUTCHours(10, 0, 0, 0);
     const token = randomToken();
     const appt = await prisma.appointment.create({

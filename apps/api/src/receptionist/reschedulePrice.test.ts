@@ -105,6 +105,9 @@ beforeAll(async () => {
         webhookSecret: randomToken(),
         bookingMode: "native",
         compAccess: true,
+        // This suite moves bookings under a day out on purpose; the client
+        // reschedule cutoff has its own tests (routes/rescheduleCutoff.test.ts).
+        rescheduleCutoffHours: 0,
       },
       select: { id: true },
     })

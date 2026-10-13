@@ -558,6 +558,11 @@ model Shop {
   bookingMode      BookingMode @default(link)
   bookingLeadHours Int         @default(2) // earliest bookable slot = now + this many hours
   bookingMaxDays   Int         @default(60) // how far ahead a customer may book
+  // How close to the start a CLIENT may still move a booking themselves (the
+  // manage link, a text to the receptionist). Inside it they are told to
+  // contact the shop; cancelling stays open. 0 = no cutoff. The barber moves
+  // anything from the dashboard. Rule: config/rescheduleCutoff.ts.
+  rescheduleCutoffHours Int    @default(24)
   bookingBufferMin Int         @default(0) // turnover gap added after each appointment
   // 🔴 THE AVAILABILITY GENERATION. Advanced (by one, atomically, AFTER commit)
   // by every write that can change what is bookable - a booking, a hold, a

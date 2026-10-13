@@ -127,6 +127,9 @@ async function makeShop(
       slug: `recept-${randomToken(5)}`,
       webhookSecret: randomToken(),
       bookingMode: "native",
+      // No reschedule cutoff: this suite moves bookings under a day out; the
+      // cutoff has its own tests (routes/rescheduleCutoff.test.ts).
+      rescheduleCutoffHours: 0,
       compAccess: true,
       receptionistEnabled: overrides.receptionistEnabled ?? true,
       receptionistCompAccess: true,

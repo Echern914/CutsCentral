@@ -103,7 +103,9 @@ beforeAll(async () => {
     .send({ name: "Length Cuts", bookingUrl: "https://len.test", smsAttested: true });
   const patched = await agent
     .patch("/api/shops/me")
-    .send({ bookingMode: "native", timezone: "UTC", bookingLeadHours: 1, bookingMaxDays: 60 });
+    // No reschedule cutoff: this suite moves bookings under a day out; the
+    // cutoff has its own tests (routes/rescheduleCutoff.test.ts).
+    .send({ bookingMode: "native", timezone: "UTC", bookingLeadHours: 1, bookingMaxDays: 60, rescheduleCutoffHours: 0 });
   expect(patched.status).toBe(200);
   const me = await agent.get("/api/shops/me");
   shopId = me.body.id;

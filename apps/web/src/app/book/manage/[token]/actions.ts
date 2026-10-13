@@ -126,6 +126,8 @@ export async function rescheduleBookingAction(
   priceChange?: { fromCents: number | null; toCents: number };
   /** On success: what the booking now costs, if it changed. */
   repriced?: { fromCents: number | null; toCents: number };
+  /** `reschedule_closed`: the shop's own sentence - too close to move it online. */
+  message?: string;
 }> {
   const res = await apiPublicSend<{ price?: { kind: string; fromCents?: number | null; toCents?: number } }>(
     "POST",
@@ -133,7 +135,16 @@ export async function rescheduleBookingAction(
     { startsAt, ...(acceptPriceCents !== undefined ? { acceptPriceCents } : {}) },
   );
   if (!res.ok) {
-    const body = res.body as { error?: string; fromCents?: number | null; toCents?: number } | undefined;
+    const body = res.body as
+      | { error?: string; fromCents?: number | null; toCents?: number; message?: string }
+      | undefined;
+    if (res.error === "reschedule_closed") {
+      return {
+        ok: false,
+        error: "reschedule_closed",
+        ...(typeof body?.message === "string" ? { message: body.message } : {}),
+      };
+    }
     if (res.error === "price_changes" && body && typeof body.toCents === "number") {
       return { ok: false, error: "price_changes", priceChange: { fromCents: body.fromCents ?? null, toCents: body.toCents } };
     }

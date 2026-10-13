@@ -73,6 +73,11 @@ import {
 } from "../engines/bookingIntake.js";
 import { checkPolicyAcceptance, publicBookingPolicy } from "../engines/bookingPolicy.js";
 import { normalizeClientNote } from "@chairback/config/clientNote";
+import {
+  rescheduleClosedMessage,
+  rescheduleClosesAt,
+  rescheduleCutoffPassed,
+} from "@chairback/config/rescheduleCutoff";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { fillBlankClientNames } from "../services/clientFill.js";
 import { neverBooked, optionalCardStepFor, unfinishedCheckoutFor } from "../services/unfinishedCheckout.js";
@@ -3138,6 +3143,9 @@ const MANAGE_SELECT = {
           addressPostal: true,
           // The owner's note for clients ("Please arrive 10 minutes early").
           clientNote: true,
+          // How close to the start the client may still move it themselves.
+          // Read here, answered below as `reschedule` - never sent as is.
+          rescheduleCutoffHours: true,
         },
       },
       service: { select: { name: true, durationMin: true } },
@@ -3225,6 +3233,15 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
       phone: appt.phone,
       email: appt.email,
     }));
+
+  // 🔴 TOO CLOSE TO THE CUT TO MOVE IT ONLINE (config/rescheduleCutoff.ts).
+  // A client moving an 8:00 cut at 7:05 left the barber an hour nobody could
+  // book. Inside the shop's cutoff the page stops offering Reschedule and
+  // says who to contact; Cancel stays exactly as it was.
+  const { rescheduleCutoffHours: cutoffHours, ...shopForPage } = appt.shop;
+  const cutoffPassed =
+    canMove && rescheduleCutoffPassed({ startsAt: appt.startsAt, now, cutoffHours });
+  const closesAt = rescheduleClosesAt(appt.startsAt, cutoffHours);
 
   // A standing appointment: how many LATER visits are still on the books, so
   // the page can offer "cancel this and the rest" instead of making the
@@ -3334,7 +3351,7 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     // Formatted server-side, from the one formatter, so the page renders a
     // string rather than re-deciding what counts as a usable address.
     shop: {
-      ...appt.shop,
+      ...shopForPage,
       address: formatShopAddress(appt.shop),
       mapsUrl: mapsUrlFor(appt.shop),
       clientNote: normalizeClientNote(appt.shop.clientNote),
@@ -3342,7 +3359,19 @@ async function renderManage(res: Response, appt: ManageRow): Promise<void> {
     service: appt.service,
     staff: appt.staff,
     canCancel: canChange,
-    canReschedule: canMove,
+    canReschedule: canMove && !cutoffPassed,
+    // The shop's cutoff for moving it online, for a booking the client could
+    // otherwise move. `closed`: too late now, and `message` says who to ask.
+    // Null when it can't be moved online at all, or the shop set no cutoff.
+    reschedule:
+      canMove && closesAt
+        ? {
+            cutoffHours,
+            closesAt: closesAt.toISOString(),
+            closed: cutoffPassed,
+            message: cutoffPassed ? rescheduleClosedMessage(cutoffHours, appt.shop.name) : null,
+          }
+        : null,
     // Non-null: cancelling keeps this much (a non-refundable deposit). The page
     // says so and asks before it cancels.
     nonRefundable: keptOnCancel,
@@ -3930,7 +3959,7 @@ bookingPublicRouter.get(
         endsAt: true,
         bookedVia: true,
         service: { select: { durationMin: true, durationOverrides: true, timeOverrides: true } },
-        shop: { select: { timezone: true, bookingMaxDays: true } },
+        shop: { select: { timezone: true, bookingMaxDays: true, rescheduleCutoffHours: true } },
       },
     });
     if (!appt) {
@@ -3940,7 +3969,16 @@ bookingPublicRouter.get(
     const now = new Date();
     // A canceled or past booking has nothing to move. Empty list rather than
     // an error: the page renders "no times available" without a failure state.
-    if (appt.status !== "BOOKED" || appt.startsAt <= now) {
+    if (
+      appt.status !== "BOOKED" ||
+      appt.startsAt <= now ||
+      // Inside the shop's cutoff there is nothing the client may move it to.
+      rescheduleCutoffPassed({
+        startsAt: appt.startsAt,
+        now,
+        cutoffHours: appt.shop.rescheduleCutoffHours,
+      })
+    ) {
       res.json({ timezone: appt.shop.timezone, slots: [] });
       return;
     }
@@ -4049,10 +4087,12 @@ bookingPublicRouter.post(
         },
         shop: {
           select: {
+            name: true,
             timezone: true,
             bookingLeadHours: true,
             bookingMaxDays: true,
             bookingBufferMin: true,
+            rescheduleCutoffHours: true,
             bookingMode: true,
             publicPageEnabled: true,
             subscriptionStatus: true,
@@ -4090,6 +4130,22 @@ bookingPublicRouter.post(
     }
 
     const now = new Date();
+    // 🔴 TOO CLOSE TO THE CUT (config/rescheduleCutoff.ts). The page stops
+    // offering the move inside the shop's cutoff; this refuses one from a
+    // page left open across it. Cancelling is a separate route, untouched.
+    if (
+      rescheduleCutoffPassed({
+        startsAt: appt.startsAt,
+        now,
+        cutoffHours: appt.shop.rescheduleCutoffHours,
+      })
+    ) {
+      res.status(409).json({
+        error: "reschedule_closed",
+        message: rescheduleClosedMessage(appt.shop.rescheduleCutoffHours, appt.shop.name),
+      });
+      return;
+    }
     const startsAt = parsed.data.startsAt;
     // 🔴 THE BOOKING KEEPS ITS LENGTH (engines/moveLength.ts). Its add-on
     // minutes and any length the shop set by hand move with it; only the

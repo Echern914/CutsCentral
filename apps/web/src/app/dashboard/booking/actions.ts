@@ -75,6 +75,8 @@ export async function saveBookingSettingsAction(input: {
   bookingLeadHours: number;
   bookingMaxDays: number;
   bookingBufferMin: number;
+  /** Sent only when the API answered it (an older API refuses an unknown field). */
+  rescheduleCutoffHours?: number;
   slotOpenedTextsEnabled?: boolean;
   requireBookingApproval?: boolean;
   approveNewClients?: boolean;

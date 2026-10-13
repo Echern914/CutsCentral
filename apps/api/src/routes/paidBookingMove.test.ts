@@ -50,7 +50,9 @@ beforeAll(async () => {
   shopId = shopRes.body.id as string;
   await prisma.shop.update({
     where: { id: shopId },
-    data: { bookingMode: "native", timezone: "UTC", bookingLeadHours: 0, compAccess: true },
+    // No reschedule cutoff: this suite moves bookings under a day out; the
+    // cutoff has its own tests (routes/rescheduleCutoff.test.ts).
+    data: { bookingMode: "native", timezone: "UTC", bookingLeadHours: 0, compAccess: true, rescheduleCutoffHours: 0 },
   });
   staffId = (await prisma.staff.create({ data: { shopId, name: "Sam" }, select: { id: true } })).id;
   serviceId = (

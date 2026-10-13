@@ -1,6 +1,10 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { apiEnv, randomToken, zonedWallTimeToUtc } from "@chairback/config";
+import {
+  describeReschedulePolicy,
+  rescheduleCutoffPassed,
+} from "@chairback/config/rescheduleCutoff";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
@@ -1293,6 +1297,28 @@ async function rescheduleTool(
   }
   // Same rule as the manage link: a blocked client may cancel, not move.
   if (await textingClientBlocked(ctx)) return fail(CONTACT_SHOP);
+  // 🔴 Same cutoff as the manage link (config/rescheduleCutoff.ts): too close
+  // to the start for the client to move it themselves. Read outside
+  // runWithShop - a Shop read inside it returns null under RLS.
+  const cutoffShop = await prisma.shop.findUnique({
+    where: { id: ctx.shopId },
+    select: { rescheduleCutoffHours: true },
+  });
+  if (
+    cutoffShop &&
+    rescheduleCutoffPassed({
+      startsAt: appt.startsAt,
+      now: ctx.now,
+      cutoffHours: cutoffShop.rescheduleCutoffHours,
+    })
+  ) {
+    return fail(
+      `too late to move it by text: ${describeReschedulePolicy(cutoffShop.rescheduleCutoffHours)}. ` +
+        "Nothing moved and nothing was offered. Tell the client it's too close to the " +
+        "appointment to move it by text; if they still want it moved, call " +
+        "escalate_to_human so the shop can decide. They can still cancel if they can't make it.",
+    );
+  }
 
   const slot = await loadSlotContext(ctx, parsed.data.new_slot_id);
   if (typeof slot === "string") return fail(slot);

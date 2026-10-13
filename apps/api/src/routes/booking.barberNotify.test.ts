@@ -109,6 +109,9 @@ beforeAll(async () => {
       bookingMode: "native",
       timezone: "UTC",
       bookingLeadHours: 1,
+      // No reschedule cutoff: this suite moves bookings under a day out; the
+      // cutoff has its own tests (routes/rescheduleCutoff.test.ts).
+      rescheduleCutoffHours: 0,
       notifyPhone: NOTIFY_PHONE,
     });
   expect(patch.status).toBe(200);

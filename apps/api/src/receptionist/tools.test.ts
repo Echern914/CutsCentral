@@ -77,6 +77,9 @@ beforeAll(async () => {
       webhookSecret: randomToken(),
       bookingMode: "native",
       compAccess: true,
+      // This suite moves bookings under a day out on purpose; the client
+      // reschedule cutoff has its own tests (routes/rescheduleCutoff.test.ts).
+      rescheduleCutoffHours: 0,
     },
     select: { id: true },
   });
@@ -327,6 +330,30 @@ describe("reschedule", () => {
       now: NOW,
     });
     expect(slots.some((s) => s.startsAt.getTime() === T(20, 0).getTime())).toBe(true);
+  });
+
+  it("🔴 inside the shop's cutoff a text can't move it - nothing moves, and cancel still works", async () => {
+    // The same 24-hour cutoff as the manage link (config/rescheduleCutoff.ts);
+    // this booking is under a day from NOW.
+    await prisma.shop.update({ where: { id: shopId }, data: { rescheduleCutoffHours: 24 } });
+    try {
+      const exec = makeToolExecutor(ctxFor(clientId, "+15551230001"));
+      const booked = await exec("book_appointment", { slot_id: slotIdAt(15, 0) });
+      const apptId = JSON.parse(booked.result).appointment_id as string;
+
+      const moved = await exec("reschedule", { appointment_id: apptId, new_slot_id: slotIdAt(15, 30) });
+      expect(moved.isError).toBe(true);
+      expect(moved.result).toContain("too late to move it by text");
+      expect(moved.result).toContain("up to 24 hours before");
+      const row = await prisma.appointment.findUniqueOrThrow({ where: { id: apptId } });
+      expect(row.startsAt.getTime()).toBe(T(15, 0).getTime());
+      expect(row.status).toBe("BOOKED");
+
+      const canceled = await exec("cancel", { appointment_id: apptId });
+      expect(canceled.isError).toBe(false);
+    } finally {
+      await prisma.shop.update({ where: { id: shopId }, data: { rescheduleCutoffHours: 0 } });
+    }
   });
 
   /** Mark an appointment paid at booking: `paidCents` taken, booked at `bookedAt` dollars. */

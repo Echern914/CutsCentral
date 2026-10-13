@@ -29,6 +29,7 @@ const FIXTURE: ShopPromptConfig = {
   bookingUrl: "https://x.test/book/fade-lab",
   depositPolicy: "none - pay at the shop",
   cancellationPolicy: "free cancellation any time before the appointment",
+  reschedulePolicy: "clients can move it themselves up to 24 hours before; after that only the shop can move it",
   noShowPolicy: "no charge for a no-show",
   tone: "sharp & no-nonsense",
 };
@@ -157,8 +158,13 @@ describe("renderPromptForShop", () => {
     // charges, and its own booking tool writes no Payment row.
     expect(text).toContain("none - pay at the shop");
     expect(text).toContain("relaxed & friendly");
+    // The shop's reschedule cutoff (the 24-hour default), in the same words
+    // the reschedule tool refuses with - so it can say so before it tries.
+    expect(text).toContain(
+      "Rescheduling:     clients can move it themselves up to 24 hours before; after that only the shop can move it",
+    );
     // Every config placeholder got filled.
-    expect(text).not.toMatch(/\{\{(SHOP_NAME|BARBER_NAMES|TIMEZONE|HOURS|SERVICE_MENU|BOOKING_URL|DEPOSIT_POLICY|CANCELLATION_POLICY|NO_SHOW_POLICY|TONE|FIRST_BARBER|OTHER_BARBER_OFFER|ADDRESS)\}\}/);
+    expect(text).not.toMatch(/\{\{(SHOP_NAME|BARBER_NAMES|TIMEZONE|HOURS|SERVICE_MENU|BOOKING_URL|DEPOSIT_POLICY|CANCELLATION_POLICY|RESCHEDULE_POLICY|NO_SHOW_POLICY|TONE|FIRST_BARBER|OTHER_BARBER_OFFER|ADDRESS)\}\}/);
   });
 
   it("🔴 a card-on-file shop with fees ON: the receptionist never says 'free cancellation' for a card it will charge", async () => {
