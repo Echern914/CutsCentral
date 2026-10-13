@@ -2,49 +2,61 @@
 
 import { useRef, useState } from "react";
 import { cn } from "@/lib/cn";
-import { zonedWallTimeToUtc } from "@chairback/config/time";
 import { Dialog } from "@/components/ui/Dialog";
 import { chip, Field, FormFooter, Group, INPUT } from "./formkit";
 import type { StaffRow } from "./page";
 import { addBlockAction, type BlockOffInput } from "./actions";
 import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
 import {
-  addDaysToKey,
   blockSummary,
   dayCount,
+  formatShortDay,
   isDayKey,
   MAX_BLOCK_DAYS,
+  MAX_REPEAT_WEEKS,
   minutesOf,
+  planDays,
+  weeksThrough,
   type BlockPlan,
 } from "./blockOffDates";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
 
+/** One day, a run of days, or the same day every week. */
+type Span = "day" | "days" | "weekly";
+/** Over a run of days: the same hours on each, or one unbroken stretch. */
+type DaysShape = "each" | "through";
+
+/** How many review dates are listed before "+N more". */
+const REVIEW_DAYS = 8;
+
 /**
  * "Block off time" (native), in the SAME chrome as the appointment sheet:
- * ui/Dialog shell, formkit cards. Blocks time on a provider's calendar so no
- * one can book it. Reuses the staff-exceptions endpoint.
+ * ui/Dialog shell, formkit cards. Blocks time on one or more providers'
+ * calendars so no one can book it.
  *
- * Three shapes, one form:
- *   - a timed block on one day (From / To, converted through the SHOP's zone);
- *   - all of one day;
- *   - every day from a start date through an end date, all day each.
- * The whole-day shapes send DAY KEYS and let the API resolve every midnight in
- * the shop's zone itself - "all of September 9" is a statement about a
- * calendar day, and the API is the one place that knows the zone for certain.
- * The timed shape converts here exactly as the appointment form does.
+ * What a barber can ask for, and what is sent (all SHOP-LOCAL day keys and
+ * minutes - the API resolves every edge in the shop's zone, per day):
+ *   - one day, all day or From-To;
+ *   - several days, either the SAME HOURS ON EACH DAY ("every day Mon-Fri,
+ *     12-1": the afternoons stay open) or ONE STRETCH ("Mon 9:00 straight
+ *     through Fri 17:00": nothing in between is bookable);
+ *   - the same day every week, a bounded number of weeks or until a date.
  *
- * `dayKey` (YYYY-MM-DD, shop tz) is the day tapped in the calendar and is the
- * default; any future day can be picked without leaving the sheet. A block
- * over existing bookings comes back as a refusal the barber can answer (see
- * ExternalBlockBanner) - the bookings are never touched either way.
+ * Before saving, the Review card says what will be blocked, for whom, and on
+ * which days. A save over existing bookings comes back as a refusal listing
+ * them (ExternalBlockBanner) and is written only if the barber confirms -
+ * the bookings themselves are never touched either way.
+ *
+ * Each Save carries a request id, re-sent only while the form is unchanged, so
+ * a save whose answer was lost and is tapped again is not written twice.
  */
 export function BlockOffForm({
   staff,
   dayKey,
   todayKey,
-  timezone,
   defaultFromHour,
+  acuityConnected = false,
   onClose,
   onCreated,
   toast,
@@ -52,128 +64,139 @@ export function BlockOffForm({
   staff: StaffRow[];
   dayKey: string; // YYYY-MM-DD, shop tz - the day tapped in the calendar
   todayKey: string; // YYYY-MM-DD, shop tz - the earliest day worth blocking
-  timezone: string; // IANA shop tz - the time inputs are shop wall clock
+  /** IANA shop tz. Kept for callers; the API resolves every edge in it now. */
+  timezone?: string;
   defaultFromHour: number; // 0-23, the tapped hour
+  /** The shop syncs with Acuity: say plainly that this block is not copied there. */
+  acuityConnected?: boolean;
   onClose: () => void;
   onCreated: () => void;
   toast: Toast;
 }) {
   const activeStaff = staff.filter((s) => s.active);
-  const [staffId, setStaffId] = useState<string | null>(
-    activeStaff.length === 1 ? activeStaff[0]!.id : null,
+  const [staffIds, setStaffIds] = useState<string[]>(
+    activeStaff.length === 1 ? [activeStaff[0]!.id] : [],
   );
   // The calendar's day, unless it has already passed - a block on a day that
   // is gone does nothing, so the form starts on the first day it could matter.
   const initialDate = dayKey < todayKey ? todayKey : dayKey;
   const [date, setDate] = useState(initialDate);
-  const [multiDay, setMultiDay] = useState(false);
+  const [span, setSpan] = useState<Span>("day");
+  const [shape, setShape] = useState<DaysShape>("each");
   const [endDate, setEndDate] = useState(initialDate);
+  const [repeatBy, setRepeatBy] = useState<"count" | "until">("count");
+  const [weeks, setWeeks] = useState("4");
+  const [untilDate, setUntilDate] = useState(initialDate);
   const [fromTime, setFromTime] = useState(pad(defaultFromHour) + ":00");
   // The 11 PM row runs to midnight ("00:00"), not 11 PM - 11 PM to 11 PM
   // opened the form already refused.
   const [toTime, setToTime] = useState(defaultFromHour >= 23 ? "00:00" : pad(defaultFromHour + 1) + ":00");
-  // Whole-day switch: testers blocking a vacation were hand-typing 00:00-23:00
-  // per day, which leaves 23:00-midnight open - a real slot for late-hours
-  // shops. All day = local midnight to next-midnight, DST-exact (the API does
-  // that arithmetic from the day key).
+  // Whole-day switch: All day = local midnight to next-midnight, DST-exact
+  // (the API does that arithmetic from the day key).
   const [allDay, setAllDay] = useState(false);
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<BlockConflict | null>(null);
   // Own flag, not useTransition's: isPending does not span the await inside
-  // an async transition, so "Blocking…" would flicker off before the request
-  // had gone anywhere. The ref refuses a second submit inside one handler.
+  // an async transition. The ref refuses a second submit inside one handler.
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
+  // 🔴 ONE SAVE, ONE BLOCK. The id is bound to exactly what is being saved:
+  // the same input re-sends the same id (a lost answer tapped again is
+  // answered from the rows the first try wrote), any change mints a new one.
+  const request = useRef<{ key: string; id: string } | null>(null);
 
-  // A range is always sent as days (all day on each, or the same hours on
-  // each); a single day sends instants unless it is all day.
-  const plan: BlockPlan = multiDay
-    ? {
-        kind: "days",
-        fromDate: date,
-        toDate: endDate,
-        ...(allDay ? {} : { window: { fromTime, toTime } }),
-      }
-    : allDay
-      ? { kind: "days", fromDate: date, toDate: date }
-      : { kind: "timed", date, fromTime, toTime };
+  const through = span === "days" && shape === "through" && !allDay;
+  const hoursWindow = allDay ? undefined : { fromTime, toTime };
+  const weekCount =
+    repeatBy === "count" ? Number.parseInt(weeks, 10) || 0 : weeksThrough(date, untilDate);
+  const plan: BlockPlan =
+    span === "weekly"
+      ? { kind: "weekly", date, weeks: weekCount, window: hoursWindow }
+      : span === "days"
+        ? through
+          ? { kind: "through", fromDate: date, fromTime, toDate: endDate, toTime }
+          : { kind: "days", fromDate: date, toDate: endDate, window: hoursWindow }
+        : allDay
+          ? { kind: "days", fromDate: date, toDate: date }
+          : { kind: "timed", date, fromTime, toTime };
   const summary = blockSummary(plan, todayKey);
-  const days = plan.kind === "days" ? dayCount(plan.fromDate, plan.toDate) : 1;
+  const days = planDays(plan);
+  const chosen = activeStaff.filter((s) => staffIds.includes(s.id));
 
   function onDateChange(next: string) {
     setDate(next);
     // The end never trails the start; nudging the start forward drags it along.
-    if (multiDay && next && endDate < next) setEndDate(next);
+    if (next && endDate < next) setEndDate(next);
+    if (next && untilDate < next) setUntilDate(next);
   }
 
-  function toggleMultiDay() {
-    if (!multiDay && (!endDate || endDate < date)) setEndDate(date);
-    setMultiDay((on) => !on);
+  function chooseSpan(next: Span) {
+    if (next === "days" && (!endDate || endDate < date)) setEndDate(date);
+    setSpan(next);
   }
 
-  /** The request to send, or the sentence that stops it. */
-  function validate(): BlockOffInput | string {
-    if (!staffId) return "Pick a provider to block.";
+  function toggleStaff(id: string) {
+    setStaffIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  }
+
+  /** "HH:mm" end -> minutes, where 12:00 AM is the END of the day (1440). */
+  const endMinutes = (hhmm: string) => (hhmm === "00:00" ? 24 * 60 : minutesOf(hhmm));
+
+  /** The request to send (without its id), or the sentence that stops it. */
+  function validate(): Omit<BlockOffInput, "requestId"> | string {
+    if (staffIds.length === 0) return "Pick who to block.";
     if (!isDayKey(date)) return "Pick a date.";
     if (date < todayKey) return "That date has already passed.";
     const note = reason.trim() || undefined;
-    if (multiDay) {
+    const fromMin = minutesOf(fromTime);
+    const toMin = endMinutes(toTime);
+    // NaN from a cleared input fails every comparison below.
+    const hours = allDay ? {} : { fromMin, toMin };
+    if (!allDay && !through && !(toMin > fromMin)) return "End time must be after the start time.";
+
+    if (span === "days") {
       if (!isDayKey(endDate)) return "Pick an end date.";
       if (endDate < date) return "The end date must be on or after the start date.";
       if (dayCount(date, endDate) > MAX_BLOCK_DAYS) {
         return `Block up to ${MAX_BLOCK_DAYS} days at a time.`;
       }
-      if (allDay) {
-        return { kind: "days", staffId, fromDate: date, toDate: endDate, reason: note };
+      if (through) {
+        if (!Number.isFinite(fromMin) || !Number.isFinite(toMin)) return "Pick a start and an end time.";
+        if (endDate === date && !(toMin > fromMin)) return "The end must be after the start.";
+        return {
+          staffIds,
+          when: { kind: "continuous", fromDate: date, fromMin, toDate: endDate, toMin },
+          reason: note,
+        };
       }
-      // The same hours on every day, as shop-local minutes; the API resolves
-      // each day's instants itself. NaN from a cleared input fails the check.
-      const fromMin = minutesOf(fromTime);
-      // 🔴 An end of 12:00 AM is the END of the day, not its start - otherwise
-      // nothing could block the last hour without blocking the whole day.
-      const toMin = toTime === "00:00" ? 24 * 60 : minutesOf(toTime);
-      if (!(toMin > fromMin)) return "End time must be after the start time.";
+      return { staffIds, when: { kind: "daily", fromDate: date, toDate: endDate, ...hours }, reason: note };
+    }
+    if (span === "weekly") {
+      if (repeatBy === "until") {
+        if (!isDayKey(untilDate)) return "Pick the last date.";
+        if (untilDate < date) return "The last date must be on or after the first.";
+      }
+      if (!(weekCount >= 1)) return "Pick how many weeks.";
+      if (weekCount > MAX_REPEAT_WEEKS) return `Repeat up to ${MAX_REPEAT_WEEKS} weeks.`;
       return {
-        kind: "days",
-        staffId,
-        fromDate: date,
-        toDate: endDate,
-        window: { fromMin, toMin },
+        staffIds,
+        when: {
+          kind: "day",
+          date,
+          ...hours,
+          repeat: repeatBy === "until" ? { until: untilDate } : { weeks: weekCount },
+        },
         reason: note,
       };
     }
-    if (allDay) {
-      return { kind: "days", staffId, fromDate: date, toDate: date, reason: note };
-    }
-    // Build ISO instants from the day + time inputs. Both are naive wall clock
-    // in the SHOP's tz (the schedule the barber sees), so convert via the shop
-    // tz - a device-local `new Date(...)` would block the wrong hours whenever
-    // the barber's device is in a different timezone than the shop.
-    const [y, m, d] = date.split("-").map(Number);
-    const startsAt = zonedWallTimeToUtc(y!, m! - 1, d!, minutesOf(fromTime), timezone);
-    // An end of 12:00 AM is midnight at the END of this day: the next day's
-    // 00:00, worked out on the day key so a DST night stays exact.
-    const endKey = toTime === "00:00" ? addDaysToKey(date, 1) : date;
-    const [ey, em, ed] = endKey.split("-").map(Number);
-    const endsAt = zonedWallTimeToUtc(
-      ey!,
-      em! - 1,
-      ed!,
-      toTime === "00:00" ? 0 : minutesOf(toTime),
-      timezone,
-    );
-    // NaN from a cleared input makes an Invalid Date, which compares false.
-    if (!(endsAt.getTime() > startsAt.getTime())) {
-      return "End time must be after the start time.";
-    }
-    return {
-      kind: "timed",
-      staffId,
-      startsAt: startsAt.toISOString(),
-      endsAt: endsAt.toISOString(),
-      reason: note,
-    };
+    return { staffIds, when: { kind: "day", date, ...hours }, reason: note };
+  }
+
+  function requestIdFor(input: Omit<BlockOffInput, "requestId">): string {
+    const key = JSON.stringify(input);
+    if (request.current?.key !== key) request.current = { key, id: newRequestId() };
+    return request.current.id;
   }
 
   async function submit(opts?: { confirmation?: string }) {
@@ -194,12 +217,11 @@ export function BlockOffForm({
     inFlight.current = true;
     setBusy(true);
     try {
-      const res = await addBlockAction({ ...input, confirmation });
+      const res = await addBlockAction({ ...input, requestId: requestIdFor(input), confirmation });
       if (!res.ok) {
         if (res.error === "appointments_overlap") {
-          // Show the bookings, ask - the block is written only on confirm, and
-          // only with the confirmation that names THESE bookings. Whatever the
-          // answer, the bookings themselves are never touched.
+          // The review, with the bookings in the way: written only on confirm,
+          // and only with the confirmation that names THESE bookings.
           setConflict({
             reason: res.reason ?? "Appointments are already booked during this time.",
             confirmation: res.confirmation ?? "",
@@ -207,16 +229,29 @@ export function BlockOffForm({
           });
           return;
         }
-        setError("Couldn't add the block. Please try again.");
+        setError(res.message ?? "Couldn't add the block. Please try again.");
         return;
       }
-      toast(days > 1 ? `${days} days blocked off` : "Time blocked off", "success");
+      const what =
+        span === "weekly" && weekCount > 1
+          ? `${weekCount} weeks blocked off`
+          : days.length > 1
+            ? `${days.length} days blocked off`
+            : "Time blocked off";
+      toast(chosen.length > 1 ? `${what} for ${chosen.length} providers` : what, "success");
       onCreated();
     } finally {
       inFlight.current = false;
       setBusy(false);
     }
   }
+
+  const saveLabel =
+    span === "weekly" && weekCount > 1
+      ? `Block ${weekCount} weeks`
+      : days.length > 1
+        ? `Block ${days.length} days`
+        : "Add block";
 
   return (
     <Dialog
@@ -228,7 +263,7 @@ export function BlockOffForm({
       footer={
         <FormFooter
           error={error}
-          label={days > 1 ? `Block ${days} days` : "Add block"}
+          label={saveLabel}
           pendingLabel="Blocking…"
           pending={busy}
           onSubmit={() => submit()}
@@ -253,31 +288,62 @@ export function BlockOffForm({
         )}
 
         {activeStaff.length > 1 && (
-          <Group title="Provider">
-            <div className="flex flex-wrap gap-1.5">
+          <Group
+            title="Who"
+            action={
+              <Pill
+                on={staffIds.length === activeStaff.length}
+                onClick={() =>
+                  setStaffIds(
+                    staffIds.length === activeStaff.length ? [] : activeStaff.map((s) => s.id),
+                  )
+                }
+                qa="block-everyone"
+              >
+                Everyone
+              </Pill>
+            }
+          >
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Providers">
               {activeStaff.map((s) => (
                 <button
                   key={s.id}
                   type="button"
-                  onClick={() => setStaffId(s.id)}
-                  className={chip(staffId === s.id, "px-4")}
+                  aria-pressed={staffIds.includes(s.id)}
+                  onClick={() => toggleStaff(s.id)}
+                  className={chip(staffIds.includes(s.id), "min-w-0 px-4")}
                 >
-                  {s.name}
+                  <span className="truncate">{s.name}</span>
                 </button>
               ))}
             </div>
           </Group>
         )}
 
-        <Group
-          title="Date"
-          action={
-            <Pill on={multiDay} onClick={toggleMultiDay} qa="block-multi-day">
-              Block multiple days
-            </Pill>
-          }
-        >
-          {multiDay ? (
+        <Group title="When">
+          {/* Three answers to "how long", side by side even at 320px: each
+              cell shares the row (min-w-0 flex-1) instead of a squashed column. */}
+          <div data-qa="block-span" className="flex gap-1.5" role="group" aria-label="How long">
+            {(
+              [
+                ["day", "One day"],
+                ["days", "Several days"],
+                ["weekly", "Every week"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={span === value}
+                onClick={() => chooseSpan(value)}
+                className={chip(span === value, "min-w-0 flex-1 px-2 text-center leading-tight")}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {span === "days" ? (
             <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2">
               <Field label="Start date">
                 <input
@@ -299,7 +365,7 @@ export function BlockOffForm({
               </Field>
             </div>
           ) : (
-            <Field label="Date">
+            <Field label={span === "weekly" ? "First date" : "Date"}>
               <input
                 type="date"
                 className={INPUT}
@@ -309,15 +375,54 @@ export function BlockOffForm({
               />
             </Field>
           )}
-          {multiDay && (
-            <p className="text-[11px] text-muted">
-              Every day from the start date through the end date, inclusive.
-            </p>
+
+          {span === "weekly" && (
+            <div className="flex min-w-0 flex-col gap-3">
+              <div className="flex gap-1.5" role="group" aria-label="Repeat until">
+                <button
+                  type="button"
+                  aria-pressed={repeatBy === "count"}
+                  onClick={() => setRepeatBy("count")}
+                  className={chip(repeatBy === "count", "min-w-0 flex-1 px-2")}
+                >
+                  A number of weeks
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={repeatBy === "until"}
+                  onClick={() => setRepeatBy("until")}
+                  className={chip(repeatBy === "until", "min-w-0 flex-1 px-2")}
+                >
+                  Until a date
+                </button>
+              </div>
+              {repeatBy === "count" ? (
+                <Field label="Weeks" hint={`Up to ${MAX_REPEAT_WEEKS}, counting this one.`}>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={MAX_REPEAT_WEEKS}
+                    className={INPUT}
+                    value={weeks}
+                    onChange={(e) => setWeeks(e.target.value)}
+                  />
+                </Field>
+              ) : (
+                <Field label="Last date">
+                  <input
+                    type="date"
+                    className={INPUT}
+                    value={untilDate}
+                    min={date || todayKey}
+                    onChange={(e) => setUntilDate(e.target.value)}
+                  />
+                </Field>
+              )}
+            </div>
           )}
         </Group>
 
-        {/* The same card for one day and for a range: a range takes these
-            hours on EVERY day it covers, or all day on each. */}
         <Group
           title="Time"
           action={
@@ -326,16 +431,36 @@ export function BlockOffForm({
             </Pill>
           }
         >
+          {span === "days" && !allDay && (
+            <div data-qa="block-days-shape" className="flex gap-1.5" role="group" aria-label="Across the days">
+              <button
+                type="button"
+                aria-pressed={shape === "each"}
+                onClick={() => setShape("each")}
+                className={chip(shape === "each", "min-w-0 flex-1 px-2 text-center leading-tight")}
+              >
+                Same hours each day
+              </button>
+              <button
+                type="button"
+                aria-pressed={shape === "through"}
+                onClick={() => setShape("through")}
+                className={chip(shape === "through", "min-w-0 flex-1 px-2 text-center leading-tight")}
+              >
+                One stretch
+              </button>
+            </div>
+          )}
           {allDay ? (
             <p className="text-[11px] text-muted">
-              {multiDay
-                ? "Midnight to midnight on every day in the range."
-                : "Midnight to midnight, nothing bookable that day."}
+              {span === "day"
+                ? "Midnight to midnight, nothing bookable that day."
+                : "Midnight to midnight on every day it covers."}
             </p>
           ) : (
             <>
               <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2">
-                <Field label="From">
+                <Field label={through ? "Starts (first day)" : "From"}>
                   <input
                     type="time"
                     className={INPUT}
@@ -343,7 +468,7 @@ export function BlockOffForm({
                     onChange={(e) => setFromTime(e.target.value)}
                   />
                 </Field>
-                <Field label="To">
+                <Field label={through ? "Ends (last day)" : "To"}>
                   <input
                     type="time"
                     className={INPUT}
@@ -352,10 +477,15 @@ export function BlockOffForm({
                   />
                 </Field>
               </div>
-              {multiDay && (
+              {span === "days" && (
                 <p className="text-[11px] text-muted">
-                  These hours are blocked on every day in the range.
+                  {through
+                    ? "Blocked from the start time on the first day straight through the end time on the last day - nothing in between is bookable."
+                    : "These hours are blocked on every day in the range. The rest of each day stays open."}
                 </p>
+              )}
+              {span === "weekly" && (
+                <p className="text-[11px] text-muted">These hours on the same day every week.</p>
               )}
             </>
           )}
@@ -373,26 +503,58 @@ export function BlockOffForm({
           </Field>
         </Group>
 
-        {/* What "Add block" will do, in words, before it does it. Reads the
-            same state the submit reads, so it cannot describe a different
-            block than the one about to be written. */}
+        {/* THE REVIEW. What Save will do, in words, before it does it: what,
+            for whom, on which days. Reads the same state the submit reads, so
+            it cannot describe a different block than the one about to be
+            written. Bookings in the way are added by the server's refusal. */}
         <div
           data-qa="block-summary"
           aria-live="polite"
-          className="min-w-0 rounded-xl border border-subtle bg-charcoal-800/40 px-3.5 py-2.5"
+          className="flex min-w-0 flex-col gap-1.5 rounded-xl border border-subtle bg-charcoal-800/40 px-3.5 py-2.5"
         >
-          <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Blocks</p>
-          <p className="mt-0.5 min-w-0 text-sm font-medium text-offwhite [overflow-wrap:anywhere]">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Review</p>
+          <p
+            data-qa="block-summary-line"
+            className="min-w-0 text-sm font-medium text-offwhite [overflow-wrap:anywhere]"
+          >
             {summary || "Pick when to block."}
           </p>
+          {activeStaff.length > 1 && (
+            <p data-qa="block-review-who" className="min-w-0 text-xs text-muted [overflow-wrap:anywhere]">
+              {chosen.length === 0 ? "No one picked yet." : `For ${chosen.map((s) => s.name).join(", ")}`}
+            </p>
+          )}
+          {summary && days.length > 1 && (
+            <ul data-qa="block-review-days" className="flex min-w-0 flex-wrap gap-1" aria-label="Dates">
+              {days.slice(0, REVIEW_DAYS).map((d) => (
+                <li
+                  key={d}
+                  className="rounded-md bg-charcoal-700/60 px-1.5 py-0.5 text-[11px] tabular-nums text-offwhite/85"
+                >
+                  {formatShortDay(d)}
+                </li>
+              ))}
+              {days.length > REVIEW_DAYS && (
+                <li className="px-1 py-0.5 text-[11px] text-muted">+{days.length - REVIEW_DAYS} more</li>
+              )}
+            </ul>
+          )}
+          <p className="text-[11px] text-muted">
+            Appointments already booked in this time stay as they are. You&apos;ll see them before anything is saved.
+          </p>
+          {acuityConnected && (
+            <p data-qa="block-acuity-note" className="text-[11px] text-muted">
+              This block isn&apos;t copied to Acuity yet. Block the same time in Acuity too, or it can still be booked there.
+            </p>
+          )}
         </div>
       </div>
     </Dialog>
   );
 }
 
-/** The header-row switch ("All day", "Block multiple days"): 44px pill, aria-pressed. */
-function Pill({
+/** The header-row switch ("All day", "Everyone"): 44px pill, aria-pressed. */
+export function Pill({
   on,
   onClick,
   qa,
@@ -422,4 +584,12 @@ function Pill({
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
+}
+
+/** One id per Save. crypto.randomUUID where it exists (every current browser). */
+function newRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `blk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
