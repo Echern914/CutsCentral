@@ -34,6 +34,85 @@ export interface RecomputeResult {
   changed: number;
 }
 
+interface EvaluatedClient {
+  id: string;
+  /** The stored badge, as read. */
+  loyaltyTier: LoyaltyTierKey | null;
+  loyaltyTierFloor: LoyaltyTierKey | null;
+  /** The tier these rules give them: effectiveTier(earned, floor). */
+  tier: LoyaltyTierKey | null;
+}
+
+/**
+ * THE EVALUATION, ONCE: every client at the shop and the tier `rules` give
+ * them. The recompute writes what this returns; the preview only counts it -
+ * so "N would move" before a save and "N moved" after it are the same
+ * arithmetic, not two that happen to agree today.
+ */
+async function evaluateTiers(
+  db: Prisma.TransactionClient,
+  shopId: string,
+  rules: TierRules,
+  now: Date,
+): Promise<EvaluatedClient[]> {
+  const stats = await loadTierStats(db, shopId, rules, now);
+
+  // Every client, including those with no visits at all: a shop that RAISES
+  // Bronze has clients who must LOSE their badge, and they are exactly the
+  // ones a visit-count query would not return.
+  const clients = await db.client.findMany({
+    where: { shopId },
+    select: { id: true, loyaltyTier: true, loyaltyTierFloor: true },
+  });
+
+  // 🔴 THE TIER HELD, NOT THE TIER EARNED. A tier the shop raised a client to
+  // by hand (loyaltyTierFloor) sticks: harder rules, or visits ageing out of
+  // a window, can take them down TO it and never below it.
+  const zero = zeroTierStats(rules);
+  return clients.map((c) => ({
+    ...c,
+    tier: effectiveTier(tierForStats(stats.get(c.id) ?? zero, rules), c.loyaltyTierFloor),
+  }));
+}
+
+export type TierCounts = Record<LoyaltyTierKey | "NONE", number>;
+
+export interface TierPreview {
+  clients: number;
+  /** How many clients hold each tier today (the stored badge). */
+  current: TierCounts;
+  /** How many would hold each tier under the draft rules. */
+  proposed: TierCounts;
+  /** How many badges a save of these rules would move. */
+  wouldMove: number;
+}
+
+/**
+ * What saving `rules` WOULD do, without saving anything: the recompute's own
+ * evaluation, counted instead of written.
+ *
+ * 🔴 READ-ONLY. No Shop, Client, PunchLedger or message row is written - the
+ * preview reads stats and clients and returns numbers. Punch balances are
+ * never touched by tiers anyway (not by the save either).
+ */
+export async function previewLoyaltyTiers(
+  shopId: string,
+  rules: TierRules,
+  now: Date = new Date(),
+): Promise<TierPreview> {
+  const clients = await runWithShop(shopId, (db) => evaluateTiers(db, shopId, rules, now));
+  const blank = (): TierCounts => ({ NONE: 0, BRONZE: 0, SILVER: 0, GOLD: 0 });
+  const current = blank();
+  const proposed = blank();
+  let wouldMove = 0;
+  for (const c of clients) {
+    current[c.loyaltyTier ?? "NONE"] += 1;
+    proposed[c.tier ?? "NONE"] += 1;
+    if (c.tier !== c.loyaltyTier) wouldMove += 1;
+  }
+  return { clients: clients.length, current, proposed, wouldMove };
+}
+
 /**
  * @param tx   Optional caller transaction. Pass the one that WRITES the rules
  *             so the two commit together; omit it and this opens its own.
@@ -46,30 +125,17 @@ export async function recomputeLoyaltyTiers(
   now: Date = new Date(),
 ): Promise<RecomputeResult> {
   const run = async (db: Prisma.TransactionClient): Promise<RecomputeResult> => {
-    const stats = await loadTierStats(db, shopId, rules, now);
-
-    // Every client, including those with no visits at all: a shop that RAISES
-    // Bronze has clients who must LOSE their badge, and they are exactly the
-    // ones a visit-count query would not return.
-    const clients = await db.client.findMany({
-      where: { shopId },
-      select: { id: true, loyaltyTier: true, loyaltyTierFloor: true },
-    });
+    const clients = await evaluateTiers(db, shopId, rules, now);
 
     // Bucket by the tier each client should now hold, the floor it was decided
     // with AND the tier read, so the write is a handful of updateMany calls
     // rather than one per client.
-    //
-    // 🔴 THE TIER HELD, NOT THE TIER EARNED. A tier the shop raised a client to
-    // by hand (loyaltyTierFloor) sticks: harder rules, or visits ageing out of
-    // a window, can take them down TO it and never below it.
-    const zero = zeroTierStats(rules);
     const wanted = new Map<
       string,
       { tier: LoyaltyTierKey | null; floor: LoyaltyTierKey | null; was: LoyaltyTierKey | null; ids: string[] }
     >();
     for (const c of clients) {
-      const tier = effectiveTier(tierForStats(stats.get(c.id) ?? zero, rules), c.loyaltyTierFloor);
+      const tier = c.tier;
       if (tier === c.loyaltyTier) continue;
       const key = `${tier ?? "NONE"}|${c.loyaltyTierFloor ?? "NONE"}|${c.loyaltyTier ?? "NONE"}`;
       const bucket = wanted.get(key);

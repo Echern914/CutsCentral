@@ -235,6 +235,38 @@ export async function revokeCardAction(
   return { ok: res.ok };
 }
 
+/** Clients per tier ("NONE" = no tier), as the tier preview counts them. */
+export interface TierCounts {
+  NONE: number;
+  BRONZE: number;
+  SILVER: number;
+  GOLD: number;
+}
+
+/** What saving a draft set of tier rules would do - nothing is saved. */
+export interface TierRulesPreview {
+  clients: number;
+  /** Holding each tier today. */
+  current: TierCounts;
+  /** Holding each tier under the draft. */
+  proposed: TierCounts;
+  wouldMove: number;
+}
+
+/**
+ * The tier preview: counts only. The API runs the save's own evaluation in a
+ * read-only pass - no rules stored, no badge moved, nobody told anything - so
+ * nothing here revalidates.
+ */
+export async function previewTierRulesAction(
+  rules: TierRules,
+): Promise<{ ok: true; data: TierRulesPreview } | { ok: false; error: string }> {
+  const res = await apiSend<TierRulesPreview>("POST", "/api/shops/me/tier-rules/preview", { tierRules: rules });
+  if (res.ok && res.data) return { ok: true, data: res.data };
+  if (res.status === 403) return { ok: false, error: "Only the owner or a manager can preview tiers." };
+  return { ok: false, error: "Could not preview these tiers. Try again." };
+}
+
 /**
  * Save what each loyalty tier is worth at this shop.
  *

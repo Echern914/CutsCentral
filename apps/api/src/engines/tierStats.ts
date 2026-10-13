@@ -1,4 +1,10 @@
-import { tierStatWindows, type TierRules, type TierStats } from "@chairback/config";
+import {
+  averageTicketCents,
+  tierStatWindows,
+  type TierRules,
+  type TierStats,
+  type TierWindowDays,
+} from "@chairback/config";
 import type { Prisma } from "@chairback/db";
 import { readChairEvents } from "./insightsWindow.js";
 
@@ -15,6 +21,9 @@ import { readChairEvents } from "./insightsWindow.js";
  *     otherwise, and nothing for a no-show. A tier that counted money any other
  *     way would call someone a $300 client that the shop's own revenue page
  *     says spent $240.
+ *   - An average ticket is those same per-row amounts, over COMPLETED rows
+ *     whose amount is known - readChairEvents' `completedTickets` - divided
+ *     by how many there are (averageTicketCents in config). Null when none.
  *
  * Windows are measured back from `now` in whole days (30 days, not "this
  * calendar month"), so a tier never flips at a month boundary for a client who
@@ -32,6 +41,13 @@ export function zeroTierStats(rules: TierRules): TierStats {
   const stats: TierStats = { visits: {}, spendCents: {} };
   for (const d of w.visits) stats.visits[d] = 0;
   for (const d of w.spend) stats.spendCents[d] = 0;
+  // No history is NO average - null, which no average-ticket rule counts as
+  // met. Only present when the rules ask, so an old shop's numbers are as
+  // they always were.
+  if (w.avgTicket.length > 0) {
+    stats.avgTicketCents = {};
+    for (const d of w.avgTicket) stats.avgTicketCents[d] = null;
+  }
   return stats;
 }
 
@@ -70,17 +86,47 @@ export async function loadTierStats(
     }
   }
 
-  if (windows.spend.length > 0) {
-    // One read covering the widest window; each event is then credited to
-    // every window it falls inside.
-    const from = windows.spend.includes(0) ? new Date(0) : since(Math.max(...windows.spend));
-    const { events } = await readChairEvents(shopId, from, now, { tx, ...(clientId ? { clientId } : {}) });
-    for (const e of events) {
-      if (!e.clientId || e.earnedCents === 0) continue;
-      const s = statsFor(e.clientId);
-      for (const days of windows.spend) {
-        if (days === 0 || e.start.getTime() >= since(days).getTime()) {
-          s.spendCents[days] = (s.spendCents[days] ?? 0) + e.earnedCents;
+  const moneyWindows = [...windows.spend, ...windows.avgTicket];
+  if (moneyWindows.length > 0) {
+    // One read covering the widest window - spend and average alike; each
+    // row is then credited to every window it falls inside.
+    const from = moneyWindows.includes(0) ? new Date(0) : since(Math.max(...moneyWindows));
+    const { events, completedTickets } = await readChairEvents(shopId, from, now, {
+      tx,
+      ...(clientId ? { clientId } : {}),
+    });
+    const inWindow = (start: Date, days: number) => days === 0 || start.getTime() >= since(days).getTime();
+    if (windows.spend.length > 0) {
+      for (const e of events) {
+        if (!e.clientId || e.earnedCents === 0) continue;
+        const s = statsFor(e.clientId);
+        for (const days of windows.spend) {
+          if (inWindow(e.start, days)) {
+            s.spendCents[days] = (s.spendCents[days] ?? 0) + e.earnedCents;
+          }
+        }
+      }
+    }
+    if (windows.avgTicket.length > 0) {
+      // AVERAGE TICKET: completed visits with a known amount only - the SAME
+      // rows on both sides of the division (CompletedTicket says which). A $0
+      // known amount (a fully refunded cut) IS a ticket and stays in.
+      const amounts = new Map<string, Partial<Record<TierWindowDays, number[]>>>();
+      for (const t of completedTickets) {
+        if (!t.clientId) continue;
+        let byWindow = amounts.get(t.clientId);
+        if (!byWindow) {
+          byWindow = {};
+          amounts.set(t.clientId, byWindow);
+        }
+        for (const days of windows.avgTicket) {
+          if (inWindow(t.start, days)) (byWindow[days] ??= []).push(t.cents);
+        }
+      }
+      for (const [id, byWindow] of amounts) {
+        const s = statsFor(id);
+        for (const days of windows.avgTicket) {
+          s.avgTicketCents![days] = averageTicketCents(byWindow[days] ?? []);
         }
       }
     }
