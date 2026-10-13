@@ -150,7 +150,9 @@ const markNoShow = (id: string) =>
 
 describe("🔴 Mark no-show against a client's own cancel", () => {
   it("a client's cancel that commits while Mark no-show waits at its write: stays CANCELED, no no-show fee", async () => {
-    const id = await bookedWithKeptCard(5);
+    // Started a minute ago: a no-show is refused before the start
+    // (engines/noShowUndo.ts), so the window this proves is the one at the start.
+    const id = await bookedWithKeptCard(-1);
     const barrier = await clientCancelHoldingTheRow(id);
     const { results, settledEarly } = await raceBehindBarrier(barrier, [() => markNoShow(id)]);
     // The no-show had read BOOKED and was parked at its write - the real window.

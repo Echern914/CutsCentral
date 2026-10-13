@@ -1151,6 +1151,7 @@ const ACT_REFUSAL: Record<string, string> = {
   external_block: "That time is blocked in Acuity. Decline the request, or clear the block there first.",
   not_found: "That request is gone. It may have been approved or cancelled elsewhere.",
   party_changed: "That group request changed while you were looking. Refresh and try again.",
+  not_started: "It hasn't started yet, so it can't be a no-show. Cancel it instead.",
 };
 
 function isoForDayHour(dayKey: string, hour: number, tz: string, minute = 0): string {
@@ -2508,6 +2509,18 @@ export function AppointmentBlock({
     runningLate: row.runningLate,
   });
   const canAct = row.source === "appointment" && row.status === "upcoming";
+  // 🔴 A no-show only once the start has come (the server refuses earlier:
+  // engines/noShowUndo.ts). A future booking marked one by a misclick used to
+  // charge a kept card the no-show fee at once.
+  const noShowOpen = new Date(row.start).getTime() <= Date.now();
+  // Two taps: the first arms it ("Confirm no-show"), the second marks it. A
+  // stray tap on a busy card no longer ends a booking.
+  const [confirmNoShow, setConfirmNoShow] = useState(false);
+  useEffect(() => {
+    if (!confirmNoShow) return;
+    const t = setTimeout(() => setConfirmNoShow(false), 5000);
+    return () => clearTimeout(t);
+  }, [confirmNoShow]);
   // A PENDING request (request-before-booking) gets Approve / Decline instead.
   const canApprove = row.source === "appointment" && row.status === "pending";
   const isRecurring = Boolean(row.seriesId);
@@ -3081,13 +3094,28 @@ export function AppointmentBlock({
           >
             Done
           </button>
-          <button
-            onClick={() => act(noShowAppointmentAction, "Marked no-show")}
-            disabled={pending}
-            className={cn(BTN_BASE, "border border-subtle text-muted hover:text-offwhite")}
-          >
-            No-show
-          </button>
+          {noShowOpen && (
+            <button
+              onClick={() => {
+                if (!confirmNoShow) {
+                  setConfirmNoShow(true);
+                  return;
+                }
+                setConfirmNoShow(false);
+                act(noShowAppointmentAction, "Marked no-show");
+              }}
+              disabled={pending}
+              data-testid="card-no-show"
+              className={cn(
+                BTN_BASE,
+                confirmNoShow
+                  ? "border border-danger-soft/50 text-danger-soft"
+                  : "border border-subtle text-muted hover:text-offwhite",
+              )}
+            >
+              {confirmNoShow ? "Confirm no-show" : "No-show"}
+            </button>
+          )}
           {isRecurring ? (
             <div className="relative">
               <button

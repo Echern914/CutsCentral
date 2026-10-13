@@ -33,6 +33,7 @@ import {
   getAppointmentDetailAction,
   markArrivedAction,
   noShowAppointmentAction,
+  undoNoShowAction,
   removeWalkInAction,
   type AppointmentDetail,
   type DetailHistoryItem,
@@ -449,6 +450,83 @@ export function AppointmentSheet({
     })();
   }
 
+  //  ── No-show: marked, and taken back ──
+  // Both ask first, in the footer (a toast draws beneath this dialog and is
+  // invisible on a phone), send ONE request (their own busy flag - a
+  // transition does not stay on across an awaited call), and answer in the
+  // footer. An undo that leaves something as it is - a fee already charged, a
+  // refunded deposit - says so there, and waits for Done.
+  const [noShowAsk, setNoShowAsk] = useState<"mark" | "undo" | null>(null);
+  const [noShowError, setNoShowError] = useState<string | null>(null);
+  const [noShowBusy, setNoShowBusy] = useState(false);
+  const [undoneNotes, setUndoneNotes] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (rawView !== "detail") {
+      setNoShowAsk(null);
+      setUndoneNotes(null);
+    }
+  }, [rawView]);
+
+  function askNoShow(kind: "mark" | "undo") {
+    setMenu(null);
+    setSavedNotice(null);
+    setNoShowError(null);
+    setConfirmRemove(false);
+    setConfirmCorrect(null);
+    setUndoneNotes(null);
+    setNoShowAsk(kind);
+  }
+
+  function confirmNoShowChange() {
+    if (noShowBusy || !noShowAsk) return;
+    const kind = noShowAsk;
+    setNoShowError(null);
+    setNoShowBusy(true);
+    void (async () => {
+      try {
+        if (kind === "mark") {
+          let res: Awaited<ReturnType<typeof noShowAppointmentAction>>;
+          try {
+            res = await noShowAppointmentAction(row.id);
+          } catch {
+            res = { ok: false };
+          }
+          if (!res.ok) {
+            setNoShowError(res.message ?? "That didn't go through. Nothing changed, so try again.");
+            load();
+            return;
+          }
+          setNoShowAsk(null);
+          toast("Marked no-show", "success");
+          onChanged();
+          load();
+          return;
+        }
+        let res: Awaited<ReturnType<typeof undoNoShowAction>>;
+        try {
+          res = await undoNoShowAction(row.id);
+        } catch {
+          res = { ok: false };
+        }
+        if (!res.ok) {
+          setNoShowError(res.message ?? "That didn't go through. Nothing changed, so try again.");
+          load();
+          return;
+        }
+        setNoShowAsk(null);
+        onChanged();
+        load();
+        if (res.notes && res.notes.length > 0) {
+          setUndoneNotes(res.notes);
+        } else {
+          toast("Back on the calendar", "success");
+        }
+      } finally {
+        setNoShowBusy(false);
+      }
+    })();
+  }
+
   //  ── chrome ──────────────────────────────────────────────────────────────
   const title =
     view === "series"
@@ -535,6 +613,20 @@ export function AppointmentSheet({
           />
         </div>
       )
+    ) : noShowAsk && detail ? (
+      <NoShowFooter
+        detail={detail}
+        kind={noShowAsk}
+        error={noShowError}
+        busy={noShowBusy}
+        onKeep={() => {
+          setNoShowAsk(null);
+          setNoShowError(null);
+        }}
+        onConfirm={confirmNoShowChange}
+      />
+    ) : undoneNotes ? (
+      <UndoneNoShowFooter notes={undoneNotes} onDone={() => setUndoneNotes(null)} />
     ) : confirmRemove && detail ? (
       <RemoveWalkInFooter
         detail={detail}
@@ -679,6 +771,7 @@ export function AppointmentSheet({
           onAct={act}
           onRemoveWalkIn={askRemoveWalkIn}
           onCorrect={askCorrect}
+          onNoShow={askNoShow}
           onPriceSaved={() => {
             onChanged();
             load();
@@ -719,6 +812,7 @@ function DetailView({
   onAct,
   onRemoveWalkIn,
   onCorrect,
+  onNoShow,
   onPriceSaved,
   showRefunds,
   onDepositRefunded,
@@ -751,6 +845,8 @@ function DetailView({
   onRemoveWalkIn: () => void;
   /** Ask, in the sheet, whether to mark this completed visit a no-show or cancel it. */
   onCorrect: (outcome: "no_show" | "canceled") => void;
+  /** Ask, in the sheet, whether to mark this booking a no-show, or to undo one. */
+  onNoShow: (kind: "mark" | "undo") => void;
   /** The price changed on the server: re-read the booking and the agenda. */
   onPriceSaved: () => void;
   /** The new checkout is live for this shop, so its card payments can be refunded here. */
@@ -956,6 +1052,10 @@ function DetailView({
           onAct={onAct}
           onRemoveWalkIn={onRemoveWalkIn}
           onCorrect={onCorrect}
+          onNoShow={(kind) => {
+            setMenu(null);
+            onNoShow(kind);
+          }}
         />
       )}
     </div>
@@ -2237,6 +2337,7 @@ function MoreMenu({
   onAct,
   onRemoveWalkIn,
   onCorrect,
+  onNoShow,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail;
@@ -2251,6 +2352,7 @@ function MoreMenu({
   ) => void;
   onRemoveWalkIn: () => void;
   onCorrect: (outcome: "no_show" | "canceled") => void;
+  onNoShow: (kind: "mark" | "undo") => void;
 }) {
   const items: MenuItem[] = [];
   const native = detail.source === "appointment" && detail.origin === "chairback";
@@ -2300,12 +2402,17 @@ function MoreMenu({
       icon: <CheckIcon />,
       onClick: () => onAct(completeAppointmentAction, "Marked done"),
     });
-    items.push({
-      key: "no-show",
-      label: "Mark no-show",
-      icon: <EmptyChairIcon />,
-      onClick: () => onAct(noShowAppointmentAction, "Marked no-show"),
-    });
+    // Only once its start has come - the SERVER says so (`noShowAllowed`);
+    // before then the route refuses and Cancel is the honest action. It asks
+    // first, in the sheet, with any fee it would charge.
+    if (detail.noShowAllowed !== false) {
+      items.push({
+        key: "no-show",
+        label: "Mark no-show",
+        icon: <EmptyChairIcon />,
+        onClick: () => onNoShow("mark"),
+      });
+    }
     // Cancelling closes the sheet: the booking it was describing is gone, and
     // leaving it open on a cancelled row invites a second, confusing action.
     // A recurring series keeps its scope menu on the CARD — this cancels the
@@ -2351,6 +2458,17 @@ function MoreMenu({
       icon: <BanIcon />,
       tone: "danger",
       onClick: () => onCorrect("canceled"),
+    });
+  }
+  // A no-show marked by mistake, put back on the calendar - when the SERVER
+  // says it can be (`undoNoShow`: ChairBack's own, recent, nothing in flight).
+  if (native && detail.status === "no_show" && detail.undoNoShow === true) {
+    items.push({
+      key: "undo-no-show",
+      divided: true,
+      label: "Undo no-show",
+      icon: <CheckIcon />,
+      onClick: () => onNoShow("undo"),
     });
   }
   if (detail.externalManageUrl) {
@@ -2661,6 +2779,99 @@ function CorrectVisitFooter({
           {busy ? "Saving…" : action}
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Mark no-show / Undo no-show, asked in the footer. Mark says exactly what a
+ * kept card is charged (the server's figure, `noShowFee`); Undo says that it
+ * goes back on the calendar and that money is not moved.
+ */
+function NoShowFooter({
+  detail,
+  kind,
+  error,
+  busy,
+  onKeep,
+  onConfirm,
+}: {
+  detail: AppointmentDetail;
+  kind: "mark" | "undo";
+  error: string | null;
+  busy: boolean;
+  onKeep: () => void;
+  onConfirm: () => void;
+}) {
+  const fee = detail.noShowFee ?? null;
+  const feeText = fee
+    ? `${fee.cents % 100 === 0 ? `$${fee.cents / 100}` : `$${(fee.cents / 100).toFixed(2)}`}`
+    : null;
+  return (
+    <div className="flex w-full flex-col gap-2" data-testid="no-show-confirm">
+      <p className="text-sm font-medium text-offwhite">
+        {kind === "mark" ? "Mark this a no-show?" : "Undo this no-show?"}
+      </p>
+      <p className="text-xs leading-relaxed text-muted">
+        {kind === "mark"
+          ? feeText
+            ? `The card ${fee?.last4 ? `ending ${fee.last4} ` : ""}kept for this booking is charged the ${feeText} no-show fee now. If you mark it by mistake, you can undo it, but the fee is not refunded automatically.`
+            : "No fee is charged. You can undo it afterwards if you mark it by mistake."
+          : "It goes back on your calendar as booked, if the time is still free. No money is charged or refunded."}
+      </p>
+      {error && (
+        <p role="alert" data-testid="no-show-error" className="text-sm text-danger-soft">
+          {error}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={onKeep}
+          disabled={busy}
+          className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+        >
+          Keep it
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          disabled={busy}
+          className={cn(
+            "flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl px-4 text-sm font-medium transition-colors duration-150 ease-out disabled:opacity-50",
+            kind === "mark"
+              ? "border border-danger-soft/50 text-danger-soft hover:bg-danger-soft/10"
+              : "border border-emerald-soft/45 text-emerald-soft hover:bg-emerald-soft/10",
+          )}
+        >
+          {busy ? "Saving…" : kind === "mark" ? "Mark no-show" : "Undo no-show"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** After an undo that left something as it was: the server's own sentences. */
+function UndoneNoShowFooter({ notes, onDone }: { notes: string[]; onDone: () => void }) {
+  return (
+    <div className="flex w-full flex-col gap-2" data-testid="no-show-undone">
+      <p role="status" className="text-sm font-medium text-emerald-soft">
+        Back on the calendar.
+      </p>
+      <ul className="flex flex-col gap-1">
+        {notes.map((n) => (
+          <li key={n} className="text-xs leading-relaxed text-amber-300">
+            {n}
+          </li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        onClick={onDone}
+        className="flex h-11 w-full items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+      >
+        Done
+      </button>
     </div>
   );
 }
