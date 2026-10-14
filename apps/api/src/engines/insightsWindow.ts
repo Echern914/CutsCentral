@@ -539,6 +539,27 @@ function decimalToCents(value: unknown): number {
   return Math.round(Number(value) * 100);
 }
 
+/**
+ * One COMPLETED visit whose amount is KNOWN - the unit an average ticket is
+ * taken over (tierRules.ts, averageTicketCents).
+ *
+ * 🔴 NOT A SECOND REVENUE RULE. `cents` is the very `earnedCents` the same
+ * row's ChairEvent carries - checkout figure plus ChairBack payments net of
+ * refunds (tips never), else the ticket. What this adds is only WHICH rows:
+ *   - COMPLETED only: a no-show, and a booking whose time passed but was never
+ *     completed, sit in `events` (they held the chair) but are not a ticket.
+ *   - KNOWN only: a row with no ticket price, no checkout figure and no
+ *     payment has an unknown amount, and averaging it in as $0 would drag
+ *     every imported client's average down for a price nobody recorded.
+ *   - One per visit: a Visit promoted from a native appointment is already
+ *     skipped by the read below, exactly as it is for revenue.
+ */
+export interface CompletedTicket {
+  clientId: string | null;
+  start: Date;
+  cents: number;
+}
+
 // A native booking that held the chair. PENDING (awaiting approval) and holds
 // are provisional - they block a slot but were never sold, so they are not
 // counted as work done. CANCELED is excluded by omission from both lists.
@@ -555,13 +576,17 @@ const SYNCED_STATUSES = ["SCHEDULED", "RESCHEDULED", "COMPLETED", "NO_SHOW"] as 
  *
  * `clientId` narrows both halves to one client - how a loyalty tier counts
  * what that person has spent, with exactly the money rule revenue uses.
+ *
+ * `completedTickets` is the average-ticket view of the SAME rows (see
+ * CompletedTicket). It is a separate field rather than a flag on each event so
+ * that every existing consumer of `events` reads exactly what it always did.
  */
 export async function readChairEvents(
   shopId: string,
   from: Date,
   to: Date,
   opts: { staffId?: string; clientId?: string; tx?: Prisma.TransactionClient } = {},
-): Promise<{ events: ChairEvent[]; syncedExcluded: boolean }> {
+): Promise<{ events: ChairEvent[]; syncedExcluded: boolean; completedTickets: CompletedTicket[] }> {
   const { staffId, clientId } = opts;
   // Appointment and Visit are ENABLE+FORCE RLS tables (tenant_isolation checks
   // app.current_shop_id): a bare prisma read returns ZERO rows under an
@@ -646,6 +671,7 @@ export async function readChairEvents(
   }));
 
   const events: ChairEvent[] = [];
+  const completedTickets: CompletedTicket[] = [];
   for (const a of appts) {
     const ticketCents = a.priceAtBooking === null ? null : decimalToCents(a.priceAtBooking);
     const noShow = a.status === "NO_SHOW";
@@ -685,6 +711,11 @@ export async function readChairEvents(
       staffId: a.staffId,
       source: "native",
     });
+    // Known = some figure says what it cost: the checkout, a payment, or the
+    // ticket. With none, `earnedCents` above is a 0 nobody recorded.
+    if (a.status === "COMPLETED" && (a.paidAmount != null || hasStripeMoney || ticketCents !== null)) {
+      completedTickets.push({ clientId: a.clientId, start: a.startsAt, cents: earnedCents });
+    }
   }
   for (const v of visits) {
     const ticketCents = v.price === null ? null : decimalToCents(v.price);
@@ -708,8 +739,12 @@ export async function readChairEvents(
       staffId: null,
       source: "synced",
     });
+    // An imported visit with no price is unknown, not free.
+    if (v.status === "COMPLETED" && ticketCents !== null) {
+      completedTickets.push({ clientId: v.clientId, start: v.scheduledAt, cents: earnedCents });
+    }
   }
-  return { events, syncedExcluded: Boolean(staffId) };
+  return { events, syncedExcluded: Boolean(staffId), completedTickets };
 }
 
 /** Group key for a service: the real id when we have one, else its trimmed name. */
