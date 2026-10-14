@@ -380,6 +380,8 @@ export function registerAppointmentEdit(
             externalBlocks: "enforce",
             externalBlockConfirmation: d.externalBlockConfirmation ?? null,
             walkInCapacity: "ignore",
+            // The barber's own hand: his own blocked time does not stop him (bookingWrite.ts `nativeBlocks`).
+            nativeBlocks: "ignore",
             staffId,
             shopId,
             startsAt,

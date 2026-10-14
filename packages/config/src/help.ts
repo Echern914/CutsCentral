@@ -251,7 +251,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "time-off",
     q: "How do I block off time or take a day off?",
-    a: "Block the time on your agenda and it stops being bookable — it shows as a blocked span on the day so you can see exactly what's held.\n\nIf your Acuity calendar has blocked time on it, that syncs across too, so you only have to block it in one place.",
+    a: "Tap Block off time on your agenda and it stops being bookable — for one provider or several, one day, a run of days, or the same time every week. It shows as a blocked span on each day it covers; tap it to change or remove it.\n\nTime blocked in Acuity syncs across here too. Time you block here isn't copied to Acuity yet, so block it there as well while Acuity still takes bookings.",
     keywords: ["block", "time off", "vacation", "day off", "holiday", "lunch", "break", "unavailable", "close"],
     category: "booking",
     action: { label: "Open agenda", featureId: "online-booking" },

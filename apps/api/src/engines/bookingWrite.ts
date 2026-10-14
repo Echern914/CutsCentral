@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Prisma } from "@chairback/db";
 import { occupyingSql, type CompletedInProgress } from "./chairOccupancy.js";
+import { weekdayWindowsToRanges } from "./blockedTime.js";
 import { assertServiceDayHasRoom } from "./serviceDailyLimit.js";
 import { recordWaitlistEvent, SYSTEM_ACTOR } from "./waitlistAudit.js";
 import { loadWalkInReservationPlan } from "./walkInCapacity.js";
@@ -19,9 +20,10 @@ import { loadWalkInReservationPlan } from "./walkInCapacity.js";
  *     grabs on that calendar (a bare overlap SELECT locks nothing when the
  *     slot is free, so two overlapping-but-different-start bookings could both
  *     pass without it). Released automatically at commit/rollback.
- *  2. Overlap re-check against every source that can own a span - appointments,
- *     targeted slots, live waitlist holds, active walk-ins, synced visits -
- *     padding both sides by the shop's turnover buffer.
+ *  2. Overlap re-check against every source that can own a span - the barber's
+ *     own blocked time (one-off blocks and weekly breaks, `nativeBlocks`),
+ *     appointments, targeted slots, live waitlist holds, active walk-ins,
+ *     synced visits, Acuity blocks - padding by the shop's turnover buffer.
  *     Throws SlotTakenError on a conflict. The partial unique index on
  *     (staffId, startsAt) WHERE status IN ('BOOKED','PENDING') remains the
  *     final backstop - which is also why this guard clears expired holds at
@@ -142,6 +144,22 @@ export class HeldSlotError extends SlotTakenError {
 }
 
 /**
+ * The write lands in time the barber BLOCKED OFF here, in ChairBack: a one-off
+ * block ("Block off time") or a standing weekly break (staff hours).
+ *
+ * A SUBCLASS of SlotTakenError, like every refusal above: to a customer it is
+ * simply "that time is not available", and every existing catch says exactly
+ * that. No confirmation answers it - the barber's own writes opt out with
+ * `nativeBlocks: "ignore"` instead (see the option).
+ */
+export class BlockedTimeError extends SlotTakenError {
+  constructor() {
+    super();
+    this.name = "BlockedTimeError";
+  }
+}
+
+/**
  * Digest of the exact rows an OverlapError named. Same reasoning as
  * externalBlockConfirmation below: a BINDING, reproducible on every replica, so
  * confirming authorises those rows and nothing that appeared since.
@@ -205,6 +223,48 @@ export async function lockStaffCalendar(
   staffId: string,
 ): Promise<void> {
   await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${staffId}`}))`);
+}
+
+/**
+ * Refuse a span that touches time the barber blocked off in ChairBack: a
+ * one-off block on this chair, or a weekly break on the shop-local weekday.
+ * Half-open on both sides, like the grid: [startsAt, tailEnd) against
+ * [block.start, block.end). Must run under the chair's lock.
+ */
+async function assertNoNativeBlock(
+  tx: Prisma.TransactionClient,
+  input: {
+    shopId: string;
+    staffId: string;
+    startsAt: Date;
+    tailEnd: Date;
+    timezone: string | null;
+  },
+): Promise<void> {
+  // ISO text + ::timestamp, never a raw Date (PR #70).
+  const oneOff = await tx.$queryRaw<{ id: string }[]>(
+    Prisma.sql`SELECT id FROM "AvailabilityException"
+               WHERE "shopId" = ${input.shopId}
+                 AND "staffId" = ${input.staffId}
+                 AND "isBlock" = true
+                 AND "startsAt" < ${input.tailEnd.toISOString()}::timestamp
+                 AND "endsAt" > ${input.startsAt.toISOString()}::timestamp
+               LIMIT 1`,
+  );
+  if (oneOff.length > 0) throw new BlockedTimeError();
+
+  const weekly = await tx.recurringBlock.findMany({
+    where: { shopId: input.shopId, staffId: input.staffId },
+    select: { weekday: true, startMin: true, endMin: true },
+  });
+  if (weekly.length === 0) return;
+  // No zone, no way to say which date a Tuesday break lands on: refuse
+  // rather than guess. Every customer write passes one (see `timezone`).
+  if (!input.timezone) throw new BlockedTimeError();
+  const start = input.startsAt.getTime();
+  const end = input.tailEnd.getTime();
+  const ranges = weekdayWindowsToRanges(weekly, start, end, input.timezone);
+  if (ranges.some((r) => r.start < end && r.end > start)) throw new BlockedTimeError();
 }
 
 /** What the guard reports back besides "you may write". */
@@ -372,6 +432,45 @@ export async function lockStaffAndAssertSlotFree(
      */
     externalBlocks?: "enforce" | "ignore";
     /**
+     * Does time the barber BLOCKED OFF IN CHAIRBACK stop this write? That is
+     * an AvailabilityException with isBlock (Block off time) on this chair, or
+     * a RecurringBlock (a standing weekly break) on the shop-local weekday.
+     *
+     * 🔴 THE SAME PARITY GAP `externalBlocks` closed, for the barber's own
+     * blocks. The slot grid has always subtracted them, but this guard never
+     * looked - so a block committed between a customer's slot check
+     * (isSlotBookable, which runs BEFORE the write transaction) and the write
+     * itself let the booking land inside it. Checked here, under the chair's
+     * lock, the block and the booking serialise and exactly one wins.
+     *
+     * Same overlap rule as the grid (engines/slots.ts): the appointment plus
+     * its trailing turnover buffer may not touch a block, and a booking may
+     * start the minute a block ends.
+     *
+     * Defaults to "enforce", for the reason `externalBlocks` does: the safe
+     * answer is refusing, so a writer added later gets protection, not a hole.
+     *
+     *   "enforce"  - every CUSTOMER-driven write: public booking and
+     *                reschedule, parties, the receptionist, waitlist offers,
+     *                tier openings, gap-fill and Auto-fill. Throws
+     *                BlockedTimeError (a SlotTakenError).
+     *   "ignore"   - the BARBER's own hand on his own calendar (dashboard
+     *                create/approve/edit/restore, recurring series, series
+     *                edit, party approve) - those screens already let him book
+     *                over his hours and his blocks, and nothing here changes
+     *                that - plus the two paths that are not a choice of time at
+     *                all: promoting a PAID hold and starting a walk-in who is
+     *                in the chair (same reasoning as `externalBlocks`).
+     */
+    nativeBlocks?: "enforce" | "ignore";
+    /**
+     * The shop's IANA zone - where a weekly break falls on a given date. When
+     * absent the guard uses `serviceDayLimit.timezone`, which every customer
+     * write already passes. A write that knows neither cannot place a weekly
+     * break, so if the chair HAS one it refuses rather than guess.
+     */
+    timezone?: string;
+    /**
      * The barber's answer to a refusal this guard already gave: the
      * `confirmation` digest from that ExternalBlockError, replayed.
      *
@@ -458,6 +557,19 @@ export async function lockStaffAndAssertSlotFree(
   }
 
   await lockStaffCalendar(tx, opts.staffId);
+
+  // Time the barber blocked off HERE - read under the lock, so a block that
+  // committed after the caller's slot check is seen. See `nativeBlocks`.
+  if ((opts.nativeBlocks ?? "enforce") !== "ignore") {
+    await assertNoNativeBlock(tx, {
+      shopId: opts.shopId,
+      staffId: opts.staffId,
+      startsAt: opts.startsAt,
+      // The trailing turnover buffer, exactly as the grid demands it.
+      tailEnd: new Date(opts.endsAt.getTime() + bufferMs),
+      timezone: opts.timezone ?? opts.serviceDayLimit?.timezone ?? null,
+    });
+  }
 
   // Who is in the chair - the SAME rule the slot grid and the specials filter
   // read with, so what is offered and what is accepted cannot disagree. It

@@ -73,6 +73,8 @@ export async function approvePartyInTx(
     // shop's own decision.
     externalBlocks: "enforce",
     walkInCapacity: "ignore",
+    // The barber's own hand: his own blocked time does not stop him (bookingWrite.ts `nativeBlocks`).
+    nativeBlocks: "ignore",
     serviceDayLimit: null,
     overrideWaitlistHolds: true,
   });

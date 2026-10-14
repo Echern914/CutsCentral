@@ -153,6 +153,8 @@ export async function startEntry(opts: {
       // create/reschedule/edit require an explicit, recorded override instead.
       externalBlocks: "ignore",
       walkInCapacity: { excludeEntryId: entryId },
+      // The person is in the chair - same reasoning as externalBlocks above.
+      nativeBlocks: "ignore",
       // 🔴 The barber is starting this person RIGHT NOW, which is itself the
       // statement that the chair turned over - the last walk-in's nominal
       // half hour may not have elapsed, but its client has got up. Refusing

@@ -7,6 +7,8 @@ import {
   formatDay,
   formatDayRange,
   isDayKey,
+  planDays,
+  weeksThrough,
 } from "./blockOffDates";
 
 /**
@@ -135,5 +137,48 @@ describe("the summary", () => {
     expect(
       blockSummary({ kind: "timed", date: "", fromTime: "14:00", toTime: "17:00" }, TODAY),
     ).toBe("");
+  });
+});
+
+describe("weekly repeats and one-stretch blocks", () => {
+  it("counts the weeks a repeat 'until' a date covers, the last one landing on it", () => {
+    expect(weeksThrough("2026-09-09", "2026-09-09")).toBe(1);
+    expect(weeksThrough("2026-09-09", "2026-09-15")).toBe(1);
+    expect(weeksThrough("2026-09-09", "2026-09-16")).toBe(2);
+    expect(weeksThrough("2026-09-09", "2026-09-30")).toBe(4);
+    expect(weeksThrough("2026-09-16", "2026-09-09")).toBe(0);
+  });
+
+  it("lists the days a plan touches, across a month end", () => {
+    expect(planDays({ kind: "weekly", date: "2026-09-23", weeks: 3 })).toEqual([
+      "2026-09-23",
+      "2026-09-30",
+      "2026-10-07",
+    ]);
+    expect(
+      planDays({ kind: "through", fromDate: "2026-09-29", fromTime: "09:00", toDate: "2026-10-01", toTime: "17:00" }),
+    ).toEqual(["2026-09-29", "2026-09-30", "2026-10-01"]);
+    expect(planDays({ kind: "weekly", date: "2026-09-23", weeks: 0 })).toEqual([]);
+  });
+
+  it("says a weekly repeat as the weekday, the hours and the run of weeks", () => {
+    expect(
+      blockSummary(
+        { kind: "weekly", date: "2026-09-09", weeks: 3, window: { fromTime: "12:00", toTime: "13:00" } },
+        TODAY,
+      ),
+    ).toBe("Every Wednesday · 12:00 PM–1:00 PM · 3 weeks, September 9–23");
+    expect(blockSummary({ kind: "weekly", date: "2026-09-09", weeks: 2 }, TODAY)).toBe(
+      "Every Wednesday · All day · 2 weeks, September 9–16",
+    );
+  });
+
+  it("says one stretch as ONE absence, start to end - not 'each day'", () => {
+    expect(
+      blockSummary(
+        { kind: "through", fromDate: "2026-09-14", fromTime: "09:00", toDate: "2026-09-18", toTime: "17:00" },
+        TODAY,
+      ),
+    ).toBe("Monday, September 14, 9:00 AM straight through Friday, September 18, 5:00 PM");
   });
 });
