@@ -51,8 +51,13 @@ export async function recomputeCadence(
   // decided by the count already in hand, exactly as before. Only a rule with a
   // window or money in it pays for the extra reads.
   const windows = tierStatWindows(rules);
+  // 🔴 An average-ticket window disqualifies the shortcut too: the count in
+  // hand has no average in it, and tierForStats refuses a missing window.
   const lifetimeVisitsOnly =
-    windows.spend.length === 0 && windows.visits.length === 1 && windows.visits[0] === 0;
+    windows.spend.length === 0 &&
+    windows.avgTicket.length === 0 &&
+    windows.visits.length === 1 &&
+    windows.visits[0] === 0;
   const stats = lifetimeVisitsOnly
     ? { visits: { 0: dates.length }, spendCents: {} }
     : await runWithShop(shopId, (tx) => loadClientTierStats(tx, shopId, clientId, rules, now));

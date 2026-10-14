@@ -40,7 +40,7 @@ import {
   publicShopAddress,
 } from "@chairback/config";
 import { Prisma, prisma, runWithShop } from "@chairback/db";
-import { recomputeLoyaltyTiers } from "../engines/loyaltyTierRecompute.js";
+import { previewLoyaltyTiers, recomputeLoyaltyTiers } from "../engines/loyaltyTierRecompute.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager, requireOwner } from "../auth/roles.js";
 import { linkReferralOnShopCreate } from "../services/referral.js";
@@ -252,7 +252,21 @@ const tierRuleSchema = z
   .object({
     visits: z.object({ min: z.number().int(), windowDays: tierWindowSchema }).strict().nullable(),
     spend: z.object({ minCents: z.number().int(), windowDays: tierWindowSchema }).strict().nullable(),
+    // Optional as well as nullable: a page loaded before this measure existed
+    // sends rules without the key, and must still save.
+    avgTicket: z
+      .object({ minCents: z.number().int(), windowDays: tierWindowSchema })
+      .strict()
+      .nullable()
+      .optional(),
     match: z.enum(["all", "any"]),
+  })
+  .strict();
+const tierRulesSchema = z
+  .object({
+    BRONZE: tierRuleSchema,
+    SILVER: tierRuleSchema,
+    GOLD: tierRuleSchema,
   })
   .strict();
 
@@ -376,13 +390,7 @@ const updateShopSchema = createShopSchema
     // Custom tier rules: visits and/or money per tier, each over its own
     // window, all or any. Shape only here - ranges and the order rule are
     // validateTierRules in config, the one function the page runs too.
-    tierRules: z
-      .object({
-        BRONZE: tierRuleSchema,
-        SILVER: tierRuleSchema,
-        GOLD: tierRuleSchema,
-      })
-      .strict(),
+    tierRules: tierRulesSchema,
     // Transactional loyalty SMS to clients (earn/redeem confirmations). Off by
     // default; gated by client consent + quiet hours regardless. See
     // services/loyaltyNotify.ts.
@@ -1756,6 +1764,40 @@ publicPageRouter.post("/:slug/review", leadLimiter, async (req, res) => {
 
   res.status(201).json({ ok: true });
 });
+
+/**
+ * What saving these tier rules WOULD do: how many clients hold each tier now
+ * and how many would under the draft, and how many badges would move.
+ *
+ * 🔴 READ-ONLY. Nothing is stored - not the rules, not a badge, not a punch,
+ * not a message. It is the save's own evaluation (previewLoyaltyTiers shares
+ * evaluateTiers with recomputeLoyaltyTiers), counted instead of written, so
+ * the preview and the "N moved tier" after a save cannot disagree.
+ *
+ * OWNER/MANAGER only, like the save: a barber seat cannot change the ladder,
+ * and the counts describe every client at the shop. Shop comes from the
+ * session (requireShop), never from the body.
+ */
+shopsRouter.post(
+  "/me/tier-rules/preview",
+  requireUser,
+  requireShop,
+  requireManager,
+  requireActiveAccess,
+  async (req, res) => {
+    const parsed = z.object({ tierRules: tierRulesSchema }).strict().safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+      return;
+    }
+    const checked = validateTierRules(parsed.data.tierRules);
+    if (!checked.ok) {
+      res.status(400).json({ error: "invalid_tier_rules", reason: checked.error, tier: checked.tier });
+      return;
+    }
+    res.json(await previewLoyaltyTiers(req.shop!.id, checked.value));
+  },
+);
 
 // Danger zone: delete the shop and ALL its data (clients, visits, punches,
 // nudges, Acuity connection) via cascading deletes. Requires the shop name as

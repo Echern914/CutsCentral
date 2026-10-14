@@ -243,7 +243,8 @@ export function createApp(): Express {
   //   WALLED (whole router)  /api/booking  /api/payments  /api/promos
   //                          /api/insights /api/loyalty   /api/notifications
   //                          /api/barber   /api/team      /api/domains
-  //   WALLED (per route)     /api/shops PATCH /me, POST /me/sms-preview
+  //   WALLED (per route)     /api/shops PATCH /me, POST /me/sms-preview,
+  //                          POST /me/tier-rules/preview
   //   WALLED (except reads)  /api/dashboard - GET of the client book and the
   //                          CSV exports stay open (middleware/wallExemptions)
   //   NEVER WALLED           /api/billing  /api/auth  /api/admin-portal
