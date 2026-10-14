@@ -910,6 +910,7 @@ async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecut
         bufferMin: slot.bufferMin,
         // The receptionist books FOR a customer, so the barber's per-weekday
         // cap applies exactly as it does on the public page.
+        bookedServiceId: slot.serviceId,
         serviceDayLimit: { serviceId: slot.serviceId, timezone: slot.timezone },
         now: ctx.now,
       });
@@ -1098,6 +1099,7 @@ async function bookAppointment(
           bufferMin: slot.bufferMin,
         // The receptionist books FOR a customer, so the barber's per-weekday
         // cap applies exactly as it does on the public page.
+        bookedServiceId: slot.serviceId,
         serviceDayLimit: { serviceId: slot.serviceId, timezone: slot.timezone },
           excludeAppointmentId: hold.id,
           statuses: active ? ["BOOKED"] : ["BOOKED", "PENDING"],
@@ -1144,6 +1146,7 @@ async function bookAppointment(
         bufferMin: slot.bufferMin,
         // The receptionist books FOR a customer, so the barber's per-weekday
         // cap applies exactly as it does on the public page.
+        bookedServiceId: slot.serviceId,
         serviceDayLimit: { serviceId: slot.serviceId, timezone: slot.timezone },
         now: ctx.now,
       });
@@ -1473,6 +1476,7 @@ async function rescheduleTool(
         bufferMin: slot.bufferMin,
         // The receptionist books FOR a customer, so the barber's per-weekday
         // cap applies exactly as it does on the public page.
+        bookedServiceId: slot.serviceId,
         serviceDayLimit: { serviceId: slot.serviceId, timezone: slot.timezone },
         excludeAppointmentId: appt.id,
         now: ctx.now,

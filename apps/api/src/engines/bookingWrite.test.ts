@@ -51,6 +51,7 @@ function assertFree(opts: {
 }): Promise<SlotGuardResult> {
   return prisma.$transaction((tx) =>
     lockStaffAndAssertSlotFree(tx, {
+      bookedServiceId: null,
       walkInCapacity: "enforce",
       serviceDayLimit: null,
       staffId,
@@ -174,6 +175,7 @@ describe("lockStaffAndAssertSlotFree", () => {
     // The real write shape: guard + create inside ONE tx.
     const created = await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
+        bookedServiceId: null,
         walkInCapacity: "enforce",
         serviceDayLimit: null,
         staffId,

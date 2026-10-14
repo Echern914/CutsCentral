@@ -1984,6 +1984,9 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         startsAt: slot.startsAt,
         endsAt: new Date(slot.startsAt.getTime() + slot.durationMin * 60_000),
         timezone: shop.timezone,
+        // The service chosen for the special: a block of other services
+        // leaves it bookable (config/blockScope.ts).
+        serviceId: d.serviceId,
       })
     ) {
       res.status(409).json({ error: "slot_taken", code: "SLOT_UNAVAILABLE" });
@@ -2494,6 +2497,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         // this claim (any OTHER overlapping targeted slot still does).
         targetedSlotIdToIgnore: targeted?.id,
         // The public page IS the path the per-weekday cap exists for.
+        bookedServiceId: d.serviceId,
         serviceDayLimit: { serviceId: d.serviceId, timezone: shop.timezone },
         now,
       });
@@ -4288,6 +4292,7 @@ bookingPublicRouter.post(
           // Moving INTO a day counts against that day. Its own row is
           // excluded, so moving within the same day is always allowed even
           // when that day is at the cap.
+          bookedServiceId: appt.serviceId,
           serviceDayLimit: {
             serviceId: appt.serviceId,
             timezone: appt.shop.timezone,

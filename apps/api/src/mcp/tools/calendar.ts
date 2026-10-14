@@ -269,6 +269,9 @@ async function agenda(inv: ToolInvocation): Promise<ToolResult> {
           chair: c.name,
           startsAt: new Date(b.start).toISOString(),
           endsAt: new Date(b.end).toISOString(),
+          // Present only when the block stops SOME services: the chair is
+          // open for every other one. Absent = the whole chair.
+          ...(b.serviceIds && b.serviceIds.length > 0 ? { onlyServiceIds: b.serviceIds } : {}),
         })),
       ),
     },

@@ -296,7 +296,7 @@ export async function materializeSeries(
         skipped.push({ index: occ.index, startsAt, reason: "not_bookable" });
         continue;
       }
-    } else if (occ.index > 0 && spanIsBlocked(blocked, startsAt.getTime(), endsAt.getTime())) {
+    } else if (occ.index > 0 && spanIsBlocked(blocked, startsAt.getTime(), endsAt.getTime(), input.serviceId)) {
       // A date the repeat GENERATED. The one the barber picked is theirs to keep.
       skipped.push({ index: occ.index, startsAt, reason: "blocked" });
       continue;
@@ -321,6 +321,8 @@ export async function materializeSeries(
           // A standing appointment the BARBER set up for a regular. Capping it
           // would let a busy Saturday quietly drop occurrences out of a series
           // months later, with nothing on screen to explain the gap.
+          // Unread under nativeBlocks "ignore" - no block is checked.
+          bookedServiceId: null,
           serviceDayLimit: null,
           // A live waitlist hold here is the shop's own automation - the
           // barber overrides it; the hold is RELEASED in this transaction.

@@ -230,6 +230,7 @@ describe("leaving the waitlist frees the time", () => {
     // SlotTakenError while one lives).
     await prisma.$transaction((tx) =>
       lockStaffAndAssertSlotFree(tx, {
+        bookedServiceId: null,
         walkInCapacity: "enforce",
         staffId,
         shopId,
@@ -531,6 +532,7 @@ describe("a claim against a barber writing over the hold", () => {
     const barber = () =>
       prisma.$transaction(async (tx) => {
         await lockStaffAndAssertSlotFree(tx, {
+          bookedServiceId: null,
           staffId,
           shopId,
           startsAt: slot.startsAt,

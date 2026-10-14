@@ -99,6 +99,7 @@ function guard(
 ) {
   return prisma.$transaction((tx) =>
     lockStaffAndAssertSlotFree(tx, {
+      bookedServiceId: null,
       ...(opts.mode ? { externalBlocks: opts.mode } : {}),
       ...(opts.confirmation !== undefined ? { externalBlockConfirmation: opts.confirmation } : {}),
       walkInCapacity: "ignore",

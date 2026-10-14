@@ -3126,6 +3126,15 @@ model AvailabilityException {
   // instant to an end instant, stored as touching per-day rows; "weekly" the
   // same day-of-week block repeated a bounded number of times.
   pattern   String?
+  // Which services the block stops - the ServiceAddOn convention: [] = EVERY
+  // service (the barber is not there; every row written before this column
+  // existed), a list = only those services are refused over the span and the
+  // chair stays open for the rest ("no Shape-ups or Kids' cuts 3-6, Haircuts
+  // as usual"). Empty failing to ALL is the safe direction: a lost list
+  // blocks more, never less. A question that cannot name its service (walk-in
+  // mode, a writer without one) treats every scoped block as in the way.
+  // Only isBlock rows use it. See config/blockScope.ts for THE rule.
+  serviceIds String[] @default([])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

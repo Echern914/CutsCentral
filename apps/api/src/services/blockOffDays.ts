@@ -253,6 +253,11 @@ export async function findAppointmentsInSpans(
     staffId: string;
     spans: { startsAt: Date; endsAt: Date }[];
     now: Date;
+    /**
+     * A block of SOME services is only "in the way" of bookings of those
+     * services (config/blockScope.ts). Absent or empty = every booking.
+     */
+    serviceIds?: readonly string[];
   },
 ): Promise<BlockConflictRow[]> {
   const windows = coalesceSpans(input.spans);
@@ -261,6 +266,9 @@ export async function findAppointmentsInSpans(
     where: {
       shopId: input.shopId,
       staffId: input.staffId,
+      ...(input.serviceIds && input.serviceIds.length > 0
+        ? { serviceId: { in: [...input.serviceIds] } }
+        : {}),
       AND: [
         { OR: windows.map((w) => ({ startsAt: { lt: w.endsAt }, endsAt: { gt: w.startsAt } })) },
         {

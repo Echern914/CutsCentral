@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, runWithShop } from "@chairback/db";
 import { zonedDateKey } from "@chairback/config";
+import { describeBlockScope, MAX_BLOCK_SERVICES } from "@chairback/config/blockScope";
 import { lockStaffCalendars } from "../engines/bookingWrite.js";
 import {
   blockOverAppointmentsConfirmation,
@@ -251,6 +252,8 @@ async function conflictsFor(
   byStaff: Map<string, PlannedSpan[]>,
   names: Map<string, string>,
   now: Date,
+  /** The block's services; [] = every booking is in the way. */
+  serviceIds: readonly string[],
 ): Promise<StaffConflictRow[]> {
   const out: StaffConflictRow[] = [];
   for (const staffId of [...byStaff.keys()].sort()) {
@@ -259,14 +262,40 @@ async function conflictsFor(
       staffId,
       spans: byStaff.get(staffId)!,
       now,
+      serviceIds,
     });
     for (const r of rows) out.push({ ...r, staffId, staffName: names.get(staffId) ?? "Provider" });
   }
   return out;
 }
 
+/**
+ * The services a block may name: this shop's own, offered by EVERY chosen
+ * barber (a block names what it stops on each chair it covers, so a service
+ * one of them does not do is a mistake to refuse, not a no-op to store).
+ * Returns the offending ids, [] when all are fine.
+ */
+async function unknownBlockServices(
+  tx: Prisma.TransactionClient,
+  shopId: string,
+  staffIds: readonly string[],
+  serviceIds: readonly string[],
+): Promise<string[]> {
+  if (serviceIds.length === 0) return [];
+  const offered = await tx.serviceStaff.findMany({
+    where: { shopId, staffId: { in: [...staffIds] }, serviceId: { in: [...serviceIds] } },
+    select: { staffId: true, serviceId: true },
+  });
+  const have = new Set(offered.map((o) => `${o.staffId}|${o.serviceId}`));
+  return serviceIds.filter((sid) => staffIds.some((st) => !have.has(`${st}|${sid}`)));
+}
+
+export const UNKNOWN_SERVICES_MESSAGE =
+  "Pick services every chosen provider offers, or choose All services.";
+
 export type CreateBlocksOutcome =
   | { kind: "not_found" }
+  | { kind: "bad_services"; message: string }
   | { kind: "too_many"; message: string }
   | { kind: "conflict"; conflicts: StaffConflictRow[]; confirmation: string }
   | {
@@ -300,8 +329,17 @@ export async function createBlocks(input: {
   requestId: string | null;
   confirmation: string | null;
   now: Date;
+  /**
+   * Which services the block stops: [] = all of them (the whole chair). Ignored
+   * for an open window (isBlock:false), which opens the chair for everything.
+   */
+  serviceIds?: readonly string[];
 }): Promise<CreateBlocksOutcome> {
   const staffIds = [...new Set(input.staffIds)].sort();
+  const serviceIds = input.isBlock ? [...new Set(input.serviceIds ?? [])].sort() : [];
+  if (serviceIds.length > MAX_BLOCK_SERVICES) {
+    return { kind: "bad_services", message: `Pick up to ${MAX_BLOCK_SERVICES} services.` };
+  }
   if (staffIds.length === 0) return { kind: "not_found" };
   if (staffIds.length > MAX_BLOCK_STAFF) {
     return { kind: "too_many", message: `Pick up to ${MAX_BLOCK_STAFF} providers at a time.` };
@@ -317,12 +355,21 @@ export async function createBlocks(input: {
     if (!input.requestId) return null;
     const prior = await tx.availabilityException.findMany({
       where: { shopId: input.shopId, requestId: input.requestId },
-      select: { staffId: true, startsAt: true, endsAt: true, groupId: true },
+      select: { staffId: true, startsAt: true, endsAt: true, groupId: true, serviceIds: true },
     });
     if (prior.length === 0) return null;
     const byStaff = new Map<string, PlannedSpan[]>();
     for (const r of prior) byStaff.set(r.staffId, [...(byStaff.get(r.staffId) ?? []), r]);
-    const overlapping = await conflictsFor(tx, input.shopId, byStaff, new Map(), input.now);
+    // The FIRST try's scope, not this request's: the replay answers for the
+    // rows that exist.
+    const overlapping = await conflictsFor(
+      tx,
+      input.shopId,
+      byStaff,
+      new Map(),
+      input.now,
+      prior[0]!.serviceIds,
+    );
     return {
       kind: "created" as const,
       count: prior.length,
@@ -350,10 +397,14 @@ export async function createBlocks(input: {
         const prior = await replay(tx);
         if (prior) return prior;
 
+        if ((await unknownBlockServices(tx, input.shopId, staffIds, serviceIds)).length > 0) {
+          return { kind: "bad_services", message: UNKNOWN_SERVICES_MESSAGE };
+        }
+
         let conflicts: StaffConflictRow[] = [];
         if (input.isBlock) {
           const byStaff = new Map(staffIds.map((id) => [id, input.spans]));
-          conflicts = await conflictsFor(tx, input.shopId, byStaff, names, input.now);
+          conflicts = await conflictsFor(tx, input.shopId, byStaff, names, input.now, serviceIds);
           if (conflicts.length > 0) {
             const confirmation = blockOverAppointmentsConfirmation(conflicts);
             if (input.confirmation !== confirmation) {
@@ -375,6 +426,7 @@ export async function createBlocks(input: {
               groupId,
               requestId: input.requestId,
               pattern: input.pattern,
+              serviceIds,
             })),
           ),
         });
@@ -409,6 +461,12 @@ export interface BlockDetail {
   reason: string | null;
   pattern: BlockPattern | null;
   groupId: string | null;
+  /** [] = all services. Otherwise the services it stops, by id. */
+  serviceIds: string[];
+  /** Those services' names, in the shop's order; a deleted one is left out. */
+  services: { id: string; name: string }[];
+  /** "All services", or "Shape-up and Kids' cut only". */
+  scopeLabel: string;
   group: {
     /** Rows "the whole group" acts on: not yet over, plus this one. */
     count: number;
@@ -454,6 +512,7 @@ async function groupRows(
     reason: true,
     pattern: true,
     groupId: true,
+    serviceIds: true,
   } as const;
   if (!target.groupId) {
     return tx.availabilityException.findMany({
@@ -489,10 +548,20 @@ export async function readBlock(input: {
         reason: true,
         pattern: true,
         groupId: true,
+        serviceIds: true,
       },
     });
     if (!target) return null;
     const rows = await groupRows(tx, input.shopId, target, input.now);
+    const scopedServices =
+      target.serviceIds.length === 0
+        ? []
+        : await tx.service.findMany({
+            where: { shopId: input.shopId, id: { in: target.serviceIds } },
+            orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+            select: { id: true, name: true },
+          });
+    const serviceName = new Map(scopedServices.map((s) => [s.id, s.name]));
     const staffIds = [...new Set(rows.map((r) => r.staffId))];
     const staff = await tx.staff.findMany({
       where: { shopId: input.shopId, id: { in: staffIds } },
@@ -510,6 +579,9 @@ export async function readBlock(input: {
       reason: target.reason,
       pattern: (target.pattern as BlockPattern | null) ?? null,
       groupId: target.groupId,
+      serviceIds: target.serviceIds,
+      services: scopedServices,
+      scopeLabel: describeBlockScope(target.serviceIds, (id) => serviceName.get(id)),
       group: {
         count: rows.length,
         staff: staff.map((s) => ({ id: s.id, name: s.name })),
@@ -534,6 +606,7 @@ export type EditTiming =
 
 export type EditBlockOutcome =
   | { kind: "not_found" }
+  | { kind: "bad_services"; message: string }
   | { kind: "invalid"; field: string; message: string }
   | { kind: "conflict"; conflicts: StaffConflictRow[]; confirmation: string; manyStaff: boolean }
   | { kind: "duplicate" }
@@ -554,9 +627,19 @@ export async function editBlock(input: {
   /** undefined = leave the note; null/"" = clear it. */
   reason: string | null | undefined;
   timing: EditTiming | undefined;
+  /**
+   * undefined = leave which services it stops; [] = all services (the whole
+   * chair); a list = only those. Applied to every row the edit covers.
+   */
+  serviceIds?: readonly string[];
   confirmation: string | null;
   now: Date;
 }): Promise<EditBlockOutcome> {
+  const nextServiceIds =
+    input.serviceIds === undefined ? undefined : [...new Set(input.serviceIds)].sort();
+  if (nextServiceIds && nextServiceIds.length > MAX_BLOCK_SERVICES) {
+    return { kind: "bad_services", message: `Pick up to ${MAX_BLOCK_SERVICES} services.` };
+  }
   try {
     return await runWithShop(
       input.shopId,
@@ -609,6 +692,25 @@ export async function editBlock(input: {
           });
         }
 
+        // A new scope is checked like a new time: widening "Shape-ups only" to
+        // every service (or adding one) can put bookings in the way that were
+        // not before. Narrowing it can only take bookings OUT of the way.
+        if (nextServiceIds) {
+          const staffIds = [...new Set(rows.map((r) => r.staffId))];
+          if ((await unknownBlockServices(tx, input.shopId, staffIds, nextServiceIds)).length > 0) {
+            return { kind: "bad_services", message: UNKNOWN_SERVICES_MESSAGE };
+          }
+          if (!next) {
+            next = rows.map((r) => ({
+              id: r.id,
+              staffId: r.staffId,
+              startsAt: r.startsAt,
+              endsAt: r.endsAt,
+            }));
+          }
+        }
+        const scope = nextServiceIds ?? rows[0]!.serviceIds;
+
         let overlapping = 0;
         if (next) {
           const staffIds = [...new Set(next.map((n) => n.staffId))];
@@ -619,7 +721,7 @@ export async function editBlock(input: {
           const names = new Map(staff.map((s) => [s.id, s.name]));
           const byStaff = new Map<string, PlannedSpan[]>();
           for (const n of next) byStaff.set(n.staffId, [...(byStaff.get(n.staffId) ?? []), n]);
-          const conflicts = await conflictsFor(tx, input.shopId, byStaff, names, input.now);
+          const conflicts = await conflictsFor(tx, input.shopId, byStaff, names, input.now, scope);
           if (conflicts.length > 0) {
             const confirmation = blockOverAppointmentsConfirmation(conflicts);
             if (input.confirmation !== confirmation) {
@@ -642,6 +744,12 @@ export async function editBlock(input: {
                                     unnest(${next.map((n) => n.endsAt.toISOString())}::timestamp[]) AS e) AS v
                        WHERE e.id = v.id AND e."shopId" = ${input.shopId} AND e."isBlock" = true`,
           );
+        }
+        if (nextServiceIds) {
+          await tx.availabilityException.updateMany({
+            where: { shopId: input.shopId, isBlock: true, id: { in: rows.map((r) => r.id) } },
+            data: { serviceIds: nextServiceIds },
+          });
         }
         if (input.reason !== undefined) {
           await tx.availabilityException.updateMany({

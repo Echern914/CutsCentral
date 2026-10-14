@@ -1,10 +1,12 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { describeBlockScope } from "@chairback/config/blockScope";
 import { cn } from "@/lib/cn";
 import { Dialog } from "@/components/ui/Dialog";
 import { chip, Field, FormFooter, Group, INPUT } from "./formkit";
-import type { StaffRow } from "./page";
+import type { ServiceRow, StaffRow } from "./page";
+import { blockableServices, scopedServiceIds } from "./blockServices";
 import { addBlockAction, type BlockOffInput } from "./actions";
 import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
 import {
@@ -43,6 +45,11 @@ const REVIEW_DAYS = 8;
  *     through Fri 17:00": nothing in between is bookable);
  *   - the same day every week, a bounded number of weeks or until a date.
  *
+ * What it stops: All services (the provider is not there), or Selected
+ * services - "no Shape-ups or Kids' cuts 3-6 PM" - with every other service
+ * still bookable over the same hours. The API enforces it on every booking
+ * path; this form only picks it.
+ *
  * Before saving, the Review card says what will be blocked, for whom, and on
  * which days. A save over existing bookings comes back as a refusal listing
  * them (ExternalBlockBanner) and is written only if the barber confirms -
@@ -53,6 +60,7 @@ const REVIEW_DAYS = 8;
  */
 export function BlockOffForm({
   staff,
+  services = [],
   dayKey,
   todayKey,
   defaultFromHour,
@@ -62,6 +70,8 @@ export function BlockOffForm({
   toast,
 }: {
   staff: StaffRow[];
+  /** The shop's menu, for "Selected services". */
+  services?: ServiceRow[];
   dayKey: string; // YYYY-MM-DD, shop tz - the day tapped in the calendar
   todayKey: string; // YYYY-MM-DD, shop tz - the earliest day worth blocking
   /** IANA shop tz. Kept for callers; the API resolves every edge in it now. */
@@ -95,6 +105,9 @@ export function BlockOffForm({
   // (the API does that arithmetic from the day key).
   const [allDay, setAllDay] = useState(false);
   const [reason, setReason] = useState("");
+  // All services = the whole chair (every block before scopes existed).
+  const [serviceScope, setServiceScope] = useState<"all" | "some">("all");
+  const [pickedServices, setPickedServices] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<BlockConflict | null>(null);
   // Own flag, not useTransition's: isPending does not span the await inside
@@ -123,6 +136,15 @@ export function BlockOffForm({
   const summary = blockSummary(plan, todayKey);
   const days = planDays(plan);
   const chosen = activeStaff.filter((s) => staffIds.includes(s.id));
+  const offeredServices = blockableServices(services, staffIds);
+  const scopedIds =
+    serviceScope === "some" ? scopedServiceIds(pickedServices, offeredServices) : [];
+  const serviceName = new Map(services.map((s) => [s.id, s.name]));
+  const scopeLine = describeBlockScope(scopedIds, (id) => serviceName.get(id));
+
+  function toggleService(id: string) {
+    setPickedServices((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  }
 
   function onDateChange(next: string) {
     setDate(next);
@@ -146,9 +168,14 @@ export function BlockOffForm({
   /** The request to send (without its id), or the sentence that stops it. */
   function validate(): Omit<BlockOffInput, "requestId"> | string {
     if (staffIds.length === 0) return "Pick who to block.";
+    if (serviceScope === "some" && scopedIds.length === 0) {
+      return "Pick at least one service, or choose All services.";
+    }
     if (!isDayKey(date)) return "Pick a date.";
     if (date < todayKey) return "That date has already passed.";
     const note = reason.trim() || undefined;
+    // Sent only for Selected services: absent is All services.
+    const scope = scopedIds.length > 0 ? { serviceIds: scopedIds } : {};
     const fromMin = minutesOf(fromTime);
     const toMin = endMinutes(toTime);
     // NaN from a cleared input fails every comparison below.
@@ -167,10 +194,16 @@ export function BlockOffForm({
         return {
           staffIds,
           when: { kind: "continuous", fromDate: date, fromMin, toDate: endDate, toMin },
+          ...scope,
           reason: note,
         };
       }
-      return { staffIds, when: { kind: "daily", fromDate: date, toDate: endDate, ...hours }, reason: note };
+      return {
+        staffIds,
+        when: { kind: "daily", fromDate: date, toDate: endDate, ...hours },
+        ...scope,
+        reason: note,
+      };
     }
     if (span === "weekly") {
       if (repeatBy === "until") {
@@ -187,10 +220,11 @@ export function BlockOffForm({
           ...hours,
           repeat: repeatBy === "until" ? { until: untilDate } : { weeks: weekCount },
         },
+        ...scope,
         reason: note,
       };
     }
-    return { staffIds, when: { kind: "day", date, ...hours }, reason: note };
+    return { staffIds, when: { kind: "day", date, ...hours }, ...scope, reason: note };
   }
 
   function requestIdFor(input: Omit<BlockOffInput, "requestId">): string {
@@ -319,6 +353,60 @@ export function BlockOffForm({
             </div>
           </Group>
         )}
+
+        <Group title="Services">
+          <div data-qa="block-scope" className="flex gap-1.5" role="group" aria-label="Which services">
+            {(
+              [
+                ["all", "All services"],
+                ["some", "Selected services"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={serviceScope === value}
+                onClick={() => setServiceScope(value)}
+                className={chip(serviceScope === value, "min-w-0 flex-1 px-2 text-center leading-tight")}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {serviceScope === "all" ? (
+            <p className="text-[11px] text-muted">Nothing can be booked in this time.</p>
+          ) : offeredServices.length === 0 ? (
+            <p data-qa="block-services-none" className="text-[11px] text-muted">
+              {staffIds.length > 1
+                ? "These providers have no service in common. Block them one at a time, or choose All services."
+                : "No services to pick yet. Add services first, or choose All services."}
+            </p>
+          ) : (
+            <>
+              <div
+                data-qa="block-services"
+                className="flex flex-wrap gap-1.5"
+                role="group"
+                aria-label="Services to block"
+              >
+                {offeredServices.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    aria-pressed={scopedIds.includes(s.id)}
+                    onClick={() => toggleService(s.id)}
+                    className={chip(scopedIds.includes(s.id), "min-w-0 px-4")}
+                  >
+                    <span className="truncate">{s.name}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted">
+                Only these can&apos;t be booked in this time. Every other service stays bookable, add-ons included.
+              </p>
+            </>
+          )}
+        </Group>
 
         <Group title="When">
           {/* Three answers to "how long", side by side even at 320px: each
@@ -519,6 +607,13 @@ export function BlockOffForm({
           >
             {summary || "Pick when to block."}
           </p>
+          <p data-qa="block-review-services" className="min-w-0 text-xs text-muted [overflow-wrap:anywhere]">
+            {serviceScope === "all"
+              ? "All services"
+              : scopedIds.length === 0
+                ? "No services picked yet."
+                : `${scopeLine}. Everything else stays bookable.`}
+          </p>
           {activeStaff.length > 1 && (
             <p data-qa="block-review-who" className="min-w-0 text-xs text-muted [overflow-wrap:anywhere]">
               {chosen.length === 0 ? "No one picked yet." : `For ${chosen.map((s) => s.name).join(", ")}`}
@@ -545,6 +640,12 @@ export function BlockOffForm({
           {acuityConnected && (
             <p data-qa="block-acuity-note" className="text-[11px] text-muted">
               This block isn&apos;t copied to Acuity yet. Block the same time in Acuity too, or it can still be booked there.
+            </p>
+          )}
+          {acuityConnected && serviceScope === "some" && (
+            <p data-qa="block-acuity-services-note" className="text-[11px] text-muted">
+              Acuity can only block a whole calendar, not single services, so Acuity bookings can still take these
+              services in this time. ChairBack bookings can&apos;t.
             </p>
           )}
         </div>

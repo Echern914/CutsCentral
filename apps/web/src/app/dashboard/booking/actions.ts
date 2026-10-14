@@ -976,6 +976,11 @@ export type BlockWhenInput =
 export interface BlockOffInput {
   staffIds: string[];
   when: BlockWhenInput;
+  /**
+   * "Selected services": only these are refused over the time; every other
+   * service stays bookable. Absent = All services (the whole chair).
+   */
+  serviceIds?: string[];
   reason?: string;
   requestId: string;
   confirmation?: string;
@@ -1015,6 +1020,7 @@ export async function addBlockAction(input: BlockOffInput): Promise<BlockOffResu
   const res = await apiSend<{ ok: boolean; created?: number }>("POST", "/api/booking/blocks", {
     staffIds: input.staffIds,
     when: input.when,
+    ...(input.serviceIds && input.serviceIds.length > 0 ? { serviceIds: input.serviceIds } : {}),
     reason: input.reason,
     requestId: input.requestId,
     confirmation: input.confirmation,
@@ -1036,6 +1042,14 @@ export interface BlockDetail {
   reason: string | null;
   pattern: "single" | "daily" | "continuous" | "weekly" | null;
   groupId: string | null;
+  /**
+   * [] = All services. Optional so a web deploy ahead of the API reads a
+   * block as the whole chair, which is what every block was before.
+   */
+  serviceIds?: string[];
+  services?: { id: string; name: string }[];
+  /** "All services", or "Shape-up and Kids' cut only". */
+  scopeLabel?: string;
   group: {
     count: number;
     staff: { id: string; name: string }[];
@@ -1064,6 +1078,8 @@ export interface BlockEditInput {
   timing?:
     | { kind: "day"; date: string; fromMin?: number; toMin?: number }
     | { kind: "window"; fromMin?: number; toMin?: number };
+  /** undefined = leave which services it stops; null = All services; a list = only those. */
+  serviceIds?: string[] | null;
   confirmation?: string;
 }
 

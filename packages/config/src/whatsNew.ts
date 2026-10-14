@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-14-block-off-some-services",
+    date: "2026-10-14",
+    kind: "feature",
+    title: "Block off time for some services only",
+    body:
+      "When you block off time, choose All services or Selected services. Pick Shape-ups and Kids' cuts for 3-6 PM, " +
+      "and Haircuts stay bookable then. Bookings already in that time stay as they are. Acuity can only block a whole calendar, so it still takes those services.",
+  },
+  {
     id: "2026-10-13-block-off-journey",
     date: "2026-10-13",
     kind: "feature",

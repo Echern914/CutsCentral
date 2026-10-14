@@ -200,6 +200,13 @@ export interface AgendaRow {
   start: string; // ISO
   end: string | null; // ISO
   clientName: string; // for a block: the reason (or "Blocked")
+  /**
+   * A native block only: the services it stops. [] or absent = the whole
+   * chair; a list = only those, and the chair is open for everything else.
+   */
+  blockServiceIds?: string[];
+  /** A native block only: "All services", or "Shape-up and Kids' cut only". */
+  blockScope?: string;
   /** Bare Instagram handle of the row's own client (never a group booker's). */
   clientInstagram?: string | null;
   serviceName: string | null;

@@ -445,6 +445,7 @@ async function startRun(run: RunRow, now: Date): Promise<void> {
         startsAt: slot.startsAt,
         endsAt: slot.endsAt,
         bufferMin: shop.bookingBufferMin,
+        bookedServiceId: run.serviceId,
         serviceDayLimit: { serviceId: run.serviceId, timezone: shop.timezone },
         walkInCapacity: "enforce",
         now,

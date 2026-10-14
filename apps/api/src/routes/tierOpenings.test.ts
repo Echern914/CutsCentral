@@ -595,6 +595,7 @@ describe("a claim against a barber writing over the hold", () => {
   const barberBooks = (startsAt: Date) =>
     prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
+        bookedServiceId: null,
         staffId,
         shopId,
         startsAt,
@@ -659,6 +660,7 @@ describe("then anyone", () => {
     const guard = (now: Date) =>
       prisma.$transaction((tx) =>
         lockStaffAndAssertSlotFree(tx, {
+          bookedServiceId: null,
           staffId,
           shopId,
           startsAt: at,
@@ -694,10 +696,10 @@ describe("then anyone", () => {
     const { openingId } = (await hold(at)).body;
     const span = { staffId, shopId, startsAt: at, endsAt: new Date(at.getTime() + 30 * 60_000), bufferMin: 0 };
     await expect(
-      prisma.$transaction((tx) => lockStaffAndAssertSlotFree(tx, { ...span, serviceDayLimit: null, walkInCapacity: "enforce" })),
+      prisma.$transaction((tx) => lockStaffAndAssertSlotFree(tx, { bookedServiceId: null, ...span, serviceDayLimit: null, walkInCapacity: "enforce" })),
     ).rejects.toBeInstanceOf(SlotTakenError);
     await prisma.$transaction((tx) =>
-      lockStaffAndAssertSlotFree(tx, { ...span, serviceDayLimit: null, walkInCapacity: "ignore", overrideWaitlistHolds: true }),
+      lockStaffAndAssertSlotFree(tx, { bookedServiceId: null, ...span, serviceDayLimit: null, walkInCapacity: "ignore", overrideWaitlistHolds: true }),
     );
     expect((await prisma.tierOpening.findUnique({ where: { id: openingId } }))?.status).toBe("RELEASED");
   });

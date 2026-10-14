@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { zonedDateKey, zonedMinutesOfDay } from "@chairback/config/time";
+import { describeBlockScope } from "@chairback/config/blockScope";
 import { Dialog } from "@/components/ui/Dialog";
 import { chip, Field, FormFooter, Group, INPUT } from "./formkit";
 import {
@@ -13,6 +14,8 @@ import {
 } from "./actions";
 import { ExternalBlockBanner, type BlockConflict } from "./ExternalBlockBanner";
 import { Pill } from "./BlockOffForm";
+import { blockableServices, scopedServiceIds } from "./blockServices";
+import type { ServiceRow } from "./page";
 import {
   addDaysToKey,
   formatClock,
@@ -24,6 +27,12 @@ import {
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
 type Scope = "one" | "group";
+
+/**
+ * The shop's menu, provided once by the calendar, so a block's sheet - opened
+ * from any card - can change which services the block stops.
+ */
+export const BlockMenu = createContext<ServiceRow[]>([]);
 
 const PATTERN_LABEL: Record<NonNullable<BlockDetail["pattern"]>, string | null> = {
   single: null,
@@ -67,15 +76,20 @@ function wallOf(block: BlockDetail, tz: string) {
  */
 export function BlockEditSheet({
   blockId,
+  services: servicesProp,
   onClose,
   onChanged,
   toast,
 }: {
   blockId: string;
+  /** The shop's menu, for changing which services the block stops. */
+  services?: ServiceRow[];
   onClose: () => void;
   onChanged: () => void;
   toast: Toast;
 }) {
+  const menu = useContext(BlockMenu);
+  const services = servicesProp ?? menu;
   const [loaded, setLoaded] = useState<{ block: BlockDetail; tz: string } | null>(null);
   const [loadError, setLoadError] = useState(false);
 
@@ -106,6 +120,7 @@ export function BlockEditSheet({
     <LoadedBlockSheet
       block={loaded.block}
       tz={loaded.tz}
+      services={services}
       onClose={onClose}
       onChanged={onChanged}
       toast={toast}
@@ -116,12 +131,14 @@ export function BlockEditSheet({
 function LoadedBlockSheet({
   block,
   tz,
+  services,
   onClose,
   onChanged,
   toast,
 }: {
   block: BlockDetail;
   tz: string;
+  services: ServiceRow[];
   onClose: () => void;
   onChanged: () => void;
   toast: Toast;
@@ -137,6 +154,11 @@ function LoadedBlockSheet({
   const [fromTime, setFromTime] = useState(hhmm(wall.fromMin));
   const [toTime, setToTime] = useState(hhmm(wall.toMin));
   const [reason, setReason] = useState(block.reason ?? "");
+  const savedServiceIds = [...(block.serviceIds ?? [])].sort();
+  const [serviceScope, setServiceScope] = useState<"all" | "some">(
+    savedServiceIds.length > 0 ? "some" : "all",
+  );
+  const [pickedServices, setPickedServices] = useState<string[]>(savedServiceIds);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<BlockConflict | null>(null);
   const [asking, setAsking] = useState(false);
@@ -150,10 +172,34 @@ function LoadedBlockSheet({
     (!allDay && (minutesOf(fromTime) !== wall.fromMin || endMin(toTime) !== wall.toMin)) ||
     (scope === "one" && date !== wall.day);
   const noteChanged = reason.trim() !== (block.reason ?? "");
+  // The services every chair this edit covers offers (the API refuses others).
+  const coveredStaff =
+    scope === "group" ? block.group.staff.map((s) => s.id) : [block.staffId];
+  const offeredServices = blockableServices(services, coveredStaff);
+  // A saved service no longer on the menu stays ticked: the barber did not
+  // choose to drop it, and the API reads a deleted id as stopping nothing.
+  const keptIds = savedServiceIds.filter((id) => !services.some((s) => s.id === id));
+  const listed = [...offeredServices, ...keptIds.map((id) => ({ id }))];
+  const scopedIds =
+    serviceScope === "some" ? scopedServiceIds(pickedServices, listed).sort() : [];
+  const servicesChanged = scopedIds.join("|") !== savedServiceIds.join("|");
+  const serviceName = new Map([
+    ...(block.services ?? []).map((s) => [s.id, s.name] as const),
+    ...services.map((s) => [s.id, s.name] as const),
+  ]);
+
+  function toggleService(id: string) {
+    setPickedServices((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  }
 
   function build(): BlockEditInput | string {
     const input: BlockEditInput = { scope };
     if (noteChanged) input.reason = reason.trim();
+    if (serviceScope === "some" && scopedIds.length === 0) {
+      return "Pick at least one service, or choose All services.";
+    }
+    // null = All services; a list = only those.
+    if (servicesChanged) input.serviceIds = scopedIds.length > 0 ? scopedIds : null;
     if (timesEditable && timeChanged) {
       const hours = allDay ? {} : { fromMin: minutesOf(fromTime), toMin: endMin(toTime) };
       if (!allDay && !(hours.toMin! > hours.fromMin!)) return "End time must be after the start time.";
@@ -165,7 +211,9 @@ function LoadedBlockSheet({
         input.timing = { kind: "window", ...hours };
       }
     }
-    if (input.reason === undefined && !input.timing) return "Nothing has changed yet.";
+    if (input.reason === undefined && !input.timing && input.serviceIds === undefined) {
+      return "Nothing has changed yet.";
+    }
     return input;
   }
 
@@ -282,6 +330,11 @@ function LoadedBlockSheet({
             {block.staffName}
             {block.reason ? ` · ${block.reason}` : ""}
           </p>
+          <p data-qa="block-edit-scope-line" className="min-w-0 text-xs text-muted [overflow-wrap:anywhere]">
+            {savedServiceIds.length === 0
+              ? "All services"
+              : `${block.scopeLabel ?? describeBlockScope(savedServiceIds, (id) => serviceName.get(id))}. Other services stay bookable.`}
+          </p>
           {inGroup && (
             <p data-qa="block-group-line" className="min-w-0 text-xs text-muted [overflow-wrap:anywhere]">
               Saved together: {groupCount} blocks
@@ -381,6 +434,50 @@ function LoadedBlockSheet({
                 <p className="text-[11px] text-muted">These hours on each day in the group, each on its own date.</p>
               )}
             </>
+          )}
+        </Group>
+
+        <Group title="Services">
+          <div data-qa="block-edit-services-scope" className="flex gap-1.5" role="group" aria-label="Which services">
+            {(
+              [
+                ["all", "All services"],
+                ["some", "Selected services"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={serviceScope === value}
+                onClick={() => setServiceScope(value)}
+                className={chip(serviceScope === value, "min-w-0 flex-1 px-2 text-center leading-tight")}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {serviceScope === "some" && (
+            <div
+              data-qa="block-edit-services"
+              className="flex flex-wrap gap-1.5"
+              role="group"
+              aria-label="Services to block"
+            >
+              {[
+                ...offeredServices.map((s) => ({ id: s.id, name: s.name })),
+                ...keptIds.map((id) => ({ id, name: serviceName.get(id) ?? "Removed service" })),
+              ].map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  aria-pressed={pickedServices.includes(s.id)}
+                  onClick={() => toggleService(s.id)}
+                  className={chip(pickedServices.includes(s.id), "min-w-0 px-4")}
+                >
+                  <span className="truncate">{s.name}</span>
+                </button>
+              ))}
+            </div>
           )}
         </Group>
 

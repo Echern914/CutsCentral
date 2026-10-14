@@ -1,5 +1,6 @@
 import type { Request, Response, Router } from "express";
 import { z } from "zod";
+import { MAX_BLOCK_SERVICES } from "@chairback/config/blockScope";
 import { appointmentConflictSentence } from "../services/blockOffDays.js";
 import {
   createBlocks,
@@ -36,6 +37,16 @@ const requestId = z
   .regex(/^[A-Za-z0-9_-]{16,64}$/, "A request id is 16-64 letters, digits, - or _.")
   .optional();
 
+/**
+ * "Selected services": the ids of the services the block stops, at least one.
+ * Absent = "All services", the whole chair. An empty list is refused rather
+ * than read as either: it is a form that lost its choice.
+ */
+const serviceIds = z
+  .array(z.string().trim().min(1).max(64))
+  .min(1, "Pick at least one service, or choose All services.")
+  .max(MAX_BLOCK_SERVICES);
+
 const windowFields = { fromMin: fromMin.optional(), toMin: toMin.optional() };
 const bothOrNeither = (d: { fromMin?: number; toMin?: number }) =>
   (d.fromMin === undefined) === (d.toMin === undefined);
@@ -71,6 +82,7 @@ const createSchema = z
   .object({
     staffIds: z.array(z.string().min(1).max(64)).min(1).max(MAX_BLOCK_STAFF),
     when: whenSchema.refine((w) => w.kind === "continuous" || bothOrNeither(w), BOTH_OR_NEITHER),
+    serviceIds: serviceIds.optional(),
     reason,
     requestId,
     confirmation,
@@ -111,6 +123,12 @@ function sendCreated(res: Response, req: Request, outcome: CreateBlocksOutcome, 
   }
   if (outcome.kind === "too_many") {
     res.status(400).json({ error: "invalid_input", issues: [{ path: ["when"], message: outcome.message }] });
+    return;
+  }
+  if (outcome.kind === "bad_services") {
+    res
+      .status(400)
+      .json({ error: "invalid_input", issues: [{ path: ["serviceIds"], message: outcome.message }] });
     return;
   }
   if (outcome.kind === "conflict") {
@@ -158,6 +176,8 @@ const editSchema = z
       ])
       .refine(bothOrNeither, BOTH_OR_NEITHER)
       .optional(),
+    /** A list = only those services; null = All services; absent = unchanged. */
+    serviceIds: serviceIds.nullable().optional(),
     confirmation,
   })
   .strict();
@@ -204,6 +224,7 @@ export function registerBlockRoutes(router: Router): void {
       requestId: d.requestId ?? null,
       confirmation: d.confirmation ?? null,
       now,
+      serviceIds: d.serviceIds ?? [],
     });
     sendCreated(res, req, outcome, staffIds.length > 1);
   });
@@ -299,12 +320,19 @@ export function registerBlockRoutes(router: Router): void {
       scope: d.scope,
       reason: d.reason,
       timing,
+      serviceIds: d.serviceIds === undefined ? undefined : (d.serviceIds ?? []),
       confirmation: d.confirmation ?? null,
       now: new Date(),
     });
     switch (outcome.kind) {
       case "not_found":
         res.status(404).json({ error: "not_found" });
+        return;
+      case "bad_services":
+        res.status(400).json({
+          error: "invalid_input",
+          issues: [{ path: ["serviceIds"], message: outcome.message }],
+        });
         return;
       case "invalid":
         res.status(400).json({

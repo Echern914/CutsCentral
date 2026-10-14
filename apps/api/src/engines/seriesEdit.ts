@@ -335,6 +335,8 @@ export async function checkSeriesEdit(
         bufferMin: req.bufferMin,
         excludeAppointmentId: visit.id,
         statuses: ["BOOKED", "PENDING"],
+        // Unread under nativeBlocks "ignore" - no block is checked.
+        bookedServiceId: null,
         serviceDayLimit: null,
         overrideWaitlistHolds: true,
         overlapConfirmation: null,

@@ -166,6 +166,8 @@ export async function startEntry(opts: {
       startsAt,
       endsAt,
       bufferMin: Math.max(0, shop.bookingBufferMin),
+      // Unread under nativeBlocks "ignore" - no block is checked.
+      bookedServiceId: null,
       serviceDayLimit: null,
       overrideWaitlistHolds: true,
       now,
