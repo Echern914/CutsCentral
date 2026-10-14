@@ -151,12 +151,12 @@ function directBooking(staffId: string, serviceId: string, startsAt: Date, min: 
   });
 }
 
-async function untilBlockedOn(table: string, tries = 100): Promise<boolean> {
+async function untilBlockedOn(table: string, atLeast = 1, tries = 200): Promise<boolean> {
   for (let i = 0; i < tries; i++) {
     const rows = await prisma.$queryRaw<{ n: number }[]>`
       SELECT count(*)::int AS n FROM pg_stat_activity
        WHERE wait_event_type = 'Lock' AND query ILIKE ${"%" + table + "%"}`;
-    if ((rows[0]?.n ?? 0) > 0) return true;
+    if ((rows[0]?.n ?? 0) >= atLeast) return true;
     await new Promise((r) => setTimeout(r, 30));
   }
   return false;
@@ -220,7 +220,10 @@ describe("booking writes", () => {
     try {
       shape = book(S.sam, S.shapeUp, at(5, 16)).then((r) => r);
       cut = book(S.sam, S.haircut, at(5, 16, 30)).then((r) => r);
-      expect(await untilBlockedOn("ExternalBlock")).toBe(true);
+      // BOTH requests parked past their earlier reads - one waiter could be
+      // the Haircut alone, and a Shape-up still on its way would be refused by
+      // the grid (400) instead of the write guard this test is about.
+      expect(await untilBlockedOn("ExternalBlock", 2)).toBe(true);
       const made = await scopedBlock(5);
       expect(made.status).toBe(201);
     } finally {
