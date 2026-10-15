@@ -335,6 +335,9 @@ export const HELP_ANSWERS: HelpAnswer[] = [
       "cancel appointment", "reschedule", "move appointment", "change time", "client cancel",
       "edit an appointment", "edit appointment", "change an appointment", "amend booking",
       "change a booking", "edit booking",
+      // The Booking rules (#640): whether and until when clients may do it online.
+      "booking rules", "cancelling online", "cancel online", "stop online cancellations",
+      "stop clients cancelling", "reschedule online", "reschedule cutoff",
     ],
     category: "booking",
     action: { label: "Open agenda", featureId: "online-booking" },
@@ -938,7 +941,81 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     id: "team-logins",
     q: "Can my barbers have their own logins?",
     a: "Yes. Invite them under Team logins and each one signs in to their own view — an employee sees their own chair and their own clients, not the whole shop's numbers.\n\nThat's separate from Staff, which is just who takes appointments.",
-    keywords: ["team", "logins", "invite", "seats", "roles", "permissions", "employee login", "manager", "access"],
+    keywords: [
+      "team", "logins", "invite", "seats", "roles", "permissions", "employee login", "manager", "access",
+      // Not "invite a barber" or "add a login": "barber" and "add" pull "how do
+      // I add a barber to my shop" (staffing, add-staff) here.
+      "invite a team member",
+    ],
+    category: "account",
+    action: { label: "Open team", featureId: "team" },
+  },
+
+  /* ----- Independent barbers on a shop's team (TeamLink, Snow 2026-10-15) ---- */
+  {
+    id: "independent-team",
+    q: "Can independent barbers or booth renters join my shop's team?",
+    a: "Yes. On Team, under Independent barbers, copy your team link and text it to them. They open it, sign in with their own ChairBack business and ask to join; you approve or decline them right there.\n\nThey keep their own business: their clients, bookings and payments never move to your shop. You see only what each one chooses to share with you — visits, revenue, clients and rating, each hidden until they turn it on. Either side can end it any time: you remove them, or they leave from their Teams page.\n\nOnly the shop's owner sees this, not managers.",
+    keywords: [
+      "booth renter", "booth renters", "independent barber", "independent barbers", "1099",
+      "team link", "join my team", "join my shop", "link their business", "contractors", "renters",
+    ],
+    category: "account",
+    action: { label: "Open team", featureId: "team" },
+  },
+  {
+    id: "booth-rent",
+    q: "How do I keep track of booth rent?",
+    a: "On Team, each independent barber has a Booth rent line. Tap Set rent for what they owe weekly or monthly and from when, then Record payment each time they pay — cash, Zelle, Cash App, Venmo, card or other. It keeps a running balance and shows what's unpaid; History lists every rate and payment, and a mistake is voided, never deleted.\n\nChairBack doesn't collect the rent — it's your record of what was paid. Each barber sees the same summary of their own rent on their Teams page. If one leaves, rent stops at the end of the current period, and the record stays so you can still settle it.",
+    keywords: [
+      "booth rent", "rent", "chair rent", "rent payment", "who paid rent", "rent owed",
+      "paid up", "track rent", "renting a chair", "rent due", "late rent",
+    ],
+    category: "account",
+    action: { label: "Open team", featureId: "team" },
+  },
+  {
+    id: "team-overview",
+    q: "How do I see how my whole team is doing?",
+    a: "On Team, pick Last 7 days, Last 30 days or Last 3 months. Team overview adds up your independent barbers' visits, revenue and clients, with an arrow against the period before, and shows how many of those paying rent are paid up.\n\nA total only counts barbers who share that number, and says so (“From 2 of 3 sharing”), so it's never passed off as the whole team's. Each barber's own numbers are under Your team, and Team activity lists who asked to join, joined or left, what anyone started or stopped sharing, and the rent you recorded — never anyone's numbers.",
+    keywords: [
+      "team totals", "team numbers", "team stats", "how is my team doing", "team overview",
+      "team activity", "team performance", "my barbers numbers", "compare my barbers", "whole team",
+    ],
+    category: "account",
+    action: { label: "Open team", featureId: "team" },
+  },
+  {
+    // The MEMBER's side: a barber whose business is on someone's team.
+    id: "team-sharing",
+    q: "What can the shop owner see about my business?",
+    a: "Only what you turn on. On your Teams page each team has switches for Visits, Revenue, Clients and Rating — all hidden until you share them — and one for Schedule. Under them is exactly how your row looks to the owner, numbers included, so there's no guessing.\n\nYour clients, bookings and payments are never shared or moved. Change a switch any time, or tap Leave team: the owner stops seeing all of it at once, and asking to join again starts with nothing shared.",
+    keywords: [
+      "what can my shop see", "what does the owner see", "what can the owner see", "hide my numbers",
+      "share my numbers", "stop sharing", "leave a team", "leave team", "my privacy on a team",
+    ],
+    category: "account",
+    action: { label: "Open teams", featureId: "teams" },
+  },
+  {
+    id: "team-mentors",
+    q: "Can I pair a mentor with someone on my team?",
+    a: "Yes, once two or more barbers are on your team. On Team, under Mentorship, pick the mentor and who they mentor, then tap Pair. You see who mentors whom, never what's shared between them.\n\nThe barber being mentored decides what their mentor sees — visits, revenue, clients and rating, all hidden to start and separate from what they share with you — on their Teams page, where the mentor gets a read-only view. Either of them, or you, can end it, and leaving the team ends it too. Photos and feedback on cuts stay in your team's own chat.",
+    keywords: [
+      "mentor", "mentors", "mentorship", "mentoring", "how does mentorship work", "mentee", "apprentice", "coach a barber",
+      "pair a mentor", "teach a barber", "new barber", "my mentor",
+    ],
+    category: "account",
+    action: { label: "Open team", featureId: "team" },
+  },
+  {
+    id: "team-schedules",
+    q: "Can I see when my team's barbers are working?",
+    a: "Yes, for each barber who shares it. They turn on Schedule on their Teams page; then Team → Schedules shows their day, today or any of the next six: their hours, when they're booked, time off, the free windows, and right now whether they're free, booked, away or done for the day.\n\nIt's times only — never who is booked or for what, and no reason for time off. When a barber who shares changes their hours or time off, Team activity says so, at most once an hour.",
+    keywords: [
+      "team schedule", "team schedules", "when are my barbers working", "who is working today",
+      "who is in today", "barber schedules", "my barbers hours", "who is free now", "share my schedule",
+    ],
     category: "account",
     action: { label: "Open team", featureId: "team" },
   },
@@ -1342,7 +1419,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "my-policy",
     q: "What is my cancellation policy set to?",
-    a: "Dashboard → Payments holds all of it: how customers pay, the free-cancel cutoff in hours, and the fee charged inside that cutoff.\n\nA cutoff of 0 means every cancellation is a full refund. A fee of 100% means no refund inside the cutoff.\n\nIf you take deposits, Deposit refunds lets you make them non-refundable: a client who cancels doesn't get the deposit back, whatever the cutoff, unless you choose to refund it from that appointment. Bookings keep the terms they were made on, and if you cancel, the deposit is always refunded in full.\n\nOne catch worth knowing: a cancellation fee can only actually be charged if you take payment through ChairBack. If you're set to pay-in-person, the fee sits there as a number and nothing collects it.\n\nYour own rules in your own words — lateness, what to bring — plus a checklist customers tick before booking are a separate card: Booking → Settings → Your policies.",
+    a: "Dashboard → Payments holds all of it: how customers pay, the free-cancel cutoff in hours, and the fee charged inside that cutoff. Whether clients can cancel or move a booking online at all, and until how many hours before, is separate: Booking → Settings → Booking rules.\n\nA cutoff of 0 means every cancellation is a full refund. A fee of 100% means no refund inside the cutoff.\n\nIf you take deposits, Deposit refunds lets you make them non-refundable: a client who cancels doesn't get the deposit back, whatever the cutoff, unless you choose to refund it from that appointment. Bookings keep the terms they were made on, and if you cancel, the deposit is always refunded in full.\n\nOne catch worth knowing: a cancellation fee can only actually be charged if you take payment through ChairBack. If you're set to pay-in-person, the fee sits there as a number and nothing collects it.\n\nYour own rules in your own words — lateness, what to bring — plus a checklist customers tick before booking are a separate card: Booking → Settings → Your policies.",
     keywords: [
       "cancellation policy", "my policy", "cancel policy", "refund policy", "cutoff",
       "cancellation fee", "late cancel", "what is my policy", "policy set",
@@ -1400,10 +1477,15 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "mark-no-show",
     q: "A client didn't show up — what do I do?",
-    a: "Mark the appointment as a no-show. It frees the chair, records the miss on that client's history, earns them no punch, and counts as $0 rather than a sale you never made.\n\nIf no-shows are a pattern, taking card or a deposit at booking is the thing that actually changes it.",
+    // #641 (2026-10-15): a no-show can't be marked before the start any more,
+    // it asks first (stating the fee and card when one is kept), and a
+    // mistaken one can be undone. Money never moves back on its own.
+    a: "Once the appointment has started, mark it a no-show: tap No-show on its card, then Confirm no-show, or open it and use More → Mark no-show. It frees the chair, records the miss on that client's history, earns them no punch, and counts as $0 rather than a sale you never made. If a card is kept for no-shows, it tells you the fee and the card before you confirm.\n\nIt can't be marked before it starts — cancel it instead. Marked the wrong one? Open it and use More → Undo no-show; it goes back to booked if that time is still free. Money doesn't move back by itself: a no-show fee already charged is refunded from your Stripe dashboard.\n\nIf no-shows are a pattern, taking card or a deposit at booking is the thing that actually changes it.",
     keywords: [
       "no show", "didnt show", "didn't show up", "never showed", "ghosted",
       "stood me up", "missed their appointment", "didnt turn up", "no showed",
+      "undo no show", "undo a no show", "no show by mistake", "wrong no show", "marked a no show by mistake",
+      "mark a no show", "mark no show", "mark as no show",
     ],
     category: "booking",
     action: { label: "Open calendar", featureId: "online-booking" },

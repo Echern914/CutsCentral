@@ -876,6 +876,11 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
       "independent",
       "booth renters",
       "team link",
+      "booth rent",
+      "team activity",
+      "team totals",
+      "mentorship",
+      "team schedules",
     ],
     description:
       "Your team: independent providers who link their own business, and who can sign in",
@@ -889,7 +894,15 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     // else's shop, and the switches for what that shop can see.
     id: "teams",
     name: "Teams you're on",
-    synonyms: ["join a team", "shop team", "leave team", "what my shop sees", "share my numbers"],
+    synonyms: [
+      "join a team",
+      "shop team",
+      "leave team",
+      "what my shop sees",
+      "share my numbers",
+      "my mentor",
+      "my booth rent",
+    ],
     description: "Link your business to a shop's team, and choose what they can see",
     href: "/dashboard/teams",
     category: "account",
