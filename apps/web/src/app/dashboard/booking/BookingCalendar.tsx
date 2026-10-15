@@ -61,7 +61,6 @@ import {
   noShowAppointmentAction,
   nudgeAppointmentAction,
   recordWalkInAction,
-  removeBlockAction,
   restoreAppointmentAction,
 } from "./actions";
 import { agendaWindowOf, mergeAgendaWindow } from "./agendaMerge";
@@ -78,6 +77,8 @@ import {
 import { AppointmentSheet, type SheetView } from "./AppointmentSheet";
 import { SpecialChip } from "../_components/SpecialChip";
 import { BlockOffForm } from "./BlockOffForm";
+import { BlockEditSheet } from "./BlockEditSheet";
+import { spreadAcrossDays } from "./blockDays";
 import { TierOpeningForm } from "./TierOpeningForm";
 import { useRouter } from "next/navigation";
 
@@ -190,6 +191,7 @@ export function BookingCalendar({
   tierOpenings = false,
   pendingWaitlistBooking = null,
   onPendingWaitlistBookingTaken,
+  acuityConnected = false,
 }: {
   initial: AgendaResponse;
   initialWaitlist: WaitlistRow[];
@@ -197,6 +199,8 @@ export function BookingCalendar({
   onOpenWaitlist: () => void;
   /** Native booking = the barber can add appointments + block off time here. */
   isNative: boolean;
+  /** Acuity is connected: Block off time says the block is not copied there. */
+  acuityConnected?: boolean;
   staff: StaffRow[];
   services: ServiceRow[];
   /** The shop's add-ons, offered in New appointment once a service is picked. */
@@ -332,14 +336,18 @@ export function BookingCalendar({
     () => new Set([`${todayParts.y}-${todayParts.m}`]),
   );
 
-  // Bucket every loaded row by its shop-tz day.
+  // Bucket every loaded row by its shop-tz day. A block that runs past
+  // midnight lands on EVERY day it covers, clipped to each (blockDays.ts) -
+  // otherwise a multi-day block showed on its first day only.
   const byDay = useMemo(() => {
     const map = new Map<string, AgendaRow[]>();
-    for (const row of agenda) {
-      const key = dayKeyOf(row.start);
-      const list = map.get(key) ?? [];
-      list.push(row);
-      map.set(key, list);
+    for (const whole of agenda) {
+      for (const row of spreadAcrossDays(whole, tz)) {
+        const key = dayKeyOf(row.start);
+        const list = map.get(key) ?? [];
+        list.push(row);
+        map.set(key, list);
+      }
     }
     for (const list of map.values()) list.sort((a, b) => a.start.localeCompare(b.start));
     return map;
@@ -1083,6 +1091,7 @@ export function BookingCalendar({
           todayKey={todayKey}
           timezone={tz}
           defaultFromHour={blockDay.hour}
+          acuityConnected={acuityConnected}
           onClose={() => setBlockDay(null)}
           onCreated={() => {
             setBlockDay(null);
@@ -2479,6 +2488,13 @@ export function AppointmentBlock({
     />
   );
   const openSheet = (view: SheetView) => (host ? host(row, view, renderSheet) : setSheet(view));
+  // A native block opens its own sheet (BlockEditSheet) - hosted like the
+  // appointment sheet, so a poll that remounts this card does not close it.
+  const [blockSheet, setBlockSheet] = useState(false);
+  const renderBlockSheet = (_view: SheetView, live: AgendaRow, close: () => void) => (
+    <BlockEditSheet blockId={live.id} onClose={close} onChanged={onChanged} toast={toast} />
+  );
+  const openBlockSheet = () => (host ? host(row, "detail", renderBlockSheet) : setBlockSheet(true));
   /**
    * COLLAPSED BY DEFAULT. A day with eight cuts used to be eight full cards of
    * service lines and button rows, which is a lot of scrolling to answer "who
@@ -2575,22 +2591,19 @@ export function AppointmentBlock({
                 Blocked{durSuffix}
               </span>
             )}
-            {/* Unblock, right on the band. Blocking time was always one tap and
-                un-blocking it was impossible anywhere in the app — the endpoint
-                existed but nothing called it, so a barber who blocked a day off
-                could never give it back. Deliberately a plain visible button,
-                not a menu: this is the one action a block has. Single tap
-                matches Cancel on an appointment, which is far more destructive
-                and also asks nothing. */}
+            {/* Open, right on the band: the block's sheet shows what it is and
+                the save it came from, changes its note or hours, and removes it
+                (or its whole group) - asking first. It used to be a one-tap
+                "Unblock" that gave a day off away with no question at all. */}
             {!row.syncedExternal && (
               <button
                 type="button"
-                onClick={() => act(removeBlockAction, "Time unblocked")}
-                disabled={pending}
-                aria-label={`Unblock ${timeLabel}`}
-                className="rounded-md border border-emerald-soft/40 px-2.5 py-1 text-[11px] font-medium text-emerald-soft transition-colors hover:bg-emerald-soft/10 disabled:opacity-50"
+                onClick={openBlockSheet}
+                aria-label={`Open block ${timeLabel}`}
+                data-qa="block-open"
+                className="rounded-md border border-subtle-strong px-2.5 py-1 text-[11px] font-medium text-offwhite/85 transition-colors hover:bg-charcoal-700/60"
               >
-                {pending ? "…" : "Unblock"}
+                Edit
               </button>
             )}
           </span>
@@ -2609,6 +2622,7 @@ export function AppointmentBlock({
               : "Remove this in Acuity — it syncs back."}
           </p>
         )}
+        {blockSheet && renderBlockSheet("detail", row, () => setBlockSheet(false))}
       </div>
     );
   }

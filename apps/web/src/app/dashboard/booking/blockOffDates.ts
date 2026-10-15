@@ -136,7 +136,51 @@ export type BlockPlan =
       /** The same hours on each day; absent = all day on each. */
       window?: { fromTime: string; toTime: string };
     }
-  | { kind: "timed"; date: string; fromTime: string; toTime: string };
+  | { kind: "timed"; date: string; fromTime: string; toTime: string }
+  /** One unbroken absence: fromTime on fromDate straight through toTime on toDate. */
+  | { kind: "through"; fromDate: string; fromTime: string; toDate: string; toTime: string }
+  /** The same block on `date` and the same weekday after it, `weeks` times. */
+  | { kind: "weekly"; date: string; weeks: number; window?: { fromTime: string; toTime: string } };
+
+/** The longest weekly repeat. Mirrors the API's MAX_REPEAT_WEEKS. */
+export const MAX_REPEAT_WEEKS = 52;
+
+/**
+ * How many weeks a repeat "until" a date covers, inclusive of a last
+ * occurrence that lands ON that date. 0 when the dates are broken or inverted.
+ */
+export function weeksThrough(fromDate: string, untilDate: string): number {
+  const n = dayCount(fromDate, untilDate);
+  return n === 0 ? 0 : Math.floor((n - 1) / 7) + 1;
+}
+
+/** The shop-local days a plan touches, in order - what the review lists. */
+export function planDays(plan: BlockPlan): string[] {
+  if (plan.kind === "timed") return isDayKey(plan.date) ? [plan.date] : [];
+  if (plan.kind === "weekly") {
+    if (!isDayKey(plan.date) || !(plan.weeks >= 1)) return [];
+    return Array.from({ length: Math.min(plan.weeks, MAX_REPEAT_WEEKS) }, (_, k) =>
+      addDaysToKey(plan.date, 7 * k),
+    );
+  }
+  const n = dayCount(plan.fromDate, plan.toDate);
+  return Array.from({ length: Math.min(n, MAX_BLOCK_DAYS) }, (_, k) => addDaysToKey(plan.fromDate, k));
+}
+
+const SHORT_DAY = new Intl.DateTimeFormat("en-US", {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+});
+
+/** "Mon, Oct 26" - a review list entry. */
+export function formatShortDay(key: string): string {
+  const at = utcNoonOf(key);
+  return at ? SHORT_DAY.format(at) : key;
+}
+
+const WEEKDAY = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" });
 
 /**
  * The line under the form: what will be blocked, in the barber's words.
@@ -148,6 +192,31 @@ export type BlockPlan =
  * so the caller's validation message is the only thing the barber reads.
  */
 export function blockSummary(plan: BlockPlan, todayKey: string): string {
+  if (plan.kind === "through") {
+    // One absence, said as one: where it starts and where it ends.
+    if (dayCount(plan.fromDate, plan.toDate) === 0) return "";
+    const from = formatClock(plan.fromTime);
+    const to = formatClock(plan.toTime);
+    if (!from || !to) return "";
+    return `${formatDay(plan.fromDate, todayKey)}, ${from} straight through ${formatDay(plan.toDate, todayKey)}, ${to}`;
+  }
+  if (plan.kind === "weekly") {
+    const days = planDays(plan);
+    if (days.length === 0) return "";
+    const at = utcNoonOf(plan.date)!;
+    let hours = "All day";
+    if (plan.window) {
+      const from = formatClock(plan.window.fromTime);
+      const to = formatClock(plan.window.toTime);
+      if (!from || !to) return "";
+      hours = `${from}–${to}`;
+    }
+    const n = days.length;
+    const span = formatDayRange(days[0]!, days[n - 1]!, todayKey);
+    return n === 1
+      ? `${formatDay(plan.date, todayKey)} · ${hours}`
+      : `Every ${WEEKDAY.format(at)} · ${hours} · ${n} weeks, ${span}`;
+  }
   if (plan.kind === "days") {
     const n = dayCount(plan.fromDate, plan.toDate);
     if (n === 0) return "";

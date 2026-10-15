@@ -136,10 +136,10 @@ describe("block off", () => {
     expect(screen.getByLabelText("To")).toHaveValue("00:00");
     fireEvent.click(screen.getByRole("button", { name: /Add block/ }));
     await waitFor(() => expect(a.addBlockAction).toHaveBeenCalledTimes(1));
-    const sent = a.addBlockAction.mock.calls[0]![0] as { startsAt: string; endsAt: string };
-    // 11 PM to midnight in New York (EDT) = 03:00Z to 04:00Z next day.
-    expect(sent.startsAt).toBe("2026-09-10T03:00:00.000Z");
-    expect(sent.endsAt).toBe("2026-09-10T04:00:00.000Z");
+    const sent = a.addBlockAction.mock.calls[0]![0] as { when: Record<string, unknown> };
+    // 11 PM to midnight: the END of the day (minute 1440), resolved by the API
+    // in the shop's zone - never an empty 11 PM-to-11 PM block.
+    expect(sent.when).toEqual({ kind: "day", date: "2026-09-09", fromMin: 23 * 60, toMin: 24 * 60 });
   });
 });
 

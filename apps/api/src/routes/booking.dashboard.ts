@@ -69,16 +69,9 @@ import {
   holdSentence,
   recordExternalBlockOverrides,
 } from "../services/appointmentOverride.js";
-import {
-  appointmentConflictSentence,
-  blockOverAppointmentsConfirmation,
-  describeAppointmentConflicts,
-  findAppointmentsInSpans,
-  planDayRangeBlock,
-  type BlockConflictRow,
-} from "../services/blockOffDays.js";
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import { registerSeriesEdit } from "./booking.seriesEdit.js";
+import { registerBlockRoutes } from "./booking.blocks.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
 import { registerUnfinishedBookings } from "./booking.unfinished.js";
 import { registerDepositRefund, registerTipRefund } from "./booking.depositRefund.js";
@@ -1529,184 +1522,9 @@ bookingDashboardRouter.put("/staff/:id/availability", async (req, res) => {
   res.json({ ok: true });
 });
 
-const exceptionReason = z.string().trim().max(200).optional().or(z.literal(""));
-/**
- * Confirms blocking OVER the bookings a previous 409 `appointments_overlap`
- * listed: that refusal's `confirmation` digest, replayed. It authorises those
- * rows and nothing else - a booking that moved or arrived since changes the
- * digest and the barber is asked again. See services/blockOffDays.ts.
- */
-const overlapConfirmation = z.string().trim().min(1).max(200).optional();
-
-// A timed block (or, with isBlock:false, a one-off open window): two instants.
-const instantExceptionSchema = z
-  .object({
-    startsAt: z.coerce.date(),
-    endsAt: z.coerce.date(),
-    isBlock: z.boolean().optional(),
-    reason: exceptionReason,
-    confirmation: overlapConfirmation,
-  })
-  .strict()
-  .refine((d) => d.endsAt > d.startsAt, { message: "End must be after start." });
-
-// Whole shop-local days, first through last inclusive - all day each, or the
-// same hours on each. The instants are resolved HERE in the shop's zone
-// (services/blockOffDays.ts) - a device in another zone cannot block the
-// wrong hours.
-const DAY_KEY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.");
-const dayRangeFields = {
-  fromDate: DAY_KEY,
-  toDate: DAY_KEY,
-  reason: exceptionReason,
-  confirmation: overlapConfirmation,
-};
-const allDayRangeSchema = z.object({ ...dayRangeFields, allDay: z.literal(true) }).strict();
-// "9:00-12:00 each day": shop-local minutes from midnight, end exclusive,
-// 1440 = through the end of the day. Each day becomes its own row.
-const timedRangeSchema = z
-  .object({
-    ...dayRangeFields,
-    fromMin: z.number().int().min(0).max(24 * 60 - 1),
-    toMin: z.number().int().min(1).max(24 * 60),
-  })
-  .strict();
-
-const exceptionSchema = z.union([instantExceptionSchema, allDayRangeSchema, timedRangeSchema]);
-
-/**
- * Block off time (or open a one-off window) on one chair.
- *
- * Two request shapes, one write path: instants for a timed block, day keys
- * for "these whole days". Either way the rows land in ONE transaction under
- * the same per-staff advisory lock every appointment write takes, so the
- * bookings a block is about to sit on are read exactly as of commit.
- *
- * A block over existing bookings is refused with 409 `appointments_overlap`
- * until the barber confirms THAT list (its digest replayed). Confirming
- * writes the block and nothing else: no appointment is cancelled, moved or
- * edited here - ever. The block only stops new bookings around them.
- */
-bookingDashboardRouter.post("/staff/:id/exceptions", async (req, res) => {
-  const parsed = exceptionSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
-    return;
-  }
-  const shopId = req.shop!.id;
-  const timezone = req.shop!.timezone;
-  const staffId = req.params.id!;
-  const d = parsed.data;
-  const now = new Date();
-
-  let spans: { startsAt: Date; endsAt: Date }[];
-  let isBlock: boolean;
-  if ("fromDate" in d) {
-    const plan = planDayRangeBlock({
-      fromDate: d.fromDate,
-      toDate: d.toDate,
-      timezone,
-      now,
-      window: "fromMin" in d ? { fromMin: d.fromMin, toMin: d.toMin } : undefined,
-    });
-    if (!plan.ok) {
-      res.status(400).json({
-        error: "invalid_input",
-        issues: [{ path: [plan.field], message: plan.message }],
-      });
-      return;
-    }
-    spans = plan.spans;
-    isBlock = true;
-  } else {
-    spans = [{ startsAt: d.startsAt, endsAt: d.endsAt }];
-    isBlock = d.isBlock ?? true;
-  }
-  const reason = d.reason || null;
-
-  const outcome = await runWithShop(shopId, async (tx) => {
-    const staff = await tx.staff.findFirst({
-      where: { id: staffId, shopId },
-      select: { id: true },
-    });
-    if (!staff) return { kind: "not_found" as const };
-
-    let conflicts: BlockConflictRow[] = [];
-    if (isBlock) {
-      // The lock the booking guard takes for this chair (engines/bookingWrite.ts),
-      // so a booking racing this block waits, and the list below cannot miss
-      // one that lands between the read and the write.
-      await tx.$executeRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`appt:${staffId}`}))`,
-      );
-      // Per span, not over the range: "9-12 each day" must not flag the
-      // afternoons in between (services/blockOffDays.ts coalesces a run of
-      // whole days back into one window).
-      conflicts = await findAppointmentsInSpans(tx, { shopId, staffId, spans, now });
-      if (conflicts.length > 0) {
-        const confirmation = blockOverAppointmentsConfirmation(conflicts);
-        if (d.confirmation !== confirmation) {
-          return { kind: "conflict" as const, conflicts, confirmation };
-        }
-      }
-    }
-    await tx.availabilityException.createMany({
-      data: spans.map((s) => ({
-        shopId,
-        staffId,
-        startsAt: s.startsAt,
-        endsAt: s.endsAt,
-        isBlock,
-        reason,
-      })),
-    });
-    return { kind: "created" as const, count: spans.length, overlapping: conflicts.length };
-  });
-
-  if (outcome.kind === "not_found") {
-    res.status(404).json({ error: "not_found" });
-    return;
-  }
-  if (outcome.kind === "conflict") {
-    // Shown, not just returned: which bookings, when, and that they stay put.
-    res.status(409).json({
-      error: "appointments_overlap",
-      confirmable: true,
-      reason: appointmentConflictSentence(outcome.conflicts),
-      conflicts: describeAppointmentConflicts(outcome.conflicts, timezone),
-      count: outcome.conflicts.length,
-      confirmation: outcome.confirmation,
-    });
-    return;
-  }
-  res.status(201).json({
-    ok: true,
-    created: outcome.count,
-    overlappingAppointments: outcome.overlapping,
-  });
-});
-
-// Remove a one-off exception - in practice "unblock this time". Shop-scoped by
-// forShop, so another shop's id simply matches nothing.
-//
-// 404s when nothing was removed rather than returning 200 {ok:false}: the web
-// layer's apiSend reads the HTTP STATUS, so the old shape reported a failed
-// delete as a success and the block would sit there while the UI said it was
-// gone. An already-deleted id is the same 404, which is the honest answer.
-bookingDashboardRouter.delete("/exceptions/:id", async (req, res) => {
-  const db = forShop(req.shop!.id);
-  const { count } = await db.availabilityException.deleteMany({
-    where: { id: req.params.id },
-  });
-  if (count === 0) {
-    res.status(404).json({ error: "not_found" });
-    return;
-  }
-  // The freed hours become bookable immediately: the router-level hook above
-  // invalidates this shop's availability caches on any non-GET that finishes
-  // under 400, so the 404 path deliberately skips it (nothing changed).
-  res.json({ ok: true });
-});
+// Block off time - create (one barber or several, days, a long absence, a
+// bounded weekly repeat), read, edit, remove. routes/booking.blocks.ts.
+registerBlockRoutes(bookingDashboardRouter);
 
 //  Acuity calendar mapping (which Acuity calendar is which chair)
 
@@ -2759,11 +2577,14 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
 
     // Blocked time (barber "Block Off Time") shows on the calendar too, as
     // distinct rows so the day view reflects when the chair is unavailable.
+    // Every block that OVERLAPS the window, not only those that start in it:
+    // a block that began before `from` still covers the days after it.
     const blocks = await tx.availabilityException.findMany({
       where: {
         shopId,
         isBlock: true,
-        startsAt: { gte: from, lte: to },
+        startsAt: { lt: to },
+        endsAt: { gt: from },
         ...(staffId ? { staffId } : {}),
       },
       orderBy: { startsAt: "asc" },
@@ -3744,6 +3565,8 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         externalBlocks: "enforce",
         externalBlockConfirmation: d.externalBlockConfirmation ?? null,
         walkInCapacity: "ignore",
+        // The barber's own hand: his own blocked time does not stop him (bookingWrite.ts `nativeBlocks`).
+        nativeBlocks: "ignore",
         staffId: d.staffId,
         shopId: shop.id,
         startsAt,
@@ -4547,6 +4370,8 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
         // declines (or clears the block where he made it) - the refusal says so.
         externalBlocks: "enforce",
         walkInCapacity: "ignore",
+        // The barber's own hand: his own blocked time does not stop him (bookingWrite.ts `nativeBlocks`).
+        nativeBlocks: "ignore",
         staffId: appt.staffId,
         shopId,
         startsAt: appt.startsAt,
@@ -4904,6 +4729,8 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
         externalBlocks: "enforce",
         externalBlockConfirmation: parsed.data.externalBlockConfirmation ?? null,
         walkInCapacity: "ignore",
+        // The barber's own hand: his own blocked time does not stop him (bookingWrite.ts `nativeBlocks`).
+        nativeBlocks: "ignore",
         staffId: appt.staffId,
         shopId,
         startsAt,
@@ -6419,6 +6246,8 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
         // declines (or clears the block where he made it) - the refusal says so.
         externalBlocks: "enforce",
         walkInCapacity: "ignore",
+        // The barber's own hand: his own blocked time does not stop him (bookingWrite.ts `nativeBlocks`).
+        nativeBlocks: "ignore",
         staffId: appt.staffId,
         shopId,
         startsAt: appt.startsAt,
@@ -7185,6 +7014,8 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
           serviceDayLimit: null,
           // Barber-driven, the same answers the dashboard create gives.
           walkInCapacity: "ignore",
+          // The barber's own hand: his own blocked time does not stop him (bookingWrite.ts `nativeBlocks`).
+          nativeBlocks: "ignore",
           // The person is in the chair; an Acuity entry does not eject them.
           externalBlocks: "ignore",
           overrideWaitlistHolds: true,
