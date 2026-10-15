@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { raceBehindAdvisoryLock } from "../testing/raceBarrier.js";
@@ -83,6 +83,25 @@ type PickerSpecial = {
   price: number;
   label: string | null;
 };
+
+
+/**
+ * Run `fn` with the clock a minute past this booking's start. A no-show is
+ * refused before the start (engines/noShowUndo.ts); this suite books through
+ * the real flow, which only takes future times, and then marks the no-show.
+ */
+async function onceStarted<T>(appointmentId: string, fn: () => Promise<T>): Promise<T> {
+  const { startsAt } = await prisma.appointment.findUniqueOrThrow({
+    where: { id: appointmentId },
+    select: { startsAt: true },
+  });
+  vi.useFakeTimers({ toFake: ["Date"], now: startsAt.getTime() + 60_000 });
+  try {
+    return await fn();
+  } finally {
+    vi.useRealTimers();
+  }
+}
 
 function dashBook(startsAt: Date, extra: Record<string, unknown> = {}) {
   return request(app)
@@ -311,9 +330,9 @@ describe("booking into a special", () => {
     const id = await publish(at, { durationMin: 30, price: 45 });
     const booked = await dashBook(at, { targetedSlotId: id });
     expect(booked.status).toBe(201);
-    const noShow = await request(app)
-      .post(`/api/booking/appointments/${booked.body.id}/no-show`)
-      .set("Cookie", cookie);
+    const noShow = await onceStarted(booked.body.id, () =>
+      request(app).post(`/api/booking/appointments/${booked.body.id}/no-show`).set("Cookie", cookie),
+    );
     expect(noShow.status).toBe(200);
 
     const picker = await dashSlots();

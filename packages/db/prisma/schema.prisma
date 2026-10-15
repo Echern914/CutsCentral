@@ -744,6 +744,7 @@ model Shop {
   recurringSeries        RecurringSeries[]
   appointmentGroups      AppointmentGroup[]
   appointmentPriceChanges AppointmentPriceChange[]
+  appointmentStatusChanges AppointmentStatusChange[]
   paymentRefunds          PaymentRefund[]
   appointmentOverrides AppointmentOverride[]
   serviceAddOns          ServiceAddOn[]
@@ -5738,6 +5739,24 @@ model AppointmentPriceChange {
   /// what a saved card can be charged (agreedPriceCents).
   source             String?
   createdAt DateTime @default(now())
+
+  @@index([shopId, appointmentId, createdAt])
+}
+
+// Who marked an appointment a no-show, and who put it back (undo). One row
+// per staff status change, written in the same transaction. APPEND-ONLY (a
+// trigger refuses UPDATE) and tenant-isolated. kind: no_show | undo_no_show.
+model AppointmentStatusChange {
+  id            String   @id @default(cuid())
+  shopId        String
+  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  /// Not a FK on purpose: the history outlives the appointment row.
+  appointmentId String
+  actorUserId   String?
+  kind          String
+  fromStatus    String
+  toStatus      String
+  createdAt     DateTime @default(now())
 
   @@index([shopId, appointmentId, createdAt])
 }

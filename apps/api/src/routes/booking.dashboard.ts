@@ -21,6 +21,15 @@ import {
   promoteOneAppointmentInTx,
   type CancelSeriesScope,
 } from "../engines/appointmentPromotion.js";
+import {
+  NO_SHOW_TOO_EARLY_MESSAGE,
+  UndoNoShowRefusedError,
+  noShowTooEarly,
+  recordNoShowMarked,
+  undoNoShow,
+  undoNoShowNotes,
+  undoNoShowRefusalMessage,
+} from "../engines/noShowUndo.js";
 import { isRecordedWalkIn, WALK_IN_SERVICE_NAME } from "../engines/walkInReceipt.js";
 import {
   approvePartyInTx,
@@ -4917,7 +4926,7 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   // request can't be a no-show (decline it instead). Reject non-BOOKED.
   const appt = await forShop(shopId).appointment.findFirst({
     where: { id: req.params.id!, shopId },
-    select: { status: true },
+    select: { status: true, startsAt: true },
   });
   if (!appt) {
     res.status(404).json({ ok: false });
@@ -4925,6 +4934,13 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   }
   if (appt.status !== "BOOKED") {
     res.status(409).json({ ok: false, error: "not_booked" });
+    return;
+  }
+  // 🔴 NOT BEFORE THE START (engines/noShowUndo.ts). A future booking marked
+  // a no-show by a misclick used to charge a kept card the no-show fee at once,
+  // for an appointment that had not happened. Before the start: Cancel.
+  if (noShowTooEarly(appt.startsAt, new Date())) {
+    res.status(409).json({ ok: false, error: "not_started", message: NO_SHOW_TOO_EARLY_MESSAGE });
     return;
   }
   // 🔴 ONLY FROM BOOKED, in the write itself. The read above is a moment
@@ -4940,7 +4956,89 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
     res.status(409).json({ ok: false, error: "not_booked" });
     return;
   }
+  // Who marked it, for the undo below and for the record. After the commit:
+  // the mark itself runs inside the shared cancel engine. A failure here is
+  // logged, never turned into a failed no-show that already happened.
+  await recordNoShowMarked({ shopId, appointmentId: req.params.id!, actorUserId: req.userId ?? null }).catch(
+    (err: unknown) =>
+      logger.error({ err, shopId, appointmentId: req.params.id }, "no-show: status record failed"),
+  );
   res.json({ ok: true });
+});
+
+/**
+ * POST /appointments/:id/undo-no-show - put a no-show back on the calendar.
+ *
+ * The rule and its reasons live in engines/noShowUndo.ts. Money never moves
+ * here; `notes` says, in words, what stays as it is (a fee already charged, a
+ * refunded deposit) so the shop can act on it itself if it chooses. A second
+ * tap finds the booking BOOKED and is refused as not_no_show, changing nothing.
+ */
+bookingDashboardRouter.post("/appointments/:id/undo-no-show", async (req, res) => {
+  const shopId = req.shop!.id;
+  const appointmentId = req.params.id!;
+  const now = new Date();
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { bookingBufferMin: true },
+  });
+  const exists = await forShop(shopId).appointment.findFirst({
+    where: { id: appointmentId, shopId },
+    select: { id: true },
+  });
+  if (!shop || !exists) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  let mirrorOutboxIds: string[];
+  try {
+    ({ mirrorOutboxIds } = await undoNoShow({
+      shopId,
+      appointmentId,
+      actorUserId: req.userId ?? null,
+      bufferMin: shop.bookingBufferMin,
+      now,
+    }));
+  } catch (err) {
+    if (err instanceof UndoNoShowRefusedError) {
+      res
+        .status(409)
+        .json({ ok: false, error: err.reason, message: undoNoShowRefusalMessage(err.reason) });
+      return;
+    }
+    if (err instanceof ExternalBlockError) {
+      res.status(409).json({
+        ok: false,
+        error: "external_block",
+        message: `This time is blocked in your other calendar (${blockSentence(err.blocks, req.shop!.timezone)}). Clear the block there first if you mean to put it back.`,
+      });
+      return;
+    }
+    if (
+      err instanceof SlotTakenError ||
+      (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")
+    ) {
+      res
+        .status(409)
+        .json({ ok: false, error: "slot_taken", message: undoNoShowRefusalMessage("slot_taken") });
+      return;
+    }
+    if (isMirrorNotConfigured(err)) {
+      res.status(409).json({
+        ok: false,
+        error: "slot_unavailable_external",
+        message: "This time can't be held in your other calendar right now, so it wasn't put back. Try again shortly.",
+      });
+      return;
+    }
+    logger.error({ err, shopId, appointmentId }, "undo no-show failed");
+    res.status(500).json({ ok: false, error: "undo_failed" });
+    return;
+  }
+  await dispatchAfterCommit(mirrorOutboxIds, { shopId, appointmentId, via: "dashboard_undo_no_show" });
+  void pokeAppointmentPass(appointmentId);
+  await noteAvailabilityChanged(shopId);
+  res.json({ ok: true, notes: await undoNoShowNotes(shopId, appointmentId, now) });
 });
 
 //  Targeted slots (one-off special-priced bookable slots under a service)

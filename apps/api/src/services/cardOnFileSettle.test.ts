@@ -95,6 +95,24 @@ const email = `cofs-${randomToken(6)}@test.local`.toLowerCase();
 const emails: Array<{ to: string; subject: string; text: string }> = [];
 const ACCT = `acct_test_${randomToken(6)}`;
 
+/**
+ * Run `fn` with the clock a minute past this booking's start. A no-show is
+ * refused before the start (engines/noShowUndo.ts); this suite books through
+ * the real flow, which only takes future times, and then marks the no-show.
+ */
+async function onceStarted<T>(appointmentId: string, fn: () => Promise<T>): Promise<T> {
+  const { startsAt } = await prisma.appointment.findUniqueOrThrow({
+    where: { id: appointmentId },
+    select: { startsAt: true },
+  });
+  vi.useFakeTimers({ toFake: ["Date"], now: startsAt.getTime() + 60_000 });
+  try {
+    return await fn();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 function futureAtHour(daysAhead: number, hourUtc: number): Date {
   const d = new Date();
   d.setUTCDate(d.getUTCDate() + daysAhead);
@@ -229,7 +247,9 @@ afterAll(async () => {
 describe("the switch is ON", () => {
   it("🔴 a no-show charges the fee, once, off-session, and tells the customer", async () => {
     const b = await bookedWithCard(3, 14);
-    const res = await request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie);
+    const res = await onceStarted(b.appointmentId, () =>
+      request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie),
+    );
     expect(res.status).toBe(200);
 
     expect(fake.state.charges).toHaveLength(1);
@@ -306,7 +326,9 @@ describe("the switch is ON", () => {
   it("a decline is recorded, not retried, and the barber is told to collect at the chair", async () => {
     const b = await bookedWithCard(4, 14);
     fake.state.declineNext = true;
-    const res = await request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie);
+    const res = await onceStarted(b.appointmentId, () =>
+      request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie),
+    );
     expect(res.status).toBe(200);
     expect(fake.state.charges).toHaveLength(1);
     expect(await cardStatus(b.appointmentId)).toBe("failed");
@@ -343,7 +365,9 @@ describe("the switch is OFF", () => {
     await setFees(false);
     try {
       const b = await bookedWithCard(5, 14);
-      await request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie);
+      await onceStarted(b.appointmentId, () =>
+        request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie),
+      );
       expect(fake.state.charges).toHaveLength(0);
       expect(await cardStatus(b.appointmentId)).toBe("released");
       expect(fake.state.detached).toContain(b.pmId);
@@ -467,7 +491,9 @@ describe("🔴 a booking keeps the cancellation terms it was made on", () => {
     try {
       const b = await bookedWithCard(5, 15);
       await setShopTerms({ chargeCardOnFileFees: true });
-      await request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie);
+      await onceStarted(b.appointmentId, () =>
+        request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie),
+      );
       expect(fake.state.charges).toHaveLength(0);
       expect(await cardStatus(b.appointmentId)).toBe("released");
     } finally {

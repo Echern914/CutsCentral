@@ -1689,8 +1689,30 @@ export async function correctCompletedVisitAction(
   return { ok: true };
 }
 
-export async function noShowAppointmentAction(id: string): Promise<Result> {
-  return done(await apiSend("POST", `/api/booking/appointments/${id}/no-show`));
+export async function noShowAppointmentAction(
+  id: string,
+): Promise<{ ok: boolean; error?: string; message?: string }> {
+  const res = await apiSend("POST", `/api/booking/appointments/${encodeURIComponent(id)}/no-show`);
+  if (!res.ok) return { ok: false, error: res.error ?? "failed", message: res.message };
+  revalidatePath("/dashboard/booking");
+  return { ok: true };
+}
+
+/**
+ * Put a no-show back on the calendar. `notes` are the server's own sentences
+ * for what stays as it is (a fee already charged, a refunded deposit) - money
+ * never moves here.
+ */
+export async function undoNoShowAction(
+  id: string,
+): Promise<{ ok: boolean; error?: string; message?: string; notes?: string[] }> {
+  const res = await apiSend<{ notes?: string[] }>(
+    "POST",
+    `/api/booking/appointments/${encodeURIComponent(id)}/undo-no-show`,
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed", message: res.message };
+  revalidatePath("/dashboard/booking");
+  return { ok: true, notes: Array.isArray(res.data?.notes) ? res.data.notes : [] };
 }
 
 export async function completeAppointmentAction(id: string): Promise<Result> {
@@ -2151,6 +2173,12 @@ export interface AppointmentDetail {
    * an older API reads as "no".
    */
   correctable?: boolean;
+  /** Mark no-show may be offered now (its start has come). Optional = older API. */
+  noShowAllowed?: boolean;
+  /** A no-show the shop may put back on the calendar. Optional = older API. */
+  undoNoShow?: boolean;
+  /** What marking it a no-show now charges the kept card; null = nothing. */
+  noShowFee?: { cents: number; last4: string | null } | null;
 }
 
 /**
