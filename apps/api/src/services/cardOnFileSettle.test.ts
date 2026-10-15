@@ -341,23 +341,31 @@ describe("the switch is ON", () => {
     expect(chargeEmails()).toHaveLength(0);
   });
 
-  it("🔴 two settlements racing on one card charge exactly once (RACE)", async () => {
-    const b = await bookedWithCard(4, 15);
-    const { cancelAppointment } = await import("../engines/appointmentPromotion.js");
-    const now = new Date();
-    // The appointment's own CAS (status != outcome) lets a NO_SHOW and a
-    // CANCELED through together - so the CardOnFile status is the only guard.
-    // Both racers must WRITE through the CardOnFile row, which is what the row
-    // lock holds.
-    const { results, settledEarly } = await raceBehindRowLock("CardOnFile", b.cardOnFileId, [
-      () => cancelAppointment(shopId, b.appointmentId, "NO_SHOW", now),
-      () => cancelAppointment(shopId, b.appointmentId, "CANCELED", now, { applyPolicyFee: true }),
-    ]);
-    expect(settledEarly).toBe(0);
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
-    expect(fake.state.charges).toHaveLength(1);
-    expect(await cardStatus(b.appointmentId)).toBe("charged");
-  });
+  // 🔴 INSIDE THE WINDOW, SO BOTH RACERS OWE A FEE. Booked four days out, only
+  // the no-show owed anything: when the free cancel took the card row first it
+  // released the card - correctly - and the no-show found nothing to charge, so
+  // "exactly one charge" held only when the no-show won the lock. It went red in
+  // CI under load. Here either winner charges, and without the guard both would.
+  it("🔴 two settlements racing on one card charge exactly once (RACE)", async () =>
+    insideTheWindow(async (start) => {
+      const b = await bookWithCardAt(later(start, 5), "Racer");
+      const card = (await prisma.cardOnFile.findUnique({ where: { appointmentId: b.appointmentId }, select: { id: true } }))!;
+      const { cancelAppointment } = await import("../engines/appointmentPromotion.js");
+      const now = new Date();
+      // The appointment's own CAS (status != outcome) lets a NO_SHOW and a
+      // CANCELED through together - so the CardOnFile status is the only guard.
+      // Both racers must WRITE through the CardOnFile row, which is what the row
+      // lock holds.
+      const { results, settledEarly } = await raceBehindRowLock("CardOnFile", card.id, [
+        () => cancelAppointment(shopId, b.appointmentId, "NO_SHOW", now),
+        () => cancelAppointment(shopId, b.appointmentId, "CANCELED", now, { applyPolicyFee: true }),
+      ]);
+      expect(settledEarly).toBe(0);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
+      expect(fake.state.charges).toHaveLength(1);
+      expect(["no_show", "late_cancel"]).toContain((fake.state.charges[0]!.params.metadata as Record<string, string>).reason);
+      expect(await cardStatus(b.appointmentId)).toBe("charged");
+    }));
 });
 
 describe("the switch is OFF", () => {
