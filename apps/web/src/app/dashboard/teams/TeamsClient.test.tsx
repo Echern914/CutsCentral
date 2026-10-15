@@ -10,12 +10,14 @@ import type { MyTeamsData } from "./TeamsClient";
  */
 
 const setSharingAction = vi.fn();
+const setTeamWalkInsAction = vi.fn();
 const leaveTeamAction = vi.fn();
 const myTeamsAction = vi.fn();
 const toast = vi.fn();
 
 vi.mock("./actions", () => ({
   setSharingAction: (...a: unknown[]) => setSharingAction(...a),
+  setTeamWalkInsAction: (...a: unknown[]) => setTeamWalkInsAction(...a),
   leaveTeamAction: (...a: unknown[]) => leaveTeamAction(...a),
   myTeamsAction: (...a: unknown[]) => myTeamsAction(...a),
 }));
@@ -249,5 +251,38 @@ describe("sharing a schedule", () => {
     render(<TeamsClient initial={data()} vocab={vocab} />);
     expect(sw("shareSchedule")).toBeNull();
     expect(document.querySelector('[data-qa="schedule-they-see"]')).toBeNull();
+  });
+});
+
+describe("front desk walk-ins", () => {
+  const sw2 = () => document.querySelector<HTMLButtonElement>('[data-qa="take-walk-ins"]');
+
+  it("🔴 turning it on waits for the server, and says when their own line is off", async () => {
+    let answer!: (v: unknown) => void;
+    setTeamWalkInsAction.mockReturnValue(new Promise((r) => (answer = r)));
+    render(<TeamsClient initial={data({ walkIns: { take: false, lineOn: false } })} vocab={vocab} />);
+    expect(sw2()!.textContent).toBe("Off");
+    fireEvent.click(sw2()!);
+    expect(setTeamWalkInsAction).toHaveBeenCalledWith("tl1", true);
+    expect(sw2()!.textContent).toBe("Saving…");
+    answer({ ok: true, walkIns: { take: true, lineOn: false } });
+    await waitFor(() => expect(sw2()!.textContent).toBe("On"));
+    expect(document.querySelector('[data-qa="desk-line-off"]')!.textContent).toContain(
+      "Your own walk-in line is off",
+    );
+  });
+
+  it("a failed save leaves it as it was", async () => {
+    setTeamWalkInsAction.mockResolvedValue({ ok: false, error: "network" });
+    render(<TeamsClient initial={data({ walkIns: { take: true, lineOn: true } })} vocab={vocab} />);
+    fireEvent.click(sw2()!);
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't save that - nothing changed", "error"));
+    expect(sw2()!.textContent).toBe("On");
+    expect(document.querySelector('[data-qa="desk-line-off"]')).toBeNull();
+  });
+
+  it("Walk-In Mode off, or waiting to be approved: no switch", () => {
+    render(<TeamsClient initial={data({ walkIns: null })} vocab={vocab} />);
+    expect(sw2()).toBeNull();
   });
 });

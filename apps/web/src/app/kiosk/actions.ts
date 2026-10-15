@@ -13,16 +13,7 @@ import { apiPublicSend } from "@/lib/api";
  * anti-enumeration - is the API's. Nothing here interprets, caches, or logs.
  */
 
-export interface KioskShopData {
-  shop: {
-    name: string;
-    logoUrl: string | null;
-    accentColor: string | null;
-    timezone: string;
-  };
-  acceptingNow: boolean;
-  /** False when the shop has no active services or no active barbers. */
-  setupComplete: boolean;
+export interface KioskMenu {
   services: {
     id: string;
     name: string;
@@ -33,6 +24,33 @@ export interface KioskShopData {
   }[];
   staff: { id: string; name: string; imageUrl: string | null }[];
   offerings: { serviceId: string; staffId: string }[];
+}
+
+/**
+ * One business a TEAM front desk can send a walk-in to: the shop's own chairs
+ * ("own") or an independent member. Each brings its own menu.
+ */
+export interface KioskDeskBusiness extends KioskMenu {
+  id: string;
+  name: string;
+  logoUrl: string | null;
+}
+
+export interface KioskShopData extends KioskMenu {
+  shop: {
+    name: string;
+    logoUrl: string | null;
+    accentColor: string | null;
+    timezone: string;
+  };
+  acceptingNow: boolean;
+  /** False when the shop has no active services or no active barbers. */
+  setupComplete: boolean;
+  /**
+   * A team front desk: the customer picks who they're here for first. Null
+   * (or absent, from an older API) = an ordinary single-shop kiosk.
+   */
+  desk?: { businesses: KioskDeskBusiness[] } | null;
   consent: { text: string; version: string };
 }
 
@@ -42,10 +60,19 @@ export async function kioskResolveAction(token: string) {
   });
 }
 
+/** At a team front desk: about how long a walk-in waits with each business. */
+export async function kioskDeskWaitsAction(token: string) {
+  return apiPublicSend<{
+    ok: true;
+    businesses: { id: string; waitMin: number | null; ahead: number }[];
+  }>("POST", "/api/walk-in/kiosk/desk/waits", { token });
+}
+
 export async function kioskEstimateAction(input: {
   token: string;
   serviceIds: string[];
   preferredStaffId: string | null;
+  businessId?: string | null;
 }) {
   return apiPublicSend<{ ok: true; waitMin: number | null; ahead: number }>(
     "POST",
@@ -88,6 +115,7 @@ export async function kioskCheckInAction(input: {
   serviceIds: string[];
   preferredStaffId: string | null;
   smsConsent: boolean;
+  businessId?: string | null;
 }) {
   return apiPublicSend<{ ok: true }>(
     "POST",

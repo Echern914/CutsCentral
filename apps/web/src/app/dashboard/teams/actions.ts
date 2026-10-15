@@ -45,6 +45,24 @@ export async function setSharingAction(
   };
 }
 
+/**
+ * Take walk-ins who check in at this team's front desk (or stop). Returns
+ * the CONFIRMED state and whether their own line is on to receive them.
+ */
+export async function setTeamWalkInsAction(
+  linkId: string,
+  take: boolean,
+): Promise<{ ok: boolean; error?: string; walkIns?: { take: boolean; lineOn: boolean } }> {
+  const res = await apiSend<{ walkIns: { take: boolean; lineOn: boolean } }>(
+    "PATCH",
+    `/api/teams/${linkId}/walk-ins`,
+    { take },
+  );
+  revalidatePath("/dashboard/teams");
+  if (!res.ok || !res.data) return { ok: false, error: res.error };
+  return { ok: true, walkIns: res.data.walkIns };
+}
+
 /** This business's booth rent with one team - the owner's own view. Read-only. */
 export async function myRentHistoryAction(linkId: string): Promise<RentHistory | null> {
   const res = await apiGet<RentHistory>(`/api/teams/${linkId}/rent`);
