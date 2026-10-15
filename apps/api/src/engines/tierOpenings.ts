@@ -668,6 +668,12 @@ function samePrice(a: number | null, b: number | null): boolean {
  * queue instead of deadlocking. Two members tapping Book at the same moment
  * serialise on the barber's lock and the row: the first books, the second
  * finds it ended.
+ *
+ * NOT limited by the shop's client-change rules (config/customerChangeRules.ts)
+ * or by its minimum notice at claim time: an opening is a time the BARBER chose and invited
+ * these members to, so it is bookable on the barber's terms. Whether a claim
+ * should honor min notice is an open owner decision (feat/booking-rules
+ * report) - left as is deliberately.
  */
 export async function claimTierOpening(params: {
   accountId: string;

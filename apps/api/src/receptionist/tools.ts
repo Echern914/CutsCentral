@@ -2,9 +2,10 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { apiEnv, randomToken, zonedWallTimeToUtc } from "@chairback/config";
 import {
-  describeReschedulePolicy,
-  rescheduleCutoffPassed,
-} from "@chairback/config/rescheduleCutoff";
+  customerChange,
+  describeCustomerChangePolicy,
+  type CustomerChangeAction,
+} from "@chairback/config/customerChangeRules";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
@@ -1044,6 +1045,29 @@ async function bookAppointment(
           "again and only offer slot_ids it returns",
       );
     }
+  } else {
+    // 🔴 A LIVE HOLD STILL OBEYS THE SHOP'S NOTICE AND HORIZON. hold_slot
+    // checked them when the hold was placed, but a hold lives for minutes and
+    // the shop's minimum notice moves with the clock: a 2:00 slot held at
+    // 11:58 under a 2-hour notice is inside it by 12:01. Re-asking the whole
+    // availability engine would see our own hold as the conflict, so only the
+    // bounds are re-checked here - the same arithmetic as the manage link's
+    // move (startsAt < now + lead is too soon; > now + maxDays is too far).
+    const bounds = await prisma.shop.findUnique({
+      where: { id: ctx.shopId },
+      select: { bookingLeadHours: true, bookingMaxDays: true },
+    });
+    if (bounds) {
+      const earliest = ctx.now.getTime() + bounds.bookingLeadHours * 3_600_000;
+      const latest = ctx.now.getTime() + bounds.bookingMaxDays * 24 * 3_600_000;
+      if (slot.startsAt.getTime() < earliest || slot.startsAt.getTime() > latest) {
+        return fail(
+          "that time is no longer bookable - it's now inside the shop's minimum notice " +
+            "(or past how far ahead it books). Nothing was booked. Run check_availability " +
+            "again and offer the next times it returns",
+        );
+      }
+    }
   }
 
   let bookOutboxIds: string[] = [];
@@ -1283,6 +1307,48 @@ async function loadOwnAppointment(ctx: ToolContext, appointmentId: string) {
   return appt;
 }
 
+/**
+ * 🔴 THE SHOP'S RULE FOR A CLIENT'S OWN CHANGE (config/customerChangeRules.ts)
+ * - the same one the manage link and the group link enforce. Null when the
+ * client may make it; otherwise the instruction for the model: nothing was
+ * done, say who decides, and hand it to the shop. Never a fee - whether a
+ * cancel costs money is the Payments setting, and nothing was cancelled.
+ *
+ * Read outside runWithShop - a Shop read inside it returns null under RLS.
+ */
+async function customerChangeRefusal(
+  ctx: ToolContext,
+  action: CustomerChangeAction,
+  startsAt: Date,
+): Promise<string | null> {
+  const shop = await prisma.shop.findUnique({
+    where: { id: ctx.shopId },
+    select: {
+      name: true,
+      customerCanReschedule: true,
+      customerCanCancel: true,
+      rescheduleCutoffHours: true,
+      cancelCutoffHours: true,
+    },
+  });
+  if (!shop) return null;
+  const allowed = action === "reschedule" ? shop.customerCanReschedule : shop.customerCanCancel;
+  const cutoffHours = action === "reschedule" ? shop.rescheduleCutoffHours : shop.cancelCutoffHours;
+  const rule = customerChange({ action, allowed, cutoffHours, startsAt, now: ctx.now, shopName: shop.name });
+  if (rule.allowed) return null;
+  const verb = action === "reschedule" ? "move" : "cancel";
+  const done = action === "reschedule" ? "Nothing moved and nothing was offered." : "Nothing was cancelled.";
+  const why =
+    rule.reason === "disabled"
+      ? `the shop doesn't let clients ${verb} appointments themselves: ${describeCustomerChangePolicy(action, allowed, cutoffHours)}.`
+      : `too late to ${verb} it by text: ${describeCustomerChangePolicy(action, allowed, cutoffHours)}.`;
+  return (
+    `${why} ${done} Do NOT try again and do NOT mention any fee. Tell the client you can't ` +
+    `${verb} it by text${rule.reason === "cutoff" ? " this close to the appointment" : ""} and ` +
+    `that the shop will decide; then call escalate_to_human so the shop can follow up with them.`
+  );
+}
+
 async function rescheduleTool(
   ctx: ToolContext,
   rawInput: unknown,
@@ -1297,28 +1363,10 @@ async function rescheduleTool(
   }
   // Same rule as the manage link: a blocked client may cancel, not move.
   if (await textingClientBlocked(ctx)) return fail(CONTACT_SHOP);
-  // 🔴 Same cutoff as the manage link (config/rescheduleCutoff.ts): too close
-  // to the start for the client to move it themselves. Read outside
-  // runWithShop - a Shop read inside it returns null under RLS.
-  const cutoffShop = await prisma.shop.findUnique({
-    where: { id: ctx.shopId },
-    select: { rescheduleCutoffHours: true },
-  });
-  if (
-    cutoffShop &&
-    rescheduleCutoffPassed({
-      startsAt: appt.startsAt,
-      now: ctx.now,
-      cutoffHours: cutoffShop.rescheduleCutoffHours,
-    })
-  ) {
-    return fail(
-      `too late to move it by text: ${describeReschedulePolicy(cutoffShop.rescheduleCutoffHours)}. ` +
-        "Nothing moved and nothing was offered. Tell the client it's too close to the " +
-        "appointment to move it by text; if they still want it moved, call " +
-        "escalate_to_human so the shop can decide. They can still cancel if they can't make it.",
-    );
-  }
+  // 🔴 Same rule as the manage link (config/customerChangeRules.ts): the shop
+  // takes no moves from clients, or it is too close to the start.
+  const moveRefused = await customerChangeRefusal(ctx, "reschedule", appt.startsAt);
+  if (moveRefused) return fail(moveRefused);
 
   const slot = await loadSlotContext(ctx, parsed.data.new_slot_id);
   if (typeof slot === "string") return fail(slot);
@@ -1589,6 +1637,11 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
   if (appt.status !== "BOOKED" || appt.startsAt.getTime() <= ctx.now.getTime()) {
     return fail("that appointment can't be cancelled (not an upcoming booked appointment)");
   }
+  // 🔴 Same rule as the manage link: the shop takes no cancels from clients,
+  // or it is too close to the start. Before the fee is even worked out - a
+  // refused cancel quotes nothing and charges nothing.
+  const cancelRefused = await customerChangeRefusal(ctx, "cancel", appt.startsAt);
+  if (cancelRefused) return fail(cancelRefused);
 
   // 🔴 WHAT THIS CANCEL WILL COST, computed BEFORE the cancel with the SAME
   // formula the engine charges with (config/shopPolicy.ts). The tool used to

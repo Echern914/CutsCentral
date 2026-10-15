@@ -30,6 +30,7 @@ const FIXTURE: ShopPromptConfig = {
   depositPolicy: "none - pay at the shop",
   cancellationPolicy: "free cancellation any time before the appointment",
   reschedulePolicy: "clients can move it themselves up to 24 hours before; after that only the shop can move it",
+  clientCancelPolicy: "clients can cancel it themselves any time before the appointment",
   noShowPolicy: "no charge for a no-show",
   tone: "sharp & no-nonsense",
 };
@@ -163,8 +164,27 @@ describe("renderPromptForShop", () => {
     expect(text).toContain(
       "Rescheduling:     clients can move it themselves up to 24 hours before; after that only the shop can move it",
     );
+    // Whether the client may cancel by text at all (default: yes, until the
+    // start) - the rule the cancel tool enforces (config/customerChangeRules.ts).
+    expect(text).toContain(
+      "Client cancels:   clients can cancel it themselves any time before the appointment",
+    );
     // Every config placeholder got filled.
-    expect(text).not.toMatch(/\{\{(SHOP_NAME|BARBER_NAMES|TIMEZONE|HOURS|SERVICE_MENU|BOOKING_URL|DEPOSIT_POLICY|CANCELLATION_POLICY|RESCHEDULE_POLICY|NO_SHOW_POLICY|TONE|FIRST_BARBER|OTHER_BARBER_OFFER|ADDRESS)\}\}/);
+    expect(text).not.toMatch(/\{\{(SHOP_NAME|BARBER_NAMES|TIMEZONE|HOURS|SERVICE_MENU|BOOKING_URL|DEPOSIT_POLICY|CANCELLATION_POLICY|RESCHEDULE_POLICY|CLIENT_CANCEL_POLICY|NO_SHOW_POLICY|TONE|FIRST_BARBER|OTHER_BARBER_OFFER|ADDRESS)\}\}/);
+
+    // A shop that takes no changes from clients says so up front, so the
+    // receptionist doesn't promise what its tools will refuse.
+    await prisma.shop.update({
+      where: { id: shop.id },
+      data: { customerCanReschedule: false, customerCanCancel: true, cancelCutoffHours: 12 },
+    });
+    const strict = (await renderPromptForShop(shop.id))!;
+    expect(strict).toContain(
+      "Rescheduling:     clients can't move an appointment themselves (online or by text) - only the shop can",
+    );
+    expect(strict).toContain(
+      "Client cancels:   clients can cancel it themselves up to 12 hours before; after that only the shop can",
+    );
   });
 
   it("🔴 a card-on-file shop with fees ON: the receptionist never says 'free cancellation' for a card it will charge", async () => {

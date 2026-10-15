@@ -90,6 +90,7 @@ import { TargetedSlotCard } from "./TargetedSlotCard";
 import { EyeIcon, ServiceCard, serviceSummary } from "./ServiceCard";
 import { isHiddenService } from "@chairback/config/serviceVisibility";
 import { RESCHEDULE_CUTOFF_MAX_HOURS, formatCutoffHours } from "@chairback/config/rescheduleCutoff";
+import { CANCEL_CUTOFF_MAX_HOURS } from "@chairback/config/customerChangeRules";
 import { UpgradeRules } from "./UpgradeRules";
 import {
   MAX_ADD_ON_MINUTES,
@@ -442,6 +443,96 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
 
 //  Settings
 
+/** The client-change fields a save sends - each only when the API answered it. */
+function clientChangeFields(
+  moves: boolean | null,
+  cancels: boolean | null,
+  cancelHours: number | null,
+): { customerCanReschedule?: boolean; customerCanCancel?: boolean; cancelCutoffHours?: number } {
+  return {
+    ...(moves !== null ? { customerCanReschedule: moves } : {}),
+    ...(cancels !== null ? { customerCanCancel: cancels } : {}),
+    ...(cancelHours !== null ? { cancelCutoffHours: cancelHours } : {}),
+  };
+}
+
+/**
+ * One "Clients can ... online" rule in Booking rules: the switch (saves on its
+ * own, like every other switch on this page) and the hours box (saved with
+ * the booking rules). Either half is left out when the API never answered it.
+ */
+function ClientChangeRule({
+  title,
+  on,
+  onToggle,
+  pending,
+  hours,
+  onHours,
+  maxHours,
+  hoursLabel,
+  helpId,
+  help,
+  always,
+  footer,
+}: {
+  title: string;
+  on: boolean | null;
+  onToggle: () => void;
+  pending: boolean;
+  hours: number | null;
+  onHours: (n: number) => void;
+  maxHours: number;
+  hoursLabel: string;
+  helpId: string;
+  help: string;
+  always: string;
+  footer?: ReactNode;
+}) {
+  return (
+    <div className="mt-4 rounded-xl border border-subtle p-4">
+      <div className="flex items-center justify-between gap-4">
+        <p className="min-w-0 text-sm font-medium text-offwhite">{title}</p>
+        {on !== null && (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={on}
+            aria-label={title}
+            onClick={onToggle}
+            disabled={pending}
+            className={cn(
+              "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
+              on
+                ? "bg-emerald-soft/15 text-emerald-soft"
+                : "border border-subtle text-muted hover:bg-charcoal-700",
+            )}
+          >
+            {on ? "On" : "Off"}
+          </button>
+        )}
+      </div>
+      {hours !== null && on !== false && (
+        <label className="mt-3 block sm:max-w-sm">
+          <span className={labelCls}>{hoursLabel}</span>
+          <NumberField
+            min={0}
+            max={maxHours}
+            integer
+            className={field}
+            value={hours}
+            onChange={onHours}
+            aria-describedby={helpId}
+          />
+        </label>
+      )}
+      <p id={helpId} className="mt-2 text-[11px] text-muted">
+        {help} {always}
+      </p>
+      {footer && <p className="mt-1 text-[11px] text-muted">{footer}</p>}
+    </div>
+  );
+}
+
 export function SettingsTab({
   shop,
   bookUrl,
@@ -462,6 +553,11 @@ export function SettingsTab({
   const [buffer, setBuffer] = useState(shop.bookingBufferMin);
   // Null = an older API that never answered it: nothing shown, nothing sent.
   const [cutoff, setCutoff] = useState<number | null>(shop.rescheduleCutoffHours ?? null);
+  // What clients may change themselves (config/customerChangeRules.ts). Null
+  // = an older API that never answered: no control shown, nothing sent.
+  const [clientMoves, setClientMoves] = useState<boolean | null>(shop.customerCanReschedule ?? null);
+  const [clientCancels, setClientCancels] = useState<boolean | null>(shop.customerCanCancel ?? null);
+  const [cancelCutoff, setCancelCutoff] = useState<number | null>(shop.cancelCutoffHours ?? null);
   const [slotOpened, setSlotOpened] = useState(shop.slotOpenedTextsEnabled);
   const [requireApproval, setRequireApproval] = useState(shop.requireBookingApproval);
   // Older API answers lack the field: that is "off", the default.
@@ -481,6 +577,8 @@ export function SettingsTab({
       groupsFirst: boolean;
       remind24h: boolean;
       remind2h: boolean;
+      clientMoves: boolean;
+      clientCancels: boolean;
     }> = {},
     // Undo the caller's own optimistic flip when the save is refused, so a
     // toggle never reads On while the server still has it Off.
@@ -496,6 +594,9 @@ export function SettingsTab({
         bookingMaxDays: maxDays,
         bookingBufferMin: buffer,
         ...(cutoff !== null ? { rescheduleCutoffHours: cutoff } : {}),
+        // Each sent only when the API answered it (an older API refuses an
+        // unknown field, which would fail every booking-rule save).
+        ...clientChangeFields(next.clientMoves ?? clientMoves, next.clientCancels ?? clientCancels, cancelCutoff),
         slotOpenedTextsEnabled: next.slotOpened ?? slotOpened,
         requireBookingApproval: next.requireApproval ?? requireApproval,
         // Only its own toggle sends it, like the booking link: an unrelated
@@ -545,6 +646,20 @@ export function SettingsTab({
     const next = !groupsFirst;
     setGroupsFirst(next);
     persist({ groupsFirst: next }, () => setGroupsFirst(!next));
+  }
+
+  // Flip "Clients can reschedule / cancel online" and save.
+  function toggleClientMoves() {
+    if (clientMoves === null) return;
+    const next = !clientMoves;
+    setClientMoves(next);
+    persist({ clientMoves: next }, () => setClientMoves(!next));
+  }
+  function toggleClientCancels() {
+    if (clientCancels === null) return;
+    const next = !clientCancels;
+    setClientCancels(next);
+    persist({ clientCancels: next }, () => setClientCancels(!next));
   }
 
   // Flip one of the automatic push-reminder tiers (24h / 2h) and save.
@@ -678,29 +793,61 @@ export function SettingsTab({
               </p>
             </label>
           </div>
-          {cutoff !== null && (
-            <label className="mt-4 block sm:max-w-sm">
-              <span className={labelCls}>
-                Clients can reschedule up to (hours before, 0 to {RESCHEDULE_CUTOFF_MAX_HOURS})
-              </span>
-              <NumberField
-                min={0}
-                max={RESCHEDULE_CUTOFF_MAX_HOURS}
-                integer
-                className={field}
-                value={cutoff}
-                onChange={setCutoff}
-                aria-describedby="cutoff-help"
-              />
-              {/* What actually happens inside the cutoff, in the one place
-                  the number is set (config/rescheduleCutoff.ts). */}
-              <p id="cutoff-help" className="mt-1 text-[11px] text-muted">
-                {cutoff > 0
-                  ? `Closer than ${formatCutoffHours(cutoff)} to the appointment, clients can't move it from their link or by text. They're asked to contact you, and can still cancel.`
-                  : "No limit: clients can move their appointment any time before it starts."}{" "}
-                You can always move any appointment yourself.
-              </p>
-            </label>
+          {/* WHAT CLIENTS MAY CHANGE THEMSELVES (config/customerChangeRules.ts):
+              from their link, their group link, or by text. The barber is
+              never limited. Each control appears only when the API answered
+              it - an older API refuses a field it doesn't know. */}
+          {(clientMoves !== null || cutoff !== null) && (
+            <ClientChangeRule
+              title="Clients can reschedule online"
+              on={clientMoves}
+              onToggle={toggleClientMoves}
+              pending={pending}
+              hours={cutoff}
+              onHours={setCutoff}
+              maxHours={RESCHEDULE_CUTOFF_MAX_HOURS}
+              hoursLabel={`Clients can reschedule up to (hours before, 0 to ${RESCHEDULE_CUTOFF_MAX_HOURS})`}
+              helpId="cutoff-help"
+              help={
+                clientMoves === false
+                  ? "Off: clients can't move their appointment from their link or by text. They see a note to contact you instead of a Reschedule button."
+                  : cutoff !== null && cutoff > 0
+                    ? `Closer than ${formatCutoffHours(cutoff)} to the appointment, clients can't move it from their link or by text. They're asked to contact you.`
+                    : "No limit: clients can move their appointment any time before it starts."
+              }
+              always="You can always move any appointment yourself."
+            />
+          )}
+          {(clientCancels !== null || cancelCutoff !== null) && (
+            <ClientChangeRule
+              title="Clients can cancel online"
+              on={clientCancels}
+              onToggle={toggleClientCancels}
+              pending={pending}
+              hours={cancelCutoff}
+              onHours={setCancelCutoff}
+              maxHours={CANCEL_CUTOFF_MAX_HOURS}
+              hoursLabel={`Clients can cancel up to (hours before, 0 to ${CANCEL_CUTOFF_MAX_HOURS})`}
+              helpId="cancel-cutoff-help"
+              help={
+                clientCancels === false
+                  ? "Off: clients can't cancel from their link or by text. They see a note to contact you instead of a Cancel button."
+                  : cancelCutoff !== null && cancelCutoff > 0
+                    ? `Closer than ${formatCutoffHours(cancelCutoff)} to the appointment, clients can't cancel it from their link or by text. They're asked to contact you.`
+                    : "No limit: clients can cancel any time before the appointment starts."
+              }
+              always="You can always cancel any appointment yourself."
+              footer={
+                <>
+                  This only decides whether clients can cancel themselves. Whether a late cancel
+                  costs a fee is set in{" "}
+                  <Link href="/dashboard/payments" className="text-gold underline">
+                    Payments
+                  </Link>
+                  .
+                </>
+              }
+            />
           )}
           <p className="mt-3 text-xs text-muted">
             Your booking page:{" "}

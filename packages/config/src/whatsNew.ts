@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-13-client-change-rules",
+    date: "2026-10-13",
+    kind: "feature",
+    title: "Choose whether clients can cancel or move online",
+    body:
+      "Booking → Settings → Booking rules now has a switch for clients rescheduling and one for cancelling " +
+      "online, plus how many hours before they close. Clients see who to contact instead. You can still " +
+      "change anything yourself; cancellation fees stay in Payments.",
+  },
+  {
     id: "2026-10-13-block-off-journey",
     date: "2026-10-13",
     kind: "feature",
