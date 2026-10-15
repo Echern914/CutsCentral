@@ -20,6 +20,7 @@ import { hasRent, type RentSummary } from "@/lib/boothRent";
 import { ChangeTag, MemberStatGrid } from "@/components/team/MemberStatGrid";
 import { approveLinkAction, endLinkAction, teamActivityAction, teamLinksAction } from "./actions";
 import { OwnerRent } from "./BoothRent";
+import { MentorPairs, type Pairing } from "./MentorPairs";
 
 /** The windows the owner can pick - each an Insights preset. */
 const PERIOD_LABEL: Record<string, string> = {
@@ -42,6 +43,8 @@ export interface TeamLinksData {
   period?: { key: string; label: string; options: string[] };
   /** Summed from what members share - see services/teamLinks.ts teamTotals. */
   totals?: TeamTotals;
+  /** Who mentors whom on the team - names only. Optional: older API. */
+  mentorships?: Pairing[];
   /** The one link the owner sends: /team/link/<their shop id>. */
   joinUrl: string;
   pending: {
@@ -411,6 +414,17 @@ export function IndependentTeam({
             </p>
           )}
         </section>
+
+        {data.active.length >= 2 && (
+          <MentorPairs
+            members={data.active.map((m) => ({ linkId: m.id, name: m.business.name }))}
+            pairings={data.mentorships ?? []}
+            onChanged={async () => {
+              const fresh = await teamLinksAction(period);
+              if (fresh) setData(fresh);
+            }}
+          />
+        )}
 
         {activity !== null && (
           // WHAT HAPPENED: joins, leaves, what someone started or stopped

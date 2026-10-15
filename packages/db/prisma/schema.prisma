@@ -1046,6 +1046,9 @@ model TeamLink {
   rentPayments BoothRentPayment[]
   // What happened on this link, for the owner's Team activity feed.
   events       TeamLinkEvent[]
+  // MENTORSHIP pairings this member is in, as the mentor or as the student.
+  mentoring    TeamMentorship[] @relation("MentorLink")
+  mentoredBy   TeamMentorship[] @relation("StudentLink")
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
@@ -1078,6 +1081,40 @@ model TeamLinkEvent {
 
   @@index([teamShopId, createdAt])
   @@index([linkId])
+}
+
+// A MENTOR on a team looking at a STUDENT's numbers - only the ones the
+// student shares with that mentor. Snow's mentorship ask (2026-10-15), the
+// numbers half: photo feedback lives in the team's own chat, not here.
+//
+// The team's OWNER pairs them (both must be members of the team, i.e. ACTIVE
+// TeamLinks). The student alone decides what this mentor sees - every switch
+// starts off, separately from what they share with the owner. Either of the
+// two can end it; leaving the team ends every pairing that member is in.
+//
+// Default-deny like TeamLink: it joins two businesses, so only the API's
+// owner path reads it, always naming who is asking.
+model TeamMentorship {
+  id            String    @id @default(cuid())
+  teamShopId    String
+  mentorLinkId  String
+  mentorLink    TeamLink  @relation("MentorLink", fields: [mentorLinkId], references: [id], onDelete: Cascade)
+  studentLinkId String
+  studentLink   TeamLink  @relation("StudentLink", fields: [studentLinkId], references: [id], onDelete: Cascade)
+  // ACTIVE | ENDED
+  status        String    @default("ACTIVE")
+  // What the student lets THIS mentor see. Off until the student turns it on.
+  shareCuts     Boolean   @default(false)
+  shareRevenue  Boolean   @default(false)
+  shareClients  Boolean   @default(false)
+  shareRating   Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  endedAt       DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  @@index([teamShopId, status])
+  @@index([mentorLinkId, status])
+  @@index([studentLinkId, status])
 }
 
 enum TeamLinkStatus {

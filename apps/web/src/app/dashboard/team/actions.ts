@@ -138,3 +138,17 @@ export async function rentHistoryAction(linkId: string): Promise<RentHistory | n
   const res = await apiGet<RentHistory>(`/api/team/links/${linkId}/rent`);
   return res.ok ? (res.data ?? null) : null;
 }
+
+/** Pair a mentor with a student on this team. Owner only. */
+export async function pairMentorAction(mentorLinkId: string, studentLinkId: string): Promise<TeamActionResult> {
+  const res = await apiSend<{ ok: boolean }>("POST", "/api/team/mentorships", { mentorLinkId, studentLinkId });
+  revalidatePath("/dashboard/team");
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
+}
+
+/** End a pairing on this team. Owner only. */
+export async function endPairingAction(id: string): Promise<TeamActionResult> {
+  const res = await apiSend<{ ok: boolean }>("POST", `/api/team/mentorships/${id}/end`);
+  revalidatePath("/dashboard/team");
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
+}
