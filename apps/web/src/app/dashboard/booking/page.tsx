@@ -19,6 +19,10 @@ export interface BookingShop {
   bookingBufferMin: number;
   /** How close to the start a client may still move it themselves. Optional = older API. */
   rescheduleCutoffHours?: number;
+  /** Whether clients may move / cancel online, and until when. Optional = older API. */
+  customerCanReschedule?: boolean;
+  customerCanCancel?: boolean;
+  cancelCutoffHours?: number;
   waitlistEnabled: boolean;
   slotOpenedTextsEnabled: boolean;
   requireBookingApproval: boolean;

@@ -11,13 +11,27 @@ import type { TipView } from "./page";
 export async function cancelBookingAction(
   token: string,
   scope: "this" | "future" = "this",
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  /** `cancel_closed`: the shop's own sentence - not online, or too close to cancel online. */
+  message?: string;
+}> {
   const res = await apiPublicSend(
     "POST",
     `/api/book/manage/${encodeURIComponent(token)}/cancel`,
     { scope },
   );
-  if (!res.ok) return { ok: false, error: res.error ?? "failed" };
+  if (!res.ok) {
+    const body = res.body as { message?: string } | undefined;
+    return {
+      ok: false,
+      error: res.error ?? "failed",
+      ...(res.error === "cancel_closed" && typeof body?.message === "string"
+        ? { message: body.message }
+        : {}),
+    };
+  }
   return { ok: true };
 }
 

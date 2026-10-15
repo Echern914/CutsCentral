@@ -48,6 +48,11 @@ import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { fillBlankClientNames } from "../services/clientFill.js";
 import { bookingBlockedFor, CONTACT_SHOP_ERROR } from "../services/clientBookingBlock.js";
 import { notifyBarberBookingEvent } from "../services/appointmentNotify.js";
+import {
+  customerChange,
+  type CustomerChangeAction,
+  type CustomerChangeVerdict,
+} from "@chairback/config/customerChangeRules";
 
 /**
  * Back-to-back group booking: "me and my brother, one after the other".
@@ -948,7 +953,20 @@ async function groupByToken(token: string | undefined) {
       clientId: true,
       phone: true,
       email: true,
-      shop: { select: { slug: true, timezone: true, name: true, bookingBufferMin: true } },
+      shop: {
+        select: {
+          slug: true,
+          timezone: true,
+          name: true,
+          bookingBufferMin: true,
+          // What the shop lets a client change online, and until when
+          // (config/customerChangeRules.ts) - the party is held to it as one.
+          customerCanReschedule: true,
+          customerCanCancel: true,
+          rescheduleCutoffHours: true,
+          cancelCutoffHours: true,
+        },
+      },
       staff: { select: { name: true } },
       appointments: {
         orderBy: { groupPosition: "asc" },
@@ -1003,6 +1021,39 @@ function partyStarted(live: readonly { startsAt: Date }[], now: Date): boolean {
   return live.some((a) => a.startsAt.getTime() <= now.getTime());
 }
 
+type GroupRow = NonNullable<Awaited<ReturnType<typeof groupByToken>>>;
+
+/**
+ * 🔴 THE SHOP'S RULE FOR A CLIENT'S OWN CHANGE, FOR THE WHOLE PARTY
+ * (config/customerChangeRules.ts) - the same rule a single booking's manage
+ * link and the receptionist apply, measured from the party's FIRST start
+ * (`startsAt`): the first chair is the one a late change empties. The
+ * barber's dashboard is never limited by this.
+ */
+function partyRule(
+  group: GroupRow,
+  action: CustomerChangeAction,
+  startsAt: Date,
+  now: Date,
+): CustomerChangeVerdict {
+  const s = group.shop;
+  return customerChange({
+    action,
+    allowed: action === "reschedule" ? s.customerCanReschedule : s.customerCanCancel,
+    cutoffHours: action === "reschedule" ? s.rescheduleCutoffHours : s.cancelCutoffHours,
+    startsAt,
+    now,
+    shopName: s.name,
+  });
+}
+
+/** The earliest start among these rows, or null for none. */
+function firstStart(rows: readonly { startsAt: Date }[]): Date | null {
+  let first: Date | null = null;
+  for (const r of rows) if (!first || r.startsAt < first) first = r.startsAt;
+  return first;
+}
+
 /**
  * The whole visit behind one group token.
  *
@@ -1028,6 +1079,17 @@ bookingGroupRouter.get("/group/:token", rewardsLimiter, async (req, res) => {
   const span = requested
     ? group.appointments.filter((a) => a.status === "BOOKED" || a.status === "PENDING")
     : live;
+  // What the shop lets this client change online right now - so the page
+  // shows the shop's sentence instead of a button the route would refuse.
+  const partyStart = firstStart(live);
+  const ruleView = (rule: CustomerChangeVerdict) =>
+    rule.allowed ? { allowed: true, message: null } : { allowed: false, message: rule.message };
+  const rules = partyStart
+    ? {
+        reschedule: ruleView(partyRule(group, "reschedule", partyStart, now)),
+        cancel: ruleView(partyRule(group, "cancel", partyStart, now)),
+      }
+    : null;
   res.json({
     status: group.status,
     requested,
@@ -1039,6 +1101,8 @@ bookingGroupRouter.get("/group/:token", rewardsLimiter, async (req, res) => {
     // ask for times that fit the party as it stands, rather than inventing a
     // second availability path.
     shop: { slug: group.shop.slug, name: group.shop.name, timezone: group.shop.timezone },
+    // Null when nobody is still booked. Optional to the page (older API).
+    rules,
     // 🔴 staffId is here so RESCHEDULE-ALL can reuse /group/slots - it needs to
     // ask for times on this barber with these services. A display-safe
     // identifier and nothing more: no mirror state, no Acuity id, no customer
@@ -1056,6 +1120,12 @@ bookingGroupRouter.get("/group/:token", rewardsLimiter, async (req, res) => {
       status: a.status,
       // This member's own time has come: their single cancel refuses it.
       started: a.startsAt.getTime() <= now.getTime(),
+      // Whether their own cancel (the single manage route) would be taken -
+      // the shop's rule, measured from THIS member's start.
+      canCancel:
+        a.status === "BOOKED" &&
+        a.startsAt.getTime() > now.getTime() &&
+        partyRule(group, "cancel", a.startsAt, now).allowed,
       // Same reason as staff.id above: reschedule-all rebuilds the party's
       // service list to re-ask for times. The NAME alone cannot do that.
       serviceId: a.serviceId,
@@ -1143,6 +1213,16 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
   // another day. The shop's own tools are unaffected.
   if (partyStarted(live, now)) {
     res.status(409).json({ error: "not_reschedulable", code: "STARTED" });
+    return;
+  }
+  // 🔴 THE SHOP'S RULE: moves online off, or too close to the party's start.
+  const moveRule = partyRule(group, "reschedule", firstStart(live)!, now);
+  if (!moveRule.allowed) {
+    res.status(409).json({
+      error: "reschedule_closed",
+      reason: moveRule.reason,
+      message: moveRule.message,
+    });
     return;
   }
   const shop = await prisma.shop.findUnique({ where: { id: group.shopId } });
@@ -1435,8 +1515,21 @@ bookingGroupRouter.post("/group/:token/cancel", bookingWriteLimiter, async (req,
       res.status(409).json({ error: "not_cancelable", code: "REQUESTED" });
       return;
     }
-    if (partyStarted(group.appointments.filter((a) => a.status === "BOOKED"), now)) {
+    const booked = group.appointments.filter((a) => a.status === "BOOKED");
+    if (partyStarted(booked, now)) {
       res.status(409).json({ error: "not_cancelable", code: "STARTED" });
+      return;
+    }
+    // 🔴 THE SHOP'S RULE: cancels online off, or too close to the party's
+    // start. Refused before anything is touched - no cancel, no fee.
+    const partyStart = firstStart(booked);
+    const cancelRule = partyStart ? partyRule(group, "cancel", partyStart, now) : null;
+    if (cancelRule && !cancelRule.allowed) {
+      res.status(409).json({
+        error: "cancel_closed",
+        reason: cancelRule.reason,
+        message: cancelRule.message,
+      });
       return;
     }
   }

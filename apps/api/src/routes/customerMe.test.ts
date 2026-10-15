@@ -307,6 +307,38 @@ describe("the home", () => {
     });
   });
 
+  it("each upcoming appointment says whether the shop lets the client move or cancel it online", async () => {
+    // config/customerChangeRules.ts, the rule the manage page enforces - here
+    // so a future app build can hide a button that page would only explain.
+    const { me, booked, requested } = await regular();
+    const flags = async (id: string) => {
+      const row = (await get("/api/me/appointments", me.token)).body.upcoming.find(
+        (a: { id: string }) => a.id === `a_${id}`,
+      );
+      return { canReschedule: row.canReschedule, canCancel: row.canCancel };
+    };
+    // A day (and a few minutes) out, on the defaults: both open.
+    expect(await flags(booked.id)).toEqual({ canReschedule: true, canCancel: true });
+    // A request is not the client's to change yet.
+    expect(await flags(requested.id)).toEqual({ canReschedule: false, canCancel: false });
+    try {
+      // Inside a 48-hour move cutoff; cancelling still open.
+      await prisma.shop.update({ where: { id: shopA }, data: { rescheduleCutoffHours: 48 } });
+      expect(await flags(booked.id)).toEqual({ canReschedule: false, canCancel: true });
+      // No cancels online at all.
+      await prisma.shop.update({
+        where: { id: shopA },
+        data: { rescheduleCutoffHours: 0, customerCanCancel: false },
+      });
+      expect(await flags(booked.id)).toEqual({ canReschedule: true, canCancel: false });
+    } finally {
+      await prisma.shop.update({
+        where: { id: shopA },
+        data: { rescheduleCutoffHours: 24, customerCanCancel: true },
+      });
+    }
+  });
+
   it("lists every shop the customer's records are at, with the shop's own words", async () => {
     const { me } = await regular();
     const home = (await get("/api/me/home", me.token)).body;

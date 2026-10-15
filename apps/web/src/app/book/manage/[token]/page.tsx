@@ -22,6 +22,16 @@ export type TipView =
   | { state: "paid"; amountCents: number }
   | { state: "refunded"; amountCents: number };
 
+/** The shop's rule for one client change, as the manage API answers it. */
+export interface ClientChangeRuleView {
+  cutoffHours: number;
+  closesAt: string | null;
+  closed: boolean;
+  /** Why it is closed. Optional = an API from before the switch existed. */
+  reason?: "disabled" | "cutoff" | null;
+  message: string | null;
+}
+
 export interface ManageData {
   status: "BOOKED" | "CANCELED" | "COMPLETED" | "NO_SHOW" | "PENDING";
   /**
@@ -88,13 +98,15 @@ export interface ManageData {
    * The shop's cutoff for moving it online (config/rescheduleCutoff.ts).
    * `closed`: too close to the start now, and `message` says who to contact.
    * Null = no cutoff, or it can't be moved online anyway. Optional = older API.
+   * `closesAt` null = the shop set no cutoff (it may still be `closed`: the
+   * shop takes no moves online at all - `reason` "disabled").
    */
-  reschedule?: {
-    cutoffHours: number;
-    closesAt: string;
-    closed: boolean;
-    message: string | null;
-  } | null;
+  reschedule?: ClientChangeRuleView | null;
+  /**
+   * The same for cancelling it online (config/customerChangeRules.ts). Null =
+   * nothing to say (open, no cutoff). Optional = an older API.
+   */
+  cancel?: ClientChangeRuleView | null;
   /**
    * Non-null: cancelling keeps this much - a deposit taken on non-refundable
    * terms. The page asks before it cancels. Optional = an older API.
