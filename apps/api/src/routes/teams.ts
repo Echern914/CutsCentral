@@ -4,9 +4,11 @@ import { ACTIVE_SHOP_COOKIE_NAME, APP_NAME, apiEnv } from "@chairback/config";
 import { Prisma, prisma, runAsOwner } from "@chairback/db";
 import { requireUser, resolveOwnedShop } from "../middleware/auth.js";
 import { accountLimiter } from "../middleware/rateLimit.js";
+import { endMentorshipsForLink, mentorshipsForMemberLink } from "../services/teamMentorships.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { logger } from "../logger.js";
 import {
+  LINK_NOTHING_SHARED,
   NOTHING_SHARED,
   linksForMember,
   recordSharingChanges,
@@ -14,6 +16,7 @@ import {
   sharingOf,
   teamNumbers,
 } from "../services/teamLinks.js";
+import { memberToday } from "../services/teamSchedule.js";
 import {
   HAS_RENT_RECORDS,
   rateHistory,
@@ -58,7 +61,8 @@ teamsRouter.get("/", async (req, res) => {
         status: l.status,
         requestedAt: l.requestedAt.toISOString(),
         approvedAt: l.approvedAt?.toISOString() ?? null,
-        team: { name: l.teamShop.name },
+        // The team's zone: their schedule preview reads times as the owner does.
+        team: { name: l.teamShop.name, timezone: l.teamShop.timezone },
         sharing: sharingOf(l),
         // Exactly what the team's owner sees right now - the same function
         // their page calls - so this preview can't drift from the truth.
@@ -70,9 +74,26 @@ teamsRouter.get("/", async (req, res) => {
                 now,
               )
             : null,
+        // Their schedule: whether the owner sees it, and - when they do -
+        // today exactly as the owner's Team page shows it (same function).
+        shareSchedule: l.shareSchedule,
+        scheduleToday:
+          l.status === "ACTIVE" && l.shareSchedule
+            ? await memberToday({ id: business.id, timezone: business.timezone }, l.teamShop.timezone, now)
+            : null,
+        // The front desk: whether they take its walk-ins, and whether their
+        // own line is on to receive them. Nothing while Walk-In Mode is off.
+        walkIns: apiEnv().WALK_IN_MODE_ENABLED
+          ? { take: l.takeTeamWalkIns, lineOn: business.walkInEnabled }
+          : null,
         // Their own booth rent with this team - the same summary the owner
         // sees. Also while asking to rejoin: an old record never disappears.
         rent: await runAsOwner((tx) => rentSummary(tx, l.id, l.teamShop.timezone, now)),
+        // Mentorship on this team: the mentors they have (and what each one
+        // sees) and the members they mentor (only what each shares).
+        ...(l.status === "ACTIVE"
+          ? await mentorshipsForMemberLink(l.id, now)
+          : { mentors: [], mentoring: [] }),
       })),
     ),
     // Teams they've left, where booth rent was recorded: read-only, the rent
@@ -221,7 +242,7 @@ teamsRouter.post("/join", accountLimiter, async (req, res) => {
             requestedAt: new Date(),
             approvedAt: null,
             endedAt: null,
-            ...NOTHING_SHARED,
+            ...LINK_NOTHING_SHARED,
           },
         });
         // The request shows on the owner's Team page either way; the EMAIL
@@ -256,19 +277,26 @@ teamsRouter.post("/join", accountLimiter, async (req, res) => {
   res.status(201).json({ ok: true, id: result.id, status: "PENDING", team: { name: team.name } });
 });
 
+const numberShares = {
+  shareCuts: z.boolean().optional(),
+  shareRevenue: z.boolean().optional(),
+  shareClients: z.boolean().optional(),
+  shareRating: z.boolean().optional(),
+};
+/** What a MENTOR may see: numbers only. */
 const sharingSchema = z
-  .object({
-    shareCuts: z.boolean().optional(),
-    shareRevenue: z.boolean().optional(),
-    shareClients: z.boolean().optional(),
-    shareRating: z.boolean().optional(),
-  })
+  .object(numberShares)
+  .strict()
+  .refine((v) => Object.keys(v).length > 0);
+/** What the team's OWNER may see: the numbers, and the member's schedule. */
+const linkSharingSchema = z
+  .object({ ...numberShares, shareSchedule: z.boolean().optional() })
   .strict()
   .refine((v) => Object.keys(v).length > 0);
 
 /** PATCH /api/teams/:id/sharing - what this team's owner may see. Member only. */
 teamsRouter.patch("/:id/sharing", accountLimiter, async (req, res) => {
-  const parsed = sharingSchema.safeParse(req.body ?? {});
+  const parsed = linkSharingSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input" });
     return;
@@ -287,21 +315,133 @@ teamsRouter.patch("/:id/sharing", accountLimiter, async (req, res) => {
     if (count === 0) return null;
     const after = await tx.teamLink.findUniqueOrThrow({
       where: { id: req.params.id },
-      include: { memberShop: { select: { id: true, timezone: true } } },
+      include: {
+        memberShop: { select: { id: true, timezone: true } },
+        teamShop: { select: { timezone: true } },
+      },
     });
     // The owner's feed: which number was shared or hidden - never its value.
     await recordSharingChanges(tx, after, sharingOf(before), sharingOf(after));
+    if (before.shareSchedule !== after.shareSchedule) {
+      await recordTeamEvent(tx, after, after.shareSchedule ? "shared" : "hid", "schedule");
+    }
     return after;
   });
   if (!link) {
     res.status(404).json({ error: "not_found" });
     return;
   }
+  const active = link.status === "ACTIVE";
   res.json({
     ok: true,
     sharing: sharingOf(link),
-    theySee: link.status === "ACTIVE" ? await teamNumbers(link.memberShop, sharingOf(link)) : null,
+    theySee: active ? await teamNumbers(link.memberShop, sharingOf(link)) : null,
+    shareSchedule: link.shareSchedule,
+    scheduleToday:
+      active && link.shareSchedule ? await memberToday(link.memberShop, link.teamShop.timezone) : null,
   });
+});
+
+const walkInsSchema = z.object({ take: z.boolean() }).strict();
+
+/**
+ * PATCH /api/teams/:id/walk-ins { take } - take walk-ins who check in at this
+ * team's front desk. They join THIS business's own line, on its own books.
+ * Member only; 404 while Walk-In Mode is off for the platform.
+ */
+teamsRouter.patch("/:id/walk-ins", accountLimiter, async (req, res) => {
+  if (!apiEnv().WALK_IN_MODE_ENABLED) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const parsed = walkInsSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const link = await runAsOwner(async (tx) => {
+    const mine = {
+      id: req.params.id,
+      memberShop: { ownerId: req.userId },
+      status: { in: ["PENDING" as const, "ACTIVE" as const] },
+    };
+    const before = await tx.teamLink.findFirst({ where: mine, select: { takeTeamWalkIns: true } });
+    if (!before) return null;
+    const { count } = await tx.teamLink.updateMany({ where: mine, data: { takeTeamWalkIns: parsed.data.take } });
+    if (count === 0) return null;
+    const after = await tx.teamLink.findUniqueOrThrow({
+      where: { id: req.params.id },
+      select: { id: true, teamShopId: true, takeTeamWalkIns: true, memberShop: { select: { walkInEnabled: true } } },
+    });
+    if (before.takeTeamWalkIns !== after.takeTeamWalkIns) {
+      await recordTeamEvent(tx, after, after.takeTeamWalkIns ? "walk_ins_on" : "walk_ins_off");
+    }
+    return after;
+  });
+  if (!link) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ ok: true, walkIns: { take: link.takeTeamWalkIns, lineOn: link.memberShop.walkInEnabled } });
+});
+
+/**
+ * PATCH /api/teams/mentorships/:id/sharing - what THIS mentor may see. Only the
+ * student changes it, and only while the pairing is live. Answers with the
+ * numbers the mentor now reads, so the preview shows the truth.
+ */
+teamsRouter.patch("/mentorships/:id/sharing", accountLimiter, async (req, res) => {
+  const parsed = sharingSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const row = await runAsOwner(async (tx) => {
+    const { count } = await tx.teamMentorship.updateMany({
+      where: {
+        id: req.params.id,
+        status: "ACTIVE",
+        studentLink: { status: "ACTIVE", memberShop: { ownerId: req.userId } },
+      },
+      data: parsed.data,
+    });
+    if (count === 0) return null;
+    return tx.teamMentorship.findUniqueOrThrow({
+      where: { id: req.params.id },
+      include: { studentLink: { select: { memberShop: { select: { id: true, timezone: true } } } } },
+    });
+  });
+  if (!row) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({
+    ok: true,
+    sharing: sharingOf(row),
+    theySee: await teamNumbers(row.studentLink.memberShop, sharingOf(row)),
+  });
+});
+
+/** POST /api/teams/mentorships/:id/end - the student OR the mentor ends a pairing. */
+teamsRouter.post("/mentorships/:id/end", accountLimiter, async (req, res) => {
+  const { count } = await runAsOwner((tx) =>
+    tx.teamMentorship.updateMany({
+      where: {
+        id: req.params.id,
+        status: "ACTIVE",
+        OR: [
+          { studentLink: { memberShop: { ownerId: req.userId } } },
+          { mentorLink: { memberShop: { ownerId: req.userId } } },
+        ],
+      },
+      data: { status: "ENDED", endedAt: new Date(), ...NOTHING_SHARED },
+    }),
+  );
+  if (count === 0) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 /**
@@ -326,10 +466,12 @@ teamsRouter.post("/:id/leave", accountLimiter, async (req, res) => {
     if (!was) return 0;
     const { count } = await tx.teamLink.updateMany({
       where: { id: was.id, status: was.status },
-      data: { status: "ENDED", endedAt: new Date(), ...NOTHING_SHARED },
+      data: { status: "ENDED", endedAt: new Date(), ...LINK_NOTHING_SHARED },
     });
     if (count > 0) {
       await recordTeamEvent(tx, was, was.status === "ACTIVE" ? "left" : "withdrew");
+      // Off the team: every mentor pairing they were in ends with it.
+      await endMentorshipsForLink(tx, was.id);
       const link = await tx.teamLink.findUniqueOrThrow({
         where: { id: req.params.id },
         select: { teamShop: { select: { timezone: true } } },

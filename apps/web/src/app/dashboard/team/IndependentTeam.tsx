@@ -20,6 +20,11 @@ import { hasRent, type RentSummary } from "@/lib/boothRent";
 import { ChangeTag, MemberStatGrid } from "@/components/team/MemberStatGrid";
 import { approveLinkAction, endLinkAction, teamActivityAction, teamLinksAction } from "./actions";
 import { OwnerRent } from "./BoothRent";
+import { MentorPairs, type Pairing } from "./MentorPairs";
+import { TeamSchedule } from "./TeamSchedule";
+import type { TeamScheduleData } from "@/lib/teamSchedule";
+import { TeamWalkIns } from "./TeamWalkIns";
+import type { TeamDeskData } from "@/lib/teamWalkIns";
 
 /** The windows the owner can pick - each an Insights preset. */
 const PERIOD_LABEL: Record<string, string> = {
@@ -42,6 +47,8 @@ export interface TeamLinksData {
   period?: { key: string; label: string; options: string[] };
   /** Summed from what members share - see services/teamLinks.ts teamTotals. */
   totals?: TeamTotals;
+  /** Who mentors whom on the team - names only. Optional: older API. */
+  mentorships?: Pairing[];
   /** The one link the owner sends: /team/link/<their shop id>. */
   joinUrl: string;
   pending: {
@@ -88,16 +95,24 @@ const primary =
 export function IndependentTeam({
   initial,
   initialActivity = null,
+  initialSchedule = null,
+  initialDesk = null,
   vocab,
 }: {
   initial: TeamLinksData;
   /** The feed, read server-side; null when it couldn't be read. */
   initialActivity?: TeamActivityItem[] | null;
+  /** Today's schedules, read server-side; null when they couldn't be read. */
+  initialSchedule?: TeamScheduleData | null;
+  /** The front desk's walk-ins, read server-side; null when they couldn't be read. */
+  initialDesk?: TeamDeskData | null;
   vocab: BusinessVocabulary;
 }) {
   const { toast } = useToast();
   const [data, setData] = useState(initial);
   const [activity, setActivity] = useState(initialActivity);
+  /** Bumped after a change to the team, so the schedule re-reads its day. */
+  const [teamVersion, setTeamVersion] = useState(0);
   const [period, setPeriod] = useState(initial.period?.key ?? "30d");
   const [loadingPeriod, setLoadingPeriod] = useState(false);
   const comparedWith = COMPARED_WITH[period] ?? "the window before";
@@ -142,6 +157,7 @@ export function IndependentTeam({
     ]);
     if (fresh) setData(fresh);
     if (feed) setActivity(feed);
+    setTeamVersion((v) => v + 1);
     if (res.ok) toast(done, "success");
     else
       toast(
@@ -411,6 +427,25 @@ export function IndependentTeam({
             </p>
           )}
         </section>
+
+        {data.active.length > 0 && initialSchedule && (
+          <TeamSchedule initial={initialSchedule} vocab={vocab} version={teamVersion} />
+        )}
+
+        {data.active.length > 0 && initialDesk?.available && (
+          <TeamWalkIns initial={initialDesk} vocab={vocab} version={teamVersion} />
+        )}
+
+        {data.active.length >= 2 && (
+          <MentorPairs
+            members={data.active.map((m) => ({ linkId: m.id, name: m.business.name }))}
+            pairings={data.mentorships ?? []}
+            onChanged={async () => {
+              const fresh = await teamLinksAction(period);
+              if (fresh) setData(fresh);
+            }}
+          />
+        )}
 
         {activity !== null && (
           // WHAT HAPPENED: joins, leaves, what someone started or stopped

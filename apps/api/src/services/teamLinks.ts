@@ -35,6 +35,14 @@ export const NOTHING_SHARED: Sharing = {
   shareRating: false,
 };
 
+/**
+ * Everything a member can switch on for a LINK, off: the four numbers, their
+ * schedule, and taking the front desk's walk-ins. What a link is reset to
+ * when it ends or starts over. (A mentor pairing shares numbers only - it
+ * uses NOTHING_SHARED.)
+ */
+export const LINK_NOTHING_SHARED = { ...NOTHING_SHARED, shareSchedule: false, takeTeamWalkIns: false } as const;
+
 export function sharingOf(link: Sharing): Sharing {
   return {
     shareCuts: link.shareCuts,
@@ -201,7 +209,15 @@ export type TeamEventKind =
   | "left"
   | "withdrew"
   | "shared"
-  | "hid";
+  | "hid"
+  // A member who shares their schedule changed their hours or time off.
+  | "availability"
+  // A member started or stopped taking the front desk's walk-ins.
+  | "walk_ins_on"
+  | "walk_ins_off";
+
+/** What a "shared"/"hid" line names: one of the four numbers, or the schedule. */
+export type TeamMetric = "cuts" | "revenue" | "clients" | "rating" | "schedule";
 
 /** The metric name a share switch is logged under. */
 export const METRIC_OF: Record<ShareKey, "cuts" | "revenue" | "clients" | "rating"> = {
@@ -216,7 +232,7 @@ export async function recordTeamEvent(
   tx: Prisma.TransactionClient,
   link: { id: string; teamShopId: string },
   kind: TeamEventKind,
-  metric: (typeof METRIC_OF)[ShareKey] | null = null,
+  metric: TeamMetric | null = null,
 ): Promise<void> {
   await tx.teamLinkEvent.create({
     data: { linkId: link.id, teamShopId: link.teamShopId, kind, metric },

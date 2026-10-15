@@ -10,6 +10,7 @@ import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { applyChairLink, releaseChairLink } from "../services/staffUserLink.js";
 import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
 import {
+  LINK_NOTHING_SHARED,
   NOTHING_SHARED,
   TEAM_PERIODS,
   linksForTeam,
@@ -21,6 +22,9 @@ import {
   teamTotals,
 } from "../services/teamLinks.js";
 import { PERIODS } from "../engines/insightsWindow.js";
+import { endMentorshipsForLink, pairMentor, pairingsForTeam } from "../services/teamMentorships.js";
+import { dayWindow, memberDay, scheduleDays } from "../services/teamSchedule.js";
+import { deskLine, deskMembers } from "../services/teamWalkIns.js";
 import {
   HAS_RENT_RECORDS,
   PAYMENT_METHODS,
@@ -511,6 +515,9 @@ teamRouter.get("/links", requireOwner, async (req, res) => {
       .filter((l) => l.status === "PENDING")
       .map((l) => ({ ...card(l), requestedAt: l.requestedAt.toISOString() })),
     active,
+    // Who mentors whom - names and dates only. What a student shares with a
+    // mentor is between them; the owner sees only what's shared with THEM.
+    mentorships: await pairingsForTeam(shop.id),
     // Rent with members who left (or are asking to come back): the record
     // stays, read-only - and nothing else of their business comes with it.
     past: await runAsOwner(async (tx) => {
@@ -540,6 +547,103 @@ teamRouter.get("/links", requireOwner, async (req, res) => {
  */
 teamRouter.get("/activity", requireOwner, async (req, res) => {
   res.json({ items: await teamActivity(req.shop!.id) });
+});
+
+/**
+ * GET /api/team/schedule?day=YYYY-MM-DD - each member's day: when they work,
+ * when they're off, when they're booked (times only), and where they are now.
+ *
+ * Only members who share their schedule are read (services/teamSchedule.ts);
+ * everyone else is listed by name as hidden. `day` is one of the next seven
+ * days in the TEAM's calendar - anything else is today. Owner-only, like
+ * everything a member shares.
+ */
+teamRouter.get("/schedule", requireOwner, async (req, res) => {
+  const shop = req.shop!;
+  const now = new Date();
+  const days = scheduleDays(now, shop.timezone);
+  const day = typeof req.query.day === "string" && days.includes(req.query.day) ? req.query.day : days[0]!;
+  const window = dayWindow(day, shop.timezone);
+  const links = (await linksForTeam(shop.id)).filter((l) => l.status === "ACTIVE");
+  const members = await Promise.all(
+    links.map(async (l) => ({
+      linkId: l.id,
+      business: { name: l.memberShop.name },
+      shared: l.shareSchedule,
+      chairs: l.shareSchedule ? await memberDay(l.memberShop, window, now) : null,
+    })),
+  );
+  res.json({ timezone: shop.timezone, day, days, now: now.toISOString(), members });
+});
+
+/**
+ * GET /api/team/walk-ins - the front desk: whether it's running, who takes
+ * its walk-ins (and why not, for anyone who doesn't), and its line - first
+ * names, who they're waiting for, and the wait. Read-only: each business
+ * runs its own line from its own Walk-ins board. Owner-only.
+ *
+ * Walk-In Mode off for the whole platform: `available: false` and nothing
+ * else, so the page shows nothing.
+ */
+teamRouter.get("/walk-ins", requireOwner, async (req, res) => {
+  if (!apiEnv().WALK_IN_MODE_ENABLED) {
+    res.json({ available: false });
+    return;
+  }
+  const shop = await prisma.shop.findUniqueOrThrow({
+    where: { id: req.shop!.id },
+    select: { walkInEnabled: true, walkInAcceptingNow: true, walkInKioskTokenHash: true },
+  });
+  res.json({
+    available: true,
+    desk: {
+      on: shop.walkInEnabled,
+      acceptingNow: shop.walkInAcceptingNow,
+      // Whether a tablet link exists - never the link (only its hash is kept).
+      hasKiosk: shop.walkInKioskTokenHash !== null,
+    },
+    members: await deskMembers(req.shop!.id),
+    line: await deskLine(req.shop!.id),
+  });
+});
+
+const pairSchema = z
+  .object({ mentorLinkId: z.string().min(1).max(64), studentLinkId: z.string().min(1).max(64) })
+  .strict();
+
+/**
+ * POST /api/team/mentorships - pair a mentor with a student. Both must be on
+ * this team now. The student starts sharing NOTHING with the mentor; they
+ * choose on their Teams page. Owner-only.
+ */
+teamRouter.post("/mentorships", accountLimiter, requireOwner, async (req, res) => {
+  const parsed = pairSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const result = await pairMentor({ teamShopId: req.shop!.id, ...parsed.data });
+  if (result.ok) {
+    res.status(201).json({ ok: true, id: result.id });
+    return;
+  }
+  const status = result.error === "not_found" ? 404 : result.error === "already_paired" ? 409 : 400;
+  res.status(status).json({ error: result.error });
+});
+
+/** POST /api/team/mentorships/:id/end - end a pairing on this team. Owner-only. */
+teamRouter.post("/mentorships/:id/end", accountLimiter, requireOwner, async (req, res) => {
+  const { count } = await runAsOwner((tx) =>
+    tx.teamMentorship.updateMany({
+      where: { id: req.params.id, teamShopId: req.shop!.id, status: "ACTIVE" },
+      data: { status: "ENDED", endedAt: new Date(), ...NOTHING_SHARED },
+    }),
+  );
+  if (count === 0) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 /** POST /api/team/links/:id/approve - let a business that asked onto the team. */
@@ -600,11 +704,13 @@ teamRouter.post("/links/:id/end", accountLimiter, requireOwner, async (req, res)
     if (!was) return 0;
     const { count } = await tx.teamLink.updateMany({
       where: { id: was.id, status: was.status },
-      data: { status: "ENDED", endedAt: new Date(), ...NOTHING_SHARED },
+      data: { status: "ENDED", endedAt: new Date(), ...LINK_NOTHING_SHARED },
     });
     if (count > 0) {
       await recordTeamEvent(tx, was, was.status === "ACTIVE" ? "removed" : "declined");
       await stopRentOnLeave(tx, req.params.id!, shop.timezone, req.userId!);
+      // Off the team: every mentor pairing they were in ends with it.
+      await endMentorshipsForLink(tx, was.id);
     }
     return count;
   });

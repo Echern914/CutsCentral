@@ -10,12 +10,14 @@ import type { MyTeamsData } from "./TeamsClient";
  */
 
 const setSharingAction = vi.fn();
+const setTeamWalkInsAction = vi.fn();
 const leaveTeamAction = vi.fn();
 const myTeamsAction = vi.fn();
 const toast = vi.fn();
 
 vi.mock("./actions", () => ({
   setSharingAction: (...a: unknown[]) => setSharingAction(...a),
+  setTeamWalkInsAction: (...a: unknown[]) => setTeamWalkInsAction(...a),
   leaveTeamAction: (...a: unknown[]) => leaveTeamAction(...a),
   myTeamsAction: (...a: unknown[]) => myTeamsAction(...a),
 }));
@@ -199,5 +201,88 @@ describe("booth rent records", () => {
     expect(document.querySelector('[data-qa="rent-total"]')!.textContent).toBe(
       "You owe $150 in total · unpaid since Sep 17",
     );
+  });
+});
+
+describe("sharing a schedule", () => {
+  const day = {
+    name: "Joe",
+    hours: [{ start: "2027-01-14T09:00:00.000Z", end: "2027-01-14T17:00:00.000Z" }],
+    booked: [],
+    off: [],
+    free: [{ start: "2027-01-14T09:00:00.000Z", end: "2027-01-14T17:00:00.000Z" }],
+    now: { kind: "free" as const, until: "2027-01-14T17:00:00.000Z" },
+  };
+  const withSchedule = (over: Partial<MyTeamsData["links"][number]> = {}) =>
+    data({ team: { name: "United Barbershop", timezone: "UTC" }, shareSchedule: false, scheduleToday: null, ...over });
+
+  it("starts hidden, and the preview says the owner sees only the name", () => {
+    render(<TeamsClient initial={withSchedule()} vocab={vocab} />);
+    expect(sw("shareSchedule").textContent).toBe("Hidden");
+    expect(sw("shareSchedule").getAttribute("aria-checked")).toBe("false");
+    expect(document.querySelector('[data-qa="schedule-they-see"]')!.textContent).toContain(
+      "Hidden. They see only your name in their schedules.",
+    );
+  });
+
+  it("🔴 turning it on waits for the server, then shows the server's own answer", async () => {
+    let answer!: (v: unknown) => void;
+    setSharingAction.mockReturnValue(new Promise((r) => (answer = r)));
+    render(<TeamsClient initial={withSchedule()} vocab={vocab} />);
+    fireEvent.click(sw("shareSchedule"));
+    expect(setSharingAction).toHaveBeenCalledWith("tl1", { shareSchedule: true });
+    expect(sw("shareSchedule").textContent).toBe("Saving…");
+    answer({ ok: true, sharing: NONE, theySee: null, shareSchedule: true, scheduleToday: [day] });
+    await waitFor(() => expect(sw("shareSchedule").textContent).toBe("Shared"));
+    const preview = document.querySelector('[data-qa="schedule-they-see"]')!;
+    expect(preview.textContent).toContain("Free until 5:00 PM");
+    expect(preview.textContent).toContain("9:00 AM - 5:00 PM · nothing booked");
+  });
+
+  it("a failed save leaves it hidden and says nothing changed", async () => {
+    setSharingAction.mockResolvedValue({ ok: false, error: "network" });
+    render(<TeamsClient initial={withSchedule()} vocab={vocab} />);
+    fireEvent.click(sw("shareSchedule"));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't save that - nothing changed", "error"));
+    expect(sw("shareSchedule").textContent).toBe("Hidden");
+  });
+
+  it("an API a deploy behind sends no schedule: no switch, no preview", () => {
+    render(<TeamsClient initial={data()} vocab={vocab} />);
+    expect(sw("shareSchedule")).toBeNull();
+    expect(document.querySelector('[data-qa="schedule-they-see"]')).toBeNull();
+  });
+});
+
+describe("front desk walk-ins", () => {
+  const sw2 = () => document.querySelector<HTMLButtonElement>('[data-qa="take-walk-ins"]');
+
+  it("🔴 turning it on waits for the server, and says when their own line is off", async () => {
+    let answer!: (v: unknown) => void;
+    setTeamWalkInsAction.mockReturnValue(new Promise((r) => (answer = r)));
+    render(<TeamsClient initial={data({ walkIns: { take: false, lineOn: false } })} vocab={vocab} />);
+    expect(sw2()!.textContent).toBe("Off");
+    fireEvent.click(sw2()!);
+    expect(setTeamWalkInsAction).toHaveBeenCalledWith("tl1", true);
+    expect(sw2()!.textContent).toBe("Saving…");
+    answer({ ok: true, walkIns: { take: true, lineOn: false } });
+    await waitFor(() => expect(sw2()!.textContent).toBe("On"));
+    expect(document.querySelector('[data-qa="desk-line-off"]')!.textContent).toContain(
+      "Your own walk-in line is off",
+    );
+  });
+
+  it("a failed save leaves it as it was", async () => {
+    setTeamWalkInsAction.mockResolvedValue({ ok: false, error: "network" });
+    render(<TeamsClient initial={data({ walkIns: { take: true, lineOn: true } })} vocab={vocab} />);
+    fireEvent.click(sw2()!);
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't save that - nothing changed", "error"));
+    expect(sw2()!.textContent).toBe("On");
+    expect(document.querySelector('[data-qa="desk-line-off"]')).toBeNull();
+  });
+
+  it("Walk-In Mode off, or waiting to be approved: no switch", () => {
+    render(<TeamsClient initial={data({ walkIns: null })} vocab={vocab} />);
+    expect(sw2()).toBeNull();
   });
 });

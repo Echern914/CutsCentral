@@ -55,7 +55,7 @@ export function mintTrackToken(): { token: string; hash: string } {
 const ACTIVE = [...ACTIVE_STATUSES];
 
 /** The active queue in board order, shaped for the estimate engine. */
-async function activeQueueForEstimate(
+export async function activeQueueForEstimate(
   shopId: string,
 ): Promise<EntryForEstimate[]> {
   const entries = await prisma.walkInEntry.findMany({
@@ -119,6 +119,9 @@ export async function estimateForNewEntry(opts: {
 
 export interface KioskCheckInResult {
   entryId: string;
+  /** The line the entry is in. At a team desk a kept spot can be another
+   * business's line than the one just picked. */
+  shopId: string;
   /** The raw tracking token for the SMS - exists here and in the text,
    * nowhere else, ever. */
   trackToken: string;
@@ -145,8 +148,27 @@ export async function kioskCheckIn(opts: {
   preferredStaffId: string | null;
   smsConsent: boolean;
   now: Date;
+  /**
+   * The TEAM front desk this check-in came through (services/teamWalkIns.ts),
+   * when it did. The entry still belongs to `shopId` - the business they
+   * chose - and also carries the desk, so that desk's owner sees it in the
+   * desk's line. One live spot per phone per desk: a phone already waiting
+   * for ANY business from this desk keeps that spot (rotated, below).
+   */
+  viaTeamShopId?: string | null;
 }): Promise<KioskCheckInResult> {
   const { shopId, timezone, phone, now } = opts;
+  const viaTeamShopId = opts.viaTeamShopId ?? null;
+
+  // Already waiting at this desk - for this business or another one: the
+  // same answer a duplicate gets at one shop's own kiosk (see below).
+  if (viaTeamShopId) {
+    const atDesk = await prisma.walkInEntry.findFirst({
+      where: { viaTeamShopId, phone, status: { in: ACTIVE } },
+      select: { id: true },
+    });
+    if (atDesk) return rotateExisting(atDesk.id, null);
+  }
 
   // Associate an existing client ONLY within this shop, by the one link rule
   // the waitlist already uses (unambiguous, non-archived, exact phone).
@@ -227,6 +249,7 @@ export async function kioskCheckIn(opts: {
           status: "WAITING",
           position,
           preferredStaffId: opts.preferredStaffId ?? null,
+          viaTeamShopId,
           quotedWaitMin: quote.waitMin,
           quotedAt: now,
           trackTokenHash: hash,
@@ -249,12 +272,14 @@ export async function kioskCheckIn(opts: {
           serviceCount: services.length,
           source: "KIOSK",
           waitMin: quote.waitMin,
+          ...(viaTeamShopId ? { via: "team_desk" } : {}),
         },
       });
       return { id: entry.id, waitMin: quote.waitMin };
     });
     return {
       entryId: created.id,
+      shopId,
       trackToken: token,
       waitMin: created.waitMin,
       deduped: false,
@@ -271,13 +296,34 @@ export async function kioskCheckIn(opts: {
     }
   }
 
-  // The phone already holds a live spot. Keep that entry, ROTATE its
-  // credential (hash-only storage means re-texting the old link is
-  // impossible by construction), kill any live tracking session, and hand
-  // back the same success the fresh path gets.
+  // The phone already holds a live spot - in this line, or (at a team desk)
+  // in another line this desk filled. Lost a race on either partial unique.
   const existing = await prisma.walkInEntry.findFirst({
-    where: { shopId, phone, status: { in: ACTIVE } },
-    select: { id: true, joinedAt: true, quotedWaitMin: true },
+    where: {
+      phone,
+      status: { in: ACTIVE },
+      OR: [{ shopId }, ...(viaTeamShopId ? [{ viaTeamShopId }] : [])],
+    },
+    select: { id: true },
+  });
+  if (!existing) throw new WalkInDuplicateEntryError(); // vanished mid-race
+  return rotateExisting(existing.id, client);
+}
+
+/**
+ * Keep the spot the phone already holds, ROTATE its credential (hash-only
+ * storage means re-texting the old link is impossible by construction), kill
+ * any live tracking session, and hand back the same success the fresh path
+ * gets. The entry may be in another business's line (a team desk), so its
+ * own shop and timezone are read here.
+ */
+async function rotateExisting(
+  entryId: string,
+  client: { id: string } | null,
+): Promise<KioskCheckInResult> {
+  const existing = await prisma.walkInEntry.findUnique({
+    where: { id: entryId },
+    select: { id: true, shopId: true, joinedAt: true, quotedWaitMin: true, clientId: true, shop: { select: { timezone: true } } },
   });
   if (!existing) throw new WalkInDuplicateEntryError(); // vanished mid-race
   const rotated = mintTrackToken();
@@ -285,31 +331,32 @@ export async function kioskCheckIn(opts: {
     where: { id: existing.id },
     data: {
       trackTokenHash: rotated.hash,
-      trackTokenExpiresAt: walkInExpiryBoundary(existing.joinedAt, timezone),
+      trackTokenExpiresAt: walkInExpiryBoundary(existing.joinedAt, existing.shop.timezone),
       trackTokenRevokedAt: null,
       trackSessionHash: null,
       trackSessionExpiresAt: null,
     },
   });
   await recordWalkInEventBestEffort({
-    shopId,
+    shopId: existing.shopId,
     entryId: existing.id,
     type: "entry.check_in_deduped",
     actor: WALK_IN_CUSTOMER_ACTOR,
     metadata: { source: "KIOSK" },
   });
   await recordWalkInEventBestEffort({
-    shopId,
+    shopId: existing.shopId,
     entryId: existing.id,
     type: "entry.link_regenerated",
     actor: WALK_IN_CUSTOMER_ACTOR,
   });
   return {
     entryId: existing.id,
+    shopId: existing.shopId,
     trackToken: rotated.token,
     waitMin: existing.quotedWaitMin,
     deduped: true,
-    clientLinked: Boolean(client),
+    clientLinked: Boolean(client ?? existing.clientId),
   };
 }
 

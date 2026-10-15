@@ -36,6 +36,33 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-15-team-front-desk",
+    date: "2026-10-15",
+    kind: "feature",
+    title: "One front desk for your whole team",
+    body:
+      "Walk-ins check in on the shop's tablet, see each barber's wait, and pick who they're here for - or next available. " +
+      "They join that barber's own line. Barbers turn it on from Teams; you see the line on Team.",
+  },
+  {
+    id: "2026-10-15-team-schedules",
+    date: "2026-10-15",
+    kind: "feature",
+    title: "See when your team works",
+    body:
+      "On Team, Schedules shows each barber's day: their hours, time off, when they're booked and when they're free right now. " +
+      "Only for barbers who turn on Schedule on their Teams page. Never who is booked.",
+  },
+  {
+    id: "2026-10-15-team-mentors",
+    date: "2026-10-15",
+    kind: "feature",
+    title: "Mentors on your team",
+    body:
+      "On Team, pair a mentor with someone on your team. The mentor sees only the numbers that person chooses to share with them, " +
+      "separate from what you see. Either of them can end it any time.",
+  },
+  {
     id: "2026-10-15-team-logistics",
     date: "2026-10-15",
     kind: "feature",

@@ -6,6 +6,8 @@ import type { TeamData } from "./page";
 import type { TeamLinksData } from "./IndependentTeam";
 import type { RentHistory, RentPeriod, RentSummary } from "@/lib/boothRent";
 import type { TeamActivityItem } from "@/lib/teamNumbers";
+import type { TeamScheduleData } from "@/lib/teamSchedule";
+import type { TeamDeskData } from "@/lib/teamWalkIns";
 
 /** Re-read the roster after any change (server is the source of truth). */
 export async function teamAction(): Promise<TeamData | null> {
@@ -67,6 +69,18 @@ export async function removeMemberAction(id: string): Promise<TeamActionResult> 
 export async function teamLinksAction(period?: string): Promise<TeamLinksData | null> {
   const q = period ? `?period=${encodeURIComponent(period)}` : "";
   const res = await apiGet<TeamLinksData>(`/api/team/links${q}`);
+  return res.ok ? (res.data ?? null) : null;
+}
+
+/** Each member's day for one of the next seven days (owner only). Null on failure. */
+export async function teamScheduleAction(day: string): Promise<TeamScheduleData | null> {
+  const res = await apiGet<TeamScheduleData>(`/api/team/schedule?day=${encodeURIComponent(day)}`);
+  return res.ok ? (res.data ?? null) : null;
+}
+
+/** The front desk: who takes its walk-ins and its line (owner only). Null on failure. */
+export async function teamWalkInsAction(): Promise<TeamDeskData | null> {
+  const res = await apiGet<TeamDeskData>("/api/team/walk-ins");
   return res.ok ? (res.data ?? null) : null;
 }
 
@@ -137,4 +151,18 @@ export async function voidRentRateAction(linkId: string, rateId: string): Promis
 export async function rentHistoryAction(linkId: string): Promise<RentHistory | null> {
   const res = await apiGet<RentHistory>(`/api/team/links/${linkId}/rent`);
   return res.ok ? (res.data ?? null) : null;
+}
+
+/** Pair a mentor with a student on this team. Owner only. */
+export async function pairMentorAction(mentorLinkId: string, studentLinkId: string): Promise<TeamActionResult> {
+  const res = await apiSend<{ ok: boolean }>("POST", "/api/team/mentorships", { mentorLinkId, studentLinkId });
+  revalidatePath("/dashboard/team");
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
+}
+
+/** End a pairing on this team. Owner only. */
+export async function endPairingAction(id: string): Promise<TeamActionResult> {
+  const res = await apiSend<{ ok: boolean }>("POST", `/api/team/mentorships/${id}/end`);
+  revalidatePath("/dashboard/team");
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
 }
