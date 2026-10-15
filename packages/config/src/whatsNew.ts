@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-15-group-booking-one-punch",
+    date: "2026-10-15",
+    kind: "fix",
+    title: "A group booking earns one punch",
+    body:
+      "When a client books for themselves and someone else, they now earn one punch for the visit, not one for each person. " +
+      "If the seat that earned it is later marked a no-show, the punch moves to a seat that happened.",
+  },
+  {
     id: "2026-10-15-switch-from-booksy-thecut",
     date: "2026-10-15",
     kind: "feature",

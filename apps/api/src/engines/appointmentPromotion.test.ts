@@ -158,6 +158,7 @@ describe("🔴 a no-show is never turned back into a completion", () => {
       endsAt: b.endsAt,
       priceAtBooking: null,
       serviceName: "Cut",
+      groupId: null,
     }, now);
 
     // The no-show reads the booking (still BOOKED, no visit - the promotion
@@ -189,7 +190,7 @@ describe("🔴 a no-show is never turned back into a completion", () => {
       promoteOneAppointmentInTx(
         tx,
         shop(),
-        { id: b.apptId, clientId: b.clientId, startsAt: b.startsAt, endsAt: b.endsAt, priceAtBooking: null, serviceName: "Cut" },
+        { id: b.apptId, clientId: b.clientId, startsAt: b.startsAt, endsAt: b.endsAt, priceAtBooking: null, serviceName: "Cut", groupId: null },
         new Date(),
       ),
     );
@@ -217,7 +218,7 @@ describe("🔴 a no-show is never turned back into a completion", () => {
       promoteOneAppointmentInTx(
         tx,
         shop(),
-        { id: b.apptId, clientId: b.clientId, startsAt: b.startsAt, endsAt: b.endsAt, priceAtBooking: null, serviceName: "Cut" },
+        { id: b.apptId, clientId: b.clientId, startsAt: b.startsAt, endsAt: b.endsAt, priceAtBooking: null, serviceName: "Cut", groupId: null },
         new Date(),
       ),
     );

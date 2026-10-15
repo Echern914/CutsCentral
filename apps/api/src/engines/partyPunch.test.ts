@@ -73,9 +73,10 @@ async function makeSingle(endedHoursAgo: number) {
   return appt.id;
 }
 
-/** Complete one seat the way Done does: load the row, promote it in a shop tx. */
+/** Complete one seat the way Done does: load the row, promote it in a shop tx.
+ *  Answers what it EARNED (null = completed without a punch). */
 async function complete(appointmentId: string) {
-  return runWithShop(shopId, async (tx) => {
+  const outcome = await runWithShop(shopId, async (tx) => {
     const a = await tx.appointment.findFirstOrThrow({
       where: { id: appointmentId, shopId },
       select: { id: true, clientId: true, startsAt: true, endsAt: true, priceAtBooking: true, groupId: true },
@@ -88,6 +89,8 @@ async function complete(appointmentId: string) {
       { byShop: true },
     );
   });
+  if (!outcome.promoted) throw new Error(`seat ${appointmentId} was not completed`);
+  return outcome.earn ?? null;
 }
 
 /** What the ledger says the booker earned from visits - the number that matters. */
@@ -97,6 +100,42 @@ async function bookerVisitPunches(): Promise<{ rows: number; punches: number }> 
     select: { punchesEarned: true },
   });
   return { rows: rows.length, punches: rows.reduce((s, r) => s + r.punchesEarned, 0) };
+}
+
+/** Correct a completed seat the way POST /appointments/:id/correct-completed does. */
+async function correct(appointmentId: string, outcome: "NO_SHOW" | "CANCELED") {
+  const { cancelAppointment } = await import("./appointmentPromotion.js");
+  return cancelAppointment(shopId, appointmentId, outcome, new Date(), {
+    initiator: "barber",
+    onlyFrom: ["COMPLETED"],
+    silent: true,
+    refuseIfMoney: true,
+    refuseIfCheckedOut: true,
+    keepBookingPayment: true,
+  });
+}
+
+/** The booker's net punches, reversals included. */
+async function bookerBalance(): Promise<number> {
+  const net = await prisma.punchLedger.aggregate({
+    where: { shopId, clientId: bookerId },
+    _sum: { punchesEarned: true, punchesRedeemed: true },
+  });
+  return (net._sum.punchesEarned ?? 0) - (net._sum.punchesRedeemed ?? 0);
+}
+
+/** Which of these seats hold a standing earn (linked to their visit). */
+async function earningSeats(ids: string[]): Promise<string[]> {
+  const seats = await prisma.appointment.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, visitId: true },
+  });
+  const out: string[] = [];
+  for (const id of ids) {
+    const visitId = seats.find((s) => s.id === id)?.visitId;
+    if (visitId && (await prisma.punchLedger.count({ where: { visitId, reversedAt: null } })) > 0) out.push(id);
+  }
+  return out;
 }
 
 beforeAll(async () => {
@@ -211,6 +250,62 @@ describe("🔴 a party earns its booker one punch", () => {
       _sum: { punchesEarned: true, punchesRedeemed: true },
     });
     expect((net._sum.punchesEarned ?? 0) - (net._sum.punchesRedeemed ?? 0)).toBe(1);
+  });
+
+  it("🔴 both seats done, the earning one corrected to a no-show: the punch moves to the seat that happened", async () => {
+    const { ids } = await makeParty(2);
+    await complete(ids[0]!);
+    await complete(ids[1]!); // completes without a punch: the party already earned
+    expect(await correct(ids[0]!, "NO_SHOW")).toBe(true);
+
+    expect(await bookerBalance()).toBe(1);
+    expect(await earningSeats(ids)).toEqual([ids[1]]);
+  });
+
+  it("the same when the earning seat is corrected to cancelled", async () => {
+    const { ids } = await makeParty(3);
+    for (const id of ids) await complete(id);
+    expect(await correct(ids[0]!, "CANCELED")).toBe(true);
+
+    expect(await bookerBalance()).toBe(1);
+    // The earliest seat still standing takes it.
+    expect(await earningSeats(ids)).toEqual([ids[1]]);
+  });
+
+  it("a seat that never earned, taken back, moves nothing", async () => {
+    const { ids } = await makeParty(2);
+    await complete(ids[0]!);
+    await complete(ids[1]!);
+    expect(await correct(ids[1]!, "NO_SHOW")).toBe(true);
+
+    expect(await bookerBalance()).toBe(1);
+    expect(await earningSeats(ids)).toEqual([ids[0]]);
+  });
+
+  it("a party that earned nothing (rewards were off) earns nothing when a seat is corrected later", async () => {
+    const { ids } = await makeParty(2);
+    await prisma.shop.update({ where: { id: shopId }, data: { rewardsEnabled: false } });
+    try {
+      await complete(ids[0]!);
+      await complete(ids[1]!);
+    } finally {
+      await prisma.shop.update({ where: { id: shopId }, data: { rewardsEnabled: true } });
+    }
+    expect(await correct(ids[0]!, "NO_SHOW")).toBe(true);
+
+    expect(await bookerBalance()).toBe(0);
+    expect(await earningSeats(ids)).toEqual([]);
+  });
+
+  it("every seat taken back leaves nothing earned", async () => {
+    const { ids } = await makeParty(2);
+    await complete(ids[0]!);
+    await complete(ids[1]!);
+    await correct(ids[0]!, "NO_SHOW");
+    await correct(ids[1]!, "NO_SHOW");
+
+    expect(await bookerBalance()).toBe(0);
+    expect(await earningSeats(ids)).toEqual([]);
   });
 
   it("🔴 two seats completing AT ONCE still earn one punch (behind the booker's row lock)", async () => {

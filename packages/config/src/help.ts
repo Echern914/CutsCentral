@@ -571,8 +571,8 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "what-counts-punch",
     q: "What counts as a punch?",
-    a: "Completed appointments that finish while rewards are on — nothing else. Cancellations and no-shows never earn punches, so the cards stay honest. Visits from before you switched rewards on can be credited under Past visits on the Rewards page.\n\nIf you ever need to correct one, you can adjust a client's balance from their profile in the client book.",
-    keywords: ["counts", "what earns", "punch rules", "no show punch", "cancellation", "adjust balance", "fix punches"],
+    a: "Completed appointments that finish while rewards are on — nothing else. Cancellations and no-shows never earn punches, so the cards stay honest. Visits from before you switched rewards on can be credited under Past visits on the Rewards page.\n\nA group booking earns the client who booked it one punch for the visit, not one for each person in the group.\n\nIf you ever need to correct one, you can adjust a client's balance from their profile in the client book.",
+    keywords: ["counts", "what earns", "punch rules", "no show punch", "cancellation", "adjust balance", "fix punches", "group booking punch", "party punch"],
     category: "clients",
     action: { label: "Open client book", featureId: "clients" },
   },
