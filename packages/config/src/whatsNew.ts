@@ -45,6 +45,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "and Haircuts stay bookable then. Bookings already in that time stay as they are. Acuity can only block a whole calendar, so it still takes those services.",
   },
   {
+    id: "2026-10-13-client-change-rules",
+    date: "2026-10-13",
+    kind: "feature",
+    title: "Choose whether clients can cancel or move online",
+    body:
+      "Booking → Settings → Booking rules now has a switch for clients rescheduling and one for cancelling " +
+      "online, plus how many hours before they close. Clients see who to contact instead. You can still " +
+      "change anything yourself; cancellation fees stay in Payments.",
+  },
+  {
     id: "2026-10-13-block-off-journey",
     date: "2026-10-13",
     kind: "feature",

@@ -118,6 +118,15 @@ export function ManageClient({
       : null;
   const cancelCostsMoney = Boolean(data.nonRefundable) || lateCancelFee !== null;
 
+  // 🔴 THE SHOP'S RULE FOR CANCELLING ONLINE (config/customerChangeRules.ts).
+  // Closed at render: no Cancel button, the shop's sentence instead. Closed
+  // while the page sat open: the server refuses (409 cancel_closed) with the
+  // same sentence, and the buttons go away.
+  const [cancelClosed, setCancelClosed] = useState<string | null>(
+    data.cancel?.closed ? (data.cancel.message ?? CANCEL_CLOSED_FALLBACK) : null,
+  );
+  const canCancel = data.canCancel && cancelClosed === null;
+
   function cancel(scope: "this" | "future") {
     setError(null);
     if (cancelCostsMoney && confirmKept !== scope) {
@@ -127,6 +136,12 @@ export function ManageClient({
     setConfirmKept(null);
     startTransition(async () => {
       const res = await cancelBookingAction(token, scope);
+      if (!res.ok && res.error === "cancel_closed") {
+        // Nothing was cancelled and nothing was charged: the shop's reason,
+        // and who to ask - never "try again".
+        setCancelClosed(res.message ?? CANCEL_CLOSED_FALLBACK);
+        return;
+      }
       if (!res.ok) {
         setError("Couldn't cancel. Please try again or call the shop.");
         return;
@@ -322,22 +337,33 @@ export function ManageClient({
             )}
             {/* Before the shop's cutoff: say until when it can be moved
                 here, so nobody finds out by trying an hour before. */}
-            {data.canReschedule && !demoTour && !movedTo && data.reschedule && !data.reschedule.closed && (
+            {data.canReschedule && !demoTour && !movedTo && data.reschedule?.closesAt && !data.reschedule.closed && (
               <p className="text-center text-xs text-muted" data-testid="reschedule-closes">
                 You can move this online until {whenFmt.format(new Date(data.reschedule.closesAt))}.
               </p>
             )}
-            {/* Cancellable but not movable. Too close to the start: the shop's
-                own sentence. A client the shop takes bookings from itself:
-                who to ask, never why. */}
-            {data.canCancel && !data.canReschedule && !demoTour && (
+            {/* Not movable online. The shop's rule (too close to the start,
+                or no moves online at all): its own sentence. A client the
+                shop takes bookings from itself: who to ask, never why. */}
+            {!data.canReschedule && !demoTour && (data.canCancel || data.reschedule?.closed) && (
               <p className="text-center text-xs text-muted" data-testid="reschedule-unavailable">
                 {data.reschedule?.closed && data.reschedule.message
                   ? data.reschedule.message
                   : "To move this appointment, please contact the shop."}
               </p>
             )}
-            {data.canCancel && !demoTour && cancelCostsMoney && confirmKept !== null && (
+            {/* Not cancellable online: the shop's own sentence, in place of
+                the button. */}
+            {cancelClosed !== null && !demoTour && (
+              <p className="text-center text-xs text-muted" data-testid="cancel-unavailable">
+                {cancelClosed}
+              </p>
+            )}
+            {/* Either change closed by the shop's rule: who to contact, once. */}
+            {!demoTour && (cancelClosed !== null || data.reschedule?.closed === true) && (
+              <ContactShop name={data.shop.name} slug={data.shop.slug} />
+            )}
+            {canCancel && !demoTour && cancelCostsMoney && confirmKept !== null && (
               <div
                 role="alertdialog"
                 aria-labelledby="kept-on-cancel"
@@ -374,7 +400,12 @@ export function ManageClient({
                 </div>
               </div>
             )}
-            {data.canCancel && !demoTour && confirmKept === null && (
+            {canCancel && !demoTour && confirmKept === null && data.cancel?.closesAt && (
+              <p className="text-center text-xs text-muted" data-testid="cancel-closes">
+                You can cancel this online until {whenFmt.format(new Date(data.cancel.closesAt))}.
+              </p>
+            )}
+            {canCancel && !demoTour && confirmKept === null && (
               <button
                 type="button"
                 onClick={() => cancel("this")}
@@ -384,7 +415,7 @@ export function ManageClient({
                 {pending ? "Canceling…" : laterVisits > 0 ? "Cancel just this visit" : "Cancel appointment"}
               </button>
             )}
-            {data.canCancel && !demoTour && laterVisits > 0 && confirmKept === null && (
+            {canCancel && !demoTour && laterVisits > 0 && confirmKept === null && (
               <button
                 type="button"
                 onClick={() => cancel("future")}
@@ -1098,5 +1129,27 @@ function Row({ label, value }: { label: string; value: string }) {
       <dt className="text-muted">{label}</dt>
       <dd className="text-right font-medium">{value}</dd>
     </div>
+  );
+}
+
+/** When the API refused a cancel without the shop's own sentence (an older API). */
+const CANCEL_CLOSED_FALLBACK =
+  "This appointment can't be cancelled online right now. To cancel it, please contact the shop directly.";
+
+/**
+ * Who to ask, once a change is closed online. The shop's page is where its
+ * own details live (address, links); this page has no phone number to offer.
+ */
+function ContactShop({ name, slug }: { name: string; slug: string | null }) {
+  return (
+    <p className="text-center text-xs text-muted" data-testid="contact-shop">
+      {slug ? (
+        <Link href={`/book/${slug}`} className="font-semibold text-offwhite underline">
+          Contact {name}
+        </Link>
+      ) : (
+        <span className="font-semibold text-offwhite">Contact {name}</span>
+      )}
+    </p>
   );
 }

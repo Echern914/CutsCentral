@@ -523,3 +523,97 @@ describe("the shop's reschedule cutoff (too close to the appointment to move it 
     expect(options).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("the shop's rules for cancelling and moving online (config/customerChangeRules.ts)", () => {
+  const noCancels =
+    "Chern Cuts doesn't take cancellations online. To cancel your appointment, contact Chern Cuts directly.";
+  const noMoves =
+    "Chern Cuts doesn't take reschedules online. To move your appointment, contact Chern Cuts directly.";
+
+  it("🔴 no cancels online: no Cancel button, the shop's sentence and who to contact instead", () => {
+    render(
+      <ManageClient
+        token="tok"
+        data={data({
+          canCancel: false,
+          cancel: { cutoffHours: 0, closesAt: null, closed: true, reason: "disabled", message: noCancels },
+        })}
+      />,
+    );
+    expect(screen.queryByText("Cancel appointment")).toBeNull();
+    expect(screen.getByTestId("cancel-unavailable").textContent).toBe(noCancels);
+    const contact = screen.getByRole("link", { name: "Contact Chern Cuts" });
+    expect(contact.getAttribute("href")).toBe("/book/chern-cuts");
+    // Moving it is its own switch - still offered.
+    expect(screen.getByText("Reschedule")).toBeTruthy();
+  });
+
+  it("🔴 no moves online: no Reschedule, the shop's sentence - Cancel stays", () => {
+    render(
+      <ManageClient
+        token="tok"
+        data={data({
+          canReschedule: false,
+          reschedule: { cutoffHours: 0, closesAt: null, closed: true, reason: "disabled", message: noMoves },
+        })}
+      />,
+    );
+    expect(screen.queryByText("Reschedule")).toBeNull();
+    expect(screen.queryByTestId("reschedule-closes")).toBeNull();
+    expect(screen.getByTestId("reschedule-unavailable").textContent).toBe(noMoves);
+    expect(screen.getByTestId("contact-shop")).toBeTruthy();
+    expect(screen.getByText("Cancel appointment")).toBeTruthy();
+  });
+
+  it("neither online: both sentences, no buttons, one contact line", () => {
+    render(
+      <ManageClient
+        token="tok"
+        data={data({
+          canCancel: false,
+          canReschedule: false,
+          cancel: { cutoffHours: 0, closesAt: null, closed: true, reason: "disabled", message: noCancels },
+          reschedule: { cutoffHours: 0, closesAt: null, closed: true, reason: "disabled", message: noMoves },
+        })}
+      />,
+    );
+    expect(screen.queryByText("Cancel appointment")).toBeNull();
+    expect(screen.queryByText("Reschedule")).toBeNull();
+    expect(screen.getByTestId("cancel-unavailable").textContent).toBe(noCancels);
+    expect(screen.getByTestId("reschedule-unavailable").textContent).toBe(noMoves);
+    expect(screen.getAllByTestId("contact-shop")).toHaveLength(1);
+  });
+
+  it("before a cancel cutoff: Cancel is offered, with until when", () => {
+    render(
+      <ManageClient
+        token="tok"
+        data={data({
+          cancel: { cutoffHours: 24, closesAt: "2026-09-10T15:00:00Z", closed: false, reason: null, message: null },
+        })}
+      />,
+    );
+    expect(screen.getByText("Cancel appointment")).toBeTruthy();
+    expect(screen.getByTestId("cancel-closes").textContent).toBe(
+      "You can cancel this online until Thursday, September 10 at 11:00 AM.",
+    );
+    expect(screen.queryByTestId("contact-shop")).toBeNull();
+  });
+
+  it("🔴 left open past the cancel cutoff: refused with the shop's sentence, and the buttons go away", async () => {
+    const closed =
+      "Chern Cuts takes cancellations online up to 24 hours before your appointment. To cancel now, contact Chern Cuts directly.";
+    cancelBookingAction.mockResolvedValueOnce({
+      ok: false,
+      error: "cancel_closed",
+      message: closed,
+    } as never);
+    render(<ManageClient token="tok" data={data()} />);
+    await act(async () => fireEvent.click(screen.getByText("Cancel appointment")));
+    expect(screen.getByTestId("cancel-unavailable").textContent).toBe(closed);
+    expect(screen.queryByText("Cancel appointment")).toBeNull();
+    // Not cancelled: the page never claims it was.
+    expect(screen.queryByText("This appointment is canceled.")).toBeNull();
+    expect(screen.getByTestId("contact-shop")).toBeTruthy();
+  });
+});
