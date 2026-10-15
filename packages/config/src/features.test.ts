@@ -138,6 +138,8 @@ describe("tier tags (the locked-feature diamonds)", () => {
       .sort();
     expect(tiered).toEqual([
       "inbox:pro_ai",
+      // routes/offers.ts: requireActiveAccess on the whole router.
+      "offers:pro",
       "promotions:pro",
       "rebook-nudges:pro",
       "receptionist:pro_ai",

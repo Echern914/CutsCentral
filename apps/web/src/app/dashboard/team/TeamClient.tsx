@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import { cap } from "@/components/VocabProvider";
 import type { BusinessVocabulary } from "@chairback/config";
 import type { ShopRole, TeamData } from "./page";
+import { MemberOffers } from "./MemberOffers";
 import {
   createChairForMemberAction,
   inviteMemberAction,
@@ -294,6 +295,20 @@ export function TeamClient({
                     <p className="mt-0.5 text-xs text-gold">
                       No {vocab.stationNoun} yet, so they have no day to see.
                     </p>
+                  )}
+                  {/* Offers & codes on: which offers this seat may make, for
+                      its own bookings (an unlinked seat has none). */}
+                  {isOwner && !isTheOwner && m.role === "BARBER" && m.staffId && data.offerServices && (
+                    <MemberOffers
+                      name={m.user.name}
+                      stationNoun={vocab.stationNoun}
+                      services={data.offerServices}
+                      allowed={m.offerServiceIds ?? []}
+                      pending={pending}
+                      onSave={(ids) =>
+                        run(() => updateMemberAction(m.id, { offerServiceIds: ids }), "Offer permission saved")
+                      }
+                    />
                   )}
                 </div>
 

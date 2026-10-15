@@ -5,7 +5,8 @@ import { Prisma, prisma } from "@chairback/db";
 import { normalizePromoCode, PROMO_AMOUNT_MAX_CENTS } from "@chairback/config/promoPricing";
 import { offerRefusalText, offerValueWords, suggestOfferCode } from "@chairback/config/offers";
 import { requireShop, requireUser } from "../middleware/auth.js";
-import { requireManager } from "../auth/roles.js";
+import { requireManager, requireOwner } from "../auth/roles.js";
+import { accountLimiter } from "../middleware/rateLimit.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import { effectivePriceAt } from "../engines/pricing.js";
 import { resolveAddOns } from "../engines/addOns.js";
@@ -22,8 +23,8 @@ import { findOfferByCode, offerUseCounts, OfferRefused, quoteOffer } from "../en
  * and nothing here touches a client's marketing consent. The shop shares the
  * code itself. (Promotions has the SMS blast; offers deliberately don't.)
  *
- * Dark until a shop is switched on (Shop.offersEnabled): every route answers
- * as if there were nothing here.
+ * Off until the shop switches it on (Shop.offersEnabled, the owner's PUT
+ * /switch): until then every route answers as if there were nothing here.
  */
 export const offersRouter: Router = Router();
 offersRouter.use(requireUser, requireShop, requireActiveAccess);
@@ -55,8 +56,10 @@ offersRouter.get("/", async (req, res) => {
   const shopId = req.shop!.id;
   const seat = await seatOf(req);
   const canCreate = seat.manager || (seat.staffId !== null && seat.serviceIds.length > 0);
+  // Switching it on or off is the owner's alone, like billing.
+  const canSwitch = req.shopRole === "OWNER";
   if (!(await shopOffersOn(shopId))) {
-    res.json({ enabled: false, canCreate: false, offers: [] });
+    res.json({ enabled: false, canCreate: false, canSwitch, offers: [] });
     return;
   }
   const clientId = typeof req.query.clientId === "string" ? req.query.clientId : undefined;
@@ -92,6 +95,7 @@ offersRouter.get("/", async (req, res) => {
   res.json({
     enabled: true,
     canCreate,
+    canSwitch,
     timezone: on?.timezone ?? "UTC",
     services: services.map((s) => ({ id: s.id, name: s.name, price: s.price === null ? null : Number(s.price) })),
     staff,
@@ -120,6 +124,23 @@ offersRouter.get("/", async (req, res) => {
       createdAt: o.createdAt.toISOString(),
     })),
   });
+});
+
+/**
+ * The owner switches Offers & codes on or off for the shop. Off stops every
+ * code at once - on the booking page and in the shop's own booking form - and
+ * keeps every booking already made at the price it was made at. Turning it back
+ * on brings the offers back as they were.
+ */
+offersRouter.put("/switch", accountLimiter, requireOwner, async (req, res) => {
+  const parsed = z.object({ enabled: z.boolean() }).strict().safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  // Shop is owner-only (default-deny inside a tenant transaction): plain prisma.
+  await prisma.shop.update({ where: { id: req.shop!.id }, data: { offersEnabled: parsed.data.enabled } });
+  res.json({ ok: true, enabled: parsed.data.enabled });
 });
 
 const createSchema = z

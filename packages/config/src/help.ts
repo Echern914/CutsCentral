@@ -658,6 +658,14 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open promotions", featureId: "promotions" },
   },
   {
+    id: "offers-codes",
+    q: "How do I make a promo code?",
+    a: "Use Offers & codes (Promotions → Offers & codes). The shop owner switches it on there first.\n\nAn offer takes dollars off, a percent off, or makes one service free. You choose which services and barbers it covers, how many times it can be used, and an optional last day. A code anyone can use goes in “Have a code?” on your booking page. An offer for one client is made from their page, and only works when you book it for them.\n\nChairBack never sends a code for you: you share it yourself. Cancelling a booking gives its use back; a no-show uses it. Switching Offers & codes off stops every code at once, and bookings already made keep their price.\n\nOn Team, the owner chooses which services each barber may make offers for.",
+    keywords: ["promo code", "discount code", "coupon", "coupon code", "personal offer", "offer for one client", "free cut code", "offers and codes"],
+    category: "clients",
+    action: { label: "Open offers & codes", featureId: "offers" },
+  },
+  {
     id: "reviews",
     q: "How do reviews work?",
     a: "Clients leave reviews on your public page, and you approve what shows. Nothing goes live without you.",

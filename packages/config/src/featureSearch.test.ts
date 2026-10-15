@@ -150,7 +150,9 @@ const EXPECTED_2: [string, string][] = [
   ["winback", "Rebooking nudges"],
   ["lapsed", "Rebooking nudges"],
   ["blast", "Promotions"],
-  ["promo code", "Promotions"],
+  // A code a client types is an Offers & codes code; Promotions are the
+  // specials shown on the page and texted out.
+  ["promo code", "Offers & codes"],
   ["notes", "Client book"],
   ["import clients", "Client book"],
   ["phone number", "AI receptionist"],

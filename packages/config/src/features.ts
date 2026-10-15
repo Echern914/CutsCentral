@@ -379,12 +379,26 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "promotions",
     name: "Promotions",
-    synonyms: ["promo", "deals", "specials", "discount", "sale", "offer", "promo code", "coupon", "blast", "text blast", "mass text"],
+    synonyms: ["promo", "deals", "specials", "discount", "sale", "blast", "text blast", "mass text"],
     description: "Run specials that show on your page and can be texted out",
     href: "/dashboard/promotions",
     category: "retention",
     tourStepId: "shop-promotions",
     tier: "pro",
+  },
+  {
+    // A code a client types, or an offer for one client - not a special shown
+    // on the page (that is Promotions). Off until the owner switches it on, on
+    // this same page; a provider seat sees its own offers there.
+    id: "offers",
+    name: "Offers & codes",
+    synonyms: ["offer", "offers", "promo code", "discount code", "coupon", "coupon code", "code", "personal offer", "free cut"],
+    description: "Codes that take money off a booking, for anyone or one client",
+    href: "/dashboard/offers",
+    category: "retention",
+    tier: "pro",
+    minRole: "BARBER",
+    questions: ["How do I make a promo code?", "Can I give one client a free cut?"],
   },
   {
     id: "reviews",

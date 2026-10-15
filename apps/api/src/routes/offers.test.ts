@@ -401,6 +401,118 @@ describe("🔴 a move keeps the discount, or is refused - never repriced to full
     expect(Number(appt.priceAtBooking)).toBe(30);
   });
 
+  it("🔴 to a time with a different menu price: the offer's new figure is shown first, then recorded as a move", async () => {
+    await makeOffer({ code: "MOVE10B", kind: "AMOUNT_OFF", amountOffCents: 1000 });
+    const res = await book({ staffId: mikey, serviceId: cut, startsAt: dayAt(3, 14).toISOString(), clientId: sam, offerCode: "MOVE10B" });
+    expect(res.status).toBe(201);
+    expect(await price(res.body.id)).toBe(30);
+    // The haircut costs $60 on the new day: the offer makes it $50.
+    const to = dayAt(5, 14);
+    await prisma.service.update({ where: { id: cut }, data: { priceOverrides: { [String(to.getUTCDay())]: 60 } } });
+    try {
+      const move = (body: Record<string, unknown>) =>
+        request(app)
+          .post(`/api/booking/appointments/${res.body.id}/reschedule`)
+          .set("Cookie", owner)
+          .send({ startsAt: to.toISOString(), ...body });
+      const asked = await move({});
+      expect(asked.status).toBe(409);
+      expect(asked.body).toMatchObject({ error: "price_changes", fromCents: 3000, toCents: 5000 });
+      expect(await price(res.body.id)).toBe(30);
+
+      expect((await move({ acceptPriceCents: 5000 })).status).toBe(200);
+      expect(await price(res.body.id)).toBe(50);
+      // A move's own row: a later move still reads this as the menu's figure.
+      const rows = await prisma.appointmentPriceChange.findMany({ where: { appointmentId: res.body.id } });
+      expect(rows).toMatchObject([{ fromPriceCents: 3000, toPriceCents: 5000, source: "move" }]);
+      expect(await prisma.offerRedemption.findUniqueOrThrow({ where: { appointmentId: res.body.id } })).toMatchObject({
+        listPriceCents: 6000,
+        discountCents: 1000,
+      });
+    } finally {
+      await prisma.service.update({ where: { id: cut }, data: { priceOverrides: {} } });
+    }
+  });
+
+  it("a price set by hand moves untouched, and the offer's figures stay as booked", async () => {
+    await makeOffer({ code: "HAND10", kind: "AMOUNT_OFF", amountOffCents: 1000 });
+    const res = await book({ staffId: mikey, serviceId: cut, startsAt: dayAt(3, 16).toISOString(), clientId: sam, offerCode: "HAND10" });
+    expect(res.status).toBe(201);
+    const edited = await request(app).post(`/api/booking/appointments/${res.body.id}/price`).set("Cookie", owner).send({ amount: 25 });
+    expect(edited.status).toBe(200);
+    const to = dayAt(5, 16);
+    await prisma.service.update({ where: { id: cut }, data: { priceOverrides: { [String(to.getUTCDay())]: 60 } } });
+    try {
+      const moved = await request(app)
+        .post(`/api/booking/appointments/${res.body.id}/reschedule`)
+        .set("Cookie", owner)
+        .send({ startsAt: to.toISOString() });
+      expect(moved.status).toBe(200);
+      expect(await price(res.body.id)).toBe(25);
+      expect(await prisma.offerRedemption.findUniqueOrThrow({ where: { appointmentId: res.body.id } })).toMatchObject({
+        listPriceCents: 4000,
+        discountCents: 1000,
+      });
+    } finally {
+      await prisma.service.update({ where: { id: cut }, data: { priceOverrides: {} } });
+    }
+  });
+
+  it("🔴 add-ons move with it at their price, not dropped", async () => {
+    await makeOffer({ code: "TOWEL5", kind: "AMOUNT_OFF", amountOffCents: 500 });
+    const towel = await prisma.serviceAddOn.create({
+      data: { shopId, name: "Hot towel move", durationMin: 0, price: 10, serviceIds: [cut] },
+    });
+    const res = await book({ staffId: mikey, serviceId: cut, startsAt: dayAt(3, 15).toISOString(), clientId: sam, offerCode: "TOWEL5", addOnIds: [towel.id] });
+    expect(res.status).toBe(201);
+    expect(await price(res.body.id)).toBe(45);
+    const moved = await request(app)
+      .post(`/api/booking/appointments/${res.body.id}/reschedule`)
+      .set("Cookie", owner)
+      .send({ startsAt: dayAt(5, 15).toISOString() });
+    expect(moved.status).toBe(200);
+    expect(await price(res.body.id)).toBe(45);
+  });
+
+  it("🔴 the client's own move to a pricier day: shown the offer's new figure first, then charged it", async () => {
+    await makeOffer({ code: "WEB5B", kind: "AMOUNT_OFF", amountOffCents: 500 });
+    const res = await bookOnline({ staffId: mikey, serviceId: cut, startsAt: dayAt(3, 9).toISOString(), offerCode: "WEB5B" });
+    expect(res.status).toBe(201);
+    const to = dayAt(5, 9);
+    await prisma.service.update({ where: { id: cut }, data: { priceOverrides: { [String(to.getUTCDay())]: 60 } } });
+    try {
+      const move = (body: Record<string, unknown>) =>
+        request(app)
+          .post(`/api/book/manage/${res.body.manageToken}/reschedule`)
+          .send({ startsAt: to.toISOString(), ...body });
+      const asked = await move({});
+      expect(asked.status).toBe(409);
+      expect(asked.body).toMatchObject({ error: "price_changes", code: "PRICE_CHANGES", fromCents: 3500, toCents: 5500 });
+      expect((await move({ acceptPriceCents: 5500 })).status).toBe(200);
+      const appt = await prisma.appointment.findFirstOrThrow({ where: { shopId, manageToken: res.body.manageToken } });
+      expect(Number(appt.priceAtBooking)).toBe(55);
+    } finally {
+      await prisma.service.update({ where: { id: cut }, data: { priceOverrides: {} } });
+    }
+  });
+
+  it("🔴 the client's own move keeps their add-ons at their price", async () => {
+    await makeOffer({ code: "WEBTOWEL", kind: "AMOUNT_OFF", amountOffCents: 500 });
+    const towel = await prisma.serviceAddOn.create({
+      data: { shopId, name: "Hot towel web", durationMin: 0, price: 10, serviceIds: [cut] },
+    });
+    const res = await bookOnline({ staffId: mikey, serviceId: cut, startsAt: dayAt(3, 11).toISOString(), offerCode: "WEBTOWEL", addOnIds: [towel.id] });
+    expect(res.status).toBe(201);
+    const booked = await prisma.appointment.findFirstOrThrow({ where: { shopId, manageToken: res.body.manageToken } });
+    expect(Number(booked.priceAtBooking)).toBe(45);
+    const moved = await request(app)
+      .post(`/api/book/manage/${res.body.manageToken}/reschedule`)
+      .send({ startsAt: dayAt(5, 11).toISOString() });
+    expect(moved.status).toBe(200);
+    const appt = await prisma.appointment.findFirstOrThrow({ where: { shopId, manageToken: res.body.manageToken } });
+    expect(Number(appt.priceAtBooking)).toBe(45);
+  });
+
   it("the client's own move from their page follows the same rule", async () => {
     await makeOffer({ code: "WEB5", kind: "AMOUNT_OFF", amountOffCents: 500 });
     const res = await bookOnline({ staffId: mikey, serviceId: cut, startsAt: dayAt(3, 12).toISOString(), offerCode: "WEB5" });
@@ -411,6 +523,67 @@ describe("🔴 a move keeps the discount, or is refused - never repriced to full
     expect(moved.status).toBe(200);
     const appt = await prisma.appointment.findFirstOrThrow({ where: { shopId, manageToken: res.body.manageToken } });
     expect(Number(appt.priceAtBooking)).toBe(35);
+  });
+});
+
+describe("🔴 the owner switches it on and off", () => {
+  it("the owner can; a manager and a barber can't, and aren't offered the switch", async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { offersEnabled: false } });
+    expect((await offers()).body).toMatchObject({ enabled: false, canSwitch: true });
+
+    const manager = await signup("offers-manager");
+    await prisma.shopMember.create({ data: { shopId, userId: manager.userId, role: "MANAGER" } });
+    const barber = await signup("offers-switch-barber");
+    await prisma.shopMember.create({ data: { shopId, userId: barber.userId, role: "BARBER" } });
+    for (const cookie of [manager.cookie, barber.cookie]) {
+      expect((await request(app).get("/api/offers").set("Cookie", cookie)).body).toMatchObject({ canSwitch: false });
+      expect((await request(app).put("/api/offers/switch").set("Cookie", cookie).send({ enabled: true })).status).toBe(403);
+    }
+    expect((await prisma.shop.findUniqueOrThrow({ where: { id: shopId } })).offersEnabled).toBe(false);
+
+    const on = await request(app).put("/api/offers/switch").set("Cookie", owner).send({ enabled: true });
+    expect(on.body).toEqual({ ok: true, enabled: true });
+    expect((await offers()).body).toMatchObject({ enabled: true, canSwitch: true });
+    expect((await request(app).put("/api/offers/switch").set("Cookie", owner).send({ enabled: "yes" })).status).toBe(400);
+  });
+
+  it("off stops a code at once; bookings already made keep their price, and on brings the offer back", async () => {
+    await makeOffer({ code: "BACK10", kind: "AMOUNT_OFF", amountOffCents: 1000 });
+    const made = await book({ staffId: mikey, serviceId: cut, startsAt: dayAt(3, 10).toISOString(), clientId: sam, offerCode: "BACK10" });
+    expect(made.status).toBe(201);
+    await request(app).put("/api/offers/switch").set("Cookie", owner).send({ enabled: false });
+
+    const refused = await book({ staffId: mikey, serviceId: cut, startsAt: dayAt(4, 10).toISOString(), clientId: jordan, offerCode: "BACK10" });
+    expect(refused.body).toMatchObject({ error: "offer_refused", reason: "not_found" });
+    expect(await price(made.body.id)).toBe(30);
+
+    await request(app).put("/api/offers/switch").set("Cookie", owner).send({ enabled: true });
+    expect(await usesOf("BACK10")).toBe(1);
+  });
+});
+
+describe("🔴 the owner gives a barber offer permission on Team", () => {
+  it("set on the member, limited to this shop's services, and the barber can then make one", async () => {
+    const barber = await signup("offers-team-barber");
+    // Mikey's chair: a chair links to one seat, and Dee's is taken below.
+    const seat = await prisma.shopMember.create({ data: { shopId, userId: barber.userId, role: "BARBER", staffId: mikey } });
+    const team = await request(app).get("/api/team").set("Cookie", owner);
+    expect(team.body.offerServices.map((s: { id: string }) => s.id).sort()).toEqual([beard, cut].sort());
+    expect(team.body.members.find((m: { id: string }) => m.id === seat.id)).toMatchObject({ offerServiceIds: [] });
+
+    const patch = (body: Record<string, unknown>, cookie = owner) =>
+      request(app).patch(`/api/team/members/${seat.id}`).set("Cookie", cookie).send(body);
+    expect((await patch({ offerServiceIds: ["not-a-service"] })).body).toEqual({ error: "invalid_service" });
+    expect((await patch({ offerServiceIds: [cut] }, barber.cookie)).status).toBe(403);
+    expect((await makeOffer({ kind: "AMOUNT_OFF", amountOffCents: 500, serviceIds: [cut] }, barber.cookie)).status).toBe(403);
+
+    expect((await patch({ offerServiceIds: [cut, cut] })).status).toBe(200);
+    expect((await prisma.shopMember.findUniqueOrThrow({ where: { id: seat.id } })).offerServiceIds).toEqual([cut]);
+    expect((await makeOffer({ kind: "AMOUNT_OFF", amountOffCents: 500, serviceIds: [cut] }, barber.cookie)).status).toBe(201);
+
+    // Off: there is nothing to give permission for.
+    await prisma.shop.update({ where: { id: shopId }, data: { offersEnabled: false } });
+    expect((await request(app).get("/api/team").set("Cookie", owner)).body.offerServices).toBeNull();
   });
 });
 

@@ -89,7 +89,7 @@ function sha256Hex(value: string): string {
  */
 teamRouter.get("/", dashboardLimiter, async (req, res) => {
   const shopId = req.shop!.id;
-  const [members, invites, staff] = await Promise.all([
+  const [members, invites, staff, shop] = await Promise.all([
     // Plain prisma: ShopMember carries a tenant policy, but the joined User is
     // a NON-tenant table that returns NULL inside runWithShop (the documented
     // Shop/User RLS default-deny gotcha). The explicit shopId keeps it scoped.
@@ -100,6 +100,7 @@ teamRouter.get("/", dashboardLimiter, async (req, res) => {
         id: true,
         role: true,
         staffId: true,
+        offerServiceIds: true,
         createdAt: true,
         user: { select: { id: true, name: true, email: true, avatarUrl: true } },
       },
@@ -114,7 +115,16 @@ teamRouter.get("/", dashboardLimiter, async (req, res) => {
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       select: { id: true, name: true },
     }),
+    // Shop is default-deny inside a tenant transaction: plain prisma.
+    prisma.shop.findUnique({ where: { id: shopId }, select: { offersEnabled: true } }),
   ]);
+  const offerServices = shop?.offersEnabled
+    ? await forShop(shopId).service.findMany({
+        where: { active: true },
+        orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+        select: { id: true, name: true },
+      })
+    : null;
 
   res.json({
     // The caller's own role, so the UI can hide owner-only controls rather
@@ -125,6 +135,8 @@ teamRouter.get("/", dashboardLimiter, async (req, res) => {
       id: m.id,
       role: m.role,
       staffId: m.staffId,
+      // The services this seat may make offers for (Offers & codes).
+      offerServiceIds: m.offerServiceIds,
       joinedAt: m.createdAt.toISOString(),
       user: m.user,
     })),
@@ -139,6 +151,9 @@ teamRouter.get("/", dashboardLimiter, async (req, res) => {
     staff,
     // Invitations can't be sent at all without transactional email.
     inviteAvailable: emailEnabled(),
+    // Offers & codes: what a seat's offer permission picks from. Null while
+    // the shop has it switched off - there is nothing to give permission for.
+    offerServices,
   });
 });
 
@@ -269,10 +284,13 @@ const memberPatchSchema = z
     role: z.enum(["MANAGER", "BARBER"]).optional(),
     // null clears the chair link.
     staffId: z.string().min(1).nullable().optional(),
+    // The services this seat may make offers for, on its own chair only
+    // (routes/offers.ts). Empty = none. Owners and managers need none.
+    offerServiceIds: z.array(z.string().min(1)).max(100).optional(),
   })
   .strict();
 
-/** PATCH /api/team/members/:id — change a seat's role or linked chair. */
+/** PATCH /api/team/members/:id — change a seat's role, linked chair or offer permission. */
 teamRouter.patch("/members/:id", requireOwner, async (req, res) => {
   const parsed = memberPatchSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
@@ -295,6 +313,16 @@ teamRouter.patch("/members/:id", requireOwner, async (req, res) => {
   if (member.userId === req.shop!.ownerId) {
     res.status(409).json({ error: "cannot_modify_owner" });
     return;
+  }
+
+  // Offer permission names only this shop's active services.
+  const offerServiceIds = parsed.data.offerServiceIds ? [...new Set(parsed.data.offerServiceIds)] : undefined;
+  if (offerServiceIds && offerServiceIds.length > 0) {
+    const found = await forShop(shopId).service.count({ where: { id: { in: offerServiceIds }, active: true } });
+    if (found !== offerServiceIds.length) {
+      res.status(400).json({ error: "invalid_service" });
+      return;
+    }
   }
 
   const staffId = parsed.data.staffId;
@@ -323,6 +351,7 @@ teamRouter.patch("/members/:id", requireOwner, async (req, res) => {
       data: {
         ...(parsed.data.role ? { role: parsed.data.role } : {}),
         ...(staffId !== undefined ? { staffId } : {}),
+        ...(offerServiceIds !== undefined ? { offerServiceIds } : {}),
       },
     });
     // Re-point Staff.userId whenever the chair link moves, so this seat's

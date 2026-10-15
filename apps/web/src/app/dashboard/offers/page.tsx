@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import { OffersManager } from "./OffersManager";
+import { OffersSwitch } from "./OffersSwitch";
 import type { OffersList } from "./actions";
 
 export const metadata: Metadata = { title: "Offers & codes" };
@@ -26,13 +27,9 @@ export default async function OffersPage() {
           <span className="text-muted">are for specials you show and text out.</span>
         </p>
       </header>
-      {res.data.enabled ? (
-        <OffersManager list={res.data} />
-      ) : (
-        <p className="rounded-2xl border border-subtle bg-charcoal-800/40 p-4 text-sm text-muted" data-testid="offers-off">
-          Offers &amp; codes isn&apos;t switched on for your shop yet.
-        </p>
-      )}
+      {res.data.enabled && <OffersManager list={res.data} />}
+      <OffersSwitch enabled={res.data.enabled} canSwitch={res.data.canSwitch === true} />
+
     </main>
   );
 }

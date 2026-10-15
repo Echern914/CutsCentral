@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-15-offers-and-codes",
+    date: "2026-10-15",
+    kind: "feature",
+    title: "Offers & codes",
+    body:
+      "Make a code anyone can use on your booking page, or an offer for one client: dollars off, a percent off, or a free service. " +
+      "The shop owner switches it on under Promotions → Offers & codes. ChairBack never sends a code for you.",
+  },
+  {
     id: "2026-10-15-group-booking-one-punch",
     date: "2026-10-15",
     kind: "fix",

@@ -33,6 +33,8 @@ export interface OfferRow {
 export interface OffersList {
   enabled: boolean;
   canCreate: boolean;
+  /** The owner may switch Offers & codes on or off. */
+  canSwitch?: boolean;
   /** The shop's zone: an offer's last day ends at its midnight. */
   timezone?: string;
   /** What the Create offer form picks from (active only). */
@@ -63,6 +65,26 @@ export interface OfferInput {
 function messageOf(body: unknown): string | undefined {
   const m = (body as { message?: unknown } | undefined)?.message;
   return typeof m === "string" ? m : undefined;
+}
+
+/** The owner switches Offers & codes on or off for the whole shop. */
+export async function setOffersEnabledAction(enabled: boolean): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend<{ ok: boolean; enabled: boolean }>("PUT", "/api/offers/switch", { enabled });
+  // Every surface that shows a code field or a link reads the switch.
+  revalidatePath("/dashboard/offers");
+  revalidatePath("/dashboard/promotions");
+  revalidatePath("/dashboard/booking");
+  revalidatePath("/dashboard/team");
+  if (res.ok) return { ok: true };
+  return {
+    ok: false,
+    error:
+      res.status === 0
+        ? "No answer from ChairBack. Check your connection, then reload to see whether it changed."
+        : res.status === 403
+          ? "Only the shop owner can switch this."
+          : "Couldn't change that. Try again.",
+  };
 }
 
 export async function listOffersAction(clientId?: string): Promise<OffersList | null> {
