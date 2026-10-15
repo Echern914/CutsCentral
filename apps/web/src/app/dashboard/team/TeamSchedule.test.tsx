@@ -124,6 +124,16 @@ describe("schedule words", () => {
     expect(nowLabel({ kind: "free", until: t("14:00") }, "America/Chicago").text).toBe("Free until 8:00 AM");
   });
 
+  it("a day that runs to midnight says midnight; a whole day says all day", () => {
+    expect(dayLine(chair({ hours: [{ start: t("18:00"), end: t("00:00", "2027-01-15") }], booked: [] }), "UTC")).toBe(
+      "6:00 PM - midnight · nothing booked",
+    );
+    expect(dayLine(chair({ hours: [{ start: t("00:00"), end: t("00:00", "2027-01-15") }], booked: [] }), "UTC")).toBe(
+      "All day · nothing booked",
+    );
+    expect(nowLabel({ kind: "free", until: t("00:00", "2027-01-15") }, "UTC").text).toBe("Free until midnight");
+  });
+
   it("the day line", () => {
     expect(dayLine(chair({ booked: [] }), "UTC")).toBe("9:00 AM - 5:00 PM · nothing booked");
     expect(dayLine(chair({ hours: [], booked: [] }), "UTC")).toBe("Off");
