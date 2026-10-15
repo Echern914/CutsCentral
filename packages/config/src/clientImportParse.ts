@@ -776,9 +776,9 @@ function mergeWindows(windows: HoursWindow[]): HoursWindow[] {
 
 function normalizeHoursLine(line: string): string {
   return line
-    .replace(/​/g, "")
+    .replace(/\u200B/g, "") // zero-width space
     .replace(/\([^)]*\)/g, " ") // "(Labor Day)", "(last booking 5:30)"
-    .replace(/[‐-―−﹘﹣－~]/g, "-") // en/em dashes, minus
+    .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D~]/g, "-") // en/em dashes, minus
     .toLowerCase()
     .replace(/(^|[^a-z])([ap])\.\s?m\.?/g, "$1$2m") // a.m. -> am
     .replace(/\s+/g, " ") // tabs, and Google's narrow no-break space before AM
