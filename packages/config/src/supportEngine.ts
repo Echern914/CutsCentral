@@ -39,6 +39,7 @@
 
 import { resolveFeature, type NavContext, type SeatRole } from "./features.js";
 import type { HelpAnswer } from "./help.js";
+import type { BookedOutBrief } from "./bookedOut.js";
 import { findHelp, helpAnswerById } from "./helpMatch.js";
 import {
   capabilityForCorpusId,
@@ -107,6 +108,12 @@ export interface SupportFacts {
   bookingUrl?: string;
   /** Prose form of the shop's opening hours. */
   hoursSentence?: string;
+  /**
+   * "How do I get booked out more?" answered from THIS shop's numbers - the
+   * brief the API computed (apps/api engines/bookedOut.ts). Structured, not a
+   * sentence: it becomes the answer's `items`, one button each.
+   */
+  bookedOut?: BookedOutBrief;
 }
 
 export interface SupportSeat {
@@ -133,6 +140,24 @@ export interface SupportAnswer {
   question: string;
   body: string;
   /** Resolved against THIS seat, or null when the destination is withheld. */
+  action: { label: string; featureId: string; href: string } | null;
+  /**
+   * A live, per-shop list (today: the booked-out brief). Each item's action is
+   * resolved against THIS seat like `action`; a destination this seat may not
+   * open comes back null, and the item still says what to do.
+   */
+  items?: SupportAnswerItem[];
+  /** What is already going well, said alongside `items`. */
+  strengths?: string[];
+  /** Which data the live answer was read from. */
+  basis?: string;
+}
+
+export interface SupportAnswerItem {
+  id: string;
+  title: string;
+  finding: string;
+  fix: string;
   action: { label: string; featureId: string; href: string } | null;
 }
 
@@ -229,6 +254,9 @@ function escalationFor(question: string): SupportEscalation {
 }
 
 function toAnswer(entry: HelpAnswer, ctx: NavContext, facts: SupportFacts): SupportAnswer {
+  if (entry.id === BOOKED_OUT_ENTRY && facts.bookedOut) {
+    return bookedOutAnswer(entry, ctx, facts.bookedOut);
+  }
   const resolved = entry.action ? resolveFeature(entry.action.featureId, ctx) : null;
   return {
     id: entry.id,
@@ -260,8 +288,48 @@ function applyFacts(entry: HelpAnswer, facts: SupportFacts): string {
   return value ? `${value}\n\n${entry.a}` : entry.a;
 }
 
-/** Which written answers are improved by which live fact. */
-const FACT_FOR_ENTRY: Record<string, keyof SupportFacts> = {
+/**
+ * The written answer the booked-out brief replaces. Its own copy stays the
+ * answer wherever no brief is supplied (the help bubble, MCP, a fetch that
+ * failed): general advice, never a wrong number.
+ */
+const BOOKED_OUT_ENTRY = "more-clients";
+
+/**
+ * The brief as an answer: its headline leads, each item keeps its own button
+ * (resolved for THIS seat - a provider is never handed a manager-only page),
+ * and the strengths and basis ride along for the renderer.
+ */
+function bookedOutAnswer(entry: HelpAnswer, ctx: NavContext, brief: BookedOutBrief): SupportAnswer {
+  const items: SupportAnswerItem[] = brief.items.map((item) => {
+    const resolved = item.action ? resolveFeature(item.action.featureId, ctx) : null;
+    return {
+      id: item.id,
+      title: item.title,
+      finding: item.finding,
+      fix: item.fix,
+      action:
+        item.action && resolved?.ok
+          ? { label: item.action.label, featureId: item.action.featureId, href: resolved.href }
+          : null,
+    };
+  });
+  return {
+    id: entry.id,
+    question: entry.q,
+    body:
+      items.length > 0
+        ? `${brief.headline}\n\nHere's what I'd work on first, from your own numbers:`
+        : `${brief.headline}\n\nNothing in your numbers stands out right now.`,
+    action: null,
+    items,
+    strengths: [...brief.strengths],
+    basis: brief.basis,
+  };
+}
+
+/** Which written answers are improved by which (prose) live fact. */
+const FACT_FOR_ENTRY: Record<string, Exclude<keyof SupportFacts, "bookedOut">> = {
   "my-policy": "policySentence",
   "booking-link": "bookingUrl",
   "set-hours": "hoursSentence",
@@ -285,7 +353,8 @@ export function resolveSupport(req: SupportRequest): SupportResolution {
     const cap = capabilityForCorpusId(found.answer.id);
     if (actorMayReceive(cap, req.actor)) {
       const answer = toAnswer(found.answer, ctx, facts);
-      const wanted = FACT_FOR_ENTRY[found.answer.id];
+      const wanted: keyof SupportFacts | undefined =
+        found.answer.id === BOOKED_OUT_ENTRY ? "bookedOut" : FACT_FOR_ENTRY[found.answer.id];
       const sources: SupportSource[] = [
         { authority: "help_corpus", id: found.answer.id },
       ];
