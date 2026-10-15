@@ -6,6 +6,7 @@ import type { TeamData } from "./page";
 import type { TeamLinksData } from "./IndependentTeam";
 import type { RentHistory, RentPeriod, RentSummary } from "@/lib/boothRent";
 import type { TeamActivityItem } from "@/lib/teamNumbers";
+import type { TeamScheduleData } from "@/lib/teamSchedule";
 
 /** Re-read the roster after any change (server is the source of truth). */
 export async function teamAction(): Promise<TeamData | null> {
@@ -67,6 +68,12 @@ export async function removeMemberAction(id: string): Promise<TeamActionResult> 
 export async function teamLinksAction(period?: string): Promise<TeamLinksData | null> {
   const q = period ? `?period=${encodeURIComponent(period)}` : "";
   const res = await apiGet<TeamLinksData>(`/api/team/links${q}`);
+  return res.ok ? (res.data ?? null) : null;
+}
+
+/** Each member's day for one of the next seven days (owner only). Null on failure. */
+export async function teamScheduleAction(day: string): Promise<TeamScheduleData | null> {
+  const res = await apiGet<TeamScheduleData>(`/api/team/schedule?day=${encodeURIComponent(day)}`);
   return res.ok ? (res.data ?? null) : null;
 }
 

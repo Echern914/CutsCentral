@@ -17,6 +17,8 @@ import { hasRent, type RentSummary } from "@/lib/boothRent";
 import { MemberRent } from "../team/BoothRent";
 import { MemberStatGrid } from "@/components/team/MemberStatGrid";
 import { MentorshipSection, type MyMentor, type MyStudent } from "./MentorshipSection";
+import { ScheduleRow } from "@/components/team/ScheduleRow";
+import { barRange, type ChairDay } from "@/lib/teamSchedule";
 import {
   leaveTeamAction,
   myRentHistoryAction,
@@ -29,10 +31,15 @@ export interface MyTeamLink {
   status: "PENDING" | "ACTIVE";
   requestedAt: string;
   approvedAt: string | null;
-  team: { name: string };
+  /** `timezone`: the team's - the schedule preview reads times as the owner does. */
+  team: { name: string; timezone?: string };
   sharing: Sharing;
   /** Exactly what the team's owner sees now. Null until they approve. */
   theySee: TeamNumbers | null;
+  /** Whether the owner sees their schedule. Optional: older API. */
+  shareSchedule?: boolean;
+  /** Today as the owner sees it, while shared and on the team. */
+  scheduleToday?: ChairDay[] | null;
   /** Their booth rent with this team - also while asking to rejoin. */
   rent: RentSummary | null;
   /** Mentors they have on this team (they are the student). Optional: older API. */
@@ -107,6 +114,30 @@ export function TeamsClient({
         links: d.links.map((l) =>
           l.id === link.id
             ? { ...l, sharing: res.sharing!, theySee: res.theySee ?? null }
+            : l,
+        ),
+      }));
+    } else {
+      toast(
+        res.error === "not_found"
+          ? "That team link has ended - refresh to see your teams"
+          : "Couldn't save that - nothing changed",
+        "error",
+      );
+    }
+    setSaving(null);
+  }
+
+  /** The schedule switch: same rules as the numbers - the server's answer, never a guess. */
+  async function flipSchedule(link: MyTeamLink) {
+    setSaving(`${link.id}:shareSchedule`);
+    const res = await setSharingAction(link.id, { shareSchedule: !link.shareSchedule });
+    if (res.ok && res.shareSchedule !== undefined) {
+      setData((d) => ({
+        ...d,
+        links: d.links.map((l) =>
+          l.id === link.id
+            ? { ...l, shareSchedule: res.shareSchedule, scheduleToday: res.scheduleToday ?? null }
             : l,
         ),
       }));
@@ -243,6 +274,38 @@ export function TeamsClient({
                     </li>
                   );
                 })}
+                {link.shareSchedule !== undefined && (
+                  <li className="flex items-center justify-between gap-4 py-2.5">
+                    <div className="min-w-0">
+                      <p className="text-sm text-offwhite">Schedule</p>
+                      <p className="text-xs text-muted">
+                        When you work, your time off and when you&apos;re booked -
+                        never who or what
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={link.shareSchedule}
+                      aria-label={`Share your schedule with ${link.team.name}`}
+                      disabled={saving !== null}
+                      onClick={() => void flipSchedule(link)}
+                      data-qa="share-shareSchedule"
+                      className={cn(
+                        "min-h-[40px] min-w-[72px] shrink-0 rounded-full px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
+                        link.shareSchedule && saving !== `${link.id}:shareSchedule`
+                          ? "bg-emerald-soft/15 text-emerald-soft"
+                          : "border border-subtle text-muted hover:bg-charcoal-700",
+                      )}
+                    >
+                      {saving === `${link.id}:shareSchedule`
+                        ? "Saving…"
+                        : link.shareSchedule
+                          ? "Shared"
+                          : "Hidden"}
+                    </button>
+                  </li>
+                )}
               </ul>
 
               <div
@@ -266,6 +329,32 @@ export function TeamsClient({
                     <p className="mt-2 text-[11px] text-muted">
                       Last 30 days. Arrows compare with the 30 days before.
                     </p>
+                    {link.shareSchedule !== undefined && (
+                      <div className="mt-3 border-t border-subtle pt-3" data-qa="schedule-they-see">
+                        <p className="text-[11px] uppercase tracking-wide text-muted">
+                          Your day today, as they see it
+                        </p>
+                        {link.shareSchedule && link.scheduleToday && link.scheduleToday.length > 0 ? (
+                          <div className="mt-1 flex flex-col gap-3">
+                            {link.scheduleToday.map((chair, i) => (
+                              <ScheduleRow
+                                key={`${chair.name}:${i}`}
+                                day={chair}
+                                timezone={link.team.timezone ?? "UTC"}
+                                range={barRange(link.scheduleToday!)}
+                                label={link.scheduleToday!.length > 1 ? chair.name : undefined}
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-1 text-sm text-muted">
+                            {link.shareSchedule
+                              ? "Shared - but you have no hours set up yet."
+                              : "Hidden. They see only your name in their schedules."}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </>
                 ) : (
                   <p className="mt-1 text-sm text-muted">

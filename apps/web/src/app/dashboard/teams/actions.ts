@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { apiGet, apiSend } from "@/lib/api";
 import type { Sharing, TeamNumbers } from "@/lib/teamNumbers";
 import type { RentHistory } from "@/lib/boothRent";
+import type { ChairDay } from "@/lib/teamSchedule";
 import type { MyTeamsData } from "./TeamsClient";
 
 /** Re-read after any change - the server is the source of truth. */
@@ -18,16 +19,30 @@ export async function myTeamsAction(): Promise<MyTeamsData | null> {
  */
 export async function setSharingAction(
   linkId: string,
-  patch: Partial<Sharing>,
-): Promise<{ ok: boolean; error?: string; sharing?: Sharing; theySee?: TeamNumbers | null }> {
-  const res = await apiSend<{ sharing: Sharing; theySee: TeamNumbers | null }>(
-    "PATCH",
-    `/api/teams/${linkId}/sharing`,
-    patch,
-  );
+  patch: Partial<Sharing> & { shareSchedule?: boolean },
+): Promise<{
+  ok: boolean;
+  error?: string;
+  sharing?: Sharing;
+  theySee?: TeamNumbers | null;
+  shareSchedule?: boolean;
+  scheduleToday?: ChairDay[] | null;
+}> {
+  const res = await apiSend<{
+    sharing: Sharing;
+    theySee: TeamNumbers | null;
+    shareSchedule?: boolean;
+    scheduleToday?: ChairDay[] | null;
+  }>("PATCH", `/api/teams/${linkId}/sharing`, patch);
   revalidatePath("/dashboard/teams");
   if (!res.ok || !res.data) return { ok: false, error: res.error };
-  return { ok: true, sharing: res.data.sharing, theySee: res.data.theySee };
+  return {
+    ok: true,
+    sharing: res.data.sharing,
+    theySee: res.data.theySee,
+    shareSchedule: res.data.shareSchedule,
+    scheduleToday: res.data.scheduleToday ?? null,
+  };
 }
 
 /** This business's booth rent with one team - the owner's own view. Read-only. */
