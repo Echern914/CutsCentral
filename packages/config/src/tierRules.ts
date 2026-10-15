@@ -14,13 +14,29 @@ import {
  * Tiers started as one number each: lifetime completed visits. That is right
  * for a shop whose regulars come on a rhythm, and wrong for plenty of others -
  * "Gold is someone who spends $300 AND comes in twice a month" cannot be said
- * with a visit count. So each tier now carries up to two requirements, each
+ * with a visit count. So each tier now carries up to three requirements, each
  * with its own look-back:
  *
- *   visits  - completed visits, all time or in the last 30/90/180/365 days
- *   spend   - money earned from them, same windows
+ *   visits     - completed visits, all time or in the last 30/90/180/365 days
+ *   spend      - money earned from them, same windows
+ *   avgTicket  - the AVERAGE TICKET over the same windows (see below)
  *
  * and says whether it needs ALL of them or ANY one.
+ *
+ * 🔴 AVERAGE TICKET, EXACTLY. avgTicket = (sum of the amounts of the client's
+ * QUALIFYING visits) / (how many qualifying visits), over the same window.
+ * Numerator and denominator are the SAME set of visits:
+ *   - COMPLETED only. A no-show, a cancellation, and a booking whose time has
+ *     passed but was never completed are in neither half.
+ *   - Each visit's amount is the per-visit figure revenue already uses
+ *     (readChairEvents' earnedCents): the checkout figure plus anything paid
+ *     through ChairBack, net of refunds, tips never included; else the ticket.
+ *   - A visit whose amount is UNKNOWN (an imported visit with no price, a
+ *     native booking with no price and no payment) is left out of BOTH halves
+ *     rather than averaged in as $0.
+ *   - A native booking and the Visit it was promoted into are one visit.
+ * Zero qualifying visits = no average (null), and a tier asking for an average
+ * ticket is then NOT met - "no data" is never read as "at least $X".
  *
  * 🔴 ONE EVALUATION, EVERYWHERE. The stored badge (Client.loyaltyTier, written
  * on each visit and by the recompute), the customer's live progress bar, and
@@ -45,6 +61,10 @@ export type TierWindowDays = (typeof TIER_WINDOWS)[number];
 export const TIER_MIN_SPEND_CENTS = 100;
 export const TIER_MAX_SPEND_CENTS = 10_000_000;
 
+/** Average-ticket bounds: a whole dollar up to $10,000 a visit, in cents. */
+export const TIER_MIN_AVG_TICKET_CENTS = 100;
+export const TIER_MAX_AVG_TICKET_CENTS = 1_000_000;
+
 export interface TierVisitRequirement {
   min: number;
   windowDays: TierWindowDays;
@@ -55,9 +75,22 @@ export interface TierSpendRequirement {
   windowDays: TierWindowDays;
 }
 
+/** An average ticket of at least `minCents`, over `windowDays`. */
+export interface TierAvgTicketRequirement {
+  minCents: number;
+  windowDays: TierWindowDays;
+}
+
 export interface TierRule {
   visits: TierVisitRequirement | null;
   spend: TierSpendRequirement | null;
+  /**
+   * OPTIONAL ON PURPOSE: every rule stored before this measure existed has no
+   * such key, and validateTierRules leaves it absent when it is not set - so a
+   * shop that never uses it stores, returns and compares exactly as before.
+   * Read it as `rule.avgTicket ?? null`.
+   */
+  avgTicket?: TierAvgTicketRequirement | null;
   /** "all": every requirement set here. "any": one is enough. Moot with one. */
   match: "all" | "any";
 }
@@ -83,6 +116,7 @@ export type TierRuleError =
   | "no_requirement"
   | "visits_out_of_range"
   | "spend_out_of_range"
+  | "avg_ticket_out_of_range"
   | "bad_window"
   | "bad_match"
   | "easier_than_below"
@@ -140,8 +174,26 @@ export function validateTierRules(
       spend = { minCents, windowDays: s.windowDays };
     }
 
-    if (!visits && !spend) return { ok: false, error: "no_requirement", tier: key };
-    value[key] = { visits, spend, match };
+    let avgTicket: TierAvgTicketRequirement | null = null;
+    if (raw.avgTicket != null) {
+      const a = raw.avgTicket as Record<string, unknown>;
+      if (!isWindow(a.windowDays)) return { ok: false, error: "bad_window", tier: key };
+      const minCents = a.minCents;
+      if (
+        typeof minCents !== "number" ||
+        !Number.isInteger(minCents) ||
+        minCents < TIER_MIN_AVG_TICKET_CENTS ||
+        minCents > TIER_MAX_AVG_TICKET_CENTS
+      ) {
+        return { ok: false, error: "avg_ticket_out_of_range", tier: key };
+      }
+      avgTicket = { minCents, windowDays: a.windowDays };
+    }
+
+    if (!visits && !spend && !avgTicket) return { ok: false, error: "no_requirement", tier: key };
+    // The key is present only when the measure is set: a rule without it is
+    // byte-for-byte the rule this shop stored before the measure existed.
+    value[key] = avgTicket ? { visits, spend, avgTicket, match } : { visits, spend, match };
   }
 
   for (let i = 1; i < LOYALTY_TIER_KEYS.length; i++) {
@@ -164,20 +216,31 @@ export function validateTierRules(
     ) {
       return { ok: false, error: "easier_than_below", tier: key };
     }
+    const hAvg = higher.avgTicket ?? null;
+    const lAvg = lower.avgTicket ?? null;
+    if (hAvg && lAvg && hAvg.windowDays === lAvg.windowDays && hAvg.minCents < lAvg.minCents) {
+      return { ok: false, error: "easier_than_below", tier: key };
+    }
     if (sameRule(higher, lower)) return { ok: false, error: "same_as_below", tier: key };
   }
   return { ok: true, value };
 }
 
+/** How many requirements a rule sets - 1 to 3. */
+function requirementCount(r: TierRule): number {
+  return [r.visits, r.spend, r.avgTicket ?? null].filter(Boolean).length;
+}
+
 function sameRule(a: TierRule, b: TierRule): boolean {
-  const req = (r: TierRule) => [r.visits, r.spend].filter(Boolean).length;
   return (
     a.visits?.min === b.visits?.min &&
     a.visits?.windowDays === b.visits?.windowDays &&
     a.spend?.minCents === b.spend?.minCents &&
     a.spend?.windowDays === b.spend?.windowDays &&
-    // "all" and "any" only differ when there are two requirements.
-    (req(a) < 2 || a.match === b.match)
+    a.avgTicket?.minCents === b.avgTicket?.minCents &&
+    a.avgTicket?.windowDays === b.avgTicket?.windowDays &&
+    // "all" and "any" only differ when there are two or more requirements.
+    (requirementCount(a) < 2 || a.match === b.match)
   );
 }
 
@@ -206,11 +269,16 @@ export function toStoredTierRules(rules: TierRules): StoredTierRules {
  * ageing out of "the last 30 days" - or when money decides it, which moves on
  * refunds and checkouts rather than only on visits. Those shops need the daily
  * recompute; a lifetime-visits shop is kept exact by the visit writes alone.
+ * An average ticket is money too - a refund moves it - so it always needs it.
  */
 export function tierRulesNeedDailyRecompute(rules: TierRules): boolean {
   return LOYALTY_TIER_KEYS.some((k) => {
     const r = rules[k];
-    return r.spend !== null || (r.visits !== null && r.visits.windowDays !== 0);
+    return (
+      r.spend !== null ||
+      (r.avgTicket ?? null) !== null ||
+      (r.visits !== null && r.visits.windowDays !== 0)
+    );
   });
 }
 
@@ -218,32 +286,61 @@ export function tierRulesNeedDailyRecompute(rules: TierRules): boolean {
 export function tierStatWindows(rules: TierRules): {
   visits: TierWindowDays[];
   spend: TierWindowDays[];
+  avgTicket: TierWindowDays[];
 } {
   const visits = new Set<TierWindowDays>();
   const spend = new Set<TierWindowDays>();
+  const avgTicket = new Set<TierWindowDays>();
   for (const k of LOYALTY_TIER_KEYS) {
     const r = rules[k];
     if (r.visits) visits.add(r.visits.windowDays);
     if (r.spend) spend.add(r.spend.windowDays);
+    if (r.avgTicket) avgTicket.add(r.avgTicket.windowDays);
   }
-  return { visits: [...visits], spend: [...spend] };
+  return { visits: [...visits], spend: [...spend], avgTicket: [...avgTicket] };
 }
 
 /** One client's numbers, counted over exactly the windows tierStatWindows named. */
 export interface TierStats {
   visits: Partial<Record<TierWindowDays, number>>;
   spendCents: Partial<Record<TierWindowDays, number>>;
+  /**
+   * The average ticket per window, in cents (see the header for exactly what
+   * is averaged), or NULL when the window holds no qualifying visit. Present
+   * only when the rules ask about an average - a shop that never does carries
+   * the same numbers it always did.
+   */
+  avgTicketCents?: Partial<Record<TierWindowDays, number | null>>;
 }
 
+/**
+ * The average ticket over a set of visit amounts (integer cents), rounded to
+ * the cent, or null for none. THE one arithmetic for it: the stats loader
+ * and anything that previews an average call this, so the two can never round
+ * differently. The caller hands over only QUALIFYING amounts - see the header.
+ */
+export function averageTicketCents(amountsCents: readonly number[]): number | null {
+  if (amountsCents.length === 0) return null;
+  const total = amountsCents.reduce((a, b) => a + b, 0);
+  return Math.round(total / amountsCents.length);
+}
+
+export type TierMeasure = "visits" | "spend" | "avgTicket";
+
 export interface TierRequirementProgress {
-  kind: "visits" | "spend";
-  /** Completed visits, or cents earned, in the window. */
+  kind: TierMeasure;
+  /**
+   * Completed visits, or cents earned, in the window. For avgTicket the
+   * average in cents - 0 when there is none (see `noAverage`).
+   */
   have: number;
   need: number;
   windowDays: TierWindowDays;
   met: boolean;
   /** 0..1 toward `need`. */
   fraction: number;
+  /** avgTicket only: true when the window holds no qualifying visit at all. */
+  noAverage?: boolean;
 }
 
 function stat(stats: TierStats, kind: "visits" | "spend", windowDays: TierWindowDays): number {
@@ -252,6 +349,15 @@ function stat(stats: TierStats, kind: "visits" | "spend", windowDays: TierWindow
   // zero. Reading it as 0 would quietly strip clients of tiers they hold.
   if (n === undefined) throw new Error(`tier stats missing ${kind} window ${windowDays}`);
   return Math.max(0, n);
+}
+
+/** The average for a window: a number, or null for "no qualifying visit". */
+function avgStat(stats: TierStats, windowDays: TierWindowDays): number | null {
+  const n = stats.avgTicketCents?.[windowDays];
+  // Same rule as stat(): a window the loader never filled is a bug. Null is
+  // a real answer (no visits to average); undefined is not.
+  if (n === undefined) throw new Error(`tier stats missing avgTicket window ${windowDays}`);
+  return n === null ? null : Math.max(0, n);
 }
 
 function requirementsOf(rule: TierRule, stats: TierStats): TierRequirementProgress[] {
@@ -276,6 +382,20 @@ function requirementsOf(rule: TierRule, stats: TierStats): TierRequirementProgre
       windowDays: rule.spend.windowDays,
       met: have >= rule.spend.minCents,
       fraction: Math.min(1, have / rule.spend.minCents),
+    });
+  }
+  if (rule.avgTicket) {
+    const avg = avgStat(stats, rule.avgTicket.windowDays);
+    const have = avg === null ? 0 : Math.round(avg);
+    out.push({
+      kind: "avgTicket",
+      have,
+      need: rule.avgTicket.minCents,
+      windowDays: rule.avgTicket.windowDays,
+      // 🔴 No average is NOT met, whatever the threshold.
+      met: avg !== null && have >= rule.avgTicket.minCents,
+      fraction: avg === null ? 0 : Math.min(1, have / rule.avgTicket.minCents),
+      noAverage: avg === null,
     });
   }
   return out;
@@ -387,9 +507,15 @@ export function tierRulesProgress(
         ? held?.visits?.windowDays === r.windowDays
           ? held.visits.min
           : 0
-        : held?.spend?.windowDays === r.windowDays
-          ? held.spend.minCents
-          : 0;
+        : r.kind === "spend"
+          ? held?.spend?.windowDays === r.windowDays
+            ? held.spend.minCents
+            : 0
+          : held?.avgTicket?.windowDays === r.windowDays
+            ? held.avgTicket.minCents
+            : 0;
+    // No average at all is no progress toward one.
+    if (r.noAverage) return 0;
     const from = floorReq < r.need ? floorReq : 0;
     const span = Math.max(1, r.need - from);
     return Math.min(Math.max(r.have - from, 0), span) / span;
@@ -438,17 +564,27 @@ export function formatTierMoney(cents: number): string {
     : `$${dollars.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function requirementPhrase(kind: "visits" | "spend", amount: number, windowDays: TierWindowDays): string {
+function requirementPhrase(kind: TierMeasure, amount: number, windowDays: TierWindowDays): string {
   const what =
-    kind === "visits" ? `${amount} ${amount === 1 ? "visit" : "visits"}` : `${formatTierMoney(amount)} spent`;
+    kind === "visits"
+      ? `${amount} ${amount === 1 ? "visit" : "visits"}`
+      : kind === "spend"
+        ? `${formatTierMoney(amount)} spent`
+        : `an average ticket of ${formatTierMoney(amount)}`;
   return windowDays === 0 ? what : `${what} ${tierWindowPhrase(windowDays)}`;
 }
 
-/** "4 visits in the last 30 days and $300 spent" - what a tier takes, in a sentence. */
+/**
+ * "4 visits in the last 30 days and $300 spent" - what a tier takes, in a
+ * sentence. With an average: "... and an average ticket of $60".
+ */
 export function describeTierRule(rule: TierRule): string {
   const parts: string[] = [];
   if (rule.visits) parts.push(requirementPhrase("visits", rule.visits.min, rule.visits.windowDays));
   if (rule.spend) parts.push(requirementPhrase("spend", rule.spend.minCents, rule.spend.windowDays));
+  if (rule.avgTicket) {
+    parts.push(requirementPhrase("avgTicket", rule.avgTicket.minCents, rule.avgTicket.windowDays));
+  }
   return parts.join(rule.match === "any" ? " or " : " and ");
 }
 
@@ -463,6 +599,12 @@ export function describeRequirementProgress(r: TierRequirementProgress): string 
     return r.met
       ? `${r.have} ${r.have === 1 ? "visit" : "visits"}${window}`
       : `${r.have} of ${r.need} ${r.need === 1 ? "visit" : "visits"}${window}`;
+  }
+  if (r.kind === "avgTicket") {
+    if (r.noAverage) return `No average ticket yet${window}`;
+    return r.met
+      ? `${formatTierMoney(r.have)} average ticket${window}`
+      : `${formatTierMoney(r.have)} of a ${formatTierMoney(r.need)} average ticket${window}`;
   }
   return r.met
     ? `${formatTierMoney(r.have)} spent${window}`
@@ -487,11 +629,14 @@ export function describeTierGap(
   const parts = open.map((r) => {
     const window = r.windowDays === 0 ? "" : ` ${tierWindowPhrase(r.windowDays)}`;
     const left = r.need - r.have;
+    // An average is not topped up like a total - "$12 more" of an average
+    // means nothing a client can act on - so the target itself is named.
+    if (r.kind === "avgTicket") return `an average ticket of ${formatTierMoney(r.need)}${window}`;
     return r.kind === "visits"
       ? `${left} more ${left === 1 ? "visit" : "visits"}${window}`
       : `${formatTierMoney(left)} more spent${window}`;
   });
-  const lone = open.length === 1 && open[0]!.windowDays === 0;
+  const lone = open.length === 1 && open[0]!.windowDays === 0 && open[0]!.kind !== "avgTicket";
   return `${parts.join(progress.match === "any" ? " or " : " and ")} ${lone ? "to" : "to reach"} ${label}`;
 }
 

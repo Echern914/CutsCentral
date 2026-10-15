@@ -1387,6 +1387,9 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
           // was already paid on the way in, and re-charging it would refuse a
           // customer permission to move a booking they already hold.
           serviceDayLimit: null,
+          // ...which is where the guard would otherwise read the zone that
+          // places the barber's weekly breaks (bookingWrite.ts `timezone`).
+          timezone: shop.timezone,
           now,
         },
       );

@@ -150,7 +150,7 @@ export interface Opening {
 
 /** One requirement of the next tier, as the shop's rules count it. */
 export interface TierRequirement {
-  kind: "visits" | "spend";
+  kind: "visits" | "spend" | "avgTicket";
   met: boolean;
   /** "1 of 2 visits in the last 30 days" / "$300 spent" */
   text: string;

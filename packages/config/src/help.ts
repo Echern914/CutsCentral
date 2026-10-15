@@ -251,7 +251,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "time-off",
     q: "How do I block off time or take a day off?",
-    a: "Block the time on your agenda and it stops being bookable — it shows as a blocked span on the day so you can see exactly what's held.\n\nIf your Acuity calendar has blocked time on it, that syncs across too, so you only have to block it in one place.",
+    a: "Tap Block off time on your agenda and it stops being bookable — for one provider or several, one day, a run of days, or the same time every week. It shows as a blocked span on each day it covers; tap it to change or remove it.\n\nTime blocked in Acuity syncs across here too. Time you block here isn't copied to Acuity yet, so block it there as well while Acuity still takes bookings.",
     keywords: ["block", "time off", "vacation", "day off", "holiday", "lunch", "break", "unavailable", "close"],
     category: "booking",
     action: { label: "Open agenda", featureId: "online-booking" },
@@ -590,7 +590,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "loyalty-tier-rules",
     q: "How do loyalty tiers work, and can I change what they take?",
-    a: "Clients climb tiers automatically, and you set the bar for each one. A tier can require visits, money spent, or both together — and you choose whether that's counted over a month or across their whole history with you.\n\nSo “Gold = 3 cuts a month” and “Gold = $300 a month” and “Gold = 3 cuts AND $300 a month” are all expressible, per tier, in your rewards settings.\n\nMoney counts what a client has actually earned you. Nothing is retroactive in a way that demotes someone unfairly — a client sees their current tier and exactly what the next one takes.",
+    a: "Clients climb tiers automatically, and you set the bar for each one. A tier can require visits, money spent, an average ticket per visit, or a mix — and you choose whether that's counted over a month or across their whole history with you.\n\nSo “Gold = 3 cuts a month” and “Gold = $300 a month” and “Gold = 3 cuts AND $300 a month” are all expressible, per tier, in your rewards settings.\n\nMoney counts what a client has actually earned you. Before you save, a preview shows how many clients would land in each tier. Nothing is retroactive in a way that demotes someone unfairly — a client sees their current tier and exactly what the next one takes.",
     keywords: [
       "tiers", "tier", "bronze", "silver", "gold", "status", "levels",
       "tier rules", "change tiers", "customize", "requirements", "how to reach",

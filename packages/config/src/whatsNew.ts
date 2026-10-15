@@ -46,6 +46,24 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "change anything yourself; cancellation fees stay in Payments.",
   },
   {
+    id: "2026-10-13-block-off-journey",
+    date: "2026-10-13",
+    kind: "feature",
+    title: "Block off time: several providers, weekly, edit and remove",
+    body:
+      "Block off time can cover several providers at once, repeat weekly (up to 52 weeks), or run as one stretch across days. " +
+      "You see the dates and any booked appointments before saving. Tap a block to change its hours or note, or remove it. It asks first.",
+  },
+  {
+    id: "2026-10-13-tier-average-ticket",
+    date: "2026-10-13",
+    kind: "feature",
+    title: "Tiers by average ticket, with a preview",
+    body:
+      "A tier can now ask for an average ticket - money divided by completed visits - beside visits and money spent. " +
+      "Before you save, Preview shows how many clients would land in each tier. Find it in Rewards → Tiers.",
+  },
+  {
     id: "2026-10-12-reschedule-cutoff",
     date: "2026-10-12",
     kind: "feature",

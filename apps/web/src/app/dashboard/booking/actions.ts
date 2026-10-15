@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { BookingModeKey } from "@chairback/config/constants";
 import type { ServiceVisibility } from "@chairback/config/serviceVisibility";
-import { apiGet, apiSend } from "@/lib/api";
+import { apiGet, apiSend, type ApiResult } from "@/lib/api";
 import { apiAnswered } from "@/lib/apiAnswered";
 import { refusedOnlyNewKeys } from "@/lib/apiCompat";
 import type { AgendaResponse } from "./page";
@@ -950,36 +950,40 @@ export async function seedBookingQuestionsAction(): Promise<Result & { added?: n
 }
 
 /**
- * Block off time, two ways. `timed` carries the two instants the form already
- * converted through the SHOP's zone; `days` carries shop-local day keys and
- * lets the API resolve every midnight itself - a whole day is a statement
- * about the calendar, not about two instants, and the API is the one place
- * that knows the zone for certain. Both take the `confirmation` a previous
+ * Block off time. The form sends SHOP-LOCAL day keys and minutes from
+ * midnight, never instants: the API resolves every edge in the shop's zone,
+ * per day, so a weekly noon block stays at noon across a clock change and a
+ * device in another zone cannot block the wrong hours.
+ *
+ *   day         one day (all day, or fromMin-toMin), optionally repeated
+ *               weekly a bounded number of times;
+ *   daily       the same hours (or all day) on EACH day of a range - the
+ *               time between stays bookable;
+ *   continuous  one unbroken absence, from a day+time through a day+time.
+ *
+ * `toMin` 1440 means "through the end of the day". `requestId` is minted once
+ * per Save and re-sent on a retry, so a save whose answer was lost is never
+ * written twice. `confirmation` is the digest a previous
  * `appointments_overlap` refusal handed back.
  */
-export type BlockOffInput =
+export type BlockWhenInput =
   | {
-      kind: "timed";
-      staffId: string;
-      startsAt: string; // ISO
-      endsAt: string; // ISO
-      reason?: string;
-      confirmation?: string;
+      kind: "day";
+      date: string;
+      fromMin?: number;
+      toMin?: number;
+      repeat?: { weeks: number } | { until: string };
     }
-  | {
-      kind: "days";
-      staffId: string;
-      fromDate: string; // YYYY-MM-DD, shop-local
-      toDate: string; // YYYY-MM-DD, shop-local, inclusive
-      /**
-       * The same hours on EVERY day of the range, as shop-local minutes from
-       * midnight (end exclusive). Absent = all day on each day. The API turns
-       * each day into its own row either way.
-       */
-      window?: { fromMin: number; toMin: number };
-      reason?: string;
-      confirmation?: string;
-    };
+  | { kind: "daily"; fromDate: string; toDate: string; fromMin?: number; toMin?: number }
+  | { kind: "continuous"; fromDate: string; fromMin: number; toDate: string; toMin: number };
+
+export interface BlockOffInput {
+  staffIds: string[];
+  when: BlockWhenInput;
+  reason?: string;
+  requestId: string;
+  confirmation?: string;
+}
 
 export interface BlockOffResult extends Result {
   /** The API's headline for a refusal it can be talked past. */
@@ -988,67 +992,125 @@ export interface BlockOffResult extends Result {
   conflicts?: string[];
   /** The digest that authorises blocking over exactly those bookings. */
   confirmation?: string;
-  /** How many rows the block became (one per day for a day range). */
+  /** How many rows the block became (one per barber per day). */
   created?: number;
+  /** The API's own sentence for a refused input, when it sent one. */
+  message?: string;
 }
 
-/**
- * Block off time (native). Same staff-exceptions endpoint as always; the
- * `appointments_overlap` refusal is passed through whole so the form can show
- * the bookings and offer to block anyway - the bookings themselves are never
- * touched by this call.
- */
-export async function addBlockAction(input: BlockOffInput): Promise<BlockOffResult> {
-  const body =
-    input.kind === "days"
-      ? {
-          fromDate: input.fromDate,
-          toDate: input.toDate,
-          ...(input.window
-            ? { fromMin: input.window.fromMin, toMin: input.window.toMin }
-            : { allDay: true as const }),
-          reason: input.reason,
-          confirmation: input.confirmation,
-        }
-      : {
-          startsAt: input.startsAt,
-          endsAt: input.endsAt,
-          isBlock: true,
-          reason: input.reason,
-          confirmation: input.confirmation,
-        };
-  const res = await apiSend<{ ok: boolean; created?: number }>(
-    "POST",
-    `/api/booking/staff/${input.staffId}/exceptions`,
-    body,
-  );
-  if (res.ok) {
-    revalidatePath("/dashboard/booking");
-    return { ok: true, created: res.data?.created };
-  }
+function blockRefusal(res: ApiResult<unknown>): BlockOffResult {
   return {
     ok: false,
     error: res.error ?? "failed",
     ...(res.reason ? { reason: res.reason } : {}),
     ...(res.conflicts ? { conflicts: res.conflicts } : {}),
     ...(res.confirmation ? { confirmation: res.confirmation } : {}),
+    ...(res.issues?.[0]?.message ? { message: res.issues[0].message } : {}),
   };
 }
 
 /**
- * Un-block time: delete the one-off exception behind a hatched band.
- *
- * The block was always removable through the API, but nothing in the app ever
- * called it — a barber who blocked a day off had no way to give it back. The
- * id here is the AgendaRow id of a `source: "block"` row, which IS the
- * AvailabilityException id.
+ * Block off time on one or more providers. A refusal over existing bookings
+ * (`appointments_overlap`) is passed through whole so the form can show the
+ * bookings and offer to block anyway - the bookings themselves are never
+ * touched by this call.
+ */
+export async function addBlockAction(input: BlockOffInput): Promise<BlockOffResult> {
+  const res = await apiSend<{ ok: boolean; created?: number }>("POST", "/api/booking/blocks", {
+    staffIds: input.staffIds,
+    when: input.when,
+    reason: input.reason,
+    requestId: input.requestId,
+    confirmation: input.confirmation,
+  });
+  if (res.ok) {
+    revalidatePath("/dashboard/booking");
+    return { ok: true, created: res.data?.created };
+  }
+  return blockRefusal(res);
+}
+
+/** A block as its sheet shows it, with the group it was saved in. */
+export interface BlockDetail {
+  id: string;
+  staffId: string;
+  staffName: string;
+  startsAt: string;
+  endsAt: string;
+  reason: string | null;
+  pattern: "single" | "daily" | "continuous" | "weekly" | null;
+  groupId: string | null;
+  group: {
+    count: number;
+    staff: { id: string; name: string }[];
+    days: string[];
+    timesEditable: boolean;
+  };
+}
+
+export async function getBlockAction(
+  id: string,
+): Promise<{ ok: true; block: BlockDetail; timezone: string } | { ok: false; error: string }> {
+  const res = await apiGet<{ block: BlockDetail; timezone: string }>(
+    `/api/booking/blocks/${encodeURIComponent(id)}`,
+  );
+  if (res.ok && res.data?.block) {
+    return { ok: true, block: res.data.block, timezone: res.data.timezone };
+  }
+  return { ok: false, error: res.error ?? "failed" };
+}
+
+export interface BlockEditInput {
+  scope: "one" | "group";
+  /** undefined = leave the note; "" = clear it. */
+  reason?: string;
+  /** A new time: a day and hours for one block, hours for the whole group. */
+  timing?:
+    | { kind: "day"; date: string; fromMin?: number; toMin?: number }
+    | { kind: "window"; fromMin?: number; toMin?: number };
+  confirmation?: string;
+}
+
+/**
+ * Change a block (or its whole group). A new time is checked against the
+ * bookings it would sit on, exactly like a save; the same refusal comes back.
+ */
+export async function editBlockAction(id: string, input: BlockEditInput): Promise<BlockOffResult> {
+  const res = await apiSend<{ ok: boolean; updated?: number }>(
+    "PATCH",
+    `/api/booking/blocks/${encodeURIComponent(id)}`,
+    input,
+  );
+  if (res.ok) {
+    revalidatePath("/dashboard/booking");
+    return { ok: true, created: res.data?.updated };
+  }
+  return blockRefusal(res);
+}
+
+/**
+ * Remove a block (the default), or its whole group: the blocks from the same
+ * save that are still to come, plus this one. The id is the AgendaRow id of a
+ * `source: "block"` row, which IS the AvailabilityException id.
  *
  * Only NATIVE blocks. Acuity/Square blocks are ExternalBlock rows owned by the
  * upstream calendar; deleting one here would be undone by the next re-sync, so
- * the UI points the barber at Acuity instead of pretending.
+ * the UI points the barber at Acuity instead of pretending. An open window
+ * (hours the barber ADDED) is never removed by this either.
  */
-export async function removeBlockAction(exceptionId: string): Promise<Result> {
-  return done(await apiSend("DELETE", `/api/booking/exceptions/${exceptionId}`));
+export async function removeBlockAction(
+  exceptionId: string,
+  scope: "one" | "group" = "one",
+): Promise<Result & { removed?: number }> {
+  const res = await apiSend<{ ok: boolean; removed?: number }>(
+    "DELETE",
+    `/api/booking/blocks/${encodeURIComponent(exceptionId)}?scope=${scope}`,
+  );
+  if (res.ok) {
+    revalidatePath("/dashboard/booking");
+    return { ok: true, removed: res.data?.removed };
+  }
+  return { ok: false, error: res.error ?? "failed" };
 }
 
 /**

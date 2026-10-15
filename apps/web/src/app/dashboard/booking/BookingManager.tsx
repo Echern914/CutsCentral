@@ -420,6 +420,7 @@ export function BookingManager({
               initialWaitlist={initialWaitlist}
               onOpenWaitlist={() => switchTab("Waitlist")}
               isNative={shop.bookingMode === "native"}
+              acuityConnected={connect.acuityConnected}
               staff={initialStaff}
               services={initialServices}
               addOns={initialAddOns}

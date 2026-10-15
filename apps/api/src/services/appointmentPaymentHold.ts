@@ -234,6 +234,8 @@ export async function promotePaidHold(params: {
         ...(targeted ? { targetedSlotIdToIgnore: targeted.id } : {}),
         // Customer-driven, exactly like the create that made this hold.
         walkInCapacity: "enforce",
+        // A PAID hold: same reasoning as externalBlocks above - the customer was promised the chair and paid.
+        nativeBlocks: "ignore",
         now,
       });
 

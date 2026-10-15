@@ -326,6 +326,8 @@ export async function checkSeriesEdit(
         externalBlocks: "enforce",
         externalBlockConfirmation: null,
         walkInCapacity: "ignore",
+        // The barber's own hand: his own blocked time does not stop him (bookingWrite.ts `nativeBlocks`).
+        nativeBlocks: "ignore",
         staffId: visit.to.staffId,
         shopId: req.shopId,
         startsAt: visit.to.startsAt,
