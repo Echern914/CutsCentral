@@ -21,6 +21,8 @@ import { ChangeTag, MemberStatGrid } from "@/components/team/MemberStatGrid";
 import { approveLinkAction, endLinkAction, teamActivityAction, teamLinksAction } from "./actions";
 import { OwnerRent } from "./BoothRent";
 import { MentorPairs, type Pairing } from "./MentorPairs";
+import { TeamSchedule } from "./TeamSchedule";
+import type { TeamScheduleData } from "@/lib/teamSchedule";
 
 /** The windows the owner can pick - each an Insights preset. */
 const PERIOD_LABEL: Record<string, string> = {
@@ -91,16 +93,21 @@ const primary =
 export function IndependentTeam({
   initial,
   initialActivity = null,
+  initialSchedule = null,
   vocab,
 }: {
   initial: TeamLinksData;
   /** The feed, read server-side; null when it couldn't be read. */
   initialActivity?: TeamActivityItem[] | null;
+  /** Today's schedules, read server-side; null when they couldn't be read. */
+  initialSchedule?: TeamScheduleData | null;
   vocab: BusinessVocabulary;
 }) {
   const { toast } = useToast();
   const [data, setData] = useState(initial);
   const [activity, setActivity] = useState(initialActivity);
+  /** Bumped after a change to the team, so the schedule re-reads its day. */
+  const [teamVersion, setTeamVersion] = useState(0);
   const [period, setPeriod] = useState(initial.period?.key ?? "30d");
   const [loadingPeriod, setLoadingPeriod] = useState(false);
   const comparedWith = COMPARED_WITH[period] ?? "the window before";
@@ -145,6 +152,7 @@ export function IndependentTeam({
     ]);
     if (fresh) setData(fresh);
     if (feed) setActivity(feed);
+    setTeamVersion((v) => v + 1);
     if (res.ok) toast(done, "success");
     else
       toast(
@@ -414,6 +422,10 @@ export function IndependentTeam({
             </p>
           )}
         </section>
+
+        {data.active.length > 0 && initialSchedule && (
+          <TeamSchedule initial={initialSchedule} vocab={vocab} version={teamVersion} />
+        )}
 
         {data.active.length >= 2 && (
           <MentorPairs

@@ -201,3 +201,53 @@ describe("booth rent records", () => {
     );
   });
 });
+
+describe("sharing a schedule", () => {
+  const day = {
+    name: "Joe",
+    hours: [{ start: "2027-01-14T09:00:00.000Z", end: "2027-01-14T17:00:00.000Z" }],
+    booked: [],
+    off: [],
+    free: [{ start: "2027-01-14T09:00:00.000Z", end: "2027-01-14T17:00:00.000Z" }],
+    now: { kind: "free" as const, until: "2027-01-14T17:00:00.000Z" },
+  };
+  const withSchedule = (over: Partial<MyTeamsData["links"][number]> = {}) =>
+    data({ team: { name: "United Barbershop", timezone: "UTC" }, shareSchedule: false, scheduleToday: null, ...over });
+
+  it("starts hidden, and the preview says the owner sees only the name", () => {
+    render(<TeamsClient initial={withSchedule()} vocab={vocab} />);
+    expect(sw("shareSchedule").textContent).toBe("Hidden");
+    expect(sw("shareSchedule").getAttribute("aria-checked")).toBe("false");
+    expect(document.querySelector('[data-qa="schedule-they-see"]')!.textContent).toContain(
+      "Hidden. They see only your name in their schedules.",
+    );
+  });
+
+  it("🔴 turning it on waits for the server, then shows the server's own answer", async () => {
+    let answer!: (v: unknown) => void;
+    setSharingAction.mockReturnValue(new Promise((r) => (answer = r)));
+    render(<TeamsClient initial={withSchedule()} vocab={vocab} />);
+    fireEvent.click(sw("shareSchedule"));
+    expect(setSharingAction).toHaveBeenCalledWith("tl1", { shareSchedule: true });
+    expect(sw("shareSchedule").textContent).toBe("Saving…");
+    answer({ ok: true, sharing: NONE, theySee: null, shareSchedule: true, scheduleToday: [day] });
+    await waitFor(() => expect(sw("shareSchedule").textContent).toBe("Shared"));
+    const preview = document.querySelector('[data-qa="schedule-they-see"]')!;
+    expect(preview.textContent).toContain("Free until 5:00 PM");
+    expect(preview.textContent).toContain("9:00 AM - 5:00 PM · nothing booked");
+  });
+
+  it("a failed save leaves it hidden and says nothing changed", async () => {
+    setSharingAction.mockResolvedValue({ ok: false, error: "network" });
+    render(<TeamsClient initial={withSchedule()} vocab={vocab} />);
+    fireEvent.click(sw("shareSchedule"));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't save that - nothing changed", "error"));
+    expect(sw("shareSchedule").textContent).toBe("Hidden");
+  });
+
+  it("an API a deploy behind sends no schedule: no switch, no preview", () => {
+    render(<TeamsClient initial={data()} vocab={vocab} />);
+    expect(sw("shareSchedule")).toBeNull();
+    expect(document.querySelector('[data-qa="schedule-they-see"]')).toBeNull();
+  });
+});

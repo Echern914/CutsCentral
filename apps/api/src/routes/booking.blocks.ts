@@ -2,6 +2,7 @@ import type { Request, Response, Router } from "express";
 import { z } from "zod";
 import { MAX_BLOCK_SERVICES } from "@chairback/config/blockScope";
 import { appointmentConflictSentence } from "../services/blockOffDays.js";
+import { teamScheduleHook } from "../middleware/teamScheduleHook.js";
 import {
   createBlocks,
   describeStaffConflicts,
@@ -195,7 +196,7 @@ export function registerBlockRoutes(router: Router): void {
    * `requestId` makes a retry safe: the same id answers 200 with the rows the
    * first try wrote, instead of writing them twice.
    */
-  router.post("/blocks", async (req, res) => {
+  router.post("/blocks", teamScheduleHook, async (req, res) => {
     const parsed = createSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
@@ -234,7 +235,7 @@ export function registerBlockRoutes(router: Router): void {
    * endpoint, kept for every caller that already speaks it. Same write path
    * as POST /blocks; its rows are a group of their own.
    */
-  router.post("/staff/:id/exceptions", async (req, res) => {
+  router.post("/staff/:id/exceptions", teamScheduleHook, async (req, res) => {
     const parsed = exceptionSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
@@ -296,7 +297,7 @@ export function registerBlockRoutes(router: Router): void {
    * time re-runs the save's conflict check (409 `appointments_overlap`, same
    * confirmation rule). Appointments are never touched.
    */
-  router.patch("/blocks/:id", async (req, res) => {
+  router.patch("/blocks/:id", teamScheduleHook, async (req, res) => {
     const parsed = editSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
@@ -360,7 +361,7 @@ export function registerBlockRoutes(router: Router): void {
    * one-off open window is never removed here. 404 when nothing was removed:
    * the web layer reads the status, and an already-removed block is that.
    */
-  router.delete("/blocks/:id", async (req, res) => {
+  router.delete("/blocks/:id", teamScheduleHook, async (req, res) => {
     const q = scopeQuery.safeParse(req.query);
     if (!q.success) {
       res.status(400).json({ error: "invalid_input" });
@@ -384,7 +385,7 @@ export function registerBlockRoutes(router: Router): void {
    * window (isBlock:false) is not a block and answers 404 here - removing a
    * block must never quietly take away hours a barber opened.
    */
-  router.delete("/exceptions/:id", async (req, res) => {
+  router.delete("/exceptions/:id", teamScheduleHook, async (req, res) => {
     const { removed } = await removeBlocks({
       shopId: req.shop!.id,
       id: req.params.id!,

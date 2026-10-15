@@ -166,6 +166,7 @@ import type { AcuityAppointmentType } from "../acuity/types.js";
 import { applyServiceImport, previewServiceImport } from "../engines/acuityServiceImport.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
+import { teamScheduleHook } from "../middleware/teamScheduleHook.js";
 import { liveAttemptFor } from "../services/serviceCheckoutAttempt.js";
 
 /**
@@ -1480,7 +1481,7 @@ async function weekdaysWithNoServiceFor(shopId: string, staffId: string): Promis
 }
 
 // Replace the entire weekly rule set for a staff member in one transaction.
-bookingDashboardRouter.put("/staff/:id/availability", async (req, res) => {
+bookingDashboardRouter.put("/staff/:id/availability", teamScheduleHook, async (req, res) => {
   const parsed = availabilitySchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });

@@ -174,6 +174,7 @@ export interface TeamActivityItem {
     | "withdrew"
     | "shared"
     | "hid"
+    | "availability"
     | "rent_paid";
   metric: string | null;
   amountCents: number | null;
@@ -191,7 +192,9 @@ export function activityLine(i: TeamActivityItem, v: BusinessVocabulary): string
           ? "revenue"
           : i.metric === "rating"
             ? "rating"
-            : "";
+            : i.metric === "schedule"
+              ? "their schedule"
+              : "";
   switch (i.kind) {
     case "requested":
       return `${i.business} asked to join`;
@@ -209,6 +212,8 @@ export function activityLine(i: TeamActivityItem, v: BusinessVocabulary): string
       return `${i.business} started sharing ${metric}`;
     case "hid":
       return `${i.business} stopped sharing ${metric}`;
+    case "availability":
+      return `${i.business} updated their hours or time off`;
     case "rent_paid":
       return `Rent recorded for ${i.business}: ${dollars(i.amountCents ?? 0)}${i.method ? ` (${i.method})` : ""}`;
   }

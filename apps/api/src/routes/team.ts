@@ -10,6 +10,7 @@ import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { applyChairLink, releaseChairLink } from "../services/staffUserLink.js";
 import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
 import {
+  LINK_NOTHING_SHARED,
   NOTHING_SHARED,
   TEAM_PERIODS,
   linksForTeam,
@@ -22,6 +23,7 @@ import {
 } from "../services/teamLinks.js";
 import { PERIODS } from "../engines/insightsWindow.js";
 import { endMentorshipsForLink, pairMentor, pairingsForTeam } from "../services/teamMentorships.js";
+import { dayWindow, memberDay, scheduleDays } from "../services/teamSchedule.js";
 import {
   HAS_RENT_RECORDS,
   PAYMENT_METHODS,
@@ -546,6 +548,33 @@ teamRouter.get("/activity", requireOwner, async (req, res) => {
   res.json({ items: await teamActivity(req.shop!.id) });
 });
 
+/**
+ * GET /api/team/schedule?day=YYYY-MM-DD - each member's day: when they work,
+ * when they're off, when they're booked (times only), and where they are now.
+ *
+ * Only members who share their schedule are read (services/teamSchedule.ts);
+ * everyone else is listed by name as hidden. `day` is one of the next seven
+ * days in the TEAM's calendar - anything else is today. Owner-only, like
+ * everything a member shares.
+ */
+teamRouter.get("/schedule", requireOwner, async (req, res) => {
+  const shop = req.shop!;
+  const now = new Date();
+  const days = scheduleDays(now, shop.timezone);
+  const day = typeof req.query.day === "string" && days.includes(req.query.day) ? req.query.day : days[0]!;
+  const window = dayWindow(day, shop.timezone);
+  const links = (await linksForTeam(shop.id)).filter((l) => l.status === "ACTIVE");
+  const members = await Promise.all(
+    links.map(async (l) => ({
+      linkId: l.id,
+      business: { name: l.memberShop.name },
+      shared: l.shareSchedule,
+      chairs: l.shareSchedule ? await memberDay(l.memberShop, window, now) : null,
+    })),
+  );
+  res.json({ timezone: shop.timezone, day, days, now: now.toISOString(), members });
+});
+
 const pairSchema = z
   .object({ mentorLinkId: z.string().min(1).max(64), studentLinkId: z.string().min(1).max(64) })
   .strict();
@@ -643,7 +672,7 @@ teamRouter.post("/links/:id/end", accountLimiter, requireOwner, async (req, res)
     if (!was) return 0;
     const { count } = await tx.teamLink.updateMany({
       where: { id: was.id, status: was.status },
-      data: { status: "ENDED", endedAt: new Date(), ...NOTHING_SHARED },
+      data: { status: "ENDED", endedAt: new Date(), ...LINK_NOTHING_SHARED },
     });
     if (count > 0) {
       await recordTeamEvent(tx, was, was.status === "ACTIVE" ? "removed" : "declined");

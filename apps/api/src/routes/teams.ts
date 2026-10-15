@@ -8,6 +8,7 @@ import { endMentorshipsForLink, mentorshipsForMemberLink } from "../services/tea
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { logger } from "../logger.js";
 import {
+  LINK_NOTHING_SHARED,
   NOTHING_SHARED,
   linksForMember,
   recordSharingChanges,
@@ -15,6 +16,7 @@ import {
   sharingOf,
   teamNumbers,
 } from "../services/teamLinks.js";
+import { memberToday } from "../services/teamSchedule.js";
 import {
   HAS_RENT_RECORDS,
   rateHistory,
@@ -59,7 +61,8 @@ teamsRouter.get("/", async (req, res) => {
         status: l.status,
         requestedAt: l.requestedAt.toISOString(),
         approvedAt: l.approvedAt?.toISOString() ?? null,
-        team: { name: l.teamShop.name },
+        // The team's zone: their schedule preview reads times as the owner does.
+        team: { name: l.teamShop.name, timezone: l.teamShop.timezone },
         sharing: sharingOf(l),
         // Exactly what the team's owner sees right now - the same function
         // their page calls - so this preview can't drift from the truth.
@@ -70,6 +73,13 @@ teamsRouter.get("/", async (req, res) => {
                 sharingOf(l),
                 now,
               )
+            : null,
+        // Their schedule: whether the owner sees it, and - when they do -
+        // today exactly as the owner's Team page shows it (same function).
+        shareSchedule: l.shareSchedule,
+        scheduleToday:
+          l.status === "ACTIVE" && l.shareSchedule
+            ? await memberToday({ id: business.id, timezone: business.timezone }, l.teamShop.timezone, now)
             : null,
         // Their own booth rent with this team - the same summary the owner
         // sees. Also while asking to rejoin: an old record never disappears.
@@ -227,7 +237,7 @@ teamsRouter.post("/join", accountLimiter, async (req, res) => {
             requestedAt: new Date(),
             approvedAt: null,
             endedAt: null,
-            ...NOTHING_SHARED,
+            ...LINK_NOTHING_SHARED,
           },
         });
         // The request shows on the owner's Team page either way; the EMAIL
@@ -262,19 +272,26 @@ teamsRouter.post("/join", accountLimiter, async (req, res) => {
   res.status(201).json({ ok: true, id: result.id, status: "PENDING", team: { name: team.name } });
 });
 
+const numberShares = {
+  shareCuts: z.boolean().optional(),
+  shareRevenue: z.boolean().optional(),
+  shareClients: z.boolean().optional(),
+  shareRating: z.boolean().optional(),
+};
+/** What a MENTOR may see: numbers only. */
 const sharingSchema = z
-  .object({
-    shareCuts: z.boolean().optional(),
-    shareRevenue: z.boolean().optional(),
-    shareClients: z.boolean().optional(),
-    shareRating: z.boolean().optional(),
-  })
+  .object(numberShares)
+  .strict()
+  .refine((v) => Object.keys(v).length > 0);
+/** What the team's OWNER may see: the numbers, and the member's schedule. */
+const linkSharingSchema = z
+  .object({ ...numberShares, shareSchedule: z.boolean().optional() })
   .strict()
   .refine((v) => Object.keys(v).length > 0);
 
 /** PATCH /api/teams/:id/sharing - what this team's owner may see. Member only. */
 teamsRouter.patch("/:id/sharing", accountLimiter, async (req, res) => {
-  const parsed = sharingSchema.safeParse(req.body ?? {});
+  const parsed = linkSharingSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input" });
     return;
@@ -293,20 +310,30 @@ teamsRouter.patch("/:id/sharing", accountLimiter, async (req, res) => {
     if (count === 0) return null;
     const after = await tx.teamLink.findUniqueOrThrow({
       where: { id: req.params.id },
-      include: { memberShop: { select: { id: true, timezone: true } } },
+      include: {
+        memberShop: { select: { id: true, timezone: true } },
+        teamShop: { select: { timezone: true } },
+      },
     });
     // The owner's feed: which number was shared or hidden - never its value.
     await recordSharingChanges(tx, after, sharingOf(before), sharingOf(after));
+    if (before.shareSchedule !== after.shareSchedule) {
+      await recordTeamEvent(tx, after, after.shareSchedule ? "shared" : "hid", "schedule");
+    }
     return after;
   });
   if (!link) {
     res.status(404).json({ error: "not_found" });
     return;
   }
+  const active = link.status === "ACTIVE";
   res.json({
     ok: true,
     sharing: sharingOf(link),
-    theySee: link.status === "ACTIVE" ? await teamNumbers(link.memberShop, sharingOf(link)) : null,
+    theySee: active ? await teamNumbers(link.memberShop, sharingOf(link)) : null,
+    shareSchedule: link.shareSchedule,
+    scheduleToday:
+      active && link.shareSchedule ? await memberToday(link.memberShop, link.teamShop.timezone) : null,
   });
 });
 
@@ -391,7 +418,7 @@ teamsRouter.post("/:id/leave", accountLimiter, async (req, res) => {
     if (!was) return 0;
     const { count } = await tx.teamLink.updateMany({
       where: { id: was.id, status: was.status },
-      data: { status: "ENDED", endedAt: new Date(), ...NOTHING_SHARED },
+      data: { status: "ENDED", endedAt: new Date(), ...LINK_NOTHING_SHARED },
     });
     if (count > 0) {
       await recordTeamEvent(tx, was, was.status === "ACTIVE" ? "left" : "withdrew");
