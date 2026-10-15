@@ -230,6 +230,8 @@ export async function undoNoShow(input: {
       // `nativeBlocks`), exactly as a restored cancel.
       serviceDayLimit: null,
       nativeBlocks: "ignore",
+      // Unread under nativeBlocks "ignore" - no block is checked.
+      bookedServiceId: null,
       overrideWaitlistHolds: true,
       targetedSlotIdToIgnore: special?.id,
     });

@@ -21,6 +21,9 @@ export interface TodayRow {
   /** ...and that special is outside his regular hours: "After hours". */
   afterHours?: boolean;
   premium?: boolean;
+  /** A block that stops only SOME services, and which ones (AgendaRow twin). */
+  blockServiceIds?: string[];
+  blockScope?: string;
 }
 
 /**
@@ -123,6 +126,11 @@ export function TodayAgenda({
                     </span>
                   </div>
                   <p className="mt-1 text-sm text-muted [overflow-wrap:anywhere]">{r.clientName}</p>
+                  {(r.blockServiceIds?.length ?? 0) > 0 && r.blockScope && (
+                    <p className="mt-0.5 text-[11px] text-muted [overflow-wrap:anywhere]">
+                      {r.blockScope}. Other services stay bookable.
+                    </p>
+                  )}
                 </li>
               );
             }

@@ -104,6 +104,7 @@ function guard(
   const zone = opts.zone ?? "service";
   return prisma.$transaction((tx) =>
     lockStaffAndAssertSlotFree(tx, {
+      bookedServiceId: null,
       ...(opts.mode ? { nativeBlocks: opts.mode } : {}),
       ...(zone === "explicit" ? { timezone: TZ } : {}),
       // A customer write: the cap object carries the shop's zone.

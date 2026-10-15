@@ -68,6 +68,7 @@ function guard(opts: {
 }): Promise<SlotGuardResult> {
   return prisma.$transaction((tx) =>
     lockStaffAndAssertSlotFree(tx, {
+      bookedServiceId: null,
       walkInCapacity: opts.walkInCapacity,
       serviceDayLimit: null,
       staffId: chairA,

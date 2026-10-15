@@ -11,6 +11,7 @@ import {
   parseServiceHours,
 } from "./pricing.js";
 import { occupyingWhere } from "./chairOccupancy.js";
+import { blockAppliesToService } from "@chairback/config/blockScope";
 import { weekdayWindowsToRanges } from "./blockedTime.js";
 import {
   fullDaysForService,
@@ -183,6 +184,17 @@ export interface ComputeSlotsInput {
    */
   ignoreExternalBlocks?: boolean;
   /**
+   * Leave out blocks that stop only SOME services (config/blockScope.ts).
+   *
+   * For a PARTY only: its grid runs on the first member's service across the
+   * whole run, which would judge the second member's Haircut by the first
+   * member's Shape-up block. The party paths ask this, then check every
+   * member on its own span and service (engines/blockedTime.ts
+   * partyMemberHitByServiceBlock) - the write guard's own rule. Whole-chair
+   * blocks are still subtracted.
+   */
+  ignoreServiceScopedBlocks?: boolean;
+  /**
    * Extra minutes from chosen add-ons, added to the service duration. A longer
    * appointment needs a bigger free window, so the picker only offers slots that
    * can fit service + add-ons (and the write-path check validates the same).
@@ -237,6 +249,17 @@ export interface FreeRangesInput {
    * is.
    */
   ignoreExternalBlocks?: boolean;
+  /**
+   * Leave out blocks that stop only SOME services (config/blockScope.ts).
+   *
+   * For a PARTY only: its grid runs on the first member's service across the
+   * whole run, which would judge the second member's Haircut by the first
+   * member's Shape-up block. The party paths ask this, then check every
+   * member on its own span and service (engines/blockedTime.ts
+   * partyMemberHitByServiceBlock) - the write guard's own rule. Whole-chair
+   * blocks are still subtracted.
+   */
+  ignoreServiceScopedBlocks?: boolean;
   /**
    * Skip the shop's bookingLeadHours when computing the lower bound. The lead
    * time is a BOOKING rule (how far ahead a customer must book online), not a
@@ -472,7 +495,7 @@ export async function computeFreeRanges(
         startsAt: { lt: new Date(rangeEnd + 24 * 60 * MS_PER_MIN) },
         endsAt: { gt: new Date(rangeStart - 24 * 60 * MS_PER_MIN) },
       },
-      select: { startsAt: true, endsAt: true, isBlock: true },
+      select: { startsAt: true, endsAt: true, isBlock: true, serviceIds: true },
     });
 
     // Barber-published targeted slots: while ACTIVE and UNBOOKED they own
@@ -782,8 +805,14 @@ export async function computeFreeRanges(
 
   for (const ex of exceptions) {
     const r = { start: ex.startsAt.getTime(), end: ex.endsAt.getTime() };
-    if (ex.isBlock) blocks.push(r);
-    else windows.push(r); // one-off open window
+    if (ex.isBlock) {
+      // A block scoped to other services leaves this one's grid alone - the
+      // SAME rule the write guard applies under the lock (config/blockScope).
+      // Walk-in mode (serviceId null) cannot say, so every block counts.
+      const scoped = ex.serviceIds.length > 0;
+      if (scoped && input.ignoreServiceScopedBlocks) continue;
+      if (blockAppliesToService(ex.serviceIds, input.serviceId)) blocks.push(r);
+    } else windows.push(r); // one-off open window
   }
 
   for (const b of booked) {
@@ -889,6 +918,7 @@ export async function computeOpenSlots(
     excludeAppointmentId: input.excludeAppointmentId,
     ignoreBooked: input.ignoreBooked,
     ignoreExternalBlocks: input.ignoreExternalBlocks,
+    ignoreServiceScopedBlocks: input.ignoreServiceScopedBlocks,
     ignoreHorizon: input.ignoreHorizon,
   });
   if (!ctx || !ctx.service) return [];
@@ -1060,6 +1090,8 @@ export async function isSlotBookable(input: {
   extraDurationMin?: number;
   /** See ComputeSlotsInput.ignoreExternalBlocks - dashboard refusal wording only. */
   ignoreExternalBlocks?: boolean;
+  /** See FreeRangesInput.ignoreServiceScopedBlocks - party paths only. */
+  ignoreServiceScopedBlocks?: boolean;
   /** See FreeRangesInput.ignoreHorizon - the barber's own repeat only. */
   ignoreHorizon?: boolean;
 }): Promise<boolean> {
@@ -1076,6 +1108,7 @@ export async function isSlotBookable(input: {
     excludeAppointmentId: input.excludeAppointmentId,
     extraDurationMin: input.extraDurationMin,
     ignoreExternalBlocks: input.ignoreExternalBlocks,
+    ignoreServiceScopedBlocks: input.ignoreServiceScopedBlocks,
     ignoreHorizon: input.ignoreHorizon,
   };
 

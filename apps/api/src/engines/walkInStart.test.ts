@@ -376,6 +376,7 @@ describe("walk-in capacity versus the public booking path", () => {
     const endsAt = new Date(t.getTime() + 30 * 60_000);
     return prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
+        bookedServiceId: null,
         walkInCapacity: "enforce",
         serviceDayLimit: null,
         staffId,

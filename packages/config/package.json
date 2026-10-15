@@ -29,6 +29,7 @@
     "./shopHandle": "./src/shopHandle.ts",
     "./shopPolicy": "./src/shopPolicy.ts",
     "./rescheduleCutoff": "./src/rescheduleCutoff.ts",
+    "./blockScope": "./src/blockScope.ts",
     "./customerChangeRules": "./src/customerChangeRules.ts",
     "./tierPerks": "./src/tierPerks.ts",
     "./tierRules": "./src/tierRules.ts",

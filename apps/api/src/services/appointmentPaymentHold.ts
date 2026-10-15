@@ -230,6 +230,7 @@ export async function promotePaidHold(params: {
         // itself, and it is excluded from the daily cap count for the same
         // reason.
         excludeAppointmentId: appt.id,
+        bookedServiceId: appt.serviceId,
         serviceDayLimit: { serviceId: appt.serviceId, timezone: appt.shop.timezone },
         ...(targeted ? { targetedSlotIdToIgnore: targeted.id } : {}),
         // Customer-driven, exactly like the create that made this hold.

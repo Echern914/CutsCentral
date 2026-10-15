@@ -20,7 +20,13 @@ import { occupyingWhere } from "./chairOccupancy.js";
  *   3. A BOOKING SYNCED FROM ACUITY OR SQUARE - a Visit. This one is below.
  */
 export async function filterBlockedTargeted<
-  T extends { staffId: string; startsAt: Date; durationMin: number },
+  T extends {
+    staffId: string;
+    startsAt: Date;
+    durationMin: number;
+    serviceId: string;
+    services?: { serviceId: string }[];
+  },
 >(shopId: string, timezone: string, slots: T[]): Promise<T[]> {
   if (slots.length === 0) return slots;
   let fromMs = Number.POSITIVE_INFINITY;

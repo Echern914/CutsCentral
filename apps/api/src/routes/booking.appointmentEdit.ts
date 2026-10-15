@@ -400,6 +400,8 @@ export function registerAppointmentEdit(
             statuses:
               appt.status === "PENDING" && !takesNewTime ? ["BOOKED"] : ["BOOKED", "PENDING"],
             // A barber editing their own calendar overrides their own cap.
+            // Unread under nativeBlocks "ignore" - no block is checked.
+            bookedServiceId: null,
             serviceDayLimit: null,
             overrideWaitlistHolds: true,
             // "Book anyway" - bound to the rows the last refusal named.

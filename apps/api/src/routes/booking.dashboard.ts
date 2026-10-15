@@ -9,6 +9,7 @@ import {
   SERVICE_COLOR_KEYS,
 } from "@chairback/config";
 import { SERVICE_VISIBILITIES } from "@chairback/config/serviceVisibility";
+import { describeBlockScope } from "@chairback/config/blockScope";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -2020,6 +2021,10 @@ interface AgendaRow {
   start: string; // ISO
   end: string | null; // ISO
   clientName: string; // for a block: the reason (or "Blocked")
+  /** A native block only: the services it stops; [] = the whole chair. */
+  blockServiceIds?: string[];
+  /** A native block only: "All services", or which services it stops. */
+  blockScope?: string;
   // The linked client's Instagram handle, bare, so two first-name-only Mikes
   // read differently on the calendar. Null on a block, and on a group
   // member's row: every member points at the BOOKER's client, so the handle
@@ -2589,8 +2594,26 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       },
       orderBy: { startsAt: "asc" },
       take: BLOCK_CAP,
-      select: { id: true, startsAt: true, endsAt: true, reason: true, staffId: true },
+      select: {
+        id: true,
+        startsAt: true,
+        endsAt: true,
+        reason: true,
+        staffId: true,
+        serviceIds: true,
+      },
     });
+    // Names for blocks of SOME services ("Shape-up and Kids' cut only").
+    const scopedIds = [...new Set(blocks.flatMap((b) => b.serviceIds))];
+    const scopedNames = new Map(
+      (scopedIds.length === 0
+        ? []
+        : await tx.service.findMany({
+            where: { shopId, id: { in: scopedIds } },
+            select: { id: true, name: true },
+          })
+      ).map((s) => [s.id, s.name]),
+    );
     if (blocks.length >= BLOCK_CAP) truncated = true;
     for (const b of blocks) {
       agenda.push({
@@ -2603,6 +2626,10 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         start: b.startsAt.toISOString(),
         end: b.endsAt.toISOString(),
         clientName: b.reason || "Blocked",
+        // [] = the whole chair. Otherwise only these services are stopped,
+        // and the chair is open for everything else over the span.
+        blockServiceIds: b.serviceIds,
+        blockScope: describeBlockScope(b.serviceIds, (id) => scopedNames.get(id)),
         serviceName: null,
         serviceColor: null,
         price: null,
@@ -3378,6 +3405,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         startsAt: slot.startsAt,
         endsAt: new Date(slot.startsAt.getTime() + slot.durationMin * 60_000),
         timezone: shop.timezone,
+        serviceId: d.serviceId,
       })
     ) {
       res.status(409).json({ error: "slot_taken" });
@@ -3577,6 +3605,8 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         // Sunday, it does not stop the barber squeezing in a regular who
         // walked up. Deliberately overridable, exactly like hours and blocked
         // time already are from this screen.
+        // Unread under nativeBlocks "ignore" - no block is checked.
+        bookedServiceId: null,
         serviceDayLimit: null,
         // A live waitlist hold here is the shop's own automation - the barber
         // overrides it and the hold is RELEASED in this same transaction.
@@ -4381,6 +4411,8 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
         // this identical to every other re-check and immune to that changing.
         excludeAppointmentId: appt.id,
         // Barber-driven, same as the dashboard create and reschedule.
+        // Unread under nativeBlocks "ignore" - no block is checked.
+        bookedServiceId: null,
         serviceDayLimit: null,
         overrideWaitlistHolds: true,
         // Taking its own special back must not be vetoed by that special.
@@ -4738,6 +4770,8 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
         bufferMin: shop.bookingBufferMin,
         excludeAppointmentId: appt.id,
         // Barber-driven move: overridable, same as the dashboard create above.
+        // Unread under nativeBlocks "ignore" - no block is checked.
+        bookedServiceId: null,
         serviceDayLimit: null,
         // A live waitlist hold here is the shop's own automation - the barber
         // overrides it and the hold is RELEASED in this same transaction.
@@ -6260,6 +6294,8 @@ bookingDashboardRouter.post("/appointments/:id/approve", async (req, res) => {
         // (PENDING consumes capacity - see serviceDailyLimit.ts), so checking
         // again here would make the barber unable to approve the very last
         // request the cap allowed.
+        // Unread under nativeBlocks "ignore" - no block is checked.
+        bookedServiceId: null,
         serviceDayLimit: null,
         // A live waitlist hold here is the shop's own automation - the barber
         // overrides it and the hold is RELEASED in this same transaction.
@@ -7011,6 +7047,8 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
           startsAt: now,
           endsAt: walkInEnd,
           bufferMin: shop.bookingBufferMin,
+          // Unread under nativeBlocks "ignore" - no block is checked.
+          bookedServiceId: null,
           serviceDayLimit: null,
           // Barber-driven, the same answers the dashboard create gives.
           walkInCapacity: "ignore",

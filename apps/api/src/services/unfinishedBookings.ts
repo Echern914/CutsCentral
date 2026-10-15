@@ -575,6 +575,7 @@ export async function listUnfinishedBookings(
         startsAt: row.startsAt,
         endsAt: row.endsAt,
         timezone,
+        serviceId: row.serviceId,
       })
     ) {
       row.targetedSlotId = null;

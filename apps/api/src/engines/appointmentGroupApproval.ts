@@ -52,7 +52,7 @@ export async function approvePartyInTx(
   const { shopId, groupId } = params;
   const members = await tx.appointment.findMany({
     where: { shopId, groupId, ...AWAITING },
-    select: { id: true, staffId: true, startsAt: true, endsAt: true },
+    select: { id: true, staffId: true, startsAt: true, endsAt: true, serviceId: true },
   });
   if (members.length === 0) return [];
   // Every row of the party, whatever its status, is out of its own way.

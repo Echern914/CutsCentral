@@ -42,6 +42,7 @@ import {
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { checkPolicyAcceptance } from "../engines/bookingPolicy.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
+import { partyMemberHitByServiceBlock, serviceScopedBlocks } from "../engines/blockedTime.js";
 import { bookingReadLimiter, bookingWriteLimiter, rewardsLimiter } from "../middleware/rateLimit.js";
 import { logger } from "../logger.js";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
@@ -224,6 +225,7 @@ async function preflight(
   shop: {
     id: string;
     timezone: string;
+    bookingBufferMin: number;
     paymentsMode: string;
     requireBookingApproval: boolean;
     connectChargesEnabled: boolean;
@@ -274,6 +276,8 @@ async function preflight(
     startsAt: plan.startsAt,
     extraDurationMin: groupExtraDurationMin(plan),
     now: opts.now,
+    // Step 3 judges EVERY member against blocks of some services.
+    ignoreServiceScopedBlocks: true,
   });
   if (!bookable) return { ok: false, failure: { code: "invalid_slot", status: 400 } };
 
@@ -296,6 +300,27 @@ async function preflight(
         failure: { code: "service_not_offered_then", status: 400, position: m.position },
       };
     }
+  }
+
+  // 3. A block of SOME services stops the member having one of them - on that
+  //    member's own span, exactly as the writer judges it (bookingWrite.ts
+  //    `partyServiceSpans`). Step 1 leaves these blocks out on purpose: its
+  //    grid runs on the FIRST member's service across the whole run, which
+  //    would let a Haircut-first party carry a Shape-up into a Shape-up
+  //    block, and refuse a Shape-up-first party for the Haircut behind it.
+  //    Same refusal as step 2: this service is not on offer then.
+  const scoped = await serviceScopedBlocks({
+    shopId: shop.id,
+    staffId: input.staffId,
+    fromMs: plan.startsAt.getTime(),
+    toMs: plan.endsAt.getTime() + Math.max(0, shop.bookingBufferMin) * 60_000,
+  });
+  const hit = partyMemberHitByServiceBlock(scoped, plan.members, shop.bookingBufferMin);
+  if (hit) {
+    return {
+      ok: false,
+      failure: { code: "service_not_offered_then", status: 400, position: hit.position },
+    };
   }
 
   return { ok: true, plan };
@@ -436,6 +461,8 @@ bookingGroupRouter.get("/:slug/group/slots", bookingReadLimiter, async (req, res
     // 🔴 Server-computed, from server-resolved durations. Never from the query.
     extraDurationMin: groupExtraDurationMin(plan),
     now,
+    // Judged per member below, the first included (preflight step 3).
+    ignoreServiceScopedBlocks: true,
   });
 
   // 🔴 RE-PLAN AT EACH CANDIDATE, because a duration is resolved at ITS OWN
@@ -445,6 +472,13 @@ bookingGroupRouter.get("/:slug/group/slots", bookingReadLimiter, async (req, res
   // pure and needs no database, so the check is cheap; without it this endpoint
   // would hand back times that /plan then refuses, which is the precise
   // disagreement it exists to prevent.
+  // Blocks of SOME services, read once for the whole window (preflight step 3).
+  const scoped = await serviceScopedBlocks({
+    shopId: shop.id,
+    staffId: parsed.data.staffId,
+    fromMs: from.getTime(),
+    toMs: to.getTime() + (plan.totalDurationMin * 2 + Math.max(0, shop.bookingBufferMin)) * 60_000,
+  });
   const slots = candidates.filter((slot) => {
     try {
       const at = planGroupSequence({
@@ -455,6 +489,7 @@ bookingGroupRouter.get("/:slug/group/slots", bookingReadLimiter, async (req, res
       });
       const roomMin = (slot.endsAt.getTime() - slot.startsAt.getTime()) / 60_000;
       if (at.totalDurationMin > roomMin) return false;
+      if (partyMemberHitByServiceBlock(scoped, at.members, shop.bookingBufferMin)) return false;
       // Every LATER member's own service must be offered across its own span -
       // the one question the combined grid cannot answer. Same rule as preflight.
       return at.members.slice(1).every((m) => {
@@ -659,6 +694,19 @@ bookingGroupRouter.post("/:slug/group", bookingWriteLimiter, async (req, res) =>
         // path asks the question. A cap that must count every member separately
         // is a real gap and is called out in the PR rather than faked here.
         serviceDayLimit: { serviceId: plan.members[0]!.serviceId, timezone: shop.timezone },
+        // A block of SOME services is judged per member, on each member's
+        // own span and service - not by the first member's, which let a
+        // Shape-up ride into a Shape-up block behind a Haircut. The members
+        // run back to back on this one chair, so the buffer trails the last.
+        bookedServiceId: null,
+        partyServiceSpans: plan.members.map((m, i) => ({
+          startsAt: m.startsAt,
+          tailEnd: new Date(
+            m.endsAt.getTime() +
+              (i === plan.members.length - 1 ? Math.max(0, shop.bookingBufferMin) * 60_000 : 0),
+          ),
+          serviceId: m.serviceId,
+        })),
         now,
       });
 
@@ -1376,6 +1424,7 @@ bookingGroupRouter.post("/group/:token/reschedule", bookingWriteLimiter, async (
           staffId: row.staffId,
           startsAt: plan.members[i]!.startsAt,
           endsAt: plan.members[i]!.endsAt,
+          serviceId: plan.members[i]!.serviceId,
         })),
         {
           walkInCapacity: "enforce",

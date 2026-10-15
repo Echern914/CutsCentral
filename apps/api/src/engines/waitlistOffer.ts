@@ -367,6 +367,7 @@ export async function offerFreedSlot(
         startsAt: slot.startsAt,
         endsAt: slot.endsAt,
         bufferMin: slot.bufferMin,
+        bookedServiceId: slot.serviceId,
         serviceDayLimit: { serviceId: slot.serviceId, timezone: slot.timezone },
         now,
       });
@@ -1174,6 +1175,7 @@ export async function claimOffer(params: {
         endsAt: offer.endsAt,
         bufferMin: shop.bookingBufferMin,
         waitlistOfferIdToIgnore: offer.id,
+        bookedServiceId: offer.serviceId,
         serviceDayLimit: { serviceId: offer.serviceId, timezone: shop.timezone },
         now,
       });

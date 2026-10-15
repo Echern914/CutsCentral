@@ -1,5 +1,7 @@
 import { runWithShop } from "@chairback/db";
 import { addDays, zonedDateParts, zonedWallTimeToUtc } from "@chairback/config";
+import { blockAppliesToService } from "@chairback/config/blockScope";
+import { slotServiceIds } from "./targetedSlotServices.js";
 
 /**
  * Blocked time, answered once for everyone: the concrete UTC ranges during
@@ -28,6 +30,12 @@ import { addDays, zonedDateParts, zonedWallTimeToUtc } from "@chairback/config";
 export interface BlockRange {
   start: number; // epoch ms
   end: number; // epoch ms
+  /**
+   * A one-off block scoped to SOME services (config/blockScope.ts). Absent or
+   * empty = every service, which is every other source here: weekly breaks,
+   * Acuity blocks, and the busy spans callers fold in.
+   */
+  serviceIds?: string[];
 }
 
 /**
@@ -114,7 +122,7 @@ export async function blockedRangesByStaff(input: {
           startsAt: { lt: new Date(input.toMs + READ_PAD_MS) },
           endsAt: { gt: new Date(input.fromMs - READ_PAD_MS) },
         },
-        select: { staffId: true, startsAt: true, endsAt: true },
+        select: { staffId: true, startsAt: true, endsAt: true, serviceIds: true },
       }),
       tx.recurringBlock.findMany({
         where: { shopId: input.shopId, staffId: { in: staffIds } },
@@ -141,7 +149,11 @@ export async function blockedRangesByStaff(input: {
     const ranges: BlockRange[] = [...shopWide];
     for (const ex of data.exceptions) {
       if (ex.staffId === staffId) {
-        ranges.push({ start: ex.startsAt.getTime(), end: ex.endsAt.getTime() });
+        ranges.push({
+          start: ex.startsAt.getTime(),
+          end: ex.endsAt.getTime(),
+          ...(ex.serviceIds.length > 0 ? { serviceIds: ex.serviceIds } : {}),
+        });
       }
     }
     ranges.push(
@@ -157,14 +169,21 @@ export async function blockedRangesByStaff(input: {
   return map;
 }
 
-/** True when [startMs, endMs) overlaps any blocked range (half-open). */
+/**
+ * True when [startMs, endMs) overlaps a blocked range (half-open) that stops
+ * `serviceId`. A range scoped to other services does not; `serviceId` null =
+ * cannot say, so every range counts (config/blockScope.ts).
+ */
 export function spanIsBlocked(
   ranges: BlockRange[] | undefined,
   startMs: number,
   endMs: number,
+  serviceId: string | null,
 ): boolean {
   if (!ranges) return false;
-  return ranges.some((r) => r.start < endMs && r.end > startMs);
+  return ranges.some(
+    (r) => r.start < endMs && r.end > startMs && blockAppliesToService(r.serviceIds, serviceId),
+  );
 }
 
 /**
@@ -177,6 +196,8 @@ export async function staffSpanBlocked(input: {
   startsAt: Date;
   endsAt: Date;
   timezone: string;
+  /** The service being booked into the span; null = every block counts. */
+  serviceId: string | null;
 }): Promise<boolean> {
   const map = await blockedRangesByStaff({
     shopId: input.shopId,
@@ -189,6 +210,7 @@ export async function staffSpanBlocked(input: {
     map.get(input.staffId),
     input.startsAt.getTime(),
     input.endsAt.getTime(),
+    input.serviceId,
   );
 }
 
@@ -197,16 +219,77 @@ export async function staffSpanBlocked(input: {
  * touches no blocked time for their own staff. `slots` may span several staff
  * members (the /day payload does); the map must have been built for at least
  * those ids and the covering time range.
+ *
+ * A special listed under several services is ONE chip: it is dropped when a
+ * block stops ANY of them. Hiding it from the unaffected service too is the
+ * safe side - the page never shows a chip the booking would refuse.
  */
 export function dropBlockedTargetedSlots<
-  T extends { staffId: string; startsAt: Date; durationMin: number },
+  T extends {
+    staffId: string;
+    startsAt: Date;
+    durationMin: number;
+    serviceId: string;
+    services?: { serviceId: string }[];
+  },
 >(slots: T[], blocked: Map<string, BlockRange[]>): T[] {
-  return slots.filter(
-    (t) =>
-      !spanIsBlocked(
-        blocked.get(t.staffId),
-        t.startsAt.getTime(),
-        t.startsAt.getTime() + t.durationMin * 60_000,
-      ),
+  return slots.filter((t) => {
+    const start = t.startsAt.getTime();
+    const end = start + t.durationMin * 60_000;
+    return !slotServiceIds(t).some((serviceId) =>
+      spanIsBlocked(blocked.get(t.staffId), start, end, serviceId),
+    );
+  });
+}
+
+/**
+ * One chair's blocks that stop only SOME services, over [fromMs, toMs].
+ * Whole-chair blocks are left out: the party grid (computeOpenSlots on the
+ * first member's service) already subtracts those for the whole run.
+ */
+export async function serviceScopedBlocks(input: {
+  shopId: string;
+  staffId: string;
+  fromMs: number;
+  toMs: number;
+}): Promise<BlockRange[]> {
+  if (input.toMs <= input.fromMs) return [];
+  const rows = await runWithShop(input.shopId, (tx) =>
+    tx.availabilityException.findMany({
+      where: {
+        shopId: input.shopId,
+        staffId: input.staffId,
+        isBlock: true,
+        serviceIds: { isEmpty: false },
+        startsAt: { lt: new Date(input.toMs) },
+        endsAt: { gt: new Date(input.fromMs) },
+      },
+      select: { startsAt: true, endsAt: true, serviceIds: true },
+    }),
   );
+  return rows.map((r) => ({
+    start: r.startsAt.getTime(),
+    end: r.endsAt.getTime(),
+    serviceIds: r.serviceIds,
+  }));
+}
+
+/**
+ * The first party member (in order) whose OWN span and service a scoped block
+ * stops, or null. The write guard's rule for a party run
+ * (bookingWrite.ts `partyServiceSpans`): each member against its own service,
+ * the turnover buffer trailing only the member who ends the run.
+ */
+export function partyMemberHitByServiceBlock<
+  M extends { startsAt: Date; endsAt: Date; serviceId: string },
+>(ranges: BlockRange[], members: readonly M[], bufferMin: number): M | null {
+  if (ranges.length === 0 || members.length === 0) return null;
+  const runEnd = Math.max(...members.map((m) => m.endsAt.getTime()));
+  const bufferMs = Math.max(0, bufferMin) * 60_000;
+  for (const m of members) {
+    const end = m.endsAt.getTime();
+    const tail = end + (end === runEnd ? bufferMs : 0);
+    if (spanIsBlocked(ranges, m.startsAt.getTime(), tail, m.serviceId)) return m;
+  }
+  return null;
 }

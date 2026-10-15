@@ -77,7 +77,7 @@ import {
 import { AppointmentSheet, type SheetView } from "./AppointmentSheet";
 import { SpecialChip } from "../_components/SpecialChip";
 import { BlockOffForm } from "./BlockOffForm";
-import { BlockEditSheet } from "./BlockEditSheet";
+import { BlockEditSheet, BlockMenu } from "./BlockEditSheet";
 import { spreadAcrossDays } from "./blockDays";
 import { TierOpeningForm } from "./TierOpeningForm";
 import { useRouter } from "next/navigation";
@@ -769,6 +769,7 @@ export function BookingCalendar({
 
   return (
     <SheetHost.Provider value={openHostedSheet}>
+    <BlockMenu.Provider value={services}>
     <div className="flex flex-col gap-4">
       {/* Waitlist dropdown sits ABOVE the calendar. */}
       <WaitlistPanel initial={initialWaitlist} onOpenTab={onOpenWaitlist} />
@@ -1087,6 +1088,7 @@ export function BookingCalendar({
       {isNative && blockDay && (
         <BlockOffForm
           staff={staff}
+          services={services}
           dayKey={blockDay.dayKey}
           todayKey={todayKey}
           timezone={tz}
@@ -1121,6 +1123,7 @@ export function BookingCalendar({
         </Fragment>
       )}
     </div>
+    </BlockMenu.Provider>
     </SheetHost.Provider>
   );
 }
@@ -1889,8 +1892,18 @@ function DayPlanner({
   // wall-clock minute is at or before its start's (an all-day block reads
   // 0..0). On THIS day it covers through 24:00 - clipping it there is what
   // lets a day off mark every hour instead of none of them.
+  //
+  // A block of SOME services ("Shape-ups only") is left out: the chair is
+  // still open for everything else, so its hours keep "+ Add appointment".
+  // Its card still shows on its start hour, saying which services it stops.
   const blockIntervals = rows
-    .filter((r) => r.source === "block" && r.end && r.end > r.start)
+    .filter(
+      (r) =>
+        r.source === "block" &&
+        r.end &&
+        r.end > r.start &&
+        (r.blockServiceIds?.length ?? 0) === 0,
+    )
     .map((r) => {
       const startMin = minuteOf(r.start);
       const rawEnd = minuteOf(r.end!);
@@ -2608,6 +2621,11 @@ export function AppointmentBlock({
             )}
           </span>
         </div>
+        {(row.blockServiceIds?.length ?? 0) > 0 && row.blockScope && (
+          <p data-qa="block-scope-line" className="min-w-0 text-[11px] text-muted [overflow-wrap:anywhere]">
+            {row.blockScope}. Other services stay bookable.
+          </p>
+        )}
         {reason && reason !== "Blocked" && (
           <p className="truncate font-medium text-offwhite/75">{reason}</p>
         )}

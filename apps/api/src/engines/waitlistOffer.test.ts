@@ -330,6 +330,7 @@ describe("offering a freed slot", () => {
     await expect(
       prisma.$transaction((tx) =>
         lockStaffAndAssertSlotFree(tx, {
+          bookedServiceId: null,
           walkInCapacity: "enforce",
           staffId,
           shopId,
@@ -584,6 +585,7 @@ describe("claiming", () => {
     const normalBooking = () =>
       prisma.$transaction(async (tx) => {
         await lockStaffAndAssertSlotFree(tx, {
+          bookedServiceId: null,
           walkInCapacity: "enforce",
           staffId,
           shopId,
@@ -634,6 +636,7 @@ describe("claiming", () => {
     // The hold lapsed: a normal booking sails through (no sweep needed).
     await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
+        bookedServiceId: null,
         walkInCapacity: "enforce",
         staffId,
         shopId,
@@ -670,6 +673,7 @@ describe("claiming", () => {
     // the guard releases the hold in the same transaction instead of refusing.
     await prisma.$transaction(async (tx) => {
       await lockStaffAndAssertSlotFree(tx, {
+        bookedServiceId: null,
         walkInCapacity: "enforce",
         staffId,
         shopId,
@@ -1091,6 +1095,7 @@ describe("approval-mode shops keep their policy", () => {
         await expect(
           prisma.$transaction((tx) =>
             lockStaffAndAssertSlotFree(tx, {
+              bookedServiceId: null,
               walkInCapacity: "enforce",
               staffId,
               shopId,

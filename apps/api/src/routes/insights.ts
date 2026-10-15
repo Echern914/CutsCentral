@@ -462,6 +462,9 @@ insightsRouter.get("/utilization", requirePremiumAccess, async (req, res) => {
           ...(staffFilter ? { staffId: staffFilter } : {}),
           startsAt: { lt: fetchTo },
           endsAt: { gt: fetchFrom },
+          // A block of SOME services leaves the chair open for the rest, so
+          // it is not time the chair was closed (config/blockScope.ts).
+          OR: [{ isBlock: false }, { serviceIds: { isEmpty: true } }],
         },
         select: { staffId: true, startsAt: true, endsAt: true, isBlock: true },
       }),
@@ -834,7 +837,13 @@ insightsRouter.get("/goal", requirePremiumAccess, async (req, res) => {
           select: { staffId: true, weekday: true, startMin: true, endMin: true },
         }),
         exceptions: await tx.availabilityException.findMany({
-          where: { shopId: shop.id, startsAt: { lt: to }, endsAt: { gt: from } },
+          where: {
+            shopId: shop.id,
+            startsAt: { lt: to },
+            endsAt: { gt: from },
+            // Service-scoped blocks keep the chair open (see above).
+            OR: [{ isBlock: false }, { serviceIds: { isEmpty: true } }],
+          },
           select: { staffId: true, startsAt: true, endsAt: true, isBlock: true },
         }),
         externalBlocks: await tx.externalBlock.findMany({

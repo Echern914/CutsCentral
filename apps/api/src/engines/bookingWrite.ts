@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Prisma } from "@chairback/db";
 import { occupyingSql, type CompletedInProgress } from "./chairOccupancy.js";
+import { blockAppliesToService } from "@chairback/config/blockScope";
 import { weekdayWindowsToRanges } from "./blockedTime.js";
 import { assertServiceDayHasRoom } from "./serviceDailyLimit.js";
 import { recordWaitlistEvent, SYSTEM_ACTOR } from "./waitlistAudit.js";
@@ -239,19 +240,49 @@ async function assertNoNativeBlock(
     startsAt: Date;
     tailEnd: Date;
     timezone: string | null;
+    /** The service being booked; null = cannot say, so every block counts. */
+    serviceId: string | null;
+    /**
+     * A party run: each member's OWN span and service, so a block of
+     * Shape-ups stops the member having one and not the Haircut beside him.
+     * When present it replaces `serviceId` for SCOPED blocks; an all-services
+     * block still refuses the whole run.
+     */
+    serviceSpans?: readonly { startsAt: Date; tailEnd: Date; serviceId: string | null }[];
   },
 ): Promise<void> {
   // ISO text + ::timestamp, never a raw Date (PR #70).
-  const oneOff = await tx.$queryRaw<{ id: string }[]>(
-    Prisma.sql`SELECT id FROM "AvailabilityException"
+  const oneOff = await tx.$queryRaw<
+    { id: string; startsAt: Date; endsAt: Date; serviceIds: string[] }[]
+  >(
+    Prisma.sql`SELECT id, "startsAt", "endsAt", "serviceIds" FROM "AvailabilityException"
                WHERE "shopId" = ${input.shopId}
                  AND "staffId" = ${input.staffId}
                  AND "isBlock" = true
                  AND "startsAt" < ${input.tailEnd.toISOString()}::timestamp
-                 AND "endsAt" > ${input.startsAt.toISOString()}::timestamp
-               LIMIT 1`,
+                 AND "endsAt" > ${input.startsAt.toISOString()}::timestamp`,
   );
-  if (oneOff.length > 0) throw new BlockedTimeError();
+  // Which services a block stops is config/blockScope.ts - the same call the
+  // slot grid makes, so the grid never offers what this refuses.
+  for (const b of oneOff) {
+    if (!input.serviceSpans) {
+      if (blockAppliesToService(b.serviceIds, input.serviceId)) throw new BlockedTimeError();
+      continue;
+    }
+    if (b.serviceIds.length === 0) throw new BlockedTimeError();
+    // $queryRaw hands a naive timestamp back as a Date already in UTC.
+    const bs = b.startsAt.getTime();
+    const be = b.endsAt.getTime();
+    for (const s of input.serviceSpans) {
+      if (
+        s.startsAt.getTime() < be &&
+        s.tailEnd.getTime() > bs &&
+        blockAppliesToService(b.serviceIds, s.serviceId)
+      ) {
+        throw new BlockedTimeError();
+      }
+    }
+  }
 
   const weekly = await tx.recurringBlock.findMany({
     where: { shopId: input.shopId, staffId: input.staffId },
@@ -333,6 +364,21 @@ export async function lockStaffAndAssertSlotFree(
      * receptionist, waitlist gap-fill.
      */
     serviceDayLimit: { serviceId: string; timezone: string } | null;
+    /**
+     * The service this write books - what a block SCOPED to some services is
+     * checked against (config/blockScope.ts). A block of Shape-ups refuses a
+     * Shape-up and lets a Haircut through; an all-services block refuses both.
+     *
+     * REQUIRED, like `serviceDayLimit`, so every writer had to answer. null
+     * means "cannot say", and then every scoped block in the span refuses -
+     * the safe answer. Irrelevant under `nativeBlocks: "ignore"`.
+     */
+    bookedServiceId: string | null;
+    /**
+     * Internal to lockStaffsAndAssertPartyFree: each member's own span and
+     * service inside one run, so scoped blocks are judged per member.
+     */
+    partyServiceSpans?: readonly { startsAt: Date; tailEnd: Date; serviceId: string | null }[];
     /**
      * Booking INTO a targeted slot. When set, UNBOOKED targeted-slot spans do
      * not block at all: overlapping specials are competing offers of the same
@@ -568,6 +614,8 @@ export async function lockStaffAndAssertSlotFree(
       // The trailing turnover buffer, exactly as the grid demands it.
       tailEnd: new Date(opts.endsAt.getTime() + bufferMs),
       timezone: opts.timezone ?? opts.serviceDayLimit?.timezone ?? null,
+      serviceId: opts.bookedServiceId,
+      serviceSpans: opts.partyServiceSpans,
     });
   }
 
@@ -866,6 +914,8 @@ export interface PartySpan {
   staffId: string;
   startsAt: Date;
   endsAt: Date;
+  /** This member's service - what a service-scoped block is judged against. */
+  serviceId: string | null;
 }
 
 /**
@@ -896,7 +946,10 @@ export interface PartySpan {
 export async function lockStaffsAndAssertPartyFree(
   tx: Prisma.TransactionClient,
   spans: readonly PartySpan[],
-  guard: Omit<SlotGuardOptions, "staffId" | "startsAt" | "endsAt" | "serviceDayLimit"> & {
+  guard: Omit<
+    SlotGuardOptions,
+    "staffId" | "startsAt" | "endsAt" | "serviceDayLimit" | "bookedServiceId" | "partyServiceSpans"
+  > & {
     serviceDayLimit: null;
   },
 ): Promise<void> {
@@ -910,21 +963,34 @@ export async function lockStaffsAndAssertPartyFree(
     const ordered = [...byStaff.get(staffId)!].sort(
       (a, b) => a.startsAt.getTime() - b.startsAt.getTime(),
     );
-    const runs: { startsAt: Date; endsAt: Date }[] = [];
+    const runs: { startsAt: Date; endsAt: Date; members: PartySpan[] }[] = [];
     for (const s of ordered) {
       const last = runs[runs.length - 1];
       if (last && s.startsAt.getTime() <= last.endsAt.getTime()) {
         if (s.endsAt.getTime() > last.endsAt.getTime()) last.endsAt = s.endsAt;
+        last.members.push(s);
       } else {
-        runs.push({ startsAt: s.startsAt, endsAt: s.endsAt });
+        runs.push({ startsAt: s.startsAt, endsAt: s.endsAt, members: [s] });
       }
     }
+    const bufferMs = Math.max(0, guard.bufferMin) * 60_000;
     for (const run of runs) {
       await lockStaffAndAssertSlotFree(tx, {
         ...guard,
         staffId,
         startsAt: run.startsAt,
         endsAt: run.endsAt,
+        // Each member against a SERVICE-scoped block on its own span and
+        // service; the turnover buffer only trails the member who ends the
+        // run, exactly as the run itself is buffered.
+        bookedServiceId: null,
+        partyServiceSpans: run.members.map((m) => ({
+          startsAt: m.startsAt,
+          tailEnd: new Date(
+            m.endsAt.getTime() + (m.endsAt.getTime() === run.endsAt.getTime() ? bufferMs : 0),
+          ),
+          serviceId: m.serviceId,
+        })),
       });
     }
   }

@@ -45,7 +45,9 @@ export function dayTotals(rows: AgendaRow[]): DayTotals {
 
   for (const r of rows) {
     if (r.source === "block") {
-      if (r.end && r.end > r.start) {
+      // A block of SOME services leaves the chair open for the rest: not
+      // closed time (the API's chair-time numbers make the same call).
+      if (r.end && r.end > r.start && (r.blockServiceIds?.length ?? 0) === 0) {
         const start = Date.parse(r.start);
         const end = Date.parse(r.end);
         if (Number.isFinite(start) && Number.isFinite(end)) {
