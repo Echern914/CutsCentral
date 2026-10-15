@@ -50,9 +50,23 @@ export function timeLabel(at: string, timezone: string): string {
   );
 }
 
-/** "9:00 AM - 5:00 PM, 6:00 PM - 8:00 PM". */
+/** When something ENDS: "midnight", not "12:00 AM" - a day that runs to midnight read as "12:00 AM - 12:00 AM". */
+export function endLabel(at: string, timezone: string): string {
+  const t = timeLabel(at, timezone);
+  return t === "12:00 AM" ? "midnight" : t;
+}
+
+const ALMOST_A_DAY_MS = 24 * 60 * 60 * 1000 - 60 * 1000;
+
+/** "9:00 AM - 5:00 PM, 6:00 PM - midnight", or "All day" for a span that is the whole day. */
 export function spansLabel(spans: ScheduleSpan[], timezone: string): string {
-  return spans.map((s) => `${timeLabel(s.start, timezone)} - ${timeLabel(s.end, timezone)}`).join(", ");
+  return spans
+    .map((s) =>
+      Date.parse(s.end) - Date.parse(s.start) >= ALMOST_A_DAY_MS
+        ? "All day"
+        : `${timeLabel(s.start, timezone)} - ${endLabel(s.end, timezone)}`,
+    )
+    .join(", ");
 }
 
 /** A day chip: "Today", "Tomorrow", then "Sat 17". The key is the team's own date. */
@@ -75,11 +89,11 @@ export function nowLabel(
 ): { text: string; tone: "free" | "busy" | "muted" } {
   switch (now.kind) {
     case "free":
-      return { text: `Free until ${timeLabel(now.until, timezone)}`, tone: "free" };
+      return { text: `Free until ${endLabel(now.until, timezone)}`, tone: "free" };
     case "busy":
-      return { text: `Booked until ${timeLabel(now.until, timezone)}`, tone: "busy" };
+      return { text: `Booked until ${endLabel(now.until, timezone)}`, tone: "busy" };
     case "away":
-      return { text: `Away until ${timeLabel(now.until, timezone)}`, tone: "muted" };
+      return { text: `Away until ${endLabel(now.until, timezone)}`, tone: "muted" };
     case "starts":
       return { text: `In at ${timeLabel(now.at, timezone)}`, tone: "muted" };
     case "done":
