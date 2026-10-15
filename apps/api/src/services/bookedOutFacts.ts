@@ -1,6 +1,6 @@
 import { prisma, runWithShop } from "@chairback/db";
 import type { BookedOutFacts } from "../engines/bookedOut.js";
-import { readChairEvents, minutesIntoLocalDay, type ChairEvent } from "../engines/insightsWindow.js";
+import { readChairEvents, minutesIntoLocalDay, shopLocalDay, type ChairEvent } from "../engines/insightsWindow.js";
 import { openMinutesForDay, shopLocalDays } from "../engines/utilization.js";
 
 /**
@@ -253,9 +253,22 @@ export async function collectBookedOutFacts(scope: BookedOutScope): Promise<Book
 
   // Overdue regulars: 3+ visits in the year, past their own median gap by half
   // again (and a week at least), not lost (under 6 months), nothing booked.
+  //
+  // 🔴 A VISIT IS A DAY, not an appointment. Two services booked back to back
+  // (or a party under one client) are several rows on one date; counted as
+  // visits they made a one-time client look like a regular on a two-hour
+  // rhythm - every one of them "overdue" a week later. Browser QA caught it:
+  // 48 one-day walk-ins reported as overdue regulars.
   let overdue = 0;
-  for (const [clientId, starts] of byClient) {
-    if (hidden.has(clientId) || future.has(clientId) || starts.length < 3) continue;
+  for (const [clientId, raw] of byClient) {
+    if (hidden.has(clientId) || future.has(clientId)) continue;
+    const byDay = new Map<number, number>();
+    for (const t of raw) {
+      const day = shopLocalDay(new Date(t), tz).getTime();
+      byDay.set(day, Math.max(byDay.get(day) ?? 0, t));
+    }
+    const starts = [...byDay.values()];
+    if (starts.length < 3) continue;
     const sorted = [...starts].sort((a, b) => a - b);
     const gaps = sorted.slice(1).map((t, i) => (t - sorted[i]!) / DAY).sort((a, b) => a - b);
     const median = gaps[Math.floor(gaps.length / 2)]!;

@@ -50,7 +50,13 @@ async function client(name: string, archived = false) {
   ).id;
 }
 
-async function appt(staffId: string, clientId: string | null, days: number, status: "BOOKED" | "COMPLETED" | "NO_SHOW") {
+async function appt(
+  staffId: string,
+  clientId: string | null,
+  days: number,
+  status: "BOOKED" | "COMPLETED" | "NO_SHOW",
+  hour = 10,
+) {
   await prisma.appointment.create({
     data: {
       shopId,
@@ -60,8 +66,8 @@ async function appt(staffId: string, clientId: string | null, days: number, stat
       firstName: "Pat",
       lastName: "Sample",
       status,
-      startsAt: at(days),
-      endsAt: new Date(at(days).getTime() + 30 * 60_000),
+      startsAt: at(days, hour),
+      endsAt: new Date(at(days, hour).getTime() + 30 * 60_000),
       priceAtBooking: 40,
       manageToken: randomToken(),
     },
@@ -108,6 +114,7 @@ beforeAll(async () => {
   const F = await client("Fay");
   const G = await client("Gus");
   const H = await client("Hal");
+  const I = await client("Ivy");
   // A: came back within 6 weeks.
   await appt(sam, A, -60, "COMPLETED");
   await appt(sam, A, -30, "COMPLETED");
@@ -127,6 +134,9 @@ beforeAll(async () => {
   // counted as coming back.
   await appt(sam, H, -85, "COMPLETED");
   await appt(sam, H, -35, "COMPLETED");
+  // I: three services back to back on ONE day, 20 days ago - one visit, not
+  // a regular on a two-hour rhythm (browser QA caught this as "overdue").
+  for (const h of [10, 12, 14]) await appt(sam, I, -20, "COMPLETED", h);
   // Lee: one booking in 3 days.
   await appt(lee, null, 3, "BOOKED");
 });
@@ -149,18 +159,20 @@ describe("the numbers, for the whole shop", () => {
     // 14 days x 2 providers x 480, less Lee's day off. Sam's Design-only block
     // keeps the time open. Booked: D in 5 days + Lee in 3 = 2 x 30.
     expect(f.upcoming).toEqual({ openMin: 14 * 2 * 480 - 480, bookedMin: 60 });
-    // 28 finished days x 960. Booked in them: F (-10) + G (-5), no-show included.
-    expect(f.past).toEqual({ openMin: 28 * 960, bookedMin: 60 });
+    // 28 finished days x 960. Booked in them: F (-10), G (-5, no-show
+    // included) and I's three (-20) = 5 x 30.
+    expect(f.past).toEqual({ openMin: 28 * 960, bookedMin: 150 });
     expect(f.weekdays).toHaveLength(7);
     expect(f.weekdays.every((w) => w.days === 8 && w.openMin === 8 * 960)).toBe(true);
     // Seen 6-13 weeks ago: A, B, C, D, H (E archived). Back within 6 weeks: A
     // only - H came back after 50 days.
     expect(f.returning).toEqual({ cohort: 5, returned: 1 });
-    // First-ever booking: F and G in the last 30 days; A and B the 30 before.
-    expect(f.newClients).toEqual({ last30: 2, prior30: 2 });
-    // Past bookings in the last 60 days: A x2, B, C, D, E, F, G, H = 9; G no-showed.
-    expect(f.noShows).toEqual({ bookings: 9, noShows: 1 });
-    // C only: D is booked, E is archived.
+    // First-ever booking: F, G and I in the last 30 days; A and B the 30 before.
+    expect(f.newClients).toEqual({ last30: 3, prior30: 2 });
+    // Past bookings in the last 60 days: A x2, B, C, D, E, F, G, H, I x3 = 12;
+    // G no-showed.
+    expect(f.noShows).toEqual({ bookings: 12, noShows: 1 });
+    // C only: D is booked, E is archived, I came on one day.
     expect(f.overdueRegulars).toBe(1);
     expect(f.profileMissingPhoto).toBe(2);
     expect(f.services).toEqual({ total: 2, unpriced: 1 });
@@ -189,7 +201,7 @@ describe("GET /api/assistant/booked-out", () => {
     expect(res.body.brief.scope).toBe("shop");
     expect(typeof res.body.brief.headline).toBe("string");
     const text = JSON.stringify(res.body);
-    for (const name of ["Ann", "Bo ", "Cy", "Di", "Fay", "Gus", "Hal", "Sample", "Pat"]) expect(text).not.toContain(name);
+    for (const name of ["Ann", "Bo ", "Cy", "Di", "Fay", "Gus", "Hal", "Ivy", "Sample", "Pat"]) expect(text).not.toContain(name);
     expect(text).not.toMatch(/\$\d/);
   });
 
