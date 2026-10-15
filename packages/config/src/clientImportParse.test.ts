@@ -445,6 +445,9 @@ describe("parseWeeklyHours", () => {
   it("🔑 reads a split shift with bare hours: 1-6 after 12 means PM", () => {
     expect(read("Mon 9-12, 1-6").days).toEqual({ 1: [w(H(9), H(12)), w(H(13), H(18))] });
     expect(read("Tue 10:30-2, 3-7:30").days).toEqual({ 2: [w(H(10, 30), H(14)), w(H(15), H(19, 30))] });
+    // The second shift starts AFTER the first ends: 7 here is 7 PM, though a
+    // bare 7 on its own would be 7 AM.
+    expect(read("Wed 8-11, 7-10").days).toEqual({ 3: [w(H(8), H(11)), w(H(19), H(22))] });
   });
 
   it("🔑 reads a bare hour from 6 AM on, and each later time after the one before", () => {
