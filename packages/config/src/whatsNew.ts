@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-13-undo-no-show",
+    date: "2026-10-13",
+    kind: "fix",
+    title: "Undo a no-show marked by mistake",
+    body:
+      "Open the appointment, tap More, then Undo no-show to put it back on your calendar. No-show now asks first, " +
+      "says any fee it charges, and only shows once the appointment has started.",
+  },
+  {
     id: "2026-10-13-client-change-rules",
     date: "2026-10-13",
     kind: "feature",
