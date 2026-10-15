@@ -1,6 +1,15 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import Link from "next/link";
+import { useMemo, useRef, useState, useTransition } from "react";
+import {
+  countVCards,
+  looksLikeVCard,
+  parseDelimited,
+  parseVCards,
+  rowsFromTable,
+  type ImportRowDraft,
+} from "@chairback/config/clientImportParse";
 import { Card } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { importClientsAction, type ImportClientRow, type ImportResult } from "../actions";
@@ -9,145 +18,158 @@ const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
 /**
- * CSV client import — the "bring your book off Booksy/Fresha/Vagaro" flow. The
- * file is parsed ENTIRELY in the browser (no upload); we map columns by header,
- * preview, then POST JSON rows. An import never makes anyone textable, and the
- * UI says so (a contact list is not proof that anyone agreed to texts).
+ * Client import - the "bring your book off Booksy/TheCut/Fresha/Vagaro" flow.
+ * The file is read ENTIRELY in the browser (no upload): a CSV export, or a
+ * phone's contacts file (.vcf), which is the only way out of TheCut - it has
+ * no export, and its barbers keep their clients in their phone's contacts.
+ * Parsing lives in `@chairback/config/clientImportParse`.
  *
- * The browser sends in batches of 500 so a big book doesn't hit the per-request
- * cap; results are summed across batches.
+ * Everything found is shown as a REVIEW LIST before anything is sent: phone
+ * contacts include friends and family, so the barber unticks whoever isn't a
+ * client, and only the ticked rows are imported. An import never makes anyone
+ * textable, and the UI says so (a contact list is not proof that anyone agreed
+ * to texts).
+ *
+ * The browser sends in batches of 500 so a big book doesn't hit the
+ * per-request cap; results are summed across batches, and every skipped row is
+ * numbered by where it sits in the FILE, not in the batch that was sent.
  */
 const BATCH = 500;
 /** How many matched rows to list by name; the count always shows. */
 const REVIEW_SHOWN = 50;
 
-/** "rows 3, 7 and 12" - capped, so one bad column cannot print a thousand numbers. */
-function rowList(rows: { row: number }[]): string {
-  const shown = rows.slice(0, 10).map((r) => r.row);
-  const more = rows.length - shown.length;
-  return `row${rows.length === 1 ? "" : "s"} ${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+type FileKind = "csv" | "contacts";
+
+/** The fields the import route takes - the draft's file position stays here. */
+function toImportRow(d: ImportRowDraft): ImportClientRow {
+  return { firstName: d.firstName, lastName: d.lastName, phone: d.phone, email: d.email, notes: d.notes };
 }
 
-/** Minimal RFC-4180-ish CSV parser: handles quotes, escaped "", CRLF. */
-function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let cell = "";
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (text[i + 1] === '"') {
-          cell += '"';
-          i++;
-        } else inQuotes = false;
-      } else cell += ch;
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ",") {
-      row.push(cell);
-      cell = "";
-    } else if (ch === "\n" || ch === "\r") {
-      if (ch === "\r" && text[i + 1] === "\n") i++;
-      row.push(cell);
-      rows.push(row);
-      row = [];
-      cell = "";
-    } else cell += ch;
-  }
-  if (cell.length > 0 || row.length > 0) {
-    row.push(cell);
-    rows.push(row);
-  }
-  return rows.filter((r) => r.some((c) => c.trim() !== ""));
-}
-
-/** Find a column index whose header matches any of the given aliases. */
-function findCol(header: string[], aliases: string[]): number {
-  const norm = header.map((h) => h.trim().toLowerCase().replace(/[^a-z]/g, ""));
-  for (const a of aliases) {
-    const idx = norm.indexOf(a);
-    if (idx !== -1) return idx;
-  }
-  return -1;
-}
-
-function mapRows(grid: string[][]): { rows: ImportClientRow[]; warning?: string } {
-  if (grid.length < 1) return { rows: [] };
-  const header = grid[0]!;
-  const iFirst = findCol(header, ["firstname", "first", "fname", "givenname"]);
-  const iLast = findCol(header, ["lastname", "last", "lname", "surname", "familyname"]);
-  const iName = findCol(header, ["name", "fullname", "client", "customer", "customername"]);
-  const iPhone = findCol(header, ["phone", "mobile", "cell", "phonenumber", "tel", "telephone"]);
-  const iEmail = findCol(header, ["email", "emailaddress", "mail"]);
-  const iNotes = findCol(header, ["notes", "note", "comment", "comments"]);
-
-  // Need at least a name source.
-  if (iFirst === -1 && iName === -1) {
-    return { rows: [], warning: "Couldn't find a name column. Add a header row with First name / Name." };
-  }
-
-  const out: ImportClientRow[] = [];
-  for (let r = 1; r < grid.length; r++) {
-    const cells = grid[r]!;
-    const get = (i: number) => (i >= 0 && i < cells.length ? cells[i]!.trim() : "");
-    let firstName = get(iFirst);
-    let lastName = get(iLast);
-    if (!firstName && iName !== -1) {
-      // Split a single "Full Name" into first + rest.
-      const full = get(iName);
-      const parts = full.split(/\s+/);
-      firstName = parts[0] ?? "";
-      lastName = parts.slice(1).join(" ");
-    }
-    if (!firstName) continue; // a row with no name is unusable
-    out.push({
-      firstName: firstName.slice(0, 80),
-      lastName: lastName ? lastName.slice(0, 80) : undefined,
-      // Every field within the API's caps: one long cell used to fail the
-      // WHOLE 500-row batch with no row number. Over 40 characters is never
-      // one phone number, so the server reports it as that row's skip.
-      phone: get(iPhone).slice(0, 40) || undefined,
-      email: get(iEmail).slice(0, 160) || undefined,
-      notes: get(iNotes).slice(0, 2000) || undefined,
-    });
-  }
-  return { rows: out };
+function fullName(d: { firstName: string; lastName?: string }): string {
+  return [d.firstName, d.lastName].filter(Boolean).join(" ");
 }
 
 export function ImportClients({ onDone }: { onDone: () => void }) {
   const { toast } = useToast();
   const [pending, start] = useTransition();
-  const [rows, setRows] = useState<ImportClientRow[]>([]);
+  const [drafts, setDrafts] = useState<ImportRowDraft[]>([]);
+  // Indexes into `drafts` that will be imported. Everyone starts ticked.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState<FileKind>("csv");
+  // Contact cards left out for having no name, or no phone or email.
+  const [dropped, setDropped] = useState(0);
   const [fileName, setFileName] = useState("");
   const [result, setResult] = useState<ImportResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // A CSV is read by rows; a contacts file by contact cards.
+  const unit = kind === "contacts" ? "contact" : "row";
+  const Unit = kind === "contacts" ? "Contact" : "Row";
+
+  function load(next: ImportRowDraft[], nextKind: FileKind, nextDropped: number) {
+    setDrafts(next);
+    setSelected(new Set(next.map((_, i) => i)));
+    setKind(nextKind);
+    setDropped(nextDropped);
+  }
+
+  function clear() {
+    load([], "csv", 0);
+    setQuery("");
+    setFileName("");
+    if (inputRef.current) inputRef.current.value = "";
+  }
 
   function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setResult(null);
+    setQuery("");
     setFileName(file.name);
+    if (/\.(xlsx|xls|numbers)$/i.test(file.name)) {
+      toast("That's a spreadsheet, not a CSV. Open it, save or download it as CSV, then pick that file.", "error");
+      load([], "csv", 0);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
-      const { rows: mapped, warning } = mapRows(parseCsv(String(reader.result ?? "")));
-      if (warning) {
-        toast(warning, "error");
-        setRows([]);
+      const text = String(reader.result ?? "");
+      if (/\.(vcf|vcard)$/i.test(file.name) || looksLikeVCard(text)) {
+        const rows = parseVCards(text);
+        const cards = countVCards(text);
+        if (rows.length === 0) {
+          toast(
+            cards > 0
+              ? "None of those contacts has a name and a phone number or email to import."
+              : "No contacts found in that file.",
+            "error",
+          );
+          load([], "contacts", 0);
+          return;
+        }
+        load(rows, "contacts", Math.max(0, cards - rows.length));
         return;
       }
-      if (mapped.length === 0) {
+      const { rows, missingName } = rowsFromTable(parseDelimited(text));
+      if (missingName) {
+        toast("Couldn't find a name column. Add a header row with First name / Name.", "error");
+        load([], "csv", 0);
+        return;
+      }
+      if (rows.length === 0) {
         toast("No client rows found in that file.", "error");
-        setRows([]);
+        load([], "csv", 0);
         return;
       }
-      setRows(mapped);
+      load(rows, "csv", 0);
     };
+    reader.onerror = () => toast("Couldn't read that file. Try picking it again.", "error");
     reader.readAsText(file);
   }
 
+  // The rows the search shows. Filtering only hides rows: whoever is ticked
+  // stays ticked while hidden, and Select all/none act on the shown rows only.
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return drafts.map((_, i) => i);
+    const digits = q.replace(/\D/g, "");
+    const out: number[] = [];
+    drafts.forEach((d, i) => {
+      const hit =
+        fullName(d).toLowerCase().includes(q) ||
+        (d.email ?? "").toLowerCase().includes(q) ||
+        (d.phone ?? "").toLowerCase().includes(q) ||
+        (digits !== "" && (d.phone ?? "").replace(/\D/g, "").includes(digits));
+      if (hit) out.push(i);
+    });
+    return out;
+  }, [drafts, query]);
+
+  function toggle(i: number, on: boolean) {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (on) next.add(i);
+      else next.delete(i);
+      return next;
+    });
+  }
+
+  function setShown(on: boolean) {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      for (const i of visible) {
+        if (on) next.add(i);
+        else next.delete(i);
+      }
+      return next;
+    });
+  }
+
   function doImport() {
+    // In file order, whatever order they were ticked in.
+    const chosen = drafts.filter((_, i) => selected.has(i));
+    if (chosen.length === 0) return;
     start(async () => {
       const totals: ImportResult = {
         ok: true,
@@ -156,14 +178,18 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
         total: 0,
         skipped: [],
       };
-      for (let i = 0; i < rows.length; i += BATCH) {
-        const r = await importClientsAction(rows.slice(i, i + BATCH));
+      for (let i = 0; i < chosen.length; i += BATCH) {
+        const batch = chosen.slice(i, i + BATCH);
+        const r = await importClientsAction(batch.map(toImportRow));
         if (!r.ok) {
-          // Earlier batches are already in. Say what was, and from which row
-          // it stopped, instead of only "Import failed".
+          // Earlier batches are already in. Say what was, and from where in
+          // the file it stopped, instead of only "Import failed".
           if (i > 0) {
             setResult(totals);
-            toast(`Imported up to row ${i}. Rows ${i + 1} on weren't added - fix the file and import them again.`, "error");
+            toast(
+              `Imported up to ${unit} ${chosen[i - 1]!.row}. The ticked ${unit}s from ${unit} ${batch[0]!.row} on weren't added - import the file again to add them.`,
+              "error",
+            );
           } else {
             toast(r.error ?? "Import failed.", "error");
           }
@@ -172,8 +198,11 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
         totals.created! += r.created ?? 0;
         totals.unchanged! += r.unchanged ?? 0;
         totals.total! += r.total ?? 0;
-        // The server numbers rows within its batch; the owner reads the FILE.
-        totals.skipped!.push(...(r.skipped ?? []).map((s) => ({ ...s, row: s.row + i })));
+        // The server numbers rows within the batch it was sent; the owner
+        // reads the FILE, and unticked rows were never sent at all.
+        totals.skipped!.push(
+          ...(r.skipped ?? []).map((s) => ({ ...s, row: batch[s.row - 1]?.row ?? s.row + i })),
+        );
       }
       setResult(totals);
       toast(
@@ -184,6 +213,20 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
     });
   }
 
+  /** "rows 3, 7 and 12" - capped, so one bad column cannot print a thousand numbers. A contact reads by name. */
+  function skipList(rows: { row: number }[]): string {
+    const shown = rows.slice(0, 10);
+    const more = rows.length - shown.length;
+    const tail = more > 0 ? ` and ${more} more` : "";
+    if (kind === "contacts") {
+      const byRow = new Map(drafts.map((d) => [d.row, d]));
+      return (
+        shown.map((r) => (byRow.has(r.row) ? fullName(byRow.get(r.row)!) : `contact ${r.row}`)).join(", ") + tail
+      );
+    }
+    return `row${rows.length === 1 ? "" : "s"} ${shown.map((r) => r.row).join(", ")}${tail}`;
+  }
+
   // Each kind of skip has its own next step, so they are shown apart.
   const skipped = result?.skipped ?? [];
   const matched = skipped.filter((s) => s.reason === "matches_existing");
@@ -192,35 +235,114 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
   const failed = skipped.filter(
     (s) => s.reason !== "matches_existing" && s.reason !== "same_name" && s.reason !== "invalid_phone",
   );
+  const count = selected.size;
 
   return (
     <Card className="p-5">
-      <div className="flex flex-col gap-4">
-        <div>
+      <div className="flex min-w-0 flex-col gap-4">
+        <div className="min-w-0">
           <h3 className="font-display text-base">Import your client list</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted">
-            Coming from Booksy, Fresha, Vagaro, or a spreadsheet? Export your
-            clients to a CSV and drop it here. We match columns named First name,
-            Last name, Phone, Email, and Notes (a single &ldquo;Name&rdquo; column
-            works too). Your book is yours — bring it with you.
+            Pick a CSV export (from Booksy, Fresha, Vagaro or a spreadsheet) or a
+            contacts file (.vcf) from your phone. We match columns named First
+            name, Last name, Phone, Email and Notes (a single &ldquo;Name&rdquo;
+            column works too). You&apos;ll see everyone before anything is added.
+            Your book is yours — bring it with you.
           </p>
+          <Link href="/dashboard/clients/switch" className="mt-1 inline-block text-xs text-gold hover:underline">
+            Switching from Booksy or TheCut? Here&apos;s how
+          </Link>
         </div>
 
         <input
           ref={inputRef}
           type="file"
-          accept=".csv,text/csv"
+          accept=".csv,.vcf,text/csv,text/vcard,text/x-vcard"
           onChange={onFile}
-          className="block w-full text-sm text-muted file:mr-3 file:rounded-full file:border-0 file:bg-gold file:px-4 file:py-2 file:text-sm file:font-semibold file:text-charcoal hover:file:bg-gold-muted"
+          aria-label="Choose a CSV or contacts file"
+          className="block w-full min-w-0 text-sm text-muted file:mr-3 file:rounded-full file:border-0 file:bg-gold file:px-4 file:py-2 file:text-sm file:font-semibold file:text-charcoal hover:file:bg-gold-muted"
         />
 
-        {rows.length > 0 && !result && (
+        {drafts.length > 0 && !result && (
           <>
-            <p className="text-sm text-offwhite">
-              <span className="font-semibold text-gold">{rows.length}</span> client
-              {rows.length === 1 ? "" : "s"} ready to import from{" "}
-              <span className="text-muted">{fileName}</span>.
+            <p className="min-w-0 break-words text-sm text-offwhite">
+              Found <span className="font-semibold text-gold">{drafts.length}</span>{" "}
+              {kind === "contacts"
+                ? `contact${drafts.length === 1 ? "" : "s"}`
+                : `client${drafts.length === 1 ? "" : "s"}`}{" "}
+              in <span className="text-muted">{fileName}</span>.
             </p>
+
+            {kind === "contacts" && (
+              <p className="rounded-xl border border-gold/30 bg-gold/10 p-3 text-xs leading-relaxed text-offwhite">
+                Your phone&apos;s contacts include friends and family. Untick anyone
+                who isn&apos;t a client before you import.
+              </p>
+            )}
+            {dropped > 0 && (
+              <p className="text-xs leading-relaxed text-muted">
+                {dropped} more contact{dropped === 1 ? " was" : "s were"} left out: no
+                name, or no phone number or email to reach them by.
+              </p>
+            )}
+
+            <div className="flex min-w-0 flex-col gap-2">
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search name, phone or email"
+                aria-label="Search the list"
+                className={field}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <p className="text-xs text-muted" role="status">
+                  <span className="font-semibold text-offwhite">{count}</span> selected of {drafts.length}
+                </p>
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  <button type="button" onClick={() => setShown(true)} className="text-xs text-gold hover:underline">
+                    {query.trim() ? "Select all shown" : "Select all"}
+                  </button>
+                  <button type="button" onClick={() => setShown(false)} className="text-xs text-gold hover:underline">
+                    {query.trim() ? "Select none shown" : "Select none"}
+                  </button>
+                </div>
+              </div>
+              <ul
+                aria-label="People in the file"
+                className="max-h-80 min-w-0 overflow-y-auto overscroll-contain rounded-xl border border-subtle"
+              >
+                {visible.map((i) => {
+                  const d = drafts[i]!;
+                  const name = fullName(d);
+                  const contact = [d.phone, d.email].filter(Boolean).join(" · ");
+                  return (
+                    <li key={i} className="border-b border-subtle/60 last:border-b-0">
+                      <label className="flex min-w-0 cursor-pointer items-center gap-3 px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(i)}
+                          onChange={(e) => toggle(i, e.target.checked)}
+                          aria-label={name}
+                          className="h-4 w-4 shrink-0 accent-gold"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm text-offwhite">{name}</span>
+                          <span className="block truncate text-xs text-muted">
+                            {contact || "No phone or email"}
+                          </span>
+                        </span>
+                      </label>
+                    </li>
+                  );
+                })}
+                {visible.length === 0 && (
+                  <li className="break-words px-3 py-4 text-center text-xs text-muted">
+                    No one matches &ldquo;{query.trim()}&rdquo;.
+                  </li>
+                )}
+              </ul>
+            </div>
 
             <p className="rounded-xl border border-subtle bg-charcoal-700/50 p-3 text-xs leading-relaxed text-muted">
               Imported clients won&apos;t be texted until they opt in themselves —
@@ -228,22 +350,15 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
               you already have keep the consent they have.
             </p>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 onClick={doImport}
-                disabled={pending}
+                disabled={pending || count === 0}
                 className="rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50"
               >
-                {pending ? "Importing…" : `Import ${rows.length} client${rows.length === 1 ? "" : "s"}`}
+                {pending ? "Importing…" : `Import ${count} client${count === 1 ? "" : "s"}`}
               </button>
-              <button
-                onClick={() => {
-                  setRows([]);
-                  setFileName("");
-                  if (inputRef.current) inputRef.current.value = "";
-                }}
-                className="text-sm text-muted hover:text-offwhite"
-              >
+              <button onClick={clear} className="text-sm text-muted hover:text-offwhite">
                 Clear
               </button>
             </div>
@@ -251,7 +366,7 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
         )}
 
         {result && (
-          <div className="rounded-xl border border-subtle bg-charcoal-700/50 p-4 text-sm">
+          <div className="min-w-0 rounded-xl border border-subtle bg-charcoal-700/50 p-4 text-sm">
             <p className="text-offwhite">
               Done — <span className="font-semibold text-gold">{result.created}</span> added
               {(result.unchanged ?? 0) > 0 && (
@@ -283,7 +398,7 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
                 <ul className="mt-2 space-y-1 text-xs">
                   {matched.slice(0, REVIEW_SHOWN).map((r) => (
                     <li key={r.row} className="min-w-0 truncate text-offwhite">
-                      Row {r.row} · {r.name}{" "}
+                      {Unit} {r.row} · {r.name}{" "}
                       <span className="text-muted">
                         — same {r.matchedBy} as {r.existingName || "an existing client"}
                       </span>
@@ -309,7 +424,7 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
                 <ul className="mt-2 space-y-1 text-xs">
                   {sameName.slice(0, REVIEW_SHOWN).map((r) => (
                     <li key={r.row} className="min-w-0 truncate text-offwhite">
-                      Row {r.row} · <span className="text-muted">You already have someone named</span>{" "}
+                      {Unit} {r.row} · <span className="text-muted">You already have someone named</span>{" "}
                       {r.name}
                     </li>
                   ))}
@@ -320,15 +435,17 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
               </div>
             )}
             {badPhone.length > 0 && (
-              <p className="mt-2 text-xs text-muted">
+              <p className="mt-2 break-words text-xs text-muted">
                 {badPhone.length} skipped for a phone number we couldn&apos;t read (
-                {rowList(badPhone)}) — fix {badPhone.length === 1 ? "that row" : "those rows"} in
-                your file and import it again.
+                {skipList(badPhone)}) —{" "}
+                {kind === "contacts"
+                  ? "fix the number in your phone's contacts, then export and import the file again."
+                  : `fix ${badPhone.length === 1 ? "that row" : "those rows"} in your file and import it again.`}
               </p>
             )}
             {failed.length > 0 && (
-              <p className="mt-2 text-xs text-muted">
-                {failed.length} couldn&apos;t be saved ({rowList(failed)}) — import the file
+              <p className="mt-2 break-words text-xs text-muted">
+                {failed.length} couldn&apos;t be saved ({skipList(failed)}) — import the file
                 again to retry {failed.length === 1 ? "it" : "them"}.
               </p>
             )}

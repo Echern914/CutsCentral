@@ -268,6 +268,24 @@ describe("the designs' own jobs", () => {
     expect(screen.getByRole("link", { name: "Book Beard Trim" }).getAttribute("href")).toBe("/book/fresh?service=svc-beard");
   });
 
+  // The "Switching from Booksy or TheCut" guide hands the shop a review link,
+  // /s/<slug>#reviews, to send its regulars. It must land on the reviews.
+  it("a #reviews link has somewhere to land in every design, and opens profile's Reviews tab", () => {
+    window.history.replaceState(null, "", "#reviews");
+    try {
+      for (const pageDesign of ["classic", "grid", "lookbook", "reel", "fresh", "profile"]) {
+        const { unmount } = render(<ShopPageClient data={page({ pageDesign })} />);
+        expect(document.getElementById("reviews"), pageDesign).not.toBeNull();
+        if (pageDesign === "profile") {
+          expect(screen.getByRole("tab", { name: "Reviews" }).getAttribute("aria-selected")).toBe("true");
+        }
+        unmount();
+      }
+    } finally {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  });
+
   it("fresh: newest first, dated, with written reviews between the photos", () => {
     render(
       <ShopPageClient

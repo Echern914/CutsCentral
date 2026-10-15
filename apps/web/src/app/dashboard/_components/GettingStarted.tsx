@@ -25,11 +25,19 @@ export function GettingStarted({
   // readiness engine's CTAs or the More sheet the way it used to.
   const connectHref = resolveHref("onboarding-connect", { role: "OWNER" });
   const clientsHref = resolveHref("clients");
+  const switchHref = resolveHref("switch-from-booksy-thecut");
   const rewardsHref = resolveHref("punch-cards", {
     flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
   });
 
-  const steps = [
+  const steps: {
+    done: boolean;
+    title: string;
+    body: string;
+    href?: string;
+    cta: string;
+    more?: { href: string; label: string };
+  }[] = [
     {
       done: connected,
       title: connected ? "Booking connected" : "Connect your booking calendar",
@@ -44,9 +52,11 @@ export function GettingStarted({
       title: "Add a client or import history",
       body: connected
         ? "No appointments yet? Add a walk-in by hand to start a punch card."
-        : "Import your client list (CSV from Booksy, Fresha, Vagaro…) or add a walk-in by hand now.",
+        : "Import your client list (a CSV from Booksy, Fresha or Vagaro, or your phone's contacts if you're on TheCut) or add a walk-in by hand now.",
       href: clientsHref ?? undefined,
       cta: "Go to Clients",
+      // The step-by-step for the two apps shops most often arrive from.
+      more: !connected && switchHref ? { href: switchHref, label: "Switching from Booksy or TheCut?" } : undefined,
     },
     // Rewards are opt-in - a booking-only shop has no rewards step to do. The
     // registry used to say so with the `rewardsEnabled` flag on the entry, but
@@ -90,6 +100,11 @@ export function GettingStarted({
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-offwhite">{s.title}</p>
               <p className="mt-0.5 text-xs text-muted">{s.body}</p>
+              {s.more && (
+                <Link href={s.more.href} className="mt-1 inline-block text-xs text-gold hover:underline">
+                  {s.more.label}
+                </Link>
+              )}
             </div>
             {s.href && !s.done && (
               <Link

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { fadeUp } from "@/components/motion/variants";
 import { PrimaryCta, ShopFooter, TextToBookBlock } from "../pageChrome";
@@ -43,6 +43,22 @@ export function ProfileDesign({ ctx }: { ctx: DesignCtx }) {
   ];
   const [tab, setTab] = useState<Tab>(tabs[0]!.key);
   const active = tabs.some((t) => t.key === tab) ? tab : tabs[0]!.key;
+
+  // A review link (/s/<slug>#reviews, sent by the shop to its regulars) opens
+  // the Reviews tab and scrolls to it: the section only exists while its tab
+  // is open, so the browser's own jump to #reviews finds nothing.
+  const jumpToReviews = useRef(false);
+  useEffect(() => {
+    if (showsReviews && window.location.hash === "#reviews") {
+      jumpToReviews.current = true;
+      setTab("reviews");
+    }
+  }, [showsReviews]);
+  useEffect(() => {
+    if (active !== "reviews" || !jumpToReviews.current) return;
+    jumpToReviews.current = false;
+    document.getElementById("reviews")?.scrollIntoView?.({ block: "start" });
+  }, [active]);
 
   // Filter the work by who did it - offered once at least two people have photos.
   const people = (data.staff ?? []).filter((s) => photos.some((p) => p.staffId === s.id));

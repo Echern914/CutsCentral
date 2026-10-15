@@ -169,10 +169,12 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     // until credited (#528), an import never writes over a client on a shared
     // phone (#510/#517/#522), and an import never counts as a yes to texts or
     // marketing email.
-    a: "Yes. If you connect Acuity or Square, your past appointments backfill automatically and those clients land in your client book with their history intact. Visits from before you switched rewards on don't earn punches by themselves — you can credit them under Rewards → Past visits.\n\nComing from a spreadsheet? Clients → Import CSV takes names, phones and emails. It never writes over a client you already have: a row that shares a phone or email with someone in your book is skipped and listed so you can decide, and so is a name-only row for someone you already have.\n\nImported clients aren't texted, or sent your marketing emails, until they say yes themselves — a contact list isn't proof anyone agreed. Your Acuity services come across separately, from Booking → Services.",
+    a: "Yes. If you connect Acuity or Square, your past appointments backfill automatically and those clients land in your client book with their history intact. Visits from before you switched rewards on don't earn punches by themselves — you can credit them under Rewards → Past visits.\n\nOn Booksy? In Booksy Biz, Customers → Export to CSV, then Clients → Import clients. On TheCut, which has no export, your clients are in your phone's contacts: export them as a contacts file (.vcf) and import that. A spreadsheet works too. You see everyone first and untick anyone who isn't a client; Clients → Switching from Booksy or TheCut has the steps. An import never writes over a client you already have: a row that shares a phone or email with someone in your book is skipped and listed so you can decide, and so is a name-only row for someone you already have.\n\nImported clients aren't texted, or sent your marketing emails, until they say yes themselves — a contact list isn't proof anyone agreed. Your Acuity services come across separately, from Booking → Services.",
     keywords: [
       "import", "existing clients", "migrate", "bring over", "transfer", "upload", "csv", "backfill",
-      "import csv", "spreadsheet", "import from acuity",
+      // Not "booksy" or "thecut": a bare app name is other-tools' word, which
+      // points at the switching guide.
+      "import csv", "spreadsheet", "import from acuity", "vcf", "contacts file",
     ],
     // A bare "import" means the client list. The Acuity service import owns
     // its own multi-word phrases; without this its generated "Where do I find
@@ -206,7 +208,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "set-hours",
     q: "How do I set my hours?",
-    a: "Two layers, and the order matters.\n\nThe ceiling is per person: Calendar → Staff → Hours sets the days and times someone actually works. Nothing can be booked outside that.\n\nThen each service can narrow it further — a service you only do on weekends simply isn't bookable midweek. Service hours can shorten your day, never extend it, so if a time is missing, widen the staff hours first.\n\nIf you're the only one in the shop, saving hours on a service widens your own week to match, so you set them once and you're done.",
+    a: "Two layers, and the order matters.\n\nThe ceiling is per person: Calendar → Staff → Hours sets the days and times someone actually works. Nothing can be booked outside that.\n\nThen each service can narrow it further — a service you only do on weekends simply isn't bookable midweek. Service hours can shorten your day, never extend it, so if a time is missing, widen the staff hours first.\n\nIf you're the only one in the shop, saving hours on a service widens your own week to match, so you set them once and you're done.\n\nMoving from Booksy, TheCut or Google? In the Hours sheet, tap Paste hours from another app and paste your week: it fills in the days for you to check before you save.",
     keywords: [
       "hours", "availability", "schedule", "open times", "when i work",
       "working hours", "shifts", "change hours", "edit hours", "update hours",
@@ -894,9 +896,10 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "other-tools",
     q: "I use a different booking tool — can you support it?",
-    a: "Acuity and Square are the two we connect to directly today.\n\nIf you're on something else, email support@getchairback.com and tell us which one — that's genuinely how we decide what to build next. In the meantime everything works manually, and it's fast.",
-    keywords: ["booksy", "vagaro", "fresha", "styleseat", "google calendar", "calendly", "other", "different tool", "schedulicity"],
+    a: "Acuity and Square are the two we connect to directly today.\n\nComing from Booksy or TheCut? There's no live connection to either, but your clients and hours still come with you: Booksy exports your client list as a CSV, and TheCut clients come from your phone's contacts. Clients → Switching from Booksy or TheCut walks you through it, reviews included.\n\nOn something else? Email support@getchairback.com and tell us which one — that's genuinely how we decide what to build next. In the meantime everything works manually, and it's fast.",
+    keywords: ["booksy", "thecut", "vagaro", "fresha", "styleseat", "google calendar", "calendly", "other", "different tool", "schedulicity"],
     category: "integrations",
+    action: { label: "Switching from Booksy or TheCut", featureId: "switch-from-booksy-thecut" },
   },
 
   /* =========================== Your page & brand ========================= */
@@ -1557,7 +1560,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     // 🔴 This said a name and a number made a client "immediately eligible for
     // reminders and rebooking nudges" - not true without their yes to texts -
     // and said nothing about a number that is already on someone (#517).
-    a: "Clients → Add client. A first name is all it needs; add a mobile number or an email if you have one. Tick “This client agreed to receive text reminders” only if they told you yes — without it they aren't texted, reminders or nudges, until they opt in themselves.\n\nIf that phone number — or, with no phone, that email — already belongs to a client, nothing is added or changed, and it tells you who has it. Same person? Open their page and update them there. Someone else on a shared family phone? Add them with their own phone or email, or with no contact details.\n\nMoving a whole book across? Use Import CSV rather than typing them in one at a time.",
+    a: "Clients → Add client. A first name is all it needs; add a mobile number or an email if you have one. Tick “This client agreed to receive text reminders” only if they told you yes — without it they aren't texted, reminders or nudges, until they opt in themselves.\n\nIf that phone number — or, with no phone, that email — already belongs to a client, nothing is added or changed, and it tells you who has it. Same person? Open their page and update them there. Someone else on a shared family phone? Add them with their own phone or email, or with no contact details.\n\nMoving a whole book across? Use Import clients rather than typing them in one at a time.",
     keywords: [
       "add a client", "new client", "add customer", "enter a client", "put a client in",
       "add someone", "create client", "add them manually",

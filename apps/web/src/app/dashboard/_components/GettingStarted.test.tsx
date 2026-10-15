@@ -19,4 +19,14 @@ describe("GettingStarted", () => {
     // The rest of first-run guidance is unaffected.
     expect(screen.getByText("Add a client or import history")).toBeTruthy();
   });
+
+  it("points a shop arriving from Booksy or TheCut at the switching guide", () => {
+    const { rerender } = render(<GettingStarted connected={false} hasClients={false} />);
+    const link = screen.getByRole("link", { name: "Switching from Booksy or TheCut?" });
+    expect(link.getAttribute("href")).toBe("/dashboard/clients/switch");
+
+    // Connected to Acuity or Square, the history comes across by itself.
+    rerender(<GettingStarted connected hasClients={false} />);
+    expect(screen.queryByRole("link", { name: "Switching from Booksy or TheCut?" })).toBeNull();
+  });
 });

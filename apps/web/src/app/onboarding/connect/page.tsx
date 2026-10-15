@@ -66,11 +66,18 @@ export default async function ConnectPage() {
               Not connecting now? Skip and log visits with one tap instead
             </a>
             <p className="text-center text-[11px] leading-relaxed text-muted">
-              On Booksy, Fresha, Vagaro, or pen &amp; paper? Everything still
-              works: import your client list as a CSV (Clients → Import), then
-              tap “Log visit” after each appointment. You can connect a booking
-              system later in Settings.
+              On Booksy, TheCut, Fresha, Vagaro, or pen &amp; paper? Everything
+              still works: import your client list (Clients → Import clients) -
+              a CSV export, or your phone&apos;s contacts if you&apos;re on TheCut -
+              then tap “Log visit” after each appointment. You can connect a
+              booking system later in Settings.
             </p>
+            <a
+              href="/dashboard/clients/switch"
+              className="text-xs text-gold hover:underline"
+            >
+              Switching from Booksy or TheCut? See how
+            </a>
           </>
         )}
       </Card>

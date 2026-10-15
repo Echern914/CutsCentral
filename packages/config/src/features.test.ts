@@ -85,6 +85,9 @@ describe("FEATURE_INDEX", () => {
       "/dashboard/site",
       "/dashboard/team",
       "/dashboard/teams",
+      // Linked from Clients, Home's first-run steps and onboarding - and
+      // findable by typing "booksy" or "thecut" anywhere.
+      "/dashboard/clients/switch",
     ];
     const indexed = new Set(FEATURE_INDEX.map((f) => f.href));
     for (const href of REQUIRED_HREFS) {
