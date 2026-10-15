@@ -7,6 +7,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { AskField } from "./AskField";
 import { ConnectionPanel } from "./ConnectionPanel";
 import { getConnections } from "./connections.server";
+import { getBookedOut } from "./bookedOut";
 import {
   ctaAwayFrom,
   getReadiness,
@@ -57,7 +58,13 @@ export default async function AssistantPage({
   // 🔴 Fetched in parallel and independently. If the MCP surface is down,
   // getConnections resolves to null and only the panel degrades - readiness,
   // help and navigation are untouched.
-  const [readiness, connections] = await Promise.all([getReadiness(), getConnections()]);
+  // The booked-out brief rides the same way: null on any failure, and the
+  // question then gets the written answer instead of this shop's numbers.
+  const [readiness, connections, bookedOut] = await Promise.all([
+    getReadiness(),
+    getConnections(),
+    getBookedOut(),
+  ]);
   const step = nextStep(readiness, vocab.stationNoun);
   // Continue-setup already leads with the next item, so it is dropped from the
   // problem list rather than printed twice.
@@ -95,6 +102,7 @@ export default async function AssistantPage({
         rewardsEnabled={rewardsEnabled}
         affiliateProgramEnabled={affiliateProgramEnabled}
         initialQuestion={handedOver}
+        bookedOut={bookedOut}
       />
 
       {step && (

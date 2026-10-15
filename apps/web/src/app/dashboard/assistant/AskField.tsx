@@ -10,6 +10,7 @@ import {
   resolveSupportAnswerById,
   type SupportResolution,
 } from "@chairback/config/supportEngine";
+import type { BookedOutBrief } from "@chairback/config/bookedOut";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
 /**
@@ -42,6 +43,8 @@ import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
 /** The examples under the field. Each one is answerable, or points somewhere real. */
 const EXAMPLES = [
+  // Answered from this shop's own numbers when the brief loaded.
+  "How do I get booked out more?",
   "Finish setting up my shop",
   "Show me tomorrow's appointments",
   "Why is my booking page unavailable?",
@@ -58,6 +61,7 @@ export function AskField({
   rewardsEnabled,
   affiliateProgramEnabled,
   initialQuestion,
+  bookedOut = null,
 }: {
   role: SeatRole;
   rewardsEnabled: boolean;
@@ -68,6 +72,12 @@ export function AskField({
    * lands here with the answer already open rather than typing it twice.
    */
   initialQuestion?: string;
+  /**
+   * "How do I get booked out more?" for this shop, computed server-side from
+   * its own numbers. Null when it could not be read: the question then gets
+   * the written answer.
+   */
+  bookedOut?: BookedOutBrief | null;
 }) {
   const router = useRouter();
   const inApp = useIsNativeApp();
@@ -86,8 +96,10 @@ export function AskField({
         inApp: inApp === true,
         flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
       },
+      // A live fact the engine folds into the matching answer - never a call.
+      facts: bookedOut ? { bookedOut } : {},
     }),
-    [role, inApp, rewardsEnabled, affiliateProgramEnabled],
+    [role, inApp, rewardsEnabled, affiliateProgramEnabled, bookedOut],
   );
 
   // A tapped chip resolves BY ID rather than by re-typing its question: the
@@ -198,6 +210,40 @@ function Answer({
               {answer.action.label} →
             </button>
           )}
+          {answer.items && answer.items.length > 0 && (
+            <ol data-qa="booked-out-items" className="mt-2 flex flex-col gap-2.5">
+              {answer.items.map((item, i) => (
+                <li
+                  key={item.id}
+                  className="min-w-0 rounded-xl border border-subtle bg-charcoal-900/40 px-3.5 py-3"
+                >
+                  <p className="text-sm font-semibold text-offwhite [overflow-wrap:anywhere]">
+                    {i + 1}. {item.title}
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed text-offwhite/85 [overflow-wrap:anywhere]">
+                    {item.finding}
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed text-muted [overflow-wrap:anywhere]">{item.fix}</p>
+                  {item.action && (
+                    <button
+                      type="button"
+                      onClick={() => onGo(item.action!.href)}
+                      className="mt-2.5 inline-flex min-h-11 items-center rounded-full border border-gold/40 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+                    >
+                      {item.action.label} →
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+          {answer.strengths && answer.strengths.length > 0 && (
+            <p data-qa="booked-out-strengths" className="mt-3 text-sm leading-relaxed text-offwhite/85">
+              <span className="font-semibold text-gold">Going well: </span>
+              {answer.strengths.join(" ")}
+            </p>
+          )}
+          {answer.basis && <p className="mt-2 text-xs text-muted">{answer.basis}</p>}
         </>
       ) : (
         <p className="mb-2 text-sm leading-relaxed text-offwhite">

@@ -1078,9 +1078,12 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   },
   {
     id: "more-clients",
-    q: "How do I get more clients?",
-    a: "Three things, in the order that actually works:\n\n1. Put your booking link in your Instagram bio and your Google listing — most shops leak more bookings here than anywhere else.\n2. Turn on rebooking nudges, so the clients you already have come back on their own rhythm. Winning back a regular is far cheaper than finding a stranger.\n3. Ask for reviews, and run a promo into your slowest window.",
-    keywords: ["more clients", "grow", "marketing", "new clients", "busy", "empty chair", "slow", "fill my chair", "advertise"],
+    // Drick's own words (2026-10-15). In the Assistant tab this answer is
+    // replaced by a list built from the shop's own numbers (config/bookedOut.ts);
+    // everywhere else - the help bubble, a connected assistant - it is this.
+    q: "How do I get booked out and get more bookings?",
+    a: "Three things, in the order that actually works:\n\n1. Put your booking link in your Instagram bio and your Google listing — most shops leak more bookings here than anywhere else.\n2. Turn on rebooking nudges, so the clients you already have come back on their own rhythm. Winning back a regular is far cheaper than finding a stranger.\n3. Ask for reviews, and run a promo into your slowest window.\n\nAsk this in the Assistant tab and it answers from your own numbers: how full your next two weeks are, which day runs emptiest, who is overdue, and what your booking page is missing.",
+    keywords: ["more clients", "grow", "grow my business", "marketing", "new clients", "busy", "busier", "empty chair", "slow", "fill my chair", "fill my schedule", "advertise", "booked out", "more bookings", "more appointments", "not getting booked", "what am i lacking", "lacking"],
     category: "clients",
   },
   {

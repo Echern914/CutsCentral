@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-15-assistant-booked-out",
+    date: "2026-10-15",
+    kind: "feature",
+    title: "Ask the Assistant how to get booked out",
+    body:
+      "Ask \"How do I get booked out more?\" in the Assistant and it answers from your own numbers: how full your next two weeks are, " +
+      "your slowest day, regulars who are overdue, clients who aren't coming back, and what your booking page is missing. Each one has a button to fix it.",
+  },
+  {
     id: "2026-10-14-block-off-some-services",
     date: "2026-10-14",
     kind: "feature",
