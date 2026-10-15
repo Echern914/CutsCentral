@@ -5,9 +5,11 @@ import { useSignalNativeReady } from "@/lib/nativeReady";
 import {
   kioskChallengeAction,
   kioskCheckInAction,
+  kioskDeskWaitsAction,
   kioskEstimateAction,
   kioskResolveAction,
   kioskVerifyAction,
+  type KioskMenu,
   type KioskShopData,
 } from "./actions";
 
@@ -26,6 +28,11 @@ import {
  * The screens deliberately show nothing the API didn't just say: eligibility,
  * estimates and dedupe answers are all server truths - this component is a
  * remote control, not a second implementation.
+ *
+ * A TEAM FRONT DESK (a booth-rent shop whose independent barbers take its
+ * walk-ins) adds one step after the name: "Who are you here for?" - each
+ * business with its wait, or "Next available". Everything after it is that
+ * business's own menu and line; the server re-checks the pick at check-in.
  */
 
 type Step =
@@ -37,6 +44,7 @@ type Step =
   | "phone"
   | "code"
   | "identity"
+  | "who"
   | "services"
   | "barber"
   | "review"
@@ -96,6 +104,9 @@ export function KioskClient() {
   } | null>(null);
   const [pending, setPending] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
+  // Team front desk: who they picked, and each business's wait as last read.
+  const [businessId, setBusinessId] = useState<string | null>(null);
+  const [waits, setWaits] = useState<Map<string, number | null> | null>(null);
 
   const reset = useCallback(() => {
     setPhone("");
@@ -106,6 +117,8 @@ export function KioskClient() {
     setLastName("");
     setServiceIds([]);
     setPreferredStaffId(null);
+    setBusinessId(null);
+    setWaits(null);
     setSmsConsent(false);
     setEstimate(null);
     setPending(false);
@@ -183,16 +196,21 @@ export function KioskClient() {
 
   const accent = data?.shop.accentColor ?? undefined;
 
+  const desk = data?.desk ?? null;
+  const business = desk?.businesses.find((b) => b.id === businessId) ?? null;
+  /** The menu the customer is choosing from: the business they picked at a desk. */
+  const menu: KioskMenu | null = desk ? business : data;
+
   const eligibleStaff = useMemo(() => {
-    if (!data) return [];
-    if (serviceIds.length === 0) return data.staff;
+    if (!menu) return [];
+    if (serviceIds.length === 0) return menu.staff;
     const offers = new Set(
-      data.offerings.map((o) => `${o.serviceId}:${o.staffId}`),
+      menu.offerings.map((o) => `${o.serviceId}:${o.staffId}`),
     );
-    return data.staff.filter((s) =>
+    return menu.staff.filter((s) =>
       serviceIds.every((svc) => offers.has(`${svc}:${s.id}`)),
     );
-  }, [data, serviceIds]);
+  }, [menu, serviceIds]);
   // Changing services can leave the chosen barber off the list - kept, they
   // were sent to a barber who doesn't do what the customer now wants.
   useEffect(() => {
@@ -202,6 +220,28 @@ export function KioskClient() {
   }, [eligibleStaff, preferredStaffId]);
 
   // ---- step actions -------------------------------------------------------
+
+  /**
+   * After the name: a front desk asks who they're here for (with fresh
+   * waits); a single shop goes straight to its services.
+   */
+  const afterName = useCallback(async () => {
+    if (!desk || !kioskToken) {
+      setStep("services");
+      return;
+    }
+    setStep("who");
+    const res = await kioskDeskWaitsAction(kioskToken);
+    // Waits are a courtesy: without them every business is still a choice.
+    setWaits(res.ok && res.data ? new Map(res.data.businesses.map((b) => [b.id, b.waitMin])) : new Map());
+  }, [desk, kioskToken]);
+
+  const pickBusiness = useCallback((id: string) => {
+    setBusinessId(id);
+    setServiceIds([]);
+    setPreferredStaffId(null);
+    setStep("services");
+  }, []);
 
   const sendCode = useCallback(async () => {
     if (!kioskToken || pending) return;
@@ -253,11 +293,11 @@ export function KioskClient() {
     if (res.data.known && res.data.firstName) {
       setKnownFirstName(res.data.firstName);
       setFirstName(res.data.firstName);
-      setStep("services");
+      void afterName();
     } else {
       setStep("identity");
     }
-  }, [kioskToken, phone, code, pending]);
+  }, [kioskToken, phone, code, pending, afterName]);
 
   const toReview = useCallback(async () => {
     if (!kioskToken || pending) return;
@@ -266,13 +306,14 @@ export function KioskClient() {
       token: kioskToken,
       serviceIds,
       preferredStaffId,
+      ...(desk ? { businessId } : {}),
     });
     setPending(false);
     // The estimate is a courtesy, not a gate - review still renders with
     // honest "estimate unavailable" copy when the call fails.
     setEstimate(res.ok && res.data ? { waitMin: res.data.waitMin, ahead: res.data.ahead } : null);
     setStep("review");
-  }, [kioskToken, serviceIds, preferredStaffId, pending]);
+  }, [kioskToken, serviceIds, preferredStaffId, pending, desk, businessId]);
 
   const submit = useCallback(async () => {
     if (!kioskToken || !proof || pending) return;
@@ -287,10 +328,22 @@ export function KioskClient() {
       serviceIds,
       preferredStaffId,
       smsConsent,
+      ...(desk ? { businessId } : {}),
     });
     setPending(false);
     if (res.ok) {
       setStep("done");
+      return;
+    }
+    if (desk && res.error === "invalid_selection") {
+      // Who they picked just stopped taking walk-ins (or changed their menu).
+      // Their verified number still stands: pick again from a fresh list.
+      setFlash("That barber can't take walk-ins right now - please pick again.");
+      setBusinessId(null);
+      setServiceIds([]);
+      setPreferredStaffId(null);
+      await load();
+      await afterName();
       return;
     }
     if (res.error === "queue_full") {
@@ -320,6 +373,10 @@ export function KioskClient() {
     preferredStaffId,
     smsConsent,
     pending,
+    desk,
+    businessId,
+    load,
+    afterName,
   ]);
 
   // ---- screens ------------------------------------------------------------
@@ -383,6 +440,19 @@ export function KioskClient() {
     // tapping; whoever set the tablet up needs to know WHICH thing is missing,
     // in their own words. Naming it is the difference between "the app is
     // broken" and a thirty-second fix.
+    if (desk) {
+      return shell(
+        <>
+          <p className="text-center text-2xl font-semibold">
+            No one is taking walk-ins here right now - please check with the front desk.
+          </p>
+          <p className="text-center text-muted">
+            Staff: each barber turns on front-desk walk-ins on their Teams page, with their own
+            walk-in line switched on and at least one service.
+          </p>
+        </>,
+      );
+    }
     const missing =
       data && data.services.length === 0 && data.staff.length === 0
         ? "no services or barbers"
@@ -528,10 +598,73 @@ export function KioskClient() {
           className={PRIMARY}
           style={accent ? { backgroundColor: accent } : undefined}
           disabled={firstName.trim().length === 0}
-          onClick={() => setStep("services")}
+          onClick={() => void afterName()}
         >
           Next
         </button>
+        <button type="button" className={GHOST} onClick={reset}>
+          Start over
+        </button>
+      </>,
+    );
+  }
+  if (step === "who") {
+    // Who can take them, soonest first is the customer's call - "Next
+    // available" is simply the shortest wait we know of right now.
+    const businesses = desk?.businesses ?? [];
+    const waitOf = (id: string) => waits?.get(id);
+    const soonest = waits
+      ? businesses
+          .filter((b) => typeof waitOf(b.id) === "number")
+          .sort((a, b) => (waitOf(a.id) as number) - (waitOf(b.id) as number))[0]
+      : undefined;
+    return shell(
+      <>
+        <h2 className="text-center text-2xl font-semibold">
+          {knownFirstName ? `Welcome back, ${knownFirstName}!` : "Who are you here for?"}
+        </h2>
+        {knownFirstName ? <p className="text-center text-muted">Who are you here for today?</p> : null}
+        <button
+          type="button"
+          className={PRIMARY}
+          style={accent ? { backgroundColor: accent } : undefined}
+          disabled={!soonest}
+          onClick={() => soonest && pickBusiness(soonest.id)}
+          data-qa="desk-next-available"
+        >
+          {waits === null
+            ? "Checking waits…"
+            : soonest
+              ? `Next available - ${soonest.name}`
+              : "No one can take a walk-in right now"}
+        </button>
+        <ul className="flex flex-col gap-3" data-qa="desk-businesses">
+          {businesses.map((b) => {
+            const wait = waitOf(b.id);
+            const open = waits === null || typeof wait === "number";
+            return (
+              <li key={b.id}>
+                <button
+                  type="button"
+                  disabled={!open}
+                  className={`${BTN} justify-between border border-subtle bg-charcoal-800/60 text-offwhite`}
+                  onClick={() => pickBusiness(b.id)}
+                >
+                  <span className="min-w-0 truncate">{b.name}</span>
+                  <span className="ml-3 shrink-0 text-base text-muted">
+                    {waits === null
+                      ? ""
+                      : typeof wait === "number"
+                        ? wait === 0
+                          ? "No wait"
+                          : `About ${wait} min`
+                        : "Not today"}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
         <button type="button" className={GHOST} onClick={reset}>
           Start over
         </button>
@@ -542,13 +675,14 @@ export function KioskClient() {
     return shell(
       <>
         <h2 className="text-center text-2xl font-semibold">
-          {knownFirstName ? `Welcome back, ${knownFirstName}!` : "What are you here for?"}
+          {knownFirstName && !desk ? `Welcome back, ${knownFirstName}!` : "What are you here for?"}
         </h2>
-        {knownFirstName ? (
+        {knownFirstName && !desk ? (
           <p className="text-center text-muted">What are you here for today?</p>
         ) : null}
+        {business ? <p className="text-center text-muted">With {business.name}</p> : null}
         <ul className="flex flex-col gap-3">
-          {data!.services.map((s) => {
+          {(menu?.services ?? []).map((s) => {
             const on = serviceIds.includes(s.id);
             return (
               <li key={s.id}>
@@ -583,11 +717,19 @@ export function KioskClient() {
           type="button"
           className={PRIMARY}
           style={accent ? { backgroundColor: accent } : undefined}
-          disabled={serviceIds.length === 0}
-          onClick={() => setStep("barber")}
+          disabled={serviceIds.length === 0 || pending}
+          onClick={() =>
+            // One chair at a business: nobody to choose between.
+            desk && (menu?.staff.length ?? 0) <= 1 ? void toReview() : setStep("barber")
+          }
         >
-          Next
+          {pending ? "One sec…" : "Next"}
         </button>
+        {desk ? (
+          <button type="button" className={GHOST} onClick={() => void afterName()}>
+            Pick someone else
+          </button>
+        ) : null}
         <button type="button" className={GHOST} onClick={reset}>
           Start over
         </button>
@@ -646,11 +788,15 @@ export function KioskClient() {
     );
   }
   if (step === "review") {
-    const svc = data!.services.filter((s) => serviceIds.includes(s.id));
-    const barber =
-      preferredStaffId === null
-        ? "Next available"
-        : (data!.staff.find((s) => s.id === preferredStaffId)?.name ?? "Next available");
+    const svc = (menu?.services ?? []).filter((s) => serviceIds.includes(s.id));
+    const chair =
+      preferredStaffId === null ? null : (menu?.staff.find((s) => s.id === preferredStaffId)?.name ?? null);
+    // At a desk they picked a business; a chair inside it only if it has several.
+    const barber = business
+      ? chair && business.staff.length > 1
+        ? `${business.name} · ${chair}`
+        : business.name
+      : (chair ?? "Next available");
     return shell(
       <>
         <h2 className="text-center text-2xl font-semibold">Look right?</h2>

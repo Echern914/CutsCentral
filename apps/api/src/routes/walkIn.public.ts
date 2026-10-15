@@ -41,6 +41,13 @@ import {
 import { resolveWaitlistClient } from "../engines/waitlistClientLink.js";
 import { notifyBarberWalkInJoined } from "../services/walkInNotify.js";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
+import {
+  deskBusinesses,
+  deskMenu,
+  deskTarget,
+  deskWaits,
+  isFrontDesk,
+} from "../services/teamWalkIns.js";
 
 /**
  * Walk-In Mode: the PUBLIC surface - the kiosk tablet and the customer's
@@ -122,6 +129,21 @@ walkInPublicRouter.post("/kiosk/resolve", kioskReadLimiter, async (req, res) => 
   if (!shop) return notFound(res);
 
   const accepting = shop.walkInAcceptingNow && hasActiveAccess(shop);
+
+  // A TEAM front desk (services/teamWalkIns.ts): the customer first picks who
+  // they're here for, then that business's own menu. Each business is only
+  // what its own kiosk would show at its own door.
+  const desk = (await isFrontDesk(shop.id))
+    ? await Promise.all(
+        (await deskBusinesses(shop)).map(async (b) => ({
+          id: b.id,
+          name: b.shop.name,
+          logoUrl: b.shop.logoUrl,
+          ...(await deskMenu(b.shop.id)),
+        })),
+      )
+    : null;
+
   const [services, staff, offerings] = await Promise.all([
     prisma.service.findMany({
       // The kiosk is client-facing: a hidden service is not on it.
@@ -171,7 +193,10 @@ walkInPublicRouter.post("/kiosk/resolve", kioskReadLimiter, async (req, res) => 
      * nobody formally offers (see walkInEstimate), so an unpaired shop is
      * degraded, not broken, and refusing it would be stricter than the engine.
      */
-    setupComplete: services.length > 0 && staff.length > 0,
+    // At a front desk: someone - the shop's own chairs or a member - can
+    // take a walk-in now.
+    setupComplete: desk ? desk.length > 0 : services.length > 0 && staff.length > 0,
+    desk: desk ? { businesses: desk } : null,
     // Display-only: the server re-snapshots duration/price at check-in.
     services: services.map((s) => ({
       id: s.id,
@@ -190,11 +215,27 @@ walkInPublicRouter.post("/kiosk/resolve", kioskReadLimiter, async (req, res) => 
   });
 });
 
+/** At a team front desk: who they picked - "own" or a member's link id. */
+const businessId = z.string().min(1).max(64).nullable().optional();
+
+/**
+ * Each business at a team front desk, with about how long a walk-in waits
+ * for the first thing on its menu. Not a front desk: 404, like a bad token.
+ */
+walkInPublicRouter.post("/kiosk/desk/waits", kioskReadLimiter, async (req, res) => {
+  const parsed = tokenSchema.safeParse(req.body);
+  if (!parsed.success) return notFound(res);
+  const shop = await shopForKioskToken(parsed.data.token);
+  if (!shop || !(await isFrontDesk(shop.id))) return notFound(res);
+  res.json({ ok: true, businesses: await deskWaits(await deskBusinesses(shop), new Date()) });
+});
+
 const estimateSchema = z
   .object({
     token: z.string().min(1).max(512),
     serviceIds: z.array(z.string().min(1).max(64)).min(1).max(3),
     preferredStaffId: z.string().min(1).max(64).nullable().optional(),
+    businessId,
   })
   .strict();
 
@@ -203,8 +244,15 @@ const estimateSchema = z
 walkInPublicRouter.post("/kiosk/estimate", kioskReadLimiter, async (req, res) => {
   const parsed = estimateSchema.safeParse(req.body);
   if (!parsed.success) return notFound(res);
-  const shop = await shopForKioskToken(parsed.data.token);
-  if (!shop) return notFound(res);
+  const desk = await shopForKioskToken(parsed.data.token);
+  if (!desk) return notFound(res);
+  // The business they picked at a team front desk; the desk's own chairs
+  // otherwise. A choice that just stopped being one is a stale selection.
+  const shop = await deskTarget(desk, parsed.data.businessId);
+  if (!shop) {
+    res.status(400).json({ error: "invalid_selection" });
+    return;
+  }
 
   const now = new Date();
   const services = await prisma.service.findMany({
@@ -359,6 +407,7 @@ const checkInSchema = z
     serviceIds: z.array(z.string().min(1).max(64)).min(1).max(3),
     preferredStaffId: z.string().min(1).max(64).nullable().optional(),
     smsConsent: z.boolean().optional(),
+    businessId,
   })
   .strict();
 
@@ -370,9 +419,13 @@ const checkInSchema = z
 walkInPublicRouter.post("/kiosk/check-in", kioskWriteLimiter, async (req, res) => {
   const parsed = checkInSchema.safeParse(req.body);
   if (!parsed.success) return notFound(res);
-  const shop = await shopForKioskToken(parsed.data.token);
-  if (!shop) return notFound(res);
-  if (!shop.walkInAcceptingNow || !hasActiveAccess(shop)) {
+  // `desk` is the shop whose kiosk this is - where the phone was verified and
+  // which texts the customer. At a TEAM front desk the entry itself goes into
+  // the line of the business they picked (`target`); everywhere else the two
+  // are the same shop.
+  const desk = await shopForKioskToken(parsed.data.token);
+  if (!desk) return notFound(res);
+  if (!desk.walkInAcceptingNow || !hasActiveAccess(desk)) {
     res.status(409).json({ error: "not_accepting" });
     return;
   }
@@ -381,10 +434,17 @@ walkInPublicRouter.post("/kiosk/check-in", kioskWriteLimiter, async (req, res) =
     res.status(400).json({ error: "invalid_phone" });
     return;
   }
+  const atDesk = await isFrontDesk(desk.id);
+  const target = await deskTarget(desk, parsed.data.businessId);
+  if (!target) {
+    // Before the proof is spent: picking again keeps their verified phone.
+    res.status(400).json({ error: "invalid_selection" });
+    return;
+  }
 
   const now = new Date();
   const proven = await consumeCheckInProof({
-    shopId: shop.id,
+    shopId: desk.id,
     phone,
     proof: parsed.data.proof,
     now,
@@ -396,8 +456,8 @@ walkInPublicRouter.post("/kiosk/check-in", kioskWriteLimiter, async (req, res) =
 
   try {
     const result = await kioskCheckIn({
-      shopId: shop.id,
-      timezone: shop.timezone,
+      shopId: target.id,
+      timezone: target.timezone,
       phone,
       firstName: parsed.data.firstName ?? null,
       lastName: parsed.data.lastName ?? null,
@@ -405,12 +465,26 @@ walkInPublicRouter.post("/kiosk/check-in", kioskWriteLimiter, async (req, res) =
       preferredStaffId: parsed.data.preferredStaffId ?? null,
       smsConsent: parsed.data.smsConsent === true,
       now,
+      viaTeamShopId: atDesk ? desk.id : null,
     });
+    // The line the spot is in: at a desk, a kept spot can be another
+    // business's line than the one just picked.
+    const line =
+      result.shopId === target.id
+        ? target
+        : await prisma.shop.findUnique({ where: { id: result.shopId } });
+    const lineShop = line ?? target;
 
     // The tracking link, post-commit. A failed text NEVER costs the spot -
-    // the entry stands either way and the success copy stays generic.
+    // the entry stands either way and the success copy stays generic. A STOP
+    // to the desk or to the business they're waiting for silences it.
     const optedOut = await prisma.client.findFirst({
-      where: { shopId: shop.id, phone, archivedAt: null, optedOut: true },
+      where: {
+        shopId: { in: [...new Set([desk.id, lineShop.id])] },
+        phone,
+        archivedAt: null,
+        optedOut: true,
+      },
       select: { id: true },
     });
     if (!optedOut && smsEnabled()) {
@@ -418,16 +492,19 @@ walkInPublicRouter.post("/kiosk/check-in", kioskWriteLimiter, async (req, res) =
       try {
         const sent = await getMessageProvider().send({
           to: phone,
-          body: buildWalkInLinkBody({ shopName: shop.name, url }),
-          from: shop.twilioNumber ?? undefined,
+          body: buildWalkInLinkBody({
+            shopName: lineShop.id === desk.id ? desk.name : `${desk.name} (with ${lineShop.name})`,
+            url,
+          }),
+          from: desk.twilioNumber ?? undefined,
         });
         // A ledger row only when a client exists (Nudge.clientId is NOT
         // NULL) and NEVER the body - the URL carries the credential.
-        const link = await resolveWaitlistClient(prisma, shop.id, phone, { contact: "vouched" });
+        const link = await resolveWaitlistClient(prisma, lineShop.id, phone, { contact: "vouched" });
         if (link.clientId) {
           await prisma.nudge.create({
             data: {
-              shopId: shop.id,
+              shopId: lineShop.id,
               clientId: link.clientId,
               kind: "walk_in_link",
               status: "SENT",
@@ -437,14 +514,15 @@ walkInPublicRouter.post("/kiosk/check-in", kioskWriteLimiter, async (req, res) =
           });
         }
       } catch (err) {
-        logger.error({ err, shopId: shop.id }, "walk-in link: SMS send failed");
+        logger.error({ err, shopId: desk.id }, "walk-in link: SMS send failed");
       }
     }
 
     // The requested chair (else the owner) gets a heads-up for a FRESH
     // join only - a dedupe changed nothing about the line. Fire-and-forget;
-    // the response below is identical either way.
-    if (!result.deduped) void notifyBarberWalkInJoined(shop.id, result.entryId);
+    // the response below is identical either way. At a team desk that is
+    // the business they picked: it's their line.
+    if (!result.deduped) void notifyBarberWalkInJoined(result.shopId, result.entryId);
 
     // Constant body for fresh AND deduped joins.
     res.json({ ok: true });

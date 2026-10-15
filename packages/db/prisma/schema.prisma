@@ -797,6 +797,8 @@ model Shop {
 
   // Walk-In Mode (same-day kiosk queue).
   walkInEntries       WalkInEntry[]
+  // Entries in members' lines that THIS shop's front desk checked in.
+  walkInDeskEntries   WalkInEntry[] @relation("WalkInViaTeam")
   walkInEntryServices WalkInEntryService[]
   walkInEvents        WalkInEvent[]
   walkInPhoneCodes    WalkInPhoneCode[]
@@ -1044,6 +1046,10 @@ model TeamLink {
   // for the owner's Team schedule. Same rules as the number switches: the
   // member sets it, off to start, reset to off when the link ends.
   shareSchedule Boolean       @default(false)
+  // Take walk-ins who check in at the TEAM's front desk: they join this
+  // member's own line, on their own books. Set by the member, off to start,
+  // reset to off when the link ends.
+  takeTeamWalkIns Boolean     @default(false)
   // BOOTH RENT the member pays the team's shop: the rate history (set, change,
   // stop) and the payments the owner records. See BoothRentRate.
   rentRates    BoothRentRate[]
@@ -4641,7 +4647,16 @@ model WalkInEntry {
   // "What is this person waiting on" + the client-link backfill check.
   @@index([shopId, clientId])
   // A barber's own-chair reads ("my claimed customers").
+  // The TEAM front desk that checked this customer in to this member's line
+  // (team walk-ins); null for every other way in. Lets that team's owner see
+  // their desk's line - nothing else of the member's. SET NULL if the team
+  // shop goes; the entry stays in this line. One live spot per phone per
+  // desk: partial unique WalkInEntry_one_active_per_phone_per_desk (SQL only).
+  viaTeamShopId String?
+  viaTeamShop   Shop?   @relation("WalkInViaTeam", fields: [viaTeamShopId], references: [id], onDelete: SetNull)
+
   @@index([shopId, assignedStaffId, status])
+  @@index([viaTeamShopId, status])
 }
 
 // One selected service on a walk-in entry. Name/duration/price are SNAPSHOTS
