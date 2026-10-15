@@ -1040,6 +1040,10 @@ model TeamLink {
   shareRevenue Boolean        @default(false)
   shareClients Boolean        @default(false)
   shareRating  Boolean        @default(false)
+  // Their day - working hours, time off, booked time, never who or what -
+  // for the owner's Team schedule. Same rules as the number switches: the
+  // member sets it, off to start, reset to off when the link ends.
+  shareSchedule Boolean       @default(false)
   // BOOTH RENT the member pays the team's shop: the rate history (set, change,
   // stop) and the payments the owner records. See BoothRentRate.
   rentRates    BoothRentRate[]
