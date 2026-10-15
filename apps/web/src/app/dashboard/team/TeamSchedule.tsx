@@ -108,7 +108,7 @@ export function TeamSchedule({
                 {m.chairs!.map((chair, i) => (
                   <ScheduleRow
                     key={`${chair.name}:${i}`}
-                    chair={chair}
+                    day={chair}
                     timezone={data.timezone}
                     range={range}
                     label={m.chairs!.length === 1 ? m.business.name : `${m.business.name} · ${chair.name}`}

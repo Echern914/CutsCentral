@@ -339,7 +339,7 @@ export function TeamsClient({
                             {link.scheduleToday.map((chair, i) => (
                               <ScheduleRow
                                 key={`${chair.name}:${i}`}
-                                chair={chair}
+                                day={chair}
                                 timezone={link.team.timezone ?? "UTC"}
                                 range={barRange(link.scheduleToday!)}
                                 label={link.scheduleToday!.length > 1 ? chair.name : undefined}
