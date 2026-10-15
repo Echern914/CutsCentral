@@ -199,6 +199,7 @@ async function autoCompleted(
         endsAt,
         priceAtBooking: null,
         serviceName: "Cut",
+        groupId: null,
       },
       new Date(),
       { byShop: opts.byShop === true },

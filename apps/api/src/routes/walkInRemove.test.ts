@@ -291,6 +291,7 @@ describe("remove a walk-in", () => {
           endsAt: a.endsAt,
           priceAtBooking: null,
           serviceName: "Walk-in",
+          groupId: null,
         },
         new Date(),
         { byShop: true },

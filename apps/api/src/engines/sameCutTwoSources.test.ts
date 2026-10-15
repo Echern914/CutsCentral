@@ -52,7 +52,7 @@ async function markDone(a: { id: string; startsAt: Date; endsAt: Date }) {
     promoteOneAppointmentInTx(
       tx,
       { id: shopId, punchesPerVisit: 1 },
-      { id: a.id, clientId, startsAt: a.startsAt, endsAt: a.endsAt, priceAtBooking: null, serviceName: "Haircut" },
+      { id: a.id, clientId, startsAt: a.startsAt, endsAt: a.endsAt, priceAtBooking: null, serviceName: "Haircut", groupId: null },
       new Date(),
       { byShop: true },
     ),

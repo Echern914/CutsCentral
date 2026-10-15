@@ -46,6 +46,8 @@ interface PromoteAppt {
   endsAt: Date;
   priceAtBooking: Prisma.Decimal | null;
   serviceName: string | null;
+  /** The party this seat belongs to (booking.group.ts); null for a single booking. */
+  groupId: string | null;
 }
 
 /**
@@ -137,16 +139,31 @@ export async function promoteOneAppointmentInTx(
     update: {}, // already promoted - leave the existing visit untouched
   });
 
+  // 🔴 A PARTY EARNS ITS BOOKER ONE PUNCH, NOT ONE PER SEAT. Every seat of a
+  // group booking is written under the BOOKER's client (booking.group.ts) - the
+  // other attendees are first names, not clients - so earning per seat handed
+  // the booker a punch for each person they brought: "me and my brother" earned
+  // two. The first seat to complete earns; the rest complete without a punch.
+  // Serialized by the client lock above, so two seats finishing together cannot
+  // both see "none yet". An earn counts while it is still linked to its seat's
+  // visit: a barber's undo keeps that link (their correction stands), while a
+  // retroactive cancel detaches it (clawBackVisitEarn), freeing the punch for a
+  // seat that really happened.
+  const partyAlreadyEarned =
+    appt.groupId !== null &&
+    (await tx.punchLedger.count({
+      where: {
+        shopId: shop.id,
+        clientId: appt.clientId,
+        visit: { appointment: { groupId: appt.groupId, id: { not: appt.id } } },
+      },
+    })) > 0;
+
   // Earn punches (idempotent via PunchLedger.visitId). The visit "happened" when
   // it ended, so promo windows are checked against endsAt.
-  const earn = await earnPunchForVisitInTx(
-    tx,
-    shop,
-    appt.clientId,
-    visit.id,
-    appt.serviceName,
-    appt.endsAt,
-  );
+  const earn = partyAlreadyEarned
+    ? null
+    : await earnPunchForVisitInTx(tx, shop, appt.clientId, visit.id, appt.serviceName, appt.endsAt);
 
   // The status already moved above, under this row's lock; link the visit.
   await tx.appointment.update({
@@ -155,6 +172,50 @@ export async function promoteOneAppointmentInTx(
   });
 
   return { promoted: true, earn };
+}
+
+/**
+ * 🔴 THE PARTY'S PUNCH MOVES TO A SEAT THAT HAPPENED. A party earns its booker
+ * one punch, on the first seat to complete (above). When that seat is taken
+ * back after it completed - cancelled, or corrected to a no-show - a seat that
+ * completes LATER earns through the normal path, but one that had ALREADY
+ * completed (without a punch, because the party had earned) never would: "both
+ * brothers done, the first was a mistake" left the booker nothing although
+ * someone was in the chair. That seat earns here instead.
+ *
+ * Inside the cancel's transaction, behind its client-row lock, so it cannot
+ * interleave with a seat completing. Only called when the seat leaving really
+ * held the earn; does nothing if another seat of the party still holds one.
+ */
+async function handPartyPunchToAnotherSeat(
+  tx: Prisma.TransactionClient,
+  shopId: string,
+  clientId: string,
+  groupId: string,
+  leavingId: string,
+): Promise<void> {
+  const stillEarned = await tx.punchLedger.count({
+    where: { shopId, clientId, visit: { appointment: { groupId, id: { not: leavingId } } } },
+  });
+  if (stillEarned > 0) return;
+  const seat = await tx.appointment.findFirst({
+    where: { shopId, clientId, groupId, id: { not: leavingId }, status: "COMPLETED", visitId: { not: null } },
+    orderBy: [{ startsAt: "asc" }, { id: "asc" }],
+    select: { visitId: true, endsAt: true, service: { select: { name: true } } },
+  });
+  if (!seat?.visitId) return;
+  // Shop is default-deny inside the tenant transaction: read the rate on its
+  // own connection, as the earn's rewards gate does.
+  const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { punchesPerVisit: true } });
+  if (!shop) return;
+  await earnPunchForVisitInTx(
+    tx,
+    { id: shopId, punchesPerVisit: shop.punchesPerVisit },
+    clientId,
+    seat.visitId,
+    seat.service?.name ?? null,
+    seat.endsAt,
+  );
 }
 
 /**
@@ -186,6 +247,7 @@ export async function promoteFulfilledAppointments(
       startsAt: true,
       endsAt: true,
       priceAtBooking: true,
+      groupId: true,
       service: { select: { name: true } },
     },
   });
@@ -213,6 +275,7 @@ export async function promoteFulfilledAppointments(
             endsAt: a.endsAt,
             priceAtBooking: a.priceAtBooking,
             serviceName: a.service?.name ?? null,
+            groupId: a.groupId,
           },
           now,
         ),
@@ -333,6 +396,7 @@ export async function cancelAppointment(
         staffId: true,
         serviceId: true,
         priceAtBooking: true,
+        groupId: true,
         service: { select: { name: true } },
         // The BOOKING payment: the one promotion may capture or refund. A
         // balance collected at checkout is money already settled for a cut that
@@ -459,7 +523,11 @@ export async function cancelAppointment(
           noShow: outcome === "NO_SHOW",
         },
       });
+      const earnedHere = (await tx.punchLedger.count({ where: { visitId } })) > 0;
       await clawBackVisitEarn(tx, shopId, visitId);
+      if (earnedHere && appt.groupId && appt.clientId) {
+        await handPartyPunchToAnotherSeat(tx, shopId, appt.clientId, appt.groupId, appt.id);
+      }
     }
 
     // 🔴 THE PROMISE TO EMAIL COMMITS WITH THE CANCELLATION, in this same
