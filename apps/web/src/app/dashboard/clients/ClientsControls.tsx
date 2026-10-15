@@ -18,7 +18,18 @@ export function ClientsControls() {
   const router = useRouter();
   const params = useSearchParams();
   const [adding, setAdding] = useState(false);
-  const [importing, setImporting] = useState(false);
+  // `?import=1` opens the importer: the "Switching from Booksy or TheCut"
+  // guide links here. Read on mount AND whenever the param arrives, because a
+  // soft navigation from a page already on Clients keeps this component (and
+  // its state) as it was.
+  const importParam = params.get("import");
+  const [importing, setImporting] = useState(importParam === "1");
+  useEffect(() => {
+    if (importParam === "1") {
+      setImporting(true);
+      setAdding(false);
+    }
+  }, [importParam]);
 
   // Live typeahead: as you type (>=2 chars), show a dropdown of the first few
   // matches so you don't have to type the whole name / number and hit Enter.
@@ -60,6 +71,7 @@ export function ClientsControls() {
     if (value) next.set(key, value);
     else next.delete(key);
     next.delete("page"); // reset to page 1 on any filter change
+    next.delete("import"); // a filter change is not a request to reopen the importer
     router.push(`/dashboard/clients?${next.toString()}`);
   }
 
@@ -155,7 +167,7 @@ export function ClientsControls() {
           }}
           className="rounded-full border border-subtle px-4 py-2 text-sm font-semibold text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
         >
-          {importing ? "Close" : "Import CSV"}
+          {importing ? "Close" : "Import clients"}
         </button>
       </div>
 

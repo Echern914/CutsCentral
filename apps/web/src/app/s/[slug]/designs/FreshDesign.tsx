@@ -105,7 +105,8 @@ export function FreshDesign({ ctx }: { ctx: DesignCtx }) {
       {sectionsBelow(ctx, ["gallery", "reviews"])}
 
       {showsReviews && (
-        <motion.section variants={fadeUp} className="mt-8">
+        // The /s/<slug>#reviews link a shop sends its regulars lands on the form.
+        <motion.section id="reviews" variants={fadeUp} className="mt-8">
           <SectionTitle muted={theme.muted}>Leave a review</SectionTitle>
           <ReviewForm
             slug={data.slug}

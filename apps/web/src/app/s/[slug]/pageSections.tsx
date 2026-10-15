@@ -175,8 +175,10 @@ export function Reviews({
   // fewer than 37 cards is not a contradiction.
   const ratingCount = data.reviewSummary.count;
 
+  // id="reviews": the review link a shop sends its regulars is /s/<slug>#reviews
+  // (the "Switching from Booksy or TheCut" guide), and it lands here.
   return (
-    <motion.section variants={fadeUp} className="mt-8" data-tour="reviews">
+    <motion.section id="reviews" variants={fadeUp} className="mt-8" data-tour="reviews">
       <SectionTitle muted={theme.muted}>Reviews</SectionTitle>
 
       {/* Average rating header (real data only). */}

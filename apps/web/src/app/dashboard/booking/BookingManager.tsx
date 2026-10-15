@@ -11,6 +11,7 @@ import {
 import { SERVICE_COLORS, SERVICE_COLOR_KEYS } from "@chairback/config/constants";
 import { cap, useVocab } from "@/components/VocabProvider";
 import { zonedDateKey, zonedWallTimeToUtc } from "@chairback/config/time";
+import { parseWeeklyHours, type HoursWindow as PastedWindow } from "@chairback/config/clientImportParse";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { NumberField } from "@/components/ui/NumberField";
@@ -4306,6 +4307,46 @@ function ServiceGroupEditor({
 type HourBreak = { start: string; end: string; reason: string };
 type HourRow = { on: boolean; start: string; end: string; breaks: HourBreak[] };
 
+/**
+ * A week pasted from another app (see `parseWeeklyHours`), laid over the
+ * sheet's rows. A day the paste doesn't mention is left exactly as it was; a
+ * closed day is switched off; an open day takes the first start and the last
+ * end, and the gaps of a split shift ("9-12, 1-6") become breaks, because one
+ * day here is one stretch with breaks taken out. The barber's own breaks stay
+ * unless they fall outside the new hours or collide with a gap.
+ */
+function applyPastedWeek(
+  rows: HourRow[],
+  days: Map<number, PastedWindow[] | "closed">,
+): HourRow[] {
+  return rows.map((row, weekday) => {
+    const pasted = days.get(weekday);
+    if (pasted === undefined) return row;
+    if (pasted === "closed" || pasted.length === 0) return { ...row, on: false };
+    const start = pasted[0]!.startMin;
+    const end = pasted[pasted.length - 1]!.endMin;
+    const gaps = pasted.slice(1).map((w, k) => ({ s: pasted[k]!.endMin, e: w.startMin }));
+    const kept = row.breaks.filter((b) => {
+      const s = hhmmToMin(b.start);
+      const e = hhmmToMin(b.end);
+      return s >= start && e <= end && !gaps.some((g) => s < g.e && g.s < e);
+    });
+    const breaks = [
+      ...kept,
+      ...gaps.map((g) => ({ start: minToHHMM(g.s), end: minToHHMM(g.e), reason: "" })),
+    ].sort((a, b) => hhmmToMin(a.start) - hhmmToMin(b.start));
+    return { ...row, on: true, start: minToHHMM(start), end: minToHHMM(end), breaks };
+  });
+}
+
+/** "Mon, Tue and Sat", in Mon-first order. */
+function dayList(days: number[]): string {
+  const names = MON_FIRST_WEEKDAYS.filter((d) => days.includes(d)).map((d) => WEEKDAYS[d]!);
+  return names.length <= 1
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 // Time pickers sit shoulder-to-shoulder in every hours editor, so they carry
 // their own padding (px-2.5 py-1.5) rather than relying on the gap alone — two
 // adjacent selects with tight padding read as one wide control.
@@ -4349,6 +4390,44 @@ export function StaffHoursSheet({
   const [noServiceDays, setNoServiceDays] = useState<number[]>([]);
   // An edit answers the last refusal, so it stops being shown.
   useEffect(() => setProblem(null), [rows]);
+  // "Paste hours from another app": the box, and what the last Apply did.
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [pasteOutcome, setPasteOutcome] = useState<{ said: string[]; unread: string[] } | null>(null);
+
+  // Fills the rows from the pasted text and saves NOTHING: the barber checks
+  // the filled-in week and taps Save hours as usual.
+  function applyPaste() {
+    const { days, unread } = parseWeeklyHours(pasteText);
+    if (days.size === 0) {
+      setPasteOutcome({
+        said: [
+          "Couldn't read any days from that. Put one day per line, like “Mon-Fri 9am-6pm” or “Sunday closed”.",
+        ],
+        unread,
+      });
+      return;
+    }
+    setRows((cur) => applyPastedWeek(cur, days));
+    const open: number[] = [];
+    const closed: number[] = [];
+    const split: number[] = [];
+    for (const [weekday, value] of days) {
+      if (value === "closed") closed.push(weekday);
+      else {
+        open.push(weekday);
+        if (value.length > 1) split.push(weekday);
+      }
+    }
+    const said: string[] = [];
+    if (open.length > 0) said.push(`Filled in ${dayList(open)}.`);
+    if (closed.length > 0) said.push(`${dayList(closed)} set to closed.`);
+    if (split.length > 0) {
+      said.push(`The gap between shifts on ${dayList(split)} is now a break.`);
+    }
+    said.push("Nothing is saved yet: check the times below, then tap Save hours.");
+    setPasteOutcome({ said, unread });
+  }
 
   // Load this staff member's hours on mount (the Sheet only opens for one).
   useEffect(() => {
@@ -4512,6 +4591,68 @@ export function StaffHoursSheet({
         <p className="text-sm text-muted">Loading hours…</p>
       ) : (
         <>
+          {/* Switching from Booksy or TheCut: paste the week from the old
+              profile instead of setting seven days by hand. Fills the rows
+              below; Save hours stays the only thing that saves. */}
+          <div className="mb-3 min-w-0 rounded-lg border border-subtle/60 p-2.5">
+            <button
+              type="button"
+              aria-expanded={pasteOpen}
+              onClick={() => setPasteOpen((v) => !v)}
+              className="text-xs text-gold hover:underline"
+            >
+              {pasteOpen ? "Hide the paste box" : "Paste hours from another app"}
+            </button>
+            {pasteOpen && (
+              <div className="mt-2 flex min-w-0 flex-col gap-2">
+                <p className="text-[11px] leading-relaxed text-muted">
+                  Copy the hours from your Booksy, TheCut or Google profile and paste
+                  them here, one day per line, like &ldquo;Mon-Fri 9am-6pm&rdquo; or
+                  &ldquo;Sunday closed&rdquo;. Apply fills in the days below; nothing is
+                  saved until you tap Save hours.
+                </p>
+                <textarea
+                  aria-label="Hours to paste"
+                  rows={5}
+                  value={pasteText}
+                  onChange={(e) => setPasteText(e.target.value)}
+                  placeholder={"Mon-Fri 9am-6pm\nSat 10am-4pm\nSun closed"}
+                  className="w-full min-w-0 rounded-lg border border-subtle bg-charcoal-700 px-2.5 py-1.5 text-sm text-offwhite placeholder:text-muted"
+                />
+                <button
+                  type="button"
+                  onClick={applyPaste}
+                  disabled={!pasteText.trim()}
+                  className="self-start rounded-lg border border-subtle px-3 py-1.5 text-sm text-offwhite disabled:opacity-40"
+                >
+                  Apply
+                </button>
+                {pasteOutcome && (
+                  <div role="status" className="min-w-0 text-[11px] leading-relaxed text-offwhite">
+                    {pasteOutcome.said.map((line) => (
+                      <p key={line}>{line}</p>
+                    ))}
+                    {pasteOutcome.unread.length > 0 && (
+                      <>
+                        <p className="mt-1 font-semibold">
+                          Couldn&apos;t read {pasteOutcome.unread.length === 1 ? "this line" : "these lines"},
+                          so set {pasteOutcome.unread.length === 1 ? "that day" : "those days"} by hand:
+                        </p>
+                        <ul className="mt-0.5 list-disc pl-4 text-muted">
+                          {pasteOutcome.unread.map((line) => (
+                            <li key={line} className="break-words">
+                              {line}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="flex flex-col gap-3">
             {rows.map((r, i) => (
               <div key={i} className="rounded-lg border border-subtle/60 p-2.5">

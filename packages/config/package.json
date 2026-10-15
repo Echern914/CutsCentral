@@ -31,6 +31,7 @@
     "./rescheduleCutoff": "./src/rescheduleCutoff.ts",
     "./blockScope": "./src/blockScope.ts",
     "./bookedOut": "./src/bookedOut.ts",
+    "./clientImportParse": "./src/clientImportParse.ts",
     "./customerChangeRules": "./src/customerChangeRules.ts",
     "./tierPerks": "./src/tierPerks.ts",
     "./tierRules": "./src/tierRules.ts",

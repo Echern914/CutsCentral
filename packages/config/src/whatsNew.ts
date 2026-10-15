@@ -35,6 +35,15 @@ export interface WhatsNewEntry {
 
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
+  {
+    id: "2026-10-15-switch-from-booksy-thecut",
+    date: "2026-10-15",
+    kind: "feature",
+    title: "Switching from Booksy or TheCut",
+    body:
+      "Import clients from a Booksy CSV or your phone's contacts (TheCut has no export), and untick anyone who isn't a client first. " +
+      "Paste your old hours into Hours to fill the week. Clients → Switching from Booksy or TheCut has the steps and a message asking regulars for reviews.",
+  },
   // Team front-desk walk-ins (#647) are announced the day Walk-In Mode is
   // switched on (WALK_IN_MODE_ENABLED), not before: until then there is no
   // switch on Teams and no line on Team to find.

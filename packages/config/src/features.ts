@@ -821,6 +821,33 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     ],
   },
   {
+    // The guide page under Clients (Snow, 2026-10-15). Booksy exports a CSV;
+    // TheCut has no export, so its clients come from the phone's contacts.
+    id: "switch-from-booksy-thecut",
+    name: "Switching from Booksy or TheCut",
+    synonyms: [
+      "thecut",
+      "the cut app",
+      "switch from booksy",
+      "switching from booksy",
+      "leave booksy",
+      "move from booksy",
+      "switch from thecut",
+      "leave thecut",
+      "phone contacts",
+      "import contacts",
+      "contacts file",
+      "vcf",
+      "vcard",
+      "bring my reviews",
+      "move my reviews",
+    ],
+    description: "Bring your clients and hours across, and ask your regulars for reviews",
+    href: "/dashboard/clients/switch",
+    category: "data",
+    questions: ["how do I switch from booksy", "how do I import my clients from thecut"],
+  },
+  {
     id: "leaderboard",
     name: "Client leaderboard",
     synonyms: ["top clients", "best clients", "vips", "ranking"],

@@ -88,6 +88,12 @@ export default async function ClientsPage({
             >
               Export CSV
             </a>
+            <Link
+              href="/dashboard/clients/switch"
+              className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
+            >
+              Switching from Booksy or TheCut?
+            </Link>
           </div>
         </div>
       </header>
