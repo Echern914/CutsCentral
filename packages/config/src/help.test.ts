@@ -693,3 +693,68 @@ describe("findHelp — what shipped early October", () => {
     expect(a("cancel-reschedule")).not.toMatch(/move anything yourself/);
   });
 });
+
+/**
+ * What shipped 2026-10-15: independent barbers on a shop's team (Team
+ * Logistics, booth rent, mentors, schedules), the no-show rules and undo
+ * (#641), and the Booking rules (#640). Each question is phrased the way a
+ * barber or booth renter would ask it, and the canaries after them are the
+ * routes these entries were caught stealing while they were written.
+ */
+describe("findHelp - teams, booth rent, no-shows and booking rules", () => {
+  it("answers the owner's team questions", () => {
+    expectAnswer("can a booth renter join my shop", "independent-team");
+    expectAnswer("how do independent barbers join my team", "independent-team");
+    expectAnswer("how do i track booth rent", "booth-rent");
+    expectAnswer("who paid rent this week", "booth-rent");
+    expectAnswer("how do i record a rent payment", "booth-rent");
+    expectAnswer("how is my team doing", "team-overview");
+    expectAnswer("where are my team totals", "team-overview");
+    expectAnswer("can i set up a mentor for my new barber", "team-mentors");
+    expectAnswer("how does mentorship work", "team-mentors");
+    expectAnswer("can i see when my barbers are working", "team-schedules");
+    expectAnswer("who is working today", "team-schedules");
+  });
+
+  it("answers the barber on someone else's team", () => {
+    expectAnswer("what does the shop owner see about me", "team-sharing");
+    expectAnswer("how do i hide my numbers from the shop", "team-sharing");
+    expectAnswer("how do i leave a team", "team-sharing");
+    expectAnswer("how do i share my schedule with the shop", "team-sharing");
+  });
+
+  it("answers no-shows, including a mistaken one", () => {
+    expectAnswer("how do i mark a no show", "mark-no-show");
+    expectAnswer("i marked a no show by mistake", "mark-no-show");
+    expectAnswer("how do i undo a no show", "mark-no-show");
+    expectAnswer("can i mark a no show before the appointment", "mark-no-show");
+  });
+
+  it("sends the online cancel and move rules to the Booking rules answer", () => {
+    expectAnswer("can i stop clients from cancelling online", "cancel-reschedule");
+    expectAnswer("how do i change the reschedule cutoff", "cancel-reschedule");
+    expectAnswer("how do i block off time for some services only", "time-off");
+  });
+
+  it("keeps the routes these entries were caught stealing", () => {
+    expectAnswer("how do i add a barber to my shop", "add-staff");
+    expectAnswer("how do i invite a team member", "team-logins");
+    expectAnswer("can my barbers have their own logins", "team-logins");
+    expectAnswer("how do i remove someone from my team", "remove-team-member");
+    expectAnswer("what is my cancellation policy", "my-policy");
+    expectAnswer("how do i set my hours", "set-hours");
+    expectAnswer("how do i get booked out", "more-clients");
+  });
+
+  it("says what's true now", () => {
+    const a = (id: string) => helpAnswerById(id)!.a;
+    expect(a("mark-no-show")).toMatch(/Undo no-show/);
+    expect(a("mark-no-show")).toMatch(/can't be marked before it starts/);
+    expect(a("my-policy")).toMatch(/Booking rules/);
+    // Shared numbers are the barber's choice, off until they turn them on.
+    expect(a("independent-team")).toMatch(/hidden until they turn it on/);
+    expect(a("team-schedules")).toMatch(/never who is booked/);
+    // ChairBack records rent; it doesn't take payments for it.
+    expect(a("booth-rent")).toMatch(/doesn't collect the rent/);
+  });
+});

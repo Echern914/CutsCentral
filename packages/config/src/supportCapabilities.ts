@@ -734,7 +734,9 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     actors: SEAT_ACTORS,
     dataClass: "shop_data",
     authority: "help_corpus",
-    corpusIds: ["feature-appointments"],
+    // The how-to (when it can be marked, the confirm, Undo no-show - #641)
+    // first; the appointments pointer is still a right place to land.
+    corpusIds: ["mark-no-show", "feature-appointments"],
     mcpTool: null,
     readOnly: false,
     confirmationRequired: true,
