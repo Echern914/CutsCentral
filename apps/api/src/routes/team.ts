@@ -24,6 +24,7 @@ import {
 import { PERIODS } from "../engines/insightsWindow.js";
 import { endMentorshipsForLink, pairMentor, pairingsForTeam } from "../services/teamMentorships.js";
 import { dayWindow, memberDay, scheduleDays } from "../services/teamSchedule.js";
+import { deskLine, deskMembers } from "../services/teamWalkIns.js";
 import {
   HAS_RENT_RECORDS,
   PAYMENT_METHODS,
@@ -573,6 +574,37 @@ teamRouter.get("/schedule", requireOwner, async (req, res) => {
     })),
   );
   res.json({ timezone: shop.timezone, day, days, now: now.toISOString(), members });
+});
+
+/**
+ * GET /api/team/walk-ins - the front desk: whether it's running, who takes
+ * its walk-ins (and why not, for anyone who doesn't), and its line - first
+ * names, who they're waiting for, and the wait. Read-only: each business
+ * runs its own line from its own Walk-ins board. Owner-only.
+ *
+ * Walk-In Mode off for the whole platform: `available: false` and nothing
+ * else, so the page shows nothing.
+ */
+teamRouter.get("/walk-ins", requireOwner, async (req, res) => {
+  if (!apiEnv().WALK_IN_MODE_ENABLED) {
+    res.json({ available: false });
+    return;
+  }
+  const shop = await prisma.shop.findUniqueOrThrow({
+    where: { id: req.shop!.id },
+    select: { walkInEnabled: true, walkInAcceptingNow: true, walkInKioskTokenHash: true },
+  });
+  res.json({
+    available: true,
+    desk: {
+      on: shop.walkInEnabled,
+      acceptingNow: shop.walkInAcceptingNow,
+      // Whether a tablet link exists - never the link (only its hash is kept).
+      hasKiosk: shop.walkInKioskTokenHash !== null,
+    },
+    members: await deskMembers(req.shop!.id),
+    line: await deskLine(req.shop!.id),
+  });
 });
 
 const pairSchema = z

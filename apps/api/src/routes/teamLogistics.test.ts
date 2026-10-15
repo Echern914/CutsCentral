@@ -228,7 +228,8 @@ describe("the activity feed", () => {
     const times = items.map((i) => i.at);
     expect([...times].sort().reverse()).toEqual(times);
     // Never a member's numbers: none of Ann's or Bo's revenue figures appear.
-    const text = JSON.stringify(res.body);
+    // (Ids left out: a random id can contain "5000" and fail this by chance.)
+    const text = JSON.stringify(res.body, (key, value) => (key === "id" ? undefined : value));
     for (const cents of ["4000", "5000", "9000", "6000", "3000"]) expect(text).not.toContain(cents);
   });
 

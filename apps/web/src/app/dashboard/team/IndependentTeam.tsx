@@ -23,6 +23,8 @@ import { OwnerRent } from "./BoothRent";
 import { MentorPairs, type Pairing } from "./MentorPairs";
 import { TeamSchedule } from "./TeamSchedule";
 import type { TeamScheduleData } from "@/lib/teamSchedule";
+import { TeamWalkIns } from "./TeamWalkIns";
+import type { TeamDeskData } from "@/lib/teamWalkIns";
 
 /** The windows the owner can pick - each an Insights preset. */
 const PERIOD_LABEL: Record<string, string> = {
@@ -94,6 +96,7 @@ export function IndependentTeam({
   initial,
   initialActivity = null,
   initialSchedule = null,
+  initialDesk = null,
   vocab,
 }: {
   initial: TeamLinksData;
@@ -101,6 +104,8 @@ export function IndependentTeam({
   initialActivity?: TeamActivityItem[] | null;
   /** Today's schedules, read server-side; null when they couldn't be read. */
   initialSchedule?: TeamScheduleData | null;
+  /** The front desk's walk-ins, read server-side; null when they couldn't be read. */
+  initialDesk?: TeamDeskData | null;
   vocab: BusinessVocabulary;
 }) {
   const { toast } = useToast();
@@ -425,6 +430,10 @@ export function IndependentTeam({
 
         {data.active.length > 0 && initialSchedule && (
           <TeamSchedule initial={initialSchedule} vocab={vocab} version={teamVersion} />
+        )}
+
+        {data.active.length > 0 && initialDesk?.available && (
+          <TeamWalkIns initial={initialDesk} vocab={vocab} version={teamVersion} />
         )}
 
         {data.active.length >= 2 && (

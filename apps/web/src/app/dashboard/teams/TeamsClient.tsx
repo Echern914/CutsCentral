@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import type { BusinessVocabulary } from "@chairback/config";
+import { cap } from "@/components/VocabProvider";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Dialog } from "@/components/ui/Dialog";
 import { useToast } from "@/components/ui/Toast";
@@ -24,6 +26,7 @@ import {
   myRentHistoryAction,
   myTeamsAction,
   setSharingAction,
+  setTeamWalkInsAction,
 } from "./actions";
 
 export interface MyTeamLink {
@@ -40,6 +43,11 @@ export interface MyTeamLink {
   shareSchedule?: boolean;
   /** Today as the owner sees it, while shared and on the team. */
   scheduleToday?: ChairDay[] | null;
+  /**
+   * The team's front desk: whether they take its walk-ins, and whether their
+   * own line is on to receive them. Null while Walk-In Mode is off.
+   */
+  walkIns?: { take: boolean; lineOn: boolean } | null;
   /** Their booth rent with this team - also while asking to rejoin. */
   rent: RentSummary | null;
   /** Mentors they have on this team (they are the student). Optional: older API. */
@@ -140,6 +148,27 @@ export function TeamsClient({
             ? { ...l, shareSchedule: res.shareSchedule, scheduleToday: res.scheduleToday ?? null }
             : l,
         ),
+      }));
+    } else {
+      toast(
+        res.error === "not_found"
+          ? "That team link has ended - refresh to see your teams"
+          : "Couldn't save that - nothing changed",
+        "error",
+      );
+    }
+    setSaving(null);
+  }
+
+  /** Front-desk walk-ins: not optimistic either - the server's answer only. */
+  async function flipWalkIns(link: MyTeamLink) {
+    if (!link.walkIns) return;
+    setSaving(`${link.id}:walkIns`);
+    const res = await setTeamWalkInsAction(link.id, !link.walkIns.take);
+    if (res.ok && res.walkIns) {
+      setData((d) => ({
+        ...d,
+        links: d.links.map((l) => (l.id === link.id ? { ...l, walkIns: res.walkIns } : l)),
       }));
     } else {
       toast(
@@ -363,6 +392,47 @@ export function TeamsClient({
                   </p>
                 )}
               </div>
+
+              {active && link.walkIns && (
+                <div className="mt-3 rounded-xl border border-subtle px-4 py-3" data-qa="desk-walk-ins">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-sm text-offwhite">Front desk walk-ins</p>
+                      <p className="text-xs text-muted">
+                        {cap(vocab.clientNounPlural)} who check in at {link.team.name}&apos;s
+                        front desk can pick you. They join your own line, on your books.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={link.walkIns.take}
+                      aria-label={`Take walk-ins from ${link.team.name}'s front desk`}
+                      disabled={saving !== null}
+                      onClick={() => void flipWalkIns(link)}
+                      data-qa="take-walk-ins"
+                      className={cn(
+                        "min-h-[40px] min-w-[72px] shrink-0 rounded-full px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
+                        link.walkIns.take && saving !== `${link.id}:walkIns`
+                          ? "bg-emerald-soft/15 text-emerald-soft"
+                          : "border border-subtle text-muted hover:bg-charcoal-700",
+                      )}
+                    >
+                      {saving === `${link.id}:walkIns` ? "Saving…" : link.walkIns.take ? "On" : "Off"}
+                    </button>
+                  </div>
+                  {link.walkIns.take && !link.walkIns.lineOn && (
+                    <p className="mt-2 text-xs text-gold" data-qa="desk-line-off">
+                      Your own walk-in line is off, so the desk can&apos;t send anyone yet. Turn on
+                      Walk-ins in{" "}
+                      <Link href="/dashboard/booking?tab=Settings" className="underline">
+                        Booking settings
+                      </Link>
+                      .
+                    </p>
+                  )}
+                </div>
+              )}
 
               {link.rent && (
                 <MemberRent

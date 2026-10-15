@@ -186,6 +186,8 @@ describe("the wording helpers", () => {
     expect(line("shared", "schedule")).toBe("Joe started sharing their schedule");
     expect(line("hid", "schedule")).toBe("Joe stopped sharing their schedule");
     expect(line("availability")).toBe("Joe updated their hours or time off");
+    expect(line("walk_ins_on")).toBe("Joe started taking front-desk walk-ins");
+    expect(line("walk_ins_off")).toBe("Joe stopped taking front-desk walk-ins");
     expect(line("rent_paid")).toBe("Rent recorded for Joe: $50 (cash)");
   });
 

@@ -81,6 +81,11 @@ teamsRouter.get("/", async (req, res) => {
           l.status === "ACTIVE" && l.shareSchedule
             ? await memberToday({ id: business.id, timezone: business.timezone }, l.teamShop.timezone, now)
             : null,
+        // The front desk: whether they take its walk-ins, and whether their
+        // own line is on to receive them. Nothing while Walk-In Mode is off.
+        walkIns: apiEnv().WALK_IN_MODE_ENABLED
+          ? { take: l.takeTeamWalkIns, lineOn: business.walkInEnabled }
+          : null,
         // Their own booth rent with this team - the same summary the owner
         // sees. Also while asking to rejoin: an old record never disappears.
         rent: await runAsOwner((tx) => rentSummary(tx, l.id, l.teamShop.timezone, now)),
@@ -335,6 +340,49 @@ teamsRouter.patch("/:id/sharing", accountLimiter, async (req, res) => {
     scheduleToday:
       active && link.shareSchedule ? await memberToday(link.memberShop, link.teamShop.timezone) : null,
   });
+});
+
+const walkInsSchema = z.object({ take: z.boolean() }).strict();
+
+/**
+ * PATCH /api/teams/:id/walk-ins { take } - take walk-ins who check in at this
+ * team's front desk. They join THIS business's own line, on its own books.
+ * Member only; 404 while Walk-In Mode is off for the platform.
+ */
+teamsRouter.patch("/:id/walk-ins", accountLimiter, async (req, res) => {
+  if (!apiEnv().WALK_IN_MODE_ENABLED) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const parsed = walkInsSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const link = await runAsOwner(async (tx) => {
+    const mine = {
+      id: req.params.id,
+      memberShop: { ownerId: req.userId },
+      status: { in: ["PENDING" as const, "ACTIVE" as const] },
+    };
+    const before = await tx.teamLink.findFirst({ where: mine, select: { takeTeamWalkIns: true } });
+    if (!before) return null;
+    const { count } = await tx.teamLink.updateMany({ where: mine, data: { takeTeamWalkIns: parsed.data.take } });
+    if (count === 0) return null;
+    const after = await tx.teamLink.findUniqueOrThrow({
+      where: { id: req.params.id },
+      select: { id: true, teamShopId: true, takeTeamWalkIns: true, memberShop: { select: { walkInEnabled: true } } },
+    });
+    if (before.takeTeamWalkIns !== after.takeTeamWalkIns) {
+      await recordTeamEvent(tx, after, after.takeTeamWalkIns ? "walk_ins_on" : "walk_ins_off");
+    }
+    return after;
+  });
+  if (!link) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ ok: true, walkIns: { take: link.takeTeamWalkIns, lineOn: link.memberShop.walkInEnabled } });
 });
 
 /**

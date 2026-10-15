@@ -99,6 +99,7 @@ import {
 import { resolveWaitlistClient } from "../engines/waitlistClientLink.js";
 import { leaveWaitlistEntry } from "../engines/waitlistOffer.js";
 import { sendWaitlistConfirmation } from "../messaging/waitlistEmail.js";
+import { isFrontDesk } from "../services/teamWalkIns.js";
 import {
   CUSTOMER_ACTOR,
   recordWaitlistEvent,
@@ -782,7 +783,11 @@ shopsRouter.post(
     // service must not be locked out of revoking a live credential. Blocking
     // the FIRST mint is what stops a barber handing out a dead kiosk; the
     // kiosk's own "not set up yet" screen covers the shop that breaks later.
-    if (blockers.length > 0 && !existing?.walkInKioskTokenHash) {
+    //
+    // A TEAM front desk needs no chairs of its own: its members take the
+    // walk-ins (services/teamWalkIns.ts), and the kiosk says "not set up"
+    // itself while none of them can.
+    if (blockers.length > 0 && !existing?.walkInKioskTokenHash && !(await isFrontDesk(req.shop!.id))) {
       res.status(409).json({
         error: "shop_not_ready",
         message: `Walk-in check-in needs ${sentenceList(
