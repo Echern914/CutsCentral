@@ -16,6 +16,7 @@ import {
 import { hasRent, type RentSummary } from "@/lib/boothRent";
 import { MemberRent } from "../team/BoothRent";
 import { MemberStatGrid } from "@/components/team/MemberStatGrid";
+import { MentorshipSection, type MyMentor, type MyStudent } from "./MentorshipSection";
 import {
   leaveTeamAction,
   myRentHistoryAction,
@@ -34,6 +35,10 @@ export interface MyTeamLink {
   theySee: TeamNumbers | null;
   /** Their booth rent with this team - also while asking to rejoin. */
   rent: RentSummary | null;
+  /** Mentors they have on this team (they are the student). Optional: older API. */
+  mentors?: MyMentor[];
+  /** Members they mentor on this team. Optional: older API. */
+  mentoring?: MyStudent[];
 }
 
 export interface MyTeamsData {
@@ -275,6 +280,15 @@ export function TeamsClient({
                   teamName={link.team.name}
                   rent={link.rent}
                   loadHistory={() => myRentHistoryAction(link.id)}
+                />
+              )}
+
+              {active && (
+                <MentorshipSection
+                  key={`${link.id}:${(link.mentors ?? []).map((x) => x.id).join(",")}:${(link.mentoring ?? []).map((x) => x.id).join(",")}`}
+                  mentors={link.mentors ?? []}
+                  mentoring={link.mentoring ?? []}
+                  vocab={vocab}
                 />
               )}
 
