@@ -9,6 +9,8 @@ import { logger } from "../logger.js";
 import {
   NOTHING_SHARED,
   linksForMember,
+  recordSharingChanges,
+  recordTeamEvent,
   sharingOf,
   teamNumbers,
 } from "../services/teamLinks.js";
@@ -226,12 +228,15 @@ teamsRouter.post("/join", accountLimiter, async (req, res) => {
         // goes at most once a day per business, so asking, leaving and asking
         // again can't be used to keep mailing an owner.
         const tellOwner = existing.requestedAt.getTime() < Date.now() - REASK_EMAIL_GAP_MS;
-        return count === 1 ? { id: existing.id, tellOwner } : { already: "PENDING" };
+        if (count !== 1) return { already: "PENDING" };
+        await recordTeamEvent(tx, { id: existing.id, teamShopId: team.id }, "requested");
+        return { id: existing.id, tellOwner };
       }
       const created = await tx.teamLink.create({
         data: { teamShopId: team.id, memberShopId: business.id },
         select: { id: true },
       });
+      await recordTeamEvent(tx, { id: created.id, teamShopId: team.id }, "requested");
       return { id: created.id, tellOwner: true };
     });
   } catch (err) {
@@ -271,19 +276,22 @@ teamsRouter.patch("/:id/sharing", accountLimiter, async (req, res) => {
   const link = await runAsOwner(async (tx) => {
     // Scoped to a business THIS person owns: the team's owner, or anyone else,
     // matches nothing and gets a 404.
-    const { count } = await tx.teamLink.updateMany({
-      where: {
-        id: req.params.id,
-        memberShop: { ownerId: req.userId },
-        status: { in: ["PENDING", "ACTIVE"] },
-      },
-      data: parsed.data,
-    });
+    const mine = {
+      id: req.params.id,
+      memberShop: { ownerId: req.userId },
+      status: { in: ["PENDING" as const, "ACTIVE" as const] },
+    };
+    const before = await tx.teamLink.findFirst({ where: mine });
+    if (!before) return null;
+    const { count } = await tx.teamLink.updateMany({ where: mine, data: parsed.data });
     if (count === 0) return null;
-    return tx.teamLink.findUnique({
+    const after = await tx.teamLink.findUniqueOrThrow({
       where: { id: req.params.id },
       include: { memberShop: { select: { id: true, timezone: true } } },
     });
+    // The owner's feed: which number was shared or hidden - never its value.
+    await recordSharingChanges(tx, after, sharingOf(before), sharingOf(after));
+    return after;
   });
   if (!link) {
     res.status(404).json({ error: "not_found" });
@@ -305,15 +313,23 @@ teamsRouter.patch("/:id/sharing", accountLimiter, async (req, res) => {
  */
 teamsRouter.post("/:id/leave", accountLimiter, async (req, res) => {
   const count = await runAsOwner(async (tx) => {
-    const { count } = await tx.teamLink.updateMany({
+    // Read first: leaving an ACTIVE team and withdrawing a PENDING request are
+    // different lines in the owner's feed.
+    const was = await tx.teamLink.findFirst({
       where: {
         id: req.params.id,
         memberShop: { ownerId: req.userId },
         status: { in: ["PENDING", "ACTIVE"] },
       },
+      select: { id: true, status: true, teamShopId: true },
+    });
+    if (!was) return 0;
+    const { count } = await tx.teamLink.updateMany({
+      where: { id: was.id, status: was.status },
       data: { status: "ENDED", endedAt: new Date(), ...NOTHING_SHARED },
     });
     if (count > 0) {
+      await recordTeamEvent(tx, was, was.status === "ACTIVE" ? "left" : "withdrew");
       const link = await tx.teamLink.findUniqueOrThrow({
         where: { id: req.params.id },
         select: { teamShop: { select: { timezone: true } } },

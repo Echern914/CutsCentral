@@ -5,6 +5,7 @@ import { apiGet, apiSend } from "@/lib/api";
 import type { TeamData } from "./page";
 import type { TeamLinksData } from "./IndependentTeam";
 import type { RentHistory, RentPeriod, RentSummary } from "@/lib/boothRent";
+import type { TeamActivityItem } from "@/lib/teamNumbers";
 
 /** Re-read the roster after any change (server is the source of truth). */
 export async function teamAction(): Promise<TeamData | null> {
@@ -63,9 +64,16 @@ export async function removeMemberAction(id: string): Promise<TeamActionResult> 
 // ---- Independent businesses on the team (TeamLink) ----
 
 /** Re-read the team link card after any change (owner only). */
-export async function teamLinksAction(): Promise<TeamLinksData | null> {
-  const res = await apiGet<TeamLinksData>("/api/team/links");
+export async function teamLinksAction(period?: string): Promise<TeamLinksData | null> {
+  const q = period ? `?period=${encodeURIComponent(period)}` : "";
+  const res = await apiGet<TeamLinksData>(`/api/team/links${q}`);
   return res.ok ? (res.data ?? null) : null;
+}
+
+/** The team's activity feed, newest first. Null when it couldn't be read. */
+export async function teamActivityAction(): Promise<TeamActivityItem[] | null> {
+  const res = await apiGet<{ items: TeamActivityItem[] }>("/api/team/activity");
+  return res.ok ? (res.data?.items ?? null) : null;
 }
 
 export async function approveLinkAction(id: string): Promise<TeamActionResult> {

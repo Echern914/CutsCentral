@@ -53,6 +53,13 @@ beforeEach(() => {
   toast.mockReset();
 });
 
+/** The preview grid's tiles, as [label, value]. */
+const seen = () =>
+  Array.from(document.querySelectorAll('[data-qa="they-see"] > div')).map((d) => [
+    d.querySelector("dt")!.textContent,
+    d.querySelector("dd")!.textContent,
+  ]);
+
 describe("what a team can see", () => {
   it("starts with everything hidden, and says so in the preview", () => {
     render(<TeamsClient initial={data()} vocab={vocab} />);
@@ -60,9 +67,13 @@ describe("what a team can see", () => {
       expect(sw(key).textContent).toBe("Hidden");
       expect(sw(key).getAttribute("aria-checked")).toBe("false");
     }
-    expect(document.querySelector('[data-qa="they-see"]')!.textContent).toBe(
-      "Cuts hidden · Revenue hidden · Clients hidden · Rating hidden",
-    );
+    // The owner's own grid, filled with what they see: every tile Hidden.
+    expect(seen()).toEqual([
+      ["Cuts", "Hidden"],
+      ["Revenue", "Hidden"],
+      ["Clients", "Hidden"],
+      ["Rating", "Hidden"],
+    ]);
   });
 
   it("🔴 a switch reads Saving… until the server answers, then shows the server's answer", async () => {
@@ -82,9 +93,12 @@ describe("what a team can see", () => {
     });
     await waitFor(() => expect(sw("shareCuts").textContent).toBe("Shared"));
     expect(sw("shareCuts").getAttribute("aria-checked")).toBe("true");
-    expect(document.querySelector('[data-qa="they-see"]')!.textContent).toBe(
-      "Cuts 42 · Revenue hidden · Clients hidden · Rating hidden",
-    );
+    expect(seen()).toEqual([
+      ["Cuts", "42"],
+      ["Revenue", "Hidden"],
+      ["Clients", "Hidden"],
+      ["Rating", "Hidden"],
+    ]);
   });
 
   it("🔴 a failed save changes nothing and says so", async () => {

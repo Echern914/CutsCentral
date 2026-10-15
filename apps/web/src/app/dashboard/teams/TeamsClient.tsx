@@ -15,6 +15,7 @@ import {
 } from "@/lib/teamNumbers";
 import { hasRent, type RentSummary } from "@/lib/boothRent";
 import { MemberRent } from "../team/BoothRent";
+import { MemberStatGrid } from "@/components/team/MemberStatGrid";
 import {
   leaveTeamAction,
   myRentHistoryAction,
@@ -240,20 +241,27 @@ export function TeamsClient({
               </ul>
 
               <div
-                className="mt-3 rounded-xl bg-charcoal-800/60 px-4 py-3"
+                className="mt-3 rounded-xl border border-subtle px-4 py-3"
                 aria-live="polite"
               >
                 <p className="text-[11px] uppercase tracking-wide text-muted">
                   {active
-                    ? "What they see right now"
+                    ? `How your row looks to ${link.team.name}`
                     : "What they'll see once approved"}
                 </p>
                 {active ? (
-                  <p className="mt-1 text-sm text-offwhite" data-qa="they-see">
-                    {stats
-                      .map((s) => `${s.label} ${s.value ?? "hidden"}`)
-                      .join(" · ")}
-                  </p>
+                  // The SAME grid the owner's Team page renders, filled with
+                  // exactly what they read - so this is their view, not a
+                  // description of it. Last 30 days, their page's default.
+                  <>
+                    <p className="mt-1 text-sm font-medium text-offwhite">
+                      {data.business?.name ?? "Your business"}
+                    </p>
+                    <MemberStatGrid stats={stats} qa="they-see" />
+                    <p className="mt-2 text-[11px] text-muted">
+                      Last 30 days. Arrows compare with the 30 days before.
+                    </p>
+                  </>
                 ) : (
                   <p className="mt-1 text-sm text-muted">
                     Nothing until they approve you - then only what&apos;s

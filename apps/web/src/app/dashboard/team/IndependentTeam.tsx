@@ -6,12 +6,42 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { Dialog } from "@/components/ui/Dialog";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
-import { teamStats, type Sharing, type TeamNumbers } from "@/lib/teamNumbers";
+import {
+  activityLine,
+  agoLabel,
+  teamStats,
+  totalTiles,
+  type Sharing,
+  type TeamActivityItem,
+  type TeamNumbers,
+  type TeamTotals,
+} from "@/lib/teamNumbers";
 import { hasRent, type RentSummary } from "@/lib/boothRent";
-import { approveLinkAction, endLinkAction, teamLinksAction } from "./actions";
+import { ChangeTag, MemberStatGrid } from "@/components/team/MemberStatGrid";
+import { approveLinkAction, endLinkAction, teamActivityAction, teamLinksAction } from "./actions";
 import { OwnerRent } from "./BoothRent";
 
+/** The windows the owner can pick - each an Insights preset. */
+const PERIOD_LABEL: Record<string, string> = {
+  "7d": "Last 7 days",
+  "30d": "Last 30 days",
+  "90d": "Last 3 months",
+};
+/** What "↑ 18%" is measured against, per window. */
+const COMPARED_WITH: Record<string, string> = {
+  "7d": "the 7 days before",
+  "30d": "the 30 days before",
+  "90d": "the 3 months before",
+};
+
 export interface TeamLinksData {
+  /**
+   * The window the numbers cover. Optional: an API a deploy behind sends
+   * neither this nor `totals`, and the card shows the 30 days without them.
+   */
+  period?: { key: string; label: string; options: string[] };
+  /** Summed from what members share - see services/teamLinks.ts teamTotals. */
+  totals?: TeamTotals;
   /** The one link the owner sends: /team/link/<their shop id>. */
   joinUrl: string;
   pending: {
@@ -57,13 +87,34 @@ const primary =
  */
 export function IndependentTeam({
   initial,
+  initialActivity = null,
   vocab,
 }: {
   initial: TeamLinksData;
+  /** The feed, read server-side; null when it couldn't be read. */
+  initialActivity?: TeamActivityItem[] | null;
   vocab: BusinessVocabulary;
 }) {
   const { toast } = useToast();
   const [data, setData] = useState(initial);
+  const [activity, setActivity] = useState(initialActivity);
+  const [period, setPeriod] = useState(initial.period?.key ?? "30d");
+  const [loadingPeriod, setLoadingPeriod] = useState(false);
+  const comparedWith = COMPARED_WITH[period] ?? "the window before";
+
+  /** Re-read the team for another window. The old numbers stay until the new arrive. */
+  async function pickPeriod(next: string) {
+    if (next === period || loadingPeriod) return;
+    setLoadingPeriod(true);
+    const fresh = await teamLinksAction(next);
+    if (fresh) {
+      setData(fresh);
+      setPeriod(fresh.period?.key ?? next);
+    } else {
+      toast("Couldn't load that window - try again", "error");
+    }
+    setLoadingPeriod(false);
+  }
   const [busy, setBusy] = useState<string | null>(null);
   const [removing, setRemoving] = useState<
     TeamLinksData["active"][number] | null
@@ -84,8 +135,13 @@ export function IndependentTeam({
   ) {
     setBusy(key);
     const res = await fn();
-    const fresh = await teamLinksAction();
+    // The feed is a nicety: a failed re-read of it must not stop the answer.
+    const [fresh, feed] = await Promise.all([
+      teamLinksAction(period),
+      teamActivityAction().catch(() => null),
+    ]);
     if (fresh) setData(fresh);
+    if (feed) setActivity(feed);
     if (res.ok) toast(done, "success");
     else
       toast(
@@ -231,13 +287,71 @@ export function IndependentTeam({
           </section>
         )}
 
+        {data.active.length > 0 && data.period && (
+          <div
+            role="group"
+            aria-label="Which window"
+            className="flex flex-wrap gap-1.5"
+            data-qa="team-period"
+          >
+            {data.period.options.map((key) => (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={period === key}
+                disabled={loadingPeriod}
+                onClick={() => void pickPeriod(key)}
+                className={cn(
+                  "min-h-[40px] rounded-full border px-4 text-xs font-medium transition-colors disabled:opacity-60",
+                  period === key
+                    ? "border-gold/50 bg-gold/10 text-gold"
+                    : "border-subtle text-muted hover:text-offwhite",
+                )}
+              >
+                {PERIOD_LABEL[key] ?? key}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {data.active.length > 0 && data.totals && (
+          // THE TEAM AT A GLANCE. Each total sums only the members who share
+          // that number, and says from how many - a partial sum is never
+          // shown as the whole team's.
+          <section aria-labelledby="team-overview" data-qa="team-overview">
+            <h3 id="team-overview" className="text-sm font-medium text-offwhite">
+              Team overview
+            </h3>
+            <p className="mt-0.5 text-xs text-muted">
+              {PERIOD_LABEL[period] ?? "Last 30 days"}, compared with {comparedWith}.
+            </p>
+            <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {totalTiles(data.totals, vocab).map((t) => (
+                <div key={t.key} className="min-w-0 rounded-xl border border-subtle px-3 py-2.5">
+                  <dt className="truncate text-[11px] uppercase tracking-wide text-muted">{t.label}</dt>
+                  <dd
+                    className={cn(
+                      "mt-0.5 text-lg tabular-nums",
+                      t.value === null ? "text-muted" : "font-semibold text-offwhite",
+                    )}
+                  >
+                    {t.value ?? "-"}
+                  </dd>
+                  {t.change && <ChangeTag change={t.change} />}
+                  <p className="mt-0.5 text-[11px] text-muted [overflow-wrap:anywhere]">{t.note}</p>
+                </div>
+              ))}
+            </dl>
+          </section>
+        )}
+
         <section aria-labelledby="team-list">
           <div className="flex items-baseline justify-between gap-3">
             <h3 id="team-list" className="text-sm font-medium text-offwhite">
               Your team
             </h3>
             {data.active.length > 0 && (
-              <p className="text-xs text-muted">Last 30 days</p>
+              <p className="text-xs text-muted">{PERIOD_LABEL[period] ?? "Last 30 days"}</p>
             )}
           </div>
           {data.active.length === 0 ? (
@@ -271,28 +385,7 @@ export function IndependentTeam({
                       Remove
                     </button>
                   </div>
-                  <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {teamStats(m.numbers, vocab).map((s) => (
-                      <div
-                        key={s.key}
-                        className="rounded-lg bg-charcoal-800/60 px-3 py-2"
-                      >
-                        <dt className="text-[11px] uppercase tracking-wide text-muted">
-                          {s.label}
-                        </dt>
-                        <dd
-                          className={cn(
-                            "mt-0.5 text-sm tabular-nums",
-                            s.value === null
-                              ? "text-muted"
-                              : "font-semibold text-offwhite",
-                          )}
-                        >
-                          {s.value ?? "Hidden"}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
+                  <MemberStatGrid stats={teamStats(m.numbers, vocab)} />
                   <OwnerRent
                     linkId={m.id}
                     businessName={m.business.name}
@@ -313,10 +406,39 @@ export function IndependentTeam({
           {data.active.length > 0 && (
             <p className="mt-2 text-[11px] text-muted/80">
               &ldquo;Hidden&rdquo; means that {vocab.providerNoun} hasn&apos;t
-              shared it. Only they can change that.
+              shared it. Only they can change that. Arrows compare with{" "}
+              {comparedWith}.
             </p>
           )}
         </section>
+
+        {activity !== null && (
+          // WHAT HAPPENED: joins, leaves, what someone started or stopped
+          // sharing, and rent you recorded. Never a member's numbers.
+          <section aria-labelledby="team-activity" data-qa="team-activity">
+            <h3 id="team-activity" className="text-sm font-medium text-offwhite">
+              Team activity
+            </h3>
+            {activity.length === 0 ? (
+              <p className="mt-1 text-sm text-muted">
+                Nothing yet. Joins, leaves, sharing changes and rent you record show up here.
+              </p>
+            ) : (
+              <ul className="mt-2 divide-y divide-subtle rounded-xl border border-subtle">
+                {activity.slice(0, 15).map((i) => (
+                  <li key={i.id} className="flex items-baseline justify-between gap-3 px-4 py-2.5">
+                    <p className="min-w-0 text-sm text-offwhite [overflow-wrap:anywhere]">
+                      {activityLine(i, vocab)}
+                    </p>
+                    <time dateTime={i.at} className="shrink-0 text-xs tabular-nums text-muted">
+                      {agoLabel(i.at)}
+                    </time>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
 
         {(data.past ?? []).length > 0 && (
           // The rent record outlives the team link: what's owed, paid and
