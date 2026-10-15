@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/Card";
 import { getVocabulary } from "@/lib/vocab";
 import { TeamClient } from "./TeamClient";
 import { IndependentTeam, type TeamLinksData } from "./IndependentTeam";
+import type { TeamActivityItem } from "@/lib/teamNumbers";
 
 export const metadata: Metadata = { title: "Team" };
 
@@ -43,13 +44,16 @@ export default async function TeamPage() {
   // context provider - a provider would be a second source of truth.
   // The independent-team card is owner-only: for anyone else /links is a 403
   // and the card isn't rendered.
-  const [res, vocab, linksRes] = await Promise.all([
+  const [res, vocab, linksRes, activityRes] = await Promise.all([
     apiGet<TeamData>("/api/team"),
     getVocabulary(),
     apiGet<TeamLinksData>("/api/team/links"),
+    // Owner-only like /links: anyone else's 403 just means no feed.
+    apiGet<{ items: TeamActivityItem[] }>("/api/team/activity"),
   ]);
   const data = res.data;
   const links = linksRes.ok ? linksRes.data : null;
+  const activity = activityRes.ok ? (activityRes.data?.items ?? null) : null;
 
   if (!data) {
     return (
@@ -65,7 +69,7 @@ export default async function TeamPage() {
   return (
     <main className="mx-auto w-full max-w-4xl px-5 py-8">
       <TeamClient initial={data} vocab={vocab}>
-        {links && <IndependentTeam initial={links} vocab={vocab} />}
+        {links && <IndependentTeam initial={links} initialActivity={activity} vocab={vocab} />}
         {/* Only the owner has that card, so for them a failed read is said
             out loud - never a card that silently isn't there. */}
         {!links && data.role === "OWNER" && (

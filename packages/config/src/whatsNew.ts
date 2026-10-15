@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-15-team-logistics",
+    date: "2026-10-15",
+    kind: "feature",
+    title: "Your team at a glance",
+    body:
+      "Team now shows totals for the last 7 days, 30 days or 3 months, with arrows against the period before, " +
+      "and who's paid up on booth rent. Totals count only what each provider shares. Team activity shows who joined, left or changed sharing.",
+  },
+  {
     id: "2026-10-14-block-off-some-services",
     date: "2026-10-14",
     kind: "feature",

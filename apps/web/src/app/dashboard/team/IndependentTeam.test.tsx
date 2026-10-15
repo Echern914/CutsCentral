@@ -19,6 +19,7 @@ vi.mock("./actions", () => ({
   approveLinkAction: (...a: unknown[]) => approveLinkAction(...a),
   endLinkAction: (...a: unknown[]) => endLinkAction(...a),
   teamLinksAction: (...a: unknown[]) => teamLinksAction(...a),
+  teamActivityAction: async () => null,
 }));
 vi.mock("@/components/ui/Toast", () => ({ useToast: () => ({ toast }) }));
 vi.mock("./BoothRent", () => ({

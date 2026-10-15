@@ -9,7 +9,18 @@ import { accountLimiter, dashboardLimiter } from "../middleware/rateLimit.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { applyChairLink, releaseChairLink } from "../services/staffUserLink.js";
 import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
-import { NOTHING_SHARED, linksForTeam, sharingOf, teamNumbers } from "../services/teamLinks.js";
+import {
+  NOTHING_SHARED,
+  TEAM_PERIODS,
+  linksForTeam,
+  recordTeamEvent,
+  sharingOf,
+  teamActivity,
+  teamNumbers,
+  teamPeriodOf,
+  teamTotals,
+} from "../services/teamLinks.js";
+import { PERIODS } from "../engines/insightsWindow.js";
 import {
   HAS_RENT_RECORDS,
   PAYMENT_METHODS,
@@ -464,31 +475,42 @@ teamRouter.get("/links", requireOwner, async (req, res) => {
   const shop = req.shop!;
   const links = await linksForTeam(shop.id);
   const now = new Date();
+  // ?period=7d|30d|90d - an Insights preset; anything else is the 30 days.
+  const period = teamPeriodOf(req.query.period);
   const card = (l: (typeof links)[number]) => ({
     id: l.id,
     business: { name: l.memberShop.name, logoUrl: l.memberShop.logoUrl },
     ownerName: l.memberShop.owner.name,
   });
+  const active = await Promise.all(
+    links
+      .filter((l) => l.status === "ACTIVE")
+      .map(async (l) => ({
+        ...card(l),
+        approvedAt: l.approvedAt?.toISOString() ?? null,
+        sharing: sharingOf(l),
+        numbers: await teamNumbers(l.memberShop, sharingOf(l), now, period),
+        // Booth rent is the owner's own ledger with this member, not one of
+        // the member's numbers - so it's always shown to the owner.
+        rent: await runAsOwner((tx) => rentSummary(tx, l.id, shop.timezone, now)),
+      })),
+  );
+  // Rent "paid up": members with rent in effect who owe nothing right now.
+  const withRent = active.filter((m) => m.rent.rate !== null || m.rent.balanceCents > 0);
   res.json({
+    period: { key: period, label: PERIODS[period].label, options: TEAM_PERIODS },
+    // Summed only over members who share each number - see teamTotals.
+    totals: {
+      ...teamTotals(active),
+      rent: { paidUp: withRent.filter((m) => m.rent.balanceCents === 0).length, of: withRent.length },
+    },
     // The shop's id, never its web address: an address can be changed and
     // then taken by another shop, and an old link would ask to join THAT one.
     joinUrl: `${env.APP_BASE_URL}/team/link/${encodeURIComponent(shop.id)}`,
     pending: links
       .filter((l) => l.status === "PENDING")
       .map((l) => ({ ...card(l), requestedAt: l.requestedAt.toISOString() })),
-    active: await Promise.all(
-      links
-        .filter((l) => l.status === "ACTIVE")
-        .map(async (l) => ({
-          ...card(l),
-          approvedAt: l.approvedAt?.toISOString() ?? null,
-          sharing: sharingOf(l),
-          numbers: await teamNumbers(l.memberShop, sharingOf(l), now),
-          // Booth rent is the owner's own ledger with this member, not one of
-          // the member's numbers - so it's always shown to the owner.
-          rent: await runAsOwner((tx) => rentSummary(tx, l.id, shop.timezone, now)),
-        })),
-    ),
+    active,
     // Rent with members who left (or are asking to come back): the record
     // stays, read-only - and nothing else of their business comes with it.
     past: await runAsOwner(async (tx) => {
@@ -510,6 +532,16 @@ teamRouter.get("/links", requireOwner, async (req, res) => {
   });
 });
 
+/**
+ * GET /api/team/activity - what happened on the team, newest first: who asked,
+ * joined, left or was removed, which number someone shared or hid, and the
+ * rent payments the owner recorded. Never a member's numbers. Owner-only, like
+ * everything the members share.
+ */
+teamRouter.get("/activity", requireOwner, async (req, res) => {
+  res.json({ items: await teamActivity(req.shop!.id) });
+});
+
 /** POST /api/team/links/:id/approve - let a business that asked onto the team. */
 teamRouter.post("/links/:id/approve", accountLimiter, requireOwner, async (req, res) => {
   const shop = req.shop!;
@@ -521,6 +553,7 @@ teamRouter.post("/links/:id/approve", accountLimiter, requireOwner, async (req, 
       data: { status: "ACTIVE", approvedAt: new Date() },
     });
     if (count === 0) return null;
+    await recordTeamEvent(tx, { id: req.params.id!, teamShopId: shop.id }, "approved");
     return tx.teamLink.findUnique({
       where: { id: req.params.id },
       select: { memberShop: { select: { name: true, owner: { select: { email: true } } } } },
@@ -558,15 +591,21 @@ teamRouter.post("/links/:id/approve", accountLimiter, requireOwner, async (req, 
 teamRouter.post("/links/:id/end", accountLimiter, requireOwner, async (req, res) => {
   const shop = req.shop!;
   const count = await runAsOwner(async (tx) => {
+    // Read first: declining a request and removing a member are different
+    // lines in the feed.
+    const was = await tx.teamLink.findFirst({
+      where: { id: req.params.id, teamShopId: shop.id, status: { in: ["PENDING", "ACTIVE"] } },
+      select: { id: true, status: true, teamShopId: true },
+    });
+    if (!was) return 0;
     const { count } = await tx.teamLink.updateMany({
-      where: {
-        id: req.params.id,
-        teamShopId: shop.id,
-        status: { in: ["PENDING", "ACTIVE"] },
-      },
+      where: { id: was.id, status: was.status },
       data: { status: "ENDED", endedAt: new Date(), ...NOTHING_SHARED },
     });
-    if (count > 0) await stopRentOnLeave(tx, req.params.id!, shop.timezone, req.userId!);
+    if (count > 0) {
+      await recordTeamEvent(tx, was, was.status === "ACTIVE" ? "removed" : "declined");
+      await stopRentOnLeave(tx, req.params.id!, shop.timezone, req.userId!);
+    }
     return count;
   });
   if (count === 0) {

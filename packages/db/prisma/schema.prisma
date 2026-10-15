@@ -1044,11 +1044,40 @@ model TeamLink {
   // stop) and the payments the owner records. See BoothRentRate.
   rentRates    BoothRentRate[]
   rentPayments BoothRentPayment[]
+  // What happened on this link, for the owner's Team activity feed.
+  events       TeamLinkEvent[]
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
   @@unique([teamShopId, memberShopId])
   @@index([memberShopId])
+}
+
+// One thing that happened on a team link, for the team owner's activity feed:
+// someone asked to join, was approved or declined, left or was removed, or
+// shared or hid one of their numbers. Append-only.
+//
+// 🔴 NEVER A VALUE. A sharing event says WHICH number was shared or hidden,
+// never what it was - the number itself is read live, and only while shared
+// (services/teamLinks.ts). Booth rent payments are not copied here: the feed
+// reads them from BoothRentPayment, the one ledger.
+//
+// Default-deny like TeamLink: it belongs to two shops, so only the API's owner
+// path reads it, always naming the team it acts for.
+model TeamLinkEvent {
+  id         String   @id @default(cuid())
+  linkId     String
+  link       TeamLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  // Denormalised from the link, so the feed reads one index.
+  teamShopId String
+  // requested | approved | declined | removed | left | withdrew | shared | hid
+  kind       String
+  // For shared/hid: cuts | revenue | clients | rating. Null otherwise.
+  metric     String?
+  createdAt  DateTime @default(now())
+
+  @@index([teamShopId, createdAt])
+  @@index([linkId])
 }
 
 enum TeamLinkStatus {

@@ -230,6 +230,8 @@ describe("approving", () => {
       revenueCents: null,
       clients: null,
       rating: null,
+      // Nothing shared: nothing for the window before, either.
+      previous: { cuts: null, revenueCents: null, clients: null },
     });
     expect(sent.some((m) => m.to === `joe-${tag}@test.chairback`)).toBe(true);
   });
@@ -245,6 +247,8 @@ describe("what the owner sees", () => {
       revenueCents: null,
       clients: null,
       rating: null,
+      // The 30 days before (days 30-59) hold no visits; hidden stays hidden.
+      previous: { cuts: 0, revenueCents: null, clients: null },
     });
   });
 
@@ -273,6 +277,8 @@ describe("what the owner sees", () => {
       revenueCents: 11500,
       clients: 2,
       rating: { average: 4.5, count: 2 },
+      // Days 30-59 are empty: the $99 visit 60 days ago is outside both.
+      previous: { cuts: 0, revenueCents: 0, clients: 0 },
     });
   });
 
@@ -596,7 +602,13 @@ describe("review evidence: fresh businesses, the whole lifecycle", () => {
     await request(app).patch(`/api/teams/${id}/sharing`).set("Cookie", m.cookie).send({ shareRevenue: true });
     const view = await teamView();
     const entry = view.body.active.find((a: { id: string }) => a.id === id);
-    expect(entry.numbers).toEqual({ cuts: null, revenueCents: 3500, clients: null, rating: null });
+    expect(entry.numbers).toEqual({
+      cuts: null,
+      revenueCents: 3500,
+      clients: null,
+      rating: null,
+      previous: { cuts: null, revenueCents: 0, clients: null },
+    });
   });
 
   it("🔴 asking again emails the owner at most once a day - leave-and-ask can't be used to spam them", async () => {
