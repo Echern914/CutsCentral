@@ -4,6 +4,7 @@ import { ACTIVE_SHOP_COOKIE_NAME, APP_NAME, apiEnv } from "@chairback/config";
 import { Prisma, prisma, runAsOwner } from "@chairback/db";
 import { requireUser, resolveOwnedShop } from "../middleware/auth.js";
 import { accountLimiter } from "../middleware/rateLimit.js";
+import { endMentorshipsForLink, mentorshipsForMemberLink } from "../services/teamMentorships.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { logger } from "../logger.js";
 import {
@@ -73,6 +74,11 @@ teamsRouter.get("/", async (req, res) => {
         // Their own booth rent with this team - the same summary the owner
         // sees. Also while asking to rejoin: an old record never disappears.
         rent: await runAsOwner((tx) => rentSummary(tx, l.id, l.teamShop.timezone, now)),
+        // Mentorship on this team: the mentors they have (and what each one
+        // sees) and the members they mentor (only what each shares).
+        ...(l.status === "ACTIVE"
+          ? await mentorshipsForMemberLink(l.id, now)
+          : { mentors: [], mentoring: [] }),
       })),
     ),
     // Teams they've left, where booth rent was recorded: read-only, the rent
@@ -305,6 +311,65 @@ teamsRouter.patch("/:id/sharing", accountLimiter, async (req, res) => {
 });
 
 /**
+ * PATCH /api/teams/mentorships/:id/sharing - what THIS mentor may see. Only the
+ * student changes it, and only while the pairing is live. Answers with the
+ * numbers the mentor now reads, so the preview shows the truth.
+ */
+teamsRouter.patch("/mentorships/:id/sharing", accountLimiter, async (req, res) => {
+  const parsed = sharingSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const row = await runAsOwner(async (tx) => {
+    const { count } = await tx.teamMentorship.updateMany({
+      where: {
+        id: req.params.id,
+        status: "ACTIVE",
+        studentLink: { status: "ACTIVE", memberShop: { ownerId: req.userId } },
+      },
+      data: parsed.data,
+    });
+    if (count === 0) return null;
+    return tx.teamMentorship.findUniqueOrThrow({
+      where: { id: req.params.id },
+      include: { studentLink: { select: { memberShop: { select: { id: true, timezone: true } } } } },
+    });
+  });
+  if (!row) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({
+    ok: true,
+    sharing: sharingOf(row),
+    theySee: await teamNumbers(row.studentLink.memberShop, sharingOf(row)),
+  });
+});
+
+/** POST /api/teams/mentorships/:id/end - the student OR the mentor ends a pairing. */
+teamsRouter.post("/mentorships/:id/end", accountLimiter, async (req, res) => {
+  const { count } = await runAsOwner((tx) =>
+    tx.teamMentorship.updateMany({
+      where: {
+        id: req.params.id,
+        status: "ACTIVE",
+        OR: [
+          { studentLink: { memberShop: { ownerId: req.userId } } },
+          { mentorLink: { memberShop: { ownerId: req.userId } } },
+        ],
+      },
+      data: { status: "ENDED", endedAt: new Date(), ...NOTHING_SHARED },
+    }),
+  );
+  if (count === 0) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+/**
  * POST /api/teams/:id/leave - leave a team (or withdraw a request).
  *
  * Nothing in the business changes; the link ends and every share switch goes
@@ -330,6 +395,8 @@ teamsRouter.post("/:id/leave", accountLimiter, async (req, res) => {
     });
     if (count > 0) {
       await recordTeamEvent(tx, was, was.status === "ACTIVE" ? "left" : "withdrew");
+      // Off the team: every mentor pairing they were in ends with it.
+      await endMentorshipsForLink(tx, was.id);
       const link = await tx.teamLink.findUniqueOrThrow({
         where: { id: req.params.id },
         select: { teamShop: { select: { timezone: true } } },

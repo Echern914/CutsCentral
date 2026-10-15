@@ -42,3 +42,28 @@ export async function leaveTeamAction(linkId: string): Promise<{ ok: boolean; er
   revalidatePath("/dashboard/teams");
   return res.ok ? { ok: true } : { ok: false, error: res.error };
 }
+
+/**
+ * Change what one MENTOR can see. Student only (the API refuses anyone else).
+ * Returns the confirmed sharing and what the mentor now reads.
+ */
+export async function setMentorSharingAction(
+  mentorshipId: string,
+  patch: Partial<Sharing>,
+): Promise<{ ok: boolean; error?: string; sharing?: Sharing; theySee?: TeamNumbers }> {
+  const res = await apiSend<{ sharing: Sharing; theySee: TeamNumbers }>(
+    "PATCH",
+    `/api/teams/mentorships/${mentorshipId}/sharing`,
+    patch,
+  );
+  revalidatePath("/dashboard/teams");
+  if (!res.ok || !res.data) return { ok: false, error: res.error };
+  return { ok: true, sharing: res.data.sharing, theySee: res.data.theySee };
+}
+
+/** End a mentor pairing - as the student or as the mentor. */
+export async function endMentorshipAction(mentorshipId: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiSend<{ ok: boolean }>("POST", `/api/teams/mentorships/${mentorshipId}/end`);
+  revalidatePath("/dashboard/teams");
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
+}

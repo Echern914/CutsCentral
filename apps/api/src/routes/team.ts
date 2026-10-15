@@ -21,6 +21,7 @@ import {
   teamTotals,
 } from "../services/teamLinks.js";
 import { PERIODS } from "../engines/insightsWindow.js";
+import { endMentorshipsForLink, pairMentor, pairingsForTeam } from "../services/teamMentorships.js";
 import {
   HAS_RENT_RECORDS,
   PAYMENT_METHODS,
@@ -511,6 +512,9 @@ teamRouter.get("/links", requireOwner, async (req, res) => {
       .filter((l) => l.status === "PENDING")
       .map((l) => ({ ...card(l), requestedAt: l.requestedAt.toISOString() })),
     active,
+    // Who mentors whom - names and dates only. What a student shares with a
+    // mentor is between them; the owner sees only what's shared with THEM.
+    mentorships: await pairingsForTeam(shop.id),
     // Rent with members who left (or are asking to come back): the record
     // stays, read-only - and nothing else of their business comes with it.
     past: await runAsOwner(async (tx) => {
@@ -540,6 +544,45 @@ teamRouter.get("/links", requireOwner, async (req, res) => {
  */
 teamRouter.get("/activity", requireOwner, async (req, res) => {
   res.json({ items: await teamActivity(req.shop!.id) });
+});
+
+const pairSchema = z
+  .object({ mentorLinkId: z.string().min(1).max(64), studentLinkId: z.string().min(1).max(64) })
+  .strict();
+
+/**
+ * POST /api/team/mentorships - pair a mentor with a student. Both must be on
+ * this team now. The student starts sharing NOTHING with the mentor; they
+ * choose on their Teams page. Owner-only.
+ */
+teamRouter.post("/mentorships", accountLimiter, requireOwner, async (req, res) => {
+  const parsed = pairSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const result = await pairMentor({ teamShopId: req.shop!.id, ...parsed.data });
+  if (result.ok) {
+    res.status(201).json({ ok: true, id: result.id });
+    return;
+  }
+  const status = result.error === "not_found" ? 404 : result.error === "already_paired" ? 409 : 400;
+  res.status(status).json({ error: result.error });
+});
+
+/** POST /api/team/mentorships/:id/end - end a pairing on this team. Owner-only. */
+teamRouter.post("/mentorships/:id/end", accountLimiter, requireOwner, async (req, res) => {
+  const { count } = await runAsOwner((tx) =>
+    tx.teamMentorship.updateMany({
+      where: { id: req.params.id, teamShopId: req.shop!.id, status: "ACTIVE" },
+      data: { status: "ENDED", endedAt: new Date(), ...NOTHING_SHARED },
+    }),
+  );
+  if (count === 0) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 /** POST /api/team/links/:id/approve - let a business that asked onto the team. */
@@ -605,6 +648,8 @@ teamRouter.post("/links/:id/end", accountLimiter, requireOwner, async (req, res)
     if (count > 0) {
       await recordTeamEvent(tx, was, was.status === "ACTIVE" ? "removed" : "declined");
       await stopRentOnLeave(tx, req.params.id!, shop.timezone, req.userId!);
+      // Off the team: every mentor pairing they were in ends with it.
+      await endMentorshipsForLink(tx, was.id);
     }
     return count;
   });

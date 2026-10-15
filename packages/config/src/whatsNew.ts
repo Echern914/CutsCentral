@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-15-team-mentors",
+    date: "2026-10-15",
+    kind: "feature",
+    title: "Mentors on your team",
+    body:
+      "On Team, pair a mentor with someone on your team. The mentor sees only the numbers that person chooses to share with them, " +
+      "separate from what you see. Either of them can end it any time.",
+  },
+  {
     id: "2026-10-15-team-logistics",
     date: "2026-10-15",
     kind: "feature",
