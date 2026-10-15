@@ -273,6 +273,19 @@ describe("checking in at the desk", () => {
     expect(await prisma.walkInEntry.count({ where: { phone: p } })).toBe(0);
   });
 
+  it("🔴 a member whose line is off at check-in is refused, though the desk offered them a minute ago", async () => {
+    const p = freshPhone();
+    const proof = await verified(p);
+    await prisma.shop.update({ where: { id: m.chris!.shopId }, data: { walkInAcceptingNow: false } });
+    try {
+      const res = await checkIn(p, proof, m.chris!.linkId, [m.chris!.serviceId]);
+      expect(res.status).toBe(400);
+      expect(await prisma.walkInEntry.count({ where: { phone: p } })).toBe(0);
+    } finally {
+      await prisma.shop.update({ where: { id: m.chris!.shopId }, data: { walkInAcceptingNow: true } });
+    }
+  });
+
   it("🔴 a pick that stopped being one is refused - and the verified phone isn't spent", async () => {
     const p = freshPhone();
     const proof = await verified(p);
