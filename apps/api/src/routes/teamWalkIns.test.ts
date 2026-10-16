@@ -40,17 +40,29 @@ async function signup(label: string) {
   expect(res.status).toBe(201);
   return (res.headers["set-cookie"] as unknown as string[])[0]!.split(";")[0]!;
 }
+/**
+ * 🔴 A ZONE WHERE IT IS MIDDAY NOW. The chairs work 00:00-24:00 shop time and
+ * the desk estimates the wait on the real clock, so in the last half hour
+ * before the shop's midnight a 30-minute cut no longer fits today and the wait
+ * is unknown (null). In UTC that was 23:30-24:00 every day: this suite went
+ * red in CI at 23:54 UTC. A whole-hour Etc/GMT zone puts "now" near noon, half
+ * a day from either end. (Etc/GMT signs are inverted: Etc/GMT-3 is UTC+3.)
+ */
+function middayZone(now = new Date()): string {
+  const ahead = 12 - now.getUTCHours(); // -11..12, every one a real Etc zone
+  return ahead === 0 ? "Etc/GMT" : `Etc/GMT${ahead > 0 ? "-" : "+"}${Math.abs(ahead)}`;
+}
 async function shopFor(cookie: string, name: string) {
   const res = await request(app).post("/api/shops").set("Cookie", cookie).send({ name, smsAttested: true });
   expect(res.status).toBe(201);
   const patch = await request(app)
     .patch("/api/shops/me")
     .set("Cookie", cookie)
-    .send({ bookingMode: "native", timezone: "UTC", walkInEnabled: true });
+    .send({ bookingMode: "native", timezone: middayZone(), walkInEnabled: true });
   expect(patch.status).toBe(200);
   return res.body.id as string;
 }
-/** A chair working round the clock and one service, so a wait always exists. */
+/** A chair working round the clock and one service, so a wait exists (see middayZone). */
 async function chairAndService(cookie: string, shopId: string, service: string) {
   const staffId = (await request(app).post("/api/booking/staff").set("Cookie", cookie).send({ name: "Chair" })).body.id;
   const serviceId = (
