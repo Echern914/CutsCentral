@@ -4,6 +4,7 @@ import {
   countVCards,
   looksLikeVCard,
   parseDelimited,
+  parseServiceMenu,
   parseVCards,
   parseWeeklyHours,
   rowsFromTable,
@@ -519,5 +520,160 @@ describe("parseWeeklyHours", () => {
     }
     expect(parseWeeklyHours(undefined as unknown as string)).toEqual({ days: new Map(), unread: [] });
     expect(read("Mon 13pm-2pm").unread).toEqual(["Mon 13pm-2pm"]);
+  });
+});
+
+describe("parseServiceMenu", () => {
+  const one = (text: string) => parseServiceMenu(text).items;
+  const brief = (text: string) =>
+    one(text).map((i) => [i.name, i.durationMin, i.priceCents, ...(i.priceIsFrom ? ["from"] : [])]);
+
+  it("reads one service a line, in the shapes menus are written", () => {
+    expect(
+      brief(
+        [
+          "Taper $40 · 45 min",
+          "Beard Trim - $20 (15 min)",
+          "Kids 30 min $25",
+          "Skin Fade | 1 hr | $45",
+          "Line up ..... $15",
+          "Hot towel shave: 45 mins, $35",
+          "Senior $30 / 30 min",
+          "1. Wash & style - $25 - 20 min",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      ["Taper", 45, 4000],
+      ["Beard Trim", 15, 2000],
+      ["Kids", 30, 2500],
+      ["Skin Fade", 60, 4500],
+      ["Line up", null, 1500],
+      ["Hot towel shave", 45, 3500],
+      ["Senior", 30, 3000],
+      ["Wash & style", 20, 2500],
+    ]);
+  });
+
+  it("🔴 reads Booksy's layout: name, an optional description, length and price on lines of their own, buttons skipped", () => {
+    const parsed = parseServiceMenu(
+      [
+        "Popular services",
+        "Taper",
+        "45min",
+        "$40.00",
+        "Book",
+        "Skin Fade",
+        "Classic fade with a razor finish and hot towel",
+        "1h",
+        "$45.00+",
+        "Book",
+      ].join("\n"),
+    );
+    expect(parsed.items).toEqual([
+      { name: "Taper", durationMin: 45, priceCents: 4000, priceIsFrom: false },
+      {
+        name: "Skin Fade",
+        durationMin: 60,
+        priceCents: 4500,
+        priceIsFrom: true,
+        description: "Classic fade with a razor finish and hot towel",
+      },
+    ]);
+    expect(parsed.unread).toEqual([]);
+  });
+
+  it("reads a name with its price and length on the next line (TheCut, Google)", () => {
+    expect(brief("Taper\n$35 • 45 mins\nBeard\n$20")).toEqual([
+      ["Taper", 45, 3500],
+      ["Beard", null, 2000],
+    ]);
+  });
+
+  it("lengths: minutes, hours, hours and minutes, decimals - and one out of range is left for the barber", () => {
+    expect(
+      one("A 1 hr 15 min $10\nB 1.5 hrs $10\nC 90 minutes $10\nD 2h $10\nE 45m $10\nF 700 min $10\nG 3 min $10").map(
+        (i) => i.durationMin,
+      ),
+    ).toEqual([75, 90, 90, 120, 45, null, null]);
+  });
+
+  it("prices: cents, thousands, a trailing symbol, free, and 'from' / '+' / a range as a starting price", () => {
+    expect(
+      brief("A $40.50 30 min\nB $1,200 30 min\nC 40$ 30 min\nD free 15 min\nE from $10 30 min\nF $40+ 30 min\nG $40-$60 30 min\nI $40 to 60 30 min"),
+    ).toEqual([
+      ["A", 30, 4050],
+      ["B", 30, 120000],
+      ["C", 30, 4000],
+      ["D", 15, 0],
+      ["E", 30, 1000, "from"],
+      ["F", 30, 4000, "from"],
+      ["G", 30, 4000, "from"],
+      ["I", 30, 4000, "from"],
+    ]);
+  });
+
+  it("🔴 a number in the name before the price stays in the name (browser QA: 'Kids under 12 $25')", () => {
+    expect(brief("Kids under 12 $25 30 min\nAges 5-12 $20 20 min\nShape up 40$ 20 min\nTrim 40 USD 15 min")).toEqual([
+      ["Kids under 12", 30, 2500],
+      ["Ages 5-12", 20, 2000],
+      ["Shape up", 20, 4000],
+      ["Trim", 15, 4000],
+    ]);
+  });
+
+  it("a plain number set off from the name is its price", () => {
+    expect(brief("Taper - 40\nBeard .... 20\nShape up: 15")).toEqual([
+      ["Taper", null, 4000],
+      ["Beard", null, 2000],
+      ["Shape up", null, 1500],
+    ]);
+  });
+
+  it("🔴 a missing length or price stays empty - never invented", () => {
+    const [taper, beard] = one("Taper $40\nBeard 15 min");
+    expect(taper).toMatchObject({ durationMin: null, priceCents: 4000 });
+    expect(beard).toMatchObject({ durationMin: 15, priceCents: null });
+  });
+
+  it("headings and lone names with nothing to go on come back word for word; noise is dropped", () => {
+    const parsed = parseServiceMenu(
+      ["Services", "Fades", "Mid fade $40 45 min", "Consultation", "Show more", "4.9 ★ (120)", "★★★★★", "Beard $20 15 min"].join("\n"),
+    );
+    expect(parsed.items.map((i) => i.name)).toEqual(["Mid fade", "Beard"]);
+    expect(parsed.unread).toEqual(["Fades", "Consultation"]);
+  });
+
+  it("🔴 a long service name after a finished service is a service, not that service's description", () => {
+    expect(brief("Taper\n45min\n$40\nTaper and beard with hot towel\n1h\n$55")).toEqual([
+      ["Taper", 45, 4000],
+      ["Taper and beard with hot towel", 60, 5500],
+    ]);
+  });
+
+  it("a real sentence after a finished service is its description", () => {
+    const [taper] = one("Taper $40 45 min\nIncludes a wash and a hot towel finish.");
+    expect(taper!.description).toBe("Includes a wash and a hot towel finish.");
+  });
+
+  it("a name pasted twice is kept once and reported", () => {
+    const parsed = parseServiceMenu("Taper $40 45 min\ntaper $45 45 min");
+    expect(parsed.items).toHaveLength(1);
+    expect(parsed.items[0]!.priceCents).toBe(4000);
+    expect(parsed.repeated).toEqual(["taper"]);
+  });
+
+  it("🔴 two services run together on one line, or a price with no name, are not guessed at", () => {
+    const parsed = parseServiceMenu("$40\nTaper $40 Beard $20");
+    expect(parsed.items).toEqual([]);
+    expect(parsed.unread).toEqual(["$40", "Taper $40 Beard $20"]);
+  });
+
+  it("a long name is cut to what the service accepts", () => {
+    expect(one(`${"x".repeat(200)} $10 30 min`)[0]!.name).toHaveLength(120);
+  });
+
+  it("never throws on junk", () => {
+    expect(parseServiceMenu(undefined as unknown as string)).toEqual({ items: [], unread: [], repeated: [] });
+    expect(() => parseServiceMenu("\u0000\u0001 ))(( $$$ min hr\n\n---\n$\n1h1h1h")).not.toThrow();
   });
 });

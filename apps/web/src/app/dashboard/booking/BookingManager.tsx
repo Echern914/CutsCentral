@@ -42,6 +42,7 @@ import { HolidayPricing } from "./HolidayPricing";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import { AcuityCalendarMap } from "./AcuityCalendarMap";
 import { AcuityServiceImport } from "./AcuityServiceImport";
+import { PasteMenu } from "./PasteMenu";
 import { Sheet } from "./AppointmentForm";
 import { useJustSaved } from "./justSaved";
 import { TimeSelect } from "@/components/ui/TimeSelect";
@@ -1340,6 +1341,9 @@ export function ServicesTab({
       {acuityConnected && <AcuityServiceImport toast={toast} />}
       <Card className="p-5">
       <CardHeader title="Services" subtitle="What customers can book, with a length." />
+      {/* Switching apps: paste the old menu instead of typing it. Open from the
+          start while the menu is still empty - the first thing a new shop needs. */}
+      <PasteMenu existingNames={initial.map((s) => s.name)} defaultOpen={initial.length === 0} toast={toast} />
       {/* All three carry a real label above the box. The unit lives INSIDE the
           box as chrome (see UnitField), so it is still on screen after a value
           is typed - a placeholder reading "Length" or "Price ($)" vanished on

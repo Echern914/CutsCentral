@@ -60,6 +60,7 @@ export default async function SwitchGuidePage() {
   const appBase = process.env.APP_BASE_URL ?? "";
   const pageLive = Boolean(shop?.slug && shop.publicPageEnabled);
   const reviewsShown = !shop?.sectionOrder?.length || shop.sectionOrder.includes("reviews");
+  const servicesHref = resolveHref("services") ?? "/dashboard/booking?tab=Services";
   const hoursHref = resolveHref("staff") ?? "/dashboard/booking?tab=Staff";
   const pageHref = resolveHref("mini-site") ?? "/dashboard/site";
   const Clients = capitalize(vocab.clientNounPlural);
@@ -75,8 +76,8 @@ export default async function SwitchGuidePage() {
         </Link>
         <h1 className="mt-1 font-display text-3xl tracking-tight">Switching from Booksy or TheCut</h1>
         <p className="mt-2 max-w-prose text-sm text-muted">
-          Bring your {vocab.clientNounPlural} and your hours with you, and start
-          collecting reviews on your own page. Three steps, about fifteen minutes.
+          Bring your {vocab.clientNounPlural}, your services and your hours with you,
+          and start collecting reviews on your own page. Four steps, about twenty minutes.
         </p>
       </header>
 
@@ -131,7 +132,28 @@ export default async function SwitchGuidePage() {
         </Card>
 
         <Card className="min-w-0 p-5">
-          <h2 className="font-display text-lg">2. Your hours</h2>
+          <h2 className="font-display text-lg">2. Your services</h2>
+          <Steps
+            items={[
+              <>Open your profile on Booksy, TheCut or Google and copy your service menu: the names, prices and lengths.</>,
+              <>
+                Here, open {em("Calendar → Services")} and tap {em("Paste your menu from another app")}.
+              </>,
+              <>
+                Paste it and tap {em("Read my menu")}. Check each service, add any length it couldn&apos;t
+                find, untick anything you don&apos;t offer any more, then tap {em("Add")}.
+              </>,
+            ]}
+          />
+          <div className="mt-4">
+            <Link href={servicesHref} className={quietBtn}>
+              Open your services
+            </Link>
+          </div>
+        </Card>
+
+        <Card className="min-w-0 p-5">
+          <h2 className="font-display text-lg">3. Your hours</h2>
           <Steps
             items={[
               <>Open your profile on Booksy, TheCut or Google and copy your opening hours.</>,
@@ -155,7 +177,7 @@ export default async function SwitchGuidePage() {
         </Card>
 
         <Card className="min-w-0 p-5">
-          <h2 className="font-display text-lg">3. Your reviews</h2>
+          <h2 className="font-display text-lg">4. Your reviews</h2>
           <p className="mt-2 text-sm leading-relaxed text-muted">
             Booksy and TheCut don&apos;t let reviews be exported, and we won&apos;t
             copy them in by hand, because nobody could check that they&apos;re

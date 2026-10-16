@@ -224,12 +224,13 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "add-services",
     q: "How do I add a service or change a price?",
-    a: "Services carry the name, price, duration, and the hours you offer them — add or edit them under Services.\n\nYou can also charge differently by weekday or by time of day (a Saturday fade priced above a Tuesday one), and the client sees the honest price for the slot they're picking.\n\nAlready set up in Acuity? Bring them across instead of typing them again — see “Can I copy what I sell on Acuity into ChairBack?”.",
+    a: "Services carry the name, price, duration, and the hours you offer them — add or edit them under Services.\n\nYou can also charge differently by weekday or by time of day (a Saturday fade priced above a Tuesday one), and the client sees the honest price for the slot they're picking.\n\nSwitching from Booksy, TheCut or Google? Copy your menu from your old profile, then on Services tap “Paste your menu from another app”. You check each service, and add any length it couldn't find, before anything is added.\n\nAlready set up in Acuity? Bring them across instead of typing them again — see “Can I copy what I sell on Acuity into ChairBack?”.",
     keywords: [
       "service", "price", "menu", "duration", "add service", "change price",
       "cost of cut", "how long", "haircut", "takes", "minutes", "length",
       "services available", "what services", "which services", "available services",
-      "service list", "what do you offer",
+      "service list", "what do you offer", "paste menu", "paste my menu", "copy my menu",
+      "import services", "import my services",
     ],
     category: "booking",
     action: { label: "Open services", featureId: "services" },
@@ -904,7 +905,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "other-tools",
     q: "I use a different booking tool — can you support it?",
-    a: "Acuity and Square are the two we connect to directly today.\n\nComing from Booksy or TheCut? There's no live connection to either, but your clients and hours still come with you: Booksy exports your client list as a CSV, and TheCut clients come from your phone's contacts. Clients → Switching from Booksy or TheCut walks you through it, reviews included.\n\nOn something else? Email support@getchairback.com and tell us which one — that's genuinely how we decide what to build next. In the meantime everything works manually, and it's fast.",
+    a: "Acuity and Square are the two we connect to directly today.\n\nComing from Booksy or TheCut? There's no live connection to either, but your clients, services and hours still come with you: Booksy exports your client list as a CSV, and TheCut clients come from your phone's contacts. Clients → Switching from Booksy or TheCut walks you through it, reviews included.\n\nOn something else? Email support@getchairback.com and tell us which one — that's genuinely how we decide what to build next. In the meantime everything works manually, and it's fast.",
     keywords: ["booksy", "thecut", "vagaro", "fresha", "styleseat", "google calendar", "calendly", "other", "different tool", "schedulicity"],
     category: "integrations",
     action: { label: "Switching from Booksy or TheCut", featureId: "switch-from-booksy-thecut" },

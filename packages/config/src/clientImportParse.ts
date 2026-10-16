@@ -1,7 +1,7 @@
 /**
  * SWITCHING FROM BOOKSY OR THECUT - reading what a shop brings with it.
  *
- * Three readers, all pure and safe in the browser (no node built-ins), because
+ * Four readers, all pure and safe in the browser (no node built-ins), because
  * the files never leave the barber's device: the web parses them, shows a
  * review list, and posts only the rows the barber ticked.
  *
@@ -18,6 +18,9 @@
  *  - `parseWeeklyHours`: a week of hours copied from an old profile (Booksy,
  *    TheCut, Google) and pasted into the hours editor. It fills the editor;
  *    it never saves anything by itself.
+ *  - `parseServiceMenu`: a service menu copied from an old profile, read into
+ *    a review list of names, lengths and prices. Nothing is created until the
+ *    barber saves the rows they kept.
  *
  * 🔴 NONE OF THIS GRANTS CONSENT. A row read here is a name and a contact,
  * never proof that anyone agreed to texts or marketing email - the import
@@ -864,4 +867,278 @@ export function parseWeeklyHours(text: string): ParsedWeek {
   }
   if (pending) unread.push(pending.line);
   return { days, unread: [...new Set(unread)] };
+}
+
+/* --------------------------------- a menu --------------------------------- */
+
+/** One service read from a pasted menu, before the barber reviews it. */
+export interface MenuItemDraft {
+  name: string;
+  /** Minutes, 5-600; null when the paste gave none (or one out of range). */
+  durationMin: number | null;
+  /** Cents; null when the paste gave no price. */
+  priceCents: number | null;
+  /** "From $40", "$40+" or "$40-$50": the price read is the lowest. */
+  priceIsFrom: boolean;
+  description?: string;
+}
+
+export interface ParsedMenu {
+  items: MenuItemDraft[];
+  /** Lines with no price or length to go on, as pasted (a heading lands here too). */
+  unread: string[];
+  /** Names pasted more than once; the first one is kept. */
+  repeated: string[];
+}
+
+/** The service length the booking API accepts. */
+export const MENU_MIN_MINUTES = 5;
+export const MENU_MAX_MINUTES = 600;
+const MENU_MAX_PRICE_CENTS = 10_000_000; // the API's $100,000 ceiling
+const MENU_NAME_MAX = 120;
+const MENU_DESCRIPTION_MAX = 800;
+
+/** Buttons and labels a profile page carries between its services. */
+const MENU_NOISE = new Set([
+  "book", "book now", "booking", "select", "choose", "add", "added", "remove", "view", "details",
+  "show more", "show less", "see more", "see less", "see all", "show all", "view all", "more", "less",
+  "services", "service", "our services", "all services", "service menu", "menu", "prices", "price list",
+  "pricing", "popular", "popular services", "featured", "featured services", "reviews", "about",
+]);
+
+const PRICE_SYMBOL = /([$£€])\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?/;
+const FROM_WORD = /\b(from|starting at|starts at|starting from)\s*$/i;
+
+/** cents from "40", "1,200", "40.5" */
+function centsOf(whole: string, frac: string | undefined): number {
+  const n = Number(whole.replace(/,/g, ""));
+  const f = frac ? Number(frac.padEnd(2, "0")) : 0;
+  return n * 100 + f;
+}
+
+/** The first price on a line, and the line without it. */
+function takePrice(s: string): { cents: number; from: boolean; rest: string } | null {
+  const free = /\bfree\b/i.exec(s);
+  let sym = PRICE_SYMBOL.exec(s);
+  // "40$ 30 min": that symbol closes the 40, it doesn't open "$ 30". Only when
+  // it touches the number - "Kids under 12 $25" is a $25 price. (Checked by
+  // hand: a lookbehind would not parse in older iPhone Safari.)
+  if (sym && /\d$/.test(s.slice(0, sym.index))) sym = null;
+  if (sym) {
+    let cents = centsOf(sym[2]!, sym[3]);
+    let from = FROM_WORD.test(s.slice(0, sym.index));
+    let end = sym.index + sym[0].length;
+    const after = s.slice(end);
+    const plus = /^\s*\+/.exec(after);
+    // "$40-$60", "$40 to 60" - but not "$25 - 20 min", a price then a length.
+    const range =
+      /^\s*(?:-|to)\s*[$£€]?\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?!\s*(?:m|min|mins|minute|minutes|h|hr|hrs|hour|hours)\.?(?![a-z]))(?!\.?\d)/i.exec(
+        after,
+      );
+    if (plus) {
+      from = true;
+      end += plus[0].length;
+    } else if (range) {
+      from = true;
+      cents = Math.min(cents, centsOf(range[1]!, range[2]));
+      end += range[0].length;
+    }
+    let start = sym.index;
+    const before = FROM_WORD.exec(s.slice(0, sym.index));
+    if (before) start = sym.index - before[0].length;
+    return { cents, from, rest: `${s.slice(0, start)} ${s.slice(end)}` };
+  }
+  // "40$", "40 USD"
+  const trailing = /\b(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?:\$|\s?(?:usd|dollars?)\b)/i.exec(s);
+  if (trailing) {
+    return {
+      cents: centsOf(trailing[1]!, trailing[2]),
+      from: false,
+      rest: `${s.slice(0, trailing.index)} ${s.slice(trailing.index + trailing[0].length)}`,
+    };
+  }
+  if (free) return { cents: 0, from: false, rest: `${s.slice(0, free.index)} ${s.slice(free.index + free[0].length)}` };
+  return null;
+}
+
+/** A plain number set off from the name at the end of a line: "Taper - 40", "Taper .... 40". */
+function takeBarePrice(s: string): { cents: number; rest: string } | null {
+  const m = /(?:\s-\s*|\s*:\s*|\s*\.{2,}\s*|\s*=\s*)(\d{1,4})(?:\.(\d{2}))?\s*$/.exec(s);
+  if (!m || m.index === 0) return null;
+  return { cents: centsOf(m[1]!, m[2]), rest: s.slice(0, m.index) };
+}
+
+/** The first length on a line ("45 min", "1 hr 15 min", "1.5 hrs", "1h"), and the line without it. */
+function takeDuration(s: string): { minutes: number; rest: string } | null {
+  const hours =
+    /(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)\.?(?![a-z])(?:\s*(?:and\s*)?(\d{1,2})\s*(?:m|min|mins|minute|minutes)\.?(?![a-z]))?/i.exec(s);
+  if (hours) {
+    const minutes = Math.round(Number(hours[1]) * 60 + (hours[2] ? Number(hours[2]) : 0));
+    return { minutes, rest: `${s.slice(0, hours.index)} ${s.slice(hours.index + hours[0].length)}` };
+  }
+  const mins = /(\d{1,3})\s*(?:m|min|mins|minute|minutes)\.?(?![a-z])/i.exec(s);
+  if (mins) {
+    return { minutes: Number(mins[1]), rest: `${s.slice(0, mins.index)} ${s.slice(mins.index + mins[0].length)}` };
+  }
+  return null;
+}
+
+/** What is left of a line once its price and length are taken: the name. */
+function menuName(s: string): string {
+  return s
+    .replace(/\(\s*\)|\[\s*\]/g, " ")
+    .replace(/^\s*(?:[-*•·∙]+|\d{1,2}[.)])\s+/, "")
+    .replace(/\s*[|•·∙]\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[\s\-–—:.,/()]+|[\s\-–—:.,/(]+$/g, "")
+    .trim();
+}
+
+/** Only ever asked of a line with no price or length on it. */
+function isMenuNoise(line: string): boolean {
+  const l = line.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!/[a-z0-9]/.test(l)) return true; // stars, dots, dividers
+  if (MENU_NOISE.has(l.replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim())) return true;
+  // Ratings and review counts: "4.9", "4.9 ★ (120)", "(87 reviews)", "120 ratings".
+  return /^\(?\s*(\d(\.\d)?\s*★*\s*)?(\(?\d+\)?\s*)?(reviews?|ratings?|stars?)?\s*\)?$/.test(l);
+}
+
+/** Between a name and its details, a longer line is its description. */
+const isDescription = (line: string) => line.split(/\s+/).length >= 5 || line.length > 40;
+/** After a finished service, only a real sentence is: a long name must not be swallowed. */
+const isSentence = (line: string) => /[.!?]$/.test(line) || line.split(/\s+/).length >= 9 || line.length > 60;
+
+const menuKey = (name: string) => name.replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * A service menu pasted from another app: one service a line ("Beard trim - $20
+ * (15 min)", "Kids 30 min $25", "Shave | 1 hr | $45"), or Booksy's layout where
+ * the name, an optional description, the length and the price each sit on
+ * their own line. Headings and buttons ("Book", "Show more") are skipped; a
+ * line with nothing to go on is returned in `unread`, word for word. A missing
+ * length or price stays null - the review list asks, it is never invented.
+ * Never throws: a paste is untrusted text.
+ */
+export function parseServiceMenu(text: string): ParsedMenu {
+  const items: MenuItemDraft[] = [];
+  const unread: string[] = [];
+  const repeated: string[] = [];
+  const seen = new Set<string>();
+  // A name on a line of its own waits for its length and price on the next.
+  let pending: { name: string; line: string; description?: string } | null = null;
+  // The item still taking a length or price from the line below it.
+  let open: MenuItemDraft | null = null;
+
+  const add = (item: MenuItemDraft) => {
+    const key = menuKey(item.name);
+    if (seen.has(key)) {
+      repeated.push(item.name);
+      open = null;
+      return;
+    }
+    seen.add(key);
+    items.push(item);
+    open = item;
+  };
+  const flushPending = () => {
+    if (pending) unread.push(pending.line);
+    pending = null;
+  };
+
+  let lines: string[] = [];
+  try {
+    lines = String(text ?? "").split(/\r\n|\r|\n/);
+  } catch {
+    return { items, unread, repeated };
+  }
+  for (const raw of lines) {
+    try {
+      const original = raw.trim();
+      const line = original.replace(/ /g, " ").replace(/[–—]/g, "-");
+      if (!line) continue;
+
+      let rest = line;
+      const price = takePrice(rest);
+      if (price) rest = price.rest;
+      // Two prices on one line is two services run together: not guessed at.
+      if (price && PRICE_SYMBOL.test(rest)) {
+        flushPending();
+        open = null;
+        unread.push(original);
+        continue;
+      }
+      const length = takeDuration(rest);
+      if (length) rest = length.rest;
+      const bare = price ? null : takeBarePrice(rest);
+      if (bare) rest = bare.rest;
+      const priceCents = price ? price.cents : bare ? bare.cents : null;
+      const durationMin = length ? length.minutes : null;
+      const name = menuName(rest).slice(0, MENU_NAME_MAX);
+      const hasDetail = priceCents !== null || durationMin !== null;
+      if (!hasDetail && isMenuNoise(line)) continue;
+      const fit = (min: number | null) =>
+        min !== null && min >= MENU_MIN_MINUTES && min <= MENU_MAX_MINUTES ? min : null;
+      const fitPrice = (c: number | null) => (c !== null && c <= MENU_MAX_PRICE_CENTS ? c : null);
+
+      if (!name && hasDetail) {
+        // Details for the name above, or for the item still missing them.
+        if (pending) {
+          const p: { name: string; line: string; description?: string } = pending;
+          pending = null;
+          add({
+            name: p.name,
+            durationMin: fit(durationMin),
+            priceCents: fitPrice(priceCents),
+            priceIsFrom: price?.from ?? false,
+            ...(p.description ? { description: p.description } : {}),
+          });
+          continue;
+        }
+        // `open` is set inside add(): read it as the union, not narrowed to null.
+        const target = open as MenuItemDraft | null;
+        const fills =
+          target !== null &&
+          (durationMin === null || target.durationMin === null) &&
+          (priceCents === null || target.priceCents === null);
+        if (target && fills) {
+          if (durationMin !== null) target.durationMin = fit(durationMin);
+          if (priceCents !== null) {
+            target.priceCents = fitPrice(priceCents);
+            target.priceIsFrom = price?.from ?? false;
+          }
+          continue;
+        }
+        unread.push(original);
+        continue;
+      }
+
+      if (name && hasDetail) {
+        flushPending();
+        add({ name, durationMin: fit(durationMin), priceCents: fitPrice(priceCents), priceIsFrom: price?.from ?? false });
+        continue;
+      }
+
+      // A name alone: a service whose details follow, a heading, or a sentence.
+      if (pending) {
+        const p: { name: string; line: string; description?: string } = pending;
+        if (isDescription(name) && !p.description) {
+          p.description = original.slice(0, MENU_DESCRIPTION_MAX);
+          continue;
+        }
+        flushPending();
+      } else if ((open as MenuItemDraft | null) && isSentence(original)) {
+        const o = open as unknown as MenuItemDraft;
+        if (!o.description) {
+          o.description = original.slice(0, MENU_DESCRIPTION_MAX);
+          continue;
+        }
+      }
+      open = null;
+      pending = { name, line: original };
+    } catch {
+      unread.push(raw.trim());
+    }
+  }
+  flushPending();
+  return { items, unread: [...new Set(unread)], repeated };
 }

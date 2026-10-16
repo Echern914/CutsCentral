@@ -174,6 +174,7 @@ import {
 import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
 import type { AcuityAppointmentType } from "../acuity/types.js";
 import { applyServiceImport, previewServiceImport } from "../engines/acuityServiceImport.js";
+import { createServicesInBulk } from "../engines/serviceBulkCreate.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
 import { teamScheduleHook } from "../middleware/teamScheduleHook.js";
@@ -463,6 +464,39 @@ bookingDashboardRouter.post("/services", async (req, res) => {
     await extendSoloStaffHoursFromServices(req.shop!.id);
   }
   res.status(201).json({ id: service.id });
+});
+
+/**
+ * POST /services/bulk - the rows a barber kept from a pasted menu
+ * (engines/serviceBulkCreate.ts): all created in one transaction, offered by
+ * every staff member, and any name already on the menu skipped by name.
+ */
+const bulkServicesSchema = z
+  .object({
+    services: z
+      .array(
+        z
+          .object({
+            name: z.string().trim().min(1).max(120),
+            durationMin: z.number().int().min(5).max(600),
+            price: z.number().min(0).max(100000).nullable(),
+            description: z.string().max(800).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(100),
+  })
+  .strict();
+
+bookingDashboardRouter.post("/services/bulk", async (req, res) => {
+  const parsed = bulkServicesSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const result = await createServicesInBulk(req.shop!.id, parsed.data.services);
+  res.status(201).json({ created: result.created.length, skipped: result.skipped });
 });
 
 bookingDashboardRouter.patch("/services/:id", async (req, res) => {

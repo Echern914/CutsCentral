@@ -151,6 +151,20 @@ export type ServiceTimeWindow = {
   durationMin?: number | null;
 };
 
+/**
+ * The rows a barber kept from a pasted menu, saved together (API
+ * engines/serviceBulkCreate.ts). A name already on the menu comes back in
+ * `skipped`; a lost answer is "no answer", never "nothing saved".
+ */
+export async function createServicesBulkAction(
+  services: { name: string; durationMin: number; price: number | null; description?: string }[],
+): Promise<{ ok: true; created: number; skipped: string[] } | { ok: false; answered: boolean }> {
+  const res = await apiSend<{ created: number; skipped: string[] }>("POST", "/api/booking/services/bulk", { services });
+  revalidatePath("/dashboard/booking");
+  if (res.ok && res.data) return { ok: true, created: res.data.created, skipped: res.data.skipped };
+  return { ok: false, answered: apiAnswered(res.status) };
+}
+
 export async function createServiceAction(input: {
   name: string;
   description?: string;

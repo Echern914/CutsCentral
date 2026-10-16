@@ -40,6 +40,11 @@ describe("Switching from Booksy or TheCut guide", () => {
     expect(screen.getByRole("link", { name: "Open your hours" }).getAttribute("href")).toBe(
       "/dashboard/booking?tab=Staff",
     );
+    // Services come across too: pasted from the old profile, checked, then added.
+    expect(text).toContain("Paste your menu from another app");
+    expect(screen.getByRole("link", { name: "Open your services" }).getAttribute("href")).toBe(
+      "/dashboard/booking?tab=Services",
+    );
   });
 
   it("is honest that reviews can't move, and hands over a message with the review link", async () => {
