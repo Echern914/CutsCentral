@@ -3,6 +3,7 @@
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
+import { SELECTABLE_BUSINESS_TYPE_IDS } from "@chairback/config/businessTypes";
 import {
   LOGIN_NEXT_ALLOWLIST,
   SIGNUP_NEXT_ALLOWLIST,
@@ -140,7 +141,15 @@ export async function signupAction(
   // @chairback/config/nextPath): a redirect target chosen by whoever wrote the
   // link is a capability, and resuming an invitation is the entire set of
   // things signup needs to be able to do with it.
-  redirect(safeNextPath(formData.get("next"), SIGNUP_NEXT_ALLOWLIST, "/onboarding"));
+  const to = safeNextPath(formData.get("next"), SIGNUP_NEXT_ALLOWLIST, "/onboarding");
+  // Signed up from a business type page: setup pre-picks it. Only a real type
+  // id is passed on, and only to setup itself.
+  const type = String(formData.get("type") ?? "");
+  redirect(
+    to === "/onboarding" && (SELECTABLE_BUSINESS_TYPE_IDS as readonly string[]).includes(type)
+      ? `/onboarding?type=${encodeURIComponent(type)}`
+      : to,
+  );
 }
 
 export async function loginAction(
@@ -169,7 +178,9 @@ export async function loginAction(
   // past: "/\evil.example" and "/%2f%2fevil.example" are both relative to
   // that test and protocol-relative to Chrome and Safari. Same allowlist as
   // signup, widened to the gated surfaces the middleware actually bounces.
-  redirect(safeNextPath(formData.get("next"), LOGIN_NEXT_ALLOWLIST, "/dashboard"));
+  // No deep link: /onboarding/resume sends a shop still setting up back to its
+  // next step, and everyone else to the dashboard.
+  redirect(safeNextPath(formData.get("next"), LOGIN_NEXT_ALLOWLIST, "/onboarding/resume"));
 }
 
 export async function logoutAction(): Promise<void> {

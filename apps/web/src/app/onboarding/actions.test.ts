@@ -17,7 +17,12 @@ vi.mock("next/headers", () => ({
   headers: () => new Map(),
 }));
 const apiSend = vi.fn();
-vi.mock("@/lib/api", () => ({ apiSend: (...a: unknown[]) => apiSend(...a) }));
+// The account, read to see whether the texting terms were agreed at signup.
+const apiGet = vi.fn();
+vi.mock("@/lib/api", () => ({
+  apiSend: (...a: unknown[]) => apiSend(...a),
+  apiGet: (...a: unknown[]) => apiGet(...a),
+}));
 vi.mock("@/lib/activeShopCookie", () => ({ clearActiveShopCookie: vi.fn() }));
 vi.mock("@/lib/mobileReturn", () => ({ mintAppReturnUrl: async () => null }));
 const redirect = vi.fn();
@@ -37,6 +42,8 @@ const created = { ok: true, status: 201, data: { id: "shop_1" } };
 beforeEach(() => {
   cookieStore.clear();
   apiSend.mockReset();
+  apiGet.mockReset();
+  apiGet.mockResolvedValue({ ok: true, status: 200, data: { smsAttested: false } });
   redirect.mockReset();
 });
 
@@ -50,7 +57,7 @@ describe("creating a business from a team link", () => {
       ["POST", "/api/teams/join"],
     ]);
     expect(apiSend.mock.calls[1]![2]).toEqual({ team: "cmteamshop0001" });
-    expect(redirect).toHaveBeenCalledWith("/onboarding/connect");
+    expect(redirect).toHaveBeenCalledWith("/onboarding/booking");
   });
 
   it("🔴 forgets the team once the request is in - it can't ask again for the next person in this browser", async () => {
@@ -80,7 +87,7 @@ describe("creating a business from a team link", () => {
     cookieStore.set("cb_team_link", "cmteamshop0001");
     apiSend.mockResolvedValueOnce(created).mockResolvedValueOnce({ ok: false, status: 0, error: "network_error" });
     await createShopAction({}, form());
-    expect(redirect).toHaveBeenCalledWith("/onboarding/connect");
+    expect(redirect).toHaveBeenCalledWith("/onboarding/booking");
     expect(cookieStore.get("cb_team_link")).toBe("cmteamshop0001");
   });
 
@@ -134,29 +141,47 @@ describe("a referral code at signup", () => {
 });
 
 /**
- * 🔴 STEP 1 NAMES WHAT TO FIX. A cleared "Punches needed" box went out as 0
- * (Number("")), the API refused it, and every refusal read "Check the booking
- * URL" - for a URL the new owner never typed.
+ * Step 1 asks only what can't be known already. How clients book is the next
+ * step and the reward comes with Rewards, so neither is sent from here; the
+ * texting agreement is asked only of someone who didn't give it at signup.
  */
-describe("step 1 refusals", () => {
-  it("a cleared Punches needed box is left to the default, not sent as 0", async () => {
+describe("step 1", () => {
+  it("🔴 agreed at signup (a password account): created without asking again", async () => {
+    apiGet.mockResolvedValue({ ok: true, status: 200, data: { smsAttested: true } });
     apiSend.mockResolvedValue(created);
     const f = form();
-    f.set("rewardThreshold", "");
+    f.delete("smsAttested");
     await createShopAction({}, f);
-    expect(apiSend.mock.calls[0]![2]).not.toHaveProperty("rewardThreshold");
+    expect(apiSend.mock.calls[0]![1]).toBe("/api/shops");
+    expect(apiSend.mock.calls[0]![2]).toMatchObject({ smsAttested: true });
   });
 
-  it("🔴 an out-of-range punch count says so, not 'Check the booking URL'", async () => {
-    apiSend.mockResolvedValue({
-      ok: false,
-      status: 400,
-      error: "invalid_input",
-      issues: [{ path: ["rewardThreshold"], message: "too big" }],
-    });
+  it("🔴 not agreed yet (Google or Apple sign-in): the box is required, and nothing is created without it", async () => {
+    for (const me of [{ ok: true, status: 200, data: { smsAttested: false } }, { ok: false, status: 0 }]) {
+      apiGet.mockResolvedValue(me);
+      const f = form();
+      f.delete("smsAttested");
+      const out = await createShopAction({}, f);
+      expect(out.error).toMatch(/confirm the SMS consent/);
+    }
+    expect(apiSend).not.toHaveBeenCalled();
+  });
+
+  it("the booking link and the reward are not sent from here any more", async () => {
+    apiSend.mockResolvedValue(created);
     const f = form();
+    f.set("bookingUrl", "https://booksy.com/x");
     f.set("rewardThreshold", "500");
-    const out = await createShopAction({}, f);
-    expect(out).toMatchObject({ error: "Punches needed must be a whole number from 1 to 100." });
+    f.set("rewardLabel", "Free cut");
+    await createShopAction({}, f);
+    const body = apiSend.mock.calls[0]![2] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("bookingUrl");
+    expect(body).not.toHaveProperty("rewardThreshold");
+    expect(body).not.toHaveProperty("rewardLabel");
+  });
+
+  it("a refusal names what to fix", async () => {
+    apiSend.mockResolvedValue({ ok: false, status: 400, error: "invalid_input", issues: [{ path: ["name"], message: "too long" }] });
+    expect(await createShopAction({}, form())).toMatchObject({ error: "Keep the shop name under 120 characters." });
   });
 });

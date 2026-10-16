@@ -45,6 +45,7 @@ export function AuthForm({
   forgotPasswordAvailable = false,
   initialError,
   next,
+  businessType,
 }: {
   mode: "login" | "signup";
   action: (
@@ -69,6 +70,8 @@ export function AuthForm({
   initialError?: string;
   /** Deep link to return to after login (set by the middleware redirect). */
   next?: string;
+  /** Signup from a business type page: passed on to setup, which pre-picks it. */
+  businessType?: string;
 }) {
   const [state, formAction] = useFormState(action, {});
   const isSignup = mode === "signup";
@@ -187,6 +190,7 @@ export function AuthForm({
           )}
           <form action={formAction} className="flex flex-col gap-3">
             {next && <input type="hidden" name="next" value={next} />}
+            {businessType && <input type="hidden" name="type" value={businessType} />}
             {isSignup && (
               <input
                 name="name"

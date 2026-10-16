@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { API_BASE, apiGet, apiSend } from "@/lib/api";
+import { API_BASE, apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { homeWithoutShop } from "@/lib/partnerHome";
 import { StatCards, type Stats } from "./_components/StatCards";
@@ -153,21 +153,10 @@ export default async function DashboardPage({
     .filter((r: TodayRow) => shopDayKey(r.start) === todayKey)
     .sort((a: TodayRow, b: TodayRow) => a.start.localeCompare(b.start));
 
-  // Brand-new barber? Arm the interactive dashboard tour right here on their
-  // real pages (?tour=1 bootstraps the DemoTour overlay below). Stamp seen
-  // FIRST so this fires exactly once; the ?tour guard makes a failed stamp
-  // unable to redirect-loop. Default true so a failed /me load never hijacks
-  // an existing barber into the tour. Demo sessions are excluded: the shared
-  // demo user can't be stamped (read-only), so without the guard every plain
-  // /dashboard visit would re-arm the tour on prospects.
-  if (
-    !(me.data?.welcomeSeen ?? true) &&
-    !me.data?.demo &&
-    searchParams?.tour === undefined
-  ) {
-    await apiSend("POST", "/api/auth/welcome-seen");
-    redirect("/dashboard?tour=1");
-  }
+  // The dashboard tour is OFFERED, never started by itself (Eric, 2026-10-16:
+  // a first visit with no interruptions). Setup's last screen and the
+  // Assistant offer "Take a 1-minute tour" (?tour=1 bootstraps the DemoTour
+  // overlay below); finishing setup stamps welcome-seen.
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-5 sm:py-8">

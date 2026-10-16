@@ -1,203 +1,25 @@
-"use client";
+import { redirect } from "next/navigation";
+import { SELECTABLE_BUSINESS_TYPE_IDS, type BusinessTypeId } from "@chairback/config/businessTypes";
+import { apiGet } from "@/lib/api";
+import { ShopForm } from "./ShopForm";
+import { getOnboardingState, resumeHref } from "./state";
 
-import { useState } from "react";
-import { useFormState, useFormStatus } from "react-dom";
-import { motion } from "framer-motion";
-import {
-  BUSINESS_TYPES,
-  SELECTABLE_BUSINESS_TYPE_IDS,
-  type BusinessTypeId,
-} from "@chairback/config/businessTypes";
-import { createShopAction } from "./actions";
-import { saveThemeAction } from "../dashboard/actions";
-import { ThemePicker } from "@/components/ThemePicker";
-import { fadeUp } from "@/components/motion/variants";
-import { Card } from "@/components/ui/Card";
-import { FormError } from "@/components/ui/FormError";
-import { TrackConversion } from "@/components/TrackConversion";
+/**
+ * FIRST-TIME SETUP starts here, and comes back here. A shop that is set up
+ * goes to its dashboard; one half way through goes to the first thing it is
+ * still missing (config/onboarding.ts); only someone with no shop of their own
+ * sees the form.
+ */
+export default async function OnboardingPage({
+  searchParams,
+}: {
+  searchParams?: { type?: string };
+}) {
+  const state = await getOnboardingState();
+  if (state) redirect(state.shop.completedAt ? "/dashboard" : resumeHref(state));
 
-// Keep the global :focus-visible ring (WCAG 2.4.7): no `outline-none`, and the
-// border tint is a supplement to that ring, not the sole focus indicator.
-const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
-
-function Submit() {
-  const { pending } = useFormStatus();
-  return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
-    >
-      {pending ? "Creating…" : "Continue"}
-    </button>
-  );
-}
-
-export default function OnboardingShopPage() {
-  const [state, action] = useFormState(createShopAction, {});
-  // No default vertical: force an explicit pick so a non-barber shop never
-  // silently inherits "barber" (which would wrong-foot its seeded reward + SMS).
-  // The API mirrors this - it stamps businessTypeSelectedAt only when a type is
-  // actually supplied, so an unanswered question stays visibly unanswered.
-  const [industry, setIndustry] = useState<BusinessTypeId | "">("");
-
-  return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5">
-      {/* Signup conversion. /onboarding is the first page after a successful
-          signup redirect; fires once per session so a refresh doesn't re-count. */}
-      <TrackConversion event="signup" dedupeKey="signup" />
-      <motion.div variants={fadeUp} initial="hidden" animate="show">
-        <p className="text-center text-xs uppercase tracking-[0.2em] text-muted">
-          Step 1 of 3
-        </p>
-        <h1 className="mb-6 mt-2 text-center font-display text-3xl tracking-tight">
-          Set up your shop
-        </h1>
-        <Card className="p-6">
-          <form action={action} className="flex flex-col gap-3">
-            <input
-              name="name"
-              placeholder="Shop or studio name"
-              aria-label="Shop or studio name"
-              required
-              maxLength={120}
-              className={field}
-            />
-            <select
-              name="industry"
-              aria-label="What kind of business are you setting up?"
-              value={industry}
-              onChange={(e) => setIndustry(e.target.value as BusinessTypeId)}
-              required
-              className={field}
-            >
-              <option value="" disabled>
-                What kind of business are you setting up?
-              </option>
-              {SELECTABLE_BUSINESS_TYPE_IDS.map((k) => (
-                <option key={k} value={k}>
-                  {BUSINESS_TYPES[k].emoji} {BUSINESS_TYPES[k].label}
-                </option>
-              ))}
-            </select>
-            {/* The tagline disambiguates neighbours ("Hair Salon" vs
-                "Multi-Service Salon") without making the picker a wall of text. */}
-            {industry ? (
-              <p className="-mt-1 text-xs text-muted">{BUSINESS_TYPES[industry].tagline}</p>
-            ) : null}
-            <input
-              name="bookingUrl"
-              type="url"
-              placeholder="Booking link (optional — Acuity, Booksy, Square…)"
-              aria-label="Booking link (optional)"
-              className={field}
-            />
-            <p className="-mt-1 text-xs text-muted">
-              No booking link? Leave this blank — you can run booking right here
-              on ChairBack (set it up in the Booking tab after signup).
-            </p>
-            <select
-              name="timezone"
-              aria-label="Time zone"
-              defaultValue="America/New_York"
-              className={field}
-            >
-              {/* Quiet-hours (TCPA) enforcement keys off this - cover every US
-                  zone so no shop has to pick a wrong one. */}
-              <option value="America/New_York">Eastern (New York)</option>
-              <option value="America/Chicago">Central (Chicago)</option>
-              <option value="America/Denver">Mountain (Denver)</option>
-              <option value="America/Phoenix">Arizona (Phoenix, no DST)</option>
-              <option value="America/Los_Angeles">Pacific (Los Angeles)</option>
-              <option value="America/Anchorage">Alaska (Anchorage)</option>
-              <option value="Pacific/Honolulu">Hawaii (Honolulu)</option>
-              <option value="America/Puerto_Rico">Atlantic (Puerto Rico)</option>
-            </select>
-            <div>
-              <p className="mb-2 text-xs text-muted">
-                Your first reward (you can build a full menu later in the Rewards tab)
-              </p>
-              <div className="grid grid-cols-2 gap-3">
-                <input
-                  name="rewardThreshold"
-                  type="number"
-                  min={1}
-                  max={100}
-                  step={1}
-                  inputMode="numeric"
-                  defaultValue={10}
-                  placeholder="Punches needed"
-                  aria-label="Punches needed for the reward"
-                  className={field}
-                />
-                <input
-                  name="rewardLabel"
-                  maxLength={80}
-                  key={industry}
-                  defaultValue={industry ? BUSINESS_TYPES[industry].defaultReward.name : ""}
-                  placeholder="Reward name"
-                  aria-label="Reward name"
-                  className={field}
-                />
-              </div>
-            </div>
-            {/* Optional partner code ("ERIC C"). Case and spaces don't
-                matter; a code that can't be used is explained right here and
-                nothing is created until it is fixed or cleared. */}
-            <input
-              name="partnerCode"
-              placeholder="Referral code (optional)"
-              aria-label="Referral code (optional)"
-              autoCapitalize="characters"
-              autoComplete="off"
-              maxLength={64}
-              aria-invalid={state.field === "partnerCode" || undefined}
-              aria-describedby={state.field === "partnerCode" ? "partner-code-error" : undefined}
-              className={field}
-            />
-            {state.field === "partnerCode" ? (
-              <FormError id="partner-code-error" className="-mt-1">
-                {state.error}
-              </FormError>
-            ) : null}
-            <label className="mt-1 flex items-start gap-2.5 text-xs leading-relaxed text-muted">
-              <input
-                type="checkbox"
-                name="smsAttested"
-                required
-                className="mt-0.5 h-4 w-4 shrink-0 rounded border-subtle bg-charcoal-700 accent-gold"
-              />
-              <span>
-                I&apos;ll only add and text clients who agreed to receive
-                messages from my shop, and I&apos;m authorized to send on their
-                behalf.
-              </span>
-            </label>
-            <FormError className="text-sm">
-              {state.field === "partnerCode" ? undefined : state.error}
-            </FormError>
-            <div className="mt-1">
-              <Submit />
-            </div>
-          </form>
-        </Card>
-        {/* Eric: "at the beginning when creating the account should have a
-            choose a Dark Mode and Light Mode." Taps apply instantly (the page
-            flipping under the tap IS the preview) and persist to the account -
-            the user exists by this point. Below the form rather than a gating
-            step: picking a look must never stand between a barber and their
-            first shop. */}
-        <div className="mt-5">
-          <p className="mb-2 text-center text-xs uppercase tracking-[0.2em] text-muted">
-            Pick your look
-          </p>
-          <ThemePicker value="dark" onPick={(t) => void saveThemeAction(t)} />
-          <p className="mt-2 text-center text-xs text-muted">
-            You can switch anytime in Account.
-          </p>
-        </div>
-      </motion.div>
-    </main>
-  );
+  const me = await apiGet<{ smsAttested?: boolean }>("/api/auth/me");
+  const type = searchParams?.type ?? "";
+  const initialType = (SELECTABLE_BUSINESS_TYPE_IDS as readonly string[]).includes(type) ? (type as BusinessTypeId) : "";
+  return <ShopForm smsAttested={me.data?.smsAttested === true} initialType={initialType} />;
 }
