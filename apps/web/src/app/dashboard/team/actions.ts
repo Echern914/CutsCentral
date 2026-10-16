@@ -43,7 +43,7 @@ export async function revokeInviteAction(id: string): Promise<TeamActionResult> 
 
 export async function updateMemberAction(
   id: string,
-  input: { role?: "MANAGER" | "BARBER"; staffId?: string | null },
+  input: { role?: "MANAGER" | "BARBER"; staffId?: string | null; offerServiceIds?: string[] },
 ): Promise<TeamActionResult> {
   const res = await apiSend<{ ok: boolean }>("PATCH", `/api/team/members/${id}`, input);
   revalidatePath("/dashboard/team");

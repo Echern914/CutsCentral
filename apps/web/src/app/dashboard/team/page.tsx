@@ -17,6 +17,8 @@ export interface TeamMember {
   role: ShopRole;
   /** The chair this person works, when their seat is linked to one. */
   staffId: string | null;
+  /** The services this seat may make offers for (Offers & codes). */
+  offerServiceIds?: string[];
   joinedAt: string;
   user: { id: string; name: string; email: string; avatarUrl: string | null };
 }
@@ -38,6 +40,8 @@ export interface TeamData {
   staff: { id: string; name: string }[];
   /** Invitations need transactional email; false hides the invite form. */
   inviteAvailable: boolean;
+  /** What a seat's offer permission picks from; null while Offers & codes is off. */
+  offerServices?: { id: string; name: string }[] | null;
 }
 
 export default async function TeamPage() {

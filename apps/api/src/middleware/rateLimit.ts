@@ -143,6 +143,17 @@ export const rewardsLimiter = make({
   keyGenerator: publicIpKey,
 });
 
+/**
+ * The booking page's "Have a code?" check: bounds guessing a shop's codes.
+ * Per visitor. (A personal offer is refused online whatever is guessed.)
+ */
+export const offerCodeLimiter = make({
+  name: "offercode",
+  windowMs: 60 * 1000,
+  limit: 10,
+  keyGenerator: publicIpKey,
+});
+
 /** Public lead-form submissions: spam-bounded. Per visitor, tight. */
 export const leadLimiter = make({
   name: "lead",

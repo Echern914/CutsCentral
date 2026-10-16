@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { apiGet } from "@/lib/api";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { getMe } from "@/lib/me";
@@ -32,6 +33,8 @@ export default async function PromotionsPage() {
   const locks = featureLocks(await getBillingSummary());
   // Tiers exist only while rewards are on; the tier audience follows suit.
   const me = await getMe();
+  // Offers & codes: always linked, so an owner can find its switch.
+  const offers = await apiGet<{ enabled: boolean }>("/api/offers");
   if (!res.ok || !res.data) {
     return <main className="p-8 text-muted">Could not load your promotions.</main>;
   }
@@ -44,6 +47,17 @@ export default async function PromotionsPage() {
           Run your own specials: discounts, freebies, or double-punch windows. Live
           promos show on your clients&apos; rewards page, and you can text them out.
         </p>
+        {offers.ok && (
+          <p className="mt-2 text-sm">
+            <Link href="/dashboard/offers" className="text-gold underline-offset-4 hover:underline">
+              Offers &amp; codes
+            </Link>{" "}
+            <span className="text-muted">
+              take money off a booking, for anyone with a code or one client
+              {offers.data?.enabled ? "." : " (off until the shop owner switches it on)."}
+            </span>
+          </p>
+        )}
       </header>
       {/* The nuance a bare diamond can't carry: promos themselves stay free
           (they render on the public page); only TEXTING them out is Premium. */}

@@ -49,7 +49,8 @@
     "./addOns": "./src/addOns.ts",
     "./tips": "./src/tips.ts",
     "./promoPricing": "./src/promoPricing.ts",
-    "./servicePricing": "./src/servicePricing.ts"
+    "./servicePricing": "./src/servicePricing.ts",
+    "./offers": "./src/offers.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

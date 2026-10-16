@@ -152,6 +152,7 @@ export const TIP_ASK_APPT_SELECT = {
   clientId: true,
   groupId: true,
   priceAtBooking: true,
+  offerRedemption: { select: { listPriceCents: true } },
   completedByShop: true,
   paidAt: true,
   checkInStatus: true,

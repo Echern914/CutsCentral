@@ -11,6 +11,8 @@ export interface BookingShop {
   /** Already on the wire from /api/shops/me (serializeShop) - the interface
    *  just never declared it. Printed on the QR card. */
   name: string;
+  /** Offers & codes is switched on (absent from an older API = off). */
+  offersEnabled?: boolean;
   slug: string | null;
   bookingMode: BookingModeKey;
   bookingUrl: string | null;
