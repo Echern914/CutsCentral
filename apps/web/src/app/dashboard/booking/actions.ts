@@ -162,7 +162,7 @@ export async function createServicesBulkAction(
   const res = await apiSend<{ created: number; skipped: string[] }>("POST", "/api/booking/services/bulk", { services });
   revalidatePath("/dashboard/booking");
   if (res.ok && res.data) return { ok: true, created: res.data.created, skipped: res.data.skipped };
-  return { ok: false, answered: apiAnswered(res) };
+  return { ok: false, answered: apiAnswered(res.status) };
 }
 
 export async function createServiceAction(input: {
