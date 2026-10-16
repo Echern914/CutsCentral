@@ -317,6 +317,11 @@ model Shop {
   // must not be presented as barbershops on the strength of that.
   // Never written by a migration again - only by an owner or manager choosing.
   businessTypeSelectedAt DateTime?
+  // When the owner finished first-time setup (onboarding), or chose to skip it.
+  // NULL = a new shop still setting up: signing in on the web resumes setup at
+  // its next step. Every shop that existed before this column is set to its
+  // createdAt by the migration, so no established shop is ever sent back.
+  onboardingCompletedAt  DateTime?
   // Optional custom singular visit-noun ("twist"); null = the industry default
   // via serviceNounFor. Flavors Insights copy + client texts. Stored lowercase.
   serviceNoun         String?

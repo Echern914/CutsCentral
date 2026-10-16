@@ -50,7 +50,8 @@
     "./tips": "./src/tips.ts",
     "./promoPricing": "./src/promoPricing.ts",
     "./servicePricing": "./src/servicePricing.ts",
-    "./offers": "./src/offers.ts"
+    "./offers": "./src/offers.ts",
+    "./onboarding": "./src/onboarding.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

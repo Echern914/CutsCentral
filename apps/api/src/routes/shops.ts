@@ -1882,6 +1882,7 @@ function serializeShop(shop: {
   takesRequests: boolean;
   waitlistEnabled: boolean;
   offersEnabled: boolean;
+  onboardingCompletedAt: Date | null;
   walkInEnabled: boolean;
   walkInAcceptingNow: boolean;
   slotOpenedTextsEnabled: boolean;
@@ -1957,6 +1958,8 @@ function serializeShop(shop: {
     waitlistEnabled: shop.waitlistEnabled,
     // Offers & codes is switched on for this shop (engines/offers.ts).
     offersEnabled: shop.offersEnabled,
+    // Null = first-time setup not finished: signing in on the web resumes it.
+    onboardingCompletedAt: shop.onboardingCompletedAt?.toISOString() ?? null,
     walkInEnabled: shop.walkInEnabled,
     walkInAcceptingNow: shop.walkInAcceptingNow,
     slotOpenedTextsEnabled: shop.slotOpenedTextsEnabled,

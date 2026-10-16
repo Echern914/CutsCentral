@@ -211,6 +211,10 @@ export default function VerticalPage({
   const v = verticalCopy(params.vertical);
   if (!v) notFound();
 
+  // Signing up from this page already says what kind of business it is:
+  // setup pre-picks it instead of asking again.
+  const signupHref = `/signup?type=${v.industryKey}`;
+
   return (
     <div className="relative min-h-dvh overflow-x-clip">
       <div
@@ -238,7 +242,7 @@ export default function VerticalPage({
               Sign in
             </Link>
             <Link
-              href="/signup"
+              href={signupHref}
               className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-charcoal shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
             >
               Get started
@@ -260,7 +264,7 @@ export default function VerticalPage({
           </p>
           <div className="mt-9 flex flex-wrap items-center justify-center gap-4">
             <Link
-              href="/signup"
+              href={signupHref}
               className="rounded-full bg-gold-gradient px-8 py-3.5 text-sm font-semibold text-charcoal shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
             >
               Start your {BILLING.trialDays}-day free trial
@@ -303,7 +307,7 @@ export default function VerticalPage({
             signup and the defaults are already right.
           </p>
           <Link
-            href="/signup"
+            href={signupHref}
             className="mt-7 inline-block rounded-full bg-gold-gradient px-9 py-3.5 text-sm font-semibold text-charcoal shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
           >
             Get started free

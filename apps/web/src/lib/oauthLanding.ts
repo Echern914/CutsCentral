@@ -53,7 +53,8 @@ export async function completeOauthLanding(
   // with no shop still falls through to /onboarding by way of /dashboard; an
   // INVITED barber goes back to their invitation instead, which is the whole
   // reason this is read here rather than hardcoded.
-  const next = readAuthNext("/dashboard");
+  // No deep link: a shop still setting up resumes setup (/onboarding/resume).
+  const next = readAuthNext("/onboarding/resume");
   const redirect = NextResponse.redirect(new URL(next, req.url));
   redirect.cookies.set(SESSION_COOKIE_NAME, token, SESSION_COOKIE_OPTIONS);
   // Domain-wide copy so browser navigations to api.<apex> (the Acuity OAuth

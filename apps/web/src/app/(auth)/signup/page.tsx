@@ -15,7 +15,7 @@ export const metadata = { title: "Create your account" };
 export default async function SignupPage({
   searchParams,
 }: {
-  searchParams: { next?: string };
+  searchParams: { next?: string; type?: string };
 }) {
   const [google, apple] = await Promise.all([
     apiPublicGet<{ available: boolean }>("/api/auth/google/available"),
@@ -30,6 +30,8 @@ export default async function SignupPage({
       appleAvailable={apple.data?.available ?? false}
       appleStartUrl="/auth/start/apple"
       next={searchParams.next}
+      // From a business type page: setup pre-picks it instead of asking.
+      businessType={searchParams.type}
     />
   );
 }

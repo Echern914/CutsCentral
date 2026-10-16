@@ -4,9 +4,11 @@ import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { TEAM_LINK_COOKIE, teamKeyOk } from "@/lib/teamLinkCookie";
 import { BackfillPoller } from "./BackfillPoller";
+import { FinishSetup, ShareLink } from "./FinishSetup";
+import { getOnboardingState } from "../state";
 
 // Distinct document title per route (WCAG 2.4.2) via the root %s template.
-export const metadata = { title: "You're all set" };
+export const metadata = { title: "Setup done" };
 
 interface ShopStatus {
   connected: boolean;
@@ -15,36 +17,54 @@ interface ShopStatus {
 }
 
 export default async function OnboardingDonePage() {
-  const [res, teamsRes, retry] = await Promise.all([
+  const [res, teamsRes, retry, setup] = await Promise.all([
     apiGet<ShopStatus>("/api/shops/me"),
     // This business's teams, from the database - not from a cookie. A brand
     // new business is only on a team (or waiting) because setup just asked.
     apiGet<{ links: { id: string; status: "PENDING" | "ACTIVE"; team: { name: string } }[] }>("/api/teams"),
     teamToRetry(),
+    getOnboardingState(),
   ]);
   const status = res.data;
   const teams = teamsRes.ok ? (teamsRes.data?.links ?? []) : [];
+  const facts = setup?.facts;
+  const native = facts?.bookingMode === "native";
+  // Bookable: a chair, a service and someone's hours. Anything missing stays
+  // on the dashboard's checklist - said here, never blocked on.
+  const bookable = Boolean(native && facts && facts.staffCount > 0 && facts.serviceCount > 0 && facts.staffWithHours > 0);
+  const appBase = process.env.APP_BASE_URL ?? "";
+  const bookUrl = setup?.shop.slug ? `${appBase}/book/${setup.shop.slug}` : null;
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5">
+      {/* Setup is finished once this screen is up: sign-in stops resuming it. */}
+      {setup && !setup.shop.completedAt && <FinishSetup />}
       {/* Light auto-refresh while backfill imports history (stops on its own) */}
       <BackfillPoller
         active={Boolean(status?.connected) && (status?.visitCount ?? 0) === 0}
       />
-      <p className="text-center text-xs uppercase tracking-[0.2em] text-muted">
-        Step 3 of 3
-      </p>
       <h1 className="mb-2 mt-2 text-center font-display text-3xl tracking-tight">
-        You&apos;re all set
+        {bookable && setup?.shop.publicPageEnabled ? "You're live" : "You're all set"}
       </h1>
       <Card className="mt-4 flex flex-col items-center gap-4 p-8 text-center">
         {/* role=status: the poller swaps importing → imported without a page
             navigation, so the result must be announced to screen readers. */}
-        {!status?.connected ? (
+        {native ? (
+          bookable && bookUrl && setup?.shop.publicPageEnabled ? (
+            <>
+              <p className="text-sm text-muted">Clients can book you here. Put it in your Instagram bio and send it to your regulars.</p>
+              <ShareLink url={bookUrl} />
+            </>
+          ) : (
+            <p className="text-sm text-muted" data-testid="setup-left">
+              Your page takes bookings once it has someone to book, a service and hours. What&apos;s left is on your
+              dashboard.
+            </p>
+          )
+        ) : !status?.connected ? (
           <p className="text-sm text-muted">
-            No booking platform connected yet. You can connect Acuity or Square
-            anytime from the Booking tab - or use ChairBack&apos;s own booking
-            page instead.
+            Your page&apos;s Book button opens your booking link. You can switch to ChairBack&apos;s own booking anytime
+            under Calendar → Settings.
           </p>
         ) : status.visitCount === 0 ? (
           <div role="status" className="flex w-full flex-col items-center gap-4">
@@ -86,12 +106,18 @@ export default async function OnboardingDonePage() {
             </Link>
           </>
         ) : (
-          <Link
-            href="/dashboard"
-            className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105"
-          >
-            Go to dashboard
-          </Link>
+          <>
+            <Link
+              href="/dashboard"
+              className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105"
+            >
+              Go to your dashboard
+            </Link>
+            {/* Offered, never started by itself. */}
+            <Link href="/dashboard?tour=1" className="text-sm text-muted underline-offset-4 hover:text-offwhite hover:underline">
+              Take a 1-minute tour
+            </Link>
+          </>
         )}
       </Card>
     </main>

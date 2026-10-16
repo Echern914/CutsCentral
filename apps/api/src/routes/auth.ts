@@ -205,6 +205,7 @@ authRouter.get("/me", requireUser, async (req, res) => {
       avatarUrl: true,
       isAdmin: true,
       welcomeSeenAt: true,
+      smsAttestedAt: true,
       // "What's new" in the bell: the last entry seen, and when the account
       // began (a new account is not greeted with the whole history).
       whatsNewSeenId: true,
@@ -251,7 +252,7 @@ authRouter.get("/me", requireUser, async (req, res) => {
     req.cookies?.[ACTIVE_SHOP_COOKIE_NAME] as string | undefined,
   );
   const activeShop = access?.shop ?? null;
-  const { welcomeSeenAt, passwordHash, googleId, appleId, whatsNewSeenId, createdAt, ...rest } = user;
+  const { welcomeSeenAt, passwordHash, googleId, appleId, whatsNewSeenId, createdAt, smsAttestedAt, ...rest } = user;
   // Whether the ACTIVE shop has rewards on - the dashboard chrome hides every
   // rewards surface (nav tab etc.) for a rewards-off shop. industry/serviceNoun
   // ride the same read so /me can hand the dashboard its resolved visit-noun.
@@ -269,6 +270,8 @@ authRouter.get("/me", requireUser, async (req, res) => {
   res.json({
     ...rest,
     welcomeSeen: welcomeSeenAt !== null,
+    // Already agreed to the texting terms (at signup): setup does not ask again.
+    smsAttested: smsAttestedAt !== null,
     whatsNew: { seenId: whatsNewSeenId, accountCreatedAt: createdAt.toISOString() },
     hasPassword: passwordHash !== null,
     hasGoogle: googleId !== null,

@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AFFILIATE_CLAIM_COOKIE } from "@chairback/config";
 import { PARTNER_CODE_ERROR_COPY } from "@chairback/config/partnerProgram";
-import { apiSend } from "@/lib/api";
+import { apiGet, apiSend } from "@/lib/api";
 import { clearActiveShopCookie } from "@/lib/activeShopCookie";
 import { mintAppReturnUrl } from "@/lib/mobileReturn";
 import { TEAM_LINK_COOKIE, clearTeamLinkCookie, teamKeyOk } from "@/lib/teamLinkCookie";
@@ -20,9 +20,11 @@ export async function createShopAction(
   formData: FormData,
 ): Promise<ShopState> {
   // SMS attestation is required to create a shop (the API enforces it too).
-  // This is the consent gate for the Google sign-in path, which skips the
-  // signup form where password users already attested.
-  if (formData.get("smsAttested") !== "on") {
+  // Someone who signed up with a password gave it on the signup form, so the
+  // form doesn't ask twice; Google and Apple sign-in skip that form, and are
+  // asked here. Read from the account, never trusted from the form.
+  const me = await apiGet<{ smsAttested?: boolean }>("/api/auth/me");
+  if (me.data?.smsAttested !== true && formData.get("smsAttested") !== "on") {
     return { error: "Please confirm the SMS consent statement to continue." };
   }
   // 🔴 No `?? "other"` fallback. The picker is `required` and deliberately has no
@@ -32,16 +34,12 @@ export async function createShopAction(
   // that renders neutral wording and gets asked once, which is the honest result.
   const industry = String(formData.get("industry") ?? "").trim();
   const partnerCode = String(formData.get("partnerCode") ?? "").trim();
-  // A cleared box is "use the default", not 0 - Number("") is 0, which the API
-  // refuses, and the owner was told to check a booking URL they never entered.
-  const rawThreshold = String(formData.get("rewardThreshold") ?? "").trim();
+  // How clients book is its own step next; the reward is set up when Rewards
+  // is switched on (the API seeds its default for the business type).
   const res = await apiSend("POST", "/api/shops", {
     name: String(formData.get("name") ?? ""),
     ...(industry ? { industry } : {}),
-    bookingUrl: String(formData.get("bookingUrl") ?? ""),
     timezone: String(formData.get("timezone") ?? "America/New_York"),
-    ...(rawThreshold ? { rewardThreshold: Number(rawThreshold) } : {}),
-    rewardLabel: String(formData.get("rewardLabel") ?? "").trim() || undefined,
     smsAttested: true,
     ...(partnerCode ? { partnerCode } : {}),
   });
@@ -75,7 +73,7 @@ export async function createShopAction(
   // of it. What remains of onboarding (connect a calendar, and so on) is
   // optional polish they can finish in the app on a real dashboard.
   const returnUrl = await mintAppReturnUrl("new_shop");
-  redirect(returnUrl ?? "/onboarding/connect");
+  redirect(returnUrl ?? "/onboarding/booking");
 }
 
 /**
@@ -105,10 +103,8 @@ async function askTheTeamTheyCameFor(): Promise<void> {
 function onboardingRefusal(res: { error?: string; issues?: { path: (string | number)[] }[] }): string {
   const field = res.issues?.[0]?.path?.[0];
   if (res.error === "invalid_input") {
-    if (field === "rewardThreshold") return "Punches needed must be a whole number from 1 to 100.";
     if (field === "name") return "Keep the shop name under 120 characters.";
-    if (field === "rewardLabel") return "Keep the reward name under 80 characters.";
-    if (field === "bookingUrl") return "That booking link doesn't look right. Use a full link starting with https://, or leave it blank.";
+    if (field === "timezone") return "Pick your time zone from the list.";
   }
   return "Could not create your shop. Check the details and try again.";
 }

@@ -50,6 +50,7 @@ import { yearlyReportRouter } from "./routes/yearlyReport.js";
 import { notificationsRouter } from "./routes/notifications.js";
 import { mcpConnectionsRouter } from "./routes/mcp.connections.js";
 import { readinessRouter } from "./routes/readiness.js";
+import { onboardingRouter } from "./routes/onboarding.js";
 import { bookedOutRouter } from "./routes/bookedOut.js";
 import { teamRouter } from "./routes/team.js";
 import { teamJoinRouter } from "./routes/teamJoin.js";
@@ -282,6 +283,8 @@ export function createApp(): Express {
   // "your subscription lapsed" is one of the answers it reports. It carries
   // its own dashboardLimiter, auth and shop scoping.
   app.use("/api/readiness", readinessRouter);
+  // First-time setup state (web /onboarding). Not behind the paywall, like readiness.
+  app.use("/api/onboarding", dashboardLimiter, onboardingRouter);
   // "How do I get booked out more?" from the shop's own numbers (Assistant).
   app.use("/api/assistant/booked-out", bookedOutRouter);
   // The barber's own list of connected assistants, and the disconnect button.
