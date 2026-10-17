@@ -6200,6 +6200,9 @@ model ProviderAward {
   title         String
   // The name the page shows: the person, not necessarily the shop.
   winnerName    String
+  // What they do, under their name: "Knotless braids · Boho locs". Their
+  // most-booked services unless ChairBack wrote it. Null = no line.
+  specialty     String?
   // How they won, one line: "Most booked in October".
   headline      String
   // Why, a few sentences, written by ChairBack.
@@ -6207,6 +6210,10 @@ model ProviderAward {
   // [{ key, label, value }] shown under the banner.
   stats         Json     @default("[]")
   awardedById   String?
+  // The winner approves exactly what is posted first: PENDING | APPROVED |
+  // DECLINED (CHECK in SQL). Only APPROVED shows on their page.
+  status        String   @default("PENDING")
+  decidedAt     DateTime?
   createdAt     DateTime @default(now())
 
   @@unique([shopId, month])

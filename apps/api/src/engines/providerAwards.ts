@@ -1,5 +1,6 @@
 import { prisma } from "@chairback/db";
 import {
+  AWARD_LIMITS,
   AWARD_STAT_KEYS,
   awardIsShowing,
   awardMonthKey,
@@ -56,6 +57,37 @@ export async function awardStatsFor(
   return out;
 }
 
+/**
+ * What they do, for the line under their name (Eric: "it should show what
+ * her service is" - not every winner is a barber). Their two most-booked
+ * services over the last 90 days; with no bookings yet, the first two on
+ * their menu. Null when they have neither. ChairBack can always write it.
+ */
+export async function specialtyFor(shopId: string, now: Date = new Date()): Promise<string | null> {
+  const since = new Date(now.getTime() - 90 * 86_400_000);
+  const booked = await prisma.appointment.groupBy({
+    by: ["serviceId"],
+    where: { shopId, status: { in: ["COMPLETED", "BOOKED"] }, startsAt: { gte: since, lte: now } },
+    _count: { _all: true },
+    orderBy: { _count: { serviceId: "desc" } },
+    take: 5,
+  });
+  const ids = booked.map((b) => b.serviceId).filter((x): x is string => Boolean(x));
+  const services = ids.length
+    ? await prisma.service.findMany({ where: { shopId, id: { in: ids } }, select: { id: true, name: true } })
+    : await prisma.service.findMany({
+        where: { shopId, active: true },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        select: { id: true, name: true },
+        take: 2,
+      });
+  const byId = new Map(services.map((s) => [s.id, s.name]));
+  const names = (ids.length ? ids.map((id) => byId.get(id)) : services.map((s) => s.name))
+    .filter((n): n is string => Boolean(n && n.trim()))
+    .slice(0, 2);
+  return names.length ? names.join(" · ").slice(0, AWARD_LIMITS.specialty) : null;
+}
+
 /** Only the stats chosen, in the order the shop sees them. Unknown keys drop. */
 export function pickStats(all: AwardStat[], keys: readonly string[] | undefined): AwardStat[] {
   if (!keys) return all;
@@ -82,16 +114,32 @@ export function readStats(raw: unknown): AwardStat[] {
  */
 export async function publicAwardFor(shopId: string, now: Date = new Date()): Promise<PublicAward | null> {
   const current = awardMonthKey(now);
+  // 🔴 APPROVED only: nothing is posted until the winner has seen it and
+  // said yes (Eric, 2026-10-17).
   const award = await prisma.providerAward.findFirst({
-    where: { shopId, month: { in: [current, previousMonthKey(current)] } },
+    where: { shopId, status: "APPROVED", month: { in: [current, previousMonthKey(current)] } },
     orderBy: { month: "desc" },
   });
   if (!award || !awardIsShowing(award.month, now)) return null;
+  return toPublicAward(award);
+}
+
+/** An award row as the card shows it - the page, and the winner's preview. */
+export function toPublicAward(award: {
+  month: string;
+  title: string;
+  winnerName: string;
+  specialty: string | null;
+  headline: string;
+  description: string;
+  stats: unknown;
+}): PublicAward {
   return {
     month: award.month,
     monthLabel: monthLabel(award.month),
     title: award.title,
     winnerName: award.winnerName,
+    specialty: award.specialty,
     headline: award.headline,
     description: award.description,
     stats: readStats(award.stats),

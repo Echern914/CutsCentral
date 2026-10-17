@@ -36,13 +36,19 @@ CREATE TABLE "ProviderAward" (
     "month" TEXT NOT NULL,
     "title" TEXT NOT NULL,
     "winnerName" TEXT NOT NULL,
+    "specialty" TEXT,
     "headline" TEXT NOT NULL,
     "description" TEXT NOT NULL,
     "stats" JSONB NOT NULL DEFAULT '[]',
     "awardedById" TEXT,
+    -- The winner approves what is posted before it shows (Eric, 2026-10-17):
+    -- PENDING until they do; only APPROVED is ever on their page.
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "decidedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "ProviderAward_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "ProviderAward_month_check" CHECK ("month" ~ '^[0-9]{4}-[0-9]{2}$')
+    CONSTRAINT "ProviderAward_month_check" CHECK ("month" ~ '^[0-9]{4}-[0-9]{2}$'),
+    CONSTRAINT "ProviderAward_status_check" CHECK ("status" IN ('PENDING', 'APPROVED', 'DECLINED'))
 );
 -- One award per shop per month; several shops may win the same month.
 CREATE UNIQUE INDEX "ProviderAward_shopId_month_key" ON "ProviderAward"("shopId", "month");

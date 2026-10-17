@@ -22,6 +22,8 @@ export interface PublicAward {
   monthLabel: string;
   title: string;
   winnerName: string;
+  /** What they do: "Knotless braids · Boho locs". Null = no line. */
+  specialty: string | null;
   headline: string;
   description: string;
   stats: AwardStat[];
@@ -37,6 +39,7 @@ export const AWARD_LIMITS = {
   credentials: 300,
   title: 60,
   winnerName: 60,
+  specialty: 80,
   headline: 100,
   description: 600,
 } as const;
@@ -67,10 +70,17 @@ export function isMonthKey(v: unknown): v is string {
   return typeof v === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(v);
 }
 
-/** "Barber of the Month", "Stylist of the Month" - the shop's own word. */
+/**
+ * "Barber of the Month", "Nail Tech of the Month", "Lash Artist of the Month"
+ * - the shop's own word for who does the work, never "barber" for everyone.
+ */
 export function awardTitle(providerNoun: string): string {
   const noun = providerNoun.trim() || "provider";
-  return `${noun.charAt(0).toUpperCase()}${noun.slice(1)} of the Month`;
+  const titled = noun
+    .split(/\s+/)
+    .map((w) => `${w.charAt(0).toUpperCase()}${w.slice(1)}`)
+    .join(" ");
+  return `${titled} of the Month`;
 }
 
 /**

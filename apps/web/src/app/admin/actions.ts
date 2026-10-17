@@ -112,6 +112,7 @@ export interface GiveAwardInput {
   month?: string;
   title?: string;
   winnerName?: string;
+  specialty?: string;
   headline: string;
   description: string;
   statKeys?: string[];
@@ -123,8 +124,13 @@ export async function giveAwardAction(body: GiveAwardInput): Promise<AdminResult
   return { ok: res.ok, error: res.error };
 }
 
-export async function takeBackAwardAction(id: string): Promise<AdminResult> {
+export async function takeBackAwardAction(id: string, slug?: string | null): Promise<AdminResult> {
   const res = await apiSend("DELETE", `/api/admin-portal/awards/${encodeURIComponent(id)}`);
   revalidatePath("/admin");
+  // Off their page now, not when its one-minute cache runs out.
+  if (slug) {
+    revalidatePath(`/s/${slug}`);
+    revalidatePath(`/book/${slug}`);
+  }
   return { ok: res.ok, error: res.error };
 }

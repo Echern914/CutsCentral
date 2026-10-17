@@ -19,6 +19,8 @@ describe("provider of the month", () => {
   it("is called by the shop's own word for who does the work", () => {
     expect(awardTitle("barber")).toBe("Barber of the Month");
     expect(awardTitle("stylist")).toBe("Stylist of the Month");
+    expect(awardTitle("nail tech")).toBe("Nail Tech of the Month");
+    expect(awardTitle("lash artist")).toBe("Lash Artist of the Month");
   });
 
   it("🔴 shows through its month and the whole month after - then stops", () => {

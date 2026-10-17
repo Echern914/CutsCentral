@@ -129,31 +129,7 @@ export function AwardSpotlight({
                 <TrophyIcon className="h-8 w-8" />
               </motion.div>
 
-              <p className="relative mt-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-gold">
-                {award.monthLabel}
-              </p>
-              <h2 id="award-title" className="relative mt-1 font-display text-2xl tracking-tight">
-                {award.title}
-              </h2>
-              <p className="relative mt-3 text-lg font-semibold [overflow-wrap:anywhere]">{award.winnerName}</p>
-              <p className="relative mt-1 text-sm font-medium text-gold [overflow-wrap:anywhere]">{award.headline}</p>
-              <p className="relative mt-3 whitespace-pre-line text-sm leading-relaxed text-offwhite/80 [overflow-wrap:anywhere]">
-                {award.description}
-              </p>
-
-              {award.stats.length > 0 && (
-                <ul className="relative mt-4 flex flex-col gap-1.5 text-left">
-                  {award.stats.map((s) => (
-                    <li
-                      key={s.key}
-                      className="flex items-baseline justify-between gap-3 rounded-xl border border-subtle px-3 py-2"
-                    >
-                      <span className="min-w-0 text-xs text-muted">{s.label}</span>
-                      <span className="shrink-0 text-sm font-semibold tabular-nums text-offwhite">{s.value}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <AwardCardBody award={award} titleId="award-title" />
 
               <button
                 ref={closeRef}
@@ -168,6 +144,48 @@ export function AwardSpotlight({
           </motion.div>
         )}
       </AnimatePresence>
+    </>
+  );
+}
+
+/**
+ * What the card says - shared by the live page and the winner's preview, so
+ * what they approve is exactly what clients see.
+ */
+export function AwardCardBody({ award, titleId }: { award: PublicAward; titleId?: string }) {
+  return (
+    <>
+      <p className="relative mt-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-gold">
+        {award.monthLabel}
+      </p>
+      <h2 id={titleId} className="relative mt-1 font-display text-2xl tracking-tight">
+        {award.title}
+      </h2>
+      <p className="relative mt-3 text-lg font-semibold [overflow-wrap:anywhere]">{award.winnerName}</p>
+      {/* What they do - not every winner is a barber. */}
+      {award.specialty && (
+        <p className="relative mt-0.5 text-sm text-offwhite/70 [overflow-wrap:anywhere]" data-qa="award-specialty">
+          {award.specialty}
+        </p>
+      )}
+      <p className="relative mt-2 text-sm font-medium text-gold [overflow-wrap:anywhere]">{award.headline}</p>
+      <p className="relative mt-3 whitespace-pre-line text-sm leading-relaxed text-offwhite/80 [overflow-wrap:anywhere]">
+        {award.description}
+      </p>
+
+      {award.stats.length > 0 && (
+        <ul className="relative mt-4 flex flex-col gap-1.5 text-left" data-qa="award-stats">
+          {award.stats.map((s) => (
+            <li
+              key={s.key}
+              className="flex items-baseline justify-between gap-3 rounded-xl border border-subtle px-3 py-2"
+            >
+              <span className="min-w-0 text-xs text-muted">{s.label}</span>
+              <span className="shrink-0 text-sm font-semibold tabular-nums text-offwhite">{s.value}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </>
   );
 }

@@ -10,7 +10,7 @@ import {
   isMonthKey,
   monthLabel,
 } from "@chairback/config/providerAward";
-import { awardStatsFor, pickStats, readStats } from "../engines/providerAwards.js";
+import { awardStatsFor, pickStats, readStats, specialtyFor } from "../engines/providerAwards.js";
 
 /**
  * PROVIDER OF THE MONTH - ChairBack's side (admin portal, /api/admin-portal/
@@ -60,9 +60,11 @@ awardsAdminRouter.get("/", async (req, res) => {
       applicationId: a.applicationId,
       title: a.title,
       winnerName: a.winnerName,
+      specialty: a.specialty,
       headline: a.headline,
       description: a.description,
       stats: readStats(a.stats),
+      status: a.status,
     })),
   });
 });
@@ -74,6 +76,7 @@ const awardSchema = z
     shopSlug: z.string().trim().min(1).max(80).optional(),
     title: z.string().trim().min(1).max(AWARD_LIMITS.title).optional(),
     winnerName: z.string().trim().min(1).max(AWARD_LIMITS.winnerName).optional(),
+    specialty: z.string().trim().min(1).max(AWARD_LIMITS.specialty).optional(),
     headline: z.string().trim().min(1).max(AWARD_LIMITS.headline),
     description: z.string().trim().min(1).max(AWARD_LIMITS.description),
     statKeys: z.array(z.enum(AWARD_STAT_KEYS)).max(AWARD_STAT_KEYS.length).optional(),
@@ -125,10 +128,16 @@ awardsAdminRouter.post("/", async (req, res) => {
     title: b.title ?? awardTitle(vocabularyForShop(shop).providerNoun),
     // An Apple sign-in can carry an email as the name: never published.
     winnerName: b.winnerName ?? (ownerName && !ownerName.includes("@") ? ownerName : shop.name),
+    // What they do - their own services unless ChairBack wrote it.
+    specialty: b.specialty ?? (await specialtyFor(shop.id, now)),
     headline: b.headline,
     description: b.description,
     stats: stats as unknown as object,
     awardedById: req.userId ?? null,
+    // Sent to the winner to approve first - and a re-post (an edit) asks
+    // again, because they agreed to the words as they were.
+    status: "PENDING",
+    decidedAt: null,
   };
   const award = await prisma.$transaction(async (tx) => {
     const saved = await tx.providerAward.upsert({
@@ -136,9 +145,6 @@ awardsAdminRouter.post("/", async (req, res) => {
       create: { shopId: shop.id, month, ...data },
       update: data,
     });
-    if (application) {
-      await tx.providerAwardApplication.update({ where: { id: application.id }, data: { status: "WON" } });
-    }
     return saved;
   });
   res.status(201).json({
@@ -149,6 +155,8 @@ awardsAdminRouter.post("/", async (req, res) => {
       month,
       title: award.title,
       winnerName: award.winnerName,
+      specialty: award.specialty,
+      status: award.status,
       headline: award.headline,
       description: award.description,
       stats: readStats(award.stats),

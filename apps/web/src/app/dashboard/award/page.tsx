@@ -5,6 +5,7 @@ import { getVocabulary } from "@/lib/vocab";
 import { awardTitle } from "@chairback/config/providerAward";
 import { Card } from "@/components/ui/Card";
 import { ApplyForAward } from "./ApplyForAward";
+import { ApproveAward } from "./ApproveAward";
 import type { AwardMe } from "./actions";
 
 export const metadata: Metadata = { title: "Provider of the Month" };
@@ -34,11 +35,13 @@ export default async function AwardPage() {
       <header className="mb-6">
         <h1 className="font-display text-3xl tracking-tight">{title}</h1>
         <p className="mt-1 text-sm text-muted">
-          Each month ChairBack picks a {vocab.providerNoun} to celebrate. The winner&apos;s page shows it to every
-          client who opens it, with how they won and why, through the month after. Apply with the numbers you&apos;re
+          Each month ChairBack picks a {vocab.providerNoun} to celebrate. Once the winner approves it, their page shows it to
+          every client who opens it, with how they won and why, through the month after. Apply with the numbers you&apos;re
           proud of and a few words about you.
         </p>
       </header>
+
+      {d.pending && <ApproveAward award={d.pending} />}
 
       {d.won.length > 0 && (
         <div className="mb-6 flex flex-col gap-3">
@@ -54,7 +57,8 @@ export default async function AwardPage() {
         </div>
       )}
 
-      <ApplyForAward me={d} />
+      {/* Chosen: approving is the one thing to do here. */}
+      {!d.pending && <ApplyForAward me={d} />}
     </main>
   );
 }

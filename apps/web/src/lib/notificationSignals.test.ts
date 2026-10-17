@@ -71,6 +71,20 @@ describe("collectNotificationSignals", () => {
     ]);
   });
 
+  it("🔴 an award waiting for the owner's OK leads the bell, straight to approving it", async () => {
+    routes({
+      "awards/pending": ok({ pending: { title: "Lash Artist of the Month", monthLabel: "October 2026" } }),
+      waitlist: ok({ counts: { WAITING: 3 } }),
+    });
+    const out = await collectNotificationSignals(MANAGER);
+    expect(out[0]).toEqual({
+      key: "award",
+      label: "You're Lash Artist of the Month for October 2026 - approve it to post",
+      count: 1,
+      href: "/dashboard/award",
+    });
+  });
+
   it("drops a source with nothing outstanding rather than listing a zero", async () => {
     // A bell that opens onto "0 waiting, 0 to reply" teaches you to ignore it.
     routes({

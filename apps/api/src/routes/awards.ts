@@ -5,7 +5,7 @@ import { AWARD_LIMITS, AWARD_STAT_KEYS, awardMonthKey, monthLabel } from "@chair
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireOwner } from "../auth/roles.js";
 import { accountLimiter } from "../middleware/rateLimit.js";
-import { awardStatsFor, pickStats, publicAwardFor, readStats } from "../engines/providerAwards.js";
+import { awardStatsFor, pickStats, publicAwardFor, readStats, toPublicAward } from "../engines/providerAwards.js";
 
 /**
  * PROVIDER OF THE MONTH (config/providerAward.ts).
@@ -43,10 +43,11 @@ awardsRouter.get("/me", async (req, res) => {
   const now = new Date();
   const month = awardMonthKey(now);
   const shop = await prisma.shop.findUniqueOrThrow({ where: { id: shopId }, select: { id: true, timezone: true } });
-  const [stats, application, won] = await Promise.all([
+  const [stats, application, won, pending] = await Promise.all([
     awardStatsFor(shop, now),
     prisma.providerAwardApplication.findUnique({ where: { shopId_month: { shopId, month } } }),
-    prisma.providerAward.findMany({ where: { shopId }, orderBy: { month: "desc" }, take: 12 }),
+    prisma.providerAward.findMany({ where: { shopId, status: "APPROVED" }, orderBy: { month: "desc" }, take: 12 }),
+    prisma.providerAward.findFirst({ where: { shopId, status: "PENDING" }, orderBy: { month: "desc" } }),
   ]);
   res.json({
     month,
@@ -61,6 +62,8 @@ awardsRouter.get("/me", async (req, res) => {
           updatedAt: application.updatedAt.toISOString(),
         }
       : null,
+    // Chosen, waiting for their OK: exactly what the card will show.
+    pending: pending ? { id: pending.id, ...toPublicAward(pending) } : null,
     won: won.map((a) => ({
       month: a.month,
       monthLabel: monthLabel(a.month),
@@ -125,3 +128,54 @@ awardsRouter.post("/apply", accountLimiter, async (req, res) => {
     },
   });
 });
+
+/** GET /api/awards/pending - is an award waiting for this shop's OK? (the bell) */
+awardsRouter.get("/pending", async (req, res) => {
+  const pending = await prisma.providerAward.findFirst({
+    where: { shopId: req.shop!.id, status: "PENDING" },
+    orderBy: { month: "desc" },
+    select: { title: true, month: true },
+  });
+  res.json({ pending: pending ? { title: pending.title, monthLabel: monthLabel(pending.month) } : null });
+});
+
+/**
+ * POST /api/awards/:id/approve | /decline - the winner says yes, or no, to
+ * exactly what ChairBack wrote. Nothing is on their page until they approve
+ * (Eric, 2026-10-17). Only this shop's own award, and only while it waits:
+ * a second tap, or one after an edit was re-sent, changes nothing twice.
+ */
+for (const decision of ["approve", "decline"] as const) {
+  awardsRouter.post(`/:id/${decision}`, accountLimiter, async (req, res) => {
+    const status = decision === "approve" ? "APPROVED" : "DECLINED";
+    const award = await prisma.providerAward.findFirst({
+      where: { id: req.params.id, shopId: req.shop!.id },
+      select: { id: true, status: true, applicationId: true, shop: { select: { slug: true } } },
+    });
+    if (!award) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const done = await prisma.$transaction(async (tx) => {
+      // The status check IS the write: a double tap or a stale screen finds
+      // nothing left to change.
+      const { count } = await tx.providerAward.updateMany({
+        where: { id: award.id, status: "PENDING" },
+        data: { status, decidedAt: new Date() },
+      });
+      if (count === 1 && award.applicationId) {
+        await tx.providerAwardApplication.update({
+          where: { id: award.applicationId },
+          data: { status: decision === "approve" ? "WON" : "SUBMITTED" },
+        });
+      }
+      return count === 1;
+    });
+    if (!done) {
+      res.status(409).json({ error: "already_decided" });
+      return;
+    }
+    // The slug, so the web can refresh that page now rather than in a minute.
+    res.json({ ok: true, status, slug: award.shop.slug });
+  });
+}

@@ -138,7 +138,7 @@ describe("choosing the winner", () => {
     expect(mine.stats).toHaveLength(2);
   });
 
-  it("🔴 awarding from the application puts it on the winner's page - who, how and why", async () => {
+  it("🔴 choosing a winner posts NOTHING until they approve - they see exactly what will show", async () => {
     const list = await request(app).get("/api/admin-portal/awards").set("Cookie", adminCookie);
     const app1 = list.body.applications.find((a: { shop: { slug: string } }) => a.shop.slug === slug);
     const res = await request(app)
@@ -150,14 +150,45 @@ describe("choosing the winner", () => {
         description: "Jera kept every chair full and her clients keep coming back.",
       });
     expect(res.status).toBe(201);
+    expect(res.body.award.status).toBe("PENDING");
+    // Not on her page yet.
+    expect(await pub(slug)).toBeNull();
+    // Her preview: the card exactly as it will show, stats and all.
+    const me = await request(app).get("/api/awards/me").set("Cookie", shopCookie);
+    expect(me.body.pending).toMatchObject({
+      title: "Barber of the Month",
+      winnerName: "Jera Smith",
+      // What she does: her own most-booked service.
+      specialty: "Fade",
+      headline: "Most booked in October",
+      description: "Jera kept every chair full and her clients keep coming back.",
+    });
+    expect(me.body.pending.stats.map((s: { key: string }) => s.key)).toEqual(["appointments", "clients"]);
+    expect((await request(app).get("/api/awards/pending").set("Cookie", shopCookie)).body.pending.title).toBe(
+      "Barber of the Month",
+    );
+  });
+
+  it("🔴 only she can approve it - not another shop", async () => {
+    const id = (await request(app).get("/api/awards/me").set("Cookie", shopCookie)).body.pending.id;
+    expect((await request(app).post(`/api/awards/${id}/approve`).set("Cookie", otherCookie)).status).toBe(404);
+    expect(await pub(slug)).toBeNull();
+  });
+
+  it("🔴 once she approves, her page shows it - who, what she does, how and why", async () => {
+    const id = (await request(app).get("/api/awards/me").set("Cookie", shopCookie)).body.pending.id;
+    const res = await request(app).post(`/api/awards/${id}/approve`).set("Cookie", shopCookie);
+    expect(res.status).toBe(200);
     const award = await pub(slug);
     expect(award).toMatchObject({
       title: "Barber of the Month",
       winnerName: "Jera Smith",
+      specialty: "Fade",
       headline: "Most booked in October",
-      description: "Jera kept every chair full and her clients keep coming back.",
     });
-    expect(award.stats.map((s: { key: string }) => s.key)).toEqual(["appointments", "clients"]);
+    expect(award.stats.map((s: { value: string }) => s.value)).toEqual(["2", "2"]);
+    // A second tap changes nothing twice.
+    expect((await request(app).post(`/api/awards/${id}/approve`).set("Cookie", shopCookie)).status).toBe(409);
     // Another shop's page says nothing.
     expect(await pub(otherSlug)).toBeNull();
   });
@@ -171,16 +202,29 @@ describe("choosing the winner", () => {
     expect((await request(app).get("/api/awards/me").set("Cookie", shopCookie)).body.won).toHaveLength(1);
   });
 
-  it("awards directly by handle, with no application - and the page shows it", async () => {
+  it("awards directly by handle; declining keeps it off the page", async () => {
     const res = await request(app)
       .post("/api/admin-portal/awards")
       .set("Cookie", adminCookie)
-      .send({ shopSlug: `@${otherSlug}`, winnerName: "Sam", headline: "Best new shop", description: "Sam's first month." });
+      .send({ shopSlug: `@${otherSlug}`, winnerName: "Sam", specialty: "Gel nails", title: "Nail Tech of the Month", headline: "Best new shop", description: "Sam's first month." });
     expect(res.status).toBe(201);
-    const award = await pub(otherSlug);
-    expect(award.winnerName).toBe("Sam");
+    const me = await request(app).get("/api/awards/me").set("Cookie", otherCookie);
+    expect(me.body.pending).toMatchObject({ winnerName: "Sam", specialty: "Gel nails", title: "Nail Tech of the Month" });
     // No bookings yet: nothing is put forward rather than a row of zeros.
-    expect(award.stats).toEqual([]);
+    expect(me.body.pending.stats).toEqual([]);
+    expect((await request(app).post(`/api/awards/${me.body.pending.id}/decline`).set("Cookie", otherCookie)).status).toBe(200);
+    expect(await pub(otherSlug)).toBeNull();
+    expect((await request(app).get("/api/awards/me").set("Cookie", otherCookie)).body.pending).toBeNull();
+  });
+
+  it("an edit asks again: re-posting puts it back to waiting for their OK", async () => {
+    await request(app)
+      .post("/api/admin-portal/awards")
+      .set("Cookie", adminCookie)
+      .send({ shopSlug: otherSlug, winnerName: "Sam", headline: "Best new shop", description: "Fixed the wording." });
+    const me = await request(app).get("/api/awards/me").set("Cookie", otherCookie);
+    expect(me.body.pending.description).toBe("Fixed the wording.");
+    expect(await pub(otherSlug)).toBeNull();
   });
 
   it("taking an award back clears the page and reopens the application", async () => {
@@ -193,6 +237,9 @@ describe("choosing the winner", () => {
   });
 
   it("a page that isn't public says nothing", async () => {
+    const id = (await request(app).get("/api/awards/me").set("Cookie", otherCookie)).body.pending.id;
+    await request(app).post(`/api/awards/${id}/approve`).set("Cookie", otherCookie);
+    expect(await pub(otherSlug)).not.toBeNull();
     await prisma.shop.updateMany({ where: { slug: otherSlug }, data: { publicPageEnabled: false } });
     expect(await pub(otherSlug)).toBeNull();
   });
