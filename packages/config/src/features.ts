@@ -401,6 +401,18 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     questions: ["How do I make a promo code?", "Can I give one client a free cut?"],
   },
   {
+    // Provider of the Month (config/providerAward.ts): the shop owner applies
+    // with the stats they choose; ChairBack picks the winner.
+    id: "provider-of-month",
+    name: "Provider of the Month",
+    synonyms: ["barber of the month", "of the month", "award", "apply for award", "winner", "spotlight"],
+    description: "Apply to be ChairBack's pick of the month, with your own stats",
+    href: "/dashboard/award",
+    category: "brand",
+    minRole: "OWNER",
+    questions: ["How do I become Barber of the Month?"],
+  },
+  {
     id: "reviews",
     name: "Reviews",
     synonyms: ["ratings", "stars", "testimonials", "feedback"],

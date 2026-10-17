@@ -143,6 +143,8 @@ model User {
   pushSubscriptions   PushSubscription[]
   // Assistants (ChatGPT/Claude) this person connected to one of their shops.
   mcpConnections      McpConnection[]
+  // Provider of the Month applications this person sent for their shop.
+  providerAwardApplications ProviderAwardApplication[]
   // Punch-ledger entries this person made by hand (bonus, undo, edit, redeem).
   ledgerActions       PunchLedger[] @relation("LedgerActor")
 
@@ -725,6 +727,9 @@ model Shop {
   promoUses           PromotionRedemption[]
   offers              Offer[]
   offerRedemptions    OfferRedemption[]
+  // Provider of the Month: what it applied with, and what it won.
+  providerAwardApplications ProviderAwardApplication[]
+  providerAwards      ProviderAward[]
   appointmentRequests AppointmentRequest[]
   waitlist            WaitlistEntry[]
   waitlistWindows     WaitlistWindow[]
@@ -6155,4 +6160,55 @@ model PartnerCashout {
 
   @@index([status, requestedAt])
   @@index([partnerId])
+}
+
+// PROVIDER OF THE MONTH (Eric, 2026-10-17; migration 20261070000000). A shop
+// applies with the stats it chooses and a pitch; ChairBack picks the winner,
+// whose public page says so. Default-deny (RLS forced, no policies): the API's
+// owner path only, like the affiliate tables.
+model ProviderAwardApplication {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // "2026-10": the month applied for.
+  month       String
+  pitch       String
+  // Licences, years in the chair, specialties - in their words.
+  credentials String?
+  // [{ key, label, value }] - the stats they chose, frozen when they applied.
+  stats       Json     @default("[]")
+  // SUBMITTED | WON | NOT_CHOSEN (CHECK in SQL).
+  status      String   @default("SUBMITTED")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  awards      ProviderAward[]
+
+  @@unique([shopId, month])
+  @@index([month])
+}
+
+model ProviderAward {
+  id            String   @id @default(cuid())
+  shopId        String
+  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  applicationId String?
+  application   ProviderAwardApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  month         String
+  // "Barber of the Month", in the shop's own word for who does the work.
+  title         String
+  // The name the page shows: the person, not necessarily the shop.
+  winnerName    String
+  // How they won, one line: "Most booked in October".
+  headline      String
+  // Why, a few sentences, written by ChairBack.
+  description   String
+  // [{ key, label, value }] shown under the banner.
+  stats         Json     @default("[]")
+  awardedById   String?
+  createdAt     DateTime @default(now())
+
+  @@unique([shopId, month])
+  @@index([month])
 }

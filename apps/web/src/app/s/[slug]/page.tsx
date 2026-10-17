@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import type { BookingModeKey } from "@chairback/config/constants";
+import type { PublicAward } from "@chairback/config/providerAward";
 import { DOMAIN_PARAM, expectedDomain } from "@/lib/customDomainGuard";
 import { loadShopPage, shopPageMetadata, shopPageTree } from "./shopPage";
 
@@ -35,6 +36,8 @@ export interface PageStaff {
 }
 
 export interface ShopPageData {
+  /** Provider of the Month while it shows; absent from an older API. */
+  award?: PublicAward | null;
   name: string;
   slug: string;
   /**

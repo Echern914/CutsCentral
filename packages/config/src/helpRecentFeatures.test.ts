@@ -22,6 +22,8 @@ describe("the Assistant knows the recent features", () => {
     ["can you show me around", "take-the-tour"],
     ["how do I get set up", "get-started"],
     ["paste my menu from booksy", "add-services"],
+    ["how do i become barber of the month", "provider-of-the-month"],
+    ["apply for the award", "provider-of-the-month"],
   ])("%s", (q, id) => {
     expect(answerFor(q)).toBe(id);
   });

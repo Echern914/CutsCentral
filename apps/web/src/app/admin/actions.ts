@@ -103,3 +103,28 @@ export async function markPartnerCashoutPaidAction(cashoutId: string, override =
 export async function declinePartnerCashoutAction(cashoutId: string): Promise<AdminResult> {
   return partners(`/cashouts/${encodeURIComponent(cashoutId)}/decline`);
 }
+
+//  Provider of the Month (routes/awardsAdmin.ts; the API owns the rules)
+
+export interface GiveAwardInput {
+  applicationId?: string;
+  shopSlug?: string;
+  month?: string;
+  title?: string;
+  winnerName?: string;
+  headline: string;
+  description: string;
+  statKeys?: string[];
+}
+
+export async function giveAwardAction(body: GiveAwardInput): Promise<AdminResult> {
+  const res = await apiSend("POST", "/api/admin-portal/awards", body);
+  revalidatePath("/admin");
+  return { ok: res.ok, error: res.error };
+}
+
+export async function takeBackAwardAction(id: string): Promise<AdminResult> {
+  const res = await apiSend("DELETE", `/api/admin-portal/awards/${encodeURIComponent(id)}`);
+  revalidatePath("/admin");
+  return { ok: res.ok, error: res.error };
+}

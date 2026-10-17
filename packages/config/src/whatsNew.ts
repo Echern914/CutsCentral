@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-17-provider-of-the-month",
+    date: "2026-10-17",
+    kind: "feature",
+    title: "Barber of the Month",
+    body:
+      "Each month ChairBack picks one to celebrate. Apply from Provider of the Month in your dashboard with the numbers you're proud of. " +
+      "The winner's page shows it to every client who opens it.",
+  },
+  {
     id: "2026-10-17-notes-before-they-arrive",
     date: "2026-10-17",
     kind: "feature",

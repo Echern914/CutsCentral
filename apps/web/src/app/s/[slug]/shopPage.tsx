@@ -4,6 +4,7 @@ import { apiPublicGet } from "@/lib/api";
 import { servesDomain } from "@/lib/customDomainGuard";
 import { PLATFORM_ORIGIN } from "@/lib/customDomainRouting";
 import { GetTheApp } from "@/components/GetTheApp";
+import { AwardSpotlight } from "@/components/AwardSpotlight";
 import { ShopPageClient } from "./ShopPageClient";
 import { shopJsonLd } from "./shopJsonLd";
 import type { ShopPageData } from "./page";
@@ -102,6 +103,8 @@ export function shopPageTree(
         }}
       />
       <ShopPageClient data={data} bookQuery={links.bookQuery} platformOrigin={links.platformOrigin} />
+      {/* Provider of the Month: opens on arrival, over every design. */}
+      <AwardSpotlight award={data.award} slug={data.slug} />
       <div className="mx-auto w-full max-w-2xl px-4 pb-8">
         <GetTheApp surface="shop" />
       </div>

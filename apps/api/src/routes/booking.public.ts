@@ -33,6 +33,7 @@ import {
   zonedDateParts,
   zonedWallTimeToUtc,
 } from "@chairback/config";
+import { publicAwardFor } from "../engines/providerAwards.js";
 import { materializeSeries, type RecurrencePattern } from "../engines/recurringSeries.js";
 import { prisma, Prisma } from "@chairback/db";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
@@ -855,6 +856,9 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
     // The shop's own booking questions, in its own order. [] for a shop that
     // asks nothing, which renders exactly the form that shipped before them.
     questions,
+    // Provider of the Month while it shows - in THIS payload, so it is checked
+    // against a custom domain together with the shop it belongs to.
+    award: await publicAwardFor(shop.id),
   });
 });
 

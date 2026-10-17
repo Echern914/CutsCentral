@@ -6,6 +6,8 @@ import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import { apiPublicGet } from "@/lib/api";
 import { expectedDomain, servesDomain } from "@/lib/customDomainGuard";
 import { BookingClient } from "./BookingClient";
+import { AwardSpotlight } from "@/components/AwardSpotlight";
+import type { PublicAward } from "@chairback/config/providerAward";
 import { GetTheApp } from "@/components/GetTheApp";
 import { RewardsDoor } from "@/components/RewardsDoor";
 import { appleItunesApp } from "@/lib/appBanner";
@@ -22,6 +24,8 @@ export interface BookingPolicyData {
 }
 
 export interface BookShopData {
+  /** Provider of the Month while it shows; absent from an older API. */
+  award?: PublicAward | null;
   shop: {
     name: string;
     slug: string;
@@ -332,9 +336,11 @@ export default async function BookPage({
   if (searchParams?.staff) openQuery.set("staff", searchParams.staff);
   const openSuffix = openQuery.toString();
   const openPath = `/book/${params.slug}${openSuffix ? `?${openSuffix}` : ""}`;
-
   return (
     <>
+      {/* Provider of the Month: only the pill here (autoOpen off) - a client
+          in the middle of booking is never interrupted. */}
+      <AwardSpotlight award={data.award} slug={params.slug} autoOpen={false} />
       {/* 🔴 ABOVE THE FLOW, which reverses what this file used to say ("below
           the flow, never above it: the booking is what they came for"). That
           rule quietly assumed the customer would still be here at the bottom.

@@ -28,6 +28,7 @@ import { mcpRouter, mcpWellKnownRouter } from "./routes/mcp.js";
 import { mcpOAuthRouter } from "./routes/mcp.oauth.js";
 import { squareOAuthRouter } from "./routes/square.oauth.js";
 import { adminRouter } from "./routes/admin.js";
+import { awardsRouter } from "./routes/awards.js";
 import { rewardsRouter } from "./routes/rewards.js";
 import { rewardsRecoveryRouter } from "./routes/rewardsRecovery.js";
 import { customerAuthRouter } from "./routes/customerAuth.js";
@@ -214,6 +215,9 @@ export function createApp(): Express {
   // route. See routes/unsubscribe.public.ts.
   app.use("/api/unsubscribe", rewardsLimiter, unsubscribeRouter);
   app.use("/api/page", rewardsLimiter, publicPageRouter); // public shop pages
+  // Provider of the Month: the public read is never walled (a page shows its
+  // award); applying is the owner's, gated inside the router.
+  app.use("/api/awards", rewardsLimiter, awardsRouter);
   // 🔴 BEFORE the public booking router, which owns "/:slug" and would swallow
   // "/group/..." as a shop slug. Express matches in registration order.
   app.use("/api/book", bookingGroupRouter); // back-to-back group booking
