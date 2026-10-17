@@ -18,6 +18,8 @@ import { FeatureSearch } from "./_components/FeatureSearch";
 import { NotificationBell } from "./_components/NotificationBell";
 import { ShopSwitcher } from "./_components/ShopSwitcher";
 import { TrialBanner } from "./_components/TrialBanner";
+import { getOnboardingState } from "@/app/onboarding/state";
+import { setupComplete } from "@chairback/config/onboarding";
 
 /**
  * Shared dashboard chrome: a slim sticky top bar (brand, search, account, sign
@@ -75,9 +77,16 @@ export default async function DashboardLayout({
   // What the header bell shows. Derived per render from counts that already
   // exist — nothing is stored, and every source fails silently, so an employee
   // seat or a lapsed shop gets a quiet bell rather than a broken header.
+  // A new shop still setting up sees one thing asking for its attention - the
+  // setup checklist on the home page (Eric, 2026-10-16: no interruptions). So
+  // until clients can book: no trial banner (unless the trial is nearly over)
+  // and no go-live count on the bell. The owner's alone; memoized per request.
+  const setup = seatRole === "OWNER" && !me.data?.demo ? await getOnboardingState() : null;
+  const settingUp = Boolean(setup && !setupComplete(setup.facts));
   const bellSignals = await collectNotificationSignals({
     barberOnly,
     premiumAiLocked: locks?.premiumAi ?? false,
+    settingUp,
   });
   return (
     <div className="min-h-dvh">
@@ -159,7 +168,7 @@ export default async function DashboardLayout({
         /* TrialBanner owns its own 3.1.1 split now: the price-quoting banner
            renders web-only INSIDE it, while a lapsed shop still gets a plain
            factual line in the native app (previously: total silence in-app). */
-        <TrialBanner />
+        <TrialBanner settingUp={settingUp} />
       )}
       {/* Phones scroll under the floating tab pill, so the last card needs
           clearance or it sits permanently behind it. The pill is ~3.6rem tall

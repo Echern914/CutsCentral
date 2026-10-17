@@ -55,6 +55,12 @@ export async function collectNotificationSignals(opts: {
   barberOnly: boolean;
   /** Premium AI locked: the receptionist inbox is permanently 0 for this shop. */
   premiumAiLocked: boolean;
+  /**
+   * A new shop still setting up: the home page's setup checklist is what it
+   * works through, so the bell doesn't also count "steps before you can go
+   * live" at it (Eric, 2026-10-16: no interruptions while setting up).
+   */
+  settingUp?: boolean;
 }): Promise<BellSignal[]> {
   const [readiness, waitlist, inbox, walkIns, reviews] = await Promise.all([
     apiGet<ReadinessSummary>("/api/readiness/summary"),
@@ -88,7 +94,8 @@ export async function collectNotificationSignals(opts: {
 
   // Setup first: it is the only signal an employee seat or a lapsed shop can
   // see, and it is the one that blocks a shop from taking real bookings.
-  const setup = readinessCount(readiness.ok ? readiness.data : null);
+  // Still setting up: the setup checklist owns this, not the bell.
+  const setup = opts.settingUp ? null : readinessCount(readiness.ok ? readiness.data : null);
   if (setup) out.push(setup);
 
   const waiting = waitlist?.ok ? (waitlist.data?.counts?.WAITING ?? 0) : 0;

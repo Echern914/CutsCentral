@@ -209,7 +209,9 @@ const createShopSchema = z
     // and "Book" CTAs fall back to the rewards page. A provided value must still
     // be a real http(s) URL (XSS guard - it's rendered as <a href>).
     bookingUrl: httpUrl(500).nullish().or(z.literal("")),
-    timezone: z.string().min(1).default(DEFAULTS.timezone),
+    // A real IANA zone: hours, reminders and quiet hours all run on it, and a
+    // zone Intl can't read would break every one of them.
+    timezone: z.string().min(1).refine(isValidTimezone, "invalid_timezone").default(DEFAULTS.timezone),
     // Vertical: flavors the seeded reward + copy, nothing structural.
     //
     // 🔴 Deliberately `.optional()` with NO default. A default would erase the

@@ -50,7 +50,7 @@ export function QuickActions({
 
   return (
     // 🔴 `mb-6` is the fix, not decoration. Every block below this one
-    // (SyncHealthBanner, GettingStarted, ConsentSetup) carries `mb-6` and NO
+    // (SyncHealthBanner, SetupChecklist, ConsentSetup) carries `mb-6` and NO
     // top margin, so with nothing on this side the tiles sat flush against
     // whatever came next - reading as one cramped, overlapping slab. This puts
     // the row back on the same 24px rhythm the rest of the page already uses.
