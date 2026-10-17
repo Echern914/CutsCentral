@@ -400,7 +400,7 @@ export function IndependentTeam({
                       type="button"
                       disabled={busy !== null}
                       onClick={() => setRemoving(m)}
-                      className="min-h-[40px] shrink-0 px-2 text-xs text-rose-300 transition-colors hover:text-rose-200 disabled:opacity-50"
+                      className="min-h-[40px] shrink-0 px-2 text-xs text-danger-soft transition-colors hover:text-danger-soft disabled:opacity-50"
                     >
                       Remove
                     </button>
@@ -550,7 +550,7 @@ export function IndependentTeam({
                   "Couldn't remove them - try again",
                 );
               }}
-              className="min-h-[40px] rounded-full bg-rose-500/90 px-4 text-xs font-semibold text-white transition-colors hover:bg-rose-500 disabled:opacity-50"
+              className="min-h-[40px] rounded-full bg-danger-soft/90 px-4 text-xs font-semibold text-white transition-colors hover:bg-danger-soft disabled:opacity-50"
             >
               Remove from team
             </button>

@@ -1191,7 +1191,7 @@ function Hero({
           <span
             className={cn(
               "rounded-full px-2.5 py-1 text-[10px] font-medium",
-              external ? "bg-sky-400/15 text-sky-300" : "bg-charcoal-700 text-muted",
+              external ? "bg-info-soft/15 text-info-soft" : "bg-charcoal-700 text-muted",
             )}
           >
             {sourceLabel}
@@ -1876,7 +1876,7 @@ function ClientCard({
             {/* Only worth a second line when it would change what the barber
                 just read: on the same clock, saying so is noise. */}
             {zoneDiffers && browserZone && (
-              <span className="mt-0.5 block text-[11px] leading-snug text-amber-300/90">
+              <span className="mt-0.5 block text-[11px] leading-snug text-warning-soft/90">
                 Your device is on {browserZone.replace(/_/g, " ")}
               </span>
             )}
@@ -1904,7 +1904,7 @@ const SMS_COPY: Record<
   no_consent: {
     label: "No SMS consent",
     detail: "Ask them to opt in — texts won't send until they do",
-    tone: "text-amber-300",
+    tone: "text-warning-soft",
     ok: false,
   },
   opted_out: {
@@ -2860,7 +2860,7 @@ function UndoneNoShowFooter({ notes, onDone }: { notes: string[]; onDone: () => 
       </p>
       <ul className="flex flex-col gap-1">
         {notes.map((n) => (
-          <li key={n} className="text-xs leading-relaxed text-amber-300">
+          <li key={n} className="text-xs leading-relaxed text-warning-soft">
             {n}
           </li>
         ))}
@@ -2912,7 +2912,7 @@ function DetailFooter({
             role="status"
             className={cn(
               "text-sm",
-              notice.tone === "success" ? "text-emerald-soft" : "text-amber-300",
+              notice.tone === "success" ? "text-emerald-soft" : "text-warning-soft",
             )}
           >
             {notice.message}
@@ -2943,7 +2943,7 @@ function DetailFooter({
             data-qa="sheet-notice"
             className={cn(
               "text-sm",
-              notice.tone === "success" ? "text-emerald-soft" : "text-amber-300",
+              notice.tone === "success" ? "text-emerald-soft" : "text-warning-soft",
             )}
           >
             {notice.message}
@@ -2960,7 +2960,7 @@ function DetailFooter({
           href={detail.externalManageUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex h-11 shrink-0 items-center justify-center rounded-xl border border-sky-400/40 px-4 text-sm font-medium text-sky-300 transition-colors duration-150 ease-out hover:bg-sky-400/10"
+          className="flex h-11 shrink-0 items-center justify-center rounded-xl border border-info-soft/40 px-4 text-sm font-medium text-info-soft transition-colors duration-150 ease-out hover:bg-info-soft/10"
         >
           Edit in {detail.originLabel}
         </a>

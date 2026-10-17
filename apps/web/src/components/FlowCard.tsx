@@ -17,9 +17,9 @@ import { APP_NAME } from "@chairback/config/constants";
 type Tone = "neutral" | "success" | "problem";
 
 const TONE_RING: Record<Tone, string> = {
-  neutral: "border-white/12 bg-white/5 text-muted",
+  neutral: "border-offwhite/12 bg-offwhite/5 text-muted",
   success: "border-gold/40 bg-gold/10 text-gold",
-  problem: "border-white/12 bg-white/5 text-muted",
+  problem: "border-offwhite/12 bg-offwhite/5 text-muted",
 };
 
 export function FlowCard({
@@ -47,7 +47,7 @@ export function FlowCard({
       <p className="mb-4 text-center text-xs uppercase tracking-[0.25em] text-gold">
         {APP_NAME}
       </p>
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+      <div className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center">
         <div
           className={`mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-full border text-lg ${TONE_RING[tone]}`}
           aria-hidden
@@ -94,7 +94,7 @@ export function FlowSecondaryLink({
   return (
     <a
       href={href}
-      className="flex min-h-[44px] w-full items-center justify-center rounded-xl border border-subtle px-5 py-3 text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-white/5"
+      className="flex min-h-[44px] w-full items-center justify-center rounded-xl border border-subtle px-5 py-3 text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-offwhite/5"
     >
       {children}
     </a>

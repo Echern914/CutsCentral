@@ -73,10 +73,10 @@ export function WaitlistForm({
 
   // No focus:outline-none — keep the global :focus-visible ring (WCAG 2.4.7).
   const input =
-    "w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-white/40";
+    "w-full rounded-lg border border-offwhite/15 bg-offwhite/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-offwhite/40";
   const chip = (on: boolean) =>
     `rounded-full border px-3 py-1 text-xs transition-colors ${
-      on ? "border-white/50 bg-white/15 text-offwhite" : "border-white/15 text-muted"
+      on ? "border-offwhite/50 bg-offwhite/15 text-offwhite" : "border-offwhite/15 text-muted"
     }`;
 
   function patch(i: number, next: Partial<Row>) {
@@ -136,7 +136,7 @@ export function WaitlistForm({
     return (
       <div
         role="status"
-        className="rounded-xl border border-white/10 bg-white/5 p-5 text-center"
+        className="rounded-xl border border-offwhite/10 bg-offwhite/5 p-5 text-center"
       >
         <p className="text-sm font-semibold text-offwhite">
           You&rsquo;re on the waitlist &#10003;
@@ -164,7 +164,7 @@ export function WaitlistForm({
   const max = localDate(HORIZON_DAYS);
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-5">
+    <div className="rounded-xl border border-offwhite/10 bg-offwhite/5 p-5">
       <p className="text-sm font-semibold text-offwhite">Join the waitlist</p>
       <p className="mt-1 text-xs text-muted">
         {serviceLabel
@@ -234,7 +234,7 @@ export function WaitlistForm({
         )}
 
         {/* ---- when they're free ---- */}
-        <fieldset className="rounded-lg border border-white/10 p-3">
+        <fieldset className="rounded-lg border border-offwhite/10 p-3">
           <legend className="px-1 text-xs text-muted">When are you free?</legend>
           <div className="flex flex-col gap-3">
             {rows.map((row, i) => (
@@ -369,14 +369,14 @@ export function WaitlistForm({
               type="checkbox"
               checked={smsConsent}
               onChange={(e) => setSmsConsent(e.target.checked)}
-              className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/30 bg-white/5"
+              className="mt-0.5 h-4 w-4 shrink-0 rounded border-offwhite/30 bg-offwhite/5"
             />
             <span>{CONSENT_TEXT}</span>
           </label>
         )}
 
         {error && (
-          <p role="alert" className="text-xs text-red-400">
+          <p role="alert" className="text-xs text-danger-soft">
             {error}
           </p>
         )}
@@ -385,7 +385,7 @@ export function WaitlistForm({
             <button
               type="button"
               onClick={onDone}
-              className="rounded-xl border border-white/15 px-4 py-3 text-sm text-muted transition-colors hover:text-offwhite"
+              className="rounded-xl border border-offwhite/15 px-4 py-3 text-sm text-muted transition-colors hover:text-offwhite"
             >
               Cancel
             </button>

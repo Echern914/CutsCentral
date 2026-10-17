@@ -263,7 +263,7 @@ export function YearlyReport() {
               type="button"
               onClick={print}
               disabled={!report || busy !== null}
-              className="rounded-xl border border-white/15 px-4 py-2.5 text-sm font-medium text-offwhite transition-colors duration-150 hover:bg-white/5 disabled:opacity-50"
+              className="rounded-xl border border-offwhite/15 px-4 py-2.5 text-sm font-medium text-offwhite transition-colors duration-150 hover:bg-offwhite/5 disabled:opacity-50"
             >
               Print
             </button>
@@ -271,7 +271,7 @@ export function YearlyReport() {
               type="button"
               onClick={share}
               disabled={!report || busy !== null}
-              className="rounded-xl border border-white/15 px-4 py-2.5 text-sm font-medium text-offwhite transition-colors duration-150 hover:bg-white/5 disabled:opacity-50"
+              className="rounded-xl border border-offwhite/15 px-4 py-2.5 text-sm font-medium text-offwhite transition-colors duration-150 hover:bg-offwhite/5 disabled:opacity-50"
             >
               {busy === "share" ? "Sharing…" : "Share"}
             </button>
@@ -290,7 +290,7 @@ export function YearlyReport() {
                 onChange={(e) => setYear(Number(e.target.value))}
                 aria-label="Report year"
                 data-testid="yearly-report-year"
-                className="min-w-[9rem] rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-base text-offwhite"
+                className="min-w-[9rem] rounded-lg border border-offwhite/15 bg-offwhite/5 px-3 py-2 text-base text-offwhite"
               >
                 {(options?.years ?? []).map((y) => (
                   <option key={y} value={y}>
@@ -307,7 +307,7 @@ export function YearlyReport() {
                   onChange={(e) => setSubject(e.target.value)}
                   aria-label="Report subject"
                   data-testid="yearly-report-subject"
-                  className="min-w-0 max-w-[14rem] truncate rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-base text-offwhite"
+                  className="min-w-0 max-w-[14rem] truncate rounded-lg border border-offwhite/15 bg-offwhite/5 px-3 py-2 text-base text-offwhite"
                 >
                   {options?.canReportShop && <option value="shop">Whole shop</option>}
                   {subjects.map((s) => (
@@ -322,12 +322,12 @@ export function YearlyReport() {
           </div>
 
           {optionsFailed && (
-            <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-rose-300">
+            <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-danger-soft">
               <span>Couldn&rsquo;t load your report options.</span>
               <button
                 type="button"
                 onClick={() => setOptionsTry((n) => n + 1)}
-                className="rounded-lg border border-white/15 px-3 py-1.5 text-xs font-medium text-offwhite hover:bg-white/5"
+                className="rounded-lg border border-offwhite/15 px-3 py-1.5 text-xs font-medium text-offwhite hover:bg-offwhite/5"
               >
                 Try again
               </button>
@@ -335,7 +335,7 @@ export function YearlyReport() {
           )}
           {!options && !optionsFailed && <p className="text-sm text-muted">Loading…</p>}
           {error && (
-            <p role="alert" className="text-sm text-rose-300">
+            <p role="alert" className="text-sm text-danger-soft">
               {error}
             </p>
           )}
@@ -376,8 +376,8 @@ function ReportPreview({
   const peak = Math.max(...report.months.map((m) => m.revenueCents), 0);
 
   return (
-    <div className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-3">
+    <div className="flex flex-col gap-4 rounded-2xl border border-offwhite/10 bg-white/[0.03] p-4">
+      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-offwhite/10 pb-3">
         <div className="min-w-0">
           {/* min-w-0 + truncate: a long shop or barber name must shorten, not
               push the dates off the card. */}
@@ -485,7 +485,7 @@ function ReportPreview({
 
       {/* The honest unavailable state. Named, with the reason - an omitted row
           reads as a zero, and a zero reads as a fact. */}
-      <section className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+      <section className="rounded-xl border border-offwhite/10 bg-white/[0.02] p-3">
         <h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
           Not included
         </h4>
@@ -529,7 +529,7 @@ function Tile({
     // shrink and blows the column out instead of wrapping.
     <div
       className={`min-w-0 rounded-xl border p-3 ${
-        accent ? "border-gold/25 bg-gold/[0.07]" : "border-white/10 bg-white/[0.03]"
+        accent ? "border-gold/25 bg-gold/[0.07]" : "border-offwhite/10 bg-white/[0.03]"
       }`}
     >
       {/* Wraps rather than truncates: "APPOINTMENTS COMPLETED" does not fit a

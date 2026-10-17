@@ -52,7 +52,7 @@ export function AddCard({
 
   if (state === "saved") {
     return (
-      <p role="status" className="mt-4 rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-muted">
+      <p role="status" className="mt-4 rounded-xl border border-offwhite/10 bg-offwhite/5 p-4 text-sm text-muted">
         <span className="font-medium text-offwhite">Card saved.</span> {shopName} keeps it on file for this appointment.
       </p>
     );
@@ -66,7 +66,7 @@ export function AddCard({
   }
 
   return (
-    <section className="mt-4 rounded-xl border border-white/10 bg-white/5 p-4" data-qa="add-card">
+    <section className="mt-4 rounded-xl border border-offwhite/10 bg-offwhite/5 p-4" data-qa="add-card">
       <h2 className="text-sm font-semibold text-offwhite">Add a card to keep on file</h2>
       <p className="mt-1 text-sm text-muted">
         You&rsquo;re booked either way. {shopName} asks for a card to keep on file - you aren&rsquo;t charged today

@@ -107,7 +107,7 @@ export function AddToWallet({
           />
         </svg>
         <span className="flex flex-col leading-tight">
-          <span className="text-[10px] text-white/80">Add to</span>
+          <span className="text-[10px] text-offwhite/80">Add to</span>
           <span className="text-sm font-semibold text-white">Apple Wallet</span>
         </span>
       </Tag>

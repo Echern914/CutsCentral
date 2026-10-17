@@ -39,7 +39,7 @@ const ACTIVE_STATUSES = ["WAITING", "ASSIGNED", "READY", "IN_SERVICE"] as const;
 
 const STATUS_BADGE: Record<string, string> = {
   WAITING: "bg-gold/15 text-gold",
-  ASSIGNED: "bg-sky-400/15 text-sky-300",
+  ASSIGNED: "bg-info-soft/15 text-info-soft",
   READY: "bg-emerald-soft/15 text-emerald-soft",
   IN_SERVICE: "bg-emerald-soft/15 text-emerald-soft",
   COMPLETED: "bg-charcoal-700 text-muted",

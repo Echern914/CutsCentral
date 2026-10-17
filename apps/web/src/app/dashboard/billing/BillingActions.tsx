@@ -33,7 +33,7 @@ export function UpgradeButton({
         }
         className={
           variant === "primary"
-            ? "rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-charcoal shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+            ? "rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-on-gold shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
             : "rounded-full border border-gold/40 px-6 py-2.5 text-sm font-semibold text-gold transition-all duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
         }
       >
@@ -58,7 +58,7 @@ export function UpgradeToPremiumAiButton({ label }: { label: string }) {
             if (r?.error) setError(r.error);
           })
         }
-        className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-charcoal shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+        className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-on-gold shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
       >
         {pending ? "Upgrading…" : label}
       </button>
@@ -94,7 +94,7 @@ export function UpgradeToTierButton({
             });
           })
         }
-        className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-charcoal shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+        className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-on-gold shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
       >
         {pending ? "Upgrading…" : label}
       </button>

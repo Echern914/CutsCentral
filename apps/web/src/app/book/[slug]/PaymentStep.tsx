@@ -91,19 +91,19 @@ export function PaymentStep({
     return onSkip ? (
       <div
         role="alert"
-        className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-200"
+        className="rounded-xl border border-warning-soft/30 bg-warning-soft/10 p-4 text-sm text-warning-soft"
       >
         <p className="font-medium">Card saving isn&rsquo;t available right now.</p>
-        <p className="mt-1 text-amber-200/80">You&rsquo;re still booked - nothing else to do.</p>
+        <p className="mt-1 text-warning-soft/80">You&rsquo;re still booked - nothing else to do.</p>
         <SkipButton onSkip={onSkip} />
       </div>
     ) : (
       <div
         role="alert"
-        className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-200"
+        className="rounded-xl border border-warning-soft/30 bg-warning-soft/10 p-4 text-sm text-warning-soft"
       >
         <p className="font-medium">Card payment isn&rsquo;t available right now.</p>
-        <p className="mt-1 text-amber-200/80">
+        <p className="mt-1 text-warning-soft/80">
           Nothing has been charged. Please call the shop to finish booking this time.
         </p>
       </div>
@@ -136,7 +136,7 @@ function SkipButton({ onSkip, disabled = false }: { onSkip: () => void; disabled
       type="button"
       onClick={onSkip}
       disabled={disabled}
-      className="mt-2 w-full rounded-xl border border-white/15 py-3 text-center text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-white/5 disabled:opacity-50"
+      className="mt-2 w-full rounded-xl border border-offwhite/15 py-3 text-center text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-offwhite/5 disabled:opacity-50"
     >
       Skip, I&rsquo;m booked
     </button>
@@ -252,14 +252,14 @@ function PaymentForm({
         </p>
       )}
       {loadTimedOut && !ready && (
-        <p role="alert" className="text-xs text-amber-300">
+        <p role="alert" className="text-xs text-warning-soft">
           The payment form is taking longer than usual. Check your connection —
           nothing has been charged.
         </p>
       )}
       <PaymentElement options={{ layout: "tabs" }} onReady={() => setReady(true)} />
       {error && (
-        <p role="alert" data-error-code={failureCode ?? undefined} className="text-xs text-red-400">
+        <p role="alert" data-error-code={failureCode ?? undefined} className="text-xs text-danger-soft">
           {error}
         </p>
       )}

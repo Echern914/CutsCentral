@@ -28,11 +28,11 @@ export interface Preflight {
 function Status({ check }: { check: PreflightCheck }) {
   const { ok, severity } = check;
   const tone = ok
-    ? { dot: "bg-emerald-400", text: "text-emerald-300", word: "Ready" }
+    ? { dot: "bg-emerald-soft", text: "text-emerald-soft", word: "Ready" }
     : severity === "blocker"
-      ? { dot: "bg-red-400", text: "text-red-300", word: "Blocker" }
+      ? { dot: "bg-danger-soft", text: "text-danger-soft", word: "Blocker" }
       : severity === "warn"
-        ? { dot: "bg-amber-400", text: "text-amber-300", word: "Warning" }
+        ? { dot: "bg-warning-soft", text: "text-warning-soft", word: "Warning" }
         : { dot: "bg-charcoal-500", text: "text-muted", word: "Off" };
   return (
     <span className={`inline-flex shrink-0 items-center gap-1.5 text-xs font-medium ${tone.text}`}>
@@ -57,7 +57,7 @@ export function PreflightSection({ p }: { p: Preflight }) {
       </h2>
       <p
         className={`mb-3 text-sm ${
-          p.blockers > 0 ? "text-red-300" : p.warnings > 0 ? "text-amber-300" : "text-emerald-300"
+          p.blockers > 0 ? "text-danger-soft" : p.warnings > 0 ? "text-warning-soft" : "text-emerald-soft"
         }`}
       >
         {headline}

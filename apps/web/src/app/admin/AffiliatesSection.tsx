@@ -111,7 +111,7 @@ const BTN =
 const BTN_GOLD =
   "rounded-full bg-gold px-3 py-1.5 text-xs font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50";
 const BTN_RED =
-  "rounded-full border border-red-500/40 px-3 py-1.5 text-xs text-red-400 transition-colors duration-150 ease-out hover:bg-red-500/10 disabled:opacity-50";
+  "rounded-full border border-danger-soft/40 px-3 py-1.5 text-xs text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50";
 const SELECT =
   "rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-xs text-offwhite focus:border-gold focus:outline-none";
 const INPUT =
@@ -128,7 +128,7 @@ function Pill({ on, label }: { on: boolean; label: string }) {
     <span
       className={cn(
         "rounded-full px-2.5 py-0.5 text-[11px]",
-        on ? "bg-emerald-500/15 text-emerald-300" : "bg-white/5 text-muted",
+        on ? "bg-emerald-soft/15 text-emerald-soft" : "bg-offwhite/5 text-muted",
       )}
     >
       {label}: {on ? "on" : "off"}
@@ -449,7 +449,7 @@ function AccountRow({
         <span
           className={cn(
             "rounded-full px-2 py-0.5 text-[11px]",
-            acc.status === "ACTIVE" ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-200",
+            acc.status === "ACTIVE" ? "bg-emerald-soft/15 text-emerald-soft" : "bg-warning-soft/15 text-warning-soft",
           )}
         >
           {acc.status === "ACTIVE" ? "active" : `suspended · ${acc.suspensionReason ?? ""}`}

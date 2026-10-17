@@ -171,7 +171,7 @@ export function InsightsClient({
             {pending && " Updating…"}
           </p>
           {failed && (
-            <p role="alert" className="mt-1 text-[11px] text-amber-400">
+            <p role="alert" className="mt-1 text-[11px] text-warning-soft">
               Couldn&apos;t load that range — still showing {data.periodLabel.toLowerCase()}.
             </p>
           )}
@@ -608,7 +608,7 @@ export function ServiceBars({
                         "shrink-0 rounded-full border px-2 py-0.5 text-[10px] tabular-nums transition-colors",
                         g
                           ? g.pct >= 1
-                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                            ? "border-emerald-soft/40 bg-emerald-soft/10 text-emerald-soft"
                             : "border-gold/40 bg-gold/10 text-gold"
                           : "border-subtle text-muted hover:border-gold/50 hover:text-gold",
                       )}
@@ -664,7 +664,7 @@ export function ServiceBars({
                       <button
                         onClick={() => void removeServiceGoal(g)}
                         disabled={goalSaving}
-                        className="rounded-full border border-subtle px-2.5 py-1 text-[11px] text-muted transition-colors hover:text-red-400"
+                        className="rounded-full border border-subtle px-2.5 py-1 text-[11px] text-muted transition-colors hover:text-danger-soft"
                       >
                         Remove
                       </button>
@@ -678,7 +678,7 @@ export function ServiceBars({
                     </button>
                   </div>
                   {goalError && (
-                    <p role="alert" className="w-full text-[11px] text-red-300">
+                    <p role="alert" className="w-full text-[11px] text-danger-soft">
                       {goalError}
                     </p>
                   )}
@@ -733,10 +733,10 @@ const CHAIR_TIME_PRESETS = [
  * not see, so every off-hours weekday looked like an empty row.
  */
 function utilTone(pct: number | null): string {
-  if (pct === null) return "bg-amber-400/60";
+  if (pct === null) return "bg-warning-soft/60";
   if (pct >= 75) return "bg-emerald-soft";
   if (pct >= 40) return "bg-gold";
-  return "bg-rose-400/80";
+  return "bg-danger-soft/80";
 }
 
 const UTIL_VIEWS = [
@@ -913,7 +913,7 @@ export function UtilizationCard({
                 <button
                   onClick={() => void clearTarget()}
                   disabled={savingTarget}
-                  className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-red-400"
+                  className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-danger-soft"
                 >
                   Remove
                 </button>
@@ -933,7 +933,7 @@ export function UtilizationCard({
               </button>
             </div>
             {targetError && (
-              <p role="alert" className="w-full text-xs text-red-300">
+              <p role="alert" className="w-full text-xs text-danger-soft">
                 {targetError}
               </p>
             )}
@@ -1066,8 +1066,8 @@ export function UtilizationCard({
                   className={cn(
                     "rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums",
                     (data?.totals.utilizationPct ?? 0) >= chairTimeTarget
-                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
-                      : "border-amber-500/40 bg-amber-500/10 text-amber-400",
+                      ? "border-emerald-soft/40 bg-emerald-soft/10 text-emerald-soft"
+                      : "border-warning-soft/40 bg-warning-soft/10 text-warning-soft",
                   )}
                   title={`Your standing target: run at ${chairTimeTarget}% booked.`}
                 >
@@ -1121,7 +1121,7 @@ export function UtilizationCard({
                       ) : offSchedule ? (
                         <span title="Booked outside your weekly hours — there's no scheduled capacity to measure it against. Add this day to your hours and it gets a real percentage.">
                           <span className="text-offwhite">{fmtDurationExact(r.bookedMin)}</span>{" "}
-                          <span className="text-amber-400/90">off-hours</span>
+                          <span className="text-warning-soft/90">off-hours</span>
                         </span>
                       ) : (
                         <>
@@ -1286,7 +1286,7 @@ function GoalsCard({
         subtitle={`Set a quota for the week and the month — then plan how to hit it: raise a price, add ${nounPlural}, pick how booked you want to run.`}
       />
       {clearError && (
-        <p role="alert" className="mt-3 text-sm text-red-300">
+        <p role="alert" className="mt-3 text-sm text-danger-soft">
           {clearError}
         </p>
       )}
@@ -1373,8 +1373,8 @@ function GoalCell({
           className={cn(
             "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold",
             onPace
-              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
-              : "border-amber-500/40 bg-amber-500/10 text-amber-400",
+              ? "border-emerald-soft/40 bg-emerald-soft/10 text-emerald-soft"
+              : "border-warning-soft/40 bg-warning-soft/10 text-warning-soft",
           )}
         >
           {p.delta === 0
@@ -1397,7 +1397,7 @@ function GoalCell({
           straight-line pace says you should be today. */}
       <div className="relative mt-3 h-2.5 overflow-hidden rounded-full bg-charcoal-700">
         <div
-          className={cn("h-full rounded-full", onPace ? "bg-emerald-500/80" : "bg-gold/80")}
+          className={cn("h-full rounded-full", onPace ? "bg-emerald-soft/80" : "bg-gold/80")}
           style={{ width: `${pctFill}%` }}
         />
         <div
@@ -1434,7 +1434,7 @@ function GoalCell({
         <button
           onClick={onClear}
           disabled={saving}
-          className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-red-400"
+          className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-danger-soft"
         >
           Remove
         </button>

@@ -94,11 +94,11 @@ function retryPage(host: string, retryHref: string): NextResponse {
 <title>Just a moment</title>
 <style>
   body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-         background: #111; color: #f5f2ea; font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+         background: #faf8f3; color: #1c1917; font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
   main { max-width: 22rem; padding: 2rem 1.5rem; text-align: center; }
   h1 { font-size: 1.25rem; margin: 0 0 .5rem; }
-  p { margin: 0 0 1.5rem; color: #b9b3a7; }
-  a { display: inline-block; padding: .75rem 1.5rem; border-radius: .75rem; background: #c9a24a; color: #111;
+  p { margin: 0 0 1.5rem; color: #57534e; }
+  a { display: inline-block; padding: .75rem 1.5rem; border-radius: .75rem; background: #d4af37; color: #1c1917;
       font-weight: 600; text-decoration: none; }
 </style>
 </head>

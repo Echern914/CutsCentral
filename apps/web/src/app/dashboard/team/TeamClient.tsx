@@ -246,7 +246,7 @@ export function TeamClient({
                       run(() => revokeInviteAction(i.id), "Invitation revoked")
                     }
                     disabled={pending}
-                    className="shrink-0 text-xs text-rose-300 transition-colors hover:text-rose-200 disabled:opacity-50"
+                    className="shrink-0 text-xs text-danger-soft transition-colors hover:text-danger-soft disabled:opacity-50"
                   >
                     Revoke
                   </button>
@@ -380,7 +380,7 @@ export function TeamClient({
                         run(() => removeMemberAction(m.id), "Access removed");
                       }}
                       disabled={pending}
-                      className="text-xs text-rose-300 transition-colors hover:text-rose-200 disabled:opacity-50"
+                      className="text-xs text-danger-soft transition-colors hover:text-danger-soft disabled:opacity-50"
                     >
                       Remove
                     </button>

@@ -47,8 +47,8 @@ const KIND_HINT: Record<string, string> = {
 };
 const KIND_STYLE: Record<string, string> = {
   appointment: "border-gold/40 bg-gold/10 text-gold",
-  visit: "border-sky-400/40 bg-sky-400/10 text-sky-300",
-  block: "border-violet-400/40 bg-violet-400/10 text-violet-300",
+  visit: "border-info-soft/40 bg-info-soft/10 text-info-soft",
+  block: "border-indigo-soft/40 bg-indigo-soft/10 text-indigo-soft",
 };
 
 function timeRange(startIso: string, endIso: string): string {
@@ -107,7 +107,7 @@ export function ConflictTabBadge({ count }: { count: number }) {
   if (count <= 0) return null;
   return (
     <span
-      className="rounded-full bg-amber-400/20 px-1.5 text-[11px] font-semibold text-amber-300"
+      className="rounded-full bg-warning-soft/20 px-1.5 text-[11px] font-semibold text-warning-soft"
       aria-label={`${count} unresolved`}
     >
       {count}
@@ -399,7 +399,7 @@ export function ConflictInbox({
               setDeletingAll(true);
             }}
             className={cn(
-              "shrink-0 rounded-lg border border-subtle px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:border-red-400/50 hover:text-red-300",
+              "shrink-0 rounded-lg border border-subtle px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:border-danger-soft/50 hover:text-danger-soft",
               !(status !== "resolved" && openCount > 0) && "ml-auto",
             )}
           >
@@ -414,7 +414,7 @@ export function ConflictInbox({
         </p>
       )}
       {error && (
-        <p role="alert" className="text-xs text-red-300">
+        <p role="alert" className="text-xs text-danger-soft">
           {error}
         </p>
       )}
@@ -482,7 +482,7 @@ export function ConflictInbox({
                         setDialogError(null);
                         setDeleting(r);
                       }}
-                      className="min-h-[2.75rem] shrink-0 rounded-lg border border-subtle px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:border-red-400/50 hover:text-red-300"
+                      className="min-h-[2.75rem] shrink-0 rounded-lg border border-subtle px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:border-danger-soft/50 hover:text-danger-soft"
                     >
                       Delete
                     </button>
@@ -529,7 +529,7 @@ export function ConflictInbox({
         footer={
           <div className="flex flex-col gap-2">
             {dialogError && (
-              <p role="alert" data-testid="resolve-error" className="text-xs text-red-300">
+              <p role="alert" data-testid="resolve-error" className="text-xs text-danger-soft">
                 {dialogError}
               </p>
             )}
@@ -647,7 +647,7 @@ export function ConflictInbox({
         footer={
           <div className="flex flex-col gap-2">
             {dialogError && (
-              <p role="alert" data-testid="resolve-error" className="text-xs text-red-300">
+              <p role="alert" data-testid="resolve-error" className="text-xs text-danger-soft">
                 {dialogError}
               </p>
             )}
@@ -716,7 +716,7 @@ function DeleteFooter({
   return (
     <div className="flex flex-col gap-2">
       {error && (
-        <p role="alert" data-testid="delete-error" className="text-xs text-red-300">
+        <p role="alert" data-testid="delete-error" className="text-xs text-danger-soft">
           {error}
         </p>
       )}
@@ -733,7 +733,7 @@ function DeleteFooter({
           type="button"
           onClick={onConfirm}
           disabled={saving}
-          className="rounded-lg bg-red-500/90 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-red-500 disabled:opacity-60"
+          className="rounded-lg bg-danger-soft/90 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-danger-soft disabled:opacity-60"
         >
           {saving ? "Deleting…" : label}
         </button>

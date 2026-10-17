@@ -205,7 +205,7 @@ export function UnfinishedBookings({ isNative, toast }: { isNative: boolean; toa
           <h2 id="unfinished-bookings-title" className="font-display text-lg">
             Didn&apos;t finish booking
             {waiting > 0 && (
-              <span className="ml-2 rounded-full bg-amber-400/20 px-2 py-0.5 align-middle text-[11px] font-semibold text-amber-300">
+              <span className="ml-2 rounded-full bg-warning-soft/20 px-2 py-0.5 align-middle text-[11px] font-semibold text-warning-soft">
                 {waiting + more}
               </span>
             )}
@@ -359,9 +359,9 @@ function UnfinishedCard({
   const chip = booked
     ? { label: "Booked", cls: "bg-gold/15 text-gold" }
     : live
-      ? { label: "Booking now", cls: "bg-sky-400/15 text-sky-300" }
+      ? { label: "Booking now", cls: "bg-info-soft/15 text-info-soft" }
       : taken
-        ? { label: "Time taken", cls: "bg-amber-400/15 text-amber-300" }
+        ? { label: "Time taken", cls: "bg-warning-soft/15 text-warning-soft" }
         : blocked
           ? { label: "Blocked", cls: "bg-charcoal-700 text-muted" }
           : { label: "Time open", cls: "bg-emerald-soft/15 text-emerald-soft" };
@@ -583,7 +583,7 @@ function UnfinishedCard({
               </p>
             )}
             {(refused?.note ?? note) && (
-              <p role="status" className="text-amber-300">
+              <p role="status" className="text-warning-soft">
                 {refused?.note ?? note}
               </p>
             )}

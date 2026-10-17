@@ -418,7 +418,7 @@ export function SeriesEditFields({ state }: { state: SeriesEditState }) {
           )}
           {unsettled.length > 0 && (
             <div className="flex min-w-0 flex-col items-start gap-2">
-              <p className="text-sm text-amber-300 [overflow-wrap:anywhere]" role="status">
+              <p className="text-sm text-warning-soft [overflow-wrap:anywhere]" role="status">
                 Still confirming with Acuity for {unsettled.map((c) => day.format(new Date(c.startsAt))).join(", ")}.
                 The old time stays blocked there until it does. This can take a few minutes.
               </p>
@@ -433,7 +433,7 @@ export function SeriesEditFields({ state }: { state: SeriesEditState }) {
             </div>
           )}
           {refused.length > 0 && (
-            <p className="text-sm text-amber-300" role="alert">
+            <p className="text-sm text-warning-soft" role="alert">
               Acuity didn&apos;t take the new time for {refused.map((c) => day.format(new Date(c.startsAt))).join(", ")}.
               The old time is still blocked there and the new one isn&apos;t - check Acuity before someone books it.
             </p>

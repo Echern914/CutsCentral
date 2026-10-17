@@ -14,7 +14,7 @@ export function PlanBadge({ tier }: { tier: "pro" | "pro_ai" }) {
   const name = PLANS[tier].name;
   const styles =
     tier === "pro_ai"
-      ? "bg-gold-gradient font-semibold text-charcoal"
+      ? "bg-gold-gradient font-semibold text-on-gold"
       : "bg-gold/15 text-gold";
   return (
     <span

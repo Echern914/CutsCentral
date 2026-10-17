@@ -29,10 +29,17 @@ const config: Config = {
           deep: "rgb(var(--cb-gold-deep) / <alpha-value>)",
         },
         offwhite: "rgb(var(--cb-fg) / <alpha-value>)", // primary text
+        // Text ON the literal gold gradient: that metal is bright in BOTH
+        // themes, so its text is dark in both (charcoal flips to white in light).
+        "on-gold": "#1C1917",
         muted: "rgb(var(--cb-fg-muted) / <alpha-value>)", // secondary text
         emerald: { soft: "rgb(var(--cb-emerald) / <alpha-value>)" },
         danger: { soft: "rgb(var(--cb-danger) / <alpha-value>)" },
         indigo: { soft: "rgb(var(--cb-indigo) / <alpha-value>)" },
+        // Status colours that flip with the theme: pale on charcoal, deep on
+        // white. Use these, never a raw amber-300 / sky-300 (unreadable on white).
+        warning: { soft: "rgb(var(--cb-warning) / <alpha-value>)" },
+        info: { soft: "rgb(var(--cb-info) / <alpha-value>)" },
       },
       borderRadius: {
         "2xl": "1rem",
@@ -67,7 +74,9 @@ const config: Config = {
         // charcoal and on white. Only the sheen (a white glaze for dark cards)
         // is variable - on white cards it fades to nothing instead of graying.
         "gold-gradient": "linear-gradient(135deg, #E6C964 0%, #D4AF37 55%, #B8962F 100%)",
-        "gold-text": "linear-gradient(120deg, #F1DD8C 0%, #D4AF37 45%, #E6C964 100%)",
+        // Gold TEXT follows the theme: pale metal on charcoal, deep gold on white.
+        "gold-text":
+          "linear-gradient(120deg, rgb(var(--cb-goldtext-a)) 0%, rgb(var(--cb-goldtext-b)) 45%, rgb(var(--cb-goldtext-c)) 100%)",
         "card-sheen":
           "linear-gradient(180deg, rgb(var(--cb-sheen) / 0.045) 0%, rgb(var(--cb-sheen) / 0) 40%)",
       },

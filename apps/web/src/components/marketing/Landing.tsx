@@ -56,7 +56,7 @@ export function Landing() {
             </Link>
             <Link
               href="/signup"
-              className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-charcoal shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
+              className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-on-gold shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
             >
               Get started
             </Link>
@@ -92,7 +92,7 @@ export function Landing() {
               <div className="mt-9 flex flex-wrap items-center justify-center gap-4 lg:justify-start">
                 <Link
                   href="/signup"
-                  className="inline-flex items-center gap-2 rounded-full bg-gold-gradient px-8 py-3.5 text-sm font-semibold text-charcoal shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
+                  className="inline-flex items-center gap-2 rounded-full bg-gold-gradient px-8 py-3.5 text-sm font-semibold text-on-gold shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
                 >
                   Start free
                   <ArrowIcon className="h-4 w-4" />
@@ -180,7 +180,7 @@ export function Landing() {
             />
             {STEPS.map((s, i) => (
               <StaggerItem key={s.title} className="relative text-center">
-                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-gold-gradient font-display text-lg text-charcoal shadow-glow-sm">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-gold-gradient font-display text-lg text-on-gold shadow-glow-sm">
                   {i + 1}
                 </div>
                 <h3 className="mt-5 font-display text-xl">{s.title}</h3>
@@ -341,7 +341,7 @@ export function Landing() {
               <div className="mt-9">
                 <Link
                   href="/signup"
-                  className="inline-flex animate-pulse-glow items-center gap-2 rounded-full bg-gold-gradient px-10 py-4 text-base font-semibold text-charcoal transition-[filter] duration-150 ease-out hover:brightness-105"
+                  className="inline-flex animate-pulse-glow items-center gap-2 rounded-full bg-gold-gradient px-10 py-4 text-base font-semibold text-on-gold transition-[filter] duration-150 ease-out hover:brightness-105"
                 >
                   Get started free
                   <ArrowIcon className="h-4 w-4" />

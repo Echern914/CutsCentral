@@ -87,15 +87,15 @@ export function ThemePicker({
 
   return (
     <div className="flex gap-3" role="group" aria-label="Dashboard appearance">
-      {swatch("dark", "Black & Gold", "The original. Easy on late-night eyes.", {
-        bg: "#0A0A0B",
-        card: "#141416",
-        text: "#F5F5F4",
-      })}
-      {swatch("light", "White & Gold", "Bright and clean. Great in daylight.", {
+      {swatch("light", "White & Gold", "The main look. Bright and clean.", {
         bg: "#FAF8F3",
         card: "#FFFFFF",
         text: "#1C1917",
+      })}
+      {swatch("dark", "Black & Gold", "Easy on late-night eyes.", {
+        bg: "#0A0A0B",
+        card: "#141416",
+        text: "#F5F5F4",
       })}
     </div>
   );

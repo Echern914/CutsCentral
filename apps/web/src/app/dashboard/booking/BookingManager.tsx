@@ -2102,7 +2102,7 @@ export function ServiceEditForm({
           {hoursConflicts.length > 0 && (
             <div
               role="alert"
-              className="mt-2 flex flex-col gap-1 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-300"
+              className="mt-2 flex flex-col gap-1 rounded-xl border border-warning-soft/40 bg-warning-soft/10 px-3 py-2 text-[11px] leading-relaxed text-warning-soft"
             >
               {hoursConflicts.map((c) => (
                 <p key={c}>{c}</p>
@@ -4697,7 +4697,7 @@ export function StaffHoursSheet({
                     without this line the barber ticks the day, sees it ticked,
                     and the booking link keeps showing it struck through. */}
                 {r.on && noServiceDays.includes(i) && (
-                  <p className="mt-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-300">
+                  <p className="mt-2 rounded-lg border border-warning-soft/40 bg-warning-soft/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-warning-soft">
                     No service is offered on {WEEKDAYS[i]}s, so customers still
                     can&apos;t book this day. Turn {WEEKDAYS[i]} on for each
                     service under{" "}

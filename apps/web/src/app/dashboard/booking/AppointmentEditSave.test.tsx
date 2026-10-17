@@ -252,7 +252,7 @@ describe("a save that worked says so", () => {
     expect(status).toHaveTextContent(
       "Saved here, but Acuity didn't confirm — the old time stays held there.",
     );
-    expect(status).toHaveClass("text-amber-300");
+    expect(status).toHaveClass("text-warning-soft");
     expect(status).not.toHaveClass("text-emerald-soft");
   });
 

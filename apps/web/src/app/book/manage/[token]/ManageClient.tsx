@@ -180,9 +180,9 @@ export function ManageClient({
       <CustomerBack
         label={`← ${data.shop.name}`}
         fallbackHref={data.shop.slug ? `/s/${data.shop.slug}` : undefined}
-        className="mb-4 self-start rounded-full border border-white/15 bg-white/5 px-3.5 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
+        className="mb-4 self-start rounded-full border border-offwhite/15 bg-offwhite/5 px-3.5 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
       />
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+      <div className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6">
         <p className="text-xs uppercase tracking-wide text-muted">Your appointment</p>
         <h1 className="mt-1 font-display text-2xl">{data.shop.name}</h1>
         {until && !isCanceled && !isDone && (
@@ -208,7 +208,7 @@ export function ManageClient({
                     href={data.shop.mapsUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="underline decoration-white/30 underline-offset-4 hover:decoration-white"
+                    className="underline decoration-offwhite/30 underline-offset-4 hover:decoration-white"
                   >
                     {data.shop.address}
                   </a>
@@ -234,13 +234,13 @@ export function ManageClient({
         )}
 
         {error && (
-          <p role="alert" className="mt-4 text-xs text-red-400">
+          <p role="alert" className="mt-4 text-xs text-danger-soft">
             {error}
           </p>
         )}
 
         {isCanceled ? (
-          <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-center text-sm text-muted">
+          <div className="mt-6 rounded-xl border border-offwhite/10 bg-offwhite/5 p-4 text-center text-sm text-muted">
             {data.neverBooked && canceledScope === null
               ? "This time wasn't booked: the checkout wasn't finished before the hold ran out, so the time went back on sale. Nothing was charged."
               : canceledScope === "future"
@@ -367,7 +367,7 @@ export function ManageClient({
               <div
                 role="alertdialog"
                 aria-labelledby="kept-on-cancel"
-                className="flex flex-col gap-2 rounded-xl border border-red-500/40 bg-red-500/5 p-3"
+                className="flex flex-col gap-2 rounded-xl border border-danger-soft/40 bg-danger-soft/5 p-3"
               >
                 <p id="kept-on-cancel" className="text-sm text-offwhite">
                   {data.nonRefundable
@@ -381,7 +381,7 @@ export function ManageClient({
                     type="button"
                     onClick={() => cancel(confirmKept)}
                     disabled={pending}
-                    className="rounded-xl border border-red-500/40 py-2.5 text-center text-sm font-semibold text-red-400 disabled:opacity-50"
+                    className="rounded-xl border border-danger-soft/40 py-2.5 text-center text-sm font-semibold text-danger-soft disabled:opacity-50"
                   >
                     {pending ? "Canceling…" : "Cancel anyway"}
                   </button>
@@ -410,7 +410,7 @@ export function ManageClient({
                 type="button"
                 onClick={() => cancel("this")}
                 disabled={pending}
-                className="rounded-xl border border-red-500/40 py-3 text-center text-sm font-semibold text-red-400 disabled:opacity-50"
+                className="rounded-xl border border-danger-soft/40 py-3 text-center text-sm font-semibold text-danger-soft disabled:opacity-50"
               >
                 {pending ? "Canceling…" : laterVisits > 0 ? "Cancel just this visit" : "Cancel appointment"}
               </button>
@@ -420,7 +420,7 @@ export function ManageClient({
                 type="button"
                 onClick={() => cancel("future")}
                 disabled={pending}
-                className="rounded-xl border border-red-500/40 py-3 text-center text-sm font-semibold text-red-400 disabled:opacity-50"
+                className="rounded-xl border border-danger-soft/40 py-3 text-center text-sm font-semibold text-danger-soft disabled:opacity-50"
               >
                 {pending
                   ? "Canceling…"
@@ -575,7 +575,7 @@ function ServiceChargeControl({
   }
 
   return (
-    <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-sm" data-qa="service-charge">
+    <div className="mt-6 rounded-xl border border-offwhite/10 bg-offwhite/5 p-4 text-sm" data-qa="service-charge">
       {stopped ? (
         <p className="text-muted" role="status">
           {shopName} can no longer charge your {cardName} for your service. You can pay another way at the shop.
@@ -594,7 +594,7 @@ function ServiceChargeControl({
                 type="button"
                 onClick={stop}
                 disabled={pending}
-                className="rounded-xl border border-red-500/40 py-2.5 text-center text-sm font-semibold text-red-400 disabled:opacity-50"
+                className="rounded-xl border border-danger-soft/40 py-2.5 text-center text-sm font-semibold text-danger-soft disabled:opacity-50"
               >
                 {pending ? "Stopping…" : "Yes, stop charges to this card"}
               </button>
@@ -611,13 +611,13 @@ function ServiceChargeControl({
             <button
               type="button"
               onClick={() => setConfirming(true)}
-              className="mt-3 w-full rounded-xl border border-white/15 py-2.5 text-center text-sm font-semibold"
+              className="mt-3 w-full rounded-xl border border-offwhite/15 py-2.5 text-center text-sm font-semibold"
             >
               Stop letting the shop charge this card
             </button>
           )}
           {failed && (
-            <p role="alert" className="mt-2 text-xs text-red-400">
+            <p role="alert" className="mt-2 text-xs text-danger-soft">
               That didn&rsquo;t go through. Please try again.
             </p>
           )}
@@ -697,7 +697,7 @@ function NudgeBanner({
       </p>
       <p className="mt-1 text-sm text-offwhite">{nudge.body ?? "Come early if you can"}</p>
       {answer === "on_my_way" ? (
-        <p role="status" className="mt-2 text-xs font-semibold text-emerald-300">
+        <p role="status" className="mt-2 text-xs font-semibold text-emerald-soft">
           You&apos;re marked on the way ✓
         </p>
       ) : answer === "declined" ? (
@@ -710,7 +710,7 @@ function NudgeBanner({
             type="button"
             onClick={onMyWay}
             disabled={pending}
-            className="flex-1 rounded-lg bg-emerald-500 py-2 text-xs font-semibold text-black disabled:opacity-50"
+            className="flex-1 rounded-lg bg-emerald-soft py-2 text-xs font-semibold text-charcoal disabled:opacity-50"
           >
             On my way
           </button>
@@ -718,14 +718,14 @@ function NudgeBanner({
             type="button"
             onClick={cantMakeIt}
             disabled={pending}
-            className="flex-1 rounded-lg border border-white/20 py-2 text-xs font-semibold text-offwhite disabled:opacity-50"
+            className="flex-1 rounded-lg border border-offwhite/20 py-2 text-xs font-semibold text-offwhite disabled:opacity-50"
           >
             Can&apos;t make it early
           </button>
         </div>
       )}
       {error && (
-        <p role="alert" className="mt-2 text-xs text-red-400">
+        <p role="alert" className="mt-2 text-xs text-danger-soft">
           Couldn&apos;t send that - try again.
         </p>
       )}
@@ -765,7 +765,7 @@ function CheckInCard({
     return (
       <div
         role="status"
-        className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 py-3 text-center text-sm font-semibold text-emerald-300"
+        className="rounded-xl border border-emerald-soft/30 bg-emerald-soft/10 py-3 text-center text-sm font-semibold text-emerald-soft"
       >
         You&apos;re checked in ✓
       </div>
@@ -799,12 +799,12 @@ function CheckInCard({
           type="button"
           onClick={() => tap()}
           disabled={pending}
-          className="w-full rounded-xl bg-emerald-500 py-3 text-center text-sm font-semibold text-black disabled:opacity-50"
+          className="w-full rounded-xl bg-emerald-soft py-3 text-center text-sm font-semibold text-charcoal disabled:opacity-50"
         >
           {pending ? "One sec…" : "On my way"}
         </button>
         {error && (
-          <p role="alert" className="mt-2 text-center text-xs text-red-400">
+          <p role="alert" className="mt-2 text-center text-xs text-danger-soft">
             Couldn&apos;t send that - try again.
           </p>
         )}
@@ -823,7 +823,7 @@ function CheckInCard({
     <div>
       <div
         role="status"
-        className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 py-3 text-center text-sm font-semibold text-emerald-300"
+        className="rounded-xl border border-emerald-soft/30 bg-emerald-soft/10 py-3 text-center text-sm font-semibold text-emerald-soft"
       >
         You&apos;re marked on the way ✓
       </div>
@@ -837,8 +837,8 @@ function CheckInCard({
             aria-pressed={c.active}
             className={
               c.active
-                ? "flex-1 rounded-lg border border-emerald-400/60 bg-emerald-400/20 px-1 py-1.5 text-[11px] font-semibold text-emerald-200"
-                : "flex-1 rounded-lg border border-white/15 px-1 py-1.5 text-[11px] text-muted disabled:opacity-50"
+                ? "flex-1 rounded-lg border border-emerald-soft/60 bg-emerald-soft/20 px-1 py-1.5 text-[11px] font-semibold text-emerald-soft"
+                : "flex-1 rounded-lg border border-offwhite/15 px-1 py-1.5 text-[11px] text-muted disabled:opacity-50"
             }
           >
             {c.label}
@@ -846,7 +846,7 @@ function CheckInCard({
         ))}
       </div>
       {error && (
-        <p role="alert" className="mt-2 text-center text-xs text-red-400">
+        <p role="alert" className="mt-2 text-center text-xs text-danger-soft">
           Couldn&apos;t send that - try again.
         </p>
       )}
@@ -1010,7 +1010,7 @@ function ReschedulePicker({
     return (
       <p
         role="status"
-        className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 py-3 text-center text-sm font-semibold text-emerald-300"
+        className="rounded-xl border border-emerald-soft/30 bg-emerald-soft/10 py-3 text-center text-sm font-semibold text-emerald-soft"
       >
         Moved — see you {timeFmt.format(new Date(done))} on{" "}
         {dayFmt.format(new Date(done))}.
@@ -1023,7 +1023,7 @@ function ReschedulePicker({
       <button
         type="button"
         onClick={load}
-        className="rounded-xl border border-white/20 py-3 text-center text-sm font-semibold transition-colors hover:bg-white/5"
+        className="rounded-xl border border-offwhite/20 py-3 text-center text-sm font-semibold transition-colors hover:bg-offwhite/5"
       >
         Reschedule
       </button>
@@ -1031,20 +1031,20 @@ function ReschedulePicker({
   }
 
   return (
-    <div className="rounded-xl border border-white/15 bg-white/5 p-4">
+    <div className="rounded-xl border border-offwhite/15 bg-offwhite/5 p-4">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold">Pick a new time</p>
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="rounded-full border border-white/15 px-3 py-1 text-xs text-muted transition-colors hover:text-offwhite"
+          className="rounded-full border border-offwhite/15 px-3 py-1 text-xs text-muted transition-colors hover:text-offwhite"
         >
           Close
         </button>
       </div>
 
       {err && (
-        <p role="alert" className="mt-3 text-xs text-red-400">
+        <p role="alert" className="mt-3 text-xs text-danger-soft">
           {err}
         </p>
       )}
@@ -1079,7 +1079,7 @@ function ReschedulePicker({
                 setPriceAsk(null);
                 setSelected(null);
               }}
-              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs font-medium"
+              className="rounded-lg border border-offwhite/20 px-3 py-1.5 text-xs font-medium"
             >
               Keep my time
             </button>
@@ -1109,7 +1109,7 @@ function ReschedulePicker({
                   className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-40 ${
                     selected === iso
                       ? "border-gold bg-gold text-charcoal"
-                      : "border-white/20 hover:bg-white/10"
+                      : "border-offwhite/20 hover:bg-offwhite/10"
                   }`}
                 >
                   {selected === iso && pending ? "Moving…" : timeFmt.format(new Date(iso))}

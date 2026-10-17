@@ -215,7 +215,7 @@ export function GroupManageClient({
         </p>
       )}
 
-      <ul className="mt-2 divide-y divide-white/5 rounded-2xl border border-subtle bg-charcoal-800/60">
+      <ul className="mt-2 divide-y divide-offwhite/5 rounded-2xl border border-subtle bg-charcoal-800/60">
         {group.members.map((m) => {
           // A member of an unanswered request is waiting, not gone.
           const gone = m.status !== "BOOKED" && !(requested && m.status === "PENDING");

@@ -583,7 +583,7 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
         />
       )}
       {row.status === "pending" && (
-        <p className="rounded-xl border border-amber-400/40 bg-amber-400/10 px-3.5 py-2.5 text-xs leading-relaxed text-amber-300">
+        <p className="rounded-xl border border-warning-soft/40 bg-warning-soft/10 px-3.5 py-2.5 text-xs leading-relaxed text-warning-soft">
           This is still a <strong>request</strong>. Editing it keeps it a request — approve
           it from the card when you&apos;re ready.
         </p>

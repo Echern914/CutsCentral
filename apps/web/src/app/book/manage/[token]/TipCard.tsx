@@ -65,7 +65,7 @@ export function TipCard({
 
   if (view.state === "paid") {
     return (
-      <section className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-center" data-qa="tip-card">
+      <section className="mt-6 rounded-xl border border-offwhite/10 bg-offwhite/5 p-4 text-center" data-qa="tip-card">
         <p role="status" className="text-sm text-offwhite">
           Thank you! Your {formatTipCents(view.amountCents)} tip went to {shopName}.
         </p>
@@ -74,7 +74,7 @@ export function TipCard({
   }
   if (view.state === "refunded") {
     return (
-      <section className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-center" data-qa="tip-card">
+      <section className="mt-6 rounded-xl border border-offwhite/10 bg-offwhite/5 p-4 text-center" data-qa="tip-card">
         <p className="text-sm text-muted">
           Your {formatTipCents(view.amountCents)} tip was refunded to you.
         </p>
@@ -83,7 +83,7 @@ export function TipCard({
   }
   if (view.state === "processing") {
     return (
-      <section className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-center" data-qa="tip-card">
+      <section className="mt-6 rounded-xl border border-offwhite/10 bg-offwhite/5 p-4 text-center" data-qa="tip-card">
         <p role="status" className="text-sm text-muted">
           Your {formatTipCents(view.amountCents)} tip is processing. This page will show it once it clears.
         </p>
@@ -233,7 +233,7 @@ function OpenTip({
                 className={
                   !custom && preset === p.cents
                     ? "rounded-xl border border-gold/60 bg-gold/15 px-4 py-2 text-sm font-semibold text-offwhite"
-                    : "rounded-xl border border-white/15 px-4 py-2 text-sm text-muted hover:text-offwhite"
+                    : "rounded-xl border border-offwhite/15 px-4 py-2 text-sm text-muted hover:text-offwhite"
                 }
               >
                 {p.percent}% · {formatTipCents(p.cents)}
@@ -249,7 +249,7 @@ function OpenTip({
               className={
                 custom
                   ? "rounded-xl border border-gold/60 bg-gold/15 px-4 py-2 text-sm font-semibold text-offwhite"
-                  : "rounded-xl border border-white/15 px-4 py-2 text-sm text-muted hover:text-offwhite"
+                  : "rounded-xl border border-offwhite/15 px-4 py-2 text-sm text-muted hover:text-offwhite"
               }
             >
               Other amount
@@ -267,12 +267,12 @@ function OpenTip({
                   setTyped(e.target.value);
                   setError(null);
                 }}
-                className="h-11 rounded-xl border border-white/15 bg-black/20 px-3 text-base text-offwhite"
+                className="h-11 rounded-xl border border-offwhite/15 bg-black/20 px-3 text-base text-offwhite"
               />
             </label>
           )}
           {error && (
-            <p role="alert" className="mt-3 text-sm text-red-400">
+            <p role="alert" className="mt-3 text-sm text-danger-soft">
               {error}
             </p>
           )}

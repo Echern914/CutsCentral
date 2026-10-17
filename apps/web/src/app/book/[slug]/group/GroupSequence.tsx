@@ -46,7 +46,7 @@ export function GroupSequence({
 }) {
   return (
     <div className="rounded-2xl border border-subtle bg-charcoal-800/60">
-      <ul className="divide-y divide-white/5">
+      <ul className="divide-y divide-offwhite/5">
         {plan.members.map((m) => (
           <li key={m.position} className="flex items-baseline gap-3 p-4">
             <span className="min-w-0 flex-1">

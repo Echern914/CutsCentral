@@ -106,9 +106,9 @@ export function appointmentStatusPill(input: {
         : input.etaMinutes
           ? `En route ~${input.etaMinutes}m`
           : "En route",
-      cls: "bg-amber-400/15 text-amber-300",
-      railCls: "bg-amber-400/70",
-      ringCls: "ring-amber-400/50",
+      cls: "bg-warning-soft/15 text-warning-soft",
+      railCls: "bg-warning-soft/70",
+      ringCls: "ring-warning-soft/50",
     };
   }
   return STATUS_PILL[input.status];
@@ -117,9 +117,9 @@ export function appointmentStatusPill(input: {
 const STATUS_PILL: Record<AppointmentCardStatus, StatusPill> = {
   pending: {
     label: "Requested",
-    cls: "bg-amber-400/15 text-amber-300",
-    railCls: "bg-amber-400/70",
-    ringCls: "ring-amber-400/50",
+    cls: "bg-warning-soft/15 text-warning-soft",
+    railCls: "bg-warning-soft/70",
+    ringCls: "ring-warning-soft/50",
   },
   upcoming: {
     label: "Booked",

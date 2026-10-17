@@ -14,7 +14,7 @@ export function ClientNoteBlock({ shopName, note }: { shopName: string; note: st
   return (
     <div
       data-testid="client-note"
-      className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4 text-left"
+      className="mt-4 rounded-xl border border-offwhite/10 bg-white/[0.03] p-4 text-left"
     >
       <p className="text-[11px] font-semibold uppercase tracking-wide opacity-60">
         {clientNoteHeading(shopName)}

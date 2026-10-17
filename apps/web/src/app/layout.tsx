@@ -67,7 +67,8 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   // Brand the mobile browser chrome (address bar) charcoal to match the app.
-  themeColor: "#0A0A0B",
+  // The browser chrome matches the main (light) look.
+  themeColor: "#FAF8F3",
 };
 
 export default function RootLayout({

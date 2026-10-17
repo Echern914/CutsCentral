@@ -88,7 +88,7 @@ export function BookingPolicyPanel({
     <section
       aria-labelledby="before-you-book"
       data-qa="booking-policy"
-      className="flex min-w-0 flex-col gap-2.5 rounded-xl border border-white/10 px-3 py-3"
+      className="flex min-w-0 flex-col gap-2.5 rounded-xl border border-offwhite/10 px-3 py-3"
     >
       <h3 id="before-you-book" className="text-sm font-semibold text-offwhite">
         Before you book
@@ -181,7 +181,7 @@ export function BookingPolicyAgreed({
     <section
       aria-labelledby="before-you-book"
       data-qa="booking-policy-agreed"
-      className="flex min-w-0 flex-col gap-2 rounded-xl border border-white/10 px-3 py-3"
+      className="flex min-w-0 flex-col gap-2 rounded-xl border border-offwhite/10 px-3 py-3"
     >
       <h3 id="before-you-book" className="text-sm font-semibold text-offwhite">
         Before you book

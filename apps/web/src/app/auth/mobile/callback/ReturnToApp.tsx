@@ -59,7 +59,7 @@ export function ReturnToApp({ code, state }: { code: string; state: string }) {
           </a>
           <a
             href={MOBILE_APP.appStoreUrl}
-            className="flex min-h-[44px] w-full items-center justify-center rounded-xl border border-subtle px-5 py-3 text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-white/5"
+            className="flex min-h-[44px] w-full items-center justify-center rounded-xl border border-subtle px-5 py-3 text-sm font-medium text-offwhite transition-colors duration-200 ease-out hover:bg-offwhite/5"
           >
             Download ChairBack
           </a>

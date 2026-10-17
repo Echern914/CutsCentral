@@ -39,7 +39,7 @@ function Submit() {
     <button
       type="submit"
       disabled={pending}
-      className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-charcoal shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+      className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-on-gold shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
     >
       {pending ? "Creating…" : "Continue"}
     </button>
@@ -198,7 +198,7 @@ export function ShopForm({
             look must never stand between a barber and their first shop. */}
         <div className="mt-5">
           <p className="mb-2 text-center text-xs uppercase tracking-[0.2em] text-muted">Pick your look</p>
-          <ThemePicker value="dark" onPick={(t) => void saveThemeAction(t)} />
+          <ThemePicker value="light" onPick={(t) => void saveThemeAction(t)} />
           <p className="mt-2 text-center text-xs text-muted">You can switch anytime in Account.</p>
         </div>
       </motion.div>

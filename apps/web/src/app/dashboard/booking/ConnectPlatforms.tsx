@@ -206,15 +206,15 @@ export function ConnectPlatforms({
               )}
             >
               <div className="flex items-center justify-between">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-charcoal-800 ring-1 ring-white/5">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-charcoal-800 ring-1 ring-offwhite/5">
                   <c.Logo />
                 </div>
                 {refused ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/15 px-2.5 py-1 text-xs font-medium text-amber-300">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-warning-soft/15 px-2.5 py-1 text-xs font-medium text-warning-soft">
                     Not syncing
                   </span>
                 ) : connected && c.connectPath ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-300">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-soft/15 px-2.5 py-1 text-xs font-medium text-emerald-soft">
                     <Check /> Connected
                   </span>
                 ) : selected ? (
@@ -309,7 +309,7 @@ export function ConnectPlatforms({
                         disconnect(c.key, c.name.split(" ")[0]);
                       }
                     }}
-                    className="inline-flex w-fit items-center rounded-full border border-rose-400/30 px-3 py-1.5 text-xs font-medium text-rose-300 transition-colors duration-150 ease-out hover:bg-rose-500/10"
+                    className="inline-flex w-fit items-center rounded-full border border-danger-soft/30 px-3 py-1.5 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
                   >
                     {pending ? "Working…" : "Disconnect"}
                   </span>

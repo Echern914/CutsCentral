@@ -38,7 +38,7 @@ export function ChangeTag({ change }: { change: Change }) {
     <p
       className={cn(
         "mt-0.5 text-[11px] font-medium tabular-nums",
-        change.trend === "up" ? "text-emerald-soft" : change.trend === "down" ? "text-rose-300" : "text-muted",
+        change.trend === "up" ? "text-emerald-soft" : change.trend === "down" ? "text-danger-soft" : "text-muted",
       )}
     >
       {change.text}

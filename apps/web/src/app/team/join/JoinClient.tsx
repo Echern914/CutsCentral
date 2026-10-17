@@ -72,7 +72,7 @@ export function JoinClient({
   }
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+    <div className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center">
       <h1 className="font-display text-2xl text-offwhite">Join {shopName}</h1>
       <p className="mt-2 text-base text-muted">
         You&apos;ve been invited to {shopName} on ChairBack.{" "}
