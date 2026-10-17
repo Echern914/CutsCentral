@@ -54,7 +54,14 @@ function freshSlot(overrides: Partial<FreedSlot> = {}): FreedSlot {
   // Anchor ~3 days out on a 30-minute grid boundary (the engine only offers
   // grid-aligned starts), then give each test its own 2h lane.
   const base = Math.ceil((Date.now() + 72 * 3600_000) / 1800_000) * 1800_000;
-  const startsAt = new Date(base + slotSeq++ * 2 * 3600_000);
+  let startsAt = new Date(base + slotSeq++ * 2 * 3600_000);
+  // 🔴 Never a lane that ends past the shop's midnight. A 23:30 slot ends on
+  // the NEXT day, so a test's "that day only" window can't fit it - which
+  // turned whichever test drew that lane red at one hour of the night (CI,
+  // 2026-10-17 07:08 UTC). Skip to the next lane instead.
+  while (wallParts(startsAt, TZ).date !== wallParts(new Date(startsAt.getTime() + 30 * 60_000), TZ).date) {
+    startsAt = new Date(base + slotSeq++ * 2 * 3600_000);
+  }
   return {
     shopId,
     staffId,
