@@ -120,3 +120,82 @@ export const ONBOARDING_PATH: Record<OnboardingStepId, string> = {
   clients: "/onboarding/clients",
   done: "/onboarding/done",
 };
+
+/** What each step is called, wherever setup is shown (checklist, Assistant). */
+export const ONBOARDING_STEP_LABEL: Record<Exclude<OnboardingStepId, "shop" | "done">, string> = {
+  booking: "Choose how clients book you",
+  team: "Add who takes appointments",
+  services: "Add your services",
+  hours: "Set your hours",
+  clients: "Bring your clients",
+};
+
+/** One step still to do, said the way the Assistant says it. */
+export interface SetupBriefItem {
+  id: OnboardingStepId;
+  title: string;
+  /** Why it matters, from this shop's own data. */
+  finding: string;
+  /** What doing it involves. */
+  fix: string;
+  href: string;
+  optional: boolean;
+}
+
+/**
+ * "How do I finish setting up?" answered from THIS shop's facts - the same
+ * steps, order and done-ness as the checklist and setup itself, so the
+ * Assistant can never send an owner to a step that is already done.
+ */
+export interface SetupBrief {
+  complete: boolean;
+  headline: string;
+  items: SetupBriefItem[];
+}
+
+const STEP_WHY: Record<Exclude<OnboardingStepId, "shop" | "done">, (f: OnboardingFacts) => [string, string]> = {
+  booking: () => [
+    "Clients can't book you until you've picked how they book.",
+    "Take bookings on ChairBack, or keep the app you already use and connect it.",
+  ],
+  team: () => [
+    "Nobody takes appointments yet, so there's no one to book.",
+    "Add yourself, and anyone else who takes appointments here.",
+  ],
+  services: () => [
+    "There's nothing on your menu to book.",
+    "Paste your menu from your old app, or add services one at a time.",
+  ],
+  hours: (f) => {
+    const missing = Math.max(0, f.staffCount - f.staffWithHours);
+    return [
+      f.staffCount > 1
+        ? `${missing} of ${f.staffCount} people have no hours yet, so they have no openings.`
+        : "You have no hours yet, so there are no openings to book.",
+      "Set the days and times you take appointments.",
+    ];
+  },
+  clients: () => [
+    "Optional: you have no clients in ChairBack yet.",
+    "Bring your list over from your old app so their punch cards and reminders start right away.",
+  ],
+};
+
+export function setupBrief(f: OnboardingFacts): SetupBrief {
+  const steps = onboardingPlan(f).filter(
+    (s): s is Exclude<OnboardingStepId, "shop" | "done"> => s !== "shop" && s !== "done",
+  );
+  const required = steps.filter((s) => s !== "clients");
+  const left = required.filter((s) => !onboardingStepDone(s, f));
+  const complete = setupComplete(f);
+  const items: SetupBriefItem[] = steps
+    .filter((s) => !onboardingStepDone(s, f))
+    .map((s) => {
+      const [finding, fix] = STEP_WHY[s](f);
+      return { id: s, title: ONBOARDING_STEP_LABEL[s], finding, fix, href: ONBOARDING_PATH[s], optional: s === "clients" };
+    });
+  const headline = complete
+    ? "You're set up — clients can book you."
+    : `${left.length} step${left.length === 1 ? "" : "s"} left before clients can book you (${required.length - left.length} of ${required.length} done).`;
+  return { complete, headline, items };
+}

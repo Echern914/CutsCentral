@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   ONBOARDING_PATH,
+  ONBOARDING_STEP_LABEL,
   nextOnboardingStep,
   onboardingPlan,
   onboardingStepDone,
@@ -8,13 +9,8 @@ import {
 } from "@chairback/config/onboarding";
 import type { OnboardingState } from "@/app/onboarding/state";
 
-const LABEL: Partial<Record<OnboardingStepId, string>> = {
-  booking: "Choose how clients book you",
-  team: "Add who takes appointments",
-  services: "Add your services",
-  hours: "Set your hours",
-  clients: "Bring your clients",
-};
+// The same names the Assistant uses for these steps (config/onboarding.ts).
+const LABEL: Partial<Record<OnboardingStepId, string>> = ONBOARDING_STEP_LABEL;
 
 /**
  * THE ONE SETUP CHECKLIST, on the dashboard until clients can book the shop.

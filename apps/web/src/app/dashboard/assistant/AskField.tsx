@@ -11,6 +11,7 @@ import {
   type SupportResolution,
 } from "@chairback/config/supportEngine";
 import type { BookedOutBrief } from "@chairback/config/bookedOut";
+import type { SetupBrief } from "@chairback/config/onboarding";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
 /**
@@ -62,6 +63,7 @@ export function AskField({
   affiliateProgramEnabled,
   initialQuestion,
   bookedOut = null,
+  setup = null,
 }: {
   role: SeatRole;
   rewardsEnabled: boolean;
@@ -78,6 +80,11 @@ export function AskField({
    * the written answer.
    */
   bookedOut?: BookedOutBrief | null;
+  /**
+   * "How do I finish setting up?" for this shop, from its own setup facts
+   * (config/onboarding.ts). Owners only; null otherwise.
+   */
+  setup?: SetupBrief | null;
 }) {
   const router = useRouter();
   const inApp = useIsNativeApp();
@@ -97,9 +104,9 @@ export function AskField({
         flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
       },
       // A live fact the engine folds into the matching answer - never a call.
-      facts: bookedOut ? { bookedOut } : {},
+      facts: { ...(bookedOut ? { bookedOut } : {}), ...(setup ? { setup } : {}) },
     }),
-    [role, inApp, rewardsEnabled, affiliateProgramEnabled, bookedOut],
+    [role, inApp, rewardsEnabled, affiliateProgramEnabled, bookedOut, setup],
   );
 
   // A tapped chip resolves BY ID rather than by re-typing its question: the

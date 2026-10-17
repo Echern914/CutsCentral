@@ -8,6 +8,14 @@ import { AskField } from "./AskField";
 import { ConnectionPanel } from "./ConnectionPanel";
 import { getConnections } from "./connections.server";
 import { getBookedOut } from "./bookedOut";
+import { getOnboardingState } from "@/app/onboarding/state";
+import {
+  ONBOARDING_PATH,
+  ONBOARDING_STEP_LABEL,
+  nextOnboardingStep,
+  setupBrief,
+  setupComplete,
+} from "@chairback/config/onboarding";
 import {
   ctaAwayFrom,
   getReadiness,
@@ -60,11 +68,21 @@ export default async function AssistantPage({
   // help and navigation are untouched.
   // The booked-out brief rides the same way: null on any failure, and the
   // question then gets the written answer instead of this shop's numbers.
-  const [readiness, connections, bookedOut] = await Promise.all([
+  const [readiness, connections, bookedOut, setupState] = await Promise.all([
     getReadiness(),
     getConnections(),
     getBookedOut(),
+    // Setup is the owner's job; the route refuses anyone else.
+    role === "OWNER" && !me.data?.demo ? getOnboardingState() : Promise.resolve(null),
   ]);
+  const setup = setupState ? setupBrief(setupState.facts) : null;
+  // 🔴 ONE GUIDE WHILE SETTING UP. Until clients can book, "Continue setup"
+  // is setup's own next step - the same one the dashboard checklist and the
+  // answer below name - not the go-live list's, which orders things
+  // differently and would send the owner somewhere else.
+  const setupNext =
+    setupState && !setupComplete(setupState.facts) ? nextOnboardingStep(setupState.facts) : null;
+  const setupNextStep = setupNext && setupNext !== "shop" && setupNext !== "done" ? setupNext : null;
   const step = nextStep(readiness, vocab.stationNoun);
   // Continue-setup already leads with the next item, so it is dropped from the
   // problem list rather than printed twice.
@@ -103,9 +121,28 @@ export default async function AssistantPage({
         affiliateProgramEnabled={affiliateProgramEnabled}
         initialQuestion={handedOver}
         bookedOut={bookedOut}
+        setup={setup}
       />
 
-      {step && (
+      {setupNextStep && setup && (
+        <Card className="mb-6">
+          <CardHeader title="Continue setup" subtitle={setup.headline} />
+          <div className="px-5 py-4" data-qa="setup-next">
+            <p className="text-sm font-medium text-offwhite">{ONBOARDING_STEP_LABEL[setupNextStep]}</p>
+            <p className="mt-1 text-sm leading-relaxed text-muted">
+              {setup.items.find((i) => i.id === setupNextStep)?.finding}
+            </p>
+            <Link
+              href={ONBOARDING_PATH[setupNextStep]}
+              className="mt-3 inline-flex items-center rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+            >
+              Continue setup →
+            </Link>
+          </div>
+        </Card>
+      )}
+
+      {step && !setupNextStep && (
         <Card className="mb-6">
           <CardHeader
             title="Continue setup"

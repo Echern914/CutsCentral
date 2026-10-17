@@ -40,6 +40,7 @@
 import { resolveFeature, type NavContext, type SeatRole } from "./features.js";
 import type { HelpAnswer } from "./help.js";
 import type { BookedOutBrief } from "./bookedOut.js";
+import type { SetupBrief } from "./onboarding.js";
 import { findHelp, helpAnswerById } from "./helpMatch.js";
 import {
   capabilityForCorpusId,
@@ -114,6 +115,12 @@ export interface SupportFacts {
    * sentence: it becomes the answer's `items`, one button each.
    */
   bookedOut?: BookedOutBrief;
+  /**
+   * "How do I finish setting up?" answered from THIS shop's setup facts
+   * (config/onboarding.ts setupBrief): what is left, in order, each with its
+   * setup screen. Supplied for an owner only - setup is the owner's job.
+   */
+  setup?: SetupBrief;
 }
 
 export interface SupportSeat {
@@ -257,6 +264,9 @@ function toAnswer(entry: HelpAnswer, ctx: NavContext, facts: SupportFacts): Supp
   if (entry.id === BOOKED_OUT_ENTRY && facts.bookedOut) {
     return bookedOutAnswer(entry, ctx, facts.bookedOut);
   }
+  if (entry.id === SETUP_ENTRY && facts.setup) {
+    return setupAnswer(entry, ctx, facts.setup);
+  }
   const resolved = entry.action ? resolveFeature(entry.action.featureId, ctx) : null;
   return {
     id: entry.id,
@@ -328,8 +338,46 @@ function bookedOutAnswer(entry: HelpAnswer, ctx: NavContext, brief: BookedOutBri
   };
 }
 
+/**
+ * The written setup answer the shop's own setup brief replaces. Without one
+ * (a provider, the MCP, a fetch that failed) the general steps stand.
+ */
+const SETUP_ENTRY = "get-started";
+
+/**
+ * The brief as an answer: what is left, in the order setup asks it, each step
+ * one button to its setup screen. Once clients can book, the answer says so
+ * and offers the tour - offered, never started for them.
+ */
+function setupAnswer(entry: HelpAnswer, ctx: NavContext, brief: SetupBrief): SupportAnswer {
+  const items: SupportAnswerItem[] = brief.items.map((item) => ({
+    id: item.id,
+    title: item.optional ? `${item.title} (optional)` : item.title,
+    finding: item.finding,
+    fix: item.fix,
+    action: { label: item.optional ? "Bring them over" : "Do this now", featureId: "setup", href: item.href },
+  }));
+  if (brief.complete) {
+    const home = resolveFeature("home", ctx);
+    return {
+      id: entry.id,
+      question: entry.q,
+      body: `${brief.headline}\n\nWant a quick look around? The tour shows where everything lives, in about a minute.`,
+      action: home.ok ? { label: "Take the tour", featureId: "home", href: `${home.href}?tour=1` } : null,
+      items,
+    };
+  }
+  return {
+    id: entry.id,
+    question: entry.q,
+    body: `${brief.headline}\n\nHere's what's left, in order:`,
+    action: null,
+    items,
+  };
+}
+
 /** Which written answers are improved by which (prose) live fact. */
-const FACT_FOR_ENTRY: Record<string, Exclude<keyof SupportFacts, "bookedOut">> = {
+const FACT_FOR_ENTRY: Record<string, Exclude<keyof SupportFacts, "bookedOut" | "setup">> = {
   "my-policy": "policySentence",
   "booking-link": "bookingUrl",
   "set-hours": "hoursSentence",
@@ -354,7 +402,11 @@ export function resolveSupport(req: SupportRequest): SupportResolution {
     if (actorMayReceive(cap, req.actor)) {
       const answer = toAnswer(found.answer, ctx, facts);
       const wanted: keyof SupportFacts | undefined =
-        found.answer.id === BOOKED_OUT_ENTRY ? "bookedOut" : FACT_FOR_ENTRY[found.answer.id];
+        found.answer.id === BOOKED_OUT_ENTRY
+          ? "bookedOut"
+          : found.answer.id === SETUP_ENTRY
+            ? "setup"
+            : FACT_FOR_ENTRY[found.answer.id];
       const sources: SupportSource[] = [
         { authority: "help_corpus", id: found.answer.id },
       ];
