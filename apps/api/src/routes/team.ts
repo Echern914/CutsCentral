@@ -9,6 +9,8 @@ import { accountLimiter, dashboardLimiter } from "../middleware/rateLimit.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { applyChairLink, releaseChairLink } from "../services/staffUserLink.js";
 import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
+import { setupProgress } from "@chairback/config/onboarding";
+import { onboardingFactsFor } from "../engines/onboardingFacts.js";
 import {
   LINK_NOTHING_SHARED,
   NOTHING_SHARED,
@@ -523,6 +525,9 @@ teamRouter.get("/links", requireOwner, async (req, res) => {
         approvedAt: l.approvedAt?.toISOString() ?? null,
         sharing: sharingOf(l),
         numbers: await teamNumbers(l.memberShop, sharingOf(l), now, period),
+        // How far their setup is - yes/no per step, never a count or a
+        // client - unless they've hidden it. On to start (Eric, 2026-10-16).
+        setup: l.shareSetup ? setupProgress(await onboardingFactsFor(l.memberShop.id)) : null,
         // Booth rent is the owner's own ledger with this member, not one of
         // the member's numbers - so it's always shown to the owner.
         rent: await runAsOwner((tx) => rentSummary(tx, l.id, shop.timezone, now)),

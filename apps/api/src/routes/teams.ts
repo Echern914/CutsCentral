@@ -77,6 +77,8 @@ teamsRouter.get("/", async (req, res) => {
         // Their schedule: whether the owner sees it, and - when they do -
         // today exactly as the owner's Team page shows it (same function).
         shareSchedule: l.shareSchedule,
+        // Whether the owner sees how far their setup is (yes/no per step).
+        shareSetup: l.shareSetup,
         scheduleToday:
           l.status === "ACTIVE" && l.shareSchedule
             ? await memberToday({ id: business.id, timezone: business.timezone }, l.teamShop.timezone, now)
@@ -243,6 +245,8 @@ teamsRouter.post("/join", accountLimiter, async (req, res) => {
             approvedAt: null,
             endedAt: null,
             ...LINK_NOTHING_SHARED,
+            // Setup progress starts shown, as on a first request.
+            shareSetup: true,
           },
         });
         // The request shows on the owner's Team page either way; the EMAIL
@@ -290,7 +294,7 @@ const sharingSchema = z
   .refine((v) => Object.keys(v).length > 0);
 /** What the team's OWNER may see: the numbers, and the member's schedule. */
 const linkSharingSchema = z
-  .object({ ...numberShares, shareSchedule: z.boolean().optional() })
+  .object({ ...numberShares, shareSchedule: z.boolean().optional(), shareSetup: z.boolean().optional() })
   .strict()
   .refine((v) => Object.keys(v).length > 0);
 
@@ -325,6 +329,9 @@ teamsRouter.patch("/:id/sharing", accountLimiter, async (req, res) => {
     if (before.shareSchedule !== after.shareSchedule) {
       await recordTeamEvent(tx, after, after.shareSchedule ? "shared" : "hid", "schedule");
     }
+    if (before.shareSetup !== after.shareSetup) {
+      await recordTeamEvent(tx, after, after.shareSetup ? "shared" : "hid", "setup");
+    }
     return after;
   });
   if (!link) {
@@ -337,6 +344,7 @@ teamsRouter.patch("/:id/sharing", accountLimiter, async (req, res) => {
     sharing: sharingOf(link),
     theySee: active ? await teamNumbers(link.memberShop, sharingOf(link)) : null,
     shareSchedule: link.shareSchedule,
+    shareSetup: link.shareSetup,
     scheduleToday:
       active && link.shareSchedule ? await memberToday(link.memberShop, link.teamShop.timezone) : null,
   });

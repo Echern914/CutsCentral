@@ -24,6 +24,8 @@ import { MentorPairs, type Pairing } from "./MentorPairs";
 import { TeamSchedule } from "./TeamSchedule";
 import type { TeamScheduleData } from "@/lib/teamSchedule";
 import { TeamWalkIns } from "./TeamWalkIns";
+import { MemberSetup } from "./MemberSetup";
+import type { SetupProgress } from "@chairback/config/onboarding";
 import type { TeamDeskData } from "@/lib/teamWalkIns";
 
 /** The windows the owner can pick - each an Insights preset. */
@@ -66,6 +68,8 @@ export interface TeamLinksData {
     numbers: TeamNumbers;
     /** Booth rent: the owner's own ledger with this member. */
     rent: RentSummary;
+    /** Their setup, yes/no per step; null = they hid it. Absent: older API. */
+    setup?: SetupProgress | null;
   }[];
   /**
    * Booth rent with members who left (ENDED) or are asking to come back
@@ -401,6 +405,7 @@ export function IndependentTeam({
                       Remove
                     </button>
                   </div>
+                  <MemberSetup setup={m.setup} />
                   <MemberStatGrid stats={teamStats(m.numbers, vocab)} />
                   <OwnerRent
                     linkId={m.id}

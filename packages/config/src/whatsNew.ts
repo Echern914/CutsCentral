@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-16-team-setup-progress",
+    date: "2026-10-16",
+    kind: "feature",
+    title: "See who on your team is set up",
+    body:
+      "Your Team page now shows how far each member's setup is - booking method, services, hours - so you can see who's ready to take bookings. " +
+      "Members share it to start and can hide it. It never shows their clients or numbers.",
+  },
+  {
     id: "2026-10-16-assistant-finish-setup",
     date: "2026-10-16",
     kind: "feature",

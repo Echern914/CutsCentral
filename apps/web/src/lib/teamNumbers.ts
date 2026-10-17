@@ -196,7 +196,9 @@ export function activityLine(i: TeamActivityItem, v: BusinessVocabulary): string
             ? "rating"
             : i.metric === "schedule"
               ? "their schedule"
-              : "";
+              : i.metric === "setup"
+                ? "their setup progress"
+                : "";
   switch (i.kind) {
     case "requested":
       return `${i.business} asked to join`;

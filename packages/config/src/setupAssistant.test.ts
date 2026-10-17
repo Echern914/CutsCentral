@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { setupBrief, type OnboardingFacts } from "./onboarding.js";
+import { setupBrief, setupProgress, type OnboardingFacts } from "./onboarding.js";
 import { resolveSupport } from "./supportEngine.js";
 
 /**
@@ -72,5 +72,27 @@ describe("the Assistant, asked about setup", () => {
     const r = ask("how do I finish setting up");
     expect(r.answer!.body).toMatch(/Add your services/);
     expect(r.wantedFact).toBe("setup");
+  });
+});
+
+describe("setupProgress (what a team's owner sees)", () => {
+  it("is yes/no per step, in setup's order - no counts", () => {
+    const p = setupProgress(facts());
+    expect(p).toEqual({
+      complete: false,
+      steps: [
+        { id: "booking", done: true },
+        { id: "team", done: true },
+        { id: "services", done: false },
+        { id: "hours", done: false },
+        { id: "clients", done: false },
+      ],
+    });
+  });
+
+  it("a shop booking elsewhere has the short path", () => {
+    const p = setupProgress(facts({ bookingMode: "link", bookingUrl: "https://booksy.com/x" }));
+    expect(p.complete).toBe(true);
+    expect(p.steps.map((s) => s.id)).toEqual(["booking", "clients"]);
   });
 });

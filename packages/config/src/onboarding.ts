@@ -199,3 +199,22 @@ export function setupBrief(f: OnboardingFacts): SetupBrief {
     : `${left.length} step${left.length === 1 ? "" : "s"} left before clients can book you (${required.length - left.length} of ${required.length} done).`;
   return { complete, headline, items };
 }
+
+/**
+ * A team member's setup, as their team's owner may see it: which steps are
+ * done, yes or no - never a count, a client or a number. The steps after
+ * making the shop, in setup's order; `clients` stays optional.
+ */
+export interface SetupProgress {
+  complete: boolean;
+  steps: { id: Exclude<OnboardingStepId, "shop" | "done">; done: boolean }[];
+}
+
+export function setupProgress(f: OnboardingFacts): SetupProgress {
+  return {
+    complete: setupComplete(f),
+    steps: onboardingPlan(f)
+      .filter((s): s is Exclude<OnboardingStepId, "shop" | "done"> => s !== "shop" && s !== "done")
+      .map((id) => ({ id, done: onboardingStepDone(id, f) })),
+  };
+}

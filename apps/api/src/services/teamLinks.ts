@@ -217,7 +217,7 @@ export type TeamEventKind =
   | "walk_ins_off";
 
 /** What a "shared"/"hid" line names: one of the four numbers, or the schedule. */
-export type TeamMetric = "cuts" | "revenue" | "clients" | "rating" | "schedule";
+export type TeamMetric = "cuts" | "revenue" | "clients" | "rating" | "schedule" | "setup";
 
 /** The metric name a share switch is logged under. */
 export const METRIC_OF: Record<ShareKey, "cuts" | "revenue" | "clients" | "rating"> = {

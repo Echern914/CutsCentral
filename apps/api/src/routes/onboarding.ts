@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { Prisma, prisma, runWithShop } from "@chairback/db";
-import type { OnboardingFacts } from "@chairback/config/onboarding";
+import { onboardingFactsFor } from "../engines/onboardingFacts.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireOwner } from "../auth/roles.js";
 import { accountLimiter } from "../middleware/rateLimit.js";
@@ -28,15 +28,15 @@ onboardingRouter.get("/state", async (req, res) => {
   const shopId = req.shop!.id;
   // Shop, User and the connections are default-deny inside a tenant
   // transaction: plain prisma, scoped by id.
-  const [shop, user, acuity, square, staff, services, clientCount] = await Promise.all([
+  const [facts, shop, user, acuity, square, staff, services] = await Promise.all([
+    // What is done - the one definition, shared with the team owner's view.
+    onboardingFactsFor(shopId),
     prisma.shop.findUniqueOrThrow({
       where: { id: shopId },
       select: {
         name: true,
         slug: true,
         publicPageEnabled: true,
-        bookingMode: true,
-        bookingUrl: true,
         timezone: true,
         industry: true,
         onboardingCompletedAt: true,
@@ -56,7 +56,6 @@ onboardingRouter.get("/state", async (req, res) => {
       select: { name: true },
       take: 500,
     }),
-    prisma.client.count({ where: { shopId } }),
   ]);
   const withHours = new Set(
     (
@@ -67,16 +66,6 @@ onboardingRouter.get("/state", async (req, res) => {
       })
     ).map((r) => r.staffId),
   );
-  const facts: OnboardingFacts = {
-    hasShop: true,
-    bookingMode: shop.bookingMode as OnboardingFacts["bookingMode"],
-    bookingUrl: shop.bookingUrl,
-    integrationConnected: Boolean(acuity || square),
-    staffCount: staff.length,
-    serviceCount: services.length,
-    staffWithHours: staff.filter((s) => withHours.has(s.id)).length,
-    clientCount,
-  };
   res.json({
     facts,
     shop: {
