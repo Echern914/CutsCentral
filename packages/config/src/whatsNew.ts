@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-16-shop-time-zone",
+    date: "2026-10-16",
+    kind: "feature",
+    title: "Change your shop's time zone",
+    body:
+      "Your hours, reminders and texts run on your shop's time. If it's set wrong, change it under Booking → Settings. " +
+      "Your hours stay the same on the clock.",
+  },
+  {
     id: "2026-10-16-paste-your-menu",
     date: "2026-10-16",
     kind: "feature",
