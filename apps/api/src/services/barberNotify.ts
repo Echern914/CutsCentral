@@ -211,7 +211,7 @@ export function appointmentDeepLink(
 }
 
 /** YYYY-MM-DD of an instant, in the shop's zone. */
-function shopDayKey(instant: Date, timezone: string): string {
+export function shopDayKey(instant: Date, timezone: string): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
     year: "numeric",

@@ -43,6 +43,34 @@ describe("collectNotificationSignals", () => {
     expect(out.map((s) => s.key)).toEqual(["waitlist"]);
   });
 
+  it("🔴 a note on an upcoming appointment: who, when, the words, and a tap to the appointment", async () => {
+    routes({
+      "notes-ahead": ok({
+        timezone: "America/New_York",
+        items: [
+          {
+            id: "a1",
+            startsAt: "2026-10-17T18:30:00.000Z",
+            clientName: "Marcus Reed",
+            clientWrote: "Low fade, keep the top long",
+            bookingNote: "Bring the #2 guard",
+            href: "/dashboard/booking?tab=Appointments&appointment=a1&day=2026-10-17",
+          },
+        ],
+      }),
+    });
+    const out = await collectNotificationSignals({ ...MANAGER, barberOnly: true });
+    expect(out).toEqual([
+      {
+        key: "note-a1",
+        label: "Marcus Reed at 2:30 PM left a note",
+        detail: "“Low fade, keep the top long”\nNote: Bring the #2 guard",
+        count: 1,
+        href: "/dashboard/booking?tab=Appointments&appointment=a1&day=2026-10-17",
+      },
+    ]);
+  });
+
   it("drops a source with nothing outstanding rather than listing a zero", async () => {
     // A bell that opens onto "0 waiting, 0 to reply" teaches you to ignore it.
     routes({
@@ -88,13 +116,15 @@ describe("collectNotificationSignals", () => {
       premiumAiLocked: false,
     });
     const asked = apiGet.mock.calls.map(([p]) => p as string);
-    // Exactly the two barber-reachable surfaces: readiness and THEIR OWN
-    // walk-in line. Neither manager-only endpoint is ever requested.
-    expect(asked).toHaveLength(2);
+    // Exactly the three barber-reachable surfaces: readiness, THEIR OWN
+    // walk-in line, and the notes on their own chair's next appointments.
+    // Neither manager-only endpoint is ever requested.
+    expect(asked).toHaveLength(3);
     expect(asked).toEqual(
       expect.arrayContaining([
         expect.stringContaining("/api/readiness/summary"),
         expect.stringContaining("/api/barber/walk-ins"),
+        expect.stringContaining("/api/barber/notes-ahead"),
       ]),
     );
     expect(asked.join(" ")).not.toContain("/api/dashboard/");

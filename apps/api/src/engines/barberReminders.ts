@@ -14,7 +14,7 @@ import {
   sendToBarber,
   type NotifyPrefs,
 } from "../services/barberNotify.js";
-import { readIntakeSnapshot } from "./bookingIntake.js";
+import { noteLines, readIntakeSnapshot } from "./bookingIntake.js";
 
 /**
  * The barber's own reminders. Everything else in the system tells the CUSTOMER
@@ -67,6 +67,8 @@ interface ApptRow {
   lastName: string | null;
   /** The customer's answers to the shop's booking questions (see bookingIntake). */
   intake: unknown;
+  /** The note on the booking itself. */
+  notes: string | null;
   service: { name: string };
   staff: { name: string; userId: string | null };
 }
@@ -125,6 +127,7 @@ async function runNextUp(shopId: string, ownerId: string, now: Date): Promise<nu
         firstName: true,
         lastName: true,
         intake: true,
+        notes: true,
         service: { select: { name: true } },
         staff: { select: { name: true, userId: true } },
       },
@@ -175,6 +178,7 @@ async function runNextUp(shopId: string, ownerId: string, now: Date): Promise<nu
     // now exists to deliver, and it is a time, not a customer's address - so
     // it belongs in the text message too.
     const body = leaveBy ? `${line}. Leave by ${leaveBy}.` : line;
+    const note = noteLines(a);
     await sendToBarber({
       shopId,
       userId,
@@ -185,7 +189,9 @@ async function runNextUp(shopId: string, ownerId: string, now: Date): Promise<nu
         // The address rides push only, where it is private to his device and
         // costs nothing. See BarberMessage.
         body,
-        ...(where ? { pushBody: `${body}\n${where}` } : {}),
+        // So does the client's note (X and Drick): what they asked for, read
+        // before they walk in - their words stay on his device, never a text.
+        ...(where || note ? { pushBody: [body, where, note].filter(Boolean).join("\n") } : {}),
         // Straight to THIS booking - which is where the address, the phone
         // number and the checkout all are.
         url: appointmentDeepLink(a.id, { startsAt: a.startsAt, timezone: tz }),

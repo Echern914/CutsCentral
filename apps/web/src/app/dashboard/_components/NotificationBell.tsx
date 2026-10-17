@@ -204,7 +204,18 @@ export function NotificationBell({
                       >
                         {/* min-w-0 so a long line truncates instead of pushing
                             the count off the edge at 320px. */}
-                        <span className="min-w-0 truncate text-offwhite">{s.label}</span>
+                        {s.detail ? (
+                          // A note is read, not skimmed: it wraps in full
+                          // (already clipped by the API) under its line.
+                          <span className="min-w-0" data-qa="bell-note">
+                            <span className="block truncate text-offwhite">{s.label}</span>
+                            <span className="mt-0.5 block whitespace-pre-line text-xs leading-relaxed text-muted [overflow-wrap:anywhere]">
+                              {s.detail}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="min-w-0 truncate text-offwhite">{s.label}</span>
+                        )}
                         <span className="shrink-0 text-xs text-muted" aria-hidden>
                           →
                         </span>

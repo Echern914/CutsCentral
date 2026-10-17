@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-17-notes-before-they-arrive",
+    date: "2026-10-17",
+    kind: "feature",
+    title: "Read client notes before they walk in",
+    body:
+      "Your bell now lists today's upcoming appointments that have a note, with the note right there. " +
+      "Your Next up alert includes it too, so you know what they asked for before they sit down.",
+  },
+  {
     id: "2026-10-16-team-setup-progress",
     date: "2026-10-16",
     kind: "feature",

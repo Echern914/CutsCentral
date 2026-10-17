@@ -125,7 +125,7 @@ import {
   sendAppointmentNudge,
 } from "../engines/appointmentNudge.js";
 import { keepsEveryAddOn, NO_ADD_ONS, resolveAddOns } from "../engines/addOns.js";
-import { readIntakeSnapshot } from "../engines/bookingIntake.js";
+import { clientNoteText } from "../engines/bookingIntake.js";
 import {
   effectiveSchedule,
   materializeTargetedRule,
@@ -2264,9 +2264,7 @@ function chairPaid(a: { paidAmount: Prisma.Decimal | null }): number | null {
  * address, phone or picked option is an answer, not a note.
  */
 function hasClientNote(intake: Prisma.JsonValue | null): boolean {
-  return readIntakeSnapshot(intake).some(
-    (x) => (x.kind === "text" || x.kind === "textarea") && x.value.trim() !== "",
-  );
+  return clientNoteText(intake) !== null;
 }
 
 /**

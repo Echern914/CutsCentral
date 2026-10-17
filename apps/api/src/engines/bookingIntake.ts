@@ -218,3 +218,55 @@ function isKind(v: unknown): v is BookingQuestionKindId {
 
 /** Every kind, for the tests that pin config and the database enum together. */
 export const BOOKING_QUESTION_KINDS = KINDS;
+
+/**
+ * What the client WROTE when they booked: their free-text answers, one per
+ * line, or null when there is none. An address, phone or picked option is an
+ * answer, not a note. The one definition behind the calendar's "Client note"
+ * chip, the barber's Next up alert and the dashboard bell, so all three agree
+ * on whether there is a note.
+ */
+export function clientNoteText(raw: unknown): string | null {
+  const lines = readIntakeSnapshot(raw)
+    .filter((x) => (x.kind === "text" || x.kind === "textarea") && x.value.trim() !== "")
+    .map((x) => x.value.trim().replace(/\s*\n+\s*/g, " "));
+  return lines.length > 0 ? lines.join("\n") : null;
+}
+
+/** A note can't take over an alert: the whole of it is one tap away. */
+const NOTE_MAX = 160;
+function clip(text: string): string {
+  return text.length > NOTE_MAX ? `${text.slice(0, NOTE_MAX - 1).trimEnd()}…` : text;
+}
+
+/**
+ * What the barber should know before they walk in (X and Drick, 2026-10-16:
+ * a client's note was invisible until someone opened the appointment). The
+ * client's own words first, then the note on the booking; each clipped, so an
+ * alert stays an alert. Null when there is neither.
+ *
+ * 🔴 For the barber's own surfaces only - push and the dashboard - never a
+ * text message: these are a client's words.
+ */
+export function noteForBarber(a: { intake: unknown; notes: string | null }): {
+  clientWrote: string | null;
+  bookingNote: string | null;
+} | null {
+  const said = clientNoteText(a.intake);
+  const booking = a.notes?.trim() ? a.notes.trim().replace(/\s*\n+\s*/g, " ") : null;
+  if (!said && !booking) return null;
+  return {
+    clientWrote: said ? clip(said.replace(/\n/g, " / ")) : null,
+    bookingNote: booking ? clip(booking) : null,
+  };
+}
+
+/** The same, as alert lines: "They wrote: …" then "Note: …". */
+export function noteLines(a: { intake: unknown; notes: string | null }): string | null {
+  const n = noteForBarber(a);
+  if (!n) return null;
+  return [
+    ...(n.clientWrote ? [`They wrote: ${n.clientWrote}`] : []),
+    ...(n.bookingNote ? [`Note: ${n.bookingNote}`] : []),
+  ].join("\n");
+}

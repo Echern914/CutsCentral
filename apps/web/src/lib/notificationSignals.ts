@@ -15,6 +15,21 @@ export interface BellSignal {
   count: number;
   /** Resolved from the feature registry — never a route typed here. */
   href: string;
+  /** A second line under the label - an appointment's note, word for word. */
+  detail?: string;
+}
+
+/** GET /api/barber/notes-ahead (routes/barber.ts). */
+interface NotesAhead {
+  timezone?: string;
+  items?: {
+    id: string;
+    startsAt: string;
+    clientName: string;
+    clientWrote: string | null;
+    bookingNote: string | null;
+    href: string;
+  }[];
 }
 
 /**
@@ -62,7 +77,7 @@ export async function collectNotificationSignals(opts: {
    */
   settingUp?: boolean;
 }): Promise<BellSignal[]> {
-  const [readiness, waitlist, inbox, walkIns, reviews] = await Promise.all([
+  const [readiness, waitlist, inbox, walkIns, reviews, notes] = await Promise.all([
     apiGet<ReadinessSummary>("/api/readiness/summary"),
     opts.barberOnly
       ? null
@@ -88,6 +103,8 @@ export async function collectNotificationSignals(opts: {
     opts.barberOnly
       ? null
       : apiGet<{ pendingCount?: number }>("/api/dashboard/reviews?limit=1"),
+    // Notes on the next appointments - this seat's own chair (any seat).
+    apiGet<NotesAhead>("/api/barber/notes-ahead"),
   ]);
 
   const out: BellSignal[] = [];
@@ -122,6 +139,29 @@ export async function collectNotificationSignals(opts: {
       label: `${inLine} walk-in${inLine === 1 ? "" : "s"} in the line`,
       count: inLine,
       href: walkInHref,
+    });
+  }
+
+  // WHAT THEY ASKED FOR, BEFORE THEY WALK IN (X and Drick, 2026-10-16). One
+  // line per upcoming appointment with a note, the note itself underneath,
+  // straight to that appointment. It leaves the bell once the time has passed.
+  const tz = notes.ok ? notes.data?.timezone : undefined;
+  for (const n of notes.ok ? (notes.data?.items ?? []) : []) {
+    const at = new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      ...(tz ? { timeZone: tz } : {}),
+    }).format(new Date(n.startsAt));
+    out.push({
+      key: `note-${n.id}`,
+      // "left" only when the client wrote it; a note on the booking just "has".
+      label: `${n.clientName} at ${at} ${n.clientWrote ? "left a note" : "has a note"}`,
+      detail: [
+        ...(n.clientWrote ? [`“${n.clientWrote}”`] : []),
+        ...(n.bookingNote ? [`Note: ${n.bookingNote}`] : []),
+      ].join("\n"),
+      count: 1,
+      href: n.href,
     });
   }
 
