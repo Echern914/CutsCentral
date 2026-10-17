@@ -201,6 +201,7 @@ export function AppWebView({
   onNavigationStateChange: callerNavStateChange,
   webviewRef,
   extraBeforeContentLoaded,
+  onTheme,
   ...props
 }: WebViewProps & {
   awaitsReady?: boolean;
@@ -217,6 +218,11 @@ export function AppWebView({
    * optional.
    */
   extraBeforeContentLoaded?: string;
+  /**
+   * The theme the page says it is showing, for native chrome drawn around the
+   * WebView (the barber screen's Switch strip) to match it.
+   */
+  onTheme?: (theme: "light" | "dark") => void;
 }) {
   const [errored, setErrored] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -376,6 +382,7 @@ export function AppWebView({
           const theme = THEME_MESSAGE.exec(e.nativeEvent.data);
           if (theme) {
             setStatusBarStyle(theme[1] === "dark" ? "light" : "dark");
+            onTheme?.(theme[1] as "light" | "dark");
             return;
           }
           const openAuth = parseOpenAuthRequest(e.nativeEvent.data, { apiOrigin: API_ORIGIN });

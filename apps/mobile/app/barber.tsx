@@ -151,6 +151,11 @@ export default function BarberScreen() {
     if (next) setSource({ uri: `${WEB_ORIGIN}${next}` });
   }, [next, at]);
 
+  // The dashboard says which look it is showing (cb:theme). The strip above it
+  // follows, so a barber in black & gold doesn't get a white band on a black page.
+  const [pageTheme, setPageTheme] = useState<"light" | "dark">("light");
+  const dark = pageTheme === "dark";
+
   // The app's sign-out. The dashboard WebView must stay authenticated via the
   // NATIVE session: once the page is on the signed-out side, clear the stale
   // token (so /login shows its buttons and doesn't auto-skip straight back
@@ -213,10 +218,10 @@ export default function BarberScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.flex} edges={["top"]}>
+    <SafeAreaView style={[styles.flex, dark && styles.dark]} edges={["top"]}>
       {/* The way back to the picker. Sits in the top strip this screen already
           reserves, so it never covers the dashboard's own bottom nav. */}
-      <ModeSwitchBar label="Shop" />
+      <ModeSwitchBar label="Shop" dark={dark} />
       {/* Tap to Pay lives here rather than around the whole app: it needs the
           barber's dashboard session, and the customer screens have no use for
           a card reader.
@@ -237,6 +242,7 @@ export default function BarberScreen() {
           onMessage={onMessage}
           onShouldStartLoadWithRequest={onShouldStartLoad}
           onNavigationStateChange={onNavigationStateChange}
+          onTheme={setPageTheme}
           // Reports in-page URL changes, so an in-page sign-out reaches us.
           extraBeforeContentLoaded={URL_WATCH_SCRIPT}
         />
@@ -265,6 +271,7 @@ export default function BarberScreen() {
               }}
               onShouldStartLoadWithRequest={onShouldStartLoad}
               onNavigationStateChange={onNavigationStateChange}
+              onTheme={setPageTheme}
             />
           )}
         </TapToPayHost>
@@ -275,5 +282,6 @@ export default function BarberScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: "#FAF8F3" },
+  dark: { backgroundColor: "#0A0A0B" },
   center: { alignItems: "center", justifyContent: "center" },
 });

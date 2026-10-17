@@ -28,10 +28,13 @@ import { router } from "expo-router";
  * destroying the one piece of state that knows the way home. Choosing a role is
  * now the ONLY thing that writes `cb.mode`.
  */
-export function ModeSwitchBar({ label }: { label: string }) {
+export function ModeSwitchBar({ label, dark = false }: { label: string; dark?: boolean }) {
+  // `dark`: the page under the bar is in black & gold (a barber's own
+  // dashboard choice), so the bar goes dark with it instead of a white band
+  // sitting on a black page.
   return (
-    <View style={styles.bar}>
-      <Text style={styles.label} numberOfLines={1}>
+    <View style={[styles.bar, dark && styles.barDark]}>
+      <Text style={[styles.label, dark && styles.labelDark]} numberOfLines={1}>
         {label}
       </Text>
       <Pressable
@@ -44,7 +47,7 @@ export function ModeSwitchBar({ label }: { label: string }) {
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
       >
-        <Text style={styles.buttonText}>⇄ Switch</Text>
+        <Text style={[styles.buttonText, dark && styles.buttonTextDark]}>⇄ Switch</Text>
       </Pressable>
     </View>
   );
@@ -59,6 +62,9 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     backgroundColor: "#FAF8F3",
   },
+  barDark: { backgroundColor: "#0A0A0B" },
+  labelDark: { color: "#A1A1AA" },
+  buttonTextDark: { color: "#E6C964" },
   label: {
     color: "#57534E",
     fontSize: 11,
