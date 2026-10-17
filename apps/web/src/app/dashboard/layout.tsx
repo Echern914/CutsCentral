@@ -19,7 +19,8 @@ import { NotificationBell } from "./_components/NotificationBell";
 import { ShopSwitcher } from "./_components/ShopSwitcher";
 import { TrialBanner } from "./_components/TrialBanner";
 import { getOnboardingState } from "@/app/onboarding/state";
-import { setupComplete } from "@chairback/config/onboarding";
+import { setupBrief, setupComplete } from "@chairback/config/onboarding";
+import { HelpSeatSync } from "@/components/help/helpSeat";
 
 /**
  * Shared dashboard chrome: a slim sticky top bar (brand, search, account, sign
@@ -170,6 +171,9 @@ export default async function DashboardLayout({
            factual line in the native app (previously: total silence in-app). */
         <TrialBanner settingUp={settingUp} />
       )}
+      {/* The corner Assistant answers as THIS seat, and an owner's "how do I
+          finish setting up?" from their own setup (components/help/helpSeat). */}
+      <HelpSeatSync role={seatRole} setup={setup ? setupBrief(setup.facts) : null} />
       {/* Phones scroll under the floating tab pill, so the last card needs
           clearance or it sits permanently behind it. The pill is ~3.6rem tall
           and floats 0.625rem above the home-indicator inset, so budget a little

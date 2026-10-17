@@ -6,10 +6,13 @@ import { usePathname, useRouter } from "next/navigation";
 import { HELP_STARTERS } from "@chairback/config/help";
 import { resolveFeature } from "@chairback/config/features";
 import {
+  actorForSeat,
   resolveSupport,
   resolveSupportAnswerById,
+  type SupportRequest,
   type SupportResolution,
 } from "@chairback/config/supportEngine";
+import { useHelpSeat } from "./helpSeat";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { isPlatformHost } from "@/lib/customDomainGuard";
 
@@ -83,6 +86,21 @@ export function HelpBubble() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
+  // Who is asking, and how far their shop's setup is - handed over by the
+  // dashboard and setup layouts (helpSeat.tsx). Nobody hands anything over on
+  // a marketing page: owner is the widest seat and the corpus is shop-facing,
+  // and the engine still withholds any destination this viewer cannot open.
+  const seat = useHelpSeat();
+  const asker = useMemo((): Omit<SupportRequest, "question"> => {
+    const role = seat?.role ?? "OWNER";
+    return {
+      actor: seat ? actorForSeat(role) : "owner",
+      channel: "in_app",
+      seat: { role, inApp: inApp === true },
+      facts: seat?.setup ? { setup: seat.setup } : {},
+    };
+  }, [seat, inApp]);
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [query, setQuery] = useState("");
   const nextId = useRef(0);
@@ -127,15 +145,7 @@ export function HelpBubble() {
       // `inApp === null` means "not yet known" (pre-hydration). Treat it as the
       // browser, matching useIsNativeApp's documented contract — by the time
       // anyone has typed, the effect has long since resolved.
-      const response = resolveSupport({
-        question: trimmed,
-        // The bubble renders on marketing pages too, where nobody is signed
-        // in. Owner is the widest seat and the corpus is shop-facing; the
-        // engine still withholds any destination this viewer cannot open.
-        actor: "owner",
-        channel: "in_app",
-        seat: { role: "OWNER", inApp: inApp === true },
-      });
+      const response = resolveSupport({ question: trimmed, ...asker });
       setMessages((prev) => [
         ...prev,
         { id: nextId.current++, role: "user", text: trimmed },
@@ -143,7 +153,7 @@ export function HelpBubble() {
       ]);
       setQuery("");
     },
-    [inApp],
+    [asker],
   );
 
   /**
@@ -159,15 +169,11 @@ export function HelpBubble() {
         {
           id: nextId.current++,
           role: "bot",
-          response: resolveSupportAnswerById(id, {
-            actor: "owner",
-            channel: "in_app",
-            seat: { role: "OWNER", inApp: inApp === true },
-          }),
+          response: resolveSupportAnswerById(id, asker),
         },
       ]);
     },
-    [inApp],
+    [asker],
   );
 
   // Greet on first open so the panel is never an empty box with a cursor.
@@ -242,18 +248,11 @@ export function HelpBubble() {
   const starters = useMemo(() => {
     // Starter chips must obey the same 3.1.1 filter as the corpus, or the very
     // first thing the app shows is a tap straight into plan pricing.
-    return HELP_STARTERS.map((q) =>
-      resolveSupport({
-        question: q,
-        actor: "owner",
-        channel: "in_app",
-        seat: { role: "OWNER", inApp: inApp === true },
-      }),
-    )
+    return HELP_STARTERS.map((q) => resolveSupport({ question: q, ...asker }))
       .map((r) => r.answer)
       .filter((a): a is NonNullable<typeof a> => a !== null)
       .slice(0, 5);
-  }, [inApp]);
+  }, [asker]);
 
   if (hidden) return null;
 
@@ -456,6 +455,31 @@ function BotBubble({
         >
           {action.label} →
         </button>
+      )}
+
+      {/* Steps from the shop's own data (what's left of setup): one button
+          each, straight to the screen that does it. */}
+      {answer?.items && answer.items.length > 0 && (
+        <ol data-qa="answer-items" className="flex max-w-[92%] flex-col gap-1.5">
+          {answer.items.map((item) => (
+            <li key={item.id} className="min-w-0">
+              {item.action ? (
+                <button
+                  type="button"
+                  onClick={() => onNavigate(item.action!.href)}
+                  className="w-full rounded-xl border border-subtle px-3 py-2 text-left transition-colors duration-150 ease-out hover:border-gold/40"
+                >
+                  <span className="block text-sm font-medium text-offwhite [overflow-wrap:anywhere]">{item.title} →</span>
+                  <span className="block text-xs leading-relaxed text-muted [overflow-wrap:anywhere]">{item.finding}</span>
+                </button>
+              ) : (
+                <p className="rounded-xl border border-subtle px-3 py-2 text-sm text-offwhite [overflow-wrap:anywhere]">
+                  {item.title}
+                </p>
+              )}
+            </li>
+          ))}
+        </ol>
       )}
 
       {/* The no-dead-end branch. The ENGINE decides there is no confident
