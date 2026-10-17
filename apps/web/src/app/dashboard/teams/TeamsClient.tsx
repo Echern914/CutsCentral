@@ -43,6 +43,8 @@ export interface MyTeamLink {
   shareSchedule?: boolean;
   /** Today as the owner sees it, while shared and on the team. */
   scheduleToday?: ChairDay[] | null;
+  /** Whether the owner sees how far their setup is. Optional: older API. */
+  shareSetup?: boolean;
   /**
    * The team's front desk: whether they take its walk-ins, and whether their
    * own line is on to receive them. Null while Walk-In Mode is off.
@@ -124,6 +126,26 @@ export function TeamsClient({
             ? { ...l, sharing: res.sharing!, theySee: res.theySee ?? null }
             : l,
         ),
+      }));
+    } else {
+      toast(
+        res.error === "not_found"
+          ? "That team link has ended - refresh to see your teams"
+          : "Couldn't save that - nothing changed",
+        "error",
+      );
+    }
+    setSaving(null);
+  }
+
+  /** The setup-progress switch: on to start; the server's answer, never a guess. */
+  async function flipSetup(link: MyTeamLink) {
+    setSaving(`${link.id}:shareSetup`);
+    const res = await setSharingAction(link.id, { shareSetup: !link.shareSetup });
+    if (res.ok && res.shareSetup !== undefined) {
+      setData((d) => ({
+        ...d,
+        links: d.links.map((l) => (l.id === link.id ? { ...l, shareSetup: res.shareSetup } : l)),
       }));
     } else {
       toast(
@@ -332,6 +354,33 @@ export function TeamsClient({
                         : link.shareSchedule
                           ? "Shared"
                           : "Hidden"}
+                    </button>
+                  </li>
+                )}
+                {link.shareSetup !== undefined && (
+                  <li className="flex items-center justify-between gap-4 py-2.5">
+                    <div className="min-w-0">
+                      <p className="text-sm text-offwhite">Setup progress</p>
+                      <p className="text-xs text-muted">
+                        Which setup steps you&apos;ve done, yes or no - never your clients or numbers
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={link.shareSetup}
+                      aria-label={`Share your setup progress with ${link.team.name}`}
+                      disabled={saving !== null}
+                      onClick={() => void flipSetup(link)}
+                      data-qa="share-shareSetup"
+                      className={cn(
+                        "min-h-[40px] min-w-[72px] shrink-0 rounded-full px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
+                        link.shareSetup && saving !== `${link.id}:shareSetup`
+                          ? "bg-emerald-soft/15 text-emerald-soft"
+                          : "border border-subtle text-muted hover:bg-charcoal-700",
+                      )}
+                    >
+                      {saving === `${link.id}:shareSetup` ? "Saving…" : link.shareSetup ? "Shared" : "Hidden"}
                     </button>
                   </li>
                 )}

@@ -1060,6 +1060,10 @@ model TeamLink {
   // for the owner's Team schedule. Same rules as the number switches: the
   // member sets it, off to start, reset to off when the link ends.
   shareSchedule Boolean       @default(false)
+  // Their setup progress - yes/no per setup step (config/onboarding.ts), never
+  // their clients or numbers - so the owner can see who's ready to take
+  // bookings. ON to start (Eric, 2026-10-16); the member can hide it.
+  shareSetup    Boolean       @default(true)
   // Take walk-ins who check in at the TEAM's front desk: they join this
   // member's own line, on their own books. Set by the member, off to start,
   // reset to off when the link ends.
@@ -1099,7 +1103,7 @@ model TeamLinkEvent {
   teamShopId String
   // requested | approved | declined | removed | left | withdrew | shared | hid
   kind       String
-  // For shared/hid: cuts | revenue | clients | rating. Null otherwise.
+  // For shared/hid: cuts | revenue | clients | rating | schedule | setup. Null otherwise.
   metric     String?
   createdAt  DateTime @default(now())
 

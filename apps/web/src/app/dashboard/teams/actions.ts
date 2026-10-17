@@ -19,19 +19,21 @@ export async function myTeamsAction(): Promise<MyTeamsData | null> {
  */
 export async function setSharingAction(
   linkId: string,
-  patch: Partial<Sharing> & { shareSchedule?: boolean },
+  patch: Partial<Sharing> & { shareSchedule?: boolean; shareSetup?: boolean },
 ): Promise<{
   ok: boolean;
   error?: string;
   sharing?: Sharing;
   theySee?: TeamNumbers | null;
   shareSchedule?: boolean;
+  shareSetup?: boolean;
   scheduleToday?: ChairDay[] | null;
 }> {
   const res = await apiSend<{
     sharing: Sharing;
     theySee: TeamNumbers | null;
     shareSchedule?: boolean;
+    shareSetup?: boolean;
     scheduleToday?: ChairDay[] | null;
   }>("PATCH", `/api/teams/${linkId}/sharing`, patch);
   revalidatePath("/dashboard/teams");
@@ -41,6 +43,7 @@ export async function setSharingAction(
     sharing: res.data.sharing,
     theySee: res.data.theySee,
     shareSchedule: res.data.shareSchedule,
+    shareSetup: res.data.shareSetup,
     scheduleToday: res.data.scheduleToday ?? null,
   };
 }
