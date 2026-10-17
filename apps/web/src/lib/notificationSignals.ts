@@ -77,7 +77,7 @@ export async function collectNotificationSignals(opts: {
    */
   settingUp?: boolean;
 }): Promise<BellSignal[]> {
-  const [readiness, waitlist, inbox, walkIns, reviews, notes] = await Promise.all([
+  const [readiness, waitlist, inbox, walkIns, reviews, notes, award] = await Promise.all([
     apiGet<ReadinessSummary>("/api/readiness/summary"),
     opts.barberOnly
       ? null
@@ -105,9 +105,26 @@ export async function collectNotificationSignals(opts: {
       : apiGet<{ pendingCount?: number }>("/api/dashboard/reviews?limit=1"),
     // Notes on the next appointments - this seat's own chair (any seat).
     apiGet<NotesAhead>("/api/barber/notes-ahead"),
+    // Provider of the Month waiting for the owner's OK (owner-only route).
+    opts.barberOnly
+      ? null
+      : apiGet<{ pending?: { title: string; monthLabel: string } | null }>("/api/awards/pending"),
   ]);
 
   const out: BellSignal[] = [];
+
+  // Chosen as Provider of the Month: nothing is posted until they approve,
+  // so this one leads - it is waiting on them and nobody else.
+  const chosen = award?.ok ? award.data?.pending : null;
+  const awardHref = hrefFor("provider-of-month");
+  if (chosen && awardHref) {
+    out.push({
+      key: "award",
+      label: `You're ${chosen.title} for ${chosen.monthLabel} - approve it to post`,
+      count: 1,
+      href: awardHref,
+    });
+  }
 
   // Setup first: it is the only signal an employee seat or a lapsed shop can
   // see, and it is the one that blocks a shop from taking real bookings.

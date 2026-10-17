@@ -4,6 +4,7 @@ import { apiEnv, BILLING, PLANS } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { requireAdmin } from "../middleware/admin.js";
+import { awardsAdminRouter } from "./awardsAdmin.js";
 import { readBookingRefusals } from "../services/bookingRefusal.js";
 import { readEmailDeliverySummary } from "../services/emailDelivery.js";
 import { readPlatformSwitch, setPlatformSwitch } from "../services/platformSwitches.js";
@@ -44,6 +45,9 @@ adminPortalRouter.use("/affiliate", affiliateAdminRouter);
 
 // Partner program (cash for people with a code; its own file, same gates).
 adminPortalRouter.use("/partners", partnerAdminRouter);
+
+// Provider of the Month: applications, and choosing who wins (same gates).
+adminPortalRouter.use("/awards", awardsAdminRouter);
 
 const MS_PER_DAY = 86_400_000;
 

@@ -18,6 +18,7 @@ import {
   type AdminReward,
 } from "./AffiliatesSection";
 import { PartnersSection, type AdminPartners } from "./PartnersSection";
+import { AwardsSection, type AdminAwards } from "./AwardsSection";
 
 export const metadata = { title: `${APP_NAME} Admin` };
 
@@ -58,7 +59,7 @@ interface AdminShop {
  * This page never trusts a client flag - the API session check is the gate.
  */
 export default async function AdminPage() {
-  const [metricsRes, shopsRes, analyticsRes, preflightRes, textingRes, affApps, affAccounts, affRewards, affLiability, affFlags, affCredits, partnersRes] =
+  const [metricsRes, shopsRes, analyticsRes, preflightRes, textingRes, affApps, affAccounts, affRewards, affLiability, affFlags, affCredits, partnersRes, awardsRes] =
     await Promise.all([
       apiGet<Metrics>("/api/admin-portal/metrics"),
       apiGet<{ shops: AdminShop[] }>("/api/admin-portal/shops"),
@@ -74,6 +75,7 @@ export default async function AdminPage() {
       apiGet<AdminFlags>("/api/admin-portal/affiliate/flags"),
       apiGet<{ credits: AdminCredit[] }>("/api/admin-portal/affiliate/credits"),
       apiGet<AdminPartners>("/api/admin-portal/partners"),
+      apiGet<AdminAwards>("/api/admin-portal/awards"),
     ]);
   if (metricsRes.status === 404 || metricsRes.status === 401) redirect("/dashboard");
   const m = metricsRes.data;
@@ -136,6 +138,8 @@ export default async function AdminPage() {
         )}
 
         {partnersRes.data && <PartnersSection data={partnersRes.data} />}
+
+        {awardsRes.data && <AwardsSection data={awardsRes.data} />}
 
         <h2 className="mb-3 mt-10 font-display text-lg">All shops</h2>
         <Card className="overflow-hidden p-0">

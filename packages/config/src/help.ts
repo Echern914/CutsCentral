@@ -572,6 +572,23 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open your team", featureId: "team" },
   },
   {
+    id: "provider-of-the-month",
+    q: "How do I become Barber of the Month?",
+    a: "Apply from Provider of the Month in your dashboard. Pick which of your own numbers to show (appointments and clients in the last 30 days, how you've grown, your rating) and tell us in a few words why you. ChairBack reads every application and picks the winner.\n\nThe winner's page shows it to every client who opens it, with how they won and why, through the month after. You can change your application until the month is decided, and apply again every month.",
+    keywords: [
+      "barber of the month",
+      "provider of the month",
+      "stylist of the month",
+      "of the month",
+      "award",
+      "apply for the award",
+      "monthly award",
+      "spotlight",
+    ],
+    category: "brand",
+    action: { label: "Apply", featureId: "provider-of-month" },
+  },
+  {
     id: "take-the-tour",
     q: "Is there a tour of the dashboard?",
     a: "Yes, about a minute long. It's offered when you finish setting up, on the \"You're live\" screen. You can also ask me \"how do I finish setting up?\" once your shop is set up, and I'll offer it there.\n\nIt never starts by itself.",

@@ -65,6 +65,7 @@ import {
 } from "../services/affiliateAttribution.js";
 import { collectCapabilities, collectReadinessFacts } from "../services/readinessFacts.js";
 import { buildReadiness } from "../engines/readiness.js";
+import { publicAwardFor } from "../engines/providerAwards.js";
 import { previewNudgeBody } from "../messaging/templates.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
@@ -1276,6 +1277,9 @@ publicPageRouter.get("/:slug", async (req, res) => {
       // list stops at 30.
       writtenCount,
     },
+    // Provider of the Month, while it is still showing (config/providerAward):
+    // who, how and why, written by ChairBack. Null almost always.
+    award: await publicAwardFor(shop.id),
   });
 });
 
