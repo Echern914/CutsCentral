@@ -176,7 +176,7 @@ const STEP_WHY: Record<Exclude<OnboardingStepId, "shop" | "done">, (f: Onboardin
     ];
   },
   clients: () => [
-    "Optional: you have no clients in ChairBack yet.",
+    "You have no clients in ChairBack yet.",
     "Bring your list over from your old app so their punch cards and reminders start right away.",
   ],
 };
