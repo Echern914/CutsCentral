@@ -125,6 +125,7 @@ import {
   sendAppointmentNudge,
 } from "../engines/appointmentNudge.js";
 import { keepsEveryAddOn, NO_ADD_ONS, resolveAddOns } from "../engines/addOns.js";
+import { readIntakeSnapshot } from "../engines/bookingIntake.js";
 import {
   effectiveSchedule,
   materializeTargetedRule,
@@ -2082,6 +2083,12 @@ interface AgendaRow {
   staffId?: string | null;
   /** Barber's private note on THIS booking (never the client's profile note). */
   notes?: string | null;
+  /**
+   * The client wrote something when they booked (a free-text booking
+   * question). Only that it exists - the words stay in the appointment's
+   * details - so the card can say "there's a note" without growing.
+   */
+  clientNote?: boolean;
   // Palette key for calendar color-coding; null when the service has no color
   // (or the row is a synced visit / block). See SERVICE_COLORS.
   serviceColor: string | null;
@@ -2229,6 +2236,7 @@ type ApptAgendaRow = {
   runningLate: boolean;
   staffId: string;
   notes: string | null;
+  intake: Prisma.JsonValue | null;
   bookedVia: string | null;
   overlapForcedAt: Date | null;
   service: { id: string; name: string; color: string | null } | null;
@@ -2249,6 +2257,16 @@ type ApptAgendaRow = {
 /** Dollars collected AT THE CHAIR (null until the barber checks the cut out). */
 function chairPaid(a: { paidAmount: Prisma.Decimal | null }): number | null {
   return a.paidAmount == null ? null : Number(a.paidAmount);
+}
+
+/**
+ * Whether the client typed anything into a free-text booking question. An
+ * address, phone or picked option is an answer, not a note.
+ */
+function hasClientNote(intake: Prisma.JsonValue | null): boolean {
+  return readIntakeSnapshot(intake).some(
+    (x) => (x.kind === "text" || x.kind === "textarea") && x.value.trim() !== "",
+  );
 }
 
 /**
@@ -2478,6 +2496,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
         runningLate: true,
         staffId: true,
         notes: true,
+        intake: true,
         bookedVia: true,
         overlapForcedAt: true,
         service: { select: { id: true, name: true, color: true } },
@@ -2589,6 +2608,7 @@ bookingDashboardRouter.get("/agenda", async (req, res) => {
       serviceId: a.service?.id ?? null,
       staffId: a.staffId,
       notes: a.notes,
+      clientNote: hasClientNote(a.intake),
       serviceColor: a.service?.color ?? null,
       price: a.priceAtBooking == null ? null : Number(a.priceAtBooking),
       status: APPT_STATUS[a.status] ?? "upcoming",

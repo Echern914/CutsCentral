@@ -175,6 +175,54 @@ describe("GET /api/booking/agenda", () => {
     expect(row.serviceName).toBe("Mens Haircut");
     expect(row.price).toBe(40);
     expect(row.status).toBe("upcoming");
+    expect(row.clientNote).toBe(false);
+  });
+
+  it("says a client left a note - without the words - and an address is not a note", async () => {
+    const email = `agenda-note-${randomToken(6)}@test.local`.toLowerCase();
+    emails.push(email);
+    const { cookie, shopId } = await signupAndShop(email, "Agenda Note Cuts");
+    await prisma.shop.update({ where: { id: shopId }, data: { bookingMode: "native" } });
+    const staff = await prisma.staff.create({ data: { shopId, name: "Drick" } });
+    const service = await prisma.service.create({
+      data: { shopId, name: "Mens Haircut", durationMin: 30, price: "40" },
+    });
+    const book = (firstName: string, hoursAhead: number, intake: unknown[]) => {
+      const start = new Date(Date.now() + hoursAhead * 60 * 60 * 1000);
+      return prisma.appointment.create({
+        data: {
+          shopId,
+          staffId: staff.id,
+          serviceId: service.id,
+          firstName,
+          status: "BOOKED",
+          startsAt: start,
+          endsAt: new Date(start.getTime() + 30 * 60 * 1000),
+          manageToken: randomToken(16),
+          intake: intake as never,
+        },
+      });
+    };
+    await book("Noted", 2, [
+      { questionId: "q1", label: "Anything I should know?", kind: "textarea", value: "Low fade, keep the top long" },
+    ]);
+    await book("Address", 3, [{ questionId: "q2", label: "Where", kind: "address", value: "1 Main St" }]);
+    await book("Blank", 4, [{ questionId: "q1", label: "Anything I should know?", kind: "text", value: "   " }]);
+
+    const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const to = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    const res = await request(app)
+      .get(`/api/booking/agenda?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
+      .set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    const by = new Map<string, { clientNote: boolean }>(
+      res.body.agenda.map((r: { clientName: string; clientNote: boolean }) => [r.clientName, r]),
+    );
+    expect(by.get("Noted")?.clientNote).toBe(true);
+    expect(by.get("Address")?.clientNote).toBe(false);
+    expect(by.get("Blank")?.clientNote).toBe(false);
+    // The words stay in the appointment's details.
+    expect(JSON.stringify(res.body)).not.toContain("Low fade");
   });
 
   it("never returns another shop's appointments (tenant isolation)", async () => {
