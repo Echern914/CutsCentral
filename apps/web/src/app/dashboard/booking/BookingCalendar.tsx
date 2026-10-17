@@ -2448,6 +2448,25 @@ function ChevronDownIcon() {
   );
 }
 
+function NoteIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-3 w-3 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" />
+      <path d="M14 3v6h6" />
+      <path d="M8 13h8M8 17h5" />
+    </svg>
+  );
+}
+
 function PencilIcon() {
   return (
     <svg
@@ -2506,6 +2525,7 @@ export function AppointmentBlock({
     />
   );
   const openSheet = (view: SheetView) => (host ? host(row, view, renderSheet) : setSheet(view));
+  const hasNote = Boolean(row.clientNote || row.notes?.trim());
   // A native block opens its own sheet (BlockEditSheet) - hosted like the
   // appointment sheet, so a poll that remounts this card does not close it.
   const [blockSheet, setBlockSheet] = useState(false);
@@ -2879,6 +2899,22 @@ export function AppointmentBlock({
           >
             ↻ Repeats
           </span>
+        )}
+        {/* A NOTE IS WAITING (X, Drick): the client wrote something when
+            they booked, or there's a note on the booking. Only that it
+            exists - the words are one tap away in the details, so the card
+            stays one line tall. */}
+        {hasNote && (
+          <button
+            type="button"
+            onClick={() => openSheet("detail")}
+            data-testid="note-chip"
+            aria-label={`Read the note on ${row.clientName || "this client"}'s appointment`}
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-gold/15 px-1.5 text-[10px] font-medium leading-4 text-gold transition-colors duration-150 ease-out hover:bg-gold/25"
+          >
+            <NoteIcon />
+            {row.clientNote ? "Client note" : "Note"}
+          </button>
         )}
         {/* Booked in Acuity/Square, mirrored here. Says both "this time is
             taken for online booking" and "manage it where it was made". */}

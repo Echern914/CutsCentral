@@ -224,6 +224,8 @@ export interface AgendaRow {
   staffId?: string | null;
   /** Barber's private note on THIS booking (never the client's profile note). */
   notes?: string | null;
+  /** The client wrote something when booking. The words live in the details. */
+  clientNote?: boolean;
   serviceColor: string | null; // SERVICE_COLORS key for the calendar accent
   price: number | null;
   status: "pending" | "upcoming" | "completed" | "canceled" | "no_show" | "blocked";
