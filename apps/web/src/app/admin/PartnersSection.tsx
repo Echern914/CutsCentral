@@ -289,7 +289,7 @@ export function PartnersSection({ data }: { data: AdminPartners }) {
         <button
           type="submit"
           disabled={busy !== null}
-          className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-charcoal disabled:opacity-50"
+          className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-on-gold disabled:opacity-50"
         >
           {busy === "create" ? "Adding…" : "Add partner"}
         </button>

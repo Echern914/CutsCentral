@@ -184,7 +184,7 @@ export function AcuityCalendarMap() {
           "mt-4 rounded-lg border px-3 py-2 text-xs",
           data.ready
             ? "border-emerald-soft/40 bg-emerald-soft/10 text-emerald-soft"
-            : "border-amber-400/40 bg-amber-400/10 text-amber-300",
+            : "border-warning-soft/40 bg-warning-soft/10 text-warning-soft",
         )}
         role="status"
       >
@@ -226,7 +226,7 @@ export function AcuityCalendarMap() {
                     )}
                   </p>
                   {s.bookable && s.problem && (
-                    <p className="mt-0.5 text-[11px] text-amber-300">
+                    <p className="mt-0.5 text-[11px] text-warning-soft">
                       {s.problem === "unmapped"
                         ? "Not mapped yet"
                         : s.problem === "stale"

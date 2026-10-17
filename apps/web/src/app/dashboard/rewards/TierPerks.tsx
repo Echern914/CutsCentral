@@ -473,7 +473,7 @@ export function TierPerks({
       </div>
 
       {ruleError && (
-        <p role="alert" className="mt-4 text-xs text-red-400">
+        <p role="alert" className="mt-4 text-xs text-danger-soft">
           {ruleError}
         </p>
       )}
@@ -492,7 +492,7 @@ export function TierPerks({
             {previewing ? "Counting…" : shownPreview ? "Count again" : "Preview before saving"}
           </button>
           {previewError && (
-            <p role="alert" className="mt-2 text-xs text-red-400">
+            <p role="alert" className="mt-2 text-xs text-danger-soft">
               {previewError}
             </p>
           )}
@@ -546,7 +546,7 @@ export function TierPerks({
           {pending ? "Saving…" : "Save tiers"}
         </button>
         {saved && !dirty && <span className="text-sm text-muted">{saved}</span>}
-        {error && <span className="text-sm text-red-400">{error}</span>}
+        {error && <span className="text-sm text-danger-soft">{error}</span>}
       </div>
     </section>
   );

@@ -142,7 +142,7 @@ export function DomainCard({ initial }: { initial: DomainStatus }) {
               <span className="text-sm font-medium text-offwhite">{status.domain}</span>
               <span
                 className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                  live ? "bg-green-500/15 text-green-400" : "bg-gold/15 text-gold"
+                  live ? "bg-emerald-soft/15 text-emerald-soft" : "bg-gold/15 text-gold"
                 }`}
               >
                 {live ? "Connected" : "Not connected yet"}
@@ -303,7 +303,7 @@ function RecordSeen({
 function PointerSeen({ status, found }: { status: DnsRecordStatus; found: string | null }) {
   switch (status) {
     case "points_here":
-      return <span className="text-green-400">✓ Found</span>;
+      return <span className="text-emerald-soft">✓ Found</span>;
     case "points_elsewhere":
       return (
         <span className="text-gold">
@@ -320,7 +320,7 @@ function PointerSeen({ status, found }: { status: DnsRecordStatus; found: string
 function TxtSeen({ status }: { status: DnsTxtStatus }) {
   switch (status) {
     case "found":
-      return <span className="text-green-400">✓ Found</span>;
+      return <span className="text-emerald-soft">✓ Found</span>;
     case "wrong":
       return <span className="text-gold">Has a different value — replace it with the one shown</span>;
     case "missing":

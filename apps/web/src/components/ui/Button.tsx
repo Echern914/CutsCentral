@@ -19,7 +19,7 @@ export function Button({
 } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   const styles =
     variant === "primary"
-      ? "bg-gold-gradient text-charcoal shadow-glow hover:shadow-glow-lg hover:brightness-105"
+      ? "bg-gold-gradient text-on-gold shadow-glow hover:shadow-glow-lg hover:brightness-105"
       : "bg-transparent text-offwhite border border-subtle hover:bg-charcoal-700 hover:border-subtle-strong";
   return (
     <motion.button
@@ -51,7 +51,7 @@ export function LinkButton({
       href={href}
       className={cn(
         "inline-flex items-center justify-center rounded-full px-6 py-3 text-sm font-semibold",
-        "bg-gold-gradient text-charcoal shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105",
+        "bg-gold-gradient text-on-gold shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105",
         className,
       )}
     >

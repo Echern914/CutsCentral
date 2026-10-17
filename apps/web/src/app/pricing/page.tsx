@@ -62,7 +62,7 @@ export default function PricingPage() {
               </Link>
               <Link
                 href="/signup"
-                className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-charcoal shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
+                className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-on-gold shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
               >
                 Get started
               </Link>

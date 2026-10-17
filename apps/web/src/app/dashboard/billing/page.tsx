@@ -513,7 +513,7 @@ export default async function BillingPage({
                     Current plan
                   </span>
                 ) : (
-                  <span className="rounded-full bg-gold-gradient px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-charcoal">
+                  <span className="rounded-full bg-gold-gradient px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-on-gold">
                     Most powerful
                   </span>
                 )}

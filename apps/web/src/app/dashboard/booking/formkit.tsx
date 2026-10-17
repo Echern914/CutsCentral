@@ -137,7 +137,7 @@ export function FormFooter({
           "flex h-11 w-full items-center justify-center rounded-xl px-5 text-sm font-semibold transition-colors duration-150 ease-out disabled:opacity-50",
           tone === "gold"
             ? "bg-gold text-charcoal-900 hover:bg-gold-muted"
-            : "bg-offwhite text-charcoal hover:bg-white",
+            : "bg-offwhite text-charcoal hover:bg-offwhite/90",
         )}
       >
         {pending ? pendingLabel : label}

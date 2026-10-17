@@ -379,7 +379,7 @@ function SignUp({ status }: { status: AffiliateStatus }) {
           </label>
 
           {error && (
-            <p role="alert" className="mt-4 text-xs text-red-400">
+            <p role="alert" className="mt-4 text-xs text-danger-soft">
               {error}
             </p>
           )}
@@ -477,7 +477,7 @@ function ChooseStyles({
         })}
       </div>
       {error && (
-        <p role="alert" className="mt-4 text-xs text-red-400">
+        <p role="alert" className="mt-4 text-xs text-danger-soft">
           {error}
         </p>
       )}
@@ -575,7 +575,7 @@ function Dashboard({
       {overview.account.suspensionMessage && (
         <div
           role="status"
-          className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
+          className="mb-6 rounded-xl border border-warning-soft/40 bg-warning-soft/10 px-4 py-3 text-sm text-warning-soft"
         >
           {overview.account.suspensionMessage}
         </div>
@@ -674,7 +674,7 @@ function Dashboard({
                     <span
                       className={cn(
                         "shrink-0 rounded-full px-2.5 py-0.5 text-[11px]",
-                        step === null ? "bg-white/5 text-muted" : "bg-gold/15 text-gold",
+                        step === null ? "bg-offwhite/5 text-muted" : "bg-gold/15 text-gold",
                       )}
                     >
                       {STAGE_COPY[r.stage]}
@@ -694,7 +694,7 @@ function Dashboard({
                           title={label}
                           className={cn(
                             "h-1.5 flex-1 rounded-full",
-                            i <= step ? "bg-gold" : "bg-white/10",
+                            i <= step ? "bg-gold" : "bg-offwhite/10",
                           )}
                         />
                       ))}

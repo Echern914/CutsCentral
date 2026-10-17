@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-17-light-is-the-main-look",
+    date: "2026-10-17",
+    kind: "feature",
+    title: "A brighter ChairBack",
+    body:
+      "White and gold is now ChairBack's main look, across the site and your dashboard. " +
+      "Prefer the original black and gold? Switch back anytime under Account → Appearance.",
+  },
+  {
     id: "2026-10-17-provider-of-the-month",
     date: "2026-10-17",
     kind: "feature",

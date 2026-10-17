@@ -243,7 +243,7 @@ export default function VerticalPage({
             </Link>
             <Link
               href={signupHref}
-              className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-charcoal shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
+              className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-on-gold shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
             >
               Get started
             </Link>
@@ -265,7 +265,7 @@ export default function VerticalPage({
           <div className="mt-9 flex flex-wrap items-center justify-center gap-4">
             <Link
               href={signupHref}
-              className="rounded-full bg-gold-gradient px-8 py-3.5 text-sm font-semibold text-charcoal shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
+              className="rounded-full bg-gold-gradient px-8 py-3.5 text-sm font-semibold text-on-gold shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
             >
               Start your {BILLING.trialDays}-day free trial
             </Link>
@@ -308,7 +308,7 @@ export default function VerticalPage({
           </p>
           <Link
             href={signupHref}
-            className="mt-7 inline-block rounded-full bg-gold-gradient px-9 py-3.5 text-sm font-semibold text-charcoal shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
+            className="mt-7 inline-block rounded-full bg-gold-gradient px-9 py-3.5 text-sm font-semibold text-on-gold shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
           >
             Get started free
           </Link>

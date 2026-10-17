@@ -70,7 +70,7 @@ export default async function AccountPage() {
       />
       {/* Appearance is per-PERSON too - the dashboard theme is about the
           reader's eyes, and never leaks to what clients see. */}
-      <AppearanceCard initialTheme={me.data?.theme ?? "dark"} />
+      <AppearanceCard initialTheme={me.data?.theme ?? "light"} />
       {/* Notifications are per-PERSON (a barber's own chair, his own phone),
           so they belong here rather than with the shop settings. */}
       {notify.data && (

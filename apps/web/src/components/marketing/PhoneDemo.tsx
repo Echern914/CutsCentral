@@ -46,7 +46,7 @@ export function PhoneDemo({ className }: { className?: string }) {
 
           <motion.div
             variants={bubble}
-            className="max-w-[70%] self-end rounded-2xl rounded-br-md bg-gold-gradient px-3.5 py-2.5 text-[12px] font-medium leading-snug text-charcoal"
+            className="max-w-[70%] self-end rounded-2xl rounded-br-md bg-gold-gradient px-3.5 py-2.5 text-[12px] font-medium leading-snug text-on-gold"
           >
             just booked thursday 🙏
           </motion.div>

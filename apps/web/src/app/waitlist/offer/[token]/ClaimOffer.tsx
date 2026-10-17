@@ -73,7 +73,7 @@ export function ClaimOffer({
 
   if (state.phase === "left_quietly") {
     return (
-      <div role="status" className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+      <div role="status" className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center">
         <h1 className="font-display text-2xl">Done</h1>
         <p className="mt-2 text-sm text-muted">
           If you were on this waitlist, you&rsquo;re off it now and won&rsquo;t
@@ -85,7 +85,7 @@ export function ClaimOffer({
 
   if (!offer || state.phase === "expired" || (state.phase === "idle" && msLeft <= 0)) {
     return (
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+      <div className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center">
         <h1 className="font-display text-2xl">This hold has ended</h1>
         <p className="mt-2 text-sm text-muted">
           Held spots are only saved for a short time, so this link is no longer
@@ -117,7 +117,7 @@ export function ClaimOffer({
     // Approval-mode shops confirm requests themselves - never tell the
     // customer they're booked when the shop still has to say yes.
     return state.pending ? (
-      <div role="status" className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+      <div role="status" className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center">
         <h1 className="font-display text-2xl">Request sent &#10003;</h1>
         <p className="mt-2 text-sm text-muted">
           Your appointment request for {when} was submitted &mdash;{" "}
@@ -126,7 +126,7 @@ export function ClaimOffer({
         </p>
       </div>
     ) : (
-      <div role="status" className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+      <div role="status" className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center">
         <h1 className="font-display text-2xl">You&rsquo;re booked &#10003;</h1>
         <p className="mt-2 text-sm text-muted">
           {when} at {offer.shopName} is yours. A confirmation email with a
@@ -138,7 +138,7 @@ export function ClaimOffer({
 
   if (state.phase === "deposit") {
     return (
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+      <div className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center">
         <h1 className="font-display text-2xl">This one needs a deposit</h1>
         <p className="mt-2 text-sm text-muted">
           {offer.shopName} now takes a deposit for this service, so this hold
@@ -154,7 +154,7 @@ export function ClaimOffer({
   // nothing about why (bookingErrors.ts CONTACT_SHOP).
   if (state.phase === "contact_shop") {
     return (
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+      <div className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center">
         <h1 className="font-display text-2xl">Please contact the shop</h1>
         <p className="mt-2 text-sm text-muted">
           We can&rsquo;t book this time online. Please contact {offer.shopName} directly to book.
@@ -165,7 +165,7 @@ export function ClaimOffer({
 
   if (state.phase === "declined") {
     return (
-      <div role="status" className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+      <div role="status" className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center">
         <h1 className="font-display text-2xl">
           {state.left ? "You're off this waitlist" : "Passed on, thanks"}
         </h1>
@@ -180,7 +180,7 @@ export function ClaimOffer({
 
   if (state.phase === "gone") {
     return (
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+      <div className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center">
         <h1 className="font-display text-2xl">That time just got taken</h1>
         <p className="mt-2 text-sm text-muted">
           The shop&rsquo;s calendar changed before you could book. Nothing was
@@ -194,11 +194,11 @@ export function ClaimOffer({
   const secs = Math.max(0, Math.floor((msLeft % 60000) / 1000));
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+    <div className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6">
       <h1 className="font-display text-2xl">
         {offer.firstName ? `${offer.firstName}, this` : "This"} spot is yours
       </h1>
-      <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-4">
+      <div className="mt-4 rounded-xl border border-offwhite/10 bg-offwhite/5 p-4">
         <p className="text-sm font-semibold text-offwhite">{when}</p>
         <p className="mt-1 text-xs text-muted">
           {offer.serviceName ?? "Appointment"}
@@ -223,11 +223,11 @@ export function ClaimOffer({
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="you@example.com"
-          className="mt-1 w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-white/40"
+          className="mt-1 w-full rounded-lg border border-offwhite/15 bg-offwhite/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-offwhite/40"
         />
       </label>
       {state.phase === "error" && (
-        <p role="alert" className="mt-3 text-xs text-red-400">
+        <p role="alert" className="mt-3 text-xs text-danger-soft">
           Something went wrong — please try again.
         </p>
       )}
@@ -247,7 +247,7 @@ export function ClaimOffer({
             else setState({ phase: "error" });
           })
         }
-        className="mt-5 w-full rounded-xl border border-white/15 bg-white/10 py-3 text-sm font-semibold text-offwhite transition-colors hover:bg-white/15 disabled:opacity-50"
+        className="mt-5 w-full rounded-xl border border-offwhite/15 bg-offwhite/10 py-3 text-sm font-semibold text-offwhite transition-colors hover:bg-offwhite/15 disabled:opacity-50"
       >
         {pending
           ? offer.approvalRequired

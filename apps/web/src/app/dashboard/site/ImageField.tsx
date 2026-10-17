@@ -58,7 +58,7 @@ export function ImageField({
             <button
               type="button"
               onClick={() => fileInput.current?.click()}
-              className="rounded-full bg-white/90 px-3 py-1.5 text-xs font-medium text-charcoal transition-colors duration-150 ease-out hover:bg-white"
+              className="rounded-full bg-offwhite/90 px-3 py-1.5 text-xs font-medium text-charcoal transition-colors duration-150 ease-out hover:bg-white"
             >
               Replace
             </button>

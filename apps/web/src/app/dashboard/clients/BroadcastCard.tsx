@@ -715,9 +715,9 @@ const LABEL: Record<string, string> = {
 };
 
 function toneFor(status: string): string {
-  if (status === "FAILED") return "text-red-400";
+  if (status === "FAILED") return "text-danger-soft";
   if (status === "PARTIAL") return "text-gold";
-  if (status === "SENT") return "text-emerald-400";
+  if (status === "SENT") return "text-emerald-soft";
   return "text-muted";
 }
 

@@ -15,8 +15,8 @@ export function DomainRetry({ domain, retryHref }: { domain: string; retryHref: 
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "#111111",
-        color: "#F5F2EA",
+        background: "#FAF8F3",
+        color: "#1C1917",
         padding: "2rem 1.5rem",
         textAlign: "center",
       }}
@@ -25,7 +25,7 @@ export function DomainRetry({ domain, retryHref }: { domain: string; retryHref: 
         <h1 style={{ fontSize: "1.25rem", fontWeight: 600, margin: "0 0 0.5rem" }}>
           {domain} is taking a moment to load
         </h1>
-        <p style={{ margin: "0 0 1.5rem", color: "#B9B3A7" }}>
+        <p style={{ margin: "0 0 1.5rem", color: "#57534E" }}>
           This is usually brief. Please try again in a few seconds.
         </p>
         <a
@@ -34,8 +34,8 @@ export function DomainRetry({ domain, retryHref }: { domain: string; retryHref: 
             display: "inline-block",
             padding: "0.75rem 1.5rem",
             borderRadius: "0.75rem",
-            background: "#C9A24A",
-            color: "#111111",
+            background: "#D4AF37",
+            color: "#1C1917",
             fontWeight: 600,
             textDecoration: "none",
           }}

@@ -173,6 +173,8 @@ const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
  */
 /** Fixed gold for special slots — see the note in BookingClient. */
 const SPECIAL_GOLD = "#D4AF37";
+/** The special gold as TEXT: the theme gold, readable on light and dark. */
+const SPECIAL_GOLD_INK = "rgb(var(--cb-gold))";
 
 /**
  * A rebook prefill from a link: "the usual, just pick a time".
@@ -204,6 +206,11 @@ export function BookingClient({
   // Text painted ON the accent must actually read against it — shops pick
   // arbitrary accents, so a hardcoded near-black fails WCAG on dark ones.
   const onAccent = readableOn(accent);
+  // The accent as TEXT: blended toward the page's own text colour, so a bright
+  // accent (the default gold) still reads on a light page - darker on light,
+  // lighter on dark - and stays recognisably the shop's colour. Fills keep
+  // the pure accent.
+  const accentInk = `color-mix(in srgb, ${accent} 68%, rgb(var(--cb-fg)))`;
   const tz = data.shop.timezone;
 
   /**
@@ -1092,7 +1099,7 @@ export function BookingClient({
         key={svc.id}
         className="overflow-hidden rounded-xl border"
         style={{
-          borderColor: "rgba(255,255,255,0.12)",
+          borderColor: `rgb(var(--cb-fg) / 0.12)`,
           borderLeft: stripe ? `3px solid ${stripe}` : undefined,
         }}
       >
@@ -1152,13 +1159,13 @@ export function BookingClient({
                       ? SPECIAL_GOLD
                       : chosen
                         ? accent
-                        : "rgba(255,255,255,0.15)",
+                        : `rgb(var(--cb-fg) / 0.15)`,
                     backgroundColor: s.targeted
                       ? `${SPECIAL_GOLD}${chosen ? "2E" : "14"}`
                       : chosen
                         ? `${accent}14`
                         : "transparent",
-                    color: s.targeted ? SPECIAL_GOLD : chosen ? accent : undefined,
+                    color: s.targeted ? SPECIAL_GOLD_INK : chosen ? accentInk : undefined,
                   }}
                 >
                   {s.targeted && (
@@ -2153,7 +2160,7 @@ export function BookingClient({
   // No focus:outline-none — the global :focus-visible ring must stay visible
   // for keyboard users (WCAG 2.4.7); the border tint alone is too weak.
   const input =
-    "w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-white/40";
+    "w-full rounded-lg border border-offwhite/15 bg-offwhite/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-offwhite/40";
 
   async function checkCode() {
     const forStaff = pickedStaffId ?? staffId;
@@ -2179,7 +2186,7 @@ export function BookingClient({
   // The invalid state is a RED BORDER PLUS A SENTENCE, never colour alone -
   // colour is not information for a customer who cannot see it, and the
   // message below is what actually says how to fix it.
-  const invalidInput = "border-rose-400/70 bg-rose-500/5";
+  const invalidInput = "border-danger-soft/70 bg-danger-soft/5";
   /** Join class names, dropping the false branches. */
   const cx = (...parts: (string | false | null | undefined)[]) =>
     parts.filter(Boolean).join(" ");
@@ -2204,7 +2211,7 @@ export function BookingClient({
 
   const FieldError = ({ field }: { field: BookingErrorField }) =>
     fieldError?.field === field ? (
-      <p id={`book-error-${field}`} role="alert" className="-mt-1 text-xs text-rose-300">
+      <p id={`book-error-${field}`} role="alert" className="-mt-1 text-xs text-danger-soft">
         {fieldError.message}
       </p>
     ) : null;
@@ -2217,7 +2224,7 @@ export function BookingClient({
   if (paymentSecret !== null && confirmedToken === null) {
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+        <div className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6">
           {/* 🔴 SAID FIRST, BEFORE ANYTHING ELSE. Customers read "Your time is
               held" as "booked", left this screen, and the hold ran out ten
               minutes later with the time back on sale. */}
@@ -2341,7 +2348,7 @@ export function BookingClient({
                 : "Payment received. Confirming your booking…"}
             </p>
           ) : payConfirm === "slow" ? (
-            <div role="status" className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm">
+            <div role="status" className="rounded-xl border border-offwhite/10 bg-offwhite/5 p-4 text-sm">
               <p className="font-medium">
                 {payCharge?.optional ? "You're booked, and your card went through." : "Your payment went through."}
               </p>
@@ -2360,13 +2367,13 @@ export function BookingClient({
               )}
             </div>
           ) : payConfirm === "gone" ? (
-            <div role="alert" className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-200">
+            <div role="alert" className="rounded-xl border border-warning-soft/30 bg-warning-soft/10 p-4 text-sm text-warning-soft">
               <p className="font-medium">
                 {seriesResult
                   ? "None of those dates could be held long enough to finish."
                   : "That time was released before the payment landed."}
               </p>
-              <p className="mt-1 text-amber-200/80">
+              <p className="mt-1 text-warning-soft/80">
                 You have not been charged — anything taken is refunded in full, and
                 the card you entered has been let go.
                 {seriesResult
@@ -2381,7 +2388,7 @@ export function BookingClient({
               <button
                 type="button"
                 onClick={reloadPage}
-                className="mt-3 rounded-full border border-amber-200/40 px-4 py-2 text-sm font-medium text-amber-100"
+                className="mt-3 rounded-full border border-warning-soft/40 px-4 py-2 text-sm font-medium text-amber-100"
               >
                 {seriesResult ? "Start again" : "Pick another time"}
               </button>
@@ -2444,13 +2451,13 @@ export function BookingClient({
         {data.shop.slug === DEMO.SHOP_SLUG && <DemoTour route="book" />}
         {/* data-tour: keep in sync with packages/config/src/demoTour.ts */}
         <div
-          className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center"
+          className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center"
           data-tour="confirmation"
         >
           <div
             aria-hidden="true"
             className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full text-2xl"
-            style={{ backgroundColor: `${accent}22`, color: accent }}
+            style={{ backgroundColor: `${accent}22`, color: accentInk }}
           >
             ✓
           </div>
@@ -2586,7 +2593,7 @@ export function BookingClient({
   if (data.shop.bookingPaused) {
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+        <div className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center">
           {data.shop.logoUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -2650,7 +2657,7 @@ export function BookingClient({
           ref={conflictRef}
           role="alert"
           tabIndex={-1}
-          className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2.5 text-center text-sm text-amber-200 outline-none"
+          className="mb-4 rounded-xl border border-warning-soft/30 bg-warning-soft/10 px-3 py-2.5 text-center text-sm text-warning-soft outline-none"
         >
           {error}
         </p>
@@ -2662,7 +2669,7 @@ export function BookingClient({
       {/* Barber-only "back to dashboard" (only when opened from the dashboard). */}
       <BackToDashboard
         fallbackHref="/dashboard/booking"
-        className="mb-4 inline-flex items-center rounded-full border border-white/15 bg-white/5 px-3.5 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
+        className="mb-4 inline-flex items-center rounded-full border border-offwhite/15 bg-offwhite/5 px-3.5 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
       />
 
       <header className="mb-6 text-center">
@@ -2671,7 +2678,7 @@ export function BookingClient({
           <img
             src={data.shop.logoUrl}
             alt={data.shop.name}
-            className="mx-auto mb-3 h-16 w-16 rounded-full border border-white/10 bg-white/5 object-cover"
+            className="mx-auto mb-3 h-16 w-16 rounded-full border border-offwhite/10 bg-offwhite/5 object-cover"
           />
         ) : null}
         <h1 className="font-display text-2xl tracking-tight">Book at {data.shop.name}</h1>
@@ -2749,7 +2756,7 @@ export function BookingClient({
             <button
               type="button"
               onClick={() => setWaitlistMode("standing")}
-              className="w-full rounded-xl border border-white/15 py-2.5 text-center text-xs font-medium text-muted transition-colors hover:text-offwhite"
+              className="w-full rounded-xl border border-offwhite/15 py-2.5 text-center text-xs font-medium text-muted transition-colors hover:text-offwhite"
             >
               Can’t find a time? Join the waitlist →
             </button>
@@ -2782,10 +2789,10 @@ export function BookingClient({
                 borderColor:
                   slot === openInfo.soonest.startsAt
                     ? accent
-                    : "rgba(255,255,255,0.15)",
+                    : `rgb(var(--cb-fg) / 0.15)`,
               }}
             >
-              <span className="text-sm font-semibold" style={{ color: accent }}>
+              <span className="text-sm font-semibold" style={{ color: accentInk }}>
                 Soonest available
               </span>
               <span className="text-sm text-muted">
@@ -2848,7 +2855,7 @@ export function BookingClient({
               <button
                 type="button"
                 onClick={() => dayDate && pickDay(dayDate)}
-                className="rounded-full border border-white/15 px-4 py-1.5 text-xs font-medium transition-colors hover:bg-white/[0.06]"
+                className="rounded-full border border-offwhite/15 px-4 py-1.5 text-xs font-medium transition-colors hover:bg-white/[0.06]"
               >
                 Try again
               </button>
@@ -2868,7 +2875,7 @@ export function BookingClient({
                 return (
                   <div
                     key={b.id}
-                    className="overflow-hidden rounded-xl border border-white/12"
+                    className="overflow-hidden rounded-xl border border-offwhite/12"
                   >
                     <button
                       type="button"
@@ -2894,7 +2901,7 @@ export function BookingClient({
                       </span>
                     </button>
                     {open && (
-                      <div className="flex flex-col gap-3 border-t border-white/8 p-3">
+                      <div className="flex flex-col gap-3 border-t border-offwhite/8 p-3">
                         {b.services.map((svc) => dayServiceRow(svc))}
                       </div>
                     )}
@@ -2969,7 +2976,7 @@ export function BookingClient({
                           pickDay(nextOpen);
                         }}
                         className="w-full rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-colors"
-                        style={{ borderColor: accent, color: accent }}
+                        style={{ borderColor: accent, color: accentInk }}
                       >
                         Next available: {dateFmt.format(new Date(`${nextOpen}T12:00:00Z`))} →
                       </button>
@@ -2988,7 +2995,7 @@ export function BookingClient({
                         type="button"
                         onClick={() => setWaitlistMode("slot")}
                         className="w-full rounded-xl border py-3 text-center text-sm font-semibold transition-colors"
-                        style={{ borderColor: accent, color: accent }}
+                        style={{ borderColor: accent, color: accentInk }}
                       >
                         {/* "get notified", not "get texted": customer SMS stays
                             off until 10DLC clears — openings notify by email. */}
@@ -3068,7 +3075,7 @@ export function BookingClient({
                       aria-pressed={selected}
                       className="overflow-hidden rounded-xl border text-left transition-colors"
                       style={{
-                        borderColor: selected ? accent : "rgba(255,255,255,0.12)",
+                        borderColor: selected ? accent : `rgb(var(--cb-fg) / 0.12)`,
                         backgroundColor: selected ? `${accent}14` : "transparent",
                         // A 3px color rail on the leading edge when the service has one.
                         borderLeft: stripe ? `3px solid ${stripe}` : undefined,
@@ -3080,7 +3087,7 @@ export function BookingClient({
                           <img
                             src={s.imageUrl}
                             alt=""
-                            className="h-14 w-14 shrink-0 rounded-lg border border-white/10 object-cover"
+                            className="h-14 w-14 shrink-0 rounded-lg border border-offwhite/10 object-cover"
                           />
                         ) : null}
                         <span className="min-w-0 flex-1">
@@ -3130,7 +3137,7 @@ export function BookingClient({
                 aria-pressed={staffId === s.id}
                 className="flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors"
                 style={{
-                  borderColor: staffId === s.id ? accent : "rgba(255,255,255,0.12)",
+                  borderColor: staffId === s.id ? accent : `rgb(var(--cb-fg) / 0.12)`,
                   backgroundColor: staffId === s.id ? `${accent}14` : "transparent",
                 }}
               >
@@ -3140,7 +3147,7 @@ export function BookingClient({
                 ) : (
                   <span
                     className="flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold"
-                    style={{ backgroundColor: `${accent}22`, color: accent }}
+                    style={{ backgroundColor: `${accent}22`, color: accentInk }}
                   >
                     {s.name.charAt(0)}
                   </span>
@@ -3205,7 +3212,7 @@ export function BookingClient({
                     type="button"
                     onClick={() => setWaitlistMode("slot")}
                     className="w-full rounded-xl border py-3 text-center text-sm font-semibold transition-colors"
-                    style={{ borderColor: accent, color: accent }}
+                    style={{ borderColor: accent, color: accentInk }}
                   >
                     Join the waitlist
                   </button>
@@ -3231,7 +3238,7 @@ export function BookingClient({
                   }}
                 >
                   <span className="flex items-center gap-2">
-                    <span aria-hidden="true" style={{ color: accent }}>
+                    <span aria-hidden="true" style={{ color: accentInk }}>
                       ⚡
                     </span>
                     <span>
@@ -3246,7 +3253,7 @@ export function BookingClient({
                   </span>
                   <span
                     className="text-xs font-semibold"
-                    style={{ color: accent }}
+                    style={{ color: accentInk }}
                   >
                     Book it →
                   </span>
@@ -3306,7 +3313,7 @@ export function BookingClient({
                           ? SPECIAL_GOLD
                           : picked
                             ? accent
-                            : "rgba(255,255,255,0.12)",
+                            : `rgb(var(--cb-fg) / 0.12)`,
                         backgroundColor: s.targeted
                           ? picked
                             ? SPECIAL_GOLD
@@ -3317,7 +3324,7 @@ export function BookingClient({
                         color: s.targeted
                           ? picked
                             ? readableOn(SPECIAL_GOLD)
-                            : SPECIAL_GOLD
+                            : SPECIAL_GOLD_INK
                           : picked
                             ? onAccent
                             : undefined,
@@ -3359,7 +3366,7 @@ export function BookingClient({
           className="mb-4 rounded-xl border p-4"
           style={{ borderColor: `${accent}55`, backgroundColor: `${accent}0f` }}
         >
-          <p className="text-sm font-semibold" style={{ color: accent }}>
+          <p className="text-sm font-semibold" style={{ color: accentInk }}>
             You have time for more
           </p>
           <p className="mt-0.5 text-xs text-muted">
@@ -3375,8 +3382,8 @@ export function BookingClient({
                 key={u.serviceId}
                 type="button"
                 onClick={() => applyUpgrade(u)}
-                className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors hover:bg-white/5"
-                style={{ borderColor: "rgba(255,255,255,0.15)" }}
+                className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors hover:bg-offwhite/5"
+                style={{ borderColor: `rgb(var(--cb-fg) / 0.15)` }}
               >
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium">{u.name}</span>
@@ -3415,7 +3422,7 @@ export function BookingClient({
           {/* Optional add-ons for the chosen service (a targeted slot's
               length/price are fixed, so add-ons don't apply there). */}
           {!slotTargeted && addOnsForService.length > 0 && (
-            <div className="mb-3 rounded-xl border border-white/10 p-3" data-tour="addons">
+            <div className="mb-3 rounded-xl border border-offwhite/10 p-3" data-tour="addons">
               <p className="mb-2 flex items-baseline justify-between gap-2 text-xs font-medium uppercase tracking-wide opacity-60">
                 <span>Add-ons</span>
                 {/* The budget, stated once. Without it a greyed-out row reads as
@@ -3447,7 +3454,7 @@ export function BookingClient({
                       title={fits ? undefined : "Not enough time left at this slot"}
                       className="flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40"
                       style={{
-                        borderColor: on ? accent : "rgba(255,255,255,0.1)",
+                        borderColor: on ? accent : `rgb(var(--cb-fg) / 0.1)`,
                         backgroundColor: on ? `${accent}14` : "transparent",
                       }}
                     >
@@ -3455,7 +3462,7 @@ export function BookingClient({
                         <span
                           aria-hidden="true"
                           className="flex h-4 w-4 items-center justify-center rounded border text-[10px]"
-                          style={{ borderColor: on ? accent : "rgba(255,255,255,0.3)", color: accent }}
+                          style={{ borderColor: on ? accent : `rgb(var(--cb-fg) / 0.3)`, color: accentInk }}
                         >
                           {on ? "✓" : ""}
                         </span>
@@ -3492,7 +3499,7 @@ export function BookingClient({
           {(slot !== null || grandTotal !== null) && (
             <div
               className="mb-3 flex flex-col gap-1 rounded-xl px-4 py-3 text-sm"
-              style={{ backgroundColor: `${accent}14`, color: accent }}
+              style={{ backgroundColor: `${accent}14`, color: accentInk }}
             >
               {/* The one recap of WHEN before committing — time chips show
                   time-of-day only and the highlighted calendar cell is
@@ -3754,7 +3761,7 @@ export function BookingClient({
                     />
                   )}
                   {invalid && (
-                    <p id={errorId} role="alert" className="text-xs text-rose-300">
+                    <p id={errorId} role="alert" className="text-xs text-danger-soft">
                       {questionError.message}
                     </p>
                   )}
@@ -3768,14 +3775,14 @@ export function BookingClient({
                 that, and would refuse the write), and while a special or an
                 add-on is selected (neither can repeat). */}
             {repeatOffered && (
-              <div className="flex flex-col gap-2 rounded-xl border border-white/10 px-3 py-3">
+              <div className="flex flex-col gap-2 rounded-xl border border-offwhite/10 px-3 py-3">
                 <div className="flex items-center justify-between gap-2">
                   <label htmlFor="repeat-every" className="text-xs text-muted">
                     Make it a standing appointment?
                   </label>
                   <select
                     id="repeat-every"
-                    className="rounded-lg bg-white/10 px-2 py-1.5 text-base text-offwhite"
+                    className="rounded-lg bg-offwhite/10 px-2 py-1.5 text-base text-offwhite"
                     value={repeat?.interval ?? 0}
                     onChange={(e) => {
                       const interval = Number(e.target.value);
@@ -3796,7 +3803,7 @@ export function BookingClient({
                     </label>
                     <select
                       id="repeat-count"
-                      className="rounded-lg bg-white/10 px-2 py-1.5 text-base text-offwhite"
+                      className="rounded-lg bg-offwhite/10 px-2 py-1.5 text-base text-offwhite"
                       value={repeat.count}
                       onChange={(e) =>
                         setRepeat({ interval: repeat.interval, count: Number(e.target.value) })
@@ -3871,7 +3878,7 @@ export function BookingClient({
                 different card" is always there. Without one, a new phone can
                 unlock it with a code texted to the number on file. */}
             {collectsCard && !standingChosen && deviceCard && (
-              <fieldset className="flex flex-col gap-1.5 rounded-lg border border-white/10 p-2.5 text-xs" data-qa="saved-card-choice">
+              <fieldset className="flex flex-col gap-1.5 rounded-lg border border-offwhite/10 p-2.5 text-xs" data-qa="saved-card-choice">
                 <legend className="px-1 text-muted">Your card</legend>
                 <label className="flex items-center gap-2 text-offwhite">
                   <input
@@ -3912,7 +3919,7 @@ export function BookingClient({
                 never ticked for them. Unticked, the card is let go after this
                 visit exactly as it always was. */}
             {offerSaveCard && (
-              <label className="flex items-start gap-2 rounded-lg border border-white/10 p-2.5 text-xs text-muted">
+              <label className="flex items-start gap-2 rounded-lg border border-offwhite/10 p-2.5 text-xs text-muted">
                 <input
                   type="checkbox"
                   checked={saveCard}
@@ -3940,7 +3947,7 @@ export function BookingClient({
                 in the product can set it - a barber cannot tick it later on the
                 customer's behalf. */}
             {data.shop.payment?.collects === "card" && (
-              <label className="flex items-start gap-2 rounded-lg border border-white/10 p-2.5 text-xs text-muted">
+              <label className="flex items-start gap-2 rounded-lg border border-offwhite/10 p-2.5 text-xs text-muted">
                 <input
                   type="checkbox"
                   checked={serviceChargeConsent}
@@ -3984,7 +3991,7 @@ export function BookingClient({
               ))}
 
             {error && (
-              <p role="alert" className="text-xs text-red-400">
+              <p role="alert" className="text-xs text-danger-soft">
                 {error}
               </p>
             )}
@@ -4147,7 +4154,7 @@ function MonthCalendar({
   const atCeiling = viewMonth >= lastAvailableMonth;
 
   return (
-    <div className="rounded-xl border border-white/10 p-3">
+    <div className="rounded-xl border border-offwhite/10 p-3">
       <div className="mb-2 flex items-center justify-between">
         <button
           type="button"
@@ -4214,15 +4221,15 @@ function MonthCalendar({
                   : open
                     ? `${accent}14`
                     : bookedOut
-                      ? "rgba(255,255,255,0.04)"
+                      ? `rgb(var(--cb-fg) / 0.04)`
                       : "transparent",
                 color: selected
                   ? onAccent
                   : open
                     ? undefined
                     : bookedOut
-                      ? "rgba(255,255,255,0.45)"
-                      : "rgba(255,255,255,0.25)",
+                      ? `rgb(var(--cb-fg) / 0.45)`
+                      : `rgb(var(--cb-fg) / 0.25)`,
                 // A booked-out day reads as "was offerable, none left" — the
                 // strike distinguishes it from a closed day at a glance.
                 textDecoration: bookedOut && !selected ? "line-through" : undefined,
@@ -4251,6 +4258,8 @@ function PayDirectInfo({
   shopName: string;
   accent: string;
 }) {
+  // The accent as text, readable on light and dark (see BookingClient).
+  const accentInk = `color-mix(in srgb, ${accent} 68%, rgb(var(--cb-fg)))`;
   const [copied, setCopied] = useState<string | null>(null);
   const rows = [
     payDirect.zelle ? { label: "Zelle", value: payDirect.zelle } : null,
@@ -4271,17 +4280,17 @@ function PayDirectInfo({
   }
 
   return (
-    <div className="mt-5 rounded-xl border border-white/10 bg-white/5 p-4 text-left">
+    <div className="mt-5 rounded-xl border border-offwhite/10 bg-offwhite/5 p-4 text-left">
       <p className="text-sm font-semibold">Pay {shopName} directly — no fees</p>
       {rows.map((r) => (
         <button
           key={r.label}
           type="button"
           onClick={() => copy(r.value)}
-          className="mt-2 flex w-full items-center justify-between rounded-lg border border-white/10 px-3 py-2 text-sm transition-colors hover:bg-white/5"
+          className="mt-2 flex w-full items-center justify-between rounded-lg border border-offwhite/10 px-3 py-2 text-sm transition-colors hover:bg-offwhite/5"
         >
           <span className="text-muted">{r.label}</span>
-          <span className="flex items-center gap-2 font-medium" style={{ color: accent }}>
+          <span className="flex items-center gap-2 font-medium" style={{ color: accentInk }}>
             {r.value}
             <span role="status" className="text-[11px] text-muted">
               {copied === r.value ? "copied!" : "tap to copy"}
@@ -4374,7 +4383,7 @@ function SavedCardUnlock({
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-white/10 p-2.5 text-xs text-muted" data-qa="saved-card-unlock-panel">
+    <div className="flex flex-col gap-2 rounded-lg border border-offwhite/10 p-2.5 text-xs text-muted" data-qa="saved-card-unlock-panel">
       <p className="text-offwhite">Use the card you saved here</p>
       {stage === "ask" ? (
         <button
@@ -4394,7 +4403,7 @@ function SavedCardUnlock({
             value={code}
             onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
             aria-label="Code from the text"
-            className="w-28 rounded-lg border border-white/15 bg-transparent px-2 py-1.5 tracking-widest text-offwhite"
+            className="w-28 rounded-lg border border-offwhite/15 bg-transparent px-2 py-1.5 tracking-widest text-offwhite"
           />
           <button
             type="button"
@@ -4438,7 +4447,7 @@ function HoldCountdown({ expiresAt }: { expiresAt: string }) {
   if (!Number.isFinite(target)) return null;
   if (msLeft <= 0) {
     return (
-      <p role="alert" className="mb-4 text-xs text-amber-300">
+      <p role="alert" className="mb-4 text-xs text-warning-soft">
         This hold has expired and the time is back on sale. You can still try to
         pay — if the time has gone, you will not be charged.
       </p>
@@ -4518,7 +4527,7 @@ function CodeLine({
       <div className="flex min-w-0 gap-2">
         <input
           aria-label="Code"
-          className="min-w-0 flex-1 rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm uppercase text-offwhite placeholder:text-muted focus:border-white/40"
+          className="min-w-0 flex-1 rounded-lg border border-offwhite/15 bg-offwhite/5 px-3 py-2 text-sm uppercase text-offwhite placeholder:text-muted focus:border-offwhite/40"
           placeholder="Code"
           autoCapitalize="characters"
           value={text}
@@ -4528,13 +4537,13 @@ function CodeLine({
           type="button"
           onClick={onApply}
           disabled={!text.trim() || checking}
-          className="shrink-0 rounded-lg border border-white/15 px-3 text-sm text-offwhite disabled:opacity-50"
+          className="shrink-0 rounded-lg border border-offwhite/15 px-3 text-sm text-offwhite disabled:opacity-50"
         >
           {checking ? "Checking…" : "Apply"}
         </button>
       </div>
       {note && (
-        <p role="alert" className="text-xs text-rose-300">
+        <p role="alert" className="text-xs text-danger-soft">
           {note}
         </p>
       )}

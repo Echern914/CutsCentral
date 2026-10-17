@@ -509,7 +509,7 @@ export function TeamsClient({
                     setLeaveError(null);
                     setLeaving(link);
                   }}
-                  className="min-h-[40px] px-2 text-xs text-rose-300 transition-colors hover:text-rose-200"
+                  className="min-h-[40px] px-2 text-xs text-danger-soft transition-colors hover:text-danger-soft"
                 >
                   {active ? "Leave team" : "Withdraw request"}
                 </button>
@@ -583,7 +583,7 @@ export function TeamsClient({
               type="button"
               disabled={leaveBusy}
               onClick={() => leaving && void leave(leaving)}
-              className="min-h-[40px] rounded-full bg-rose-500/90 px-4 text-xs font-semibold text-white transition-colors hover:bg-rose-500 disabled:opacity-50"
+              className="min-h-[40px] rounded-full bg-danger-soft/90 px-4 text-xs font-semibold text-white transition-colors hover:bg-danger-soft disabled:opacity-50"
             >
               {leaveBusy
                 ? "Leaving…"

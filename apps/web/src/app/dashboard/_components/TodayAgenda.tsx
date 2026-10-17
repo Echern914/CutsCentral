@@ -162,7 +162,7 @@ export function TodayAgenda({
                 <div className="mt-1.5 flex items-start gap-2.5">
                   <span
                     aria-hidden
-                    className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-[11px] font-semibold text-offwhite/80 ring-1 ring-white/10"
+                    className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-[11px] font-semibold text-offwhite/80 ring-1 ring-offwhite/10"
                   >
                     {initialsOf(r.clientName)}
                   </span>

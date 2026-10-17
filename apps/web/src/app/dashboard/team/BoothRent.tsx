@@ -129,7 +129,7 @@ function VoidButton({
             setFailed(!ok);
             setState(ok ? "idle" : "confirm");
           }}
-          className="min-h-[40px] rounded-full bg-rose-500/90 px-3 text-[11px] font-semibold text-white disabled:opacity-50"
+          className="min-h-[40px] rounded-full bg-danger-soft/90 px-3 text-[11px] font-semibold text-white disabled:opacity-50"
         >
           {state === "busy" ? "Voiding…" : "Void it"}
         </button>
@@ -616,7 +616,7 @@ function RentDialog({
               type="button"
               disabled={saving}
               onClick={() => void save(true)}
-              className="min-h-[40px] px-2 text-xs text-rose-300 hover:text-rose-200 disabled:opacity-50"
+              className="min-h-[40px] px-2 text-xs text-danger-soft hover:text-danger-soft disabled:opacity-50"
             >
               {inEffect ? "Stop rent" : "Cancel the start"}
             </button>

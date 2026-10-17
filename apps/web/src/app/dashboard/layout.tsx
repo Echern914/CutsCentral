@@ -95,7 +95,7 @@ export default async function DashboardLayout({
           never flash dark on a hard load), then sync the API's answer - the
           server value wins so the choice follows the account to new devices. */}
       <script dangerouslySetInnerHTML={{ __html: PREPAINT_SCRIPT }} />
-      <ThemeSync theme={me.data?.theme ?? "dark"} />
+      <ThemeSync theme={me.data?.theme ?? "light"} />
       {/* Swipe down at the top of any dashboard page to reload - the phone
           (and the iOS shell especially) has no refresh button. */}
       <PullToRefresh />

@@ -122,7 +122,7 @@ export function DashboardPreview() {
                     {c.last} · {c.usual}
                   </p>
                 </div>
-                <span className="shrink-0 rounded-full bg-gold-gradient px-2.5 py-1 text-[10px] font-semibold text-charcoal">
+                <span className="shrink-0 rounded-full bg-gold-gradient px-2.5 py-1 text-[10px] font-semibold text-on-gold">
                   Nudge
                 </span>
               </div>

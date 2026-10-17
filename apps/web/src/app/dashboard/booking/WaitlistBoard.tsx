@@ -57,7 +57,7 @@ const chipCls = (active: boolean) =>
 
 const STATUS_BADGE: Record<WaitlistSection, string> = {
   WAITING: "bg-gold/15 text-gold",
-  CONTACTED: "bg-sky-400/15 text-sky-300",
+  CONTACTED: "bg-info-soft/15 text-info-soft",
   BOOKED: "bg-emerald-soft/15 text-emerald-soft",
   EXPIRED: "bg-charcoal-700 text-muted",
   REMOVED: "bg-charcoal-700 text-muted",
@@ -392,7 +392,7 @@ function WaitlistCard({
       <div className="mt-2 flex items-start gap-2.5">
         <span
           aria-hidden
-          className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-[11px] font-semibold text-offwhite/80 ring-1 ring-white/10"
+          className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-[11px] font-semibold text-offwhite/80 ring-1 ring-offwhite/10"
         >
           {initialsOf(name)}
         </span>
@@ -510,7 +510,7 @@ function WaitlistCard({
               type="button"
               onClick={() => setStatus("CONTACTED", "Marked contacted")}
               disabled={pending}
-              className={cn(BTN_BASE, "border border-sky-400/40 text-sky-300 hover:bg-sky-400/10")}
+              className={cn(BTN_BASE, "border border-info-soft/40 text-info-soft hover:bg-info-soft/10")}
             >
               Contacted
             </button>

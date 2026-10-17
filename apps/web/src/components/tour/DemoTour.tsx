@@ -212,7 +212,7 @@ export function DemoTour({
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2, ease: "easeOut" }}
-        className="pointer-events-auto fixed inset-x-3 bottom-3 mx-auto max-w-sm rounded-2xl border border-white/15 bg-[#101014]/95 p-4 text-offwhite shadow-2xl outline-none backdrop-blur sm:inset-x-auto"
+        className="pointer-events-auto fixed inset-x-3 bottom-3 mx-auto max-w-sm rounded-2xl border border-offwhite/15 bg-[#101014]/95 p-4 text-offwhite shadow-2xl outline-none backdrop-blur sm:inset-x-auto"
         style={bubblePosition(rect, pad)}
       >
         <div className="flex items-center justify-between gap-3">
@@ -229,7 +229,7 @@ export function DemoTour({
         </div>
         <h2 className="mt-2 font-display text-lg leading-snug">{active.title}</h2>
         <p className="mt-1 text-sm leading-relaxed text-muted">{active.body}</p>
-        <div className="mt-2 h-0.5 w-full overflow-hidden rounded-full bg-white/10" aria-hidden>
+        <div className="mt-2 h-0.5 w-full overflow-hidden rounded-full bg-offwhite/10" aria-hidden>
           <div
             className="h-full rounded-full bg-gold transition-all duration-200 ease-out"
             style={{ width: `${(step / steps.length) * 100}%` }}
@@ -240,7 +240,7 @@ export function DemoTour({
             <button
               type="button"
               onClick={() => go(step - 1)}
-              className="rounded-xl border border-white/15 px-4 py-2 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+              className="rounded-xl border border-offwhite/15 px-4 py-2 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite"
             >
               Back
             </button>
@@ -248,7 +248,7 @@ export function DemoTour({
           <button
             type="button"
             onClick={() => (isLast ? finish() : go(step + 1))}
-            className="flex-1 rounded-xl bg-offwhite py-2 text-center text-sm font-semibold text-black transition-transform duration-200 ease-out hover:scale-[1.01]"
+            className="flex-1 rounded-xl bg-offwhite py-2 text-center text-sm font-semibold text-charcoal transition-transform duration-200 ease-out hover:scale-[1.01]"
           >
             {isLast
               ? sellFinish

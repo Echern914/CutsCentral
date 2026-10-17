@@ -4,40 +4,44 @@
  * constants (the dashboard layout inlines PREPAINT_SCRIPT into a <script>),
  * while the client components import the functions.
  *
- * Dashboard appearance: "dark" (black & gold, the original) or "light" (white
- * & gold). The mechanism is one attribute - data-theme on <html> - which remaps
- * every CSS token variable (globals.css) that the Tailwind palette resolves to.
+ * Appearance: "light" (warm white & gold) is ChairBack's MAIN look, everywhere
+ * - the landing page, sign-in, booking, every page (Eric, 2026-10-17). "dark"
+ * (the original black & gold) is a personal choice a barber can make for
+ * their own dashboard. The mechanism is one attribute - data-theme="dark" on
+ * <html> - which remaps every CSS token variable (globals.css). No attribute
+ * = light, so a page renders light from its very first paint.
  *
- * WHERE IT APPLIES, deliberately: only the barber-facing surfaces (/dashboard,
- * /onboarding). Client-facing pages (/s, /book, /r, /demo) and the marketing
- * site always render the brand's dark look - a client booking a haircut sees
- * the SHOP's branding, never the barber's personal reading preference, and a
- * barber previewing their own public page must see what clients see.
+ * WHERE THE CHOICE APPLIES, deliberately: only the barber-facing surfaces
+ * (/dashboard, /onboarding). Every other page renders light whatever the
+ * barber picked: a client booking a haircut sees ChairBack's look, never the
+ * barber's personal reading preference, and a barber previewing their own
+ * booking page sees what clients see. (A shop's own page design on /s keeps
+ * its own colours - that is the shop's branding, set in its page settings.)
  *
  * Source of truth is User.theme on the API; localStorage is the fast local echo
- * that lets a pre-paint script apply the theme before hydration (no dark flash
- * for light users on a hard load).
+ * that lets a pre-paint script apply dark before hydration (no light flash
+ * for dark users on a hard load).
  */
 export type Theme = "dark" | "light";
 
 const STORAGE_KEY = "cb-theme";
 
-/** Routes that honor the personal theme. Everything else is brand-dark. */
+/** Routes that honor the personal theme. Everything else is light. */
 export function themeableRoute(pathname: string): boolean {
   return pathname.startsWith("/dashboard") || pathname.startsWith("/onboarding");
 }
 
 export function storedTheme(): Theme {
   try {
-    return localStorage.getItem(STORAGE_KEY) === "light" ? "light" : "dark";
+    return localStorage.getItem(STORAGE_KEY) === "dark" ? "dark" : "light";
   } catch {
-    return "dark";
+    return "light";
   }
 }
 
 /** Set the attribute (the visual flip) and remember the choice locally. */
 export function applyTheme(theme: Theme): void {
-  if (theme === "light") document.documentElement.dataset.theme = "light";
+  if (theme === "dark") document.documentElement.dataset.theme = "dark";
   else delete document.documentElement.dataset.theme;
   try {
     localStorage.setItem(STORAGE_KEY, theme);
@@ -46,14 +50,14 @@ export function applyTheme(theme: Theme): void {
   }
 }
 
-/** Drop to brand-dark WITHOUT forgetting the preference (public routes). */
+/** Back to the main (light) look WITHOUT forgetting the preference (public routes). */
 export function suspendTheme(): void {
   delete document.documentElement.dataset.theme;
 }
 
 /**
- * Inline pre-paint script (dashboard/onboarding layouts): applies the stored
- * theme before first paint so a light-mode barber never sees a dark flash.
- * Kept tiny + try/catch'd; the default (no attribute) is dark = today's look.
+ * Inline pre-paint script (dashboard/onboarding layouts): applies a stored
+ * dark choice before first paint so a dark-mode barber never sees a light
+ * flash. Kept tiny + try/catch'd; the default (no attribute) is light.
  */
-export const PREPAINT_SCRIPT = `try{if(localStorage.getItem("${STORAGE_KEY}")==="light")document.documentElement.dataset.theme="light"}catch(e){}`;
+export const PREPAINT_SCRIPT = `try{if(localStorage.getItem("${STORAGE_KEY}")==="dark")document.documentElement.dataset.theme="dark"}catch(e){}`;

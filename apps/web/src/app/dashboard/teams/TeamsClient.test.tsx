@@ -140,7 +140,7 @@ describe("leaving", () => {
 
     const confirm = screen
       .getAllByRole("button", { name: "Leave team" })
-      .find((b) => b.className.includes("bg-rose"))!;
+      .find((b) => b.className.includes("bg-danger-soft"))!;
     fireEvent.click(confirm);
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith("You left United Barbershop's team", "success"),
@@ -154,7 +154,7 @@ describe("leaving", () => {
     fireEvent.click(screen.getByRole("button", { name: "Leave team" }));
     const confirm = screen
       .getAllByRole("button", { name: "Leave team" })
-      .find((b) => b.className.includes("bg-rose"))!;
+      .find((b) => b.className.includes("bg-danger-soft"))!;
     fireEvent.click(confirm);
     // 🔴 Said in the dialog's footer: a toast draws beneath the dialog, so on
     // a phone the button just went back to "Leave team" with no word.

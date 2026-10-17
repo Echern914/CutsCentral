@@ -1210,7 +1210,7 @@ function WaitlistPanel({
             </span>
           )}
           {contactedCount > 0 && (
-            <span className="rounded-full bg-sky-400/15 px-2 py-0.5 text-xs font-medium text-sky-300">
+            <span className="rounded-full bg-info-soft/15 px-2 py-0.5 text-xs font-medium text-info-soft">
               {contactedCount} contacted
             </span>
           )}
@@ -1458,7 +1458,7 @@ function CategoryChip({
 // blocked bands read as "not sellable" at a glance without shouting. Must stay
 // a literal for the Tailwind JIT to pick it up.
 const BLOCK_STRIPES =
-  "bg-[repeating-linear-gradient(-45deg,transparent,transparent_6px,rgba(255,255,255,0.04)_6px,rgba(255,255,255,0.04)_12px)]";
+  "bg-[repeating-linear-gradient(-45deg,transparent,transparent_6px,rgb(var(--cb-fg)/0.05)_6px,rgb(var(--cb-fg)/0.05)_12px)]";
 
 /** "2026-09-21T14:30": an instant as a datetime-local value in the SHOP's zone -
  *  device-local formatting would show a different hour than the calendar. */
@@ -1660,9 +1660,9 @@ export function WalkInBar({
     return (
       <div
         role="alert"
-        className="flex flex-col gap-1.5 rounded-lg border border-amber-400/60 bg-amber-400/10 px-3 py-2"
+        className="flex flex-col gap-1.5 rounded-lg border border-warning-soft/60 bg-warning-soft/10 px-3 py-2"
       >
-        <p className="text-xs font-semibold text-amber-300">
+        <p className="text-xs font-semibold text-warning-soft">
           Walk-in recorded - but this {vocab.stationNoun} is double-booked
         </p>
         <p className="text-[11px] leading-snug text-offwhite/80">
@@ -1682,7 +1682,7 @@ export function WalkInBar({
         <button
           type="button"
           onClick={reset}
-          className="self-start rounded-lg bg-amber-400/20 px-3 py-1 text-[11px] font-semibold text-amber-200 transition-colors hover:bg-amber-400/30"
+          className="self-start rounded-lg bg-warning-soft/20 px-3 py-1 text-[11px] font-semibold text-warning-soft transition-colors hover:bg-warning-soft/30"
         >
           Got it
         </button>
@@ -2621,7 +2621,7 @@ export function AppointmentBlock({
               </span>
             )}
             {row.syncedExternal ? (
-              <span className="rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-medium tabular-nums text-sky-300">
+              <span className="rounded-full bg-info-soft/15 px-2 py-0.5 text-[10px] font-medium tabular-nums text-info-soft">
                 Acuity{durSuffix}
               </span>
             ) : (
@@ -2823,7 +2823,7 @@ export function AppointmentBlock({
       >
         <span
           aria-hidden
-          className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-[11px] font-semibold text-offwhite/80 ring-1 ring-white/10"
+          className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-[11px] font-semibold text-offwhite/80 ring-1 ring-offwhite/10"
         >
           {initialsOf(row.clientName || "Client")}
         </span>
@@ -2922,7 +2922,7 @@ export function AppointmentBlock({
           <span
             title="Booked on your other platform (Acuity/Square). It blocks this time for online booking — change or cancel it there."
             data-testid="source-badge"
-            className="shrink-0 rounded-full bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-300"
+            className="shrink-0 rounded-full bg-info-soft/15 px-1.5 py-0.5 text-[10px] font-medium text-info-soft"
           >
             Synced
           </span>
@@ -2939,8 +2939,8 @@ export function AppointmentBlock({
           appointment API, so editing it here would desynchronize the two
           systems - the barber is sent to the system that actually owns it. */}
       {row.syncedExternal && (
-        <div className="mt-3 rounded-lg border border-sky-400/30 bg-sky-400/5 px-3 py-2">
-          <p className="text-[11px] text-sky-300">
+        <div className="mt-3 rounded-lg border border-info-soft/30 bg-info-soft/5 px-3 py-2">
+          <p className="text-[11px] text-info-soft">
             Booked in Acuity. Change or cancel it there — this card mirrors it so the
             time stays blocked here.
           </p>
@@ -2950,7 +2950,7 @@ export function AppointmentBlock({
             rel="noopener noreferrer"
             className={cn(
               BTN_BASE,
-              "mt-2 border border-sky-400/40 text-sky-300 hover:bg-sky-400/10",
+              "mt-2 border border-info-soft/40 text-info-soft hover:bg-info-soft/10",
             )}
           >
             Edit in Acuity
