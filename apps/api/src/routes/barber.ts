@@ -12,6 +12,8 @@ import {
 } from "../engines/specialBooking.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
+import { noteForBarber } from "../engines/bookingIntake.js";
+import { shopDayKey } from "../services/barberNotify.js";
 /**
  * The barber-facing API: one chair, nothing else.
  *
@@ -242,4 +244,79 @@ barberRouter.post("/push/native", async (req, res) => {
     return;
   }
   res.json({ ok: true });
+});
+
+/** How far ahead the bell looks for notes: the rest of a working day. */
+const NOTES_AHEAD_MS = 12 * 60 * 60 * 1000;
+/** A client who is a few minutes late is still about to walk in. */
+const NOTES_GRACE_MS = 15 * 60 * 1000;
+
+/**
+ * GET /api/barber/notes-ahead - the appointments coming up in the next 12
+ * hours that carry a note, with the note: what the client wrote when they
+ * booked, and the note on the booking. The dashboard bell shows them so the
+ * barber reads what was asked for BEFORE the client walks in (X and Drick,
+ * 2026-10-16), not after opening each appointment.
+ *
+ * WHOSE: the same people the Next up alert goes to (engines/barberReminders):
+ * the chair this seat works, and for the OWNER also every chair nobody's
+ * login is linked to - an owner's own chair made at setup is one of those.
+ * Never a colleague's chair: their clients' words are theirs.
+ */
+barberRouter.get("/notes-ahead", async (req, res) => {
+  const shopId = req.shop!.id;
+  const isOwner = req.shopRole === "OWNER";
+  const staffId = req.shopStaffId ?? null;
+  if (!isOwner && !staffId) {
+    res.json({ items: [] });
+    return;
+  }
+  const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { timezone: true } });
+  const tz = shop?.timezone ?? "America/New_York";
+  const now = Date.now();
+  // 🔴 Built without an `undefined` anywhere: `{ staffId: undefined }` is NO
+  // filter to Prisma, and inside this OR it would hand an owner every chair.
+  const chairs = isOwner
+    ? {
+        OR: [
+          ...(staffId ? [{ staffId }] : []),
+          { staff: { userId: null } },
+          { staff: { userId: req.userId! } },
+        ],
+      }
+    : { staffId: staffId! };
+  const rows = (await forShop(shopId).appointment.findMany({
+    where: {
+      status: "BOOKED",
+      holdExpiresAt: null,
+      startsAt: { gt: new Date(now - NOTES_GRACE_MS), lte: new Date(now + NOTES_AHEAD_MS) },
+      ...chairs,
+    },
+    orderBy: { startsAt: "asc" },
+    take: 100,
+    select: { id: true, startsAt: true, firstName: true, lastName: true, intake: true, notes: true },
+  })) as unknown as {
+    id: string;
+    startsAt: Date;
+    firstName: string;
+    lastName: string | null;
+    intake: unknown;
+    notes: string | null;
+  }[];
+  const items = rows.flatMap((a) => {
+    const note = noteForBarber(a);
+    if (!note) return [];
+    return [
+      {
+        id: a.id,
+        startsAt: a.startsAt.toISOString(),
+        clientName: [a.firstName, a.lastName].filter(Boolean).join(" ").trim() || "A client",
+        clientWrote: note.clientWrote,
+        bookingNote: note.bookingNote,
+        // The appointment itself, on its day, where the whole note is.
+        href: `/dashboard/booking?tab=Appointments&appointment=${encodeURIComponent(a.id)}&day=${shopDayKey(a.startsAt, tz)}`,
+      },
+    ];
+  });
+  res.json({ items: items.slice(0, 20), timezone: tz });
 });

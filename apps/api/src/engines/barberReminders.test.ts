@@ -388,7 +388,22 @@ describe("next up, for a job the barber has to travel to", () => {
     ]);
     await run();
     const alert = mineOnly("nextUp").find((x) => x.title.includes("Alex"));
-    expect(alert!.pushBody).toBeUndefined();
+    // Not somewhere to drive: no leave-by, no travel title.
+    expect(alert!.title).toMatch(/^Next up: Alex/);
+    expect(alert!.body).not.toMatch(/Leave by/);
+    // But it IS what the client wrote (X and Drick, 2026-10-16): the push
+    // carries it, the text message never does.
+    expect(alert!.pushBody).toContain("They wrote: Grinding when I brake");
+    expect(alert!.body).not.toContain("Grinding");
+  });
+
+  it("🔴 the note on the booking rides the push too - never the text", async () => {
+    const appt = await makeAppt(staffAId, 20, "Robin");
+    await prisma.appointment.update({ where: { id: appt.id }, data: { notes: "Bring the #2 guard" } });
+    await run();
+    const alert = mineOnly("nextUp").find((x) => x.title.includes("Robin"));
+    expect(alert!.pushBody).toContain("Note: Bring the #2 guard");
+    expect(alert!.body).not.toContain("guard");
   });
 
   it("links to THAT booking, not the calendar it is on", async () => {
