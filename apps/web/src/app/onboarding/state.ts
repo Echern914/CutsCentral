@@ -6,7 +6,7 @@ import {
   type OnboardingFacts,
   type OnboardingStepId,
 } from "@chairback/config/onboarding";
-import { apiGet } from "@/lib/api";
+import { getSetupStateResult } from "@/lib/me";
 
 /** GET /api/onboarding/state (routes/onboarding.ts). */
 export interface OnboardingState {
@@ -26,19 +26,20 @@ export interface OnboardingState {
   services: string[];
 }
 
+/** Memoized per request (lib/me.ts): the dashboard layout and its page both read it. */
 export async function getOnboardingState(): Promise<OnboardingState | null> {
-  const res = await apiGet<OnboardingState>("/api/onboarding/state");
-  return res.ok && res.data ? res.data : null;
+  const res = await getSetupStateResult();
+  return res.ok && res.data ? (res.data as OnboardingState) : null;
 }
 
 /**
- * A setup step's page loads the state through this: no shop, not the owner,
- * or setup already finished all leave the step for where they belong.
+ * A setup step's page loads the state through this: no shop, or not the
+ * owner, leaves for the dashboard. A shop that finished or skipped setup can
+ * still open a step - the dashboard's setup checklist links to them.
  */
 export async function stepState(): Promise<OnboardingState> {
   const state = await getOnboardingState();
   if (!state) redirect("/dashboard");
-  if (state.shop.completedAt) redirect("/dashboard");
   return state;
 }
 

@@ -43,6 +43,7 @@ import { ConnectPlatforms } from "./ConnectPlatforms";
 import { AcuityCalendarMap } from "./AcuityCalendarMap";
 import { AcuityServiceImport } from "./AcuityServiceImport";
 import { PasteMenu } from "./PasteMenu";
+import { ShopTimezoneCard } from "./ShopTimezoneCard";
 import { Sheet } from "./AppointmentForm";
 import { useJustSaved } from "./justSaved";
 import { TimeSelect } from "@/components/ui/TimeSelect";
@@ -356,6 +357,8 @@ export function BookingManager({
             apiBase={apiBase}
             toast={toast}
           />
+          {/* Set from the owner's device at setup; put right here. */}
+          {shop.timezone && <ShopTimezoneCard current={shop.timezone} />}
           {/* What the booking form asks. Lives with the other booking settings
               because that is what it is - and only matters for the shops whose
               job needs more than a name (a mobile mechanic's address, the

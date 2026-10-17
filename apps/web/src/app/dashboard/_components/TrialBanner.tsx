@@ -18,7 +18,17 @@ import { getBillingSummary } from "@/lib/billing";
  *     LAPSED shop gets one factual line — no price, no CTA, no billing link,
  *     which is exactly what Guideline 3.1.1 permits.
  */
-export async function TrialBanner() {
+export async function TrialBanner({
+  settingUp = false,
+}: {
+  /**
+   * A new shop still setting up (config/onboarding.ts setupComplete): the trial
+   * countdown waits until clients can book - unless the trial is nearly over,
+   * which they must hear about whatever else they're doing. A lapsed shop's
+   * banner always shows: their booking page is off.
+   */
+  settingUp?: boolean;
+} = {}) {
   const res = await getBillingSummary();
   const b = res.data;
   if (!b?.billingEnabled || b.subscribed || b.compAccess) return null;
@@ -53,6 +63,10 @@ export async function TrialBanner() {
       </div>
     );
   }
+
+  // Still setting up, with more than three days left: nothing competes with
+  // the setup checklist (Eric, 2026-10-16).
+  if (settingUp && (b.trialDaysLeft === null || b.trialDaysLeft > 3)) return null;
 
   return (
     <HideInNativeApp>

@@ -86,3 +86,14 @@ export interface Me {
  * another's request - safe for our multi-tenant model.
  */
 export const getMe = cache((): Promise<ApiResult<Me>> => apiGet<Me>("/api/auth/me"));
+
+/**
+ * The owner's first-time setup state (GET /api/onboarding/state, owner only),
+ * memoized for one server render like getMe: the dashboard layout (trial
+ * banner, bell) and its home page (the setup checklist) both read it. Typed
+ * by the caller (app/onboarding/state.ts); the annotation keeps the type even
+ * where `cache` resolves untyped under the dual @types/react baseline.
+ */
+export const getSetupStateResult: () => Promise<ApiResult<unknown>> = cache(
+  (): Promise<ApiResult<unknown>> => apiGet<unknown>("/api/onboarding/state"),
+);

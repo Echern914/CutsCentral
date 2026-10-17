@@ -10,6 +10,8 @@ vi.mock("../state", async () => {
   return { ...real, getOnboardingState: getState };
 });
 vi.mock("@/lib/api", () => ({ apiGet: vi.fn() }));
+// React's per-request cache() exists only in Next's React build.
+vi.mock("@/lib/me", () => ({ getSetupStateResult: vi.fn() }));
 const redirect = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({ redirect: (to: string) => redirect(to) }));
 

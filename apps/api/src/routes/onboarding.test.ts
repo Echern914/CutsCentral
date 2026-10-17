@@ -144,6 +144,18 @@ describe("walking the steps", () => {
   });
 });
 
+describe("the shop's time zone (Booking → Settings)", () => {
+  it("🔴 a real zone is saved; one Intl can't read is refused, and the zone stays", async () => {
+    const solo = await signup("onb-tz");
+    const id = await newShop(solo.cookie, "Zone Cuts");
+    const patch = (timezone: string) => request(app).patch("/api/shops/me").set("Cookie", solo.cookie).send({ timezone });
+    expect((await patch("America/Los_Angeles")).status).toBe(200);
+    expect((await patch("Mars/Olympus_Mons")).status).toBe(400);
+    expect((await patch("")).status).toBe(400);
+    expect((await prisma.shop.findUniqueOrThrow({ where: { id } })).timezone).toBe("America/Los_Angeles");
+  });
+});
+
 describe("finishing", () => {
   it("🔴 stamps the shop and the tour once; signing in stops resuming setup", async () => {
     const solo = await signup("onb-finish");

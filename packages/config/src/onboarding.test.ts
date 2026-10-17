@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   nextOnboardingStep,
   onboardingPlan,
+  setupComplete,
   stepAfter,
   stepPosition,
   type OnboardingFacts,
@@ -52,6 +53,21 @@ describe("next step", () => {
 
   it("a blank link is no link", () => {
     expect(nextOnboardingStep(at({ bookingUrl: "   " }))).toBe("booking");
+  });
+});
+
+describe("setup complete", () => {
+  it("🔴 booking on ChairBack: chairs, services and everyone's hours - clients are optional", () => {
+    const native = at({ bookingMode: "native" });
+    expect(setupComplete(native)).toBe(false);
+    expect(setupComplete({ ...native, staffCount: 2, serviceCount: 3, staffWithHours: 1 })).toBe(false);
+    expect(setupComplete({ ...native, staffCount: 2, serviceCount: 3, staffWithHours: 2 })).toBe(true);
+  });
+
+  it("their own link or a connected calendar: choosing it is the whole of it", () => {
+    expect(setupComplete(fresh)).toBe(false);
+    expect(setupComplete(at({ bookingUrl: "https://vagaro.com/me" }))).toBe(true);
+    expect(setupComplete(at({ integrationConnected: true }))).toBe(true);
   });
 });
 

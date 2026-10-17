@@ -18,7 +18,9 @@ import { SettingsCard, type ShopSettings } from "./_components/SettingsCard";
 import { ClientDemoCard } from "./_components/ClientDemoCard";
 import { TourReplayButton } from "./_components/TourReplayButton";
 import { SyncHealthBanner } from "./_components/SyncHealthBanner";
-import { GettingStarted } from "./_components/GettingStarted";
+import { SetupChecklist } from "./_components/SetupChecklist";
+import { getOnboardingState } from "@/app/onboarding/state";
+import { setupComplete } from "@chairback/config/onboarding";
 import { ConsentSetup } from "./_components/ConsentSetup";
 import { ShopIdentity } from "./_components/ShopIdentity";
 import { QuickActions } from "./_components/QuickActions";
@@ -129,6 +131,10 @@ export default async function DashboardPage({
   // Premium lock flags for SweepControl / WinbackPreview. Memoized: shares the
   // layout's /api/billing round-trip for this render (see lib/billing.ts).
   const locks = featureLocks(await getBillingSummary());
+  // Still setting up (the owner only): the setup checklist is the one thing on
+  // this page asking for attention. Memoized: shares the layout's read.
+  const setup = who.data?.shopRole === "OWNER" ? await getOnboardingState() : null;
+  const settingUp = Boolean(setup && !setupComplete(setup.facts));
 
   if (shopRes.status === 401) redirect("/login");
   if (shopRes.status === 404) redirect(await homeWithoutShop());
@@ -174,7 +180,6 @@ export default async function DashboardPage({
           shopName={shop.name}
           avatarUrl={me.data?.avatarUrl}
           publicUrl={shop.slug ? `${appBase}/book/${shop.slug}` : null}
-          connected={shop.connected}
         />
         <QuickActions
           rewardsEnabled={shop.rewardsEnabled}
@@ -190,12 +195,10 @@ export default async function DashboardPage({
         reconnectHref={`${API_BASE}/api/acuity/oauth/start`}
       />
 
-      <GettingStarted
-        connected={shop.connected}
-        hasClients={(sync.data?.clientCount ?? 0) > 0}
-        rewardsEnabled={shop.rewardsEnabled}
-        affiliateProgramEnabled={affiliateProgramEnabled}
-      />
+      {/* The one setup checklist (config/onboarding.ts), until clients can
+          book. It replaced Getting Started, whose "connected" meant Acuity
+          only and which never mentioned chairs, services or hours. */}
+      {settingUp && setup && <SetupChecklist state={setup} />}
 
       <ConsentSetup needConsentCount={sync.data?.clientsNeedingConsent ?? 0} />
 
@@ -224,7 +227,9 @@ export default async function DashboardPage({
           nudge belongs after the work, not competing with the primary CTA.
           Dropped entirely if the call failed - a missing referral row is
           invisible, while a broken one on the home screen is not. */}
-      {referrals.data && (
+      {/* Held back while setting up: a shop that can't take a booking yet is
+          not the moment to ask it to refer another. */}
+      {referrals.data && !settingUp && (
         <ReferralCard
           earnedMonths={referrals.data.earnedMonths}
           pendingCount={referrals.data.pendingCount}

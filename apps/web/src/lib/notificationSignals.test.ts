@@ -34,6 +34,15 @@ describe("collectNotificationSignals", () => {
     expect(out.reduce((n, s) => n + s.count, 0)).toBe(6);
   });
 
+  it("🔴 a new shop still setting up: no go-live count on the bell - the setup checklist is the one ask", async () => {
+    routes({
+      readiness: ok({ scope: "shop", milestonesBlocking: 2 }),
+      waitlist: ok({ counts: { WAITING: 3 } }),
+    });
+    const out = await collectNotificationSignals({ ...MANAGER, settingUp: true });
+    expect(out.map((s) => s.key)).toEqual(["waitlist"]);
+  });
+
   it("drops a source with nothing outstanding rather than listing a zero", async () => {
     // A bell that opens onto "0 waiting, 0 to reply" teaches you to ignore it.
     routes({

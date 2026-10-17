@@ -72,6 +72,18 @@ export function onboardingStepDone(step: OnboardingStepId, f: OnboardingFacts): 
   }
 }
 
+/**
+ * Clients can book: how they book is chosen, and a shop booking on ChairBack
+ * has chairs, services and everyone's hours. Bringing clients is optional. Until
+ * this is true the dashboard is a setup checklist with nothing else competing
+ * for attention (no trial banner, no go-live bell, no referral card).
+ */
+export function setupComplete(f: OnboardingFacts): boolean {
+  return onboardingPlan(f)
+    .filter((s) => s !== "shop" && s !== "clients" && s !== "done")
+    .every((s) => onboardingStepDone(s, f));
+}
+
 /** The first step still to do. */
 export function nextOnboardingStep(f: OnboardingFacts): OnboardingStepId {
   for (const step of onboardingPlan(f)) {

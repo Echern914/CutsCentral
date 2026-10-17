@@ -91,6 +91,11 @@ export async function saveBookingSettingsAction(input: {
   return done(await apiSend("PATCH", "/api/shops/me", input));
 }
 
+/** The shop's time zone (Booking → Settings). The API refuses a zone that isn't real. */
+export async function saveShopTimezoneAction(timezone: string): Promise<Result> {
+  return done(await apiSend("PATCH", "/api/shops/me", { timezone }));
+}
+
 //  The shop's booking policies + checklist ("Before you book")
 
 /**

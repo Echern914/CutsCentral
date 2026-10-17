@@ -8,6 +8,8 @@ import type { SquareSyncStatus } from "./squareSyncStatus";
 export const metadata: Metadata = { title: "Booking" };
 
 export interface BookingShop {
+  /** IANA zone (Booking → Settings → Time zone). Optional: an older API payload. */
+  timezone?: string;
   /** Already on the wire from /api/shops/me (serializeShop) - the interface
    *  just never declared it. Printed on the QR card. */
   name: string;
