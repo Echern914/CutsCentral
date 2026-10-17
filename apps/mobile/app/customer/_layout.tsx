@@ -24,7 +24,7 @@ import { color } from "@/src/customer/theme";
 export default function CustomerLayout() {
   return (
     <CustomerProvider>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <Gate />
     </CustomerProvider>
   );

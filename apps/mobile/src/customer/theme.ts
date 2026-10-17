@@ -3,7 +3,7 @@ import { Platform, type TextStyle } from "react-native";
 /**
  * My ChairBack's visual system.
  *
- * The same near-black and gold the rest of ChairBack speaks (web globals.css
+ * The same white and gold the rest of ChairBack speaks (web globals.css
  * --cb-* tokens; the role picker's COLORS), spent with restraint: gold is for
  * the one primary action on a screen, progress, and the brand mark - never a
  * wash, never a glow. Separation comes from surfaces and hairlines, not
@@ -12,29 +12,32 @@ import { Platform, type TextStyle } from "react-native";
  * cancellation a quiet grey.
  */
 export const color = {
-  bg: "#0A0A0B",
-  surface: "#141416",
-  surfaceRaised: "#1C1C1F",
-  surfacePressed: "#232327",
-  hairline: "rgba(245,245,244,0.08)",
-  hairlineStrong: "rgba(245,245,244,0.14)",
-  text: "#F5F5F4",
-  textSecondary: "#A1A1AA",
-  textTertiary: "#77777F",
+  // White & gold - ChairBack's main look since 2026-10-17, matching the web's
+  // light tokens (apps/web globals.css :root).
+  bg: "#FAF8F3",
+  surface: "#FFFFFF",
+  surfaceRaised: "#F4F0E7",
+  surfacePressed: "#EDE8DC",
+  hairline: "rgba(28,25,23,0.12)",
+  hairlineStrong: "rgba(28,25,23,0.2)",
+  text: "#1C1917",
+  textSecondary: "#57534E",
+  textTertiary: "#78716C",
   gold: "#D4AF37",
-  goldText: "#E6C964",
-  goldTint: "rgba(212,175,55,0.14)",
-  onGold: "#0A0A0B",
-  focus: "#E6C964",
+  // Gold as TEXT: the deep gold, readable on white (the bright metal is ~1.9:1).
+  goldText: "#9A7A1F",
+  goldTint: "rgba(154,122,31,0.12)",
+  onGold: "#1C1917",
+  focus: "#9A7A1F",
 } as const;
 
 /** The dot beside each status word. Muted, and never the only signal. */
 export const statusColor = {
-  requested: "#F2B84B",
-  booked: "#D4AF37",
-  completed: "#6FCF97",
-  canceled: "#8A8A92",
-  no_show: "#E08A7B",
+  requested: "#B45309",
+  booked: "#9A7A1F",
+  completed: "#15803D",
+  canceled: "#78716C",
+  no_show: "#C2410C",
 } as const;
 
 /** 8-point spacing. `half` exists for the few optical adjustments that need it. */

@@ -42,3 +42,18 @@ describe("appearance", () => {
     expect(themeableRoute("/dashboard/booking")).toBe(true);
   });
 });
+
+describe("inside the iPhone app", () => {
+  it("🔴 tells the app which theme is showing, so the status bar matches", () => {
+    const sent: string[] = [];
+    (window as unknown as { ReactNativeWebView?: unknown }).ReactNativeWebView = { postMessage: (m: string) => sent.push(m) };
+    try {
+      applyTheme("dark");
+      suspendTheme();
+      applyTheme("light");
+      expect(sent).toEqual(["cb:theme:dark", "cb:theme:light", "cb:theme:light"]);
+    } finally {
+      delete (window as unknown as { ReactNativeWebView?: unknown }).ReactNativeWebView;
+    }
+  });
+});

@@ -100,11 +100,13 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="auto" />
+      {/* Dark icons: the main look is light. A page showing the dark theme
+          says so over the bridge and AppWebView flips them (cb:theme). */}
+      <StatusBar style="dark" />
       <Stack
         screenOptions={{
           headerShown: false,
-          contentStyle: { backgroundColor: "#0A0A0B" },
+          contentStyle: { backgroundColor: "#FAF8F3" },
         }}
       >
         <Stack.Screen name="index" />

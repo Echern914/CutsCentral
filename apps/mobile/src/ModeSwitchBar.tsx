@@ -57,10 +57,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 14,
     paddingVertical: 6,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#FAF8F3",
   },
   label: {
-    color: "#A1A1AA",
+    color: "#57534E",
     fontSize: 11,
     letterSpacing: 1.2,
     textTransform: "uppercase",
@@ -76,7 +76,7 @@ const styles = StyleSheet.create({
   },
   buttonPressed: { backgroundColor: "rgba(212,175,55,0.14)" },
   buttonText: {
-    color: "#E6C964",
+    color: "#9A7A1F",
     fontSize: 12,
     fontWeight: "600",
   },

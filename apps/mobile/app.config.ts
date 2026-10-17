@@ -200,21 +200,28 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        opens a visit once so Back works first time (#634), and dashboard
   //        sign-out reaching the app, signed-out phones dropping their pushes,
   //        join links showing only the real shop and party links loading
-  //        (#636). 🔴 The
-  //        Lock Screen widget (#618) is NOT in this build: it ships only from
-  //        a Mac prebuild with NEXT_UP_WIDGET_ENABLED=true once its target has
-  //        compiled, signed with the App Group, and passed the device checks
-  //        in docs/lock-screen-widget.md. Without the flag, prebuild leaves the
-  //        target, the App Group entitlement and the names setting out.
+  //        (#636). Build 51 was never uploaded, so 1.1.6 = build 51 also
+  //        carries white & gold (2026-10-17, Eric: light is the main look):
+  //        the app's own screens, the splash and a status bar that follows the
+  //        page's theme over the bridge (cb:theme). AND the Lock Screen widget
+  //        (#618), by Eric's choice: it ships only from a Mac prebuild with
+  //        NEXT_UP_WIDGET_ENABLED=true once its target has compiled, signed
+  //        with the App Group, and passed the device checks in
+  //        docs/lock-screen-widget.md - see docs/release-1.1.6.md. Without the
+  //        flag, prebuild leaves the target, the App Group entitlement and the
+  //        names setting out.
   version: "1.1.6",
   orientation: "portrait",
-  userInterfaceStyle: "automatic",
+  // Light: the app's screens are white & gold, so system controls (alerts,
+  // pickers, keyboards) match them rather than following the phone's setting.
+  userInterfaceStyle: "light",
   newArchEnabled: true,
   icon: "./assets/icon.png",
   splash: {
+    // White & gold (assets/splash.svg is the source).
     image: "./assets/splash.png",
     resizeMode: "contain",
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#FAF8F3",
   },
   ios: {
     // Reverse-DNS bundle id, aligned with the getchairback.com domain + brand.

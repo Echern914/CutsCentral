@@ -73,18 +73,20 @@ import {
  */
 
 const COLORS = {
-  bg: "#0A0A0B",
-  surface: "rgba(20,20,22,0.72)",
-  surfaceHi: "#1C1C1F",
-  border: "rgba(245,245,244,0.08)",
-  borderStrong: "rgba(245,245,244,0.14)",
-  hairline: "#26262B",
+  bg: "#FAF8F3",
+  surface: "rgba(255,255,255,0.86)",
+  surfaceHi: "#F4F0E7",
+  border: "rgba(28,25,23,0.12)",
+  borderStrong: "rgba(28,25,23,0.21)",
+  hairline: "#E4DED0",
   gold: "#D4AF37",
   goldSoft: "#E6C964",
   goldMuted: "#B8962F",
   goldDeep: "#8C6E1B",
-  textPrimary: "#F5F5F4",
-  textMuted: "#A1A1AA",
+  // Gold as TEXT on the light ground: the deep gold (web --cb-gold, light).
+  goldInk: "#9A7A1F",
+  textPrimary: "#1C1917",
+  textMuted: "#57534E",
 } as const;
 
 const GOLD_GRADIENT = [COLORS.goldSoft, COLORS.gold, COLORS.goldMuted] as const;
@@ -700,7 +702,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surface,
   },
   backPressed: { backgroundColor: "rgba(212,175,55,0.14)" },
-  backText: { color: COLORS.goldSoft, fontSize: 13, fontWeight: "600" },
+  backText: { color: COLORS.goldInk, fontSize: 13, fontWeight: "600" },
 
   // Hero / spotlight
   hero: { alignItems: "center", marginBottom: 34 },
@@ -737,7 +739,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 1,
-    backgroundColor: "rgba(245,245,244,0.16)",
+    backgroundColor: "rgba(28,25,23,0.24)",
   },
 
   wordmarkBlock: { alignItems: "center" },
@@ -749,7 +751,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   wordmark: {
-    color: COLORS.goldSoft,
+    color: COLORS.goldInk,
     // The real brand display face (matches the web --font-display). The font
     // file IS the bold weight, so we do NOT also set fontWeight (that can force
     // faux-bold / a system fallback on Android). If the font fails to load,
@@ -803,7 +805,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 1,
-    backgroundColor: "rgba(245,245,244,0.10)",
+    backgroundColor: "rgba(28,25,23,0.15)",
   },
   rowGlow: { ...StyleSheet.absoluteFillObject, borderRadius: 18 },
 
@@ -824,7 +826,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 1,
-    backgroundColor: "rgba(245,245,244,0.14)",
+    backgroundColor: "rgba(28,25,23,0.21)",
   },
 
   rowText: { flex: 1, marginLeft: 14, marginRight: 8 },

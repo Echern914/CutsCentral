@@ -871,8 +871,8 @@ const styles = StyleSheet.create({
     backgroundColor: color.surfaceRaised,
   },
   timerCalm: { borderColor: "rgba(212,175,55,0.30)" },
-  timerUrgent: { borderColor: "rgba(224,138,123,0.40)" },
-  timerBooked: { borderColor: "rgba(111,207,151,0.35)" },
+  timerUrgent: { borderColor: "rgba(194,65,12,0.40)" },
+  timerBooked: { borderColor: "rgba(21,128,61,0.35)" },
   timerLabel: { textAlign: "center", textTransform: "uppercase", letterSpacing: 1.6 },
   center: { textAlign: "center" },
   // Wraps rather than overflowing at the largest text sizes.

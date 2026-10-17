@@ -77,8 +77,8 @@ function Step({ n, title, body }: { n: string; title: string; body: string }) {
 }
 
 const styles = StyleSheet.create({
-  sheet: { flex: 1, backgroundColor: "#0A0A0B", padding: 24, gap: 24 },
-  title: { color: "#F5F5F4", fontSize: 26, fontWeight: "700", marginTop: 12 },
+  sheet: { flex: 1, backgroundColor: "#FAF8F3", padding: 24, gap: 24 },
+  title: { color: "#1C1917", fontSize: 26, fontWeight: "700", marginTop: 12 },
   steps: { gap: 20 },
   step: { flexDirection: "row", gap: 14 },
   badge: {
@@ -89,11 +89,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  badgeText: { color: "#0A0A0B", fontWeight: "700" },
+  badgeText: { color: "#1C1917", fontWeight: "700" },
   stepText: { flex: 1, gap: 4 },
-  stepTitle: { color: "#F5F5F4", fontSize: 16, fontWeight: "600" },
-  stepBody: { color: "#A1A1AA", fontSize: 14, lineHeight: 20 },
-  footnote: { color: "#A1A1AA", fontSize: 13, lineHeight: 18 },
+  stepTitle: { color: "#1C1917", fontSize: 16, fontWeight: "600" },
+  stepBody: { color: "#57534E", fontSize: 14, lineHeight: 20 },
+  footnote: { color: "#57534E", fontSize: 13, lineHeight: 18 },
   button: {
     marginTop: "auto",
     minHeight: 52,
@@ -102,5 +102,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  buttonText: { color: "#0A0A0B", fontSize: 17, fontWeight: "700" },
+  buttonText: { color: "#1C1917", fontSize: 17, fontWeight: "700" },
 });

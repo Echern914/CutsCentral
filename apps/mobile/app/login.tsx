@@ -443,7 +443,7 @@ export default function LoginScreen() {
                     AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN
                   }
                   buttonStyle={
-                    AppleAuthentication.AppleAuthenticationButtonStyle.WHITE
+                    AppleAuthentication.AppleAuthenticationButtonStyle.BLACK
                   }
                   cornerRadius={12}
                   style={styles.appleButton}
@@ -473,7 +473,7 @@ export default function LoginScreen() {
                 value={email}
                 onChangeText={setEmail}
                 placeholder="Email"
-                placeholderTextColor="#6b6b70"
+                placeholderTextColor="#78716C"
                 autoCapitalize="none"
                 autoCorrect={false}
                 autoComplete="email"
@@ -485,7 +485,7 @@ export default function LoginScreen() {
                 value={password}
                 onChangeText={setPassword}
                 placeholder="Password"
-                placeholderTextColor="#6b6b70"
+                placeholderTextColor="#78716C"
                 autoCapitalize="none"
                 autoCorrect={false}
                 autoComplete="current-password"
@@ -620,15 +620,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 16,
   },
-  joinText: { color: "#D4AF37", fontSize: 16, fontWeight: "600" },
+  joinText: { color: "#9A7A1F", fontSize: 16, fontWeight: "600" },
   joinHint: {
-    color: "#A1A1AA",
+    color: "#57534E",
     fontSize: 14,
     lineHeight: 20,
     textAlign: "center",
     marginTop: 10,
   },
-  root: { flex: 1, backgroundColor: "#0A0A0B" },
+  root: { flex: 1, backgroundColor: "#FAF8F3" },
   flex: { flex: 1 },
   center: { alignItems: "center", justifyContent: "center" },
   safe: { flex: 1 },
@@ -640,13 +640,13 @@ const styles = StyleSheet.create({
     paddingVertical: 24,
   },
   title: {
-    color: "#F5F5F4",
+    color: "#1C1917",
     fontSize: 22,
     fontWeight: "600",
     textAlign: "center",
   },
   sub: {
-    color: "#A1A1AA",
+    color: "#57534E",
     fontSize: 14,
     marginTop: 8,
     textAlign: "center",
@@ -659,6 +659,9 @@ const styles = StyleSheet.create({
     height: 50,
     borderRadius: 12,
     backgroundColor: "#FFFFFF",
+    // White on a warm-white screen needs an edge to read as a button.
+    borderWidth: 1,
+    borderColor: "#D6D0C4",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -670,16 +673,16 @@ const styles = StyleSheet.create({
     gap: 10,
     marginVertical: 2,
   },
-  line: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: "#3f3f46" },
-  dividerText: { color: "#6b6b70", fontSize: 12 },
+  line: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: "#D6D0C4" },
+  dividerText: { color: "#78716C", fontSize: 12 },
   input: {
     width: "100%",
     height: 50,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#3f3f46",
-    backgroundColor: "#18181B",
-    color: "#F5F5F4",
+    borderColor: "#D6D0C4",
+    backgroundColor: "#FFFFFF",
+    color: "#1C1917",
     paddingHorizontal: 14,
     fontSize: 15,
   },
@@ -688,16 +691,16 @@ const styles = StyleSheet.create({
     height: 50,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#a1a1aa",
+    borderColor: "#A8A29E",
     alignItems: "center",
     justifyContent: "center",
   },
-  emailText: { color: "#F5F5F4", fontSize: 16, fontWeight: "600" },
+  emailText: { color: "#1C1917", fontSize: 16, fontWeight: "600" },
   forgot: { alignSelf: "center", marginTop: 2 },
-  forgotText: { color: "#6b6b70", fontSize: 13 },
-  error: { color: "#F87171", fontSize: 13, marginTop: 18, textAlign: "center" },
+  forgotText: { color: "#78716C", fontSize: 13 },
+  error: { color: "#DC2626", fontSize: 13, marginTop: 18, textAlign: "center" },
   demo: { marginTop: 26 },
-  demoText: { color: "#D4AF37", fontSize: 14, fontWeight: "600" },
+  demoText: { color: "#9A7A1F", fontSize: 14, fontWeight: "600" },
   back: { marginTop: 18 },
-  backText: { color: "#6b6b70", fontSize: 13 },
+  backText: { color: "#78716C", fontSize: 13 },
 });
