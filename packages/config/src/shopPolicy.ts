@@ -388,7 +388,10 @@ export function bookingCancellationTerms(
       cancelWindowHours: shop.cancelWindowHours,
       cancelFeeBps: shop.cancelFeeBps,
       chargeCardOnFileFees: shop.chargeCardOnFileFees,
-      cardFeeFlatCents: shop.cardFeeFlatCents,
+      // 🔴 NEVER the flat fee: a booking with no snapshot was made before flat
+      // fees existed, on the percentage. Only a booking that itself recorded a
+      // flat amount is charged one.
+      cardFeeFlatCents: null,
     };
   }
   // A snapshot from before flat fees existed has no flat column: NULL, so it

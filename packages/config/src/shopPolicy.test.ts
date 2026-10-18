@@ -682,6 +682,16 @@ describe("🔴 a booking keeps the cancellation terms it was made on", () => {
     expect(bookingCancellationTerms(old, { ...shopNow, cardFeeFlatCents: 9900 })).toEqual(shopNow);
   });
 
+  it("🔴 a booking with NO snapshot never gets the shop's flat fee - it keeps the percentage", () => {
+    const legacy = {
+      cancelWindowHoursAtBooking: null,
+      cancelFeeBpsAtBooking: null,
+      cardOnFileFeesAtBooking: null,
+      cardFeeFlatCentsAtBooking: null,
+    };
+    expect(bookingCancellationTerms(legacy, { ...shopNow, cardFeeFlatCents: 2500 })).toEqual(shopNow);
+  });
+
   it("a flat amount of 0 is stored as the percentage, never as a $0 fee", () => {
     expect(cancellationTermsSnapshot({ ...shopNow, cardFeeFlatCents: 0 }).cardFeeFlatCentsAtBooking).toBeNull();
   });

@@ -664,6 +664,33 @@ describe("🔴 a flat no-show fee", () => {
     }
   });
 
+  it("🔴 a booking from before snapshots (no terms recorded) never gets the flat fee: the % ($20), not $25", async () => {
+    const b = await bookedWithCard(12, 14);
+    await prisma.appointment.update({
+      where: { id: b.appointmentId },
+      data: {
+        cancelWindowHoursAtBooking: null,
+        cancelFeeBpsAtBooking: null,
+        cardOnFileFeesAtBooking: null,
+        cardFeeFlatCentsAtBooking: null,
+      },
+    });
+    await setFlat(2500);
+    try {
+      const detail = await onceStarted(b.appointmentId, () =>
+        request(app).get(`/api/booking/appointments/${b.appointmentId}/detail`).set("Cookie", cookie),
+      );
+      expect(detail.body.noShowFee).toMatchObject({ cents: 2000 });
+      await onceStarted(b.appointmentId, () =>
+        request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie),
+      );
+      expect(fake.state.charges).toHaveLength(1);
+      expect(fake.state.charges[0]!.params.amount).toBe(2000);
+    } finally {
+      await setFlat(null);
+    }
+  });
+
   it("🔴 a flat fee over the booked price charges the price ($60 flat on a $40 cut takes $40)", async () => {
     await setFlat(6000);
     try {
