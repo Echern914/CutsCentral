@@ -41,6 +41,7 @@ import { resolveFeature, type NavContext, type SeatRole } from "./features.js";
 import type { HelpAnswer } from "./help.js";
 import type { BookedOutBrief } from "./bookedOut.js";
 import type { SetupBrief } from "./onboarding.js";
+import { openSlotsText, type OpenSlotsBrief } from "./openSlots.js";
 import { findHelp, helpAnswerById } from "./helpMatch.js";
 import {
   capabilityForCorpusId,
@@ -121,6 +122,13 @@ export interface SupportFacts {
    * setup screen. Supplied for an owner only - setup is the owner's job.
    */
   setup?: SetupBrief;
+  /**
+   * "How many slots do I have open next week?" counted from THIS shop's
+   * calendar with the booking page's own slot engine (apps/api
+   * services/openSlotsFacts.ts). Scoped server-side: a provider seat's brief
+   * covers their own chair only.
+   */
+  openSlots?: OpenSlotsBrief;
 }
 
 export interface SupportSeat {
@@ -260,7 +268,15 @@ function escalationFor(question: string): SupportEscalation {
   };
 }
 
-function toAnswer(entry: HelpAnswer, ctx: NavContext, facts: SupportFacts): SupportAnswer {
+function toAnswer(
+  entry: HelpAnswer,
+  ctx: NavContext,
+  facts: SupportFacts,
+  question: string,
+): SupportAnswer {
+  if (entry.id === OPEN_SLOTS_ENTRY && facts.openSlots) {
+    return openSlotsAnswer(entry, ctx, facts.openSlots, question);
+  }
   if (entry.id === BOOKED_OUT_ENTRY && facts.bookedOut) {
     return bookedOutAnswer(entry, ctx, facts.bookedOut);
   }
@@ -376,14 +392,57 @@ function setupAnswer(entry: HelpAnswer, ctx: NavContext, brief: SetupBrief): Sup
   };
 }
 
+/**
+ * The written answer the shop's own open-slot count replaces. Without one (a
+ * connected assistant, a non-ChairBack calendar, a read that failed) the
+ * written pointer to the calendar and booking page stands: never a guessed
+ * number.
+ */
+const OPEN_SLOTS_ENTRY = "open-slots";
+
+/**
+ * The count as an answer. Which days it covers is read from the QUESTION
+ * ("next week", "tomorrow", "Friday"); "today" is the brief's own shop-local
+ * date, so the engine still reads no clock.
+ */
+function openSlotsAnswer(
+  entry: HelpAnswer,
+  ctx: NavContext,
+  brief: OpenSlotsBrief,
+  question: string,
+): SupportAnswer {
+  const resolved = entry.action ? resolveFeature(entry.action.featureId, ctx) : null;
+  return {
+    id: entry.id,
+    question: entry.q,
+    body: openSlotsText(brief, question),
+    action:
+      entry.action && resolved?.ok
+        ? { label: entry.action.label, featureId: entry.action.featureId, href: resolved.href }
+        : null,
+    basis:
+      brief.scope === "own"
+        ? "Counted from your own calendar when this page opened."
+        : "Counted from your shop's calendar when this page opened.",
+  };
+}
+
 /** Which written answers are improved by which (prose) live fact. */
-const FACT_FOR_ENTRY: Record<string, Exclude<keyof SupportFacts, "bookedOut" | "setup">> = {
+const FACT_FOR_ENTRY: Record<string, Exclude<keyof SupportFacts, "bookedOut" | "setup" | "openSlots">> = {
   "my-policy": "policySentence",
   "booking-link": "bookingUrl",
   "set-hours": "hoursSentence",
 };
 
 const MAX_SUGGESTIONS = 4;
+
+/** The live fact that would make this entry's answer about THIS shop, if any. */
+function wantedFactFor(id: string): keyof SupportFacts | undefined {
+  if (id === BOOKED_OUT_ENTRY) return "bookedOut";
+  if (id === SETUP_ENTRY) return "setup";
+  if (id === OPEN_SLOTS_ENTRY) return "openSlots";
+  return FACT_FOR_ENTRY[id];
+}
 
 /**
  * Resolve one support question. Pure; see the contract at the top of the file.
@@ -400,13 +459,8 @@ export function resolveSupport(req: SupportRequest): SupportResolution {
   if (found.kind === "answer" && found.answer) {
     const cap = capabilityForCorpusId(found.answer.id);
     if (actorMayReceive(cap, req.actor)) {
-      const answer = toAnswer(found.answer, ctx, facts);
-      const wanted: keyof SupportFacts | undefined =
-        found.answer.id === BOOKED_OUT_ENTRY
-          ? "bookedOut"
-          : found.answer.id === SETUP_ENTRY
-            ? "setup"
-            : FACT_FOR_ENTRY[found.answer.id];
+      const answer = toAnswer(found.answer, ctx, facts, req.question);
+      const wanted = wantedFactFor(found.answer.id);
       const sources: SupportSource[] = [
         { authority: "help_corpus", id: found.answer.id },
       ];
@@ -484,12 +538,16 @@ export function resolveSupportAnswerById(
       sources: [],
     };
   }
+  const wanted = wantedFactFor(entry.id);
   return {
     outcome: "ANSWERED",
-    answer: toAnswer(entry, ctx, req.facts ?? {}),
+    // A tapped topic carries no question of its own: its canonical wording
+    // names no day, so the count covers this week and next.
+    answer: toAnswer(entry, ctx, req.facts ?? {}, entry.q),
     suggestions: [],
     escalation: null,
     capabilityId: cap?.id ?? null,
     sources: [{ authority: "help_corpus", id: entry.id }],
+    ...(wanted && !req.facts?.[wanted] ? { wantedFact: wanted } : {}),
   };
 }

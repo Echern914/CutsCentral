@@ -12,6 +12,7 @@ import {
 } from "@chairback/config/supportEngine";
 import type { BookedOutBrief } from "@chairback/config/bookedOut";
 import type { SetupBrief } from "@chairback/config/onboarding";
+import type { OpenSlotsBrief } from "@chairback/config/openSlots";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 
 /**
@@ -53,7 +54,8 @@ const EXAMPLES = [
   "Who should I rebook?",
   "Take me to my services",
   "How do I change my cancellation policy?",
-  "What openings do I have Friday?",
+  // Counted from this shop's calendar when the count loaded.
+  "How many slots do I have open next week?",
   "Why did my integration stop syncing?",
 ];
 
@@ -63,6 +65,7 @@ export function AskField({
   affiliateProgramEnabled,
   initialQuestion,
   bookedOut = null,
+  openSlots = null,
   setup = null,
 }: {
   role: SeatRole;
@@ -80,6 +83,12 @@ export function AskField({
    * the written answer.
    */
   bookedOut?: BookedOutBrief | null;
+  /**
+   * "How many slots do I have open next week?" for this seat, counted
+   * server-side with the booking page's slot engine. Null when it could not be
+   * read (or the calendar lives in Acuity/Square): the written answer stands.
+   */
+  openSlots?: OpenSlotsBrief | null;
   /**
    * "How do I finish setting up?" for this shop, from its own setup facts
    * (config/onboarding.ts). Owners only; null otherwise.
@@ -104,9 +113,13 @@ export function AskField({
         flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
       },
       // A live fact the engine folds into the matching answer - never a call.
-      facts: { ...(bookedOut ? { bookedOut } : {}), ...(setup ? { setup } : {}) },
+      facts: {
+        ...(bookedOut ? { bookedOut } : {}),
+        ...(openSlots ? { openSlots } : {}),
+        ...(setup ? { setup } : {}),
+      },
     }),
-    [role, inApp, rewardsEnabled, affiliateProgramEnabled, bookedOut, setup],
+    [role, inApp, rewardsEnabled, affiliateProgramEnabled, bookedOut, openSlots, setup],
   );
 
   // A tapped chip resolves BY ID rather than by re-typing its question: the
@@ -204,7 +217,7 @@ function Answer({
       {answer ? (
         <>
           {answer.body.split("\n\n").map((para, i) => (
-            <p key={i} className="mb-2 whitespace-pre-line text-sm leading-relaxed text-offwhite">
+            <p key={i} className="mb-2 whitespace-pre-line text-sm leading-relaxed text-offwhite [overflow-wrap:anywhere]">
               {para}
             </p>
           ))}

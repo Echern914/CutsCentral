@@ -1278,6 +1278,30 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open services", featureId: "services" },
   },
   {
+    id: "open-slots",
+    // Drick's own words (2026-10-18): "How many slots do I have open for next
+    // week?" In the Assistant this answer is replaced by the count from the
+    // shop's own calendar (config/openSlots.ts); without that count - a
+    // connected assistant, or a read that failed - it is this.
+    // 🔴 No "next week"/"this week" keywords and no primaryFor: "week" and
+    // "many" are generic, and would take "how many appointments do I have next
+    // week" or "how many texts do I get". The slot words carry it.
+    q: "How many open slots do I have?",
+    // The body avoids "week" and "appointments": body words score too, and
+    // with them this took "how many appointments do I have next week".
+    a: "Your calendar shows every open time, day by day, and your booking page shows exactly the times clients can pick right now.\n\nAsk this in the Assistant (or the Assistant bubble while you're in your dashboard) and it counts them from your own calendar, with a count per day: tomorrow, a day you name, or the days ahead.\n\nIf your bookings run through Acuity or Square, your open times live in that calendar instead.",
+    keywords: [
+      "open slots", "slots open", "open times", "open spots", "spots open",
+      "openings", "free slots", "slots available", "available slots",
+      "slots left", "openings left", "availability left", "free times",
+      // Carries "next" (not "week") so "how many openings next week" clears
+      // the coverage bar; "week" here took "how many bookings this week".
+      "next opening", "next open slot",
+    ],
+    category: "booking",
+    action: { label: "Open appointments", featureId: "appointments" },
+  },
+  {
     id: "confirmation-text",
     q: "My client didn't get a confirmation TEXT when they booked",
     a: "That one isn't a text. A booking confirmation goes out by email — the confirmation SMS is deliberately off, because a text per booking costs every shop money for something the email already does.\n\nReminders are separate: an email about a day before, a push a day and 2 hours before if they use the app, and a text about a day before when your shop has texting on.\n\nSo if they're waiting on a confirmation, check the email side — their address on the booking, and their spam folder. If a REMINDER didn't arrive, that's a different question with different causes.",

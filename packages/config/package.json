@@ -52,7 +52,8 @@
     "./servicePricing": "./src/servicePricing.ts",
     "./offers": "./src/offers.ts",
     "./onboarding": "./src/onboarding.ts",
-    "./providerAward": "./src/providerAward.ts"
+    "./providerAward": "./src/providerAward.ts",
+    "./openSlots": "./src/openSlots.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -9,9 +9,12 @@ import {
   actorForSeat,
   resolveSupport,
   resolveSupportAnswerById,
+  type SupportFacts,
   type SupportRequest,
   type SupportResolution,
 } from "@chairback/config/supportEngine";
+import type { OpenSlotsBrief } from "@chairback/config/openSlots";
+import { getOpenSlots } from "@/app/dashboard/assistant/actions";
 import { useHelpSeat } from "./helpSeat";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { isPlatformHost } from "@/lib/customDomainGuard";
@@ -25,6 +28,11 @@ import { isPlatformHost } from "@/lib/customDomainGuard";
  * policy we don't ship. The engine guarantees a useful reply for ANY input and
  * attaches a route to a human whenever it cannot answer, so this component has
  * no "I didn't understand" state to render and no dead end to fall into.
+ *
+ * ONE EXCEPTION, and it is still free: "how many slots do I have open next
+ * week?" is answered from the shop's own calendar, which only the API can
+ * count. The bubble asks ChairBack's API for it (a server action) when - and
+ * only when - that question is asked by a signed-in seat. See `respond`.
  *
  * DELIBERATELY NO TYPING INDICATOR. Matching takes about a millisecond, and
  * faking a pause to seem more human would be spending the one advantage this
@@ -48,6 +56,9 @@ import { isPlatformHost } from "@/lib/customDomainGuard";
 
 /** Paragraph separator used by every corpus body. */
 const PARA = "\n\n";
+
+/** How long a fetched open-slot count is reused before it is asked for again. */
+const OPEN_SLOTS_FRESH_MS = 5 * 60_000;
 
 /**
  * Client-facing routes. A barber's shop page belongs to the SHOP, and a
@@ -106,6 +117,53 @@ export function HelpBubble() {
   const nextId = useRef(0);
 
   /**
+   * "How many slots do I have open next week?" - the one answer the bubble
+   * fetches. Asked for ONLY when somebody asks that question (the engine says
+   * so with `wantedFact`), never on page load, so every other page and every
+   * other question stays free and instant. It goes through a server action to
+   * ChairBack's own API - no model, nothing spent - and the API decides the
+   * seat's scope. Kept a few minutes so a follow-up ("and tomorrow?") is
+   * instant.
+   */
+  const openSlots = useRef<{ brief: OpenSlotsBrief; at: number } | null>(null);
+
+  /**
+   * Answer one ask. `resolveWith` runs the engine with any extra live fact;
+   * when the answer wants the open-slot count and this is a signed-in seat,
+   * a short "counting" line holds the place until the count arrives, then the
+   * answer replaces it - with the count, or the written answer if it failed.
+   */
+  const respond = useCallback(
+    (userText: string, resolveWith: (extra: SupportFacts) => SupportResolution) => {
+      const cached =
+        openSlots.current && Date.now() - openSlots.current.at < OPEN_SLOTS_FRESH_MS
+          ? { openSlots: openSlots.current.brief }
+          : {};
+      const first = resolveWith(cached);
+      const userId = nextId.current++;
+      const botId = nextId.current++;
+      const counting = first.wantedFact === "openSlots" && seat !== null;
+      setMessages((prev) => [
+        ...prev,
+        { id: userId, role: "user", text: userText },
+        counting
+          ? { id: botId, role: "bot", text: "Counting your open times…" }
+          : { id: botId, role: "bot", response: first },
+      ]);
+      if (!counting) return;
+      const settle = (response: SupportResolution) =>
+        setMessages((prev) => prev.map((m) => (m.id === botId ? { id: botId, role: "bot", response } : m)));
+      getOpenSlots()
+        .then((brief) => {
+          if (brief) openSlots.current = { brief, at: Date.now() };
+          settle(brief ? resolveWith({ openSlots: brief }) : first);
+        })
+        .catch(() => settle(first));
+    },
+    [seat],
+  );
+
+  /**
    * Where the full Assistant lives for this visitor, or null if nowhere.
    *
    * Resolved through the registry rather than hardcoded, so this cannot drift
@@ -145,15 +203,12 @@ export function HelpBubble() {
       // `inApp === null` means "not yet known" (pre-hydration). Treat it as the
       // browser, matching useIsNativeApp's documented contract — by the time
       // anyone has typed, the effect has long since resolved.
-      const response = resolveSupport({ question: trimmed, ...asker });
-      setMessages((prev) => [
-        ...prev,
-        { id: nextId.current++, role: "user", text: trimmed },
-        { id: nextId.current++, role: "bot", response },
-      ]);
+      respond(trimmed, (extra) =>
+        resolveSupport({ question: trimmed, ...asker, facts: { ...asker.facts, ...extra } }),
+      );
       setQuery("");
     },
-    [asker],
+    [asker, respond],
   );
 
   /**
@@ -163,17 +218,11 @@ export function HelpBubble() {
    */
   const openAnswer = useCallback(
     (id: string, label: string) => {
-      setMessages((prev) => [
-        ...prev,
-        { id: nextId.current++, role: "user", text: label },
-        {
-          id: nextId.current++,
-          role: "bot",
-          response: resolveSupportAnswerById(id, asker),
-        },
-      ]);
+      respond(label, (extra) =>
+        resolveSupportAnswerById(id, { ...asker, facts: { ...asker.facts, ...extra } }),
+      );
     },
-    [asker],
+    [asker, respond],
   );
 
   // Greet on first open so the panel is never an empty box with a cursor.
@@ -440,7 +489,7 @@ function BotBubble({
       {body && (
         <div className="max-w-[92%] space-y-2 rounded-2xl rounded-bl-sm bg-charcoal-700/70 px-3 py-2">
           {body.split(PARA).map((para, i) => (
-            <p key={i} className="whitespace-pre-line text-sm leading-relaxed text-offwhite">
+            <p key={i} className="whitespace-pre-line text-sm leading-relaxed text-offwhite [overflow-wrap:anywhere]">
               {para}
             </p>
           ))}

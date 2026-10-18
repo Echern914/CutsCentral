@@ -8,6 +8,7 @@ import { AskField } from "./AskField";
 import { ConnectionPanel } from "./ConnectionPanel";
 import { getConnections } from "./connections.server";
 import { getBookedOut } from "./bookedOut";
+import { getOpenSlots } from "./actions";
 import { getOnboardingState } from "@/app/onboarding/state";
 import {
   ONBOARDING_PATH,
@@ -68,10 +69,12 @@ export default async function AssistantPage({
   // help and navigation are untouched.
   // The booked-out brief rides the same way: null on any failure, and the
   // question then gets the written answer instead of this shop's numbers.
-  const [readiness, connections, bookedOut, setupState] = await Promise.all([
+  // So does the open-slot count ("how many slots do I have open next week?").
+  const [readiness, connections, bookedOut, openSlots, setupState] = await Promise.all([
     getReadiness(),
     getConnections(),
     getBookedOut(),
+    getOpenSlots(),
     // Setup is the owner's job; the route refuses anyone else.
     role === "OWNER" && !me.data?.demo ? getOnboardingState() : Promise.resolve(null),
   ]);
@@ -121,6 +124,7 @@ export default async function AssistantPage({
         affiliateProgramEnabled={affiliateProgramEnabled}
         initialQuestion={handedOver}
         bookedOut={bookedOut}
+        openSlots={openSlots}
         setup={setup}
       />
 

@@ -334,6 +334,20 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     neverExpose: ["other clients' bookings behind the busy times"],
   },
   {
+    id: "open_slot_count",
+    intent: "How many open slots do I have this week or next?",
+    // The shop's own calendar, counted: a seat's question, never a customer's.
+    actors: SEAT_ACTORS,
+    dataClass: "shop_data",
+    authority: "live_state",
+    corpusIds: ["open-slots"],
+    mcpTool: "calendar_openings",
+    readOnly: true,
+    confirmationRequired: false,
+    safeFallback: "Point at the calendar and the booking page, where the open times show.",
+    neverExpose: ["other clients' bookings behind the busy times", "another provider's calendar to a provider seat"],
+  },
+  {
     id: "appointment_requested_vs_confirmed",
     intent: "Was my appointment requested or confirmed?",
     actors: [...CUSTOMER_ACTORS, ...SEAT_ACTORS],
