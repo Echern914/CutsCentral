@@ -91,6 +91,7 @@ export async function startEntry(opts: {
       cancelWindowHours: true,
       cancelFeeBps: true,
       chargeCardOnFileFees: true,
+      cardFeeFlatCents: true,
     },
   });
   if (!shop) throw new WalkInNotFoundError();

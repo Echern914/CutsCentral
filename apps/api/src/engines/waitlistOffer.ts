@@ -1099,6 +1099,7 @@ export async function claimOffer(params: {
             cancelWindowHours: true,
             cancelFeeBps: true,
             chargeCardOnFileFees: true,
+            cardFeeFlatCents: true,
           },
         }),
         tx.service.findFirst({

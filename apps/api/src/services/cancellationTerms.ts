@@ -21,6 +21,7 @@ export const CANCELLATION_TERMS_SNAPSHOT_SELECT = {
   cancelWindowHoursAtBooking: true,
   cancelFeeBpsAtBooking: true,
   cardOnFileFeesAtBooking: true,
+  cardFeeFlatCentsAtBooking: true,
 } as const;
 
 /** The shop columns a booking with no snapshot falls back to. */
@@ -28,6 +29,7 @@ export const SHOP_CANCELLATION_TERMS_SELECT = {
   cancelWindowHours: true,
   cancelFeeBps: true,
   chargeCardOnFileFees: true,
+  cardFeeFlatCents: true,
 } as const;
 
 /** No shop row: nothing may be charged on terms nobody can read. */
@@ -35,6 +37,7 @@ const NOTHING_CHARGED: CancellationTerms = {
   cancelWindowHours: 0,
   cancelFeeBps: 0,
   chargeCardOnFileFees: false,
+  cardFeeFlatCents: null,
 };
 
 /**

@@ -576,6 +576,7 @@ export async function cancelAppointment(
         cancelWindowHoursAtBooking: appt.cancelWindowHoursAtBooking,
         cancelFeeBpsAtBooking: appt.cancelFeeBpsAtBooking,
         cardOnFileFeesAtBooking: appt.cardOnFileFeesAtBooking,
+        cardFeeFlatCentsAtBooking: appt.cardFeeFlatCentsAtBooking,
       },
     };
   });

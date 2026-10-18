@@ -15,6 +15,8 @@ import {
   chargeAtBookingCents,
   bookingCancellationTerms,
   cancellationTermsSnapshot,
+  cardFeeConfigured,
+  describeCardOnFileFee,
 } from "./shopPolicy.js";
 
 describe("describeMovePriceChange - the one sentence a move at a new price asks with", () => {
@@ -580,7 +582,7 @@ describe("🔴 a card-on-file shop's cancellation sentence says what the card is
   it("🔴 by text: a booking made there is free, an online one with a card is charged - and is checked first", () => {
     const line = describeCancellationPolicy(on, { collectsAtBooking: false });
     expect(line).toContain("free cancellation any time for a booking made in this conversation");
-    expect(line).toContain("charged 50% of its booked price for a cancellation inside 24h of the start");
+    expect(line).toContain("charged 50% of the booked price for a cancellation inside 24h of the start");
     expect(line).toContain("get_client_history");
     expect(describeCancellationPolicy({ ...on, chargeCardOnFileFees: false }, { collectsAtBooking: false })).toBe(
       "free cancellation any time before the appointment",
@@ -619,14 +621,15 @@ describe("🔴 a card-on-file shop's cancellation sentence says what the card is
 });
 
 describe("🔴 a booking keeps the cancellation terms it was made on", () => {
-  const shopThen = { cancelWindowHours: 0, cancelFeeBps: 0, chargeCardOnFileFees: false };
-  const shopNow = { cancelWindowHours: 24, cancelFeeBps: 5000, chargeCardOnFileFees: true };
+  const shopThen = { cancelWindowHours: 0, cancelFeeBps: 0, chargeCardOnFileFees: false, cardFeeFlatCents: null };
+  const shopNow = { cancelWindowHours: 24, cancelFeeBps: 5000, chargeCardOnFileFees: true, cardFeeFlatCents: null };
 
   it("the snapshot is the shop's terms at booking, as the columns store them", () => {
     expect(cancellationTermsSnapshot(shopThen)).toEqual({
       cancelWindowHoursAtBooking: 0,
       cancelFeeBpsAtBooking: 0,
       cardOnFileFeesAtBooking: false,
+      cardFeeFlatCentsAtBooking: null,
     });
   });
 
@@ -635,12 +638,150 @@ describe("🔴 a booking keeps the cancellation terms it was made on", () => {
   });
 
   it("a booking from before snapshots (all NULL) settles by the shop's current terms, as before", () => {
-    const legacy = { cancelWindowHoursAtBooking: null, cancelFeeBpsAtBooking: null, cardOnFileFeesAtBooking: null };
+    const legacy = {
+      cancelWindowHoursAtBooking: null,
+      cancelFeeBpsAtBooking: null,
+      cardOnFileFeesAtBooking: null,
+      cardFeeFlatCentsAtBooking: null,
+    };
     expect(bookingCancellationTerms(legacy, shopNow)).toEqual(shopNow);
   });
 
   it("a half-written snapshot is never half-trusted", () => {
-    const half = { cancelWindowHoursAtBooking: 0, cancelFeeBpsAtBooking: null, cardOnFileFeesAtBooking: false };
+    const half = {
+      cancelWindowHoursAtBooking: 0,
+      cancelFeeBpsAtBooking: null,
+      cardOnFileFeesAtBooking: false,
+      cardFeeFlatCentsAtBooking: null,
+    };
     expect(bookingCancellationTerms(half, shopNow)).toEqual(shopNow);
+  });
+
+  it("🔴 a flat fee is frozen too: booked at $25, the owner moves to $40 - the booking still owes $25", () => {
+    const flatThen = { ...shopNow, cardFeeFlatCents: 2500 };
+    const flatNow = { ...shopNow, cardFeeFlatCents: 4000 };
+    const snap = cancellationTermsSnapshot(flatThen);
+    expect(snap.cardFeeFlatCentsAtBooking).toBe(2500);
+    expect(bookingCancellationTerms(snap, flatNow).cardFeeFlatCents).toBe(2500);
+  });
+
+  it("🔴 booked on the percentage, the owner switches to flat: the booking keeps its percentage", () => {
+    const snap = cancellationTermsSnapshot(shopNow);
+    const terms = bookingCancellationTerms(snap, { ...shopNow, cardFeeFlatCents: 2500 });
+    expect(terms.cardFeeFlatCents).toBeNull();
+    expect(terms.cancelFeeBps).toBe(5000);
+  });
+
+  it("a snapshot written before flat fees existed (no flat column) keeps its percentage", () => {
+    const old = {
+      cancelWindowHoursAtBooking: 24,
+      cancelFeeBpsAtBooking: 5000,
+      cardOnFileFeesAtBooking: true,
+      cardFeeFlatCentsAtBooking: null,
+    };
+    expect(bookingCancellationTerms(old, { ...shopNow, cardFeeFlatCents: 9900 })).toEqual(shopNow);
+  });
+
+  it("🔴 a booking with NO snapshot never gets the shop's flat fee - it keeps the percentage", () => {
+    const legacy = {
+      cancelWindowHoursAtBooking: null,
+      cancelFeeBpsAtBooking: null,
+      cardOnFileFeesAtBooking: null,
+      cardFeeFlatCentsAtBooking: null,
+    };
+    expect(bookingCancellationTerms(legacy, { ...shopNow, cardFeeFlatCents: 2500 })).toEqual(shopNow);
+  });
+
+  it("a flat amount of 0 is stored as the percentage, never as a $0 fee", () => {
+    expect(cancellationTermsSnapshot({ ...shopNow, cardFeeFlatCents: 0 }).cardFeeFlatCentsAtBooking).toBeNull();
+  });
+});
+
+describe("🔴 a FLAT card-on-file fee (Drick: $25 for a no-show)", () => {
+  const start = new Date("2026-09-12T15:00:00Z");
+  const flat = {
+    priceCents: 4000,
+    cancelWindowHours: 24,
+    cancelFeeBps: 5000,
+    cardFeeFlatCents: 2500,
+    startsAt: start,
+  };
+
+  it("a no-show owes the flat amount, not the percentage", () => {
+    expect(cardOnFileFeeCents({ ...flat, now: new Date("2026-09-12T16:00:00Z"), reason: "no_show" })).toBe(2500);
+  });
+
+  it("works with the percentage at 0 - the flat amount is the fee", () => {
+    expect(cardOnFileFeeCents({ ...flat, cancelFeeBps: 0, now: start, reason: "no_show" })).toBe(2500);
+    expect(cardFeeConfigured({ cancelFeeBps: 0, cardFeeFlatCents: 2500 })).toBe(true);
+  });
+
+  it("🔴 is capped at the booked price: $25 on a $15 line-up charges $15", () => {
+    expect(cardOnFileFeeCents({ ...flat, priceCents: 1500, now: start, reason: "no_show" })).toBe(1500);
+  });
+
+  it("an unpriced booking charges nothing, flat or not", () => {
+    expect(cardOnFileFeeCents({ ...flat, priceCents: null, now: start, reason: "no_show" })).toBe(0);
+    expect(cardOnFileFeeCents({ ...flat, priceCents: 0, now: start, reason: "no_show" })).toBe(0);
+  });
+
+  it("a late cancel owes it only inside the window, and never with no window", () => {
+    expect(cardOnFileFeeCents({ ...flat, now: new Date("2026-09-12T03:00:00Z"), reason: "late_cancel" })).toBe(2500);
+    expect(cardOnFileFeeCents({ ...flat, now: new Date("2026-09-10T15:00:00Z"), reason: "late_cancel" })).toBe(0);
+    expect(cardOnFileFeeCents({ ...flat, cancelWindowHours: 0, now: start, reason: "late_cancel" })).toBe(0);
+    // A no-show needs no window.
+    expect(cardOnFileFeeCents({ ...flat, cancelWindowHours: 0, now: start, reason: "no_show" })).toBe(2500);
+  });
+
+  it("null / 0 / missing flat = the percentage, exactly as before", () => {
+    for (const cardFeeFlatCents of [null, 0, undefined]) {
+      expect(cardOnFileFeeCents({ ...flat, cardFeeFlatCents, now: start, reason: "no_show" })).toBe(2000);
+    }
+    expect(cardFeeConfigured({ cancelFeeBps: 0, cardFeeFlatCents: null })).toBe(false);
+  });
+
+  it("the percentage is never more than the price either", () => {
+    expect(cardOnFileFeeCents({ ...flat, cardFeeFlatCents: null, cancelFeeBps: 20000, now: start, reason: "no_show" })).toBe(4000);
+  });
+
+  it("is said in one set of words, and the % wording is unchanged", () => {
+    expect(describeCardOnFileFee({ cancelFeeBps: 5000, cardFeeFlatCents: 2500 })).toBe(
+      "$25 (or the booked price, if less)",
+    );
+    expect(describeCardOnFileFee({ cancelFeeBps: 5000, cardFeeFlatCents: 1550 })).toBe(
+      "$15.50 (or the booked price, if less)",
+    );
+    expect(describeCardOnFileFee({ cancelFeeBps: 5000, cardFeeFlatCents: null })).toBe("50% of the booked price");
+  });
+
+  const shop = {
+    paymentsMode: "card_on_file" as const,
+    cancelWindowHours: 24,
+    cancelFeeBps: 0,
+    cardFeeFlatCents: 2500,
+    chargeCardOnFileFees: true,
+    paymentsLive: true,
+  };
+
+  it("every sentence a client or the receptionist reads states the flat fee", () => {
+    expect(describeCancellationPolicy(shop)).toBe(
+      "free up to 24h before; inside that window $25 (or the booked price, if less) is charged to a card kept on file",
+    );
+    expect(describeCancellationPolicy(shop, { collectsAtBooking: false })).toContain(
+      "charged $25 (or the booked price, if less) for a cancellation inside 24h",
+    );
+    expect(describeNoShowPolicy(shop)).toBe(
+      "a no-show is charged to the card on file - the fee is $25 (or the booked price, if less); cancelling ahead of time avoids it",
+    );
+    const deposit = describeDepositPolicy(shop);
+    expect(deposit).toContain("charged only for a no-show");
+    expect(deposit).toContain("the fee is $25 (or the booked price, if less)");
+  });
+
+  it("🔴 fees switched OFF: the flat amount is never stated and nothing is threatened", () => {
+    const off = { ...shop, chargeCardOnFileFees: false };
+    expect(describeCancellationPolicy(off)).toBe("free cancellation any time before the appointment");
+    expect(describeNoShowPolicy(off)).toMatch(/no charge for a no-show/);
+    expect(describeDepositPolicy(off)).not.toContain("$25");
   });
 });

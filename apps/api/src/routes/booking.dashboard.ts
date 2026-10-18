@@ -3363,6 +3363,7 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
       cancelWindowHours: true,
       cancelFeeBps: true,
       chargeCardOnFileFees: true,
+      cardFeeFlatCents: true,
       offersEnabled: true,
     },
   });
@@ -7064,6 +7065,7 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
       cancelWindowHours: true,
       cancelFeeBps: true,
       chargeCardOnFileFees: true,
+      cardFeeFlatCents: true,
     },
   });
   if (!shop) {

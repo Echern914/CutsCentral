@@ -52,6 +52,8 @@ export async function savePaymentSettingsAction(input: {
   paymentsMode?: "off" | "ahead" | "deposit" | "card_on_file" | "hold";
   /** card_on_file: may the kept card be charged for a no-show / late cancel? */
   chargeCardOnFileFees?: boolean;
+  /** card_on_file: the fee as a flat amount in CENTS; null = the percentage. */
+  cardFeeFlatCents?: number | null;
   /** card_on_file: hold the time until a card is saved (true), or book them anyway (false). */
   requireCardToBook?: boolean;
   cancelWindowHours?: number;
@@ -124,6 +126,8 @@ export interface PaymentStatus {
   depositNonRefundable?: boolean;
   /** card_on_file: whether the kept card may be charged for a no-show / late cancel. */
   chargeCardOnFileFees: boolean;
+  /** card_on_file: the fee as a flat amount in cents; null = the percentage. Optional = an older API. */
+  cardFeeFlatCents?: number | null;
   /**
    * card_on_file: is a client who skips the card still booked? false (the
    * default) = yes. Optional = an older API.

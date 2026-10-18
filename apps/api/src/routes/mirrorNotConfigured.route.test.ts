@@ -294,7 +294,7 @@ describe("recurring series", () => {
       dateOverrides: null,
       timezone: "UTC",
       bookingBufferMin: 0,
-      cancellationTerms: { cancelWindowHours: 0, cancelFeeBps: 0, chargeCardOnFileFees: false },
+      cancellationTerms: { cancelWindowHours: 0, cancelFeeBps: 0, chargeCardOnFileFees: false, cardFeeFlatCents: null },
       // The barber forcing a time, exactly as the dashboard path does - the
       // availability gate is not what this test is about.
       checkAvailability: false,

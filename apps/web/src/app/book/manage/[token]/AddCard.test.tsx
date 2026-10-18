@@ -78,6 +78,25 @@ describe("adding a card to a booking that stands", () => {
     expect(screen.queryByText(/no-show/)).toBeNull();
   });
 
+  it("states the fee itself when the server gives it - a flat $25 says $25", () => {
+    render(
+      <AddCard
+        token="tok_1"
+        offer={{
+          clientSecret: "seti_1_secret",
+          serviceChargeConsent: false,
+          chargesFees: true,
+          cardFee: "$25 (or the booked price, if less)",
+        }}
+        shopName="Sample Studio"
+        shopSlug="sample-studio"
+        onSaved={onSaved}
+      />,
+    );
+    expect(screen.getByText("$25 (or the booked price, if less)")).toBeTruthy();
+    expect(screen.getByText(/the fee is/)).toBeTruthy();
+  });
+
   it("a card they asked to keep: this browser keeps the key for next time", async () => {
     const key = { token: "k".repeat(43), brand: "visa", last4: "4242" };
     cardSavedAction.mockResolvedValue({ ok: true, status: "BOOKED", savedCard: key });
