@@ -10,6 +10,7 @@ import {
 } from "@chairback/config";
 import { SERVICE_VISIBILITIES } from "@chairback/config/serviceVisibility";
 import { describeBlockScope } from "@chairback/config/blockScope";
+import { parseHolidayNames } from "@chairback/config/servicePricing";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -73,6 +74,8 @@ import {
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import { registerSeriesEdit } from "./booking.seriesEdit.js";
 import { registerBlockRoutes } from "./booking.blocks.js";
+import { registerSpecialDayRoutes } from "./booking.specialDays.js";
+import { deleteOpeningsKeepingSpecialDaysClosed, SPECIAL_DAY_PATTERN, specialDayRuleIds } from "../engines/specialDay.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
 import { registerUnfinishedBookings } from "./booking.unfinished.js";
 import { registerDepositRefund, registerTipRefund } from "./booking.depositRefund.js";
@@ -395,13 +398,17 @@ const serviceSchema = z
 
 bookingDashboardRouter.get("/services", async (req, res) => {
   const db = forShop(req.shop!.id);
-  const [services, links] = await Promise.all([
+  const [services, links, shopNames] = await Promise.all([
     db.service.findMany({
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     }),
     db.serviceStaff.findMany({ select: { serviceId: true, staffId: true } }),
+    prisma.shop.findUnique({ where: { id: req.shop!.id }, select: { holidayNames: true } }),
   ]);
   res.json({
+    // The shop's names for its priced dates ({"2026-11-26": "Thanksgiving"}),
+    // shown on the Holiday pricing card beside the prices.
+    holidayNames: parseHolidayNames(shopNames?.holidayNames),
     services: services.map((s) => ({
       ...s,
       price: s.price === null ? null : Number(s.price),
@@ -1572,6 +1579,7 @@ bookingDashboardRouter.put("/staff/:id/availability", teamScheduleHook, async (r
 // Block off time - create (one barber or several, days, a long absence, a
 // bounded weekly repeat), read, edit, remove. routes/booking.blocks.ts.
 registerBlockRoutes(bookingDashboardRouter);
+registerSpecialDayRoutes(bookingDashboardRouter);
 
 //  Acuity calendar mapping (which Acuity calendar is which chair)
 
@@ -5554,6 +5562,9 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
     }),
   }));
   const tz = shop?.timezone ?? "America/New_York";
+  // A special day's rule is listed like any batch, but is removed and changed
+  // from the Special day card (its blocks go with it) - see engines/specialDay.ts.
+  const specialDays = await specialDayRuleIds(prisma, tsShopId, rules.map((r) => r.id));
   res.json({
     targetedSlots: slots.map((t) => ({
       ...t,
@@ -5574,6 +5585,7 @@ bookingDashboardRouter.get("/targeted-slots", async (req, res) => {
         serviceId: r.serviceId,
         serviceIds: slotServiceIds(r),
         draft: r.draft,
+        specialDay: specialDays.has(r.id),
         label: r.label,
         schedule: effectiveSchedule(
           { anchor: r.anchor, schedule: r.schedule },
@@ -5990,6 +6002,11 @@ bookingDashboardRouter.delete("/targeted-slots/rules/:id", async (req, res) => {
         startsAt: { gt: new Date() },
       },
     });
+    // A special day's blocks close the chair's normal schedule around its
+    // openings; with the openings gone they must go too, or the day stays shut.
+    await tx.availabilityException.deleteMany({
+      where: { shopId, groupId: ruleId, pattern: SPECIAL_DAY_PATTERN },
+    });
     return removed.count;
   });
   if (result === null) {
@@ -6010,9 +6027,12 @@ bookingDashboardRouter.post("/targeted-slots/bulk-delete", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const { count } = await forShop(req.shop!.id).targetedSlot.deleteMany({
-    where: { id: { in: parsed.data.ids }, bookedAppointmentId: null },
-  });
+  // A special day's opening leaves its span closed, not reopened to the
+  // normal grid (see deleteOpeningsKeepingSpecialDaysClosed).
+  const shopId = req.shop!.id;
+  const count = await runWithShop(shopId, (tx) =>
+    deleteOpeningsKeepingSpecialDaysClosed(tx, shopId, parsed.data.ids),
+  );
   res.json({ ok: true, removed: count });
 });
 
@@ -6060,6 +6080,14 @@ bookingDashboardRouter.patch("/targeted-slots/rules/:id", async (req, res) => {
   });
   if (!shop) {
     res.status(404).json({ ok: false });
+    return;
+  }
+  // A special day is not a weekly series: its openings were spaced around the
+  // turnover buffer and around bookings already on the chair, and blocks close
+  // the rest of the day. Regenerating it from the schedule would ignore both,
+  // so it is changed by removing and republishing it (engines/specialDay.ts).
+  if ((await specialDayRuleIds(prisma, shopId, [req.params.id!])).size > 0) {
+    res.status(409).json({ error: "special_day" });
     return;
   }
   const tz = shop.timezone;
@@ -6299,10 +6327,16 @@ bookingDashboardRouter.patch("/targeted-slots/:id", async (req, res) => {
   const db = forShop(req.shop!.id);
   const existing = await db.targetedSlot.findFirst({
     where: { id: req.params.id },
-    select: { bookedAppointmentId: true, startsAt: true },
+    select: { bookedAppointmentId: true, startsAt: true, ruleId: true },
   });
   if (!existing) {
     res.status(404).json({ ok: false });
+    return;
+  }
+  // Moving or resizing one opening of a special day would open a hole in the
+  // day's closed schedule. Remove the day and plan it again instead.
+  if (existing.ruleId && (await specialDayRuleIds(prisma, req.shop!.id, [existing.ruleId])).size > 0) {
+    res.status(409).json({ ok: false, error: "special_day" });
     return;
   }
   if (existing.bookedAppointmentId !== null) {
@@ -6332,11 +6366,14 @@ bookingDashboardRouter.patch("/targeted-slots/:id", async (req, res) => {
 });
 
 // Delete an UNBOOKED targeted slot (a booked one is history - 409).
+// An opening of a special day leaves its span closed (the normal grid must not
+// fill a hole inside Thanksgiving).
 bookingDashboardRouter.delete("/targeted-slots/:id", async (req, res) => {
-  const db = forShop(req.shop!.id);
-  const { count } = await db.targetedSlot.deleteMany({
-    where: { id: req.params.id, bookedAppointmentId: null },
-  });
+  const shopId = req.shop!.id;
+  const db = forShop(shopId);
+  const count = await runWithShop(shopId, (tx) =>
+    deleteOpeningsKeepingSpecialDaysClosed(tx, shopId, [req.params.id!]),
+  );
   if (count === 0) {
     const exists = await db.targetedSlot.count({ where: { id: req.params.id } });
     res.status(exists > 0 ? 409 : 404).json({ ok: false });

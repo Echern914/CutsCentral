@@ -426,6 +426,12 @@ model Shop {
   // Gallery photos with optional per-photo captions: [{ url, caption? }, ...].
   // Migrated from galleryUrls; galleryUrls is kept for one release as a safety net.
   galleryItems      Json     @default("[]")
+  // Holiday NAMES: {"YYYY-MM-DD": "Thanksgiving"}, shop-local dates. The
+  // price stays on each Service.dateOverrides; the name is the shop's name for
+  // the date, so it lives once here instead of on every service. Written with
+  // the prices in one transaction (PUT /api/booking/holidays). Read through
+  // parseHolidayNames (config/servicePricing.ts).
+  holidayNames      Json     @default("{}")
   // Per-shop styling so each page looks like THEIR shop (see PAGE_FONTS /
   // LAYOUT_STYLES / PAGE_SECTIONS in config). All optional; null = the default.
   fontKey           String? // PAGE_FONTS key (typography pairing)

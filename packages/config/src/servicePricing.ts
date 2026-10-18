@@ -256,6 +256,29 @@ export function parseDateOverrides(raw: unknown): Record<string, number> {
   return out;
 }
 
+/** The longest holiday name a shop may store ("Thanksgiving", "Day before prom"). */
+export const MAX_HOLIDAY_NAME = 40;
+
+/**
+ * Shop.holidayNames ({"YYYY-MM-DD": "Thanksgiving"}) read defensively: the
+ * same real-date rule as parseDateOverrides, trimmed, empty names dropped and
+ * long ones cut to MAX_HOLIDAY_NAME. A name is display only - it never changes
+ * a price; the price for the date still comes from each service's dateOverrides.
+ */
+export function parseHolidayNames(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const entries = Object.entries(raw as Record<string, unknown>);
+    const realDates = parseDateOverrides(Object.fromEntries(entries.map(([k]) => [k, 0])));
+    for (const [k, v] of entries) {
+      if (!(k in realDates) || typeof v !== "string") continue;
+      const name = v.trim().slice(0, MAX_HOLIDAY_NAME);
+      if (name) out[k] = name;
+    }
+  }
+  return out;
+}
+
 /**
  * The price in effect at an instant, MOST SPECIFIC LAYER FIRST: the named
  * calendar date, else its time-of-day window's price when the shop-local start

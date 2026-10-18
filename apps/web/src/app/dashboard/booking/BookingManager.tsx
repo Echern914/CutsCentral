@@ -39,6 +39,7 @@ import { UnfinishedBookings } from "./UnfinishedBookings";
 import { ConflictInbox, ConflictTabBadge, useUnresolvedConflictCount } from "./ConflictInbox";
 import { ShopQrCard } from "./ShopQrCard";
 import { HolidayPricing } from "./HolidayPricing";
+import { SpecialDayCard } from "./SpecialDayCard";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import { AcuityCalendarMap } from "./AcuityCalendarMap";
 import { AcuityServiceImport } from "./AcuityServiceImport";
@@ -189,6 +190,7 @@ export function BookingManager({
   connect,
   initialStaff,
   initialServices,
+  holidayNames,
   initialServiceGroups,
   initialAddOns,
   initialQuestions,
@@ -206,6 +208,8 @@ export function BookingManager({
   connect: ConnectStatus;
   initialStaff: StaffRow[];
   initialServices: ServiceRow[];
+  /** The shop's names for its holiday dates (Holiday pricing card). */
+  holidayNames?: Record<string, string>;
   initialServiceGroups: ServiceGroupRow[];
   initialAddOns: AddOnRow[];
   initialQuestions: BookingQuestionRow[];
@@ -386,6 +390,7 @@ export function BookingManager({
         <div data-tour="booking-setup">
           <ServicesTab
             initial={initialServices}
+            holidayNames={holidayNames}
             staff={initialStaff}
             initialServiceGroups={initialServiceGroups}
             initialAddOns={initialAddOns}
@@ -1152,6 +1157,7 @@ export function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast
 
 export function ServicesTab({
   initial,
+  holidayNames,
   staff,
   initialServiceGroups,
   initialAddOns,
@@ -1161,6 +1167,7 @@ export function ServicesTab({
   acuityConnected,
 }: {
   initial: ServiceRow[];
+  holidayNames?: Record<string, string>;
   staff: StaffRow[];
   initialServiceGroups: ServiceGroupRow[];
   initialAddOns: AddOnRow[];
@@ -1172,6 +1179,9 @@ export function ServicesTab({
   acuityConnected: boolean;
 }) {
   const vocab = useVocab();
+  // Bumped when a special day is published or removed, so the Targeted slots
+  // card (which loads its own list) shows the new openings.
+  const [specialsVersion, setSpecialsVersion] = useState(0);
   const [name, setName] = useState("");
   const [duration, setDuration] = useState(30);
   const [price, setPrice] = useState("");
@@ -1544,11 +1554,29 @@ export function ServicesTab({
       {/* Holiday pricing, shop-wide. The per-service editor can still set a
           date one service at a time; this is the same data grouped BY DATE,
           which is how a barber actually thinks about a holiday. */}
-      <HolidayPricing services={initial} timezone={timezone} toast={toast} />
+      <HolidayPricing services={initial} names={holidayNames} timezone={timezone} toast={toast} />
+
+      {/* Special day, right under Holiday pricing: the same "a date is
+          different" thought, taken past price to the whole day's times. It
+          publishes targeted slots, so the Targeted slots card below re-reads
+          when one is published or removed (the key). */}
+      <SpecialDayCard
+        services={initial}
+        staff={staff}
+        timezone={timezone}
+        toast={toast}
+        onChanged={() => setSpecialsVersion((v) => v + 1)}
+      />
 
       <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
 
-      <TargetedSlotsManager services={initial} staff={staff} timezone={timezone} toast={toast} />
+      <TargetedSlotsManager
+        key={specialsVersion}
+        services={initial}
+        staff={staff}
+        timezone={timezone}
+        toast={toast}
+      />
     </div>
   );
 }
@@ -2921,7 +2949,9 @@ function TargetedSlotsManager({
               // find out, not what you scan the list by.
               title={rule.label?.trim() || nameOf(services, rule.serviceId)}
               subtitle={
-                next
+                rule.specialDay && next
+                  ? `Special day · ${whenFmt.format(new Date(next.startsAt))}`
+                  : next
                   ? `Next ${whenFmt.format(new Date(next.startsAt))}`
                   : rule.indefinite
                     ? "Repeats weekly"
@@ -2949,21 +2979,29 @@ function TargetedSlotsManager({
               }
               actions={
                 <>
-                  <button
-                    onClick={() => beginEditRule(rule)}
-                    disabled={pending}
-                    className="text-xs text-gold hover:underline disabled:opacity-50"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => duplicateRule(rule)}
-                    disabled={pending}
-                    aria-label={`Duplicate ${rule.label?.trim() || "series"}`}
-                    className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
-                  >
-                    Duplicate
-                  </button>
+                  {/* A special day is changed on its own card (Special day,
+                      beside Holiday pricing): its openings were spaced around
+                      bookings and its blocks close the rest of the day, which
+                      the weekly-series editor knows nothing about. */}
+                  {!rule.specialDay && (
+                    <>
+                      <button
+                        onClick={() => beginEditRule(rule)}
+                        disabled={pending}
+                        className="text-xs text-gold hover:underline disabled:opacity-50"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => duplicateRule(rule)}
+                        disabled={pending}
+                        aria-label={`Duplicate ${rule.label?.trim() || "series"}`}
+                        className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
+                      >
+                        Duplicate
+                      </button>
+                    </>
+                  )}
                   <button
                     onClick={() => removeRule(rule)}
                     disabled={pending}

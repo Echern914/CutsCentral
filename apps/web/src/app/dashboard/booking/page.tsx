@@ -345,7 +345,7 @@ export default async function BookingPage({
     await Promise.all([
       apiGet<BookingShop>("/api/shops/me"),
       apiGet<{ staff: StaffRow[] }>("/api/booking/staff"),
-      apiGet<{ services: ServiceRow[] }>("/api/booking/services"),
+      apiGet<{ services: ServiceRow[]; holidayNames?: Record<string, string> }>("/api/booking/services"),
       apiGet<{ groups: ServiceGroupRow[] }>("/api/booking/groups"),
       apiGet<{ addOns: AddOnRow[] }>("/api/booking/addons"),
       apiGet<{ questions: BookingQuestionRow[] }>("/api/booking/questions"),
@@ -406,6 +406,7 @@ export default async function BookingPage({
         connect={connect}
         initialStaff={staffRes.data?.staff ?? []}
         initialServices={servicesRes.data?.services ?? []}
+        holidayNames={servicesRes.data?.holidayNames ?? {}}
         initialServiceGroups={groupsRes.data?.groups ?? []}
         initialAddOns={addOnsRes.data?.addOns ?? []}
         initialQuestions={questionsRes.data?.questions ?? []}
