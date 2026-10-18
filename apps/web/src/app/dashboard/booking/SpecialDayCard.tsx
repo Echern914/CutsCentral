@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { MinutesField, MoneyField } from "@/components/ui/UnitField";
 import { cap, useVocab } from "@/components/VocabProvider";
@@ -89,7 +89,22 @@ export function SpecialDayCard({
   // The list of upcoming special days. null = still loading.
   const [rows, setRows] = useState<SpecialDayRow[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [pending, start] = useTransition();
+  // A plain async handler + busy flag (not useTransition: an async transition
+  // is a type error under this app's dual @types/react). The ref is the
+  // double-tap guard; the state drives the disabled buttons.
+  const [pending, setPending] = useState(false);
+  const inFlight = useRef(false);
+  async function run(work: () => Promise<void>) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setPending(true);
+    try {
+      await work();
+    } finally {
+      inFlight.current = false;
+      setPending(false);
+    }
+  }
 
   // The builder.
   const [open, setOpen] = useState(false);
@@ -107,14 +122,17 @@ export function SpecialDayCard({
   // first answer on the server instead of publishing twice.
   const requestId = useRef<string>(newRequestId());
 
+  // The list loads on its own, never behind the busy flag: a reload after a
+  // publish must not hold the buttons or be dropped by the double-tap guard.
   function load() {
-    start(async () => {
-      const r = await listSpecialDaysAction();
-      if (r.ok && r.specialDays) {
-        setRows(r.specialDays);
-        setLoadFailed(false);
-      } else setLoadFailed(true);
-    });
+    void listSpecialDaysAction()
+      .then((r) => {
+        if (r.ok && r.specialDays) {
+          setRows(r.specialDays);
+          setLoadFailed(false);
+        } else setLoadFailed(true);
+      })
+      .catch(() => setLoadFailed(true));
   }
   useEffect(() => {
     load();
@@ -186,7 +204,7 @@ export function SpecialDayCard({
       return;
     }
     setProblem(null);
-    start(async () => {
+    void run(async () => {
       const r = await previewSpecialDayAction(input);
       if (r.ok) {
         requestId.current = newRequestId();
@@ -204,7 +222,7 @@ export function SpecialDayCard({
       requestId: requestId.current,
       expectOpenings: total,
     };
-    start(async () => {
+    void run(async () => {
       const r = await publishSpecialDayAction(input);
       if (r.ok) {
         toast(
@@ -234,7 +252,7 @@ export function SpecialDayCard({
       `Remove ${label} on ${prettyDate(first.date)}? Its open times are deleted and the normal schedule comes back.` +
       (booked > 0 ? ` ${booked} booked visit${booked === 1 ? "" : "s"} stay booked.` : "");
     if (!window.confirm(question)) return;
-    start(async () => {
+    void run(async () => {
       const r = await removeSpecialDaysAction(group.map((g) => g.ruleId));
       if (r.ok) {
         toast(

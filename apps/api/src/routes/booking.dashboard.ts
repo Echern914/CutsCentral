@@ -75,7 +75,7 @@ import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import { registerSeriesEdit } from "./booking.seriesEdit.js";
 import { registerBlockRoutes } from "./booking.blocks.js";
 import { registerSpecialDayRoutes } from "./booking.specialDays.js";
-import { SPECIAL_DAY_PATTERN, specialDayRuleIds } from "../engines/specialDay.js";
+import { deleteOpeningsKeepingSpecialDaysClosed, SPECIAL_DAY_PATTERN, specialDayRuleIds } from "../engines/specialDay.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
 import { registerUnfinishedBookings } from "./booking.unfinished.js";
 import { registerDepositRefund, registerTipRefund } from "./booking.depositRefund.js";
@@ -6026,9 +6026,12 @@ bookingDashboardRouter.post("/targeted-slots/bulk-delete", async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const { count } = await forShop(req.shop!.id).targetedSlot.deleteMany({
-    where: { id: { in: parsed.data.ids }, bookedAppointmentId: null },
-  });
+  // A special day's opening leaves its span closed, not reopened to the
+  // normal grid (see deleteOpeningsKeepingSpecialDaysClosed).
+  const shopId = req.shop!.id;
+  const count = await runWithShop(shopId, (tx) =>
+    deleteOpeningsKeepingSpecialDaysClosed(tx, shopId, parsed.data.ids),
+  );
   res.json({ ok: true, removed: count });
 });
 
@@ -6323,10 +6326,16 @@ bookingDashboardRouter.patch("/targeted-slots/:id", async (req, res) => {
   const db = forShop(req.shop!.id);
   const existing = await db.targetedSlot.findFirst({
     where: { id: req.params.id },
-    select: { bookedAppointmentId: true, startsAt: true },
+    select: { bookedAppointmentId: true, startsAt: true, ruleId: true },
   });
   if (!existing) {
     res.status(404).json({ ok: false });
+    return;
+  }
+  // Moving or resizing one opening of a special day would open a hole in the
+  // day's closed schedule. Remove the day and plan it again instead.
+  if (existing.ruleId && (await specialDayRuleIds(prisma, req.shop!.id, [existing.ruleId])).size > 0) {
+    res.status(409).json({ ok: false, error: "special_day" });
     return;
   }
   if (existing.bookedAppointmentId !== null) {
@@ -6356,11 +6365,14 @@ bookingDashboardRouter.patch("/targeted-slots/:id", async (req, res) => {
 });
 
 // Delete an UNBOOKED targeted slot (a booked one is history - 409).
+// An opening of a special day leaves its span closed (the normal grid must not
+// fill a hole inside Thanksgiving).
 bookingDashboardRouter.delete("/targeted-slots/:id", async (req, res) => {
-  const db = forShop(req.shop!.id);
-  const { count } = await db.targetedSlot.deleteMany({
-    where: { id: req.params.id, bookedAppointmentId: null },
-  });
+  const shopId = req.shop!.id;
+  const db = forShop(shopId);
+  const count = await runWithShop(shopId, (tx) =>
+    deleteOpeningsKeepingSpecialDaysClosed(tx, shopId, [req.params.id!]),
+  );
   if (count === 0) {
     const exists = await db.targetedSlot.count({ where: { id: req.params.id } });
     res.status(exists > 0 ? 409 : 404).json({ ok: false });

@@ -325,6 +325,47 @@ describe("with a turnover buffer", () => {
   });
 });
 
+describe("deleting single openings of a special day", () => {
+  const date = daysOut(12);
+
+  it("keeps their spans closed: no normal slot appears inside the day", async () => {
+    const res = await dash("post", "/special-days").send(body(date));
+    expect(res.status).toBe(201);
+    const ruleId = res.body.created[0].ruleId as string;
+    const slotAt = (hhmm: string) => prisma.targetedSlot.findFirstOrThrow({ where: { ruleId, startsAt: at(date, hhmm) } });
+
+    // One by the single delete, two by the bulk delete.
+    const noon = await slotAt("12:00");
+    expect((await dash("delete", `/targeted-slots/${noon.id}`)).status).toBe(200);
+    const bulk = await dash("post", "/targeted-slots/bulk-delete").send({
+      ids: [(await slotAt("13:00")).id, (await slotAt("13:20")).id],
+    });
+    expect(bulk.body.removed).toBe(2);
+
+    // The holes are closed, not handed back to the normal grid.
+    const cut = await daySlots(date, cutId);
+    expect(cut.normal).toEqual([]);
+    expect(cut.special).toHaveLength(21);
+    expect((await daySlots(date, beardId)).normal).toEqual([]);
+    expect((await book(at(date, "12:00"), cutId)).status).toBeGreaterThanOrEqual(400);
+    expect((await book(at(date, "13:00"), beardId)).status).toBeGreaterThanOrEqual(400);
+    // The neighbours still book.
+    const before = await slotAt("11:40");
+    expect((await book(before.startsAt, cutId, before.id)).status).toBe(201);
+    const after = await slotAt("12:20");
+    expect((await book(after.startsAt, cutId, after.id)).status).toBe(201);
+
+    // Moving one opening would open a hole too: refused.
+    const moved = await dash("patch", `/targeted-slots/${(await slotAt("15:00")).id}`).send({ price: 10 });
+    expect(moved.status).toBe(409);
+
+    // Removing the whole day still cleans up every block, these included.
+    expect((await dash("post", "/special-days/remove").send({ ruleIds: [ruleId] })).status).toBe(200);
+    expect(await prisma.availabilityException.count({ where: { groupId: ruleId } })).toBe(0);
+    expect((await daySlots(date, beardId)).normal.length).toBeGreaterThan(0);
+  });
+});
+
 describe("named holidays, saved in one transaction", () => {
   const d1 = daysOut(20);
   const d2 = daysOut(21);

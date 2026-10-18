@@ -486,3 +486,72 @@ export async function specialDayRuleIds(
   });
   return new Set(marks.map((m) => m.groupId!));
 }
+
+/**
+ * Delete hand-picked UNBOOKED openings, keeping a special day's span closed.
+ *
+ * A special day closes the chair's normal schedule with blocks over everything
+ * EXCEPT its openings. Deleting one opening without more would leave a hole
+ * the normal grid fills - on Thanksgiving that sells a regular-length,
+ * regular-price slot inside the special day. So an opening that belongs to a
+ * special day is replaced by a special_day block over the span it owned: from
+ * its start to the next thing in the day (the next opening or the next block),
+ * which by construction is its length plus the buffer. Removing the whole day
+ * still deletes every block of the group, these included.
+ *
+ * Each row is deleted on its own guarded write, so an opening a client claims
+ * mid-request stays (booked) and gets no block over it. Runs inside the
+ * caller's transaction. Returns how many were deleted.
+ */
+export async function deleteOpeningsKeepingSpecialDaysClosed(
+  tx: Prisma.TransactionClient,
+  shopId: string,
+  ids: string[],
+): Promise<number> {
+  const rows = await tx.targetedSlot.findMany({
+    where: { shopId, id: { in: ids }, bookedAppointmentId: null },
+    select: { id: true, ruleId: true, staffId: true, startsAt: true, durationMin: true },
+  });
+  const special = await specialDayRuleIds(
+    tx,
+    shopId,
+    [...new Set(rows.map((r) => r.ruleId).filter((r): r is string => r !== null))],
+  );
+  let deleted = 0;
+  for (const row of rows) {
+    const gone = await tx.targetedSlot.deleteMany({ where: { id: row.id, bookedAppointmentId: null } });
+    if (gone.count === 0) continue;
+    deleted += 1;
+    if (row.ruleId === null || !special.has(row.ruleId)) continue;
+    const [nextSlot, nextBlock] = await Promise.all([
+      tx.targetedSlot.findFirst({
+        where: { shopId, ruleId: row.ruleId, startsAt: { gt: row.startsAt } },
+        orderBy: { startsAt: "asc" },
+        select: { startsAt: true },
+      }),
+      tx.availabilityException.findFirst({
+        where: { shopId, groupId: row.ruleId, pattern: SPECIAL_DAY_PATTERN, startsAt: { gt: row.startsAt } },
+        orderBy: { startsAt: "asc" },
+        select: { startsAt: true, reason: true },
+      }),
+    ]);
+    const fallback = row.startsAt.getTime() + row.durationMin * 60_000;
+    const end = Math.min(
+      nextSlot?.startsAt.getTime() ?? Infinity,
+      nextBlock?.startsAt.getTime() ?? Infinity,
+    );
+    await tx.availabilityException.create({
+      data: {
+        shopId,
+        staffId: row.staffId,
+        startsAt: row.startsAt,
+        endsAt: new Date(Number.isFinite(end) ? end : fallback),
+        isBlock: true,
+        reason: nextBlock?.reason ?? "Special day - only its special openings are bookable",
+        groupId: row.ruleId,
+        pattern: SPECIAL_DAY_PATTERN,
+      },
+    });
+  }
+  return deleted;
+}
