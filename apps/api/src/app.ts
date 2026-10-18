@@ -53,6 +53,7 @@ import { mcpConnectionsRouter } from "./routes/mcp.connections.js";
 import { readinessRouter } from "./routes/readiness.js";
 import { onboardingRouter } from "./routes/onboarding.js";
 import { bookedOutRouter } from "./routes/bookedOut.js";
+import { openSlotsRouter } from "./routes/openSlots.js";
 import { teamRouter } from "./routes/team.js";
 import { teamJoinRouter } from "./routes/teamJoin.js";
 import { teamsRouter } from "./routes/teams.js";
@@ -291,6 +292,8 @@ export function createApp(): Express {
   app.use("/api/onboarding", dashboardLimiter, onboardingRouter);
   // "How do I get booked out more?" from the shop's own numbers (Assistant).
   app.use("/api/assistant/booked-out", bookedOutRouter);
+  // "How many slots do I have open next week?" from the shop's own calendar.
+  app.use("/api/assistant/open-slots", openSlotsRouter);
   // The barber's own list of connected assistants, and the disconnect button.
   // NEVER WALLED and never plan-gated: a shop that lapsed or downgraded must
   // still be able to SEE and REVOKE what it connected while it was paying.
