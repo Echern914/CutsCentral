@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_HOLIDAY_NAME, parseHolidayNames } from "./servicePricing";
+import { MAX_HOLIDAY_NAME, parseHolidayNames } from "./servicePricing.js";
 
 describe("parseHolidayNames", () => {
   it("keeps real dates with a name, trimmed", () => {
