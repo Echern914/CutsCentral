@@ -275,6 +275,7 @@ export interface AppointmentPassSource extends CancellationTermsSnapshot {
     connectChargesEnabled: boolean;
     stripeConnectAccountId: string | null;
     chargeCardOnFileFees: boolean;
+    cardFeeFlatCents: number | null;
   };
 }
 
@@ -326,6 +327,7 @@ export function buildAppointmentPassJson(
         depositAmountCents: appt.shop.depositAmountCents,
         requiresApproval: appt.shop.requireBookingApproval,
         chargeCardOnFileFees: terms.chargeCardOnFileFees,
+        cardFeeFlatCents: terms.cardFeeFlatCents,
         paymentsLive: appt.paymentsLive,
       });
 
@@ -462,6 +464,7 @@ export async function buildPassForAppointment(
             connectChargesEnabled: true,
             stripeConnectAccountId: true,
             chargeCardOnFileFees: true,
+            cardFeeFlatCents: true,
           },
         },
       },

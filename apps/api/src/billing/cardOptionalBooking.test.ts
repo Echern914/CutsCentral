@@ -335,6 +335,7 @@ describe("a card shop books without a card - the default", () => {
       clientSecret: `${row.stripeSetupIntentId}_secret`,
       serviceChargeConsent: false,
       chargesFees: false,
+      cardFee: null,
     });
 
     fake.succeed(row.stripeSetupIntentId);

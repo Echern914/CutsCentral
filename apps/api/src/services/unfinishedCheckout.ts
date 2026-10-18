@@ -1,4 +1,4 @@
-import type { CancellationTermsSnapshot } from "@chairback/config";
+import { statedCardOnFileFee, type CancellationTermsSnapshot } from "@chairback/config";
 import { prisma, runWithShop } from "@chairback/db";
 import { termsForBooking } from "./cancellationTerms.js";
 import { stripeClient } from "../billing/stripe.js";
@@ -140,7 +140,13 @@ export async function optionalCardStepFor(
     seriesId: string | null;
   } & CancellationTermsSnapshot,
   now: Date,
-): Promise<{ clientSecret: string; serviceChargeConsent: boolean; chargesFees: boolean } | null> {
+): Promise<{
+  clientSecret: string;
+  serviceChargeConsent: boolean;
+  chargesFees: boolean;
+  /** The fee in words, on this booking's terms; null when none would be charged. */
+  cardFee: string | null;
+} | null> {
   if (appt.status !== "BOOKED" || appt.startsAt.getTime() <= now.getTime()) return null;
   try {
     const select = {
@@ -172,6 +178,7 @@ export async function optionalCardStepFor(
       serviceChargeConsent: card.serviceChargeConsentAt !== null && card.serviceChargeWithdrawnAt === null,
       // The same fee terms the booking page's card step states.
       chargesFees: terms.chargeCardOnFileFees,
+      cardFee: statedCardOnFileFee(terms),
     };
   } catch (err) {
     // Stripe unreachable: the booking stands; the page just can't offer the card this time.

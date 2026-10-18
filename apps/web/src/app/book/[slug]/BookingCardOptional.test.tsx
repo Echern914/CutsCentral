@@ -216,6 +216,38 @@ describe("a card shop that books without a card", () => {
   });
 });
 
+describe("🔴 a card shop that charges no-shows states the fee on the card step", () => {
+  it("a flat fee: the card step says the condition AND the amount the server gave", async () => {
+    bookAction.mockResolvedValue(setupResponse(true));
+    const data = shopData(true);
+    data.shop.payment = {
+      ...data.shop.payment!,
+      sentence:
+        "no charge at booking; a card is kept on file and is charged only for a no-show or a cancellation inside the cancellation window (see the cancellation policy) - the fee is $25 (or the booked price, if less)",
+      cardFee: "$25 (or the booked price, if less)",
+    };
+    const confirm = await reachLastStep(data);
+    await act(async () => fireEvent.click(confirm));
+    expect(await screen.findByText("Add a card to keep on file")).toBeTruthy();
+    expect(screen.getByText(/It is charged only for a no-show or a cancellation inside the shop’s cancellation window/)).toBeTruthy();
+    expect(screen.getByText("$25 (or the booked price, if less)")).toBeTruthy();
+  });
+
+  it("no fee from the server: the condition alone, no figure", async () => {
+    bookAction.mockResolvedValue(setupResponse(true));
+    const data = shopData(true);
+    data.shop.payment = {
+      ...data.shop.payment!,
+      sentence: "no charge at booking; a card is kept on file and is charged only for a no-show",
+      cardFee: null,
+    };
+    const confirm = await reachLastStep(data);
+    await act(async () => fireEvent.click(confirm));
+    expect(await screen.findByText("Add a card to keep on file")).toBeTruthy();
+    expect(screen.queryByText(/the fee is/)).toBeNull();
+  });
+});
+
 describe("a card shop that requires the card (card-or-nothing)", () => {
   it("still says 'Not booked yet', asks for the card to confirm, and offers no Skip", async () => {
     bookAction.mockResolvedValue(setupResponse(false));

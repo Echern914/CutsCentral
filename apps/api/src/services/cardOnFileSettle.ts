@@ -167,6 +167,7 @@ export async function cardOnFileFeeFor(params: {
     priceCents,
     cancelWindowHours: params.terms.cancelWindowHours,
     cancelFeeBps: params.terms.cancelFeeBps,
+    cardFeeFlatCents: params.terms.cardFeeFlatCents,
     startsAt: params.startsAt,
     now: params.now,
     reason: params.reason,

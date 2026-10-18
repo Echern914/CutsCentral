@@ -68,6 +68,8 @@ export interface ManageData {
     serviceChargeConsent: boolean;
     /** The shop charges a saved card for a no-show or a late cancel. Optional = an older API. */
     chargesFees?: boolean;
+    /** That fee in words, on this booking's terms. Optional = an older API. */
+    cardFee?: string | null;
   } | null;
   /** The card never arrived before the hold ran out: this was never a booking. */
   neverBooked?: boolean;

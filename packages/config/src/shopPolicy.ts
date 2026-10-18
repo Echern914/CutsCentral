@@ -57,6 +57,11 @@ export interface ShopPolicyInput {
    */
   chargeCardOnFileFees?: boolean;
   /**
+   * card_on_file only: the fee as a FLAT amount in cents instead of
+   * `cancelFeeBps` of the price. Null/undefined = the percentage.
+   */
+  cardFeeFlatCents?: number | null;
+  /**
    * card_on_file only: is the card a condition of the booking? `false` (the
    * shop default) = the client is booked at Confirm and the card step after it
    * is optional, so the prose must never say the card is needed to book.
@@ -134,7 +139,7 @@ function cardFeeIsReal(shop: ShopPolicyInput): boolean {
     shop.paymentsMode === "card_on_file" &&
     shop.chargeCardOnFileFees === true &&
     shop.cancelWindowHours > 0 &&
-    shop.cancelFeeBps > 0 &&
+    cardFeeConfigured(shop) &&
     shop.paymentsLive !== false &&
     shop.requiresApproval !== true
   );
@@ -195,15 +200,15 @@ export function describeCancellationPolicy(
   // Same window and rate, but the base is the price the booking was made at
   // (cardOnFileFeeCents), not money in hand.
   if (cardFeeIsReal(shop)) {
-    const pct = percentFromBps(shop.cancelFeeBps);
+    const fee = describeCardOnFileFee(shop);
     const hours = shop.cancelWindowHours;
     // By text no card is saved, so a booking made HERE is free to cancel - but
     // a client who booked online and saved a card, cancelling by text, is
     // charged. Said before the cancel, not discovered on a statement.
     if (channel.collectsAtBooking === false) {
-      return `free cancellation any time for a booking made in this conversation (no card is saved by text); a booking made online with a card kept on file is charged ${pct}% of its booked price for a cancellation inside ${hours}h of the start - check that booking (get_client_history) and say the charge before cancelling`;
+      return `free cancellation any time for a booking made in this conversation (no card is saved by text); a booking made online with a card kept on file is charged ${fee} for a cancellation inside ${hours}h of the start - check that booking (get_client_history) and say the charge before cancelling`;
     }
-    return `free up to ${hours}h before; inside that window ${pct}% of the booked price is charged to a card kept on file`;
+    return `free up to ${hours}h before; inside that window ${fee} is charged to a card kept on file`;
   }
   // A fee needs something to take it FROM. cancelAppointment computes it as a
   // share of what was COLLECTED, so with no payment row the fee is zero
@@ -235,13 +240,16 @@ export function describeDepositPolicy(
       return "none up front - pay at the shop";
     }
     // Booked either way: the card is asked for, never a condition.
+    // The fee itself is said wherever one is set, so the figure the client
+    // agrees to is the figure cardOnFileFeeCents charges.
+    const fee = cardFeeConfigured(shop) ? ` - the fee is ${describeCardOnFileFee(shop)}` : "";
     if (shop.requireCardToBook === false) {
       return shop.chargeCardOnFileFees
-        ? "no charge at booking; you're booked with or without a card, and a card you save is kept on file and charged only for a no-show or a cancellation inside the cancellation window (see the cancellation policy)"
+        ? `no charge at booking; you're booked with or without a card, and a card you save is kept on file and charged only for a no-show or a cancellation inside the cancellation window (see the cancellation policy)${fee}`
         : "no charge at booking; you're booked with or without a card, and a card you save is kept on file and not charged unless the shop turns on no-show fees - pay at the shop";
     }
     return shop.chargeCardOnFileFees
-      ? "no charge at booking; a card is kept on file and is charged only for a no-show or a cancellation inside the cancellation window (see the cancellation policy)"
+      ? `no charge at booking; a card is kept on file and is charged only for a no-show or a cancellation inside the cancellation window (see the cancellation policy)${fee}`
       : "no charge at booking; a card is kept on file and is not charged unless the shop turns on no-show fees - pay at the shop";
   }
 
@@ -315,13 +323,16 @@ export function describeShopPolicy(shop: ShopPolicyInput): string {
 }
 
 /**
- * The three settings a cancellation or a no-show is SETTLED by - the window,
- * the fee rate, and whether a kept card may be charged at all.
+ * The settings a cancellation or a no-show is SETTLED by - the window, the
+ * fee rate, whether a kept card may be charged at all, and (card on file) a
+ * flat fee in place of the rate.
  */
 export interface CancellationTerms {
   cancelWindowHours: number;
   cancelFeeBps: number;
   chargeCardOnFileFees: boolean;
+  /** Card on file: a flat fee in cents instead of the rate. Null = the rate. */
+  cardFeeFlatCents: number | null;
 }
 
 /** Those terms as a booking carries them (Appointment.*AtBooking). */
@@ -329,6 +340,8 @@ export interface CancellationTermsSnapshot {
   cancelWindowHoursAtBooking: number | null;
   cancelFeeBpsAtBooking: number | null;
   cardOnFileFeesAtBooking: boolean | null;
+  /** NULL with the three above set = made on the percentage. */
+  cardFeeFlatCentsAtBooking: number | null;
 }
 
 /**
@@ -345,11 +358,13 @@ export function cancellationTermsSnapshot(shop: CancellationTerms): {
   cancelWindowHoursAtBooking: number;
   cancelFeeBpsAtBooking: number;
   cardOnFileFeesAtBooking: boolean;
+  cardFeeFlatCentsAtBooking: number | null;
 } {
   return {
     cancelWindowHoursAtBooking: shop.cancelWindowHours,
     cancelFeeBpsAtBooking: shop.cancelFeeBps,
     cardOnFileFeesAtBooking: shop.chargeCardOnFileFees,
+    cardFeeFlatCentsAtBooking: flatCardFeeCents(shop.cardFeeFlatCents),
   };
 }
 
@@ -373,12 +388,16 @@ export function bookingCancellationTerms(
       cancelWindowHours: shop.cancelWindowHours,
       cancelFeeBps: shop.cancelFeeBps,
       chargeCardOnFileFees: shop.chargeCardOnFileFees,
+      cardFeeFlatCents: shop.cardFeeFlatCents,
     };
   }
+  // A snapshot from before flat fees existed has no flat column: NULL, so it
+  // keeps the percentage it was made on, whatever the shop picks later.
   return {
     cancelWindowHours: appt.cancelWindowHoursAtBooking,
     cancelFeeBps: appt.cancelFeeBpsAtBooking,
     chargeCardOnFileFees: appt.cardOnFileFeesAtBooking,
+    cardFeeFlatCents: appt.cardFeeFlatCentsAtBooking ?? null,
   };
 }
 
@@ -565,12 +584,12 @@ export function describeNoShowPolicy(
   if (
     shop.paymentsMode === "card_on_file" &&
     shop.chargeCardOnFileFees &&
-    shop.cancelFeeBps > 0 &&
+    cardFeeConfigured(shop) &&
     channel.collectsAtBooking !== false &&
     shop.paymentsLive !== false &&
     !shop.requiresApproval
   ) {
-    return "a no-show is charged to the card on file under the cancellation policy - cancelling ahead of time avoids it";
+    return `a no-show is charged to the card on file - the fee is ${describeCardOnFileFee(shop)}; cancelling ahead of time avoids it`;
   }
   return collectsMoney(shop, channel)
     ? "a no-show keeps whatever was paid at booking - it is not refunded"
@@ -595,8 +614,14 @@ export type CardOnFileChargeReason = "no_show" | "late_cancel";
  *    cancels a day early with a 12h window owes nothing, exactly as they would
  *    have been refunded in full had they prepaid.
  *
- * Zero whenever the shop has no fee configured (window or percentage unset),
- * so a shop that keeps cards "just in case" and never set a fee can never be
+ * A FLAT fee (`cardFeeFlatCents`, e.g. $25) replaces the percentage when set,
+ * and is CAPPED AT THE PRICE, as the deposit is (depositChargeCents): a $25
+ * no-show fee on a $15 line-up charges $15. The percentage is capped the same
+ * way already (at most 100%). An unpriced booking charges nothing either way -
+ * there is no price to cap at, and guessing a fee is worse than not taking one.
+ *
+ * Zero whenever the shop has no fee configured (window or fee unset), so a
+ * shop that keeps cards "just in case" and never set a fee can never be
  * surprised by a charge. `chargeCardOnFileFees` - the master switch - is
  * checked by the CALLER, not here: this is the arithmetic, that is the policy.
  */
@@ -604,17 +629,69 @@ export function cardOnFileFeeCents(input: {
   priceCents: number | null;
   cancelWindowHours: number;
   cancelFeeBps: number;
+  /** A flat fee in cents instead of the rate. Null/undefined = the rate. */
+  cardFeeFlatCents?: number | null;
   startsAt: Date;
   now: Date;
   reason: CardOnFileChargeReason;
 }): number {
   if (!input.priceCents || input.priceCents <= 0) return 0;
-  if (input.cancelFeeBps <= 0) return 0;
+  if (!cardFeeConfigured(input)) return 0;
   if (input.reason === "late_cancel") {
     if (input.cancelWindowHours <= 0) return 0;
     const windowStart = input.startsAt.getTime() - input.cancelWindowHours * 3_600_000;
     if (input.now.getTime() < windowStart) return 0;
   }
-  return Math.floor((input.priceCents * input.cancelFeeBps) / 10000);
+  const flat = flatCardFeeCents(input.cardFeeFlatCents);
+  if (flat !== null) return Math.min(flat, input.priceCents);
+  return Math.floor((input.priceCents * Math.min(input.cancelFeeBps, 10000)) / 10000);
+}
+
+/** A usable flat fee, or null (the shop charges the percentage). */
+function flatCardFeeCents(cents: number | null | undefined): number | null {
+  return typeof cents === "number" && Number.isFinite(cents) && cents > 0 ? Math.floor(cents) : null;
+}
+
+/**
+ * Does this shop (or booking's terms) set a card-on-file fee at all - a flat
+ * amount, or a percentage above zero? The same test the arithmetic above
+ * makes, for every surface deciding whether to MENTION a fee.
+ */
+export function cardFeeConfigured(terms: {
+  cancelFeeBps: number;
+  cardFeeFlatCents?: number | null;
+}): boolean {
+  return flatCardFeeCents(terms.cardFeeFlatCents) !== null || terms.cancelFeeBps > 0;
+}
+
+/**
+ * THE card-on-file fee, in words - "$25 (or the booked price, if less)"
+ * or "50% of the booked price". Every surface that states the fee BEFORE it is
+ * charged (the booking page, the receptionist, the Wallet pass, readiness)
+ * says it with this, so the words and cardOnFileFeeCents cannot drift. Where
+ * one booking's exact figure is known, say that figure (cardOnFileFeeCents)
+ * instead.
+ */
+export function describeCardOnFileFee(terms: {
+  cancelFeeBps: number;
+  cardFeeFlatCents?: number | null;
+}): string {
+  const flat = flatCardFeeCents(terms.cardFeeFlatCents);
+  return flat !== null
+    ? `${dollarsFromCents(flat)} (or the booked price, if less)`
+    : `${percentFromBps(terms.cancelFeeBps)}% of the booked price`;
+}
+
+/**
+ * The fee a card step states beside "charged only for a no-show or a late
+ * cancel" - or null when these terms charge a kept card nothing (switch off,
+ * or no fee set), so the step says no figure it would not charge.
+ */
+export function statedCardOnFileFee(terms: {
+  chargeCardOnFileFees: boolean;
+  cancelFeeBps: number;
+  cardFeeFlatCents?: number | null;
+}): string | null {
+  return terms.chargeCardOnFileFees && cardFeeConfigured(terms) ? describeCardOnFileFee(terms) : null;
 }
 

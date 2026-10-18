@@ -354,6 +354,15 @@ export function BookingClient({
    * an authorisation to take money is not something to have by default.
    */
   const [serviceChargeConsent, setServiceChargeConsent] = useState(false);
+  // Card on file: the no-show / late-cancel fee, stated beside the condition
+  // in the server's words (config/shopPolicy statedCardOnFileFee) - the
+  // figure the client agrees to is the figure the settlement charges.
+  const cardFee = data.shop.payment?.cardFee ?? null;
+  const cardFeeClause = cardFee ? (
+    <>
+      {" "}- the fee is <strong className="text-offwhite">{cardFee}</strong>
+    </>
+  ) : null;
   // The shop's own policies and the lines the customer must tick ("Before you
   // book"). Every box starts unticked; Confirm waits until all are ticked.
   const bookingPolicy = useBookingPolicy(data.shop.bookingPolicy);
@@ -2271,11 +2280,11 @@ export function BookingClient({
                     {" "}As you agreed, the shop can also charge it for your service once
                     your appointment is finished
                     {data.shop.payment?.sentence.includes("charged only")
-                      ? <>, and for a no-show or a cancellation inside the shop&rsquo;s cancellation window.</>
+                      ? <>, and for a no-show or a cancellation inside the shop&rsquo;s cancellation window{cardFeeClause}.</>
                       : "."}
                   </>
                 ) : data.shop.payment?.sentence.includes("charged only") ? (
-                  <> It is charged only for a no-show or a cancellation inside the shop&rsquo;s cancellation window.</>
+                  <> It is charged only for a no-show or a cancellation inside the shop&rsquo;s cancellation window{cardFeeClause}.</>
                 ) : (
                   <> It is not charged unless the shop turns on no-show fees.</>
                 )}

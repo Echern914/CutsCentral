@@ -214,7 +214,7 @@ describe("renderPromptForShop", () => {
       });
       const text = (await renderPromptForShop(shop.id))!;
       expect(text).not.toContain("free cancellation any time before the appointment");
-      expect(text).toContain("charged 50% of its booked price for a cancellation inside 24h of the start");
+      expect(text).toContain("charged 50% of the booked price for a cancellation inside 24h of the start");
       // A booking made by text keeps no card, so it IS free - and that is said too.
       expect(text).toContain("free cancellation any time for a booking made in this conversation");
 
@@ -223,6 +223,15 @@ describe("renderPromptForShop", () => {
       const off = (await renderPromptForShop(shop.id))!;
       expect(off).toContain("free cancellation any time before the appointment");
       expect(off).not.toContain("50%");
+
+      // A FLAT fee: the receptionist quotes the amount, from the same words.
+      await prisma.shop.update({
+        where: { id: shop.id },
+        data: { chargeCardOnFileFees: true, cardFeeFlatCents: 2500 },
+      });
+      const flat = (await renderPromptForShop(shop.id))!;
+      expect(flat).toContain("charged $25 (or the booked price, if less) for a cancellation inside 24h of the start");
+      expect(flat).not.toContain("50%");
     } finally {
       delete process.env.STRIPE_SECRET_KEY;
       delete process.env.STRIPE_CONNECT_WEBHOOK_SECRET;

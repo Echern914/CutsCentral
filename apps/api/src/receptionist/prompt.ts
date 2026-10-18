@@ -219,6 +219,7 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
       // read here, so a card-on-file shop's receptionist said "free
       // cancellation" while services/cardOnFileSettle.ts charged the card.
       chargeCardOnFileFees: true,
+      cardFeeFlatCents: true,
       // CAPABILITY, not intent. paymentsMode says what the shop WANTS; these
       // say whether a card can actually be taken. A shop can sit in deposit
       // mode through all of Connect onboarding and collect nothing.

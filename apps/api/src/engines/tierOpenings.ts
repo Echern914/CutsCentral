@@ -760,6 +760,7 @@ export async function claimTierOpening(params: {
             cancelWindowHours: true,
             cancelFeeBps: true,
             chargeCardOnFileFees: true,
+            cardFeeFlatCents: true,
           },
         }),
         tx.service.findFirst({

@@ -587,3 +587,198 @@ describe("🔴 the appointment page states the late-cancel charge before Cancel"
     expect(page.body.lateCancelFee).toBeNull();
   });
 });
+
+/**
+ * 🔴 A FLAT FEE (Drick: "$25 for a no-show"). The charge takes the flat amount
+ * this booking was made with - capped at the booked price - and an owner
+ * changing it afterwards never reaches a booking already made.
+ */
+describe("🔴 a flat no-show fee", () => {
+  const setFlat = (cents: number | null) =>
+    prisma.shop.update({ where: { id: shopId }, data: { cardFeeFlatCents: cents } });
+  const flatOf = (appointmentId: string) =>
+    prisma.appointment
+      .findUnique({ where: { id: appointmentId }, select: { cardFeeFlatCentsAtBooking: true } })
+      .then((r) => r?.cardFeeFlatCentsAtBooking);
+
+  it("a no-show charges the flat $25 - not 50% of the $40 cut - and every surface said $25 first", async () => {
+    await setFlat(2500);
+    try {
+      // The booking page states the fee beside the card step.
+      const pub = await request(app).get(`/api/book/${slug}`);
+      expect(pub.body.shop.payment.cardFee).toBe("$25 (or the booked price, if less)");
+      expect(pub.body.shop.payment.sentence).toContain("the fee is $25 (or the booked price, if less)");
+
+      const b = await bookedWithCard(10, 14);
+      expect(await flatOf(b.appointmentId)).toBe(2500);
+      // The barber's Confirm no-show prompt quotes the same cents.
+      const detail = await onceStarted(b.appointmentId, () =>
+        request(app).get(`/api/booking/appointments/${b.appointmentId}/detail`).set("Cookie", cookie),
+      );
+      expect(detail.body.noShowFee).toMatchObject({ cents: 2500, last4: "4242" });
+
+      const res = await onceStarted(b.appointmentId, () =>
+        request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie),
+      );
+      expect(res.status).toBe(200);
+      expect(fake.state.charges).toHaveLength(1);
+      expect(fake.state.charges[0]!.params.amount).toBe(2500);
+      expect(await cardStatus(b.appointmentId)).toBe("charged");
+      expect(chargeEmails()[0]!.subject).toMatch(/\$25\.00 charged to your card/);
+    } finally {
+      await setFlat(null);
+    }
+  });
+
+  it("🔴 changed after booking ($25 -> $40, or back to %): the booking is still charged $25", async () => {
+    await setFlat(2500);
+    try {
+      const b = await bookedWithCard(10, 15);
+      const c = await bookedWithCard(10, 16);
+      await setFlat(4000);
+      await onceStarted(b.appointmentId, () =>
+        request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie),
+      );
+      await setFlat(null);
+      await onceStarted(c.appointmentId, () =>
+        request(app).post(`/api/booking/appointments/${c.appointmentId}/no-show`).set("Cookie", cookie),
+      );
+      expect(fake.state.charges.map((x) => x.params.amount)).toEqual([2500, 2500]);
+    } finally {
+      await setFlat(null);
+    }
+  });
+
+  it("🔴 booked on the percentage, the owner switches to flat after: the booking keeps 50% ($20)", async () => {
+    const b = await bookedWithCard(11, 14);
+    expect(await flatOf(b.appointmentId)).toBeNull();
+    await setFlat(2500);
+    try {
+      await onceStarted(b.appointmentId, () =>
+        request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie),
+      );
+      expect(fake.state.charges).toHaveLength(1);
+      expect(fake.state.charges[0]!.params.amount).toBe(2000);
+    } finally {
+      await setFlat(null);
+    }
+  });
+
+  it("🔴 a flat fee over the booked price charges the price ($60 flat on a $40 cut takes $40)", async () => {
+    await setFlat(6000);
+    try {
+      const b = await bookedWithCard(11, 15);
+      await onceStarted(b.appointmentId, () =>
+        request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie),
+      );
+      expect(fake.state.charges).toHaveLength(1);
+      expect(fake.state.charges[0]!.params.amount).toBe(4000);
+    } finally {
+      await setFlat(null);
+    }
+  });
+
+  it("🔴 booked while fees were OFF, a flat fee and the switch turned on after: nothing is charged", async () => {
+    await setFees(false);
+    await setFlat(2500);
+    try {
+      const b = await bookedWithCard(11, 16);
+      await setFees(true);
+      await onceStarted(b.appointmentId, () =>
+        request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie),
+      );
+      expect(fake.state.charges).toHaveLength(0);
+      expect(await cardStatus(b.appointmentId)).toBe("released");
+    } finally {
+      await setFees(true);
+      await setFlat(null);
+    }
+  });
+
+  it("a late cancel inside the window: the page quotes $25 and the cancel charges $25", async () =>
+    insideTheWindow(async (start) => {
+      await setFlat(2500);
+      try {
+        const b = await bookWithCardAt(later(start, 6), "FlatLate");
+        const page = await request(app).get(`/api/book/manage/${b.token}`);
+        expect(page.body.lateCancelFee).toMatchObject({ cents: 2500, inside: true });
+        await request(app).post(`/api/book/manage/${b.token}/cancel`);
+        expect(fake.state.charges).toHaveLength(1);
+        expect(fake.state.charges[0]!.params.amount).toBe(2500);
+      } finally {
+        await setFlat(null);
+      }
+    }));
+});
+
+/**
+ * THE SETTING: PATCH /api/payments/settings. Owner or manager only (the
+ * router's requireManager), $1..$1,000 or null, refused out of range rather
+ * than clamped - and a refused save changes nothing.
+ */
+describe("the flat fee setting", () => {
+  const extra: string[] = [];
+  async function seat(role: "MANAGER" | "BARBER") {
+    const e = `cofs-${role.toLowerCase()}-${randomToken(6)}@test.local`.toLowerCase();
+    extra.push(e);
+    const res = await request(app).post("/api/auth/signup").send({ email: e, password: "supersecret123", name: role, smsAttested: true });
+    expect(res.status).toBe(201);
+    const user = (await prisma.user.findUnique({ where: { email: e }, select: { id: true } }))!;
+    await prisma.shopMember.create({
+      data: { shopId, userId: user.id, role, ...(role === "BARBER" ? { staffId } : {}) },
+    });
+    return (res.headers["set-cookie"] as unknown as string[])[0]!;
+  }
+  const flatNow = () =>
+    prisma.shop.findUnique({ where: { id: shopId }, select: { cardFeeFlatCents: true } }).then((r) => r?.cardFeeFlatCents);
+  const patch = (c: string, body: Record<string, unknown>) =>
+    request(app).patch("/api/payments/settings").set("Cookie", c).send(body);
+
+  afterAll(async () => {
+    await prisma.shop.update({ where: { id: shopId }, data: { cardFeeFlatCents: null } });
+    for (const e of extra) {
+      const user = await prisma.user.findUnique({ where: { email: e } });
+      if (user) {
+        await prisma.shopMember.deleteMany({ where: { userId: user.id } });
+        await prisma.user.delete({ where: { id: user.id } });
+      }
+    }
+  });
+
+  it("the owner saves a flat amount, reads it back, and clears it with null", async () => {
+    const saved = await patch(cookie, { cardFeeFlatCents: 2500 });
+    expect(saved.status).toBe(200);
+    expect(await flatNow()).toBe(2500);
+    const status = await request(app).get("/api/payments/status").set("Cookie", cookie);
+    expect(status.body.cardFeeFlatCents).toBe(2500);
+    expect((await patch(cookie, { cardFeeFlatCents: null })).status).toBe(200);
+    expect(await flatNow()).toBeNull();
+  });
+
+  it("🔴 out of range or not whole cents is refused with 400, never clamped, and nothing changes", async () => {
+    await patch(cookie, { cardFeeFlatCents: 2500 });
+    for (const bad of [0, 99, 100_001, 25.5, -2500, "2500"]) {
+      const res = await patch(cookie, { cardFeeFlatCents: bad });
+      expect(res.status, String(bad)).toBe(400);
+      expect(res.body.error).toBe("invalid_input");
+    }
+    expect(await flatNow()).toBe(2500);
+    await patch(cookie, { cardFeeFlatCents: null });
+  });
+
+  it("a manager may set it; a barber seat is refused 403 and nothing changes", async () => {
+    const manager = await seat("MANAGER");
+    expect((await patch(manager, { cardFeeFlatCents: 3000 })).status).toBe(200);
+    expect(await flatNow()).toBe(3000);
+    const barber = await seat("BARBER");
+    const refused = await patch(barber, { cardFeeFlatCents: 9900 });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe("forbidden_role");
+    expect(await flatNow()).toBe(3000);
+    await patch(cookie, { cardFeeFlatCents: null });
+  });
+
+  it("🔴 the database refuses a flat fee outside $1..$1,000 even past the route", async () => {
+    await expect(prisma.shop.update({ where: { id: shopId }, data: { cardFeeFlatCents: 0 } })).rejects.toThrow();
+  });
+});

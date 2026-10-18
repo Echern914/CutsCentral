@@ -648,6 +648,12 @@ model Shop {
   // client who leaves it is still booked, never silently released. ON: the
   // time is held while they save a card, and released if they don't.
   requireCardToBook Boolean @default(false)
+  // Card on file: the no-show / late-cancel fee as a FLAT amount in cents,
+  // instead of cancelFeeBps of the price. Null (the default) = the percentage,
+  // as always. Capped at the booked price when charged (config/shopPolicy.ts
+  // cardOnFileFeeCents), like the deposit. Card on file only: prepaid money
+  // is still settled by cancelFeeBps.
+  cardFeeFlatCents Int?
   // Deposit mode: is the deposit kept when the CLIENT cancels? Default OFF
   // (follow the cancellation policy). A cancellation by the shop still refunds
   // in full. Read ONLY when a new booking is paid for - each booking snapshots
@@ -3569,6 +3575,9 @@ model Appointment {
   cancelWindowHoursAtBooking Int?
   cancelFeeBpsAtBooking      Int?
   cardOnFileFeesAtBooking    Boolean?
+  // Shop.cardFeeFlatCents as it stood at creation. NULL with the three above
+  // set = the booking was made on the percentage. Never set without them.
+  cardFeeFlatCentsAtBooking  Int?
   // Snapshot of the add-ons chosen at booking: [{name, durationMin, price}].
   // endsAt already includes their duration and priceAtBooking already includes
   // their price; this JSON preserves the itemized list for display even if an
