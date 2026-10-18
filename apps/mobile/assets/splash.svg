@@ -1,0 +1,28 @@
+<svg width="1284" height="1284" viewBox="0 0 1284 1284" xmlns="http://www.w3.org/2000/svg">
+  <!-- Launch splash, light (2026-10-17: white & gold is ChairBack's main look).
+       The app icon's chair mark (assets/icon.svg), centred at the same size the
+       dark splash used, on the web's warm white (--cb-bg #FAF8F3). The gold runs
+       a little deeper than the icon's so the mark holds on a light ground.
+       Rendered to splash.png at 1284x1284. -->
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#E6C964"/>
+      <stop offset="50%" stop-color="#D4AF37"/>
+      <stop offset="100%" stop-color="#9A7A1F"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="46%" r="30%">
+      <stop offset="0%" stop-color="#D4AF37" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#D4AF37" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1284" height="1284" fill="#FAF8F3"/>
+  <rect width="1284" height="1284" fill="url(#glow)"/>
+  <!-- The icon's 1024 grid, scaled to the dark splash's 512px tile at (386,386). -->
+  <g transform="translate(386 386) scale(0.5)" fill="none" stroke="url(#gold)" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="372" y="250" width="280" height="320" rx="70" stroke-width="44"/>
+    <rect x="452" y="186" width="120" height="60" rx="30" fill="url(#gold)" stroke-width="0"/>
+    <path d="M328 612 H696 a36 36 0 0 1 36 36 v40 a36 36 0 0 1 -36 36 H328 a36 36 0 0 1 -36 -36 v-40 a36 36 0 0 1 36 -36 Z" fill="url(#gold)" stroke-width="0"/>
+    <rect x="486" y="724" width="52" height="92" rx="14" fill="url(#gold)" stroke-width="0"/>
+    <path d="M388 838 H636" stroke-width="46"/>
+  </g>
+</svg>

@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { WebView, type WebViewProps } from "react-native-webview";
 import * as WebBrowser from "expo-web-browser";
+import { setStatusBarStyle } from "expo-status-bar";
 import { API_ORIGIN, NEXT_UP_WIDGET_ENABLED, WEB_ORIGIN } from "@/src/config";
 import { parseOpenAuthRequest, resumeUrl } from "@/src/nativeBridge";
 
@@ -23,6 +24,13 @@ const LOAD_TIMEOUT_MS = 20000;
 // Pages that should emit the cb:ready handshake. For URLs that don't (e.g. the
 // barber dashboard, which we don't control as tightly), onLoadEnd is the signal.
 const READY_MESSAGE = "cb:ready";
+/**
+ * The page says which theme it is showing ("cb:theme:light" | "cb:theme:dark",
+ * web lib/theme.ts). Light is the main look and the status bar defaults to dark
+ * icons; a barber who chose black & gold for their dashboard gets white icons
+ * there, so the clock and battery never vanish into the page.
+ */
+const THEME_MESSAGE = /^cb:theme:(light|dark)$/;
 
 /**
  * The shared WebView for every screen, tuned to feel like a native app rather
@@ -193,6 +201,7 @@ export function AppWebView({
   onNavigationStateChange: callerNavStateChange,
   webviewRef,
   extraBeforeContentLoaded,
+  onTheme,
   ...props
 }: WebViewProps & {
   awaitsReady?: boolean;
@@ -209,6 +218,11 @@ export function AppWebView({
    * optional.
    */
   extraBeforeContentLoaded?: string;
+  /**
+   * The theme the page says it is showing, for native chrome drawn around the
+   * WebView (the barber screen's Switch strip) to match it.
+   */
+  onTheme?: (theme: "light" | "dark") => void;
 }) {
   const [errored, setErrored] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -365,6 +379,12 @@ export function AppWebView({
         // signal that we can hide the spinner. Chain any caller-provided onMessage.
         onMessage={(e) => {
           if (e.nativeEvent.data === READY_MESSAGE) clearLoading();
+          const theme = THEME_MESSAGE.exec(e.nativeEvent.data);
+          if (theme) {
+            setStatusBarStyle(theme[1] === "dark" ? "light" : "dark");
+            onTheme?.(theme[1] as "light" | "dark");
+            return;
+          }
           const openAuth = parseOpenAuthRequest(e.nativeEvent.data, { apiOrigin: API_ORIGIN });
           if (openAuth) {
             void runOpenAuth(openAuth);
@@ -409,17 +429,17 @@ export function AppWebView({
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: "#0A0A0B" },
+  flex: { flex: 1, backgroundColor: "#FAF8F3" },
   overlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   center: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#FAF8F3",
     padding: 24,
   },
   title: { color: "#fff", fontSize: 18, fontWeight: "600" },
-  sub: { color: "#8a8a8f", fontSize: 14, marginTop: 6, textAlign: "center" },
+  sub: { color: "#78716C", fontSize: 14, marginTop: 6, textAlign: "center" },
   button: {
     backgroundColor: "#fff",
     borderRadius: 12,
@@ -427,5 +447,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
     marginTop: 18,
   },
-  buttonText: { color: "#0A0A0B", fontSize: 15, fontWeight: "600" },
+  buttonText: { color: "#1C1917", fontSize: 15, fontWeight: "600" },
 });

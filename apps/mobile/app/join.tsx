@@ -41,14 +41,14 @@ import {
  */
 
 const COLORS = {
-  bg: "#0A0A0B",
-  surface: "#161618",
-  border: "rgba(245,245,244,0.10)",
+  bg: "#FAF8F3",
+  surface: "#FFFFFF",
+  border: "rgba(28,25,23,0.15)",
   gold: "#D4AF37",
   goldMuted: "#B8962F",
-  text: "#F5F5F4",
-  muted: "#A1A1AA",
-  danger: "#F87171",
+  text: "#1C1917",
+  muted: "#57534E",
+  danger: "#DC2626",
 } as const;
 
 /**

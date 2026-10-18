@@ -88,14 +88,14 @@ export function UpdateRequired() {
 const styles = StyleSheet.create({
   root: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "#0A0A0B",
+    backgroundColor: "#FAF8F3",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 28,
   },
-  title: { color: "#F5F5F4", fontSize: 22, fontWeight: "700", marginBottom: 10 },
+  title: { color: "#1C1917", fontSize: 22, fontWeight: "700", marginBottom: 10 },
   body: {
-    color: "#A1A1AA",
+    color: "#57534E",
     fontSize: 16,
     lineHeight: 23,
     textAlign: "center",
@@ -111,5 +111,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
   },
   pressed: { opacity: 0.85 },
-  primaryText: { color: "#0A0A0B", fontSize: 16, fontWeight: "700" },
+  primaryText: { color: "#1C1917", fontSize: 16, fontWeight: "700" },
 });

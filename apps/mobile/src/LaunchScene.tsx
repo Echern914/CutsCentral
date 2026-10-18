@@ -57,7 +57,7 @@ import { launchSceneTiming, shouldPlayLaunchScene } from "./launchSceneRules";
  * build system changes - the wrong week for it.)
  */
 
-const BG = "#0A0A0B";
+const BG = "#FAF8F3";
 const GOLD = "#D4AF37";
 const GOLD_SOFT = "#F4D67A";
 const GOLD_DEEP = "#A6841F";
@@ -285,7 +285,8 @@ const styles = StyleSheet.create({
   center: { alignItems: "center", justifyContent: "center" },
   wordBlock: { alignItems: "center", marginTop: 6 },
   wordmark: {
-    color: GOLD_SOFT,
+    // Deep gold: the soft metal washes out on the light ground.
+    color: "#9A7A1F",
     // The brand display face, already loaded by the root layout. If it failed
     // to load the layout revealed the app anyway and this falls back to the
     // system face - a slightly plainer word, not a broken launch.

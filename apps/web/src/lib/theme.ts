@@ -39,10 +39,26 @@ export function storedTheme(): Theme {
   }
 }
 
+/**
+ * Inside the iPhone app, say which theme is showing so the app can colour the
+ * status bar to match (apps/mobile AppWebView, "cb:theme:*"). Silent in a
+ * browser, and in an older app that ignores the message.
+ */
+function tellApp(theme: Theme): void {
+  try {
+    (window as { ReactNativeWebView?: { postMessage: (m: string) => void } }).ReactNativeWebView?.postMessage(
+      `cb:theme:${theme}`,
+    );
+  } catch {
+    /* no bridge */
+  }
+}
+
 /** Set the attribute (the visual flip) and remember the choice locally. */
 export function applyTheme(theme: Theme): void {
   if (theme === "dark") document.documentElement.dataset.theme = "dark";
   else delete document.documentElement.dataset.theme;
+  tellApp(theme);
   try {
     localStorage.setItem(STORAGE_KEY, theme);
   } catch {
@@ -53,6 +69,7 @@ export function applyTheme(theme: Theme): void {
 /** Back to the main (light) look WITHOUT forgetting the preference (public routes). */
 export function suspendTheme(): void {
   delete document.documentElement.dataset.theme;
+  tellApp("light");
 }
 
 /**

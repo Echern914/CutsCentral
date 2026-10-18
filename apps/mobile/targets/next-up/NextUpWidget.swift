@@ -1,7 +1,8 @@
 import SwiftUI
 import WidgetKit
 
-// THE LOCK SCREEN WIDGET: "Next: Sam · 2:30 PM · Fade".
+// THE LOCK SCREEN WIDGET: the next three clients ("2:30 PM Sam", ...); one
+// client shows as "Next: Sam · 2:30 PM · Fade".
 //
 // 🔴 UNPROVEN UNTIL BUILT ON THE MAC. Nothing in this folder can be compiled
 // on the Windows machine it was written on; it was written against Apple's
@@ -115,7 +116,8 @@ enum Store {
 
 struct NextUpEntry: TimelineEntry {
   enum Shows {
-    case next(NextUpAppointment, timezone: String)
+    /// The next few, soonest first; never empty.
+    case next([NextUpAppointment], timezone: String)
     case nobodyLeft(shop: String)
     case signedOut
     case setUp
@@ -129,6 +131,9 @@ struct NextUpEntry: TimelineEntry {
 let lateGrace: TimeInterval = 10 * 60
 /// How often the widget asks for a fresh snapshot (WidgetKit budgets refreshes).
 let refreshEvery: TimeInterval = 30 * 60
+/// How many upcoming clients a widget lists. Widgets can't scroll, and three
+/// is what fits the Lock Screen's rectangle (Drick, 2026-10-17: "the next 3").
+let showMost = 3
 
 func entries(for snapshot: NextUpSnapshot, from now: Date) -> [NextUpEntry] {
   let upcoming = snapshot.appointments
@@ -141,8 +146,9 @@ func entries(for snapshot: NextUpSnapshot, from now: Date) -> [NextUpEntry] {
     if flip > now { moments.append(flip) }
   }
   return moments.prefix(24).map { moment in
-    if let next = upcoming.first(where: { $0.startsAt.addingTimeInterval(lateGrace) > moment }) {
-      return NextUpEntry(date: moment, shows: .next(next, timezone: snapshot.shop.timezone))
+    let ahead = upcoming.filter { $0.startsAt.addingTimeInterval(lateGrace) > moment }
+    if !ahead.isEmpty {
+      return NextUpEntry(date: moment, shows: .next(Array(ahead.prefix(showMost)), timezone: snapshot.shop.timezone))
     }
     return NextUpEntry(date: moment, shows: .nobodyLeft(shop: snapshot.shop.name))
   }
@@ -153,14 +159,24 @@ struct Provider: TimelineProvider {
     NextUpEntry(
       date: Date(),
       shows: .next(
-        NextUpAppointment(
-          id: "placeholder",
-          startsAt: Date().addingTimeInterval(1800),
-          endsAt: Date().addingTimeInterval(3600),
-          client: "Sam",
-          service: "Fade",
-          chair: ""
-        ),
+        [
+          NextUpAppointment(
+            id: "placeholder",
+            startsAt: Date().addingTimeInterval(1800),
+            endsAt: Date().addingTimeInterval(3600),
+            client: "Sam",
+            service: "Fade",
+            chair: ""
+          ),
+          NextUpAppointment(
+            id: "placeholder-2",
+            startsAt: Date().addingTimeInterval(3600),
+            endsAt: Date().addingTimeInterval(5400),
+            client: "Jay",
+            service: "Lineup",
+            chair: ""
+          ),
+        ],
         timezone: TimeZone.current.identifier
       )
     )
@@ -242,7 +258,9 @@ struct NextUpView: View {
 
   var body: some View {
     switch entry.shows {
-    case .next(let appt, let timezone):
+    case .next(let list, let timezone):
+      // `list` is never empty (entries(for:from:) only builds .next with one).
+      let appt = list[0]
       let when = timeLabel(appt.startsAt, timezone: timezone, now: entry.date)
       let who = appt.client ?? appt.service
       switch family {
@@ -250,15 +268,47 @@ struct NextUpView: View {
         Text("Next: \(who) · \(when)")
           .widgetURL(link(for: appt, timezone: timezone))
       case .accessoryRectangular:
-        VStack(alignment: .leading, spacing: 1) {
-          Text("NEXT · \(when)").font(.caption2).fontWeight(.semibold).widgetAccentable()
-          Text(who).font(.headline).lineLimit(1)
-          if appt.client != nil {
-            Text(appt.service).font(.caption).lineLimit(1)
+        if list.count == 1 {
+          VStack(alignment: .leading, spacing: 1) {
+            Text("NEXT · \(when)").font(.caption2).fontWeight(.semibold).widgetAccentable()
+            Text(who).font(.headline).lineLimit(1)
+            if appt.client != nil {
+              Text(appt.service).font(.caption).lineLimit(1)
+            }
           }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .widgetURL(link(for: appt, timezone: timezone))
+        } else {
+          // The next three, one line each: the soonest large, the rest small.
+          // The Lock Screen gives a widget one tap target - the first booking.
+          VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(list.enumerated()), id: \.element.id) { index, item in
+              row(item, timezone: timezone, now: entry.date, first: index == 0)
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .widgetURL(link(for: appt, timezone: timezone))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .widgetURL(link(for: appt, timezone: timezone))
+      case .systemMedium:
+        // Room for the service too, and each row opens its own booking.
+        VStack(alignment: .leading, spacing: 6) {
+          Text("NEXT UP").font(.caption2).fontWeight(.semibold).foregroundStyle(.secondary)
+          ForEach(list, id: \.id) { item in
+            Link(destination: link(for: item, timezone: timezone) ?? URL(string: "chairback://barber")!) {
+              HStack(spacing: 8) {
+                Text(timeLabel(item.startsAt, timezone: timezone, now: entry.date))
+                  .font(.subheadline).fontWeight(.semibold).lineLimit(1)
+                Text(item.client ?? item.service).font(.subheadline).lineLimit(1)
+                Spacer(minLength: 4)
+                if item.client != nil {
+                  Text(item.service).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+              }
+            }
+          }
+          Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       default:
         VStack(alignment: .leading, spacing: 4) {
           Text("NEXT UP").font(.caption2).fontWeight(.semibold).foregroundStyle(.secondary)
@@ -266,6 +316,11 @@ struct NextUpView: View {
           Text(who).font(.headline).lineLimit(1)
           if appt.client != nil {
             Text(appt.service).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+          }
+          // Then the two after, smaller.
+          ForEach(list.dropFirst(), id: \.id) { item in
+            Text("\(timeLabel(item.startsAt, timezone: timezone, now: entry.date)) \(item.client ?? item.service)")
+              .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
           }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -278,6 +333,16 @@ struct NextUpView: View {
     case .setUp:
       message(title: "Next up", detail: "Open ChairBack to set up")
     }
+  }
+
+  /// One line of the Lock Screen list: "2:30 PM  Sam".
+  func row(_ item: NextUpAppointment, timezone: String, now: Date, first: Bool) -> some View {
+    HStack(spacing: 6) {
+      Text(timeLabel(item.startsAt, timezone: timezone, now: now))
+        .font(first ? .headline : .caption).fontWeight(.semibold).widgetAccentable()
+      Text(item.client ?? item.service).font(first ? .headline : .caption)
+    }
+    .lineLimit(1)
   }
 
   @ViewBuilder
@@ -316,8 +381,8 @@ struct NextUpWidget: Widget {
       NextUpView(entry: entry).nextUpBackground()
     }
     .configurationDisplayName("Next up")
-    .description("Your next client, on your Lock Screen.")
-    .supportedFamilies([.accessoryRectangular, .accessoryInline, .systemSmall])
+    .description("Your next three clients, on your Lock Screen or Home Screen.")
+    .supportedFamilies([.accessoryRectangular, .accessoryInline, .systemSmall, .systemMedium])
   }
 }
 

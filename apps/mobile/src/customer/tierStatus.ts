@@ -13,7 +13,7 @@ const RANK: Record<TierKey, number> = { BRONZE: 1, SILVER: 2, GOLD: 3 };
 const KEY_BY_LABEL: Record<string, TierKey> = { Bronze: "BRONZE", Silver: "SILVER", Gold: "GOLD" };
 
 /** The ring colours when an older API sends none. The same as the tier table. */
-const FALLBACK_COLOR: Record<TierKey, string> = { BRONZE: "#B8772F", SILVER: "#C7CBD1", GOLD: "#D4AF37" };
+const FALLBACK_COLOR: Record<TierKey, string> = { BRONZE: "#B8772F", SILVER: "#8B9199", GOLD: "#D4AF37" };
 
 export interface BestTier {
   key: TierKey;
