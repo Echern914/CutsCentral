@@ -7,7 +7,7 @@ import { MoneyField } from "@/components/ui/UnitField";
 import { parsePrice } from "@/lib/serviceFields";
 import { zonedDateKey } from "@chairback/config/time";
 import { collapseRuns, expandRange, MAX_RANGE_DAYS } from "@/lib/dateRanges";
-import { updateServiceAction } from "./actions";
+import { saveHolidayAction } from "./actions";
 import type { ServiceRow } from "./page";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
@@ -29,7 +29,11 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  *
  * NO NEW MODEL. Each save still writes `dateOverrides` on the services it
  * names, so the pricing engine, the public menu and the booking flow never need
- * to know this screen exists.
+ * to know this screen exists. The one addition is a NAME per date
+ * (Shop.holidayNames - Drick: "need to be able to edit the holiday and name
+ * it"), and every save - add, edit, remove - is ONE server transaction
+ * (PUT /api/booking/holidays), so an edit can never leave half the services on
+ * the old date and half on the new.
  */
 
 /** A date with everything priced on it, assembled back out of the services. */
@@ -60,15 +64,18 @@ function prettyDate(date: string): string {
 
 export function HolidayPricing({
   services,
+  names = {},
   timezone,
   toast,
 }: {
   services: ServiceRow[];
+  /** The shop's names for its dates ({"2026-11-26": "Thanksgiving"}). */
+  names?: Record<string, string>;
   /** The shop's IANA zone, which decides what "today" is. */
   timezone?: string;
   toast: Toast;
 }) {
-  // No refresh callback: updateServiceAction revalidates /dashboard/booking, so
+  // No refresh callback: saveHolidayAction revalidates /dashboard/booking, so
   // the server re-renders and hands this component fresh `services` - the same
   // way every other card on this tab stays current.
   const [pending, start] = useTransition();
@@ -83,7 +90,11 @@ export function HolidayPricing({
   const [dateTo, setDateTo] = useState("");
   const [dates, setDates] = useState<string[]>([]);
   const [price, setPrice] = useState("");
+  const [name, setName] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  // The saved stretch being edited (its dates), or null when adding. Save
+  // takes these dates off every service and writes the form's in one go.
+  const [editing, setEditing] = useState<string[] | null>(null);
 
   const active = useMemo(() => services.filter((s) => s.active), [services]);
 
@@ -109,12 +120,15 @@ export function HolidayPricing({
   // "Dec 25 – 31" row, and Remove clears the whole stretch. Days that differ
   // stay separate rows - collapsing them would hide a real difference.
   const displayGroups = useMemo(() => {
+    // The NAME is part of the signature: Dec 24 "Christmas Eve" and Dec 25
+    // "Christmas" priced alike are still two holidays.
     const signature = (g: HolidayGroup) =>
-      JSON.stringify(
+      JSON.stringify([
+        names[g.date] ?? "",
         [...g.entries]
           .map((e) => [e.serviceId, e.price] as const)
           .sort((a, b) => a[0].localeCompare(b[0])),
-      );
+      ]);
     const byDate = new Map(groups.map((g) => [g.date, g]));
     const out: { from: string; to: string; dates: string[]; group: HolidayGroup }[] = [];
     for (const run of collapseRuns(groups.map((g) => g.date))) {
@@ -135,7 +149,7 @@ export function HolidayPricing({
       }
     }
     return out;
-  }, [groups]);
+  }, [groups, names]);
 
   const today = todayKey(timezone);
 
@@ -150,11 +164,29 @@ export function HolidayPricing({
 
   function reset() {
     setAdding(false);
+    setEditing(null);
     setDate("");
     setDateTo("");
     setDates([]);
     setPrice("");
+    setName("");
     setPicked(new Set());
+  }
+
+  /** Open the form on a saved stretch: its dates, price, services and name. */
+  function beginEdit(run: { dates: string[]; group: HolidayGroup }) {
+    const prices = [...new Set(run.group.entries.map((e) => e.price))];
+    setEditing(run.dates);
+    setAdding(true);
+    setDate("");
+    setDateTo("");
+    setDates(run.dates);
+    // One price box: prefilled when every service shares it. Mixed prices
+    // (set one service at a time in the service editor) leave it blank so a
+    // save cannot silently flatten them to one number.
+    setPrice(prices.length === 1 ? String(prices[0]) : "");
+    setName(names[run.dates[0]!] ?? "");
+    setPicked(new Set(run.group.entries.map((e) => e.serviceId)));
   }
 
   /**
@@ -222,52 +254,43 @@ export function HolidayPricing({
       return;
     }
     start(async () => {
-      // dateOverrides is a per-service blob, so a shop-wide holiday is N
-      // writes - ONE per service, whatever the date count: all the chosen
-      // dates merge into each service's existing blob together, so another
-      // holiday already on the service survives, and a two-date save cannot
-      // half-land on a service.
-      const results = await Promise.all(
-        [...picked].map((id) => {
-          const svc = services.find((s) => s.id === id);
-          const merged = { ...(svc?.dateOverrides ?? {}) };
-          for (const d of chosen) merged[d] = value;
-          return updateServiceAction(id, { dateOverrides: merged });
-        }),
-      );
-      const failed = results.filter((r) => !r.ok).length;
-      if (failed === 0) {
+      // ONE call, one transaction: the old dates (when editing) come off every
+      // service, the chosen dates go on the picked ones, and the name is set -
+      // or none of it happens.
+      const r = await saveHolidayAction({
+        removeDates: editing ?? [],
+        dates: chosen,
+        price: value,
+        serviceIds: [...picked],
+        name: name.trim(),
+      });
+      if (r.ok) {
+        const what = name.trim() || (chosen.length === 1 ? prettyDate(chosen[0]!) : `${chosen.length} dates`);
         toast(
-          `${
-            chosen.length === 1
-              ? prettyDate(chosen[0]!)
-              : `${chosen.length} dates`
-          } priced on ${picked.size} service${picked.size === 1 ? "" : "s"}`,
+          `${what} ${editing ? "updated" : `priced on ${picked.size} service${picked.size === 1 ? "" : "s"}`}`,
           "success",
         );
         reset();
       } else {
-        // Partial success is real (N independent writes), so refresh either way
-        // rather than leaving the list showing a state that no longer matches.
-        toast(`Couldn't set ${failed} of ${results.length}`, "error");
+        toast(
+          r.error === "too_many_dates"
+            ? "A service can hold 120 holiday dates at most - remove some passed ones first"
+            : "Couldn't save the holiday - nothing was changed",
+          "error",
+        );
       }
     });
   }
 
-  /** Remove a whole displayed stretch: every date of the run, per service. */
-  function clearDates(datesToClear: string[], entries: HolidayGroup["entries"]) {
+  /** Remove a whole displayed stretch: every date of the run, every service. */
+  function clearDates(datesToClear: string[], label: string) {
+    if (!window.confirm(`Remove the holiday on ${label}? Those days go back to normal prices.`)) return;
     start(async () => {
-      const serviceIds = [...new Set(entries.map((e) => e.serviceId))];
-      const results = await Promise.all(
-        serviceIds.map((id) => {
-          const svc = services.find((s) => s.id === id);
-          const rest = { ...(svc?.dateOverrides ?? {}) };
-          for (const d of datesToClear) delete rest[d];
-          return updateServiceAction(id, { dateOverrides: rest });
-        }),
-      );
-      if (results.every((r) => r.ok)) toast("Holiday removed", "success");
-      else toast("Couldn't remove all of it", "error");
+      const r = await saveHolidayAction({ removeDates: datesToClear });
+      if (r.ok) {
+        toast("Holiday removed", "success");
+        if (editing && editing.some((d) => datesToClear.includes(d))) reset();
+      } else toast("Couldn't remove it - nothing was changed", "error");
     });
   }
 
@@ -292,6 +315,7 @@ export function HolidayPricing({
               run.from === run.to
                 ? prettyDate(run.from)
                 : `${prettyDate(run.from)} – ${prettyDate(run.to)}`;
+            const holidayName = names[run.from];
             return (
               <li
                 key={run.from}
@@ -302,7 +326,14 @@ export function HolidayPricing({
               >
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-offwhite">
-                    {label}
+                    {holidayName ? (
+                      <>
+                        {holidayName}
+                        <span className="ml-2 text-xs font-normal text-muted">{label}</span>
+                      </>
+                    ) : (
+                      label
+                    )}
                     {past && (
                       <span className="ml-2 text-[11px] font-normal text-muted">
                         passed
@@ -315,15 +346,26 @@ export function HolidayPricing({
                       .join(" · ")}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => clearDates(run.dates, run.group.entries)}
-                  disabled={pending}
-                  className="rounded px-1.5 py-1 text-xs text-muted transition-colors hover:text-danger-soft disabled:opacity-50"
-                  aria-label={`Remove holiday pricing on ${label}`}
-                >
-                  Remove
-                </button>
+                <span className="flex shrink-0 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => beginEdit(run)}
+                    disabled={pending}
+                    className="rounded px-1.5 py-1 text-xs text-gold transition-colors hover:underline disabled:opacity-50"
+                    aria-label={`Edit holiday on ${label}`}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => clearDates(run.dates, holidayName ?? label)}
+                    disabled={pending}
+                    className="rounded px-1.5 py-1 text-xs text-muted transition-colors hover:text-danger-soft disabled:opacity-50"
+                    aria-label={`Remove holiday pricing on ${label}`}
+                  >
+                    Remove
+                  </button>
+                </span>
               </li>
             );
           })}
@@ -333,7 +375,10 @@ export function HolidayPricing({
       {!adding ? (
         <button
           type="button"
-          onClick={() => setAdding(true)}
+          onClick={() => {
+            reset();
+            setAdding(true);
+          }}
           disabled={active.length === 0}
           className="mt-4 rounded-lg bg-gold/15 px-3 py-1.5 text-xs font-medium text-gold transition-colors hover:bg-gold/25 disabled:opacity-50"
         >
@@ -341,6 +386,22 @@ export function HolidayPricing({
         </button>
       ) : (
         <div className="mt-4 rounded-xl border border-gold/40 bg-gold/5 p-3">
+          {editing && (
+            <p className="mb-2 text-xs font-medium text-gold">
+              Editing {names[editing[0]!] ?? prettyDate(editing[0]!)} - saving replaces it
+            </p>
+          )}
+          <label className="mb-3 flex flex-col gap-1 text-[11px] text-muted">
+            Name (optional)
+            <input
+              type="text"
+              value={name}
+              maxLength={40}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Thanksgiving"
+              className="w-full max-w-xs rounded-lg border border-subtle bg-charcoal-700 px-2 py-1.5 text-xs text-offwhite"
+            />
+          </label>
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1 text-[11px] text-muted">
               Dates (leave “to” blank for one day)
@@ -464,7 +525,7 @@ export function HolidayPricing({
               disabled={pending}
               className="rounded-lg bg-gold/20 px-3 py-1.5 text-xs font-semibold text-gold transition-colors hover:bg-gold/30 disabled:opacity-50"
             >
-              {pending ? "Saving…" : "Save holiday"}
+              {pending ? "Saving…" : editing ? "Save changes" : "Save holiday"}
             </button>
             <button
               type="button"

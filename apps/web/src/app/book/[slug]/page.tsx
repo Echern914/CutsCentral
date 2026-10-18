@@ -32,6 +32,8 @@ export interface BookShopData {
     /** Verified custom domain or null; absent from an older API. See lib/customDomainGuard.ts. */
     customDomain?: string | null;
     timezone: string;
+    /** Holiday names by YYYY-MM-DD (shop tz); absent from an older API. */
+    holidayNames?: Record<string, string>;
     /**
      * What this business calls its people and visits, resolved by the API.
      * Optional so a web deploy ahead of the API keeps today's copy; absent or

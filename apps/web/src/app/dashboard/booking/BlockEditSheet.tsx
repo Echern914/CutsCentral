@@ -39,6 +39,8 @@ const PATTERN_LABEL: Record<NonNullable<BlockDetail["pattern"]>, string | null> 
   daily: "Same hours each day",
   continuous: "One stretch across days",
   weekly: "Repeats weekly",
+  // Written by a Special day: the hours around its openings.
+  special_day: "Part of a special day",
 };
 
 /** "HH:mm" of minutes from midnight; 1440 (end of day) reads as "00:00". */

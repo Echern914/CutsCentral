@@ -28,6 +28,8 @@ vi.mock("./actions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./actions")>()),
   ...a,
   getAvailabilityAction: vi.fn(async () => ({ ok: true, data: { rules: [] } })),
+  // The Special day card loads its list on mount (SpecialDayCard.tsx).
+  listSpecialDaysAction: vi.fn(async () => ({ ok: true, specialDays: [] })),
   listUpgradeRulesAction: vi.fn(async () => ({ ok: false })),
 }));
 vi.mock("@/components/VocabProvider", () => ({

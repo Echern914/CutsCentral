@@ -84,6 +84,7 @@ import {
 } from "../engines/bookingIntake.js";
 import { checkPolicyAcceptance, publicBookingPolicy } from "../engines/bookingPolicy.js";
 import { normalizeClientNote } from "@chairback/config/clientNote";
+import { parseHolidayNames } from "@chairback/config/servicePricing";
 import { rescheduleClosesAt } from "@chairback/config/rescheduleCutoff";
 import {
   customerChange,
@@ -694,6 +695,9 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       // for a visit redirected from a custom domain (see routes/shops.ts).
       customDomain: shop.customDomainVerifiedAt ? shop.customDomain : null,
       timezone: shop.timezone,
+      // The names the owner gave holiday dates ("Thanksgiving"), shown under
+      // the calendar on that day. Wording only - prices come from dateOverrides.
+      holidayNames: parseHolidayNames(shop.holidayNames),
       // The words this business uses, resolved server-side so the booking page
       // never re-derives them. NEUTRAL for a shop that has not chosen a type -
       // a customer must never be asked to pick a "barber" at a nail studio.

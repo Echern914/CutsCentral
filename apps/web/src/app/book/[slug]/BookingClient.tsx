@@ -2825,6 +2825,11 @@ export function BookingClient({
               requestAnimationFrame(() => revealElement(servicesSectionRef.current));
             }}
           />
+          {dayDate !== null && data.shop.holidayNames?.[dayDate] && (
+            <p className="mt-2 text-center text-sm font-semibold" data-testid="holiday-name">
+              {data.shop.holidayNames[dayDate]}
+            </p>
+          )}
         </Section>
       )}
 

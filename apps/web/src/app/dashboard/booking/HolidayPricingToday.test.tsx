@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ServiceRow } from "./page";
 
-vi.mock("./actions", () => ({ updateServiceAction: vi.fn(async () => ({ ok: true })) }));
+vi.mock("./actions", () => ({ saveHolidayAction: vi.fn(async () => ({ ok: true })) }));
 
 const { HolidayPricing } = await import("./HolidayPricing");
 

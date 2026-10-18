@@ -1065,7 +1065,7 @@ export interface BlockDetail {
   startsAt: string;
   endsAt: string;
   reason: string | null;
-  pattern: "single" | "daily" | "continuous" | "weekly" | null;
+  pattern: "single" | "daily" | "continuous" | "weekly" | "special_day" | null;
   groupId: string | null;
   /**
    * [] = All services. Optional so a web deploy ahead of the API reads a
@@ -1850,6 +1850,9 @@ export interface TargetedSlotRuleRow {
   /** Duplicated but never published: no slots, no public availability, and it
    *  goes live only when the barber saves it. */
   draft?: boolean;
+  /** Published by the Special day card: changed and removed there, because
+   *  its blocks close the rest of the chair's day and must go with it. */
+  specialDay?: boolean;
   serviceId: string;
   /** Every service this slot is bookable as. serviceId is the primary and is
    *  always a member; the API is authoritative via the join table. */
@@ -2475,4 +2478,115 @@ export async function listTierOpeningsAction(): Promise<{ ok: boolean; openings?
 /** End a hold early: the slot goes straight back on the booking page. */
 export async function releaseTierOpeningAction(id: string): Promise<Result> {
   return done(await apiSend("POST", `/api/tier-openings/${encodeURIComponent(id)}/release`));
+}
+
+/* ------------------------------------------------------------------ */
+/* Holidays + Special days                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Add, edit or remove a holiday in ONE server transaction: `removeDates` come
+ * off every service first, then `dates` are priced on `serviceIds`, and the
+ * shop's name for those dates is set (blank clears it). Nothing half-lands.
+ */
+export async function saveHolidayAction(input: {
+  removeDates?: string[];
+  dates?: string[];
+  price?: number;
+  serviceIds?: string[];
+  name?: string;
+}): Promise<Result> {
+  return done(await apiSend("PUT", "/api/booking/holidays", input));
+}
+
+export interface SpecialDayInput {
+  date: string;
+  staffIds: string[];
+  start: string; // "HH:MM" shop-local
+  end: string;
+  cutMin: number;
+  price: number;
+  serviceIds: string[];
+  name?: string;
+  requestId?: string;
+  expectOpenings?: number;
+}
+
+export interface SpecialDayPlan {
+  staffId: string;
+  openings: string[];
+  skipped: { startsAt: string; reason: "booking" | "blocked" | "past" }[];
+  bookings: { startsAt: string; endsAt: string }[];
+}
+
+export interface SpecialDayRow {
+  ruleId: string;
+  staffId: string;
+  date: string;
+  name: string | null;
+  price: number;
+  cutMin: number;
+  firstStart: string | null;
+  lastEnd: string | null;
+  openings: number;
+  booked: number;
+}
+
+type SpecialDayFailure = { ok: false; error: string; message?: string; plans?: SpecialDayPlan[] };
+
+function specialDayFailure(res: { error?: string; body?: unknown }): SpecialDayFailure {
+  const b = (res.body ?? {}) as { message?: unknown; plans?: unknown };
+  return {
+    ok: false,
+    error: res.error ?? "failed",
+    ...(typeof b.message === "string" ? { message: b.message } : {}),
+    ...(Array.isArray(b.plans) ? { plans: b.plans as SpecialDayPlan[] } : {}),
+  };
+}
+
+export async function listSpecialDaysAction(): Promise<{ ok: boolean; specialDays?: SpecialDayRow[] }> {
+  const res = await apiGet<{ specialDays: SpecialDayRow[] }>("/api/booking/special-days");
+  if (!res.ok || !res.data) return { ok: false };
+  return { ok: true, specialDays: res.data.specialDays };
+}
+
+/** What publishing would create. Writes nothing. */
+export async function previewSpecialDayAction(
+  input: SpecialDayInput,
+): Promise<{ ok: true; plans: SpecialDayPlan[]; bufferMin: number } | SpecialDayFailure> {
+  const res = await apiSend<{ plans: SpecialDayPlan[]; bufferMin: number }>(
+    "POST",
+    "/api/booking/special-days/preview",
+    input,
+  );
+  if (!res.ok || !res.data) return specialDayFailure(res);
+  return { ok: true, plans: res.data.plans, bufferMin: res.data.bufferMin };
+}
+
+/** Publish: every chair in one server transaction. */
+export async function publishSpecialDayAction(
+  input: SpecialDayInput,
+): Promise<{ ok: true; created: { staffId: string; openings: number }[] } | SpecialDayFailure> {
+  const res = await apiSend<{ created: { staffId: string; openings: number }[] }>(
+    "POST",
+    "/api/booking/special-days",
+    input,
+  );
+  if (!res.ok || !res.data) return specialDayFailure(res);
+  revalidatePath("/dashboard/booking");
+  return { ok: true, created: res.data.created };
+}
+
+/** Take special days down. Booked openings stay booked. */
+export async function removeSpecialDaysAction(
+  ruleIds: string[],
+): Promise<{ ok: true; openingsRemoved: number; bookedKept: number } | { ok: false; error: string }> {
+  const res = await apiSend<{ openingsRemoved: number; bookedKept: number }>(
+    "POST",
+    "/api/booking/special-days/remove",
+    { ruleIds },
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  revalidatePath("/dashboard/booking");
+  return { ok: true, openingsRemoved: res.data.openingsRemoved, bookedKept: res.data.bookedKept };
 }

@@ -30,6 +30,8 @@ vi.mock("./actions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./actions")>()),
   updateServiceAction,
   getAvailabilityAction: vi.fn(async () => ({ ok: true, data: { rules: [] } })),
+  // The Special day card loads its list on mount (SpecialDayCard.tsx).
+  listSpecialDaysAction: vi.fn(async () => ({ ok: true, specialDays: [] })),
   // What the tab's other panels load on mount - irrelevant here.
   listTargetedSlotsAction: vi.fn(async () => ({ ok: false })),
   listUpgradeRulesAction: vi.fn(async () => ({ ok: false })),
