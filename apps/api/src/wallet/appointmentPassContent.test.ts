@@ -57,6 +57,7 @@ function source(over: Partial<Source> = {}, shopOver: Partial<Source["shop"]> = 
     cancelWindowHoursAtBooking: null,
     cancelFeeBpsAtBooking: null,
     cardOnFileFeesAtBooking: null,
+    cardFeeFlatCentsAtBooking: null,
     ...over,
     shop: {
       name: "Chern Cuts",
@@ -77,6 +78,7 @@ function source(over: Partial<Source> = {}, shopOver: Partial<Source["shop"]> = 
       connectChargesEnabled: false,
       stripeConnectAccountId: null,
       chargeCardOnFileFees: false,
+      cardFeeFlatCents: null,
       ...shopOver,
     },
   };

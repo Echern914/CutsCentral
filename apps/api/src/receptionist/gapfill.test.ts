@@ -152,7 +152,7 @@ async function seedShop(dailySendCap = 50): Promise<Seeded> {
         timezone: "America/New_York",
         dailySendCap,
         twilioNumber: null,
-        cancellationTerms: { cancelWindowHours: 0, cancelFeeBps: 0, chargeCardOnFileFees: false },
+        cancellationTerms: { cancelWindowHours: 0, cancelFeeBps: 0, chargeCardOnFileFees: false, cardFeeFlatCents: null },
       },
       appt: {
         id: canceled.id,

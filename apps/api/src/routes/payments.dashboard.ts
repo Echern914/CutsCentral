@@ -40,6 +40,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
       depositAmountCents: true,
       depositNonRefundable: true,
       chargeCardOnFileFees: true,
+      cardFeeFlatCents: true,
       requireCardToBook: true,
       tipPolicy: true,
       onlineTipsEnabled: true,
@@ -79,6 +80,8 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
     depositAmountCents: shop.depositAmountCents,
     depositNonRefundable: shop.depositNonRefundable,
     chargeCardOnFileFees: shop.chargeCardOnFileFees,
+    // Card on file: the fee as a flat amount in cents; null = cancelFeeBps.
+    cardFeeFlatCents: shop.cardFeeFlatCents,
     // Card on file: is a client who skips the card still booked? (false = yes)
     requireCardToBook: shop.requireCardToBook,
     tipPolicy: shop.tipPolicy,
@@ -177,6 +180,13 @@ const settingsSchema = z
     // A separate switch from the mode on purpose - "unless the barber is set
     // and it's on them" (Eric). Default false in the schema.
     chargeCardOnFileFees: z.boolean().optional(),
+    // Card on file: the no-show / late-cancel fee as a FLAT amount in cents,
+    // instead of cancelFeeBps of the price. null = back to the percentage.
+    // Same $1..$1,000 bounds as the deposit (and a DB CHECK). Not checked
+    // against a service price here: services differ, so the charge is capped
+    // at each booking's own price instead (config cardOnFileFeeCents).
+    // Applies to bookings made from now on - each snapshots it.
+    cardFeeFlatCents: z.number().int().min(100).max(100_000).nullable().optional(),
     // Card on file: hold the time until a card is saved (true), or book the
     // client at Confirm and make the card step optional (false, the default).
     requireCardToBook: z.boolean().optional(),
@@ -234,6 +244,7 @@ paymentsDashboardRouter.patch("/settings", async (req, res) => {
       ...(d.cancelFeeBps !== undefined ? { cancelFeeBps: d.cancelFeeBps } : {}),
       ...(d.tipPolicy !== undefined ? { tipPolicy: d.tipPolicy ?? null } : {}),
       ...(d.chargeCardOnFileFees !== undefined ? { chargeCardOnFileFees: d.chargeCardOnFileFees } : {}),
+      ...(d.cardFeeFlatCents !== undefined ? { cardFeeFlatCents: d.cardFeeFlatCents } : {}),
       ...(d.requireCardToBook !== undefined ? { requireCardToBook: d.requireCardToBook } : {}),
       ...(d.depositAmountCents !== undefined
         ? { depositAmountCents: d.depositAmountCents }

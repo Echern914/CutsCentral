@@ -69,6 +69,7 @@ const SHOP_SELECT = {
   cancelWindowHours: true,
   cancelFeeBps: true,
   chargeCardOnFileFees: true,
+  cardFeeFlatCents: true,
 } as const;
 
 export async function notifySlotOpened(params: {
@@ -199,6 +200,7 @@ export async function notifySlotOpened(params: {
             cancelWindowHours: shop.cancelWindowHours,
             cancelFeeBps: shop.cancelFeeBps,
             chargeCardOnFileFees: shop.chargeCardOnFileFees,
+            cardFeeFlatCents: shop.cardFeeFlatCents,
           },
         },
         appt: {

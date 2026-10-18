@@ -21,6 +21,7 @@ import {
   depositIsNonRefundable,
   describeCancellationPolicy,
   describeDepositPolicy,
+  statedCardOnFileFee,
   type ShopPaymentsMode,
   formatShopAddress,
   localMinutesOfDay,
@@ -208,6 +209,7 @@ function publicPaymentSummary(shop: {
   depositAmountCents: number | null;
   depositNonRefundable: boolean;
   chargeCardOnFileFees: boolean;
+  cardFeeFlatCents: number | null;
   requireCardToBook: boolean;
   cancelWindowHours: number;
   cancelFeeBps: number;
@@ -239,6 +241,12 @@ function publicPaymentSummary(shop: {
    * the sentence above.
    */
   cardOptional: boolean;
+  /**
+   * Card on file: the no-show / late-cancel fee in words ("$25 (or the booked
+   * price, if less)", "50% of the booked price"), for the card step to state
+   * beside the condition. Null when the card would be charged nothing.
+   */
+  cardFee: string | null;
 } {
   const collects = collectsAtBooking({
     connectEnabled: connectEnabled(),
@@ -257,6 +265,7 @@ function publicPaymentSummary(shop: {
     cancelFeeBps: shop.cancelFeeBps,
     depositAmountCents: shop.depositAmountCents,
     chargeCardOnFileFees: shop.chargeCardOnFileFees,
+    cardFeeFlatCents: shop.cardFeeFlatCents,
     requireCardToBook: shop.requireCardToBook,
     paymentsLive: collects !== null,
     requiresApproval: shop.requireBookingApproval,
@@ -275,6 +284,7 @@ function publicPaymentSummary(shop: {
     sentence,
     cancellation,
     cardOptional: collects === "card" && !shop.requireCardToBook,
+    cardFee: collects === "card" ? statedCardOnFileFee(shop) : null,
   };
 }
 

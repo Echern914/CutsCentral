@@ -75,7 +75,10 @@ export function AddCard({
           : ", and you pay at your visit."}
         {/* The same fee terms the booking page's card step says. */}
         {offer.chargesFees && (
-          <> It can also be charged for a no-show or a cancellation inside the shop&rsquo;s cancellation window.</>
+          <>
+            {" "}It can also be charged for a no-show or a cancellation inside the shop&rsquo;s cancellation window
+            {offer.cardFee ? <> - the fee is <strong className="text-offwhite">{offer.cardFee}</strong></> : null}.
+          </>
         )}
       </p>
       {open ? (

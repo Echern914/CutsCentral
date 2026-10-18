@@ -24,12 +24,14 @@ const NO_CANCELLATION_TERMS: CancellationTerms = {
   cancelWindowHours: 0,
   cancelFeeBps: 0,
   chargeCardOnFileFees: false,
+  cardFeeFlatCents: null,
 };
 /** A booking that could not be read back: settle it by the shop, as before snapshots. */
 const NO_SNAPSHOT = {
   cancelWindowHoursAtBooking: null,
   cancelFeeBpsAtBooking: null,
   cardOnFileFeesAtBooking: null,
+  cardFeeFlatCentsAtBooking: null,
 };
 import {
   bookingCancellationTerms,
@@ -770,6 +772,7 @@ async function loadSlotContext(
       cancelWindowHours: true,
       cancelFeeBps: true,
       chargeCardOnFileFees: true,
+      cardFeeFlatCents: true,
     },
   });
   if (!shop) return "shop not found";

@@ -88,6 +88,11 @@ export interface BookShopData {
        * step after it is optional. Optional = an older API (says the old line).
        */
       cardOptional?: boolean;
+      /**
+       * Card on file: the no-show / late-cancel fee in words, stated beside the
+       * condition. Null = nothing would be charged; optional = an older API.
+       */
+      cardFee?: string | null;
     } | null;
     /**
      * The shop's own policies + checklist ("Before you book"). Null = nothing

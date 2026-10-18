@@ -98,6 +98,15 @@ export function PaymentsManager({
   const [cancelFeePct, setCancelFeePct] = useState(
     String(initial.cancelFeeBps / 100),
   );
+  // Card on file: the fee charged to the card as a % of the service (the
+  // cancellation fee below) or a flat dollar amount. Dollars held as a raw
+  // string like the deposit, so a refused save keeps exactly what was typed.
+  const [cardFeeKind, setCardFeeKind] = useState<"percent" | "flat">(
+    initial.cardFeeFlatCents != null ? "flat" : "percent",
+  );
+  const [cardFeeFlatDollars, setCardFeeFlatDollars] = useState(
+    initial.cardFeeFlatCents != null ? String(initial.cardFeeFlatCents / 100) : "",
+  );
   // Deposit shown in DOLLARS (cents is a storage detail, not something a barber
   // should type). $20 is the suggested default for a shop that has never set
   // one - it is the number Eric asked for and a realistic no-show deterrent.
@@ -293,6 +302,8 @@ export function PaymentsManager({
     const feePct = cancelFeePct.trim() === "" ? 0 : Number(cancelFeePct);
     const hoursRaw = cancelHours.trim() === "" ? 0 : Number(cancelHours);
     const depositRaw = Number(depositDollars);
+    const flatFee = mode === "card_on_file" && cardFeeKind === "flat";
+    const flatRaw = cardFeeFlatDollars.trim() === "" ? NaN : Number(cardFeeFlatDollars);
     const problem =
       !Number.isFinite(feePct) || feePct < 0 || feePct > 100
         ? "The cancellation fee must be 0 to 100%."
@@ -300,7 +311,9 @@ export function PaymentsManager({
           ? "The cancellation cutoff must be 0 to 720 hours."
           : mode === "deposit" && !(Number.isFinite(depositRaw) && depositRaw >= 1 && depositRaw <= 1000)
             ? "The deposit must be $1 to $1,000."
-            : null;
+            : flatFee && !(Number.isFinite(flatRaw) && flatRaw >= 1 && flatRaw <= 1000)
+              ? "The flat fee must be $1 to $1,000."
+              : null;
     if (problem) {
       toast(problem, "error");
       return;
@@ -317,7 +330,13 @@ export function PaymentsManager({
         cancelWindowHours: hours,
         cancelFeeBps: Math.round(feePct * 100),
         ...(mode === "deposit" ? { depositAmountCents: depositCents, depositNonRefundable } : {}),
-        ...(mode === "card_on_file" ? { chargeCardOnFileFees: chargeFees, requireCardToBook: requireCard } : {}),
+        ...(mode === "card_on_file"
+          ? {
+              chargeCardOnFileFees: chargeFees,
+              requireCardToBook: requireCard,
+              cardFeeFlatCents: flatFee ? Math.round(flatRaw * 100) : null,
+            }
+          : {}),
         tipPolicy,
       });
       if (r.ok) toast("Payment settings saved", "success");
@@ -842,6 +861,38 @@ export function PaymentsManager({
             before you switched it on.
           </p>
         )}
+        {/* Card on file only: the card is charged a share of the service OR a
+            set amount. Prepaid money is still kept by the % (what was
+            collected), so the choice is offered only where it applies. */}
+        {mode === "card_on_file" && (
+          <fieldset className="mt-3">
+            <legend className={labelCls}>Fee charged to the card</legend>
+            <div className="mt-1 flex flex-wrap gap-2" role="radiogroup">
+              {(
+                [
+                  { v: "percent", label: "% of the service" },
+                  { v: "flat", label: "Flat amount" },
+                ] as const
+              ).map((o) => (
+                <label
+                  key={o.v}
+                  className={`flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${
+                    cardFeeKind === o.v ? "border-gold text-offwhite" : "border-subtle text-muted"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="card-fee-kind"
+                    className="h-3.5 w-3.5 accent-gold"
+                    checked={cardFeeKind === o.v}
+                    onChange={() => setCardFeeKind(o.v)}
+                  />
+                  {o.label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        )}
         <div className="mt-3 grid gap-4 sm:grid-cols-2">
           <label className="block">
             <span className={labelCls}>Free-cancel cutoff (hours before)</span>
@@ -856,20 +907,41 @@ export function PaymentsManager({
               0 = always full refund.
             </span>
           </label>
-          <label className="block">
-            <span className={labelCls}>Fee if cancelled inside the cutoff (%)</span>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              className={field}
-              value={cancelFeePct}
-              onChange={(e) => setCancelFeePct(e.target.value)}
-            />
-            <span className="mt-1 block text-[11px] text-muted">
-              100 = no refund inside the cutoff.
-            </span>
-          </label>
+          {mode === "card_on_file" && cardFeeKind === "flat" ? (
+            <label className="block">
+              <span className={labelCls}>Fee for a no-show or a late cancel ($)</span>
+              <input
+                type="number"
+                min={1}
+                max={1000}
+                step="1"
+                inputMode="decimal"
+                className={field}
+                value={cardFeeFlatDollars}
+                onChange={(e) => setCardFeeFlatDollars(e.target.value)}
+                aria-label="Flat fee in dollars"
+              />
+              <span className="mt-1 block text-[11px] text-muted">
+                The same amount whatever the service. If a service costs less, we charge its
+                price instead, never more. Bookings already made keep the fee they were made with.
+              </span>
+            </label>
+          ) : (
+            <label className="block">
+              <span className={labelCls}>Fee if cancelled inside the cutoff (%)</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                className={field}
+                value={cancelFeePct}
+                onChange={(e) => setCancelFeePct(e.target.value)}
+              />
+              <span className="mt-1 block text-[11px] text-muted">
+                100 = no refund inside the cutoff.
+              </span>
+            </label>
+          )}
         </div>
       </Card>
 

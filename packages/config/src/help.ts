@@ -1278,6 +1278,30 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open services", featureId: "services" },
   },
   {
+    id: "open-slots",
+    // Drick's own words (2026-10-18): "How many slots do I have open for next
+    // week?" In the Assistant this answer is replaced by the count from the
+    // shop's own calendar (config/openSlots.ts); without that count - a
+    // connected assistant, or a read that failed - it is this.
+    // 🔴 No "next week"/"this week" keywords and no primaryFor: "week" and
+    // "many" are generic, and would take "how many appointments do I have next
+    // week" or "how many texts do I get". The slot words carry it.
+    q: "How many open slots do I have?",
+    // The body avoids "week" and "appointments": body words score too, and
+    // with them this took "how many appointments do I have next week".
+    a: "Your calendar shows every open time, day by day, and your booking page shows exactly the times clients can pick right now.\n\nAsk this in the Assistant (or the Assistant bubble while you're in your dashboard) and it counts them from your own calendar, with a count per day: tomorrow, a day you name, or the days ahead.\n\nIf your bookings run through Acuity or Square, your open times live in that calendar instead.",
+    keywords: [
+      "open slots", "slots open", "open times", "open spots", "spots open",
+      "openings", "free slots", "slots available", "available slots",
+      "slots left", "openings left", "availability left", "free times",
+      // Carries "next" (not "week") so "how many openings next week" clears
+      // the coverage bar; "week" here took "how many bookings this week".
+      "next opening", "next open slot",
+    ],
+    category: "booking",
+    action: { label: "Open appointments", featureId: "appointments" },
+  },
+  {
     id: "confirmation-text",
     q: "My client didn't get a confirmation TEXT when they booked",
     a: "That one isn't a text. A booking confirmation goes out by email — the confirmation SMS is deliberately off, because a text per booking costs every shop money for something the email already does.\n\nReminders are separate: an email about a day before, a push a day and 2 hours before if they use the app, and a text about a day before when your shop has texting on.\n\nSo if they're waiting on a confirmation, check the email side — their address on the booking, and their spam folder. If a REMINDER didn't arrive, that's a different question with different causes.",
@@ -1509,7 +1533,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "my-policy",
     q: "What is my cancellation policy set to?",
-    a: "Dashboard → Payments holds all of it: how customers pay, the free-cancel cutoff in hours, and the fee charged inside that cutoff. Whether clients can cancel or move a booking online at all, and until how many hours before, is separate: Booking → Settings → Booking rules.\n\nA cutoff of 0 means every cancellation is a full refund. A fee of 100% means no refund inside the cutoff.\n\nIf you take deposits, Deposit refunds lets you make them non-refundable: a client who cancels doesn't get the deposit back, whatever the cutoff, unless you choose to refund it from that appointment. Bookings keep the terms they were made on, and if you cancel, the deposit is always refunded in full.\n\nOne catch worth knowing: a cancellation fee can only actually be charged if you take payment through ChairBack. If you're set to pay-in-person, the fee sits there as a number and nothing collects it.\n\nYour own rules in your own words — lateness, what to bring — plus a checklist customers tick before booking are a separate card: Booking → Settings → Your policies.",
+    a: "Dashboard → Payments holds all of it: how customers pay, the free-cancel cutoff in hours, and the fee charged inside that cutoff. Whether clients can cancel or move a booking online at all, and until how many hours before, is separate: Booking → Settings → Booking rules.\n\nA cutoff of 0 means every cancellation is a full refund. A fee of 100% means no refund inside the cutoff.\n\nWith Card on file, the fee charged to the card for a no-show or a late cancel can be a % of the service or a flat amount, like $25. A flat fee is never more than the service's price, and each booking keeps the fee it was made with.\n\nIf you take deposits, Deposit refunds lets you make them non-refundable: a client who cancels doesn't get the deposit back, whatever the cutoff, unless you choose to refund it from that appointment. Bookings keep the terms they were made on, and if you cancel, the deposit is always refunded in full.\n\nOne catch worth knowing: a cancellation fee can only actually be charged if you take payment through ChairBack. If you're set to pay-in-person, the fee sits there as a number and nothing collects it.\n\nYour own rules in your own words — lateness, what to bring — plus a checklist customers tick before booking are a separate card: Booking → Settings → Your policies.",
     keywords: [
       "cancellation policy", "my policy", "cancel policy", "refund policy", "cutoff",
       "cancellation fee", "late cancel", "what is my policy", "policy set",
