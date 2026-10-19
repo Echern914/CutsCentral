@@ -92,6 +92,7 @@ import {
 } from "@/components/ui/UnitField";
 import { TargetedSlotCard } from "./TargetedSlotCard";
 import { EyeIcon, ServiceCard, serviceSummary } from "./ServiceCard";
+import { ServiceOrderList, inSavedOrder } from "./ServiceOrder";
 import { isHiddenService } from "@chairback/config/serviceVisibility";
 import { RESCHEDULE_CUTOFF_MAX_HOURS, formatCutoffHours } from "@chairback/config/rescheduleCutoff";
 import { CANCEL_CUTOFF_MAX_HOURS } from "@chairback/config/customerChangeRules";
@@ -1207,6 +1208,17 @@ export function ServicesTab({
   const justSaved = useJustSaved<ServiceRow>();
   const [pending, start] = useTransition();
   const activeStaff = staff.filter((s) => s.active);
+  // Reorder mode: the list turns into ≡ / ▲ / ▼ rows (ServiceOrder.tsx).
+  const [reordering, setReordering] = useState(false);
+  // The order the last reorder SAVED, held only while `initial` is still the
+  // list that save replaced - the page's refresh takes seconds on prod, and
+  // until it lands `initial` is in the old order. When the refreshed list
+  // arrives it is already in the saved order, and the server wins again
+  // (same idea as justSaved).
+  const [savedOrder, setSavedOrder] = useState<{ ids: string[]; over: ServiceRow[] } | null>(null);
+  const activeRows = initial.filter((s) => s.active);
+  const activeServices =
+    savedOrder && savedOrder.over === initial ? inSavedOrder(activeRows, savedOrder.ids) : activeRows;
 
   function add() {
     if (!name.trim()) return;
@@ -1442,8 +1454,43 @@ export function ServicesTab({
         Add service
       </button>
 
+      {activeServices.length > 1 && (
+        <div className="mt-5 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setReordering((r) => !r)}
+            aria-pressed={reordering}
+            className={cn(
+              "flex min-h-[44px] items-center gap-2 rounded-xl border px-4 text-sm font-medium transition-colors",
+              reordering
+                ? "border-gold bg-gold text-charcoal-900"
+                : "border-gold/40 text-gold hover:border-gold/70",
+            )}
+          >
+            {reordering ? (
+              "Done"
+            ) : (
+              <>
+                <span aria-hidden="true">≡</span> Reorder
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
+      {reordering && activeServices.length > 1 ? (
+        <ServiceOrderList
+          services={activeServices.map((row) => {
+            const s = justSaved.current(row);
+            return { id: s.id, name: s.name, hidden: isHiddenService(s) };
+          })}
+          hasGroups={initialServiceGroups.some((g) => g.active && g.serviceIds.length > 0)}
+          onSaved={(ids) => setSavedOrder({ ids, over: initial })}
+          toast={toast}
+        />
+      ) : (
       <ul className="mt-5 flex flex-col gap-2">
-        {initial.filter((s) => s.active).map((listed) => {
+        {activeServices.map((listed) => {
           const s = justSaved.current(listed);
           // Hours the ENGINE will use for this service (a group overrides it).
           // Restricted => ★ + the windows spelled out, so the barber can spot
@@ -1518,10 +1565,11 @@ export function ServicesTab({
             />
           );
         })}
-        {initial.filter((s) => s.active).length === 0 && (
+        {activeServices.length === 0 && (
           <li className="text-sm text-muted">No services yet.</li>
         )}
       </ul>
+      )}
       </Card>
 
       {editing && (

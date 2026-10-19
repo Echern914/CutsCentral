@@ -229,6 +229,25 @@ export async function deleteServiceAction(id: string): Promise<Result> {
   return done(await apiSend("DELETE", `/api/booking/services/${id}`));
 }
 
+/**
+ * Save the whole menu order at once: `ids` is every active service, top to
+ * bottom. The API writes all of it or none of it and answers with the order it
+ * now holds - `ids` on success is THAT order, not the one we sent, so the list
+ * only ever shows what was actually saved.
+ */
+export async function reorderServicesAction(
+  ids: string[],
+): Promise<Result & { ids?: string[] }> {
+  const res = await apiSend<{ services: { id: string; sortOrder: number }[] }>(
+    "PUT",
+    "/api/booking/services/order",
+    { ids },
+  );
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  revalidatePath("/dashboard/booking");
+  return { ok: true, ids: res.data.services.map((s) => s.id) };
+}
+
 //  Service groups
 
 // A group bundles several services under ONE shared set of booking limits.

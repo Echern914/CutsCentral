@@ -243,7 +243,9 @@ export async function renderPromptForShop(shopId: string): Promise<string | null
     }),
     db.service.findMany({
       where: { ...PUBLIC_SERVICE },
-      orderBy: { sortOrder: "asc" },
+      // The barber's menu order, with the same tie-break as the booking page,
+      // so the receptionist reads the menu the way the page lists it.
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       // Every pricing layer, not just the base. The menu used to read
       // `price`/`durationMin` alone while the booking tool wrote the
       // day-adjusted figure - so on a Saturday the receptionist quoted $40
