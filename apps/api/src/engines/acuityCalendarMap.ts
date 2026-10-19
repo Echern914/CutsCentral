@@ -141,11 +141,27 @@ export function computeMappingReadiness(input: {
   return { ready: blocking.length === 0 && bookable.length > 0, staff, blocking, preselectCalendarId };
 }
 
-/** The staff slice + connection timestamp, read under tenant scoping. */
+/**
+ * The staff slice + connection timestamp, read under tenant scoping.
+ *
+ * A REMOVED chair (Staff "Remove" is a soft delete: active=false) is left out
+ * unless it still holds an Acuity calendar. An empty removed chair is just a
+ * ghost: it showed on the mapping card as an unexplained "Inactive" twin of a
+ * barber who is still working, and nothing on it could be fixed. One that
+ * still holds a calendar stays, because that calendar is unavailable to every
+ * other chair until it is freed - and the owner can only free what they see.
+ */
 export async function loadStaffMappingRows(shopId: string): Promise<StaffMappingRow[]> {
   return runWithShop(shopId, async (tx) => {
     const rows = await tx.staff.findMany({
-      where: { shopId },
+      where: {
+        shopId,
+        OR: [
+          { active: true },
+          { acuityCalendarId: { not: null } },
+          { acuityExtraCalendarIds: { isEmpty: false } },
+        ],
+      },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       select: {
         id: true,

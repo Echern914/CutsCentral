@@ -73,7 +73,15 @@ export function AcuityCalendarMap() {
         void load();
         return;
       }
-      toast(calendarId ? `${cap(vocab.stationNoun)} mapped` : "Mapping cleared", "success");
+      const removed = data?.staff.find((x) => x.id === staffId)?.active === false;
+      toast(
+        calendarId
+          ? `${cap(vocab.stationNoun)} mapped`
+          : removed
+            ? "Calendar freed"
+            : "Mapping cleared",
+        "success",
+      );
       void load();
     });
   }
@@ -172,6 +180,21 @@ export function AcuityCalendarMap() {
     return [...onAccount, ...missing];
   };
 
+  /**
+   * A REMOVED chair (Staff "Remove" is a soft delete) only belongs on this card
+   * while it still holds a calendar. The server already filters the rest out;
+   * this repeats it so an older API can't bring back the unexplained
+   * "Inactive" twin of a barber who is still working.
+   */
+  const holdsCalendar = (s: AcuityMappingData["staff"][number]) =>
+    s.calendarId !== null || s.extraCalendarIds.length > 0;
+  const rows = data.staff.filter((s) => s.active || holdsCalendar(s));
+
+  const calendarLabel = (id: string) => {
+    const name = data.calendars.find((c) => c.id === id)?.name;
+    return name ? `"${name}"` : `calendar ${id}`;
+  };
+
   return (
     <Card className="p-5">
       <CardHeader
@@ -196,7 +219,40 @@ export function AcuityCalendarMap() {
       </div>
 
       <ul className="mt-4 flex flex-col gap-3">
-        {data.staff.map((s) => {
+        {rows.map((s) => {
+          if (!s.active) {
+            // Removed, but still holding Acuity calendars no other chair can
+            // use. Nothing to map here - only one thing to do: let them go.
+            const held = [s.calendarId, ...s.extraCalendarIds].filter(
+              (id): id is string => id !== null,
+            );
+            const many = held.length > 1;
+            return (
+              <li key={s.id} className="flex flex-col gap-3 rounded-lg border border-subtle p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="[overflow-wrap:anywhere] text-sm font-semibold text-offwhite">
+                      {s.name}
+                      <span className="ml-2 rounded-full bg-charcoal-700 px-1.5 py-0.5 text-[10px] font-medium text-muted">
+                        Removed
+                      </span>
+                    </p>
+                    <p className="mt-0.5 [overflow-wrap:anywhere] text-[11px] text-muted">
+                      {`You removed this ${vocab.providerNoun}, but they still hold ${held.map(calendarLabel).join(", ")}. No other ${vocab.stationNoun} can use ${many ? "those calendars" : "that calendar"} until you free ${many ? "them" : "it"}.`}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={savingId === s.id}
+                    onClick={() => save(s.id, null, data.connectedAt)}
+                    className="h-11 shrink-0 rounded-lg border border-subtle px-4 text-sm font-medium text-offwhite hover:bg-charcoal-700 disabled:opacity-50 sm:h-9"
+                  >
+                    {many ? "Free calendars" : "Free calendar"}
+                  </button>
+                </div>
+              </li>
+            );
+          }
           const value = s.calendarId ?? "";
           // Unambiguous shape (one chair, one calendar): preselect it in the
           // control - but still SHOW it, because an unseen default is how the
@@ -221,7 +277,7 @@ export function AcuityCalendarMap() {
                     {s.name}
                     {!s.bookable && (
                       <span className="ml-2 rounded-full bg-charcoal-700 px-1.5 py-0.5 text-[10px] font-medium text-muted">
-                        {s.active ? "No active services" : "Inactive"}
+                        No active services
                       </span>
                     )}
                   </p>
