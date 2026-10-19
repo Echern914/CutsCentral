@@ -100,6 +100,84 @@ describe("the Acuity calendar picker", () => {
   });
 });
 
+/**
+ * Drick, 2026-10: "Ability to remove a barber I guess, not sure what this is?"
+ * A chair he had removed showed as an "Inactive" Drick above his real one,
+ * with a "Not mapped" picker and nothing to do about it.
+ */
+describe("a removed chair on the mapping card", () => {
+  const removed = (over: Partial<AcuityMappingData["staff"][number]>) => ({
+    id: "st_old",
+    name: "Dee",
+    active: false,
+    bookable: false,
+    calendarId: null,
+    calendarName: null,
+    extraCalendarIds: [],
+    problem: "unmapped" as const,
+    ...over,
+  });
+
+  it("🔴 one holding no calendar is not shown at all, even if an older API sends it", async () => {
+    const base = mapping({ calendarId: "cal_1", calendarName: "Dee's calendar", problem: null });
+    getAcuityMappingAction.mockResolvedValue({
+      ok: true,
+      data: { ...base, ready: true, staff: [removed({}), ...base.staff] },
+    });
+    render(<AcuityCalendarMap />);
+    await screen.findByText("Dee");
+    expect(screen.getAllByText("Dee")).toHaveLength(1);
+    expect(screen.queryByText("Inactive")).toBeNull();
+    expect(screen.queryByText("Removed")).toBeNull();
+  });
+
+  it("one still holding a calendar says Removed, names it, and frees it in one tap", async () => {
+    const base = mapping();
+    getAcuityMappingAction.mockResolvedValue({
+      ok: true,
+      data: {
+        ...base,
+        calendars: [
+          { id: "cal_1", name: "Dee's calendar", takenByStaffId: "st_old" },
+          { id: "cal_2", name: "After hours", takenByStaffId: "st_old" },
+        ],
+        staff: [
+          removed({ calendarId: "cal_1", calendarName: "Dee's calendar", extraCalendarIds: ["cal_2"], problem: null }),
+          ...base.staff,
+        ],
+      },
+    });
+    render(<AcuityCalendarMap />);
+    expect(await screen.findByText("Removed")).toBeTruthy();
+    expect(screen.getByText(/still hold "Dee's calendar", "After hours"/)).toBeTruthy();
+    // No picker for a removed chair (only the active one has one): there is
+    // nothing to map it to.
+    expect(screen.getAllByRole("combobox")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Free calendars" }));
+    await waitFor(() =>
+      expect(setStaffAcuityCalendarAction).toHaveBeenCalledWith("st_old", null, "2026-10-01T00:00:00.000Z"),
+    );
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Calendar freed", "success"));
+  });
+
+  it("a refused free is reported, not shown as done", async () => {
+    setStaffAcuityCalendarAction.mockResolvedValue({ ok: false, error: "acuity_unavailable" });
+    const base = mapping();
+    getAcuityMappingAction.mockResolvedValue({
+      ok: true,
+      data: {
+        ...base,
+        calendars: [{ id: "cal_1", name: "Dee's calendar", takenByStaffId: "st_old" }],
+        staff: [removed({ calendarId: "cal_1", calendarName: "Dee's calendar", problem: null }), ...base.staff],
+      },
+    });
+    render(<AcuityCalendarMap />);
+    fireEvent.click(await screen.findByRole("button", { name: "Free calendar" }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't save that mapping", "error"));
+    expect(toast).not.toHaveBeenCalledWith("Calendar freed", "success");
+  });
+});
+
 const connect: ConnectStatus = {
   acuityConnected: false,
   acuityNeedsReconnect: false,

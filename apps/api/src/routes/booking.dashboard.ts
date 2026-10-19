@@ -1401,11 +1401,26 @@ bookingDashboardRouter.patch("/staff/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * Remove a barber. A SOFT delete (appointments and history point at the row),
+ * which also lets go of their Acuity calendars in the same write.
+ *
+ * Before, a removed chair kept holding its calendar: every other chair saw it
+ * as "already mapped", and the mapping card showed an unexplained "Inactive"
+ * twin of the barber with no way to clear it. Blocks already pushed to Acuity
+ * are unaffected - each AcuityOutboundBlock carries its own copy of the
+ * calendar id, so releasing or reconciling one never reads this mapping.
+ */
 bookingDashboardRouter.delete("/staff/:id", async (req, res) => {
   const db = forShop(req.shop!.id);
   const { count } = await db.staff.updateMany({
     where: { id: req.params.id },
-    data: { active: false },
+    data: {
+      active: false,
+      acuityCalendarId: null,
+      acuityExtraCalendarIds: [],
+      acuityCalendarMappedAt: null,
+    },
   });
   res.json({ ok: count > 0 });
 });
