@@ -5,6 +5,7 @@ import { apiGet } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { LocalDate } from "@/components/ui/LocalDate";
 import { CompToggle } from "./CompToggle";
+import { PAID_PLAN_KEYS, planLabel, planName } from "./planLabel";
 import { AnalyticsSection, type Analytics } from "./Analytics";
 import { PreflightSection, type Preflight } from "./Preflight";
 import { TextingSwitch, type TextingState } from "./TextingSwitch";
@@ -28,6 +29,8 @@ interface Metrics {
   totalShops: number;
   newThisWeek: number;
   paying: number;
+  /** Paying shops per Shop.plan key; adds up to `paying`. */
+  payingByPlan?: Record<string, number>;
   trialing: number;
   comped: number;
   mrrEstimate: number;
@@ -120,6 +123,8 @@ export default async function AdminPage() {
           </div>
         )}
 
+        {m?.payingByPlan && <PlanBreakdown byPlan={m.payingByPlan} />}
+
         {texting && <TextingSwitch initial={texting} />}
 
         {preflight && <PreflightSection p={preflight} />}
@@ -144,12 +149,13 @@ export default async function AdminPage() {
         <h2 className="mb-3 mt-10 font-display text-lg">All shops</h2>
         <Card className="overflow-hidden p-0">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-sm">
+            <table className="w-full min-w-[880px] text-sm">
               <thead>
                 <tr className="border-b border-subtle text-left text-xs uppercase tracking-wide text-muted">
                   <th className="px-4 py-3 font-medium">Shop</th>
                   <th className="px-4 py-3 font-medium">Owner</th>
                   <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Plan</th>
                   <th className="px-4 py-3 font-medium">Clients</th>
                   <th className="px-4 py-3 font-medium">Joined</th>
                   <th className="px-4 py-3 font-medium">Free access</th>
@@ -169,6 +175,9 @@ export default async function AdminPage() {
                     <td className="px-4 py-3">
                       <StatusPill shop={s} />
                     </td>
+                    <td className="px-4 py-3">
+                      <PlanCell shop={s} />
+                    </td>
                     <td className="px-4 py-3 text-muted">
                       {s.clientCount}
                       <span className="text-xs"> · {s.visitCount}v</span>
@@ -183,7 +192,7 @@ export default async function AdminPage() {
                 ))}
                 {shops.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted">
+                    <td colSpan={7} className="px-4 py-8 text-center text-sm text-muted">
                       No shops yet.
                     </td>
                   </tr>
@@ -231,5 +240,43 @@ function StatusPill({ shop }: { shop: AdminShop }) {
         : ["Free", "bg-charcoal-700 text-muted"];
   return (
     <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${cls}`}>{text}</span>
+  );
+}
+
+function PlanCell({ shop }: { shop: AdminShop }) {
+  const p = planLabel(shop);
+  return (
+    <>
+      <p className={p.chosen ? "font-medium text-offwhite" : "text-muted"}>{p.name}</p>
+      {(p.detail || p.endsAt) && (
+        <p className="text-xs text-muted">
+          {p.detail}
+          {p.endsAt && (
+            <>
+              {" "}
+              <LocalDate iso={p.endsAt} options={{ month: "short", day: "numeric" }} />
+            </>
+          )}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** How the paying shops split across the plans they chose. */
+function PlanBreakdown({ byPlan }: { byPlan: Record<string, number> }) {
+  // Any key outside the paid list (an old or renamed plan) still shows, so
+  // the row always adds up to the Paying card.
+  const extra = Object.keys(byPlan).filter((k) => !(PAID_PLAN_KEYS as string[]).includes(k));
+  const keys = [...PAID_PLAN_KEYS, ...extra];
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
+      <span className="text-xs uppercase tracking-wide text-muted">Paying by plan</span>
+      {keys.map((k) => (
+        <span key={k} className="text-muted">
+          {planName(k)} <span className="font-medium text-offwhite">{byPlan[k] ?? 0}</span>
+        </span>
+      ))}
+    </div>
   );
 }
