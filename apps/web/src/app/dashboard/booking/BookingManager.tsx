@@ -39,8 +39,7 @@ import { BookingCalendar } from "./BookingCalendar";
 import { UnfinishedBookings } from "./UnfinishedBookings";
 import { ConflictInbox, ConflictTabBadge, useUnresolvedConflictCount } from "./ConflictInbox";
 import { ShopQrCard } from "./ShopQrCard";
-import { HolidayPricing } from "./HolidayPricing";
-import { SpecialDayCard } from "./SpecialDayCard";
+import { HolidaysAndSpecialDays } from "./HolidaysAndSpecialDays";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import { AcuityCalendarMap } from "./AcuityCalendarMap";
 import { AcuityServiceImport } from "./AcuityServiceImport";
@@ -1557,18 +1556,15 @@ export function ServicesTab({
         unsavedRef={groupUnsavedRef}
       />
 
-      {/* Holiday pricing, shop-wide. The per-service editor can still set a
-          date one service at a time; this is the same data grouped BY DATE,
-          which is how a barber actually thinks about a holiday. */}
-      <HolidayPricing services={initial} names={holidayNames} timezone={timezone} toast={toast} />
-
-      {/* Special day, right under Holiday pricing: the same "a date is
-          different" thought, taken past price to the whole day's times. It
-          publishes targeted slots, so the Targeted slots card below re-reads
-          when one is published or removed (the key). */}
-      <SpecialDayCard
+      {/* Holiday pricing (shop-wide, grouped BY DATE - how a barber thinks
+          about a holiday) and Special day, sharing one live view of the day:
+          "Open live view" on either draws the date per chair to pick its
+          times and the price of each opening. Special days publish targeted
+          slots, so the Targeted slots card below re-reads on a save (key). */}
+      <HolidaysAndSpecialDays
         services={initial}
         staff={staff}
+        names={holidayNames}
         timezone={timezone}
         toast={toast}
         onChanged={() => setSpecialsVersion((v) => v + 1)}

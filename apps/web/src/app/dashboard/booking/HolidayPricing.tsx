@@ -62,11 +62,19 @@ function prettyDate(date: string): string {
   });
 }
 
+/** The holiday's one price, when every service shares it (else null). */
+function runPrice(group: HolidayGroup): number | null {
+  const prices = [...new Set(group.entries.map((e) => e.price))];
+  return prices.length === 1 ? prices[0]! : null;
+}
+
 export function HolidayPricing({
   services,
   names = {},
   timezone,
   toast,
+  specialDays = {},
+  onOpenLiveView,
 }: {
   services: ServiceRow[];
   /** The shop's names for its dates ({"2026-11-26": "Thanksgiving"}). */
@@ -74,6 +82,15 @@ export function HolidayPricing({
   /** The shop's IANA zone, which decides what "today" is. */
   timezone?: string;
   toast: Toast;
+  /** Dates already run as a special day: how many openings, how many booked. */
+  specialDays?: Record<string, { openings: number; booked: number }>;
+  /**
+   * Open the LIVE VIEW (LiveDayView.tsx) on these dates: the day drawn per
+   * chair, where the barber picks the times and the price of each opening
+   * (Drick: "This should show the 'open live view' so I can select specific
+   * prices and TIMES available for that day").
+   */
+  onOpenLiveView?: (dates: string[], name?: string, price?: number | null) => void;
 }) {
   // No refresh callback: saveHolidayAction revalidates /dashboard/booking, so
   // the server re-renders and hands this component fresh `services` - the same
@@ -152,6 +169,9 @@ export function HolidayPricing({
   }, [groups, names]);
 
   const today = todayKey(timezone);
+  // The form's dates when they are exactly ONE day still ahead.
+  const formDates = adding ? allDates() : null;
+  const singleDate = formDates && formDates.length === 1 && formDates[0]! >= today ? formDates[0]! : null;
 
   function toggle(id: string) {
     setPicked((cur) => {
@@ -316,6 +336,14 @@ export function HolidayPricing({
                 ? prettyDate(run.from)
                 : `${prettyDate(run.from)} – ${prettyDate(run.to)}`;
             const holidayName = names[run.from];
+            // The days of the stretch not already behind the shop - the live
+            // view steps through them.
+            const ahead = run.dates.filter((d) => d >= today);
+            const special = ahead.reduce<{ openings: number; booked: number } | null>((acc, d) => {
+              const s = specialDays[d];
+              if (!s) return acc;
+              return { openings: (acc?.openings ?? 0) + s.openings, booked: (acc?.booked ?? 0) + s.booked };
+            }, null);
             return (
               <li
                 key={run.from}
@@ -345,8 +373,24 @@ export function HolidayPricing({
                       .map((e) => `${e.serviceName} $${e.price.toFixed(0)}`)
                       .join(" · ")}
                   </p>
+                  {special && (
+                    <p className="text-xs text-gold">
+                      Special day: {special.openings} opening{special.openings === 1 ? "" : "s"}
+                      {special.booked > 0 ? ` · ${special.booked} booked` : ""}
+                    </p>
+                  )}
                 </div>
-                <span className="flex shrink-0 gap-1">
+                <span className="flex shrink-0 flex-wrap gap-1">
+                  {onOpenLiveView && !past && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenLiveView(ahead, holidayName, runPrice(run.group))}
+                      className="min-h-[44px] rounded px-1.5 text-xs font-medium text-gold transition-colors hover:underline"
+                      aria-label={`Open live view of ${holidayName ?? label}`}
+                    >
+                      Open live view
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => beginEdit(run)}
@@ -535,6 +579,21 @@ export function HolidayPricing({
               Cancel
             </button>
           </div>
+          {/* One date picked: its live view is a tap away, to set the times
+              and the price of each opening that day - not just one price. */}
+          {onOpenLiveView && singleDate && (
+            <button
+              type="button"
+              onClick={() => {
+                const p = parsePrice(price);
+                onOpenLiveView([singleDate], name.trim() || undefined, p.ok ? p.value : null);
+              }}
+              className="mt-3 min-h-[44px] rounded-lg border border-gold/40 px-3 text-xs font-medium text-gold transition-colors hover:bg-gold/10"
+            >
+              Open live view
+              <span className="ml-1 font-normal text-muted">- pick the times and the price of each opening that day</span>
+            </button>
+          )}
         </div>
       )}
     </Card>

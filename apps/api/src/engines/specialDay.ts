@@ -1,9 +1,12 @@
 import { prisma, Prisma, runWithShop } from "@chairback/db";
 import { zonedDateKey, zonedDateParts, zonedWallTimeToUtc } from "@chairback/config";
-import { blockedRangesByStaff, spanIsBlocked } from "./blockedTime.js";
+import { blockedRangesByStaff } from "./blockedTime.js";
 import { occupyingWhere } from "./chairOccupancy.js";
 import { lockStaffCalendars } from "./bookingWrite.js";
 import { MAX_SLOTS_PER_WINDOW } from "./targetedSlotRules.js";
+import { fillOpenings, openingStartMinutes } from "@chairback/config/specialDay";
+
+export { openingStartMinutes };
 
 /**
  * A SPECIAL DAY - "on Thanksgiving every cut is 20 minutes and $65, 9 to 5,
@@ -67,23 +70,6 @@ export interface ChairPlan {
   bookings: { startsAt: Date; endsAt: Date }[];
 }
 
-/**
- * The opening START minutes a window holds: every cut + buffer from the start
- * while the whole owned span (cut + buffer) still fits before the end.
- */
-export function openingStartMinutes(input: {
-  startMin: number;
-  endMin: number;
-  cutMin: number;
-  bufferMin: number;
-}): number[] {
-  const step = input.cutMin + Math.max(0, input.bufferMin);
-  const out: number[] = [];
-  if (input.cutMin <= 0) return out;
-  for (let m = input.startMin; m + step <= input.endMin; m += step) out.push(m);
-  return out;
-}
-
 /** The shop-local day as UTC instants [start, end). DST-correct. */
 export function dayBoundsUtc(date: string, timezone: string): { start: Date; end: Date } {
   const [y, m, d] = date.split("-").map(Number) as [number, number, number];
@@ -131,12 +117,8 @@ export async function planSpecialDay(
 ): Promise<ChairPlan[]> {
   const { shopId, timezone, spec, now } = input;
   const bufferMs = Math.max(0, input.bufferMin) * 60_000;
-  const cutMs = spec.cutMin * 60_000;
   const { start: dayStart, end: dayEnd } = dayBoundsUtc(spec.date, timezone);
   const [y, m, d] = spec.date.split("-").map(Number) as [number, number, number];
-  const starts = openingStartMinutes({ ...spec, bufferMin: input.bufferMin }).map((min) =>
-    zonedWallTimeToUtc(y, m - 1, d, min, timezone),
-  );
 
   const [blocked, appts, visits] = await Promise.all([
     blockedRangesByStaff({
@@ -174,37 +156,40 @@ export async function planSpecialDay(
     }),
   ]);
 
+  // The placement rule is the shared one (config/specialDay.ts) - the live
+  // view draws and fills a day with the same function, so the two agree.
+  const externalSpans = visits
+    .filter((v) => v.endAt !== null)
+    .map((v) => ({ start: v.scheduledAt.getTime(), end: v.endAt!.getTime() }));
   return spec.staffIds.map((staffId) => {
     const mine = appts.filter((a) => a.staffId === staffId);
-    const plan: ChairPlan = {
+    const fill = fillOpenings({
+      startMin: spec.startMin,
+      endMin: spec.endMin,
+      cutMin: spec.cutMin,
+      bufferMin: input.bufferMin,
+      at: (min) => zonedWallTimeToUtc(y, m - 1, d, min, timezone).getTime(),
+      unit: 60_000,
+      day: {
+        bookings: mine.map((a) => ({ start: a.startsAt.getTime(), end: a.endsAt.getTime() })),
+        external: externalSpans,
+        // Every block counts, service-scoped ones too: the opening may be
+        // booked as any of its services, so the safe reading is "in the way".
+        blocks: (blocked.get(staffId) ?? []).map((b) => ({ start: b.start, end: b.end })),
+      },
+      now: now.getTime(),
+    });
+    return {
       staffId,
-      openings: [],
-      skipped: [],
+      openings: fill.openings.map((o) => ({ startsAt: new Date(o.start), endsAt: new Date(o.end) })),
+      skipped: fill.skipped.map((k) => ({
+        startsAt: new Date(k.start),
+        // planSpecialDay never passes a day edge or other openings, so only
+        // these three can come back.
+        reason: k.reason as SkipReason,
+      })),
       bookings: mine.map((a) => ({ startsAt: a.startsAt, endsAt: a.endsAt })),
     };
-    for (const startsAt of starts) {
-      const s = startsAt.getTime();
-      const e = s + cutMs;
-      if (s <= now.getTime()) {
-        plan.skipped.push({ startsAt, reason: "past" });
-        continue;
-      }
-      const hitsBooking =
-        mine.some((a) => a.startsAt.getTime() < e + bufferMs && a.endsAt.getTime() > s - bufferMs) ||
-        visits.some((v) => v.endAt !== null && v.scheduledAt.getTime() < e && v.endAt.getTime() > s);
-      if (hitsBooking) {
-        plan.skipped.push({ startsAt, reason: "booking" });
-        continue;
-      }
-      // serviceId null: a block scoped to ANY service counts - the opening may
-      // be booked as any of its services, so the safe reading is "in the way".
-      if (spanIsBlocked(blocked.get(staffId), s, e + bufferMs, null)) {
-        plan.skipped.push({ startsAt, reason: "blocked" });
-        continue;
-      }
-      plan.openings.push({ startsAt, endsAt: new Date(e) });
-    }
-    return plan;
   });
 }
 
@@ -390,6 +375,9 @@ export interface SpecialDayRow {
   lastEnd: string | null;
   openings: number;
   booked: number;
+  /** The cheapest and dearest opening (each opening carries its own price). */
+  minPrice: number;
+  maxPrice: number;
 }
 
 /** The special days still ahead (today included), soonest first. */
@@ -410,7 +398,7 @@ export async function listSpecialDays(shopId: string, timezone: string, now: Dat
         price: true,
         durationMin: true,
         slots: {
-          select: { startsAt: true, durationMin: true, bookedAppointmentId: true },
+          select: { startsAt: true, durationMin: true, bookedAppointmentId: true, price: true },
           orderBy: { startsAt: "asc" },
         },
       },
@@ -435,6 +423,8 @@ export async function listSpecialDays(shopId: string, timezone: string, now: Dat
         lastEnd: last ? new Date(last.startsAt.getTime() + last.durationMin * 60_000).toISOString() : null,
         openings: r.slots.length,
         booked: r.slots.filter((s) => s.bookedAppointmentId !== null).length,
+        minPrice: r.slots.length ? Math.min(...r.slots.map((s) => Number(s.price))) : Number(r.price),
+        maxPrice: r.slots.length ? Math.max(...r.slots.map((s) => Number(s.price))) : Number(r.price),
       };
     });
     return rows.sort((a, b) => a.date.localeCompare(b.date) || a.staffId.localeCompare(b.staffId));

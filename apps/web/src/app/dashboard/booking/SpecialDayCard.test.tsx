@@ -1,151 +1,110 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ServiceRow, StaffRow } from "./page";
+import type { SpecialDayRow } from "./actions";
+import type { StaffRow } from "./page";
 
-const listSpecialDaysAction = vi.fn();
-const previewSpecialDayAction = vi.fn();
-const publishSpecialDayAction = vi.fn();
 const removeSpecialDaysAction = vi.fn();
 vi.mock("./actions", () => ({
-  listSpecialDaysAction: (...a: unknown[]) => listSpecialDaysAction(...a),
-  previewSpecialDayAction: (...a: unknown[]) => previewSpecialDayAction(...a),
-  publishSpecialDayAction: (...a: unknown[]) => publishSpecialDayAction(...a),
   removeSpecialDaysAction: (...a: unknown[]) => removeSpecialDaysAction(...a),
 }));
 
 const { SpecialDayCard } = await import("./SpecialDayCard");
 
 /**
- * The Special day builder (Drick: "make all cuts (20 min long) only on that
- * day and charge $65 all day"). What must not break quietly:
- *   - nothing publishes before the barber has SEEN the openings
- *   - the preview says what was left out and that bookings stay
- *   - a success toast only after the server confirmed
- *   - changing a field after the preview throws the preview away
+ * The Special day card lists what is planned and LEADS INTO THE LIVE VIEW -
+ * the same one Holiday pricing opens - so a special day is built and changed
+ * in one place. What must not break quietly:
+ *   - each planned day opens its live view
+ *   - planning a new day asks only for the date, then opens the live view
+ *   - remove says what stays booked, and claims success only on the server's ok
  */
 const staff = [{ id: "st1", name: "Drick", active: true }] as unknown as StaffRow[];
-const services = [
-  { id: "cut", name: "Cut", active: true, price: 40 },
-  { id: "beard", name: "Beard", active: true, price: 25 },
-] as unknown as ServiceRow[];
-
 const iso = (hhmm: string) => `2026-11-26T${hhmm}:00.000Z`;
-const plan = {
+const row: SpecialDayRow = {
+  ruleId: "r1",
   staffId: "st1",
-  openings: [iso("09:00"), iso("09:20"), iso("10:40")],
-  skipped: [
-    { startsAt: iso("10:00"), reason: "booking" },
-    { startsAt: iso("10:20"), reason: "booking" },
-  ],
-  bookings: [{ startsAt: iso("10:00"), endsAt: iso("10:30") }],
+  date: "2026-11-26",
+  name: "Thanksgiving",
+  price: 65,
+  cutMin: 20,
+  firstStart: iso("09:00"),
+  lastEnd: iso("17:00"),
+  openings: 24,
+  booked: 3,
+  minPrice: 50,
+  maxPrice: 80,
 };
 
-function fill() {
-  fireEvent.click(screen.getByRole("button", { name: "+ Plan a special day" }));
-  fireEvent.change(screen.getByPlaceholderText("Thanksgiving"), { target: { value: "Thanksgiving" } });
-  fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2026-11-26" } });
-  fireEvent.change(screen.getByLabelText("Price each"), { target: { value: "65" } });
-  fireEvent.click(screen.getByRole("button", { name: "Cut" }));
+function card(props: Partial<Parameters<typeof SpecialDayCard>[0]> = {}) {
+  const onOpen = vi.fn();
+  const toast = vi.fn();
+  const onChanged = vi.fn();
+  render(
+    <SpecialDayCard
+      rows={[row]}
+      loadFailed={false}
+      onReload={vi.fn()}
+      staff={staff}
+      timezone="UTC"
+      toast={toast}
+      onOpen={onOpen}
+      onChanged={onChanged}
+      {...props}
+    />,
+  );
+  return { onOpen, toast, onChanged };
 }
 
 beforeEach(() => {
   vi.useFakeTimers({ now: new Date("2026-11-01T12:00:00.000Z"), toFake: ["Date"] });
-  listSpecialDaysAction.mockResolvedValue({ ok: true, specialDays: [] });
-  previewSpecialDayAction.mockResolvedValue({ ok: true, plans: [plan], bufferMin: 0 });
-  publishSpecialDayAction.mockResolvedValue({ ok: true, created: [{ staffId: "st1", openings: 3 }] });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
-describe("Special day builder", () => {
-  it("previews first, shows what was left out, then publishes exactly that", async () => {
-    const toast = vi.fn();
-    render(<SpecialDayCard services={services} staff={staff} timezone="UTC" toast={toast} />);
-    await screen.findByText(/None planned/);
-    fill();
-    // No Publish before a preview exists.
-    expect(screen.queryByRole("button", { name: /Publish/ })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Preview openings" }));
-
-    await screen.findByText(/3 openings at \$65/);
-    expect(previewSpecialDayAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        date: "2026-11-26",
-        staffIds: ["st1"],
-        start: "09:00",
-        end: "17:00",
-        cutMin: 20,
-        price: 65,
-        serviceIds: ["cut"],
-        name: "Thanksgiving",
-      }),
-    );
-    expect(screen.getByText(/Left out:/).textContent).toMatch(/already booked/);
-    expect(screen.getByText(/They stay booked/)).toBeTruthy();
-    expect(publishSpecialDayAction).not.toHaveBeenCalled();
-    expect(toast).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Publish 3 openings" }));
-    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringMatching(/Thanksgiving published: 3 openings/), "success"));
-    const sent = publishSpecialDayAction.mock.calls[0]![0];
-    expect(sent.expectOpenings).toBe(3);
-    expect(sent.requestId).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
+describe("Special day card", () => {
+  it("lists a planned day with its price range and opens its live view", () => {
+    const { onOpen } = card();
+    expect(screen.getByText("Thanksgiving")).toBeTruthy();
+    expect(screen.getByText(/24 openings · \$50–\$80 · 3 booked/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Open live view of Thanksgiving/ }));
+    expect(onOpen).toHaveBeenCalledWith("2026-11-26", "Thanksgiving");
   });
 
-  it("a change after the preview throws the preview away", async () => {
-    render(<SpecialDayCard services={services} staff={staff} timezone="UTC" toast={vi.fn()} />);
-    await screen.findByText(/None planned/);
-    fill();
-    fireEvent.click(screen.getByRole("button", { name: "Preview openings" }));
-    await screen.findByRole("button", { name: "Publish 3 openings" });
-    fireEvent.change(screen.getByLabelText("Price each"), { target: { value: "70" } });
-    expect(screen.queryByRole("button", { name: /Publish/ })).toBeNull();
-    expect(screen.getByRole("button", { name: "Preview openings" })).toBeTruthy();
+  it("plans a new day by its date, straight into the live view", () => {
+    const { onOpen } = card({ rows: [] });
+    expect(screen.getByText(/None planned/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "+ Plan a special day" }));
+    const go = screen.getByRole("button", { name: "Open live view" });
+    expect(go).toHaveProperty("disabled", true);
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2026-11-26" } });
+    fireEvent.click(go);
+    expect(onOpen).toHaveBeenCalledWith("2026-11-26");
   });
 
-  it("a refused publish shows why and claims no success", async () => {
-    publishSpecialDayAction.mockResolvedValue({
-      ok: false,
-      error: "already_exists",
-      message: "That chair already has a special day on that date. Remove it first to change it.",
-    });
-    const toast = vi.fn();
-    render(<SpecialDayCard services={services} staff={staff} timezone="UTC" toast={toast} />);
-    await screen.findByText(/None planned/);
-    fill();
-    fireEvent.click(screen.getByRole("button", { name: "Preview openings" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Publish 3 openings" }));
-    expect((await screen.findByRole("alert")).textContent).toMatch(/already has a special day/);
-    expect(toast).not.toHaveBeenCalled();
+  it("remove keeps booked visits and says so only after the server confirmed", async () => {
+    removeSpecialDaysAction.mockResolvedValue({ ok: true, openingsRemoved: 21, bookedKept: 3 });
+    const { toast, onChanged } = card();
+    fireEvent.click(screen.getByRole("button", { name: /Remove special day on/ }));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/3 booked visits stay booked/));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Thanksgiving removed - 3 booked visits kept", "success"));
+    expect(removeSpecialDaysAction).toHaveBeenCalledWith(["r1"]);
+    expect(onChanged).toHaveBeenCalled();
   });
 
-  it("lists a planned day by its name, and a failed load offers a retry", async () => {
-    listSpecialDaysAction.mockResolvedValueOnce({ ok: false });
-    const { unmount } = render(<SpecialDayCard services={services} staff={staff} timezone="UTC" toast={vi.fn()} />);
-    expect(await screen.findByText(/Couldn.t load your special days/)).toBeTruthy();
-    unmount();
+  it("a refused remove claims nothing; a failed load offers a retry", async () => {
+    removeSpecialDaysAction.mockResolvedValue({ ok: false, error: "failed" });
+    const { toast, onChanged } = card();
+    fireEvent.click(screen.getByRole("button", { name: /Remove special day on/ }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't remove it - nothing was changed", "error"));
+    expect(onChanged).not.toHaveBeenCalled();
 
-    listSpecialDaysAction.mockResolvedValue({
-      ok: true,
-      specialDays: [
-        {
-          ruleId: "r1",
-          staffId: "st1",
-          date: "2026-11-26",
-          name: "Thanksgiving",
-          price: 65,
-          cutMin: 20,
-          firstStart: iso("09:00"),
-          lastEnd: iso("17:00"),
-          openings: 24,
-          booked: 3,
-        },
-      ],
-    });
-    render(<SpecialDayCard services={services} staff={staff} timezone="UTC" toast={vi.fn()} />);
-    expect(await screen.findByText("Thanksgiving")).toBeTruthy();
-    expect(screen.getByText(/24 openings · 20 min · \$65 · 3 booked/)).toBeTruthy();
+    const onReload = vi.fn();
+    card({ rows: null, loadFailed: true, onReload });
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(onReload).toHaveBeenCalled();
   });
 });

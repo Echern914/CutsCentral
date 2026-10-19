@@ -53,7 +53,8 @@
     "./offers": "./src/offers.ts",
     "./onboarding": "./src/onboarding.ts",
     "./providerAward": "./src/providerAward.ts",
-    "./openSlots": "./src/openSlots.ts"
+    "./openSlots": "./src/openSlots.ts",
+    "./specialDay": "./src/specialDay.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

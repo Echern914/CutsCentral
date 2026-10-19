@@ -1546,7 +1546,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "holiday-pricing",
     q: "How do I set holiday pricing?",
-    a: "That's day pricing, on the Services tab. Open a service, add a date override, and set what that day costs — you can pick a stretch of dates at once, so Christmas week is one entry rather than seven.\n\nThe higher price is shown honestly at booking, so nobody is surprised at the chair.\n\nIf what you actually want is to be CLOSED that day, block the time on your calendar instead.",
+    a: "That's day pricing, on the Services tab. Open a service, add a date override, and set what that day costs — you can pick a stretch of dates at once, so Christmas week is one entry rather than seven.\n\nThe higher price is shown honestly at booking, so nobody is surprised at the chair.\n\nTo run the day differently — say only 20-minute cuts at $65 all day — tap Open live view on that holiday under Holiday pricing. You see the day with what's already booked, fill it in one step, then tap any opening to change its price or take it off, or tap empty time to add one. Nothing changes for clients until you save.\n\nIf what you actually want is to be CLOSED that day, block the time on your calendar instead.",
     keywords: [
       "holiday pricing", "holiday price", "christmas", "new year", "thanksgiving",
       "date pricing", "price for a day", "date override", "december 25",

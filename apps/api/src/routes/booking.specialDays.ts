@@ -18,6 +18,8 @@ import {
   type ChairPlan,
   type SpecialDaySpec,
 } from "../engines/specialDay.js";
+import { loadDayView, saveDay } from "../engines/specialDayView.js";
+import { OPENING_CONFLICT_WORDS } from "@chairback/config/specialDay";
 
 /**
  * Holidays (named, edited in one save) and Special days (engines/specialDay.ts).
@@ -138,6 +140,85 @@ async function checkSpecialDay(
   }
   return { ok: true, timezone: shop.timezone, bufferMin: shop.bookingBufferMin, spec, serviceIds };
 }
+
+/**
+ * The shop facts the live view needs, or why the date cannot be opened: a
+ * native shop, a real date not already behind it. The chairs are the shop's
+ * ACTIVE staff - every one of them is drawn, so the basis covers them all.
+ */
+async function liveViewShop(
+  shopId: string,
+  date: string,
+): Promise<
+  | { ok: true; timezone: string; bufferMin: number; staffIds: string[] }
+  | { ok: false; status: number; error: string; message: string }
+> {
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { timezone: true, bookingMode: true, bookingBufferMin: true },
+  });
+  if (!shop || shop.bookingMode !== "native") {
+    return { ok: false, status: 400, error: "not_native", message: "Special days need ChairBack booking turned on." };
+  }
+  if (date < zonedDateKey(new Date(), shop.timezone)) {
+    return { ok: false, status: 400, error: "in_the_past", message: "That date has already passed." };
+  }
+  const staff = await forShop(shopId).staff.findMany({
+    where: { active: true },
+    select: { id: true },
+    orderBy: { createdAt: "asc" },
+  });
+  if (staff.length === 0) {
+    return { ok: false, status: 400, error: "no_staff", message: "Add someone to the team first." };
+  }
+  if (staff.length > MAX_SPECIAL_DAY_CHAIRS * 4) {
+    return { ok: false, status: 400, error: "too_many_chairs", message: "Too many people to show on one day." };
+  }
+  return { ok: true, timezone: shop.timezone, bufferMin: shop.bookingBufferMin, staffIds: staff.map((s) => s.id) };
+}
+
+const liveOpening = z
+  .object({
+    id: z.string().min(1).max(64).optional(),
+    startMin: z.number().int().min(0).max(1439),
+    durationMin: z.number().int().min(5).max(240),
+    price: z.number().min(0).max(100000),
+  })
+  .strict();
+
+const liveSaveSchema = z
+  .object({
+    date: DAY_KEY,
+    name: z.string().trim().max(MAX_HOLIDAY_NAME).optional().or(z.literal("")),
+    serviceIds: z.array(z.string().min(1)).max(50).default([]),
+    chairs: z
+      .array(
+        z
+          .object({
+            staffId: z.string().min(1),
+            openings: z.array(liveOpening).max(MAX_SPECIAL_DAY_OPENINGS),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(MAX_SPECIAL_DAY_CHAIRS * 4),
+    // The view's fingerprint: the save is refused (409) if the day changed.
+    basis: z.string().min(8).max(128),
+    // Minted once per save; a retried save replays instead of writing twice.
+    requestId: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/).optional(),
+  })
+  .strict()
+  .refine((d) => d.serviceIds.length > 0 || d.chairs.every((c) => c.openings.length === 0), {
+    message: "Choose which services the openings count as",
+    path: ["serviceIds"],
+  });
+
+const REFUSAL_WORDS: Record<string, string> = {
+  ...OPENING_CONFLICT_WORDS,
+  unknown_opening: "that opening is no longer on the day",
+  booked_opening: "a booked opening can't be changed",
+  too_many_openings: `one day holds at most ${MAX_SPECIAL_DAY_OPENINGS} openings per person`,
+};
 
 export function registerSpecialDayRoutes(router: Router): void {
   /**
@@ -276,6 +357,104 @@ export function registerSpecialDayRoutes(router: Router): void {
           ? "Something on the calendar changed since the preview. Check the new preview, then publish."
           : "Every opening overlaps something already booked or blocked, so there is nothing to publish.",
       plans: plansJson(result.plans),
+    });
+  });
+
+  /**
+   * GET /special-days/day?date=YYYY-MM-DD - the LIVE VIEW of one date: every
+   * chair's bookings, Acuity time, blocked time and special openings, in
+   * shop-local minutes (engines/specialDayView.ts). Read-only.
+   */
+  router.get("/special-days/day", async (req, res) => {
+    const date = DAY_KEY.safeParse(req.query.date);
+    if (!date.success) {
+      res.status(400).json({ error: "invalid_input", issues: date.error.issues });
+      return;
+    }
+    const shopId = req.shop!.id;
+    const shop = await liveViewShop(shopId, date.data);
+    if (!shop.ok) {
+      res.status(shop.status).json({ error: shop.error, message: shop.message });
+      return;
+    }
+    const view = await loadDayView({
+      shopId,
+      timezone: shop.timezone,
+      bufferMin: shop.bufferMin,
+      date: date.data,
+      staffIds: shop.staffIds,
+      now: new Date(),
+    });
+    res.json({ view });
+  });
+
+  /**
+   * PUT /special-days/day - save the live view: each listed chair's openings
+   * become exactly the ones sent (booked openings always stay as booked), and
+   * the rest of that chair's day is closed. One transaction under the chairs'
+   * calendar locks; 409 `changed` (with the fresh view) when the day moved
+   * since the view was read; a repeated requestId replays.
+   */
+  router.put("/special-days/day", async (req, res) => {
+    const parsed = liveSaveSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+      return;
+    }
+    const d = parsed.data;
+    const shopId = req.shop!.id;
+    const shop = await liveViewShop(shopId, d.date);
+    if (!shop.ok) {
+      res.status(shop.status).json({ error: shop.error, message: shop.message });
+      return;
+    }
+    const serviceIds = [...new Set(d.serviceIds)];
+    const chairIds = d.chairs.map((c) => c.staffId);
+    const known = new Set(shop.staffIds);
+    if (new Set(chairIds).size !== chairIds.length || chairIds.some((id) => !known.has(id))) {
+      res.status(400).json({ error: "invalid_input", message: "Pick people from this shop." });
+      return;
+    }
+    if (serviceIds.length > 0) {
+      const found = await forShop(shopId).service.count({ where: { id: { in: serviceIds }, active: true } });
+      if (found !== serviceIds.length) {
+        res.status(400).json({ error: "invalid_input", message: "Pick services from this shop." });
+        return;
+      }
+    }
+    const out = await saveDay({
+      shopId,
+      timezone: shop.timezone,
+      bufferMin: shop.bufferMin,
+      date: d.date,
+      staffIds: shop.staffIds,
+      chairs: d.chairs,
+      serviceIds,
+      name: d.name?.trim() || null,
+      requestId: d.requestId ?? null,
+      basis: d.basis,
+      now: new Date(),
+    });
+    if (out.ok) {
+      res.json({ ok: true, replay: out.replay, summary: out.summary, view: out.view });
+      return;
+    }
+    if (out.error === "changed") {
+      res.status(409).json({
+        error: "changed",
+        message: "Something on this day changed since you opened it. Nothing was saved - check the day, then save again.",
+        view: out.view,
+      });
+      return;
+    }
+    const hh = String(Math.floor(out.startMin / 60)).padStart(2, "0");
+    const mm = String(out.startMin % 60).padStart(2, "0");
+    res.status(400).json({
+      error: "invalid_opening",
+      staffId: out.staffId,
+      startMin: out.startMin,
+      reason: out.reason,
+      message: `The opening at ${hh}:${mm} can't be saved: ${REFUSAL_WORDS[out.reason] ?? "it doesn't fit"}. Nothing was saved.`,
     });
   });
 
