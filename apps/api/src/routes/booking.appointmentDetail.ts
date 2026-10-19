@@ -17,6 +17,8 @@ import { CANCELLATION_TERMS_SNAPSHOT_SELECT, termsForBooking } from "../services
 import { readIntakeSnapshot, type IntakeAnswer } from "../engines/bookingIntake.js";
 import { readPolicySnapshot } from "../engines/bookingPolicy.js";
 import { serviceCheckoutEnabled } from "./booking.checkout.js";
+import { KEPT_BY_A_NO_SHOW } from "../engines/appointmentPromotion.js";
+import { noShowCardOutcome, type NoShowCardOutcome } from "@chairback/config";
 
 /**
  * ONE BOOKING, IN FULL — the read behind the appointment sheet.
@@ -253,6 +255,14 @@ export interface AppointmentDetail {
    * asks before it marks, with this figure.
    */
   noShowFee?: { cents: number; last4: string | null } | null;
+  /**
+   * What marking it a no-show does to the card - a charge (the same figure as
+   * `noShowFee`) or the ONE reason nothing is charged (config/shopPolicy.ts
+   * noShowCardOutcome). Present whenever a no-show can be marked, by either
+   * door (`noShowAllowed` or `correctable`), so Checkout can say it up front.
+   * Null when no no-show can be marked. Optional = an older API.
+   */
+  noShowCard?: NoShowCardOutcome | null;
   /** Where to go and change it, when another system owns the schedule. */
   externalManageUrl: string | null;
 }
@@ -664,27 +674,47 @@ export function registerAppointmentDetail(router: Router): void {
           })
         : null;
     const undoNoShow = undoFacts !== null && undoNoShowRefusal(undoFacts, new Date()) === null;
-    const noShowFee =
-      noShowAllowed && appt.cardOnFile?.status === "saved"
+    // What a no-show would do to the card, read only where one can be marked.
+    // The fee is cardOnFileFeeFor on THIS booking's terms - the function the
+    // charge itself uses - and the reason is the shared rule's, never the
+    // sheet's guess (config/shopPolicy.ts noShowCardOutcome).
+    const noShowCard =
+      !external && (noShowAllowed || correctable)
         ? await (async () => {
             const snap = await prisma.appointment.findFirst({
               where: { id: appt.id, shopId },
               select: { priceAtBooking: true, startsAt: true, ...CANCELLATION_TERMS_SNAPSHOT_SELECT },
             });
             if (!snap) return null;
-            const now = new Date();
-            const cents = await cardOnFileFeeFor({
+            const terms = await termsForBooking(shopId, snap);
+            const feeCents = await cardOnFileFeeFor({
               shopId,
               appointmentId: appt.id,
               priceAtBooking: snap.priceAtBooking,
               startsAt: snap.startsAt,
-              now,
+              now: new Date(),
               reason: "no_show",
-              terms: await termsForBooking(shopId, snap),
+              terms,
             });
-            return cents > 0 ? { cents, last4: appt.cardOnFile?.last4 ?? null } : null;
+            const shopNow = await prisma.shop.findUnique({
+              where: { id: shopId },
+              select: { chargeCardOnFileFees: true },
+            });
+            return noShowCardOutcome({
+              path: noShowAllowed ? "live" : "correction",
+              cardStatus: appt.cardOnFile?.status ?? null,
+              last4: appt.cardOnFile?.last4 ?? null,
+              feeCents,
+              terms,
+              shopFeesOnNow: shopNow?.chargeCardOnFileFees === true,
+              depositKept: payments.some(
+                (p) => p.purpose === KEPT_BY_A_NO_SHOW.purpose && p.status === KEPT_BY_A_NO_SHOW.status,
+              ),
+            });
           })()
         : null;
+    const noShowFee =
+      noShowCard?.charge === true ? { cents: noShowCard.cents, last4: noShowCard.last4 } : null;
     const history = await clientHistory(
       shopId,
       appt.clientId,
@@ -754,6 +784,7 @@ export function registerAppointmentDetail(router: Router): void {
       noShowAllowed,
       undoNoShow,
       noShowFee,
+      noShowCard,
     };
     res.json(detail);
   });

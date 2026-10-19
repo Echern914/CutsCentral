@@ -4,6 +4,10 @@ import { cap, useVocab } from "@/components/VocabProvider";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/cn";
+import {
+  describeNoShowCardOutcome,
+  type NoShowCardOutcome,
+} from "@chairback/config/shopPolicy";
 import { copyText, mailtoUri, smsUri, telUri } from "@/lib/contactUri";
 import { parsePrice } from "@/lib/serviceFields";
 import { Dialog } from "@/components/ui/Dialog";
@@ -527,6 +531,36 @@ export function AppointmentSheet({
     })();
   }
 
+  //  ── "Didn't show up?" from Checkout ──
+  // Drick, 2026-10-19: "Still doesnt let me charge card on file for someone
+  // that missed appt" - from the Checkout screen, which offered only ways to
+  // record a payment. The row goes into the SAME confirm the More menu opens
+  // (no second path to a charge): a live booking's Mark no-show, or a visit
+  // the sweep already completed's correction. The SERVER says which is open
+  // (`noShowAllowed` / `correctable`) and what it does to the card
+  // (`noShowCard`); a paid visit is not offered it.
+  const checkoutNoShow: NoShowCardOutcome | null =
+    detail !== null &&
+    detail.source === "appointment" &&
+    detail.origin === "chairback" &&
+    detail.checkedOutAt === null &&
+    detail.noShowCard != null &&
+    ((detail.status === "upcoming" && detail.noShowAllowed === true) ||
+      (detail.status === "completed" && detail.correctable === true))
+      ? detail.noShowCard
+      : null;
+
+  function markNoShowFromCheckout() {
+    if (!detail) return;
+    setPayError(null);
+    setView("detail");
+    if (detail.status === "completed") askCorrect("no_show");
+    else askNoShow("mark");
+  }
+  const checkoutNoShowRow = checkoutNoShow ? (
+    <CheckoutNoShowRow outcome={checkoutNoShow} onMark={markNoShowFromCheckout} />
+  ) : null;
+
   //  ── chrome ──────────────────────────────────────────────────────────────
   const title =
     view === "series"
@@ -710,6 +744,7 @@ export function AppointmentSheet({
               load();
             }}
             onBackToAppointment={() => setView("detail")}
+            reviewExtra={checkoutNoShowRow}
           />
         ) : (
           <PayView
@@ -729,6 +764,7 @@ export function AppointmentSheet({
               setPayError(null);
               setMethod(m);
             }}
+            noShowRow={checkoutNoShowRow}
           />
         )
       ) : (
@@ -2571,6 +2607,7 @@ function PayView({
   ticketCents,
   method,
   setMethod,
+  noShowRow,
 }: {
   row: AgendaRow;
   dateLabel: string;
@@ -2582,6 +2619,8 @@ function PayView({
   ticketCents: number | null;
   method: string | null;
   setMethod: (m: (typeof METHODS)[number]["key"]) => void;
+  /** "Didn't show up? Mark no-show" - only when the server says it can be. */
+  noShowRow?: React.ReactNode;
 }) {
   const vocab = useVocab();
   return (
@@ -2652,6 +2691,8 @@ function PayView({
           ))}
         </div>
       </div>
+
+      {noShowRow}
 
       <p className="text-center text-[11px] leading-relaxed text-muted">
         Records the sale and marks the {vocab.serviceNoun} done. ChairBack never touches the money —
@@ -2745,6 +2786,12 @@ function CorrectVisitFooter({
   // A no-show keeps a deposit paid at booking exactly as it is (the server
   // allows that one payment, and only for a no-show), so it stays counted.
   const keepsDeposit = outcome === "no_show" && detail.payment.onlineCents > 0;
+  // A no-show after the fact charges nothing; the server says why, so a barber
+  // looking to charge the card is told the real reason, not just "no fee".
+  const why =
+    outcome === "no_show" && detail.noShowCard && !detail.noShowCard.charge
+      ? describeNoShowCardOutcome(detail.noShowCard)
+      : null;
   return (
     <div className="flex w-full flex-col gap-2" data-testid="correct-visit-confirm">
       <p className="text-sm font-medium text-offwhite">
@@ -2754,8 +2801,15 @@ function CorrectVisitFooter({
         {keepsDeposit
           ? `It comes off your completed visits, and only its deposit stays in ${day}, kept as it is.`
           : `It comes off your completed visits and out of ${day}.`}{" "}
-        Any punch it earned comes off. Nobody is told, and no fee is charged.
+        Any punch it earned comes off.{" "}
+        {why ? "Nobody is told." : "Nobody is told, and no fee is charged."}
       </p>
+      {why && (
+        <p className="text-xs leading-relaxed text-offwhite" data-testid="correct-visit-card">
+          {why.text}
+        </p>
+      )}
+      {why?.settingsLink && <FeeSettingsLink />}
       {error && (
         <p role="alert" data-testid="correct-visit-error" className="text-sm text-danger-soft">
           {error}
@@ -2807,6 +2861,8 @@ function NoShowFooter({
   const feeText = fee
     ? `${fee.cents % 100 === 0 ? `$${fee.cents / 100}` : `$${(fee.cents / 100).toFixed(2)}`}`
     : null;
+  // Why nothing is charged, in the server's terms (config/shopPolicy.ts).
+  const none = detail.noShowCard && !detail.noShowCard.charge ? detail.noShowCard : null;
   return (
     <div className="flex w-full flex-col gap-2" data-testid="no-show-confirm">
       <p className="text-sm font-medium text-offwhite">
@@ -2816,9 +2872,12 @@ function NoShowFooter({
         {kind === "mark"
           ? feeText
             ? `The card ${fee?.last4 ? `ending ${fee.last4} ` : ""}kept for this booking is charged the ${feeText} no-show fee now. If you mark it by mistake, you can undo it, but the fee is not refunded automatically.`
-            : "No fee is charged. You can undo it afterwards if you mark it by mistake."
+            : none
+              ? `${describeNoShowCardOutcome(none).text} You can undo it afterwards if you mark it by mistake.`
+              : "No fee is charged. You can undo it afterwards if you mark it by mistake."
           : "It goes back on your calendar as booked, if the time is still free. No money is charged or refunded."}
       </p>
+      {kind === "mark" && none && describeNoShowCardOutcome(none).settingsLink && <FeeSettingsLink />}
       {error && (
         <p role="alert" data-testid="no-show-error" className="text-sm text-danger-soft">
           {error}
@@ -2848,6 +2907,63 @@ function NoShowFooter({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * "Didn't show up? Mark no-show" on Checkout - with what it does to the card
+ * said BEFORE the tap: the server's figure and card, or the one reason nothing
+ * is charged. Tapping opens the same confirm the More menu does.
+ */
+function CheckoutNoShowRow({
+  outcome,
+  onMark,
+}: {
+  outcome: NoShowCardOutcome;
+  onMark: () => void;
+}) {
+  const said = describeNoShowCardOutcome(outcome);
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="checkout-no-show">
+      <button
+        type="button"
+        onClick={onMark}
+        data-qa="checkout-no-show"
+        className="flex min-h-[2.75rem] w-full items-start gap-3 rounded-lg border border-danger-soft/40 px-3.5 py-3 text-left transition-colors duration-150 ease-out hover:bg-danger-soft/10"
+      >
+        <span className="mt-0.5 shrink-0 text-danger-soft" aria-hidden="true">
+          <EmptyChairIcon />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium text-offwhite">
+            Didn&rsquo;t show up? <span className="text-danger-soft">Mark no-show</span>
+          </span>
+          <span
+            className={cn(
+              "mt-0.5 block text-xs leading-relaxed [overflow-wrap:anywhere]",
+              outcome.charge ? "text-offwhite" : "text-muted",
+            )}
+            data-testid="checkout-no-show-card"
+          >
+            {said.text}
+          </span>
+        </span>
+      </button>
+      {said.settingsLink && <FeeSettingsLink />}
+    </div>
+  );
+}
+
+/** Where no-show fees are switched on and set (Payments, How customers pay). */
+function FeeSettingsLink() {
+  return (
+    <Link
+      href="/dashboard/payments#no-show-fees"
+      data-testid="no-show-fee-settings"
+      className="self-start px-1 text-xs font-medium text-gold underline underline-offset-2"
+    >
+      Turn on and set no-show fees
+    </Link>
   );
 }
 

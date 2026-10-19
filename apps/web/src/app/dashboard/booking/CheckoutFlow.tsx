@@ -101,6 +101,7 @@ export function CheckoutFlow({
   timeZone,
   onDone,
   onBackToAppointment,
+  reviewExtra,
 }: {
   appointmentId: string;
   /** The shop's IANA zone: the appointment's time means nothing in any other. */
@@ -109,6 +110,11 @@ export function CheckoutFlow({
   onDone: () => void;
   /** The clear way back to the same appointment. */
   onBackToAppointment: () => void;
+  /**
+   * Shown under the methods on the review step only - never beside an open
+   * collection or a confirm (the sheet's "Didn't show up? Mark no-show").
+   */
+  reviewExtra?: React.ReactNode;
 }) {
   const [state, setState] = useState<CheckoutState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -734,6 +740,7 @@ export function CheckoutFlow({
         </div>
       </div>
       )}
+      {reviewExtra}
     </div>
   );
 }

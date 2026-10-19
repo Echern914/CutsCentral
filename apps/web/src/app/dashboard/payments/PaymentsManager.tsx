@@ -606,8 +606,9 @@ export function PaymentsManager({
         )}
       </Card>
 
-      {/* Payment mode */}
-      <Card className="p-5">
+      {/* Payment mode - and the no-show fee switch (#no-show-fees: the
+          appointment sheet links here when a fee can't be charged). */}
+      <Card id="no-show-fees" className="p-5">
         <CardHeader title="How customers pay" />
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           <ModeButton
