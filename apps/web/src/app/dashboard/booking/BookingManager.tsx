@@ -20,6 +20,7 @@ import { BookingQuestionsCard } from "./BookingQuestionsCard";
 import { BookingPolicyCard } from "./BookingPolicyCard";
 import { ClientNoteCard } from "./ClientNoteCard";
 import { useDemoTour } from "@/components/tour/state";
+import { useUrlTab } from "./useUrlTab";
 import Link from "next/link";
 import { cn } from "@/lib/cn";
 import { useLeaveGuard } from "@/lib/useLeaveGuard";
@@ -252,24 +253,29 @@ export function BookingManager({
     switchTabRef.current("Appointments"),
   );
 
-  function switchTab(next: Tab) {
-    if (next === tab) return;
+  function switchTab(next: Tab): boolean {
+    if (next === tab) return true;
     const st = groupUnsavedRef.current?.();
     // Mid-save: ignore the tap. Unmounting now would prompt about edits that
     // are already on the wire (dirty clears only when the action resolves) —
     // and if that save then failed, the draft the toast promises is kept
     // would already be gone. The save settles within a beat; tap again.
-    if (st?.saving) return;
+    if (st?.saving) return false;
     if (
       st?.dirty &&
       !window.confirm("You have unsaved group edits. Leave and lose them?")
     ) {
-      return;
+      return false;
     }
     setTab(next);
+    return true;
   }
 
   switchTabRef.current = switchTab;
+
+  // A link to another tab of THIS page (the "Everything else" menu, the
+  // Assistant) switches to it, and the address follows the tab bar.
+  useUrlTab({ tabs, current: tab, onRequest: switchTab });
 
   // Dashboard demo tour: its steps on this page live behind tabs, so follow
   // the tour by switching to the tab that hosts the active step's anchor —
