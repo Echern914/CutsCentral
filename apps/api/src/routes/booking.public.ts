@@ -1030,8 +1030,13 @@ async function computeDayBody(
   const [services, links, groups, rawTargeted] = await Promise.all([
     prisma.service.findMany({
       where: { shopId: shop.id, ...PUBLIC_SERVICE },
-      // groupSortOrder first so each bundle's members come out in saved order.
-      orderBy: [{ groupSortOrder: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
+      // The barber's menu order (Services tab). Each bundle re-sorts its own
+      // members by groupSortOrder below. This used to sort by groupSortOrder
+      // FIRST for everyone, which put the ungrouped list out of the barber's
+      // order: a service that ever left a group keeps its old groupSortOrder
+      // (release only clears serviceGroupId), so "More services" was ordered
+      // by a number the barber can no longer see or change.
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       select: {
         id: true,
         name: true,
@@ -1045,6 +1050,7 @@ async function computeDayBody(
         priceOverrides: true,
         dateOverrides: true,
         serviceGroupId: true,
+        groupSortOrder: true,
       },
     }),
     prisma.serviceStaff.findMany({
@@ -1200,8 +1206,11 @@ async function computeDayBody(
     .map((g) => ({
       id: g.id,
       name: g.name,
+      // In the group's saved order (a stable sort, so ties keep menu order) -
+      // the same rule the service-first menu applies on the page.
       services: services
         .filter((s) => s.serviceGroupId === g.id)
+        .sort((a, b) => a.groupSortOrder - b.groupSortOrder)
         .map((s) => byId.get(s.id))
         .filter((s): s is NonNullable<typeof s> => Boolean(s)),
     }))

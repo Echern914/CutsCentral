@@ -348,6 +348,9 @@ const timeOverridesSchema = z
   )
   .optional();
 
+/** The highest sortOrder a service can carry (the form's own bound). */
+const SERVICE_SORT_MAX = 1000;
+
 const serviceSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
@@ -386,7 +389,7 @@ const serviceSchema = z
     // The eye icon: "hidden" = only the barber books it; clients never see it
     // (config/serviceVisibility.ts). Separate from `active` (gone for everyone).
     visibility: z.enum(SERVICE_VISIBILITIES).optional(),
-    sortOrder: z.number().int().min(0).max(1000).optional(),
+    sortOrder: z.number().int().min(0).max(SERVICE_SORT_MAX).optional(),
     // "Offered by every barber" as a live intent. When true, staffIds is ignored
     // and the offering is kept in sync with all active staff (now and future).
     offeredByAll: z.boolean().optional(),
@@ -436,6 +439,22 @@ bookingDashboardRouter.post("/services", async (req, res) => {
   }
   const d = parsed.data;
   const db = forShop(req.shop!.id);
+  // A new service goes to the END of the menu. It used to take sortOrder 0,
+  // which only read as "last" while every service was 0 and createdAt broke the
+  // tie; once the barber has set his own order (PUT /services/order writes
+  // 0..n-1), a 0 would slot the new one in second, under his first service.
+  const sortOrder =
+    d.sortOrder ??
+    Math.min(
+      ((
+        await db.service.findFirst({
+          where: { active: true },
+          orderBy: { sortOrder: "desc" },
+          select: { sortOrder: true },
+        })
+      )?.sortOrder ?? -1) + 1,
+      SERVICE_SORT_MAX,
+    );
   const service = await db.service.create({
     data: {
       name: d.name,
@@ -454,7 +473,7 @@ bookingDashboardRouter.post("/services", async (req, res) => {
       dateOverrides: d.dateOverrides ?? {},
       active: d.active ?? true,
       visibility: d.visibility ?? "public",
-      sortOrder: d.sortOrder ?? 0,
+      sortOrder,
       dailyTarget: d.dailyTarget ?? null,
       offeredByAll: d.offeredByAll ?? false,
     },
@@ -505,6 +524,72 @@ bookingDashboardRouter.post("/services/bulk", async (req, res) => {
   }
   const result = await createServicesInBulk(req.shop!.id, parsed.data.services);
   res.status(201).json({ created: result.created.length, skipped: result.skipped });
+});
+
+/**
+ * PUT /services/order - the barber's menu order, saved whole (Snow: "an
+ * ability to move services up and down so retyping them doesn't get a lil
+ * crazy"). Before this the only way to change the order was delete and retype.
+ *
+ * `ids` is EVERY active service of this shop, top to bottom - exactly the list
+ * the Services tab shows. Anything else is refused with nothing written:
+ *  - an id that is not one of this shop's active services (another shop's, a
+ *    removed one, a typo) -> 400 unknown_service. Tenant safety: a foreign id
+ *    is never written, and is not silently skipped either;
+ *  - the same id twice -> 400 duplicate_service;
+ *  - a list missing one of the shop's services (a stale tab that never saw a
+ *    service added since) -> 400 incomplete_list, rather than leaving the
+ *    missing one wherever its old number happens to sort.
+ *
+ * sortOrder becomes the index (0..n-1) in one transaction, so the menu is in
+ * the old order or the new one, never half of each. The answer is the order as
+ * the database now holds it, which is what the dashboard then shows.
+ *
+ * groupSortOrder (a service's place INSIDE its group) is untouched: that order
+ * is set in the group editor and the booking page uses it inside each group.
+ */
+const serviceOrderSchema = z
+  .object({ ids: z.array(z.string().min(1)).min(1).max(SERVICE_SORT_MAX) })
+  .strict();
+
+bookingDashboardRouter.put("/services/order", async (req, res) => {
+  const parsed = serviceOrderSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const ids = parsed.data.ids;
+  if (new Set(ids).size !== ids.length) {
+    res.status(400).json({ error: "duplicate_service" });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const result = await runWithShop(shopId, async (tx) => {
+    const active = await tx.service.findMany({
+      where: { shopId, active: true },
+      select: { id: true },
+    });
+    const mine = new Set(active.map((s) => s.id));
+    if (ids.some((id) => !mine.has(id))) return { error: "unknown_service" as const };
+    if (ids.length !== mine.size) return { error: "incomplete_list" as const };
+    for (let i = 0; i < ids.length; i++) {
+      await tx.service.updateMany({
+        where: { shopId, id: ids[i]! },
+        data: { sortOrder: i },
+      });
+    }
+    const saved = await tx.service.findMany({
+      where: { shopId, active: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, sortOrder: true },
+    });
+    return { saved };
+  });
+  if ("error" in result) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.json({ services: result.saved });
 });
 
 bookingDashboardRouter.patch("/services/:id", async (req, res) => {
