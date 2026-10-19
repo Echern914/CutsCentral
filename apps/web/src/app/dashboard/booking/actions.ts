@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { BookingModeKey } from "@chairback/config/constants";
 import type { ServiceVisibility } from "@chairback/config/serviceVisibility";
+import type { NoShowCardOutcome } from "@chairback/config/shopPolicy";
 import { apiGet, apiSend, type ApiResult } from "@/lib/api";
 import { apiAnswered } from "@/lib/apiAnswered";
 import { refusedOnlyNewKeys } from "@/lib/apiCompat";
@@ -2203,6 +2204,12 @@ export interface AppointmentDetail {
   undoNoShow?: boolean;
   /** What marking it a no-show now charges the kept card; null = nothing. */
   noShowFee?: { cents: number; last4: string | null } | null;
+  /**
+   * What marking it a no-show does to the card: the charge, or the one reason
+   * nothing is charged. Set whenever a no-show can be marked (live or after
+   * the fact). Optional = older API.
+   */
+  noShowCard?: NoShowCardOutcome | null;
 }
 
 /**

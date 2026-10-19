@@ -698,3 +698,135 @@ export function statedCardOnFileFee(terms: {
   return terms.chargeCardOnFileFees && cardFeeConfigured(terms) ? describeCardOnFileFee(terms) : null;
 }
 
+
+/**
+ * WHAT MARKING ONE BOOKING A NO-SHOW DOES TO ITS CARD - said BEFORE the mark,
+ * on the barber's Checkout and in the no-show confirm.
+ *
+ * "Still doesn't let me charge card on file for someone that missed appt"
+ * (Drick, 2026-10-19): the screen gave no way in, and nothing said why a card
+ * could not be charged. This names the one honest answer per booking.
+ *
+ * 🔴 IT DECIDES NOTHING ABOUT MONEY. The charge itself is settleCardOnFile's
+ * (apps/api services/cardOnFileSettle.ts) and its rule stands: "card on file
+ * doesn't get charged unless the barber is set and it's on them". This only
+ * READS the same facts - the fee that function would charge (`feeCents`, from
+ * cardOnFileFeeFor on THIS booking's terms) and whether the mark goes through
+ * the path that settles a card at all - so what the barber is told and what
+ * happens cannot disagree:
+ *   - `live`: a booked visit whose start has come. Mark no-show settles the
+ *     kept card, so a saved card and a fee above zero IS a charge;
+ *   - `correction`: a visit the 15-minute sweep already completed. That path
+ *     never moves money (engines/visitCorrection.ts) - and completing the
+ *     visit already let the card go.
+ *
+ * Reasons, most fundamental first: money already kept; the switch off in this
+ * booking's terms (and whether it is off at the shop TODAY, which is the
+ * difference between "turn it on" and "booked before you did"); no fee to
+ * charge; no card; the card already let go.
+ */
+export type NoShowNoChargeReason =
+  /** A deposit / pay-ahead was collected at booking; a no-show keeps it. */
+  | "deposit_kept"
+  /** Fees were off for this booking, and are still off at the shop. */
+  | "fees_off"
+  /** Fees are on at the shop now, but were off when this was booked. */
+  | "booked_before_fees"
+  /** Fees on for this booking, but no amount (no % and no flat fee). */
+  | "no_fee_set"
+  /** Fees on and set, but the booking has no price: the fee is $0. */
+  | "no_price"
+  /** No card was ever saved on this booking. */
+  | "no_card"
+  /** A card was saved and has already been let go. */
+  | "card_released"
+  /** The sweep closed the visit as done after it ended, letting the card go. */
+  | "visit_closed";
+
+export type NoShowCardOutcome =
+  | { charge: true; cents: number; last4: string | null }
+  | { charge: false; reason: NoShowNoChargeReason };
+
+export function noShowCardOutcome(input: {
+  path: "live" | "correction";
+  /** CardOnFile.status on this booking, or null when there is no row. */
+  cardStatus: string | null;
+  last4: string | null;
+  /** What settleCardOnFile would charge for a no-show now (cardOnFileFeeFor). */
+  feeCents: number;
+  /** THIS booking's terms (termsForBooking), never the shop's today. */
+  terms: CancellationTerms;
+  /** The shop's switch today - only to tell "turn it on" from "booked before". */
+  shopFeesOnNow: boolean;
+  /** A collected booking payment (deposit / pay-ahead) is on this booking. */
+  depositKept: boolean;
+}): NoShowCardOutcome {
+  if (input.path === "live" && input.cardStatus === "saved" && input.feeCents > 0) {
+    return { charge: true, cents: input.feeCents, last4: input.last4 };
+  }
+  const why = (reason: NoShowNoChargeReason): NoShowCardOutcome => ({ charge: false, reason });
+  if (input.depositKept) return why("deposit_kept");
+  if (!input.terms.chargeCardOnFileFees) {
+    return why(input.shopFeesOnNow ? "booked_before_fees" : "fees_off");
+  }
+  if (!cardFeeConfigured(input.terms)) return why("no_fee_set");
+  if (input.feeCents <= 0) return why("no_price");
+  if (input.cardStatus !== "saved" && input.cardStatus !== "released" && input.cardStatus !== "charged") {
+    return why("no_card");
+  }
+  return why(input.path === "correction" ? "visit_closed" : "card_released");
+}
+
+/**
+ * The outcome above in the barber's words - one sentence, plus whether the
+ * screen should offer the way to the no-show fee setting (only where that
+ * setting is the answer).
+ */
+export function describeNoShowCardOutcome(outcome: NoShowCardOutcome): {
+  text: string;
+  settingsLink: boolean;
+} {
+  if (outcome.charge) {
+    const card = outcome.last4 ? `the card ending ${outcome.last4}` : "the card saved on this booking";
+    return { text: `Charges ${dollarsFromCents(outcome.cents)} to ${card}.`, settingsLink: false };
+  }
+  switch (outcome.reason) {
+    case "deposit_kept":
+      return {
+        text: "Nothing more is charged. What they paid when booking stays with you.",
+        settingsLink: false,
+      };
+    case "fees_off":
+      return {
+        text: "Nothing is charged: no-show fees are off, and were off when this was booked. Turning them on covers bookings made after that.",
+        settingsLink: true,
+      };
+    case "booked_before_fees":
+      return {
+        text: "Nothing is charged: this was booked before you turned on no-show fees, so its terms don't allow a charge. Bookings made since then can be charged.",
+        settingsLink: false,
+      };
+    case "no_fee_set":
+      return {
+        text: "Nothing is charged: no-show fees are on, but no fee amount was set when this was booked.",
+        settingsLink: true,
+      };
+    case "no_price":
+      return {
+        text: "Nothing is charged: this booking has no price, so the fee comes to $0.",
+        settingsLink: false,
+      };
+    case "no_card":
+      return { text: "Nothing is charged: no card was saved on this booking.", settingsLink: false };
+    case "card_released":
+      return {
+        text: "Nothing is charged: the card saved on this booking has already been let go.",
+        settingsLink: false,
+      };
+    case "visit_closed":
+      return {
+        text: "Nothing is charged: ChairBack closed this visit as done after its end time, and that let the saved card go. To charge the fee, mark the no-show before the visit's end time passes.",
+        settingsLink: false,
+      };
+  }
+}
