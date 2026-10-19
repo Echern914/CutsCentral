@@ -2499,26 +2499,6 @@ export async function saveHolidayAction(input: {
   return done(await apiSend("PUT", "/api/booking/holidays", input));
 }
 
-export interface SpecialDayInput {
-  date: string;
-  staffIds: string[];
-  start: string; // "HH:MM" shop-local
-  end: string;
-  cutMin: number;
-  price: number;
-  serviceIds: string[];
-  name?: string;
-  requestId?: string;
-  expectOpenings?: number;
-}
-
-export interface SpecialDayPlan {
-  staffId: string;
-  openings: string[];
-  skipped: { startsAt: string; reason: "booking" | "blocked" | "past" }[];
-  bookings: { startsAt: string; endsAt: string }[];
-}
-
 export interface SpecialDayRow {
   ruleId: string;
   staffId: string;
@@ -2530,18 +2510,9 @@ export interface SpecialDayRow {
   lastEnd: string | null;
   openings: number;
   booked: number;
-}
-
-type SpecialDayFailure = { ok: false; error: string; message?: string; plans?: SpecialDayPlan[] };
-
-function specialDayFailure(res: { error?: string; body?: unknown }): SpecialDayFailure {
-  const b = (res.body ?? {}) as { message?: unknown; plans?: unknown };
-  return {
-    ok: false,
-    error: res.error ?? "failed",
-    ...(typeof b.message === "string" ? { message: b.message } : {}),
-    ...(Array.isArray(b.plans) ? { plans: b.plans as SpecialDayPlan[] } : {}),
-  };
+  /** Optional: an API from before per-opening prices does not send them. */
+  minPrice?: number;
+  maxPrice?: number;
 }
 
 export async function listSpecialDaysAction(): Promise<{ ok: boolean; specialDays?: SpecialDayRow[] }> {
@@ -2550,31 +2521,96 @@ export async function listSpecialDaysAction(): Promise<{ ok: boolean; specialDay
   return { ok: true, specialDays: res.data.specialDays };
 }
 
-/** What publishing would create. Writes nothing. */
-export async function previewSpecialDayAction(
-  input: SpecialDayInput,
-): Promise<{ ok: true; plans: SpecialDayPlan[]; bufferMin: number } | SpecialDayFailure> {
-  const res = await apiSend<{ plans: SpecialDayPlan[]; bufferMin: number }>(
-    "POST",
-    "/api/booking/special-days/preview",
-    input,
-  );
-  if (!res.ok || !res.data) return specialDayFailure(res);
-  return { ok: true, plans: res.data.plans, bufferMin: res.data.bufferMin };
+/* The LIVE VIEW of one special day (apps/api engines/specialDayView.ts). */
+
+export interface DayViewItem {
+  startMin: number;
+  endMin: number;
+  label: string;
 }
 
-/** Publish: every chair in one server transaction. */
-export async function publishSpecialDayAction(
-  input: SpecialDayInput,
-): Promise<{ ok: true; created: { staffId: string; openings: number }[] } | SpecialDayFailure> {
-  const res = await apiSend<{ created: { staffId: string; openings: number }[] }>(
-    "POST",
-    "/api/booking/special-days",
+export interface DayViewOpening {
+  id: string;
+  startMin: number;
+  durationMin: number;
+  price: number;
+  booked: boolean;
+}
+
+export interface DayViewChair {
+  staffId: string;
+  ruleIds: string[];
+  hours: { startMin: number; endMin: number }[];
+  openings: DayViewOpening[];
+  bookings: DayViewItem[];
+  external: DayViewItem[];
+  blocks: DayViewItem[];
+}
+
+export interface DayView {
+  date: string;
+  timezone: string;
+  bufferMin: number;
+  nowMin: number | null;
+  name: string | null;
+  serviceIds: string[];
+  chairs: DayViewChair[];
+  basis: string;
+}
+
+export interface SaveDayInput {
+  date: string;
+  name?: string;
+  serviceIds: string[];
+  chairs: {
+    staffId: string;
+    openings: { id?: string; startMin: number; durationMin: number; price: number }[];
+  }[];
+  basis: string;
+  requestId?: string;
+}
+
+export interface SaveDaySummary {
+  added: number;
+  removed: number;
+  repriced: number;
+  bookedKept: number;
+}
+
+type DayFailure = { ok: false; error: string; message?: string; view?: DayView };
+
+function dayFailure(res: { error?: string; body?: unknown }): DayFailure {
+  const b = (res.body ?? {}) as { message?: unknown; view?: unknown };
+  return {
+    ok: false,
+    error: res.error ?? "failed",
+    ...(typeof b.message === "string" ? { message: b.message } : {}),
+    ...(b.view && typeof b.view === "object" ? { view: b.view as DayView } : {}),
+  };
+}
+
+/** One date, every chair: what is already there and the special openings. */
+export async function getSpecialDayViewAction(date: string): Promise<{ ok: true; view: DayView } | DayFailure> {
+  const res = await apiGet<{ view: DayView }>(`/api/booking/special-days/day?date=${encodeURIComponent(date)}`);
+  if (!res.ok || !res.data) return dayFailure(res);
+  return { ok: true, view: res.data.view };
+}
+
+/**
+ * Save the live view - one server transaction under the calendar locks. A 409
+ * `changed` carries the fresh view; nothing was written.
+ */
+export async function saveSpecialDayViewAction(
+  input: SaveDayInput,
+): Promise<{ ok: true; view: DayView; summary: SaveDaySummary; replay: boolean } | DayFailure> {
+  const res = await apiSend<{ view: DayView; summary: SaveDaySummary; replay: boolean }>(
+    "PUT",
+    "/api/booking/special-days/day",
     input,
   );
-  if (!res.ok || !res.data) return specialDayFailure(res);
+  if (!res.ok || !res.data) return dayFailure(res);
   revalidatePath("/dashboard/booking");
-  return { ok: true, created: res.data.created };
+  return { ok: true, view: res.data.view, summary: res.data.summary, replay: res.data.replay };
 }
 
 /** Take special days down. Booked openings stay booked. */
