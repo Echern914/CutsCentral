@@ -70,10 +70,14 @@ adminPortalRouter.get("/metrics", async (_req, res) => {
   let paying = 0;
   let trialing = 0;
   let mrrEstimate = 0;
+  // How the paying shops split across the plans they chose - the same
+  // "paying" as the Paying card, so the numbers add up to it.
+  const payingByPlan: Record<string, number> = {};
   for (const g of statusGroups) {
     if (g.subscriptionStatus === "trialing") trialing += g._count._all;
     if (!PAYING.has(g.subscriptionStatus)) continue;
     paying += g._count._all;
+    payingByPlan[g.plan] = (payingByPlan[g.plan] ?? 0) + g._count._all;
     // Only true paying subscriptions count toward MRR - comps are
     // revenue-neutral - and each at ITS plan's price: a Starter shop is not a
     // Premium shop's worth of revenue.
@@ -90,6 +94,7 @@ adminPortalRouter.get("/metrics", async (_req, res) => {
     totalShops,
     newThisWeek,
     paying,
+    payingByPlan,
     trialing,
     comped: compCount,
     mrrEstimate,

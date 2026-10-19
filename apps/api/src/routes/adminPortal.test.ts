@@ -161,3 +161,29 @@ describe("comp access toggle", () => {
     expect(hasActiveAccess({ ...lapsed, compAccess: true }, { enabled: true })).toBe(true);
   });
 });
+
+describe("which plan each shop chose", () => {
+  it("lists a shop's plan and counts paying shops by plan", async () => {
+    await prisma.shop.update({
+      where: { id: targetShopId },
+      data: { plan: "pro_ai", subscriptionStatus: "active", stripeSubscriptionId: `sub_test_${randomToken(6)}` },
+    });
+    try {
+      const listed = await request(app).get("/api/admin-portal/shops").set("Cookie", adminCookie);
+      const row = listed.body.shops.find((s: { id: string }) => s.id === targetShopId);
+      expect(row.plan).toBe("pro_ai");
+      expect(row.subscribed).toBe(true);
+
+      const metrics = await request(app).get("/api/admin-portal/metrics").set("Cookie", adminCookie);
+      expect(metrics.body.payingByPlan.pro_ai).toBeGreaterThanOrEqual(1);
+      // The split adds up to the Paying card.
+      const sum = Object.values(metrics.body.payingByPlan as Record<string, number>).reduce((a, b) => a + b, 0);
+      expect(sum).toBe(metrics.body.paying);
+    } finally {
+      await prisma.shop.update({
+        where: { id: targetShopId },
+        data: { plan: "free", subscriptionStatus: "none", stripeSubscriptionId: null },
+      });
+    }
+  });
+});
