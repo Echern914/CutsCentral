@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
+import { loadAction } from "@/lib/loadAction";
+import { LoadFailed } from "@/components/ui/LoadFailed";
 import { useVocab } from "@/components/VocabProvider";
 import {
   cancelCheckoutAttemptAction,
@@ -118,6 +120,8 @@ export function CheckoutFlow({
 }) {
   const [state, setState] = useState<CheckoutState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The website was deployed while this sheet was open (lib/loadAction.ts).
+  const [stale, setStale] = useState(false);
   const [step, setStep] = useState<Step>("review");
   const [choice, setChoice] = useState<Choice | null>(null);
   const [outcome, setOutcome] = useState<ChargeCardResult | null>(null);
@@ -137,7 +141,14 @@ export function CheckoutFlow({
   const requestId = useRef<string | null>(null);
 
   const load = useCallback(async () => {
-    const res = await getCheckoutAction(appointmentId);
+    const call = await loadAction(() => getCheckoutAction(appointmentId));
+    if (!call.ok) {
+      if (call.failure === "stale") setStale(true);
+      // Still a throw, as it always was: the payment steps that re-read after
+      // a collection catch it and say so in their own words.
+      throw new Error("checkout_read_failed");
+    }
+    const res = call.value;
     if (!res.ok || !res.data) {
       setLoadError(res.error ?? "Couldn't load this checkout");
       return;
@@ -146,9 +157,15 @@ export function CheckoutFlow({
     setLoadError(null);
   }, [appointmentId]);
 
-  useEffect(() => {
-    void load();
+  // The first read (and its retry). A throw here - no answer at all, or a
+  // stale deployment - used to leave "Loading…" on screen for good.
+  const loadOrSayWhy = useCallback(() => {
+    void load().catch(() => setLoadError("Couldn't load this checkout"));
   }, [load]);
+
+  useEffect(() => {
+    loadOrSayWhy();
+  }, [loadOrSayWhy]);
 
   /**
    * 🔴 ONE FIGURE, AND THE BARBER CANNOT EDIT IT. v1 collects the whole
@@ -244,13 +261,16 @@ export function CheckoutFlow({
   );
 
 
+  if (stale && !state) {
+    return <LoadFailed what="this checkout" failure="stale" onRetry={loadOrSayWhy} />;
+  }
   if (loadError) {
     return (
       <div className="flex flex-col gap-3">
         <p role="alert" className="text-sm text-danger-soft">
           {loadError}
         </p>
-        <button type="button" onClick={() => void load()} className="text-sm text-gold underline">
+        <button type="button" onClick={loadOrSayWhy} className="text-sm text-gold underline">
           Try again
         </button>
       </div>

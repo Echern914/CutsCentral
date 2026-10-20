@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { LoadFailed } from "@/components/ui/LoadFailed";
+import { loadAction, type LoadFailure } from "@/lib/loadAction";
 import { cn } from "@/lib/cn";
 import {
   createUpgradeRuleAction,
@@ -42,6 +44,9 @@ export function UpgradeRules({
 }) {
   const [rules, setRules] = useState<UpgradeRuleRow[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // A failed read used to set `loaded` anyway, so the card said "Nothing set
+  // up" about prompts it simply hadn't read.
+  const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
   const [pending, start] = useTransition();
   const [adding, setAdding] = useState(false);
   const [sourceIds, setSourceIds] = useState<string[]>([]);
@@ -52,9 +57,14 @@ export function UpgradeRules({
 
   function refresh() {
     start(() => {
-      void listUpgradeRulesAction().then((res) => {
-        if (res.ok) setRules(res.rules ?? []);
+      void loadAction(listUpgradeRulesAction).then((res) => {
+        if (!res.ok || !res.value.ok) {
+          setLoadFailure(res.ok ? "failed" : res.failure);
+          return;
+        }
+        setRules(res.value.rules ?? []);
         setLoaded(true);
+        setLoadFailure(null);
       });
     });
   }
@@ -136,7 +146,17 @@ export function UpgradeRules({
         own.
       </p>
 
-      {loaded && rules.length === 0 ? (
+      {loadFailure && (
+        <LoadFailed
+          className="mt-3"
+          what="your upgrade prompts"
+          failure={loadFailure}
+          onRetry={refresh}
+        />
+      )}
+      {!loaded ? (
+        !loadFailure && <p className="mt-3 text-sm text-muted">Loading…</p>
+      ) : rules.length === 0 ? (
         <p className="mt-3 text-sm text-muted">
           Nothing set up. We&rsquo;re suggesting upgrades automatically.
         </p>

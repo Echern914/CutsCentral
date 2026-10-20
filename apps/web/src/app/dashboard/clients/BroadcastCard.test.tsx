@@ -38,6 +38,8 @@ vi.mock("./broadcastActions", () => ({
   })),
 }));
 vi.mock("@/components/ui/Toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
+const reload = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/reloadPage", () => ({ reloadPage: reload }));
 // Every vocabulary word this card reads is a plain string; echo the key.
 vi.mock("@/components/VocabProvider", () => ({
   useVocab: () => new Proxy({}, { get: (_t, key) => String(key) }),
@@ -397,5 +399,71 @@ describe("BroadcastCard by service", () => {
     });
     render(<BroadcastCard rewardsEnabled />);
     expect(await screen.findByText(/Had Fade and Braids · 5 sent/)).toBeTruthy();
+  });
+});
+
+/**
+ * A read that fails must say so. Each of these used to show as an answer:
+ * no Recent messages at all, "0 of 0 will get this", "No services yet."
+ */
+describe("BroadcastCard when a read fails", () => {
+  it("🔴 Recent messages says it couldn't load, and Try again reads again", async () => {
+    vi.mocked(listBroadcastsAction).mockResolvedValueOnce({ ok: false, error: "failed" });
+    render(<BroadcastCard rewardsEnabled />);
+    expect(await screen.findByText(/Couldn.t load your recent messages\./)).toBeTruthy();
+    vi.mocked(listBroadcastsAction).mockResolvedValueOnce({
+      ok: true,
+      broadcasts: [
+        {
+          id: "b1",
+          channel: "push",
+          subject: "Gold week",
+          body: "Free lineups",
+          status: "SENT",
+          recipientCount: 4,
+          sentCount: 4,
+          failedCount: 0,
+          skippedCount: 0,
+          pendingCount: 0,
+          queuedAt: null,
+          sentAt: null,
+          createdAt: "2026-09-01T00:00:00Z",
+        },
+      ] as never,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Gold week")).toBeTruthy();
+    expect(screen.queryByText(/Couldn.t load your recent messages/)).toBeNull();
+  });
+
+  it("a page left open across a deploy offers Reload for Recent messages", async () => {
+    // Next 14.2 resolves a call to a server action the new build lacks with
+    // undefined (lib/loadAction.ts).
+    vi.mocked(listBroadcastsAction).mockResolvedValueOnce(undefined as never);
+    reload.mockClear();
+    render(<BroadcastCard rewardsEnabled />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("🔴 a failed count is not '0 of 0 will get this'", async () => {
+    vi.mocked(previewBroadcastAction).mockResolvedValueOnce({ ok: false, error: "failed" });
+    render(<BroadcastCard rewardsEnabled />);
+    openComposer();
+    expect(await screen.findByText(/Couldn.t load how many clientNounPlural get this\./)).toBeTruthy();
+    expect(screen.queryByText(/will get this/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText(/will get this notification/)).toBeTruthy();
+  });
+
+  it("🔴 a failed service list is not 'No services yet.'", async () => {
+    vi.mocked(broadcastServiceOptionsAction).mockResolvedValueOnce({ ok: false });
+    render(<BroadcastCard rewardsEnabled />);
+    openComposer();
+    fireEvent.click(screen.getByRole("button", { name: "By service" }));
+    expect(await screen.findByText(/Couldn.t load your services\./)).toBeTruthy();
+    expect(screen.queryByText("No services yet.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("button", { name: "Fade · 4" })).toBeTruthy();
   });
 });

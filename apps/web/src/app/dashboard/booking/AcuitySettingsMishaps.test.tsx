@@ -37,6 +37,9 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
 }));
 
+const reload = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/reloadPage", () => ({ reloadPage: reload }));
+
 const { AcuityCalendarMap } = await import("./AcuityCalendarMap");
 const { ConnectPlatforms, disconnectRefusal } = await import("./ConnectPlatforms");
 
@@ -219,5 +222,28 @@ describe("a refused Disconnect is a sentence", () => {
       expect(line, String(code)).toMatch(/^Couldn't|^Only the owner/);
       expect(line, String(code)).not.toMatch(/_/);
     }
+  });
+});
+
+describe("the Acuity calendar mapping when its read fails", () => {
+  it("🔴 a read that throws says so, instead of 'Loading your Acuity calendars…' for good", async () => {
+    getAcuityMappingAction.mockRejectedValueOnce(new TypeError("Load failed"));
+    render(<AcuityCalendarMap />);
+    expect(await screen.findByText(/Couldn't reach Acuity just now/)).toBeTruthy();
+    expect(screen.queryByText(/Loading your Acuity calendars/)).toBeNull();
+    getAcuityMappingAction.mockResolvedValueOnce({ ok: true, data: mapping({}, "cal_1") });
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Dee")).toBeTruthy();
+  });
+
+  it("a page left open across a deploy offers Reload", async () => {
+    // Next 14.2 resolves a call to a server action the new build lacks with
+    // undefined (lib/loadAction.ts).
+    getAcuityMappingAction.mockResolvedValueOnce(undefined);
+    reload.mockClear();
+    render(<AcuityCalendarMap />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/ChairBack was updated/)).toBeTruthy();
   });
 });
