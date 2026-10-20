@@ -4,7 +4,9 @@ import { cap, useVocab } from "@/components/VocabProvider";
 import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
+import { addOnOffersService } from "@chairback/config/addOns";
 import { cn } from "@/lib/cn";
+import { formatPrice } from "@/lib/serviceFields";
 import {
   editAppointmentAction,
   getEditContextAction,
@@ -44,7 +46,33 @@ export interface SavedNotice {
  * paid-price refusal, the E.164 phone rule). This screen's job is to prefill
  * honestly, send ONLY what actually changed, and report back plainly -
  * including when Acuity did not confirm a move.
+ *
+ * ADD-ONS: the service's add-ons are listed as toggles, pre-ticked from the
+ * booking (the same rule New appointment lists by, `addOnOffersService`).
+ * Ticking one moves the Duration and Price boxes by what it adds, so the
+ * boxes always show what Save will write, and the barber can still type over
+ * either. One already on the booking moves them by what it added THEN (its
+ * frozen snapshot), which is also what the server keeps. Changing the service
+ * takes off - visibly - any ticked add-on the new service doesn't offer.
+ * `addOnIds` is sent only when the set changed.
  */
+
+/** The figures one add-on moves a booking by. */
+interface AddOnFigures {
+  id: string;
+  name: string;
+  durationMin: number;
+  price: number | null;
+}
+
+/** Move a typed number by `delta`, keeping blank-for-nothing (see DURATION IS TEXT). */
+function shiftBox(text: string, delta: number, blankIfZero: boolean): string {
+  if (delta === 0) return text;
+  const n = text.trim() === "" ? 0 : Number(text);
+  if (Number.isNaN(n)) return text;
+  const next = Math.max(0, Math.round((n + delta) * 100) / 100);
+  return next === 0 && blankIfZero ? "" : String(next);
+}
 
 /** Wall-clock helpers: the shop's timezone is the one that matters, not the browser's. */
 function toLocalParts(iso: string, timezone: string): { date: string; time: string } {
@@ -169,6 +197,15 @@ export interface AppointmentEditState {
     setClientName: (v: string) => void;
     changingClient: boolean;
     setChangingClient: (v: boolean) => void;
+    /** Picks a service, and takes off ticked add-ons it doesn't offer. */
+    chooseService: (id: string | null) => void;
+    /** Null until the detail read gives the booking's own add-ons. */
+    addOnIds: string[] | null;
+    toggleAddOn: (id: string) => void;
+    /** The add-ons this service offers, plus any already on the booking. */
+    addOnChoices: AddOnFigures[];
+    /** What a service change took off, said once, in words. */
+    addOnNote: string | null;
   };
 }
 
@@ -205,6 +242,10 @@ export function useAppointmentEdit({
   const [changingClient, setChangingClient] = useState(false);
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  // The booking's add-ons, as ids. Null until the detail read lands - like
+  // contact, there is no honest baseline before it.
+  const [addOnIds, setAddOnIds] = useState<string[] | null>(null);
+  const [addOnNote, setAddOnNote] = useState<string | null>(null);
   const [blockConflict, setBlockConflict] = useState<BlockConflict | null>(null);
   const [overlapConflict, setOverlapConflict] = useState<BlockConflict | null>(null);
   // The overlap he already said yes to, carried on the retry that follows - so
@@ -254,7 +295,67 @@ export function useAppointmentEdit({
     if (!detail) return;
     setPhone(detail.contact.phoneDisplay ?? detail.contact.phone ?? "");
     setEmail(detail.contact.email ?? "");
+    setAddOnIds((detail.addOns ?? []).map((a) => a.id));
+    setAddOnNote(null);
   }, [detail]);
+
+  /** What the booking carries now: frozen figures, as the server keeps them. */
+  const bookedAddOns: AddOnFigures[] = (detail?.addOns ?? []).map((a) => ({
+    id: a.id,
+    name: a.name,
+    durationMin: a.durationMin ?? 0,
+    price: a.price ?? null,
+  }));
+  /** Offered with THIS service: active, by the API's own rule. */
+  const offeredWith = (svcId: string | null) =>
+    (ctx?.addOns ?? []).filter((a) => svcId !== null && addOnOffersService(a, svcId));
+  const figuresFor = (id: string): AddOnFigures | undefined =>
+    bookedAddOns.find((a) => a.id === id) ?? ctx?.addOns?.find((a) => a.id === id);
+  const offeredNow = offeredWith(serviceId);
+  const addOnChoices: AddOnFigures[] = [
+    ...offeredNow.map((a) => figuresFor(a.id)!),
+    // One already on the booking that this service no longer lists stays
+    // visible while the service is unchanged, so it can be taken off.
+    ...(serviceId === row.serviceId
+      ? bookedAddOns.filter((b) => !offeredNow.some((a) => a.id === b.id))
+      : []),
+  ];
+
+  function toggleAddOn(id: string) {
+    if (addOnIds === null) return;
+    const a = figuresFor(id);
+    if (!a) return;
+    const on = addOnIds.includes(id);
+    const sign = on ? -1 : 1;
+    setAddOnIds(on ? addOnIds.filter((x) => x !== id) : [...addOnIds, id]);
+    setDuration((t) => shiftBox(t, sign * a.durationMin, true));
+    setPrice((t) => shiftBox(t, sign * (a.price ?? 0), row.price == null));
+    setAddOnNote(null);
+  }
+
+  function chooseService(id: string | null) {
+    setServiceId(id);
+    const svc = ctx?.services.find((s) => s.id === id);
+    const offered = offeredWith(id);
+    const ticked = addOnIds ?? [];
+    const kept = ticked.filter((x) => offered.some((a) => a.id === x));
+    const dropped = ticked
+      .filter((x) => !kept.includes(x))
+      .map((x) => figuresFor(x))
+      .filter((a): a is AddOnFigures => a !== undefined);
+    if (addOnIds !== null) setAddOnIds(kept);
+    if (svc) {
+      const keptMin = kept.reduce((sum, x) => sum + (figuresFor(x)?.durationMin ?? 0), 0);
+      setDuration(String(svc.durationMin + keptMin));
+    }
+    const droppedPrice = dropped.reduce((sum, a) => sum + (a.price ?? 0), 0);
+    setPrice((t) => shiftBox(t, -droppedPrice, row.price == null));
+    setAddOnNote(
+      dropped.length === 0
+        ? null
+        : `${dropped.map((a) => a.name).join(" and ")} ${dropped.length === 1 ? "was" : "were"} taken off — ${svc?.name ?? "this service"} doesn't offer ${dropped.length === 1 ? "it" : "them"}.`,
+    );
+  }
 
   /**
    * What Save would send, worked out from the form as it stands. ONE function
@@ -290,6 +391,11 @@ export function useAppointmentEdit({
     if (priceNum !== (row.price ?? null) && !Number.isNaN(priceNum)) patch.price = priceNum;
     if (notes !== (row.notes ?? "")) patch.notes = notes || null;
     if (clientId !== (row.clientId ?? null)) patch.clientId = clientId;
+    // The whole set, and only when it changed (order doesn't count).
+    if (detail && addOnIds !== null) {
+      const before = (detail.addOns ?? []).map((a) => a.id).sort().join(",");
+      if ([...addOnIds].sort().join(",") !== before) patch.addOnIds = addOnIds;
+    }
     // Contact only when the detail read gave us something to compare against.
     if (detail) {
       const basePhone = detail.contact.phoneDisplay ?? detail.contact.phone ?? "";
@@ -399,7 +505,10 @@ export function useAppointmentEdit({
         if (res.error === "invalid_slot" && !acceptedCustomTime.current) {
           setBlockConflict(null);
           setOverlapConflict(null);
-          setOffHoursConflict({ reason: OFF_HOURS_REASON, confirmation: "custom-time" });
+          setOffHoursConflict({
+            reason: patch.addOnIds && patch.durationMin ? ADD_ON_OFF_HOURS_REASON : OFF_HOURS_REASON,
+            confirmation: "custom-time",
+          });
           return;
         }
         // Any other refusal is the authoritative answer now - the banners are
@@ -408,7 +517,15 @@ export function useAppointmentEdit({
         setBlockConflict(null);
         setOverlapConflict(null);
         setOffHoursConflict(null);
-        setSaveError(errorCopy(vocab)[res.error ?? ""] ?? "Couldn't save those changes. Try again.");
+        // An add-on refusal names the add-on, and a paid booking's says it was
+        // the add-on's price - the server's own words, when it gave them.
+        const ownWords =
+          res.error === "invalid_add_on" || (res.error === "price_change_on_paid" && patch.addOnIds)
+            ? res.message
+            : undefined;
+        setSaveError(
+          ownWords ?? errorCopy(vocab)[res.error ?? ""] ?? "Couldn't save those changes. Try again.",
+        );
         return;
       }
       setBlockConflict(null);
@@ -451,6 +568,8 @@ export function useAppointmentEdit({
     setChangingClient(false);
     setPhone(detail ? (detail.contact.phoneDisplay ?? detail.contact.phone ?? "") : "");
     setEmail(detail?.contact.email ?? "");
+    setAddOnIds(detail ? (detail.addOns ?? []).map((a) => a.id) : null);
+    setAddOnNote(null);
     setBlockConflict(null);
     setOverlapConflict(null);
     setOffHoursConflict(null);
@@ -508,6 +627,11 @@ export function useAppointmentEdit({
       setClientName,
       changingClient,
       setChangingClient,
+      chooseService,
+      addOnIds,
+      toggleAddOn,
+      addOnChoices,
+      addOnNote,
     },
   };
 }
@@ -682,12 +806,7 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
         <Field label="Service">
           <select
             value={f.serviceId ?? ""}
-            onChange={(e) => {
-              const id = e.target.value || null;
-              f.setServiceId(id);
-              const svc = ctx.services.find((s) => s.id === id);
-              if (svc) f.setDuration(String(svc.durationMin));
-            }}
+            onChange={(e) => f.chooseService(e.target.value || null)}
             className={INPUT}
           >
             {ctx.services.map((s) => (
@@ -697,6 +816,13 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
             ))}
           </select>
         </Field>
+        {f.addOnNote && (
+          <p role="status" className="text-xs leading-relaxed text-warning-soft">
+            {f.addOnNote}
+          </p>
+        )}
+
+        <AddOnToggles state={state} />
 
         <Field label={cap(vocab.providerNoun)}>
           <select
@@ -808,6 +934,91 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
 }
 
 /**
+ * The service's add-ons as toggles - New appointment's look and words. Hidden
+ * when there is nothing to pick and nothing on the booking.
+ */
+function AddOnToggles({ state }: { state: AppointmentEditState }) {
+  const { ctx, detail, fields: f } = state;
+  if (!ctx || f.addOnChoices.length === 0) return null;
+  if (f.addOnIds === null) {
+    return <p className="text-xs text-muted">Loading add-ons…</p>;
+  }
+  const ticked = f.addOnChoices.filter((a) => f.addOnIds!.includes(a.id));
+  const serviceName = ctx.services.find((s) => s.id === f.serviceId)?.name ?? state.row.serviceName;
+  const minutes = f.duration.trim() === "" ? 0 : Number(f.duration);
+  const price = f.price.trim() === "" ? null : Number(f.price);
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <span className="text-xs font-medium text-muted">Add-ons</span>
+      <div role="group" aria-label="Add-ons" className="flex min-w-0 flex-col gap-1.5">
+        {f.addOnChoices.map((a) => {
+          const on = f.addOnIds!.includes(a.id);
+          const extra = [
+            a.price != null && a.price > 0 ? `+${formatPrice(a.price)}` : null,
+            a.durationMin > 0 ? `+${a.durationMin} min` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          return (
+            <button
+              key={a.id}
+              type="button"
+              aria-pressed={on}
+              onClick={() => f.toggleAddOn(a.id)}
+              className={cn(
+                "flex min-h-[2.75rem] w-full min-w-0 items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-left text-sm transition-colors duration-150 ease-out",
+                on ? "border-gold/50 bg-gold/10" : "border-subtle hover:bg-charcoal-700/40",
+              )}
+            >
+              <span className="flex min-w-0 items-center gap-2.5">
+                <span
+                  aria-hidden
+                  className={cn(
+                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]",
+                    on ? "border-gold text-gold" : "border-subtle-strong",
+                  )}
+                >
+                  {on ? "✓" : ""}
+                </span>
+                <span className="min-w-0 [overflow-wrap:anywhere] font-medium text-offwhite">
+                  {a.name}
+                </span>
+              </span>
+              {extra && <span className="shrink-0 text-xs tabular-nums text-muted">{extra}</span>}
+            </button>
+          );
+        })}
+      </div>
+      {detail?.payment.state === "paid" && (
+        <p className="text-xs text-muted">
+          Paid in full online — an add-on with a price would change the paid total, so only free
+          ones can be added here.
+        </p>
+      )}
+      {ticked.length > 0 && (
+        <div
+          data-qa="add-on-total"
+          className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-gold/30 bg-gold/5 px-4 py-2.5 text-sm"
+        >
+          <span className="min-w-0">
+            <span className="block text-[11px] font-medium uppercase tracking-wide text-muted">
+              Total
+            </span>
+            <span className="block [overflow-wrap:anywhere] text-offwhite">
+              {[serviceName, ...ticked.map((a) => a.name)].join(" + ")}
+            </span>
+          </span>
+          <span className="shrink-0 font-semibold tabular-nums text-gold">
+            {Number.isNaN(minutes) ? "—" : `${minutes} min`}
+            {price !== null && !Number.isNaN(price) ? ` · ${formatPrice(price)}` : ""}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Why a time isn't a "usual opening" (invalid_slot). The API can't say which
  * rule it was, so this names every one it might be - the most common for an
  * edit first: a new service steps from opening time by its OWN length, so a
@@ -816,6 +1027,11 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
 const OFF_HOURS_REASON =
   "That time isn't one of this service's usual openings. It may be between its usual start times, " +
   "outside your hours or the service's, or inside your booking notice.";
+
+/** The same refusal, reached by an add-on making the booking longer. */
+const ADD_ON_OFF_HOURS_REASON =
+  "With the add-ons it runs longer, and that no longer fits this service's usual openings - it may " +
+  "run past your hours or the service's.";
 
 // A function of the shop's words rather than a module constant: two of these
 // name the workspace or the provider, and a module-level constant has no
@@ -843,4 +1059,6 @@ const errorCopy = (vocab: BusinessVocabulary): Record<string, string> => ({
   client_not_found: "That client isn't in your book.",
   staff_not_found: `That ${vocab.providerNoun} is no longer available.`,
   service_not_found: "That service is no longer available.",
+  invalid_add_on:
+    "An add-on you picked isn't offered with this service any more. Close this and open it again to see the current list.",
 });
