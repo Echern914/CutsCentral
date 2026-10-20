@@ -2280,11 +2280,17 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     firstName: d.firstName,
     lastName: d.lastName,
   });
-  // 🔑 WHO IS BOOKING, when the page was opened from the app: the account's
-  // own record here, instead of whatever the typing points at. Absent or
-  // invalid = the anonymous booking this page has always made
+  // 🔑 WHO IS BOOKING, when the page was opened from the app and what was
+  // typed is this customer's: the account's own record here, instead of
+  // whatever else the typing points at. Absent, invalid, or typed for someone
+  // else = the anonymous booking this page has always made
   // (services/appBooking.ts).
-  const booker = await appBookerFor(d.customerHandoff, shop.id, typedKey, now);
+  const booker = await appBookerFor(
+    d.customerHandoff,
+    shop.id,
+    { key: typedKey, phone, email: d.email || null },
+    now,
+  );
   const target = await bookingTarget(
     shop.id,
     { key: typedKey, phone, email: d.email || null, firstName: d.firstName, lastName: d.lastName || null },

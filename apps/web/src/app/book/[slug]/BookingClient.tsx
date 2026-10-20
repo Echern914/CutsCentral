@@ -2550,9 +2550,11 @@ export function BookingClient({
               </>
             )}
           </p>
-          {/* Booked from the ChairBack app with a phone or email the app
-              account has not confirmed: the booking is real, but the app
-              cannot list it (it shows only what the account proves is theirs).
+          {/* Booked from the ChairBack app as themselves, but onto a record
+              that also carries a phone or email the account has not
+              confirmed: the booking is real, but the app cannot list it (it
+              shows only what the account proves is theirs). A booking typed
+              for someone else never gets this line - the API sends no inApp.
               Say so here, with the fix, rather than let "Nothing is booked"
               in the app be how they find out. */}
           {notInApp && (

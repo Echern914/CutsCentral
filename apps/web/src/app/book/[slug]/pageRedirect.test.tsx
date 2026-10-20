@@ -53,6 +53,13 @@ describe("/book/<slug> for a shop that books somewhere else", () => {
     );
   });
 
+  it("never carries the app's booking handoff to the anonymous shop page", async () => {
+    answer(booking, page({ bookingMode: "acuity", customDomain: null }));
+    await expect(render({ cb_me: "eyJwdXJwb3NlIjoiY3VzdG9tZXJfYm9va2luZ192MSJ9.c2lnbmF0dXJlLXNpZ25hdHVyZS1zaWc", utm_source: "app" })).rejects.toThrow(
+      redirectsTo("/s/acuity-cuts?utm_source=app"),
+    );
+  });
+
   it("🔴 from a custom domain, lands on the shop's page - never ChairBack's home - with the domain check intact", async () => {
     // How it arrives: drickcuts.com/book -> /from-domain -> 308 to THIS page on
     // the platform host with cb_domain set. "/" here would be ChairBack's own

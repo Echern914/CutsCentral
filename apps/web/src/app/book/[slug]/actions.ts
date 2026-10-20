@@ -369,8 +369,9 @@ export async function bookAction(
   /** The saved card this device offered can't be used - forget it here. */
   savedCardRefused?: boolean;
   /**
-   * Booked from the ChairBack app: whether the app will show it. False only
-   * when what was typed belongs to a record the account has not proven.
+   * Booked from the ChairBack app, as the account itself (a typed contact is
+   * theirs): whether the app will show it. Absent for any other booking,
+   * including one typed for someone else.
    */
   inApp?: { shown: boolean };
 }> {

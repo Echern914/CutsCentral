@@ -26,6 +26,9 @@ import { mintBookingHandoff } from "../auth/bookingHandoff.js";
  * tests take the handoff from exactly where the app gets it - the storefront
  * URL and a saved shop's Book link - and book with it.
  *
+ * The account counts only when what was TYPED is theirs - a parent booking
+ * their kid, or a friend handed the link, books exactly as typed.
+ *
  * And what must NOT change: a typed contact still never opens anybody else's
  * record (#628, typedContactTakeover.test.ts), a handoff never creates a link
  * on its own, and a page without one books exactly as it always has.
@@ -219,36 +222,88 @@ describe("booked from the app with an account already linked here", () => {
     expect((await home(me.token)).next).not.toBeNull();
   });
 
-  it("(b) signed in by phone, types only an email - lands on their record, nothing typed written to it", async () => {
+  it("(b) types only an email, and it is their verified one - lands on their record, nothing typed written to it", async () => {
+    const phone = randomPhone();
+    const email = randomEmail("b");
+    const rec = await shopRecord({ key: `tel:${phone}`, phone });
+    const me = await account({ phone, email });
+    const booked = await book({ email: email.toUpperCase() }, await handoffFromStorefront(me.token));
+    expect(booked.status).toBe(201);
+    expect(booked.body.inApp).toEqual({ shown: true });
+    expect(await clientOf(booked.body.manageToken)).toBe(rec.id);
+    // No second record for the typed email, and the record keeps what it had.
+    expect(await clientsCarrying({ email })).toBe(0);
+    expect((await prisma.client.findUniqueOrThrow({ where: { id: rec.id } })).email).toBeNull();
+    expect((await home(me.token)).next).not.toBeNull();
+  });
+
+  it("(b) signed in by phone, types only an email that is on neither the account nor their record - booked as typed", async () => {
+    // Nothing typed is theirs, so nothing says the booking is FOR them: it may
+    // be for a friend. It books exactly as the page always has.
     const phone = randomPhone();
     const rec = await shopRecord({ key: `tel:${phone}`, phone });
     const me = await account({ phone });
     const typedEmail = randomEmail("b");
     const booked = await book({ email: typedEmail }, await handoffFromStorefront(me.token));
     expect(booked.status).toBe(201);
-    expect(booked.body.inApp).toEqual({ shown: true });
-    expect(await clientOf(booked.body.manageToken)).toBe(rec.id);
-    // No second record for the typed email, and the record keeps what it had.
-    expect(await clientsCarrying({ email: typedEmail })).toBe(0);
-    expect((await prisma.client.findUniqueOrThrow({ where: { id: rec.id } })).email).toBeNull();
-    // The booking row keeps what was typed, so its confirmation reaches them.
-    const appt = await prisma.appointment.findFirstOrThrow({ where: { manageToken: booked.body.manageToken } });
-    expect(appt.email).toBe(typedEmail);
-    expect((await home(me.token)).next).not.toBeNull();
+    expect(booked.body.inApp).toBeUndefined();
+    expect(await clientOf(booked.body.manageToken)).not.toBe(rec.id);
+    expect(await clientsCarrying({ email: typedEmail })).toBe(1);
   });
 
-  it("(b) types a different phone - still their record", async () => {
+  it("types a different phone and their own email - their record, and consent for that other number is not consent for theirs", async () => {
     const phone = randomPhone();
+    const email = randomEmail("b3");
     const rec = await shopRecord({ key: `tel:${phone}`, phone });
-    const me = await account({ phone });
+    const me = await account({ phone, email });
     const other = randomPhone();
-    const booked = await book({ phone: other, email: randomEmail("b3") }, await handoffFromStorefront(me.token), { smsConsent: true });
+    const booked = await book({ phone: other, email }, await handoffFromStorefront(me.token), { smsConsent: true });
     expect(booked.status).toBe(201);
     expect(await clientOf(booked.body.manageToken)).toBe(rec.id);
     expect(await clientsCarrying({ phone: other })).toBe(0);
-    // Consent was given for the OTHER number - it is not consent for theirs.
     expect((await prisma.client.findUniqueOrThrow({ where: { id: rec.id } })).smsConsentAt).toBeNull();
     expect((await home(me.token)).next).not.toBeNull();
+  });
+
+  it("types the phone on their RECORD (not the account's) - their record, no duplicate", async () => {
+    const email = randomEmail("recphone");
+    const recPhone = randomPhone();
+    const rec = await shopRecord({ key: `mail:${email}`, phone: recPhone, email });
+    const me = await account({ email });
+    const booked = await book({ phone: recPhone, email: randomEmail("other") }, await handoffFromStorefront(me.token));
+    expect(booked.status).toBe(201);
+    expect(booked.body.inApp).toEqual({ shown: true });
+    expect(await clientOf(booked.body.manageToken)).toBe(rec.id);
+    expect(await clientsCarrying({ phone: recPhone })).toBe(1);
+  });
+
+  it("🔴 a parent books their kid from their own app: the kid's record, not the parent's", async () => {
+    const parentPhone = randomPhone();
+    const kidPhone = randomPhone();
+    const parentRec = await shopRecord({ key: `tel:${parentPhone}`, phone: parentPhone });
+    const kidRec = await shopRecord({ key: `tel:${kidPhone}`, phone: kidPhone });
+    const parent = await account({ phone: parentPhone });
+    const booked = await book({ phone: kidPhone, email: randomEmail("kid") }, await handoffFromStorefront(parent.token));
+    expect(booked.status).toBe(201);
+    expect(booked.body.inApp).toBeUndefined();
+    expect(await clientOf(booked.body.manageToken)).toBe(kidRec.id);
+    expect(await prisma.appointment.count({ where: { clientId: parentRec.id } })).toBe(0);
+  });
+
+  it("🔴 a storefront link sent to a friend: their booking is theirs, not the sender's", async () => {
+    const senderPhone = randomPhone();
+    const senderRec = await shopRecord({ key: `tel:${senderPhone}`, phone: senderPhone });
+    const sender = await account({ phone: senderPhone });
+    const shared = await handoffFromStorefront(sender.token);
+    const friendPhone = randomPhone();
+    const booked = await book({ phone: friendPhone, email: randomEmail("friend") }, shared);
+    expect(booked.status).toBe(201);
+    expect(booked.body.inApp).toBeUndefined();
+    const friendRec = await prisma.client.findUniqueOrThrow({ where: { id: (await clientOf(booked.body.manageToken))! } });
+    expect(friendRec.id).not.toBe(senderRec.id);
+    expect(friendRec.phone).toBe(friendPhone);
+    expect(await prisma.appointment.count({ where: { clientId: senderRec.id } })).toBe(0);
+    expect((await home(sender.token)).next).toBeNull();
   });
 
   it("(a) their record carries the phone under another key (the receptionist's bare E.164) - no duplicate, still shown", async () => {
@@ -338,19 +393,31 @@ describe("booked from the app with no record linked here yet (a saved shop)", ()
     expect((await home(me.token)).next).not.toBeNull();
   });
 
-  it("(b) a fresh phone account types only an email - the new record also carries the verified phone", async () => {
+  it("(b) a fresh account types only its own email - the new record also carries its verified phone", async () => {
     const phone = randomPhone();
-    const me = await account({ phone });
-    const typedEmail = randomEmail("b2");
-    const booked = await book({ email: typedEmail }, await handoffFromSavedShop(me.token));
+    const email = randomEmail("b2");
+    const me = await account({ phone, email });
+    const booked = await book({ email }, await handoffFromSavedShop(me.token));
     expect(booked.status).toBe(201);
     expect(booked.body.inApp).toEqual({ shown: true });
     const rec = await prisma.client.findUniqueOrThrow({ where: { id: (await clientOf(booked.body.manageToken))! } });
-    expect({ phone: rec.phone, email: rec.email }).toEqual({ phone, email: typedEmail });
+    expect({ phone: rec.phone, email: rec.email }).toEqual({ phone, email });
     // ...but the BOOKING keeps what was typed: no text to a number they left blank.
     const appt = await prisma.appointment.findFirstOrThrow({ where: { manageToken: booked.body.manageToken } });
     expect(appt.phone).toBeNull();
     expect((await home(me.token)).next).not.toBeNull();
+  });
+
+  it("(b) a fresh phone account types only an email that is not its own - booked as typed, nothing of the account filled in", async () => {
+    const phone = randomPhone();
+    const me = await account({ phone });
+    const typedEmail = randomEmail("b4");
+    const booked = await book({ email: typedEmail }, await handoffFromSavedShop(me.token));
+    expect(booked.status).toBe(201);
+    expect(booked.body.inApp).toBeUndefined();
+    const rec = await prisma.client.findUniqueOrThrow({ where: { id: (await clientOf(booked.body.manageToken))! } });
+    expect({ phone: rec.phone, email: rec.email }).toEqual({ phone: null, email: typedEmail });
+    expect((await home(me.token)).next).toBeNull();
   });
 
   it("(d) an archived record holds their key - it gives the key up, keeps its history, stays archived", async () => {
@@ -398,7 +465,8 @@ describe("what a handoff can never do", () => {
     const attacker = await account({ email: randomEmail("mallory") });
     const booked = await book({ phone, email: randomEmail("typed") }, await handoffFromSavedShop(attacker.token));
     expect(booked.status).toBe(201);
-    expect(booked.body.inApp).toEqual({ shown: false });
+    // Nothing typed is the attacker's: the handoff is not even consulted.
+    expect(booked.body.inApp).toBeUndefined();
     // Neither the typed email nor the attacker's own VERIFIED one lands on the regular's record.
     expect((await prisma.client.findUniqueOrThrow({ where: { id: victim.id } })).email).toBeNull();
     const h = await home(attacker.token);
@@ -422,14 +490,15 @@ describe("what a handoff can never do", () => {
 
   it("never fills in a verified contact that would point the booking at a record the account was NOT given", async () => {
     // The account's phone is on two records here, so neither is opened to it.
-    // It types only an email. Filling the blank phone with the verified one
+    // It types only its own email. Filling the blank phone with the verified one
     // would turn the key into tel:<phone> and land the booking on one of those
     // records - a record the identity rules just declined to give them.
     const phone = randomPhone();
     const one = await shopRecord({ key: `tel:${phone}`, phone });
     const two = await shopRecord({ key: phone, phone });
-    const me = await account({ phone });
-    const booked = await book({ email: randomEmail("blank") }, await handoffFromSavedShop(me.token));
+    const email = randomEmail("blank");
+    const me = await account({ phone, email });
+    const booked = await book({ email }, await handoffFromSavedShop(me.token));
     expect(booked.status).toBe(201);
     expect([one.id, two.id]).not.toContain(await clientOf(booked.body.manageToken));
     expect(await clientsCarrying({ phone })).toBe(2);
@@ -448,7 +517,8 @@ describe("what a handoff can never do", () => {
       mintBookingHandoff({ accountId: me.id, shopId, tokenVersion: 7 }, now),
     ];
     for (const handoff of bad) {
-      const booked = await book({ email: randomEmail("bad") }, handoff);
+      // Typed as the account would: with a good handoff this lands on `rec`.
+      const booked = await book({ phone, email: randomEmail("bad") }, handoff);
       expect(booked.status).toBe(201);
       expect(booked.body.inApp).toBeUndefined();
       expect(await clientOf(booked.body.manageToken)).not.toBe(rec.id);
@@ -467,12 +537,12 @@ describe("what a handoff can never do", () => {
     expect(await clientsCarrying({ email: typedEmail })).toBe(1);
   });
 
-  it("a client the shop blocked is refused on their own record, whatever they type", async () => {
+  it("a client the shop blocked is refused on their own record, whatever key the typing derives", async () => {
     const phone = randomPhone();
     const rec = await shopRecord({ key: phone, phone });
     await prisma.client.update({ where: { id: rec.id }, data: { bookingBlockedAt: new Date() } });
     const me = await account({ phone });
-    const booked = await book({ email: randomEmail("blocked") }, await handoffFromStorefront(me.token));
+    const booked = await book({ phone, email: randomEmail("blocked") }, await handoffFromStorefront(me.token));
     expect(booked.status).toBe(403);
     expect(booked.body.code).toBe("CONTACT_SHOP");
   });

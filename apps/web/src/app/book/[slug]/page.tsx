@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { APP_NAME } from "@chairback/config/constants";
-import { bookingHandoffFrom } from "@chairback/config/bookingHandoff";
+import { BOOKING_HANDOFF_PARAM, bookingHandoffFrom } from "@chairback/config/bookingHandoff";
 import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import { apiPublicGet } from "@/lib/api";
 import { expectedDomain, servesDomain } from "@/lib/customDomainGuard";
@@ -273,6 +273,9 @@ async function pageInsteadOfBooking(
   if (!servesDomain(res.data, expected)) return null;
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(searchParams ?? {})) {
+    // The app's booking handoff is for a booking on THIS page; the shop page
+    // is anonymous and has no use for it, so it does not ride along.
+    if (key === BOOKING_HANDOFF_PARAM) continue;
     for (const v of Array.isArray(value) ? value : value === undefined ? [] : [value]) {
       query.append(key, v);
     }

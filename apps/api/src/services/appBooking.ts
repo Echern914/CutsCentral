@@ -20,14 +20,18 @@ import { syncCustomerView } from "./customerIdentity.js";
  *     phone, and the identity rules - rightly - stopped opening either one;
  *   - joining from the app with an email, then booking with a phone: same.
  *
- * Now, when the page carries a valid handoff (auth/bookingHandoff.ts):
+ * Now, when the page carries a valid handoff (auth/bookingHandoff.ts) AND
+ * the typing is this customer's (appBookerFor - a parent booking their kid, or
+ * a friend sent the link, books exactly as typed):
  *
- *   LINKED   The account already holds an ACTIVE link at this shop: the
+ *   LINKED   The account already holds an ACTIVE link at this shop, and a
+ *            typed phone or email is the account's own or that record's: the
  *            booking lands on that record. Never a second one. The typed name,
  *            phone and email still go on the appointment row, exactly as they
  *            always have, and nothing typed is written onto the record.
  *
- *   NOT YET  No link at this shop. The booking finds its record by the typed
+ *   NOT YET  No link at this shop, and a typed contact IS the account's
+ *            verified one. The booking finds its record by the typed
  *            contact as always, except that a contact left BLANK is filled with
  *            the account's own VERIFIED one - and only when no active record
  *            at this shop carries it, so the fill can only ever describe a
@@ -55,16 +59,30 @@ export interface AppBooker {
   email: string | null;
 }
 
+/** A typed email the way the identity rules compare one: lower(btrim()). */
+function emailKey(email: string | null | undefined): string | null {
+  return email?.trim().toLowerCase() || null;
+}
+
 /**
  * The signed-in customer behind a booking, or null for an anonymous one. A
  * handoff that is missing, forged, expired, for another shop, from before a
  * sign-out-everywhere, or for the demo account is simply not there: the
  * booking goes ahead exactly as the page has always booked it.
+ *
+ * 🔴 AND IT IS NULL WHEN THE TYPING SAYS THE BOOKING IS FOR SOMEONE ELSE. The
+ * handoff says who holds the phone, not who is in the chair: a parent books
+ * for their kid from their own app, or a customer sends a storefront link
+ * (which carries the handoff) to a friend. So the account counts only when at
+ * least one TYPED contact is the account's own verified one, or is on the
+ * account's linked record here. A booking whose typed contacts are all someone
+ * else's books exactly as typed - no linked record, and none of the account's
+ * contacts filled in.
  */
 export async function appBookerFor(
   handoff: string | undefined,
   shopId: string,
-  typedKey: string,
+  typed: { key: string; phone: string | null; email: string | null },
   now = new Date(),
 ): Promise<AppBooker | null> {
   if (!handoff || !apiEnv().CUSTOMER_ACCOUNTS_ENABLED) return null;
@@ -84,6 +102,12 @@ export async function appBookerFor(
     return null;
   }
 
+  const typedPhone = typed.phone || null;
+  const typedEmail = emailKey(typed.email);
+  const typedIsTheAccount =
+    (typedPhone !== null && typedPhone === account.phoneE164) ||
+    (typedEmail !== null && typedEmail === account.emailNormalized);
+
   // The same reconciliation every My ChairBack read runs: links are re-derived
   // from proof right now, never trusted from memory.
   const links = (await syncCustomerView(read.accountId, now)).links.filter((l) => l.shopId === shopId);
@@ -92,15 +116,27 @@ export async function appBookerFor(
     const records = await runAsOwner((tx) =>
       tx.client.findMany({
         where: { id: { in: links.map((l) => l.clientId) }, shopId, archivedAt: null },
-        select: { id: true, acuityClientKey: true, phone: true },
+        select: { id: true, acuityClientKey: true, phone: true, email: true },
       }),
     );
+    // A linked record counts when the typing is the account's, or names that
+    // record itself (its phone, or its email).
+    const named = records.filter(
+      (r) =>
+        typedIsTheAccount ||
+        (typedPhone !== null && r.phone === typedPhone) ||
+        (typedEmail !== null && emailKey(r.email) === typedEmail),
+    );
     // Several linked records here (a claimed one and an automatic one): the
-    // one the typing names, if it is one of them, else the oldest link.
-    linked =
-      records.find((r) => r.acuityClientKey === typedKey) ??
-      links.map((l) => records.find((r) => r.id === l.clientId)).find((r) => r !== undefined) ??
-      null;
+    // one the typing names by key, if it is one of them, else the oldest link.
+    const pick =
+      named.find((r) => r.acuityClientKey === typed.key) ??
+      links.map((l) => named.find((r) => r.id === l.clientId)).find((r) => r !== undefined);
+    linked = pick ? { id: pick.id, acuityClientKey: pick.acuityClientKey, phone: pick.phone } : null;
+  }
+  if (!linked && !typedIsTheAccount) {
+    logger.info({ shopId }, "app booking: typed contacts are not the account's - booking as typed");
+    return null;
   }
   return { accountId: read.accountId, linked, phone: account.phoneE164, email: account.emailNormalized };
 }
