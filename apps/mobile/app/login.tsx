@@ -28,6 +28,7 @@ import {
   rememberAttempt,
 } from "@/src/joinAuth";
 import { buildSignupStartUrl } from "@/src/joinFlow";
+import { FRAME } from "@/src/frameColors";
 
 /**
  * Barber/manager native sign-in. Google blocks its OAuth inside an embedded
@@ -407,7 +408,7 @@ export default function LoginScreen() {
   if (checking) {
     return (
       <View style={[styles.root, styles.center]}>
-        <ActivityIndicator color="#fff" />
+        <ActivityIndicator color={FRAME.spinner} />
       </View>
     );
   }
