@@ -40,6 +40,12 @@ export interface AppointmentDetail extends Appointment {
   address: string | null;
   durationMin: number | null;
   priceCents: number | null;
+  /**
+   * The API's word that THIS appointment can go in Apple Wallet: it can sign
+   * passes, and this is a BOOKED ChairBack booking still ahead - self-booked
+   * or booked by the barber. Optional: an older API omits it (= no badge).
+   */
+  canAddToWallet?: boolean;
 }
 
 /**
