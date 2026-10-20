@@ -4,6 +4,7 @@ import {
   Text,
   Pressable,
   ActivityIndicator,
+  AppState,
   BackHandler,
   Linking,
   Platform,
@@ -15,6 +16,7 @@ import { setStatusBarStyle } from "expo-status-bar";
 import { API_ORIGIN, NEXT_UP_WIDGET_ENABLED, WEB_ORIGIN } from "@/src/config";
 import { parseOpenAuthRequest, resumeUrl } from "@/src/nativeBridge";
 import { FRAME } from "@/src/frameColors";
+import { shouldReloadOnReturn } from "@/src/staleReturn";
 
 // If the real page content hasn't signaled ready within this long, stop spinning
 // and offer a retry. The page posts "cb:ready" when its real UI mounts; we do NOT
@@ -311,6 +313,26 @@ export function AppWebView({
     const next = resumeUrl(WEB_ORIGIN, req.resumePath, resultUrl);
     webref.current?.injectJavaScript(`window.location.assign(${JSON.stringify(next)}); true;`);
   }
+
+  // Back from a long time in the background: start a fresh page, because a
+  // website deploy in the meantime leaves the old one unable to load its cards
+  // (src/staleReturn.ts). A quick switch away and back keeps the page as is.
+  useEffect(() => {
+    let leftAt: number | null = null;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "background") {
+        leftAt = Date.now();
+      } else if (state === "active") {
+        if (shouldReloadOnReturn(leftAt, Date.now())) {
+          restarts.current = 0;
+          retry();
+        }
+        leftAt = null;
+      }
+    });
+    return () => sub.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Android hardware/gesture back: consume it while the WebView has history to
   // pop; otherwise let the system handle it (screen back / app exit). iOS has
