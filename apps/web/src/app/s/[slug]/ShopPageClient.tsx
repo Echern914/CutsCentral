@@ -53,9 +53,11 @@ export function ShopPageClient({
   data: ShopPageData;
   preview?: boolean;
   /**
-   * Appended to the native Book link. Set only for a visit that came through
-   * the shop's custom domain (`?cb_domain=`), so the booking page applies the
-   * same same-shop check the landing page just passed.
+   * Appended to the native Book link. Set for a visit that came through the
+   * shop's custom domain (`?cb_domain=`), so the booking page applies the same
+   * same-shop check the landing page just passed - or for a customer's own
+   * page opened from the ChairBack app (`?cb_me=`, config bookingHandoff.ts),
+   * so their booking shows in the app.
    */
   bookQuery?: string;
   /**

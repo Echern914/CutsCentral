@@ -59,6 +59,44 @@ async function contactOnFile(
   return (onFile[0]?.n ?? 0) > 0;
 }
 
+/**
+ * 🔴 AN ARCHIVED RECORD IS NEVER REOPENED BY A CUSTOMER - but it can hold the
+ * very key this person derives to (same phone), and an upsert on that key would
+ * then land on the archived record and link nothing: a dead end. Reviving it
+ * would hand the account the archived history on the strength of a phone number
+ * alone (numbers get recycled) and overrule the shop's decision to archive it.
+ * So the archived record gives the key up - re-keyed exactly as a merge re-keys
+ * its loser (client.ts: `merged:`) - and stays archived with its history
+ * untouched, while the customer gets a fresh record under the key, where their
+ * later bookings land too.
+ *
+ * Callers: joining a shop, and a booking made from the app with the account's
+ * own verified contact (services/appBooking.ts). Never the anonymous booking
+ * page: a typed contact alone moves nothing.
+ */
+export async function releaseArchivedKey(
+  tx: Prisma.TransactionClient,
+  p: { shopId: string; acuityClientKey: string; accountId: string; via: "join" | "app_booking" },
+): Promise<void> {
+  const holder = await tx.client.findUnique({
+    where: { shopId_acuityClientKey: { shopId: p.shopId, acuityClientKey: p.acuityClientKey } },
+    select: { id: true, archivedAt: true },
+  });
+  if (!holder?.archivedAt) return;
+  // ONLY the key moves. Its visits, punches, appointments, notes and any
+  // merge events naming it (ClientMergeEvent, append-only) stay exactly
+  // where they are, and the new key says what happened to the old one.
+  await tx.client.update({
+    where: { id: holder.id },
+    data: { acuityClientKey: `archived:${holder.id}` },
+  });
+  // Ids only: the phone or email that caused it never reaches a log line.
+  logger.info(
+    { shopId: p.shopId, archivedClientId: holder.id, accountId: p.accountId, via: p.via },
+    "archived client released its key to a new record (history untouched)",
+  );
+}
+
 /** Make the account a client of the shop now; the shop's approval, if any, is behind us. */
 export async function becomeClient(
   accountId: string,
@@ -87,33 +125,8 @@ export async function becomeClient(
     lastName: account.lastName,
   });
   await runAsOwner(async (tx) => {
-    // 🔴 AN ARCHIVED RECORD IS NEVER REOPENED BY JOINING - but it can hold the
-    // very key this person derives to (same phone), and the upsert below would
-    // then change nothing and link nothing: the other half of the dead end
-    // above. Reviving it would hand this account the archived history on the
-    // strength of a phone number alone (numbers get recycled) and overrule the
-    // shop's decision to archive it. So the archived record gives the key up -
-    // re-keyed exactly as a merge re-keys its loser (client.ts: `merged:`) -
-    // and stays archived with its history untouched, while the customer gets a
-    // fresh record under the key, where their later bookings will land too.
-    const holder = await tx.client.findUnique({
-      where: { shopId_acuityClientKey: { shopId, acuityClientKey } },
-      select: { id: true, archivedAt: true },
-    });
-    if (holder?.archivedAt) {
-      // ONLY the key moves. Its visits, punches, appointments, notes and any
-      // merge events naming it (ClientMergeEvent, append-only) stay exactly
-      // where they are, and the new key says what happened to the old one.
-      await tx.client.update({
-        where: { id: holder.id },
-        data: { acuityClientKey: `archived:${holder.id}` },
-      });
-      // Ids only: the phone or email that caused it never reaches a log line.
-      logger.info(
-        { shopId, archivedClientId: holder.id, accountId },
-        "join: archived client released its key to a new record (history untouched)",
-      );
-    }
+    // 🔴 AN ARCHIVED RECORD IS NEVER REOPENED BY JOINING - see releaseArchivedKey.
+    await releaseArchivedKey(tx, { shopId, acuityClientKey, accountId, via: "join" });
     await tx.client.upsert({
       where: { shopId_acuityClientKey: { shopId, acuityClientKey } },
       create: {

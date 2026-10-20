@@ -190,9 +190,15 @@ export interface BookingPrefill {
 export function BookingClient({
   data,
   prefill = null,
+  customerHandoff = null,
 }: {
   data: BookShopData;
   prefill?: BookingPrefill | null;
+  /**
+   * Opened from the ChairBack app: who is booking, signed by the API (config
+   * bookingHandoff.ts). Passed through untouched; null on every other visit.
+   */
+  customerHandoff?: string | null;
 }) {
   // Clear the native app's WebView spinner (reachable from the shop page's Book
   // CTA inside the app; the shell may be waiting on this ready signal).
@@ -508,6 +514,9 @@ export function BookingClient({
   }, [error, slot]);
 
   const [confirmedToken, setConfirmedToken] = useState<string | null>(null);
+  // Booked from the app, onto a record the app account has not proven - so
+  // the app will not list it until they add that phone or email there.
+  const [notInApp, setNotInApp] = useState(false);
   // true when the shop requires approval: the customer submitted a REQUEST, not a
   // confirmed booking, so the success screen reads "Request sent".
   const [wasRequest, setWasRequest] = useState(false);
@@ -1709,6 +1718,8 @@ export function BookingClient({
         savedCardToken: payingWithSavedCard && deviceCard ? deviceCard.token : undefined,
         // Only ever true from their own tick: keep this NEW card for next time.
         saveCard: offerSaveCard && saveCard ? true : undefined,
+        // Only from the app, and only what the API itself signed.
+        ...(customerHandoff ? { customerHandoff } : {}),
       });
       /**
        * Refresh the available times, then say what happened.
@@ -1866,6 +1877,7 @@ export function BookingClient({
       // after the card clears, and without this a card-on-file series showed a
       // bare "You're booked" with no mention of the other eleven visits.
       setSeriesResult(res.series ?? null);
+      setNotInApp(res.inApp?.shown === false);
       // Pay-ahead: the booking is created; collect payment before confirming.
       if (res.paymentClientSecret) {
         // If they leave this screen, this device can pick the booking up again
@@ -2538,6 +2550,17 @@ export function BookingClient({
               </>
             )}
           </p>
+          {/* Booked from the ChairBack app with a phone or email the app
+              account has not confirmed: the booking is real, but the app
+              cannot list it (it shows only what the account proves is theirs).
+              Say so here, with the fix, rather than let "Nothing is booked"
+              in the app be how they find out. */}
+          {notInApp && (
+            <p className="mt-2 text-sm text-muted" data-testid="not-in-app">
+              To see this in the ChairBack app, add the phone number or email you booked with in
+              the app under Profile.
+            </p>
+          )}
           {/* The owner's note ("Please arrive 10 minutes early"). Not on a
               request: nothing is booked yet, and its approval email carries it. */}
           {!wasRequest && <ClientNoteBlock shopName={data.shop.name} note={data.shop.clientNote} />}

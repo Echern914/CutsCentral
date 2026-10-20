@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { APP_NAME } from "@chairback/config/constants";
+import { bookingHandoffFrom } from "@chairback/config/bookingHandoff";
 import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import { apiPublicGet } from "@/lib/api";
 import { expectedDomain, servesDomain } from "@/lib/customDomainGuard";
@@ -318,7 +319,7 @@ export default async function BookPage({
   searchParams,
 }: {
   params: { slug: string };
-  searchParams?: { service?: string; staff?: string; cb_domain?: string };
+  searchParams?: { service?: string; staff?: string; cb_domain?: string; cb_me?: string | string[] };
 }) {
   const data = await getDataFor(params.slug, searchParams);
   if (!data) {
@@ -359,7 +360,14 @@ export default async function BookPage({
       <div className="mx-auto w-full max-w-2xl px-4 pt-4">
         <GetTheApp surface="booking" openPath={openPath} />
       </div>
-      <BookingClient data={data} prefill={prefill} />
+      {/* `cb_me`: opened from the ChairBack app, so the booking lands on the
+          customer's own record and shows in their app (config
+          bookingHandoff.ts). Absent everywhere else - an ordinary booking. */}
+      <BookingClient
+        data={data}
+        prefill={prefill}
+        customerHandoff={bookingHandoffFrom(searchParams?.cb_me)}
+      />
       <div className="mx-auto w-full max-w-2xl px-4 pb-8">
         {/* 🔴 THE ONLY CHANGE THIS FEATURE MAKES TO THE SINGLE BOOKING PAGE:
             one link. The flow above is untouched - not wrapped, not refactored,

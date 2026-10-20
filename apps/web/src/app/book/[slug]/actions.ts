@@ -286,6 +286,11 @@ export interface BookInput {
   savedCardToken?: string;
   /** A shop's public offer code, checked against this booking. */
   offerCode?: string;
+  /**
+   * Opened from the ChairBack app: who is booking, signed by the API
+   * (config bookingHandoff.ts). Opaque here and only ever passed through.
+   */
+  customerHandoff?: string;
 }
 
 /**
@@ -363,12 +368,18 @@ export async function bookAction(
   savedCard?: { brand: string | null; last4: string | null };
   /** The saved card this device offered can't be used - forget it here. */
   savedCardRefused?: boolean;
+  /**
+   * Booked from the ChairBack app: whether the app will show it. False only
+   * when what was typed belongs to a record the account has not proven.
+   */
+  inApp?: { shown: boolean };
 }> {
   const res = await apiPublicSend<{
     ok: boolean;
     manageToken: string;
     savedCard?: { brand: string | null; last4: string | null };
     savedCardRefused?: boolean;
+    inApp?: { shown: boolean };
     payment: {
       /** "payment" moves money now; "setup" keeps the card and charges nothing. */
       kind?: "payment" | "setup";
@@ -427,6 +438,7 @@ export async function bookAction(
     pending: Boolean(res.data.pending),
     ...(res.data.savedCard ? { savedCard: res.data.savedCard } : {}),
     ...(res.data.savedCardRefused ? { savedCardRefused: true } : {}),
+    ...(res.data.inApp ? { inApp: { shown: res.data.inApp.shown === true } } : {}),
   };
 }
 

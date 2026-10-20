@@ -24,6 +24,7 @@ import { buildLoyaltyView, loadLoyaltyInputs, type LoyaltyView } from "./loyalty
 import { livePromotions, type PublicPromotion } from "./livePromotions.js";
 import { syncCustomerLinks, syncCustomerView, type ActiveLink } from "./customerIdentity.js";
 import { PUBLIC_SHOP_SELECT, toPublicShop } from "./shopByHandle.js";
+import { mintBookingHandoff, withBookingHandoff } from "../auth/bookingHandoff.js";
 
 /**
  * MY CHAIRBACK'S READ MODEL - everything the customer home, history, details
@@ -712,6 +713,11 @@ export async function buildHome(accountId: string, now = new Date()): Promise<Po
   };
 }
 
+/** ChairBack's own /book/<slug> page - the only Book link a handoff may ride on. */
+function isOwnBookingPage(url: string): boolean {
+  return url.startsWith(`${base()}/book/`);
+}
+
 /**
  * The shops this account added by name. Public details only, through the same
  * projection "Find a shop" uses - so never a shop whose public page is off - and
@@ -727,17 +733,25 @@ async function savedShops(accountId: string, linkedShopIds: Set<string>): Promis
     }),
   );
   const out: PortalSavedShop[] = [];
+  const mint = rows.length > 0 ? await bookingHandoffMinter(accountId) : () => null;
   for (const row of rows) {
     if (linkedShopIds.has(row.shop.id)) continue;
     const shop = toPublicShop(row.shop);
     if (!shop) continue;
+    // ChairBack's own booking page: it carries who is booking, so a first
+    // booking here can land on a record the app opens (services/appBooking.ts).
+    // A shop that books somewhere else gets its link untouched.
+    const handoff =
+      row.joinRequestedAt === null && isOwnBookingPage(shop.bookUrl)
+        ? mint(row.shop.id)
+        : null;
     out.push({
       key: row.id,
       name: shop.name,
       handle: shop.handle,
       logoUrl: shop.logoUrl,
       town: shop.town,
-      bookUrl: shop.bookUrl,
+      bookUrl: handoff ? withBookingHandoff(shop.bookUrl, handoff) : shop.bookUrl,
       pending: row.joinRequestedAt !== null,
     });
   }
@@ -1008,7 +1022,31 @@ export async function storefrontUrl(accountId: string, linkKey: string): Promise
       select: { magicToken: true },
     }),
   );
-  return client ? `${base()}/r/${client.magicToken}` : null;
+  if (!client) return null;
+  // The storefront's Book button carries who is booking to the booking page,
+  // so the booking lands on THIS record and shows in the app
+  // (auth/bookingHandoff.ts, services/appBooking.ts).
+  const handoff = await bookingHandoffFor(accountId, link.shopId);
+  const url = `${base()}/r/${client.magicToken}`;
+  return handoff ? withBookingHandoff(url, handoff) : url;
+}
+
+/**
+ * A booking handoff for this account at this shop, or null for the demo
+ * account (read-only: it books nothing) and while customer accounts are off.
+ */
+async function bookingHandoffFor(accountId: string, shopId: string): Promise<string | null> {
+  return (await bookingHandoffMinter(accountId))(shopId);
+}
+
+/** One account read, then a handoff per shop (the saved list mints several). */
+async function bookingHandoffMinter(accountId: string): Promise<(shopId: string) => string | null> {
+  if (!apiEnv().CUSTOMER_ACCOUNTS_ENABLED) return () => null;
+  const account = await runAsOwner((tx) =>
+    tx.customerAccount.findUnique({ where: { id: accountId }, select: { tokenVersion: true, isDemo: true } }),
+  );
+  if (!account || account.isDemo) return () => null;
+  return (shopId) => mintBookingHandoff({ accountId, shopId, tokenVersion: account.tokenVersion });
 }
 
 /**
