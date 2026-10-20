@@ -801,7 +801,9 @@ describe("telling the client", () => {
     }
   });
 
-  it("🔴 any other dashboard booking still sends nothing", async () => {
+  it("🔴 any other dashboard booking also tells them - in the background, with nothing to report", async () => {
+    // Eric, 2026-10-20: every booking the shop makes tells the client
+    // (manualBookingNotifiesClient.test.ts). Only confirmClient waits to say.
     await useMailer();
     try {
       const who = person("Dee", "Lyle");
@@ -811,7 +813,7 @@ describe("telling the client", () => {
       expect(res.status).toBe(201);
       expect(res.body.clientConfirmation).toBeUndefined();
       await settle();
-      expect(sent.filter((m) => m.to === who.email)).toHaveLength(0);
+      expect(sent.filter((m) => m.to === who.email)).toHaveLength(1);
     } finally {
       await noMailer();
     }

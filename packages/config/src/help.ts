@@ -314,7 +314,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "reminders",
     q: "Do clients get reminders?",
-    a: "Automatically. A confirmation email when they book online, then a reminder email about a day before. If they use the ChairBack app they also get a push a day before and 2 hours before. You don't do anything.\n\nA booking you make yourself (at the chair, by phone) sends no confirmation, only the reminders. The exception is Book them on Didn't finish booking: those clients tried to book online, so ChairBack emails them the confirmation, and pushes the app if they use it.\n\nReminders are the single biggest thing you can do about no-shows.",
+    a: "Automatically. A confirmation email when they book online, then a reminder email about a day before. If they use the ChairBack app they also get a push a day before and 2 hours before. You don't do anything.\n\nA booking you make yourself (by phone, at the chair, off the waitlist) sends them the same confirmation email, and a push if they use the app. To skip it, untick Send them a confirmation in New appointment. A time that has already passed never sends one.\n\nReminders are the single biggest thing you can do about no-shows.",
     keywords: ["reminder", "no show", "noshow", "confirmation", "notify", "forget", "24 hour", "text before"],
     category: "booking",
     action: { label: "Open booking settings", featureId: "reminders" },
@@ -1383,7 +1383,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "email-didnt-arrive",
     q: "A client didn't get their confirmation email",
-    a: "Work down this list — it's ordered by how often each one is the answer:\n\n1. It's in spam or Promotions. Ask them to look there first; it's the usual culprit.\n2. The address has a typo, or they booked with an old one. The appointment shows the address it was sent to.\n3. You take bookings as requests and haven't approved this one yet — nothing is sent until you approve.\n4. The appointment was added by you or came in from Acuity or Square without an email address, so there was nobody to write to.\n\nIf none of those fit, email support@getchairback.com with the shop name and the appointment time and we'll trace that specific message.\n\nWorth knowing: their booking is real either way. The email is a notification, not the booking, so nothing is lost while you sort it out.",
+    a: "Work down this list — it's ordered by how often each one is the answer:\n\n1. It's in spam or Promotions. Ask them to look there first; it's the usual culprit.\n2. The address has a typo, or they booked with an old one. The appointment shows the address it was sent to.\n3. You take bookings as requests and haven't approved this one yet — nothing is sent until you approve.\n4. The appointment was added by you or came in from Acuity or Square without an email address, so there was nobody to write to — or you booked it with Send them a confirmation unticked.\n\nIf none of those fit, email support@getchairback.com with the shop name and the appointment time and we'll trace that specific message.\n\nWorth knowing: their booking is real either way. The email is a notification, not the booking, so nothing is lost while you sort it out.",
     keywords: [
       "didnt get email", "no confirmation email", "email never arrived", "email didnt send",
       "missing confirmation", "never got the email", "email not received", "no email",

@@ -508,6 +508,107 @@ async function notifyAppointmentConfirmationImpl(params: {
   }
 }
 
+type LoadedAppt = NonNullable<Awaited<ReturnType<typeof loadAppointment>>>["appt"];
+
+/**
+ * The APP half of "the shop booked you": one push to every device the client
+ * has - their phone on this shop, and My ChairBack when the record is linked
+ * to an account (sendPushToClient reaches both, once per device). Same gate as
+ * the email twin: the shop has access and the client is not archived. Never
+ * throws; a failure is logged and the booking is untouched.
+ *
+ * `moreVisits` > 0 = the first visit of a repeat the shop just set up, so the
+ * one notification says it is not the only one (the email lists every date).
+ */
+async function pushClientBooked(
+  shop: ApptShop,
+  appt: LoadedAppt,
+  now: Date,
+  moreVisits = 0,
+): Promise<void> {
+  if (!appt.client || appt.client.archivedAt !== null) return;
+  if (!hasActiveAccess(shop, { now })) return;
+  const more = moreVisits > 0 ? ` - and ${moreVisits} more visit${moreVisits === 1 ? "" : "s"}` : "";
+  try {
+    await sendPushToClient({
+      shopId: shop.id,
+      clientId: appt.client.id,
+      kind: "appointment",
+      payload: {
+        title: shop.name,
+        body: `You're booked: ${appt.service.name}, ${formatApptTime(appt.startsAt, shop.timezone)}${more}.`,
+        url: `${apiEnv().APP_BASE_URL}/book/manage/${appt.manageToken}`,
+        tag: `booked-${appt.id}`,
+      },
+    });
+  } catch (err) {
+    logger.warn({ err, shopId: shop.id, appointmentId: appt.id }, "booked-by-shop push failed");
+  }
+}
+
+/**
+ * TELL A CLIENT THE SHOP BOOKED THEM - every booking a barber or manager makes
+ * for a client from the dashboard (New appointment, Book again, booking off
+ * the waitlist, a repeat), unless he unticked "Send them a confirmation".
+ *
+ * Eric, 2026-10-20: "when a barber manually books appointments customers get
+ * notified either through email or through the app notifications." Until then
+ * only a booking made from "Didn't finish booking" told the client
+ * (confirmBookedFromList below); one made by phone or at the chair said
+ * nothing, so a client booked by phone had no record of it unless the barber
+ * texted them himself.
+ *
+ * What goes out is exactly what a client who books themselves gets - the
+ * SAME confirmation email (notifyAppointmentConfirmation: its gates, its
+ * once-only stamp, never a text) - plus a push to the app, because here the
+ * client is not the one looking at a "you're booked" screen.
+ *
+ * 🔴 ONLY A FUTURE, CONFIRMED BOOKING. Read from the saved row, never from the
+ * request: a visit entered after the fact (the time has passed) or one that is
+ * no longer BOOKED is never announced as "you're booked".
+ *
+ * Fire-and-forget like the public page's confirmation: the barber's booking
+ * never waits on, or fails because of, a mailer or a push service. Tracked so
+ * a test can wait for it. Never throws.
+ */
+export function notifyClientBookedByShop(params: {
+  shopId: string;
+  appointmentId: string;
+  now?: Date;
+  /** The first visit of a repeat: how many more were booked with it. */
+  moreVisits?: number;
+}): Promise<void> {
+  return trackBackgroundWork(notifyClientBookedByShopImpl(params));
+}
+
+async function notifyClientBookedByShopImpl(params: {
+  shopId: string;
+  appointmentId: string;
+  now?: Date;
+  moreVisits?: number;
+}): Promise<void> {
+  const now = params.now ?? new Date();
+  try {
+    const loaded = await loadAppointment(params.shopId, params.appointmentId);
+    if (!loaded) return;
+    const { shop, appt } = loaded;
+    if (appt.status !== "BOOKED" || appt.startsAt.getTime() <= now.getTime()) {
+      logger.info(
+        { shopId: shop.id, appointmentId: appt.id, reason: appt.status !== "BOOKED" ? "not_booked" : "in_the_past" },
+        "booked-by-shop confirmation skipped",
+      );
+      return;
+    }
+    await pushClientBooked(shop, appt, now, params.moreVisits ?? 0);
+    await notifyAppointmentConfirmation({ shopId: shop.id, appointmentId: appt.id, now });
+  } catch (err) {
+    logger.error(
+      { err, shopId: params.shopId, appointmentId: params.appointmentId },
+      "notifyClientBookedByShop failed",
+    );
+  }
+}
+
 /**
  * TELL A CLIENT THE SHOP BOOKED THEM - from "Didn't finish booking".
  *
@@ -515,8 +616,8 @@ async function notifyAppointmentConfirmationImpl(params: {
  * are booked already, and with texting off the barber had no way to reach them
  * all ("I can't text everyone"). So booking one from that list sends them the
  * same confirmation email a client who books themselves gets, plus a push if
- * they use the app. Every other dashboard booking (at the chair, by phone)
- * stays silent, as it always has.
+ * they use the app - the same two messages as notifyClientBookedByShop above,
+ * except that this one WAITS for the email so the row can say whether it went.
  *
  * Answers what the barber may be told: "email" only when an email REALLY went
  * out. The send is awaited (it is bounded by the mailer's timeout) and the
@@ -536,31 +637,15 @@ export async function confirmBookedFromList(params: {
     const loaded = await loadAppointment(params.shopId, params.appointmentId);
     if (!loaded || loaded.appt.status !== "BOOKED") return "none";
     const { shop, appt } = loaded;
+    // A time that has already passed is not "you're booked".
+    if (appt.startsAt.getTime() <= now.getTime()) return "none";
     const emailTo = appt.email ?? appt.client?.email ?? null;
     willEmail =
       appt.confirmationEmailSentAt === null &&
       appt.client !== null &&
       emailSkipReason(shop, appt.client, emailTo, now) === null &&
       emailDispatchMode() === "live";
-    if (appt.client) {
-      void trackBackgroundWork(
-        sendPushToClient({
-          shopId: shop.id,
-          clientId: appt.client.id,
-          kind: "appointment",
-          payload: {
-            title: shop.name,
-            body: `You're booked: ${appt.service.name}, ${formatApptTime(appt.startsAt, shop.timezone)}.`,
-            url: `${apiEnv().APP_BASE_URL}/book/manage/${appt.manageToken}`,
-            tag: `booked-${appt.id}`,
-          },
-        })
-          .then(() => undefined)
-          .catch((err: unknown) => {
-            logger.warn({ err, shopId: shop.id, appointmentId: appt.id }, "booked-from-list push failed");
-          }),
-      );
-    }
+    void trackBackgroundWork(pushClientBooked(shop, appt, now));
   } catch (err) {
     logger.error(
       { err, shopId: params.shopId, appointmentId: params.appointmentId },

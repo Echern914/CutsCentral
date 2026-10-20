@@ -48,7 +48,11 @@ import {
 import { recomputeCadence } from "../engines/cadence.js";
 import { collapseExternalBlocks } from "../engines/externalBlockCollapse.js";
 import { notifyPunchEarned } from "../services/loyaltyNotify.js";
-import { confirmBookedFromList, notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
+import {
+  confirmBookedFromList,
+  notifyAppointmentConfirmation,
+  notifyClientBookedByShop,
+} from "../services/appointmentNotify.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
@@ -3095,13 +3099,20 @@ const createApptSchema = z
     // physical time, so it never combines with a recurrence.
     targetedSlotId: z.string().trim().min(1).max(60).optional(),
     /**
-     * Tell the client they're booked - the same confirmation email a client who
-     * books themselves gets, plus a push if they use the app. Sent ONLY when the
-     * barber books from "Didn't finish booking": those clients tried to book
-     * online and may think they already are. A booking made at the chair or by
-     * phone stays silent, as it always has. Single bookings only.
+     * Tell the client AND WAIT to say whether the email went ("email" |
+     * "none" in `clientConfirmation`). Sent by "Didn't finish booking", whose
+     * row has to say whether the client heard, because those clients tried to
+     * book online and may think they already are. Single bookings only.
      */
     confirmClient: z.literal(true).optional(),
+    /**
+     * Every other booking the shop makes tells the client too - the same
+     * confirmation email a client who books themselves gets, plus a push if
+     * they use the app (notifyClientBookedByShop) - in the background, and
+     * only for a time still to come. `false` is the barber's "Send them a
+     * confirmation" unticked: nothing is sent. Omitted = send.
+     */
+    notifyClient: z.boolean().optional(),
     /**
      * 🔴 ONE SUBMISSION, ONE BOOKING. Minted by the form when it opens and sent
      * again on every retry of that submission, so a request re-sent after a
@@ -3139,6 +3150,10 @@ const createApptSchema = z
   .refine((d) => !(d.confirmClient && d.recurrence), {
     message: "A confirmation is sent for a single booking only.",
     path: ["confirmClient"],
+  })
+  .refine((d) => !(d.confirmClient && d.notifyClient === false), {
+    message: "Asked both to confirm and not to notify the client.",
+    path: ["notifyClient"],
   })
   .refine((d) => !(d.operationId && d.recurrence), {
     message: "An operation id is for a single booking only.",
@@ -3226,8 +3241,9 @@ async function resolveSeriesClient(input: {
  *
  * Deliberately NOT cancelAppointment: that is a real cancellation, with a
  * customer email and a slot-opened blast. Nobody was ever told about this
- * booking - the dashboard create sends no confirmation - so there is nobody to
- * tell it is gone. Same shape as the public page's compensateUnmirroredBooking.
+ * booking - the dashboard create tells the client only once the block has
+ * landed (tellClient), and this one never did - so there is nobody to tell it
+ * is gone. Same shape as the public page's compensateUnmirroredBooking.
  *
  * Returns whether the booking is gone. False means it SURVIVES, unmirrored,
  * and the caller must say so rather than "not booked".
@@ -3294,20 +3310,29 @@ async function undoUnmirroredForcedBooking(input: {
 }
 
 /**
- * Booked from "Didn't finish booking": tell the client (confirmBookedFromList).
- * Only once the time is truly theirs - an Acuity block that landed, or none
- * needed. An ambiguous mirror may still be refused, and the public page keeps
- * the same silence in that case. Answers what the barber may be told.
+ * Tell the client the shop booked them - ONE of two ways, never both:
+ *  - `confirmClient` ("Didn't finish booking"): confirmBookedFromList, awaited,
+ *    and its answer ("email" | "none") is what the barber is told;
+ *  - otherwise, unless the barber unticked it (`notifyClient: false`):
+ *    notifyClientBookedByShop in the background. Nothing to report.
+ * Either way, only once the time is truly theirs - an Acuity block that
+ * landed, or none needed. An ambiguous mirror may still be refused, and the
+ * public page keeps the same silence in that case. A time already past is
+ * never announced (both senders read that off the saved row).
  */
-async function confirmIfAsked(
-  asked: true | undefined,
+async function tellClient(
+  d: { confirmClient?: true; notifyClient?: boolean },
   mirror: DispatchOutcome,
   shopId: string,
   appointmentId: string,
+  now: Date,
 ): Promise<"email" | "none" | undefined> {
-  if (!asked) return undefined;
-  if (mirror !== "active" && mirror !== "skipped" && mirror !== "observed") return "none";
-  return confirmBookedFromList({ shopId, appointmentId });
+  const settled = mirror === "active" || mirror === "skipped" || mirror === "observed";
+  if (d.confirmClient) return settled ? confirmBookedFromList({ shopId, appointmentId, now }) : "none";
+  if (d.notifyClient !== false && settled) {
+    void notifyClientBookedByShop({ shopId, appointmentId, now });
+  }
+  return undefined;
 }
 
 /** What a submission asked for - compared with what its id already booked. */
@@ -3780,6 +3805,19 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         // Every visit in the repeat carries the note typed for it.
         notes: d.note || null,
       });
+      // ONE confirmation for the whole repeat, as the public page sends: for
+      // its first visit still to come, and the email lists every booked date
+      // ("3 of 6 booked"). A repeat is not a "Didn't finish booking" action,
+      // so confirmClient never reaches here (refused above).
+      const upcoming = series.booked.filter((b) => b.startsAt.getTime() > now.getTime());
+      if (d.notifyClient !== false && upcoming.length > 0) {
+        void notifyClientBookedByShop({
+          shopId,
+          appointmentId: upcoming[0]!.appointmentId,
+          now,
+          moreVisits: upcoming.length - 1,
+        });
+      }
       res.status(201).json({
         ok: true,
         id: series.booked[0]?.appointmentId ?? null,
@@ -4118,14 +4156,14 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
         "dashboard booking made OVER a conflict (Book anyway)",
       );
       await attachClientSavedCard({ shopId, appointmentId: result.id, clientId: result.clientId });
-      const clientConfirmation = await confirmIfAsked(d.confirmClient, mirror, shopId, result.id);
+      const clientConfirmation = await tellClient(d, mirror, shopId, result.id, now);
       res.status(201).json({ ok: true, id: result.id, ...savedTimes, forced: true, mirror, clientConfirmation, offer: offerSummary(offerUse) });
       return;
     }
     // The client saved a card here: this booking carries it too, so a no-show
     // on a booking made by phone is covered like one they made themselves.
     await attachClientSavedCard({ shopId, appointmentId: result.id, clientId: result.clientId });
-    const clientConfirmation = await confirmIfAsked(d.confirmClient, mirror, shopId, result.id);
+    const clientConfirmation = await tellClient(d, mirror, shopId, result.id, now);
     res.status(201).json({ ok: true, id: result.id, ...savedTimes, mirror, clientConfirmation, offer: offerSummary(offerUse) });
   } catch (err) {
     // 🔴 THE RACE THE READ ABOVE CANNOT WIN. Two copies of one submission both
