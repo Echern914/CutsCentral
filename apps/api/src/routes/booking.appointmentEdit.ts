@@ -26,6 +26,7 @@ import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js"
 import { toE164 } from "../acuity/clientKey.js";
 import { editClient } from "../services/client.js";
 import { decimalToCents, recordPriceChange } from "../services/appointmentPriceLedger.js";
+import { resolveEditedAddOns } from "../engines/addOns.js";
 
 /**
  * EDIT AN APPOINTMENT. One endpoint, every editable field.
@@ -62,6 +63,20 @@ import { decimalToCents, recordPriceChange } from "../services/appointmentPriceL
  *     never `acuityClientKey`". A barber typing a number must never be able to
  *     manufacture permission to text it.
  *
+ *  6. ADD-ONS MOVE THE LENGTH AND THE PRICE, AND NOTHING ELSE MOVES MONEY.
+ *     `addOnIds` is the booking's whole new set (absent = unchanged, [] =
+ *     none); see `resolveEditedAddOns` for what is kept, resolved and refused.
+ *     LENGTH: an explicit `durationMin` is the booking's TOTAL length - what
+ *     the sheet's Duration box shows, add-ons included - and wins. Without
+ *     one, a service change takes the new service's length plus the add-ons,
+ *     and anything else moves the current end by the add-on minutes gained
+ *     or lost. A longer end is a time change like any other: the same
+ *     availability gate, lock, overlap check, "Book anyway" and Acuity swap.
+ *     PRICE: an explicit `price` is the barber's typed total and wins.
+ *     Without one, the current price moves by the add-on prices gained or
+ *     lost. Either way it is the same price change as a typed one - refused
+ *     on a paid booking that cannot take it (rule 4) and ledgered.
+ *
  * Imported bookings are refused outright: a Visit-linked row is owned by
  * Acuity, and editing it here would desynchronize the two systems with no
  * outbound appointment API to push the change back.
@@ -97,6 +112,11 @@ const editApptSchema = z
      * stamped as forced. A customer's live hold is never covered.
      */
     overlapConfirmation: z.string().trim().min(1).max(200).optional(),
+    /**
+     * The booking's add-ons after this edit, as ids: the whole set, not a
+     * diff. Absent = unchanged; [] = remove them all. See rule 6.
+     */
+    addOnIds: z.array(z.string().min(1)).max(20).optional(),
   })
   .strict();
 
@@ -107,9 +127,10 @@ export function registerAppointmentEdit(
   /**
    * Everything the edit sheet prefills from, in ONE round trip: the shop's
    * timezone (a wall-clock edit is meaningless without it), the active service
-   * and staff lists, and the client book for the explicit change-client
-   * search. Capped, and carrying only what the picker renders - no emails, no
-   * notes, no loyalty state.
+   * and staff lists, the active add-ons (with the services each goes with, so
+   * the sheet lists exactly what `resolveEditedAddOns` will honour), and the
+   * client book for the explicit change-client search. Capped, and carrying
+   * only what the picker renders - no emails, no notes, no loyalty state.
    */
   router.get("/appointments/edit-context", async (req, res) => {
     const shopId = req.shop!.id;
@@ -117,7 +138,7 @@ export function registerAppointmentEdit(
       where: { id: shopId },
       select: { timezone: true },
     });
-    const [services, staff, clients] = await Promise.all([
+    const [services, staff, clients, addOns] = await Promise.all([
       forShop(shopId).service.findMany({
         where: { shopId, active: true },
         orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -134,11 +155,17 @@ export function registerAppointmentEdit(
         take: 500,
         select: { id: true, firstName: true, lastName: true, phone: true },
       }),
+      forShop(shopId).serviceAddOn.findMany({
+        where: { shopId, active: true },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        select: { id: true, name: true, durationMin: true, price: true, serviceIds: true },
+      }),
     ]);
     res.json({
       timezone: shop?.timezone ?? "America/New_York",
       services,
       staff,
+      addOns: addOns.map((a) => ({ ...a, price: a.price === null ? null : Number(a.price) })),
       clients: clients.map((c) => ({
         id: c.id,
         name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || "Client",
@@ -183,6 +210,9 @@ export function registerAppointmentEdit(
         // below), whoever is actually sitting in this chair.
         groupId: true,
         priceAtBooking: true,
+        // The frozen add-on snapshot (engines/addOns.ts) - what an add-on
+        // edit starts from.
+        addOns: true,
         // Whether ChairBack ever emailed this client the CURRENT time - the
         // test for telling them the new one (after commit, below).
         confirmationEmailSentAt: true,
@@ -273,15 +303,37 @@ export function registerAppointmentEdit(
       res.status(400).json({ error: "invalid_input" });
       return;
     }
-    // An explicit duration wins. Otherwise a service change adopts the new
-    // service's length, and everything else preserves the booking's CURRENT
-    // length - a barber who stretched this cut to 45 minutes must not have it
-    // silently snap back when they only fix a phone number.
+    // The add-ons after this edit (rule 6). Refused by name, never dropped: a
+    // barber who saw an add-on on his screen must not save a booking without it.
+    const addOnEdit = await resolveEditedAddOns(shopId, {
+      current: appt.addOns,
+      serviceId,
+      serviceChanged: serviceId !== appt.serviceId,
+      addOnIds: d.addOnIds,
+    });
+    if (!addOnEdit.ok) {
+      res.status(400).json({ error: "invalid_add_on", message: addOnEdit.message });
+      return;
+    }
+    const { before: addOnsBefore, after: addOnsAfter } = addOnEdit;
+
+    // An explicit duration wins (it is the TOTAL, add-ons included). Otherwise
+    // a service change adopts the new service's length plus its add-ons, and
+    // everything else preserves the booking's CURRENT length - a barber who
+    // stretched this cut to 45 minutes must not have it silently snap back
+    // when they only fix a phone number - moved only by add-on minutes gained
+    // or lost.
     const currentMin = Math.round(
       (appt.endsAt.getTime() - appt.startsAt.getTime()) / 60_000,
     );
+    const addOnMinDelta = addOnsAfter.minutes - addOnsBefore.minutes;
     const durationMin =
-      d.durationMin ?? (d.serviceId ? service.durationMin : currentMin);
+      d.durationMin ??
+      (d.serviceId
+        ? service.durationMin + addOnsAfter.minutes
+        : addOnMinDelta === 0
+          ? currentMin
+          : Math.max(5, currentMin + addOnMinDelta));
     const endsAt = new Date(startsAt.getTime() + durationMin * 60_000);
 
     const timeMoved =
@@ -302,6 +354,15 @@ export function registerAppointmentEdit(
       startsAt.getTime() < appt.startsAt.getTime() ||
       endsAt.getTime() > appt.endsAt.getTime();
 
+    // The price this edit sets: undefined = untouched. A typed price wins;
+    // otherwise an add-on change moves the current price by what it adds or
+    // takes away (a priceless booking gains only a priced add-on's figure).
+    const addOnCentsDelta = addOnsAfter.cents - addOnsBefore.cents;
+    const priceFromAddOns = d.price === undefined && addOnEdit.changed && addOnCentsDelta !== 0;
+    const nextPrice: number | null | undefined = priceFromAddOns
+      ? Math.max(0, (decimalToCents(appt.priceAtBooking) ?? 0) + addOnCentsDelta) / 100
+      : d.price;
+
     // Money never moves as a side effect of an edit. Read separately: the
     // forShop() tenant wrapper erases nested-relation types.
     // The BOOKING payment (at most one per appointment): this guard is about a
@@ -314,20 +375,24 @@ export function registerAppointmentEdit(
     // A deposit is part payment: the new price only has to still cover it, the
     // rest is paid at the shop (paidBookingTakesPrice). A full prepayment must
     // still match.
+    // An add-on that changes the total is a price change like a typed one: a
+    // free add-on (or one on a deposit the new total still covers) is fine.
     if (
       payment?.status === "succeeded" &&
-      d.price !== undefined &&
-      d.price !== null &&
+      nextPrice !== undefined &&
+      nextPrice !== null &&
       !paidBookingTakesPrice({
         paidCents: payment.amount,
         bookedPriceCents: decimalToCents(appt.priceAtBooking),
-        newPriceCents: Math.round(d.price * 100),
+        newPriceCents: Math.round(nextPrice * 100),
       })
     ) {
       res.status(409).json({
         error: "price_change_on_paid",
         message:
-          "This booking is already paid. Refund or take the difference in person, then change the price.",
+          addOnEdit.changed && addOnCentsDelta !== 0
+            ? "This booking is already paid, so an add-on with a price can't change its total here. Take the difference in person."
+            : "This booking is already paid. Refund or take the difference in person, then change the price.",
       });
       return;
     }
@@ -430,11 +495,14 @@ export function registerAppointmentEdit(
             ...(d.lastName !== undefined ? { lastName: d.lastName } : {}),
             ...(normalizedPhone !== undefined ? { phone: normalizedPhone } : {}),
             ...(normalizedEmail !== undefined ? { email: normalizedEmail } : {}),
-            ...(d.price !== undefined
+            ...(nextPrice !== undefined
               ? {
                   priceAtBooking:
-                    d.price === null ? null : new Prisma.Decimal(d.price.toFixed(2)),
+                    nextPrice === null ? null : new Prisma.Decimal(nextPrice.toFixed(2)),
                 }
+              : {}),
+            ...(addOnEdit.changed
+              ? { addOns: addOnEdit.snapshot as unknown as Prisma.InputJsonValue }
               : {}),
             ...(d.notes !== undefined ? { notes: d.notes } : {}),
             // Send-state resets only when the TIME actually moved: fixing a
@@ -473,9 +541,9 @@ export function registerAppointmentEdit(
         // the customer booked at - and that caps both the no-show fee and a
         // service charge to their saved card. An unrecorded raise here would
         // let either be charged at a price the customer never agreed to.
-        if (d.price !== undefined && d.price !== null) {
+        if (nextPrice !== undefined && nextPrice !== null) {
           const fromPriceCents = decimalToCents(appt.priceAtBooking);
-          const toPriceCents = Math.round(d.price * 100);
+          const toPriceCents = Math.round(nextPrice * 100);
           if (fromPriceCents !== toPriceCents) {
             await recordPriceChange(tx, {
               shopId,

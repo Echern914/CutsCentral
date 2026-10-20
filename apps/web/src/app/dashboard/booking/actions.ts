@@ -2140,7 +2140,8 @@ export interface AppointmentDetail {
   timezone: string;
   price: number | null;
   notes: string | null;
-  addOns: { id: string; name: string }[];
+  /** Frozen when chosen: minutes and price as this booking carries them. */
+  addOns: { id: string; name: string; durationMin?: number; price?: number | null }[];
   /**
    * What the customer answered to the shop's OWN booking questions - the
    * address a mobile mechanic is driving to, the vehicle he is quoting parts
@@ -2257,6 +2258,12 @@ export interface EditContext {
   timezone: string;
   services: { id: string; name: string; durationMin: number }[];
   staff: { id: string; name: string }[];
+  /**
+   * The shop's ACTIVE add-ons and the services each goes with ([] = every
+   * service) - the same rule the API honours (`addOnOffersService`).
+   * Optional: an older API answers without it, and the sheet then shows none.
+   */
+  addOns?: { id: string; name: string; durationMin: number; price: number | null; serviceIds: string[] }[];
   clients: { id: string; name: string; phone: string | null }[];
 }
 

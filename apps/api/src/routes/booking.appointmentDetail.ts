@@ -15,6 +15,7 @@ import { UNDO_NO_SHOW_SELECT, noShowTooEarly, undoNoShowRefusal } from "../engin
 import { cardOnFileFeeFor } from "../services/cardOnFileSettle.js";
 import { CANCELLATION_TERMS_SNAPSHOT_SELECT, termsForBooking } from "../services/cancellationTerms.js";
 import { readIntakeSnapshot, type IntakeAnswer } from "../engines/bookingIntake.js";
+import { snapshotOf } from "../engines/addOns.js";
 import { readPolicySnapshot } from "../engines/bookingPolicy.js";
 import { serviceCheckoutEnabled } from "./booking.checkout.js";
 import { KEPT_BY_A_NO_SHOW } from "../engines/appointmentPromotion.js";
@@ -144,7 +145,11 @@ export interface AppointmentDetail {
   price: number | null;
   /** The barber's private note on THIS booking (never the client's profile note). */
   notes: string | null;
-  addOns: { id: string; name: string }[];
+  /**
+   * The add-ons this booking carries, as frozen when chosen. Minutes and price
+   * ride along so the edit sheet can take one off at exactly what it added.
+   */
+  addOns: { id: string; name: string; durationMin: number; price: number | null }[];
   /**
    * What the customer answered to the shop's own booking questions - the
    * service address a mobile mechanic is driving to, the vehicle he is quoting.
@@ -336,17 +341,6 @@ function resolveContact(input: {
  * The add-on snapshot is untyped JSON that may predate the current shape. Read
  * defensively — same rule (and same reason) as the agenda's copy.
  */
-function detailAddOns(raw: Prisma.JsonValue | null): { id: string; name: string }[] {
-  if (!Array.isArray(raw)) return [];
-  const out: { id: string; name: string }[] = [];
-  for (const item of raw) {
-    if (typeof item !== "object" || item === null) continue;
-    const { id, name } = item as { id?: unknown; name?: unknown };
-    if (typeof id === "string" && typeof name === "string") out.push({ id, name });
-  }
-  return out;
-}
-
 /** Strip the question id: the sheet renders labels and values, nothing else. */
 function publicIntake(answers: IntakeAnswer[]): { label: string; value: string; kind: string }[] {
   return answers.map((a) => ({ label: a.label, value: a.value, kind: a.kind }));
@@ -741,7 +735,7 @@ export function registerAppointmentDetail(router: Router): void {
       timezone: shop?.timezone ?? "America/New_York",
       price,
       notes: appt.notes,
-      addOns: detailAddOns(appt.addOns),
+      addOns: snapshotOf(appt.addOns),
       intake: publicIntake(readIntakeSnapshot(appt.intake)),
       policyAgreement: policyAgreement(appt.policyAcceptedAt, appt.policySnapshot),
       contact: resolveContact({
