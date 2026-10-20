@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bookingHandoffFrom, bookingHandoffQuery } from "./bookingHandoff";
+import { bookingHandoffFrom, bookingHandoffQuery } from "./bookingHandoff.js";
 
 const H = "eyJwdXJwb3NlIjoiY3VzdG9tZXJfYm9va2luZ192MSJ9.c2lnbmF0dXJlLXNpZ25hdHVyZS1zaWc";
 
