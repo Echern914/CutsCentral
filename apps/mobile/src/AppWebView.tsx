@@ -4,6 +4,7 @@ import {
   Text,
   Pressable,
   ActivityIndicator,
+  AppState,
   BackHandler,
   Linking,
   Platform,
@@ -14,6 +15,8 @@ import * as WebBrowser from "expo-web-browser";
 import { setStatusBarStyle } from "expo-status-bar";
 import { API_ORIGIN, NEXT_UP_WIDGET_ENABLED, WEB_ORIGIN } from "@/src/config";
 import { parseOpenAuthRequest, resumeUrl } from "@/src/nativeBridge";
+import { FRAME } from "@/src/frameColors";
+import { shouldReloadOnReturn } from "@/src/staleReturn";
 
 // If the real page content hasn't signaled ready within this long, stop spinning
 // and offer a retry. The page posts "cb:ready" when its real UI mounts; we do NOT
@@ -280,6 +283,15 @@ export function AppWebView({
     setKey((k) => k + 1);
   }
 
+  // A killed page process restarts on its own, but not forever: a page that
+  // dies again on every load lands on the Retry screen rather than looping.
+  const restarts = useRef(0);
+  function onProcessGone() {
+    restarts.current += 1;
+    if (restarts.current > 3) setErrored(true);
+    else retry();
+  }
+
   /**
    * "cb:open-auth": run a sign-in the WebView cannot host (Stripe's) in the
    * system authentication browser, then bring the page back with the outcome.
@@ -302,6 +314,26 @@ export function AppWebView({
     webref.current?.injectJavaScript(`window.location.assign(${JSON.stringify(next)}); true;`);
   }
 
+  // Back from a long time in the background: start a fresh page, because a
+  // website deploy in the meantime leaves the old one unable to load its cards
+  // (src/staleReturn.ts). A quick switch away and back keeps the page as is.
+  useEffect(() => {
+    let leftAt: number | null = null;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "background") {
+        leftAt = Date.now();
+      } else if (state === "active") {
+        if (shouldReloadOnReturn(leftAt, Date.now())) {
+          restarts.current = 0;
+          retry();
+        }
+        leftAt = null;
+      }
+    });
+    return () => sub.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Android hardware/gesture back: consume it while the WebView has history to
   // pop; otherwise let the system handle it (screen back / app exit). iOS has
   // no system back — it gets allowsBackForwardNavigationGestures below plus
@@ -323,7 +355,13 @@ export function AppWebView({
       <View style={styles.center}>
         <Text style={styles.title}>Couldn&apos;t load</Text>
         <Text style={styles.sub}>Check your connection and try again.</Text>
-        <Pressable style={styles.button} onPress={retry}>
+        <Pressable
+          style={styles.button}
+          onPress={() => {
+            restarts.current = 0;
+            retry();
+          }}
+        >
           <Text style={styles.buttonText}>Retry</Text>
         </Pressable>
       </View>
@@ -399,6 +437,14 @@ export function AppWebView({
         onHttpError={(e) => {
           if (e.nativeEvent.statusCode >= 400) setErrored(true);
         }}
+        // The page's process was killed underneath us - iOS reclaims a
+        // backgrounded WebView's memory, Android's renderer can crash. The view
+        // is then a blank page that never loads again and fires nothing else,
+        // so the app sat on a white screen until it was force-quit. Start a
+        // fresh WebView on the same source instead (the barber's /app-auth
+        // handshake runs again, so the session carries over).
+        onContentProcessDidTerminate={onProcessGone}
+        onRenderProcessGone={onProcessGone}
         // One navigation policy, three layers in order:
         //  1. mailto:/tel:/etc go to iOS (Mail, Phone), never into the WebView;
         //  2. the caller's policy (e.g. barber.tsx bounces web /login to the
@@ -421,7 +467,7 @@ export function AppWebView({
       />
       {loading && (
         <View style={[styles.center, styles.overlay]}>
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={FRAME.spinner} />
         </View>
       )}
     </View>
@@ -429,23 +475,23 @@ export function AppWebView({
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: "#FAF8F3" },
+  flex: { flex: 1, backgroundColor: FRAME.bg },
   overlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   center: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FAF8F3",
+    backgroundColor: FRAME.bg,
     padding: 24,
   },
-  title: { color: "#fff", fontSize: 18, fontWeight: "600" },
-  sub: { color: "#78716C", fontSize: 14, marginTop: 6, textAlign: "center" },
+  title: { color: FRAME.title, fontSize: 18, fontWeight: "600" },
+  sub: { color: FRAME.sub, fontSize: 14, marginTop: 6, textAlign: "center" },
   button: {
-    backgroundColor: "#fff",
+    backgroundColor: FRAME.buttonBg,
     borderRadius: 12,
     paddingVertical: 12,
     paddingHorizontal: 28,
     marginTop: 18,
   },
-  buttonText: { color: "#1C1917", fontSize: 15, fontWeight: "600" },
+  buttonText: { color: FRAME.buttonText, fontSize: 15, fontWeight: "600" },
 });

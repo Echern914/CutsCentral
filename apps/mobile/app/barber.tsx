@@ -25,6 +25,7 @@ import { ModeSwitchBar } from "@/src/ModeSwitchBar";
 import { announceScript, TapToPayHost } from "@/src/tapToPay/TapToPayHost";
 import { safeDashboardPath } from "@/src/pushTap";
 import { isSignedOutMessage, isSignedOutUrl, once, URL_WATCH_SCRIPT } from "@/src/dashboardSignOut";
+import { FRAME } from "@/src/frameColors";
 
 /**
  * Barber mode: a WebView of the existing /dashboard. The barber reaches here via
@@ -212,7 +213,7 @@ export default function BarberScreen() {
   if (!source) {
     return (
       <View style={[styles.flex, styles.center]}>
-        <ActivityIndicator color="#fff" />
+        <ActivityIndicator color={FRAME.spinner} />
       </View>
     );
   }
@@ -281,7 +282,7 @@ export default function BarberScreen() {
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: "#FAF8F3" },
+  flex: { flex: 1, backgroundColor: FRAME.bg },
   dark: { backgroundColor: "#0A0A0B" },
   center: { alignItems: "center", justifyContent: "center" },
 });
