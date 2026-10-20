@@ -788,7 +788,11 @@ describe("links out to the shop's own pages", () => {
     const store = await get(`/api/me/shops/${alpha.key}/storefront`, me.token);
     expect(store.status).toBe(200);
     expect(store.headers["cache-control"]).toBe("no-store");
-    expect(store.body.url).toBe(`${apiEnv().APP_BASE_URL.replace(/\/$/, "")}/r/${a1.magicToken}`);
+    // Their own /r/ link, carrying who is booking to its Book button (the
+    // booking handoff: auth/bookingHandoff.ts) and nothing else.
+    const url = new URL(store.body.url);
+    expect(`${url.origin}${url.pathname}`).toBe(`${apiEnv().APP_BASE_URL.replace(/\/$/, "")}/r/${a1.magicToken}`);
+    expect([...url.searchParams.keys()]).toEqual(["cb_me"]);
 
     const manage = await get(`/api/me/appointments/a_${booked.id}/manage`, me.token);
     expect(manage.body.url).toMatch(new RegExp(`/book/manage/${booked.manageToken}$`));

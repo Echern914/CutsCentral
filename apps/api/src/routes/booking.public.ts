@@ -2,6 +2,8 @@ import { Router, type Response } from "express";
 import { z } from "zod";
 import { countBookingRefusals } from "../services/bookingRefusal.js";
 import { bookingBlockedFor, CONTACT_SHOP_ERROR } from "../services/clientBookingBlock.js";
+import { appBookerFor, bookingTarget, shownInApp } from "../services/appBooking.js";
+import { releaseArchivedKey } from "../services/joinShop.js";
 import {
   dayAvailabilityCache,
   noteAvailabilityChanged,
@@ -1764,6 +1766,13 @@ const createSchema = z
      * still be the card's client. No card step, no hold: the booking stands.
      */
     savedCardToken: z.string().min(20).max(200).optional(),
+    /**
+     * The page was opened from My ChairBack: the signed handoff the API put on
+     * that page's URL (auth/bookingHandoff.ts). It only ever says which of the
+     * account's OWN records the booking lands on - never who may see one - and
+     * a missing, expired or forged one books exactly as a stranger's would.
+     */
+    customerHandoff: z.string().min(16).max(1000).optional(),
     // Chosen service add-ons (ids). Invalid/foreign ids are dropped server-side.
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
     /**
@@ -2265,13 +2274,33 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     }
   }
 
-  const consented = d.smsConsent === true && Boolean(phone);
-  const acuityClientKey = deriveAcuityClientKey({
+  const typedKey = deriveAcuityClientKey({
     phone: d.phone,
     email: d.email,
     firstName: d.firstName,
     lastName: d.lastName,
   });
+  // 🔑 WHO IS BOOKING, when the page was opened from the app and what was
+  // typed is this customer's: the account's own record here, instead of
+  // whatever else the typing points at. Absent, invalid, or typed for someone
+  // else = the anonymous booking this page has always made
+  // (services/appBooking.ts).
+  const booker = await appBookerFor(
+    d.customerHandoff,
+    shop.id,
+    { key: typedKey, phone, email: d.email || null },
+    now,
+  );
+  const target = await bookingTarget(
+    shop.id,
+    { key: typedKey, phone, email: d.email || null, firstName: d.firstName, lastName: d.lastName || null },
+    booker,
+  );
+  const acuityClientKey = target.acuityClientKey;
+  // SMS consent was given for the number TYPED. On the account's own record
+  // it is stamped only when that record carries the same number.
+  const consented =
+    d.smsConsent === true && Boolean(phone) && (target.linkedClientId === null || target.linkedPhone === phone);
 
   // ENFORCE with THIS chair unmapped (or its mapping stale after a reconnect)
   // means Acuity still shows the time free. Close this barber only - the other
@@ -2291,7 +2320,14 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
   // series. Asked here, after every check that does not depend on WHO is
   // booking and before anything is written, so a valid request differs from a
   // booking only by this answer (services/clientBookingBlock.ts).
-  if (await bookingBlockedFor(prisma, shop.id, { acuityClientKey, phone, email: d.email })) {
+  if (
+    await bookingBlockedFor(prisma, shop.id, {
+      acuityClientKey,
+      clientId: target.linkedClientId,
+      phone: target.createPhone,
+      email: target.createEmail,
+    })
+  ) {
     res.status(403).json({ error: CONTACT_SHOP_ERROR, code: "CONTACT_SHOP" });
     return;
   }
@@ -2320,6 +2356,11 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       d.emailMarketing === true &&
       Boolean(d.email) &&
       (await emailYesMayLand(prisma, shop.id, acuityClientKey, d.email!));
+    if (booker && target.releaseArchived) {
+      await prisma.$transaction((tx) =>
+        releaseArchivedKey(tx, { shopId: shop.id, acuityClientKey, accountId: booker.accountId, via: "app_booking" }),
+      );
+    }
     const client = await prisma.client.upsert({
       where: { shopId_acuityClientKey: { shopId: shop.id, acuityClientKey } },
       create: {
@@ -2328,8 +2369,8 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         magicToken: randomToken(),
         firstName: d.firstName,
         lastName: d.lastName || null,
-        phone,
-        email: d.email || null,
+        phone: target.createPhone,
+        email: target.createEmail,
         source: "manual",
         smsConsentAt: consented ? now : null,
         smsConsentSource: consented ? "booking" : null,
@@ -2534,10 +2575,13 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
       });
     }
     await noteAvailabilityChanged(shop.id);
+    const seriesInApp = booker ? { shown: await shownInApp(booker.accountId, client.id, now) } : null;
 
     res.status(201).json({
       ok: true,
       manageToken: firstRow?.manageToken ?? null,
+      // Booked from the app: whether My ChairBack shows it (services/appBooking.ts).
+      ...(seriesInApp ? { inApp: seriesInApp } : {}),
       startsAt: startsAt.toISOString(),
       endsAt: firstRow?.endsAt?.toISOString() ?? null,
       pending: false,
@@ -2628,6 +2672,7 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
   let appointmentId: string;
   let manageToken: string;
   let mirrorOutboxIds: string[] = [];
+  let bookedClientId: string;
   try {
     // One transaction as the connection owner (NO runWithShop - the public route
     // has no shop context). Availability was validated above; here the advisory
@@ -2659,6 +2704,17 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
         d.emailMarketing === true &&
         Boolean(d.email) &&
         (await emailYesMayLand(tx, shop.id, acuityClientKey, d.email!));
+      // Booked from the app on the account's own verified contact, and an
+      // archived record holds that key: it gives the key up rather than
+      // swallow the booking where the app can never show it (joinShop.ts).
+      if (booker && target.releaseArchived) {
+        await releaseArchivedKey(tx, {
+          shopId: shop.id,
+          acuityClientKey,
+          accountId: booker.accountId,
+          via: "app_booking",
+        });
+      }
       const client = await tx.client.upsert({
         where: {
           shopId_acuityClientKey: { shopId: shop.id, acuityClientKey },
@@ -2669,8 +2725,10 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           magicToken: randomToken(),
           firstName: d.firstName,
           lastName: d.lastName || null,
-          phone,
-          email: d.email || null,
+          // What was typed - or, booked from the app with a field left blank,
+          // the account's own verified contact (only ever on a NEW record).
+          phone: target.createPhone,
+          email: target.createEmail,
           source: "manual",
           smsConsentAt: consented ? now : null,
           smsConsentSource: consented ? "booking" : null,
@@ -2801,11 +2859,12 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
           visitId: null,
         },
       });
-      return { ...appt, outboxIds };
+      return { ...appt, outboxIds, clientId: client.id };
     });
     appointmentId = result.id;
     manageToken = result.manageToken;
     mirrorOutboxIds = result.outboxIds;
+    bookedClientId = result.clientId;
   } catch (err) {
     // The barber's cap for that weekday filled while this customer was on the
     // page. Its own code, not slot_taken: the time itself may well still be
@@ -3115,9 +3174,14 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     }
   }
 
+  // Booked from the app: does My ChairBack show it now? Settled here so a
+  // record this booking just created is linked before the customer taps Done.
+  const inApp = booker ? { shown: await shownInApp(booker.accountId, bookedClientId, now) } : null;
+
   res.status(201).json({
     ok: true,
     manageToken,
+    ...(inApp ? { inApp } : {}),
     startsAt: startsAt.toISOString(),
     endsAt: endsAt.toISOString(),
     // true = it's a REQUEST awaiting approval (no confirmation yet); the client

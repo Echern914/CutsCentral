@@ -2,6 +2,7 @@ import { MOBILE_APP } from "@chairback/config/constants";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { APP_NAME, serviceNounForShop } from "@chairback/config/constants";
+import { bookingHandoffFrom, bookingHandoffQuery } from "@chairback/config/bookingHandoff";
 import { apiPublicGet } from "@/lib/api";
 import { ShopPageClient } from "@/app/s/[slug]/ShopPageClient";
 import type { ShopPageData } from "@/app/s/[slug]/page";
@@ -73,8 +74,10 @@ export async function generateMetadata({
 
 export default async function ClientLandingPage({
   params,
+  searchParams,
 }: {
   params: { magicToken: string };
+  searchParams?: { cb_me?: string | string[] };
 }) {
   const data = await getRewards(params.magicToken);
   if (!data) notFound();
@@ -99,6 +102,11 @@ export default async function ClientLandingPage({
   return (
     <ShopPageClient
       data={shopPage}
+      // Opened from the ChairBack app: the API signed who is booking onto this
+      // URL, and the Book button carries it on so the booking lands on THIS
+      // customer's record and shows in their app (config bookingHandoff.ts).
+      // Opaque here - the booking API alone decides what it is worth.
+      bookQuery={bookingHandoffQuery(bookingHandoffFrom(searchParams?.cb_me)) || undefined}
       // Turns the shop page into the client's OWN view of the shop: it gains a
       // rewards entry pointing back into their token. Anonymous visitors on
       // /s/<slug> pass nothing here and see no such link.
