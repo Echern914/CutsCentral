@@ -14,6 +14,8 @@ import { zonedDateKey, zonedWallTimeToUtc } from "@chairback/config/time";
 import { parseWeeklyHours, type HoursWindow as PastedWindow } from "@chairback/config/clientImportParse";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
+import { LoadFailed } from "@/components/ui/LoadFailed";
+import { loadAction, type LoadFailure } from "@/lib/loadAction";
 import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { BookingQuestionsCard } from "./BookingQuestionsCard";
@@ -2272,6 +2274,10 @@ function TargetedSlotsManager({
   const activeStaff = staff.filter((s) => s.active);
   const [slots, setSlots] = useState<TargetedSlotRow[] | null>(null);
   const [rules, setRules] = useState<TargetedSlotRuleRow[]>([]);
+  // The last read failed. Without this a failed first read left the card at
+  // `slots === null` forever: the publish form and nothing under it - not the
+  // list, not "No targeted slots yet" (Drick, 2026-10-20, with 86 live).
+  const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
   // A duplicate we just made and want to open for review. The id exists before
   // the refreshed list does, so it waits here until the rule shows up.
   const [pendingEditRuleId, setPendingEditRuleId] = useState<string | null>(null);
@@ -2328,11 +2334,14 @@ function TargetedSlotsManager({
 
   function refresh() {
     start(async () => {
-      const res = await listTargetedSlotsAction();
-      if (res.ok && res.slots) {
-        setSlots(res.slots);
-        setRules(res.rules ?? []);
+      const res = await loadAction(listTargetedSlotsAction);
+      if (res.ok && res.value.ok && res.value.slots) {
+        setSlots(res.value.slots);
+        setRules(res.value.rules ?? []);
         setSelected(new Set());
+        setLoadFailure(null);
+      } else {
+        setLoadFailure(res.ok ? "failed" : res.failure);
       }
     });
   }
@@ -2979,6 +2988,18 @@ function TargetedSlotsManager({
             Clear
           </button>
         </div>
+      )}
+
+      {loadFailure ? (
+        <LoadFailed
+          className="mt-5"
+          what="your targeted slots"
+          failure={loadFailure}
+          onRetry={refresh}
+          note="Your targeted slots are still live on your booking page."
+        />
+      ) : (
+        slots === null && <p className="mt-5 text-sm text-muted">Loading your targeted slots…</p>
       )}
 
       <ul className="mt-5 flex flex-col gap-2">

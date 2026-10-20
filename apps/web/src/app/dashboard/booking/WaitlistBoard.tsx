@@ -4,6 +4,8 @@ import { cap, useVocab } from "@/components/VocabProvider";
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { Card } from "@/components/ui/Card";
 import { cn } from "@/lib/cn";
+import { loadAction, type LoadFailure } from "@/lib/loadAction";
+import { LoadFailed } from "@/components/ui/LoadFailed";
 import { mailtoUri, smsUri } from "@/lib/contactUri";
 import {
   BTN_BASE,
@@ -118,21 +120,37 @@ export function WaitlistBoard({
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  // The list's read failed. A toast alone used to vanish and leave the empty
+  // state saying nobody was waiting; a throw left "Loading…" up for good.
+  const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
 
   const load = useCallback(
     async (opts: { append?: boolean } = {}) => {
       setLoading(true);
-      const res = await getWaitlistAction({
-        status: section,
-        staffId: staffId || undefined,
-        sort,
-        cursor: opts.append ? (cursor ?? undefined) : undefined,
-      });
+      const call = await loadAction(() =>
+        getWaitlistAction({
+          status: section,
+          staffId: staffId || undefined,
+          sort,
+          cursor: opts.append ? (cursor ?? undefined) : undefined,
+        }),
+      );
       setLoading(false);
-      if (!res.ok) {
-        toast("Couldn't load the waitlist", "error");
+      const res = call.ok ? call.value : null;
+      if (!call.ok || !res?.ok) {
+        // A failed "Load more" leaves the rows already shown, which are true.
+        if (opts.append) {
+          toast("Couldn't load the waitlist", "error");
+          return;
+        }
+        // A failed first page must not leave another section's rows, or the
+        // empty state, standing in for an answer.
+        setRows([]);
+        setCursor(null);
+        setLoadFailure(call.ok ? "failed" : call.failure);
         return;
       }
+      setLoadFailure(null);
       setRows((prev) => (opts.append ? [...prev, ...res.waitlist] : res.waitlist));
       setCounts(res.counts);
       setCursor(res.nextCursor);
@@ -254,7 +272,11 @@ export function WaitlistBoard({
       </div>
 
       {/* ---- the list ---- */}
-      {loading && rows.length === 0 ? (
+      {loadFailure && rows.length === 0 && !loading ? (
+        <Card className="px-5 py-6">
+          <LoadFailed what="the waitlist" failure={loadFailure} onRetry={() => void load()} />
+        </Card>
+      ) : loading && rows.length === 0 ? (
         <Card className="px-5 py-10 text-center">
           <p className="text-sm text-muted">Loading…</p>
         </Card>

@@ -18,7 +18,7 @@ vi.mock("./actions", async (importOriginal) => ({
   listTargetedSlotsAction: vi.fn(async () => ({ ok: true, slots: [], rules: [] })),
   getAvailabilityAction: vi.fn(async () => ({ ok: true, data: { rules: [] } })),
   listSpecialDaysAction: vi.fn(async () => ({ ok: true, specialDays: [] })),
-  listUpgradeRulesAction: vi.fn(async () => ({ ok: false })),
+  listUpgradeRulesAction: vi.fn(async () => ({ ok: true, rules: [] })),
 }));
 vi.mock("@/components/VocabProvider", () => ({
   useVocab: () => NEUTRAL_VOCABULARY,

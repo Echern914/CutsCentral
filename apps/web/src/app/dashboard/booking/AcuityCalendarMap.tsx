@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { cap, useVocab } from "@/components/VocabProvider";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { LoadFailed } from "@/components/ui/LoadFailed";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
+import { loadAction } from "@/lib/loadAction";
 import {
   getAcuityMappingAction,
   setStaffAcuityCalendarAction,
@@ -32,13 +34,18 @@ export function AcuityCalendarMap() {
   const [data, setData] = useState<AcuityMappingData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // The website was deployed while this page was open (lib/loadAction.ts).
+  // Before, that call threw and the card sat on "Loading..." for good.
+  const [stale, setStale] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [savingExtrasId, setSavingExtrasId] = useState<string | null>(null);
   const [, start] = useTransition();
   const { toast } = useToast();
 
   const load = useCallback(async () => {
-    const res = await getAcuityMappingAction();
+    const call = await loadAction(getAcuityMappingAction);
+    const res = call.ok ? call.value : { ok: false as const, data: undefined, error: "failed" };
+    setStale(!call.ok && call.failure === "stale");
     if (res.ok && res.data) {
       setData(res.data);
       setError(null);
@@ -130,6 +137,20 @@ export function AcuityCalendarMap() {
     return (
       <Card className="p-5">
         <p className="text-sm text-muted">Loading your Acuity calendars…</p>
+      </Card>
+    );
+  }
+
+  if (stale) {
+    return (
+      <Card className="p-5">
+        <CardHeader title={`Acuity ${vocab.stationNoun} mapping`} />
+        <LoadFailed
+          className="mt-3"
+          what="your Acuity calendars"
+          failure="stale"
+          onRetry={() => void load()}
+        />
       </Card>
     );
   }

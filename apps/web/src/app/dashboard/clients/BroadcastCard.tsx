@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { LOYALTY_TIERS, LOYALTY_TIER_KEYS } from "@chairback/config/constants";
 import { describeTierAudience } from "@chairback/config/tierRules";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { LoadFailed } from "@/components/ui/LoadFailed";
+import { loadAction, type LoadFailure } from "@/lib/loadAction";
 import { useToast } from "@/components/ui/Toast";
 import { useVocab } from "@/components/VocabProvider";
 import { cn } from "@/lib/cn";
@@ -115,6 +117,12 @@ export function BroadcastCard({
   const [serviceKeys, setServiceKeys] = useState<string[]>([]);
   const [sinceDays, setSinceDays] = useState<SinceDays>(365);
   const [serviceOptions, setServiceOptions] = useState<ServiceOption[] | null>(null);
+  // Each read below can fail. Before, a failure showed as an answer: "No
+  // services yet.", "0 of 0 will get this", or no Recent messages at all.
+  const [optionsFailure, setOptionsFailure] = useState<LoadFailure | null>(null);
+  const [optionsTry, setOptionsTry] = useState(0);
+  const [previewFailure, setPreviewFailure] = useState<LoadFailure | null>(null);
+  const [historyFailure, setHistoryFailure] = useState<LoadFailure | null>(null);
   const needsService = byService && serviceKeys.length === 0;
   const [preview, setPreview] = useState<BroadcastPreview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -177,12 +185,16 @@ export function BroadcastCard({
       return;
     }
     setLoading(true);
-    const r = await previewBroadcastAction({
-      channel,
-      tiers,
-      ...(byService ? { services: { keys: serviceKeys, sinceDays } } : {}),
-    });
-    setPreview(r.ok ? (r.preview ?? null) : null);
+    const r = await loadAction(() =>
+      previewBroadcastAction({
+        channel,
+        tiers,
+        ...(byService ? { services: { keys: serviceKeys, sinceDays } } : {}),
+      }),
+    );
+    const ok = r.ok && r.value.ok && r.value.preview ? r.value.preview : null;
+    setPreview(ok);
+    setPreviewFailure(ok ? null : r.ok ? "failed" : r.failure);
     setLoading(false);
   }, [channel, tiers, byService, serviceKeys, sinceDays]);
 
@@ -191,17 +203,23 @@ export function BroadcastCard({
     if (!open || !byService) return;
     let live = true;
     setServiceOptions(null);
-    void broadcastServiceOptionsAction(sinceDays).then((r) => {
-      if (live) setServiceOptions(r.ok ? (r.options ?? []) : []);
+    setOptionsFailure(null);
+    void loadAction(() => broadcastServiceOptionsAction(sinceDays)).then((r) => {
+      if (!live) return;
+      if (r.ok && r.value.ok) setServiceOptions(r.value.options ?? []);
+      else setOptionsFailure(r.ok ? "failed" : r.failure);
     });
     return () => {
       live = false;
     };
-  }, [open, byService, sinceDays]);
+  }, [open, byService, sinceDays, optionsTry]);
 
   const refreshHistory = useCallback(async () => {
-    const r = await listBroadcastsAction();
-    if (r.ok && r.broadcasts) setHistory(r.broadcasts.filter((b) => b.status !== "DRAFT"));
+    const r = await loadAction(listBroadcastsAction);
+    if (r.ok && r.value.ok && r.value.broadcasts) {
+      setHistory(r.value.broadcasts.filter((b) => b.status !== "DRAFT"));
+      setHistoryFailure(null);
+    } else setHistoryFailure(r.ok ? "failed" : r.failure);
   }, []);
 
   useEffect(() => {
@@ -322,6 +340,8 @@ export function BroadcastCard({
         </button>
         <BroadcastHistory
           rows={history}
+          failure={historyFailure}
+          onRetry={() => void refreshHistory()}
           vocab={vocab.clientNounPlural}
           busy={pending}
           onEdit={editFrom}
@@ -441,7 +461,13 @@ export function BroadcastCard({
             <div className="mt-2 rounded-xl border border-subtle px-3 py-2.5">
               <p className="text-xs text-muted">Who had</p>
               <div className="mt-1.5 flex flex-wrap gap-1.5" role="group" aria-label="Services">
-                {serviceOptions === null ? (
+                {optionsFailure ? (
+                  <LoadFailed
+                    what="your services"
+                    failure={optionsFailure}
+                    onRetry={() => setOptionsTry((n) => n + 1)}
+                  />
+                ) : serviceOptions === null ? (
                   <span className="text-xs text-muted">Loading your services…</span>
                 ) : serviceOptions.length === 0 ? (
                   <span className="text-xs text-muted">No services yet.</span>
@@ -533,6 +559,12 @@ export function BroadcastCard({
             <p className="text-sm text-muted">Pick at least one service to see who gets this.</p>
           ) : loading ? (
             <p className="text-sm text-muted">Counting…</p>
+          ) : previewFailure ? (
+            <LoadFailed
+              what={`how many ${vocab.clientNounPlural} get this`}
+              failure={previewFailure}
+              onRetry={() => void refresh()}
+            />
           ) : (
             <>
               {preview?.channels?.[channel]?.unavailable ? (
@@ -615,6 +647,8 @@ export function BroadcastCard({
 
       <BroadcastHistory
         rows={history}
+        failure={historyFailure}
+        onRetry={() => void refreshHistory()}
         vocab={vocab.clientNounPlural}
         busy={pending}
         onEdit={editFrom}
@@ -636,12 +670,17 @@ export function BroadcastCard({
  */
 function BroadcastHistory({
   rows,
+  failure = null,
+  onRetry,
   vocab,
   busy = false,
   onEdit,
   onRemove,
 }: {
   rows: BroadcastRow[];
+  /** The last read failed: said here, never shown as "nothing sent". */
+  failure?: LoadFailure | null;
+  onRetry?: () => void;
   vocab: string;
   busy?: boolean;
   /** Load it back into the composer to change and send again. */
@@ -649,10 +688,18 @@ function BroadcastHistory({
   /** Take it off this list (and out of clients' in-app bell). */
   onRemove?: (b: BroadcastRow) => void;
 }) {
-  if (rows.length === 0) return null;
+  if (rows.length === 0 && !failure) return null;
   return (
     <div className="mt-5 border-t border-subtle pt-4">
       <p className="text-xs text-muted">Recent messages</p>
+      {failure && (
+        <LoadFailed
+          className="mt-2"
+          what="your recent messages"
+          failure={failure}
+          onRetry={() => onRetry?.()}
+        />
+      )}
       <ul className="mt-2 flex flex-col gap-3">
         {rows.slice(0, 5).map((b) => (
           <li key={b.id} className="flex flex-col gap-1.5">

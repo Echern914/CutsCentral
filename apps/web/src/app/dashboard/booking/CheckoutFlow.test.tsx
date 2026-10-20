@@ -48,6 +48,9 @@ vi.mock("./tapToPayBridge", () => ({
   requestTapToPayEducation: (...a: unknown[]) => requestTapToPayEducation(...a),
 }));
 
+const reload = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/reloadPage", () => ({ reloadPage: reload }));
+
 const { CheckoutFlow } = await import("./CheckoutFlow");
 
 const stateFor = (over: Partial<CheckoutState> = {}): CheckoutState => ({
@@ -721,5 +724,27 @@ describe("cash", () => {
     const [, input] = recordCashCheckoutAction.mock.calls[0]!;
     expect(input).toMatchObject({ amountCents: 5500, method: "cash", confirmed: true });
     await waitFor(() => expect(screen.getByText("Paid")).toBeTruthy());
+  });
+});
+
+describe("when the checkout can't be read", () => {
+  it("🔴 a read that throws says so and offers Try again, never an endless Loading…", async () => {
+    getCheckoutAction.mockRejectedValueOnce(new TypeError("Load failed"));
+    renderFlow();
+    expect(await screen.findByText("Couldn't load this checkout")).toBeTruthy();
+    expect(screen.queryByText("Loading…")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Marcus Bell")).toBeTruthy();
+    expect(getCheckoutAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("a sheet left open across a deploy offers Reload", async () => {
+    // Next 14.2 resolves a call to a server action the new build lacks with
+    // undefined (lib/loadAction.ts).
+    getCheckoutAction.mockResolvedValueOnce(undefined);
+    renderFlow();
+    fireEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/ChairBack was updated/)).toBeTruthy();
   });
 });

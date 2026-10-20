@@ -23,6 +23,9 @@ vi.mock("./actions", () => ({
   yearlyReportAction: reportAction,
 }));
 
+const reload = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/reloadPage", () => ({ reloadPage: reload }));
+
 const { YearlyReport } = await import("./YearlyReport");
 
 const OWNER_OPTIONS: YearlyReportOptions = {
@@ -316,5 +319,29 @@ describe("when the options can't be read", () => {
     render(<YearlyReport />);
     fireEvent.click(screen.getByTestId("yearly-report-open"));
     expect((await screen.findByRole("alert")).textContent).toMatch(/load your report options/);
+  });
+});
+
+describe("when the report itself can't be read", () => {
+  it("🔴 a thrown read says so, instead of 'Building your report…' for good", async () => {
+    reportAction.mockRejectedValueOnce(new TypeError("Load failed"));
+    render(<YearlyReport />);
+    fireEvent.click(screen.getByTestId("yearly-report-open"));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Couldn't build that report/);
+    expect(screen.queryByText("Building your report…")).toBeNull();
+  });
+
+  it("a sheet left open across a deploy offers Reload, not a Try again that can't work", async () => {
+    // Next 14.2 resolves a call to a server action the new build lacks with
+    // undefined (lib/loadAction.ts).
+    optionsAction.mockResolvedValueOnce(undefined);
+    reload.mockClear();
+    render(<YearlyReport />);
+    fireEvent.click(screen.getByTestId("yearly-report-open"));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/ChairBack was updated/);
+    expect(within(alert).queryByRole("button", { name: "Try again" })).toBeNull();
+    fireEvent.click(within(alert).getByRole("button", { name: "Reload" }));
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });

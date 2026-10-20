@@ -3,6 +3,9 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { WaitlistBoard } from "./WaitlistBoard";
 import { getWaitlistAction, setWaitlistStatusAction, type WaitlistEntry } from "./actions";
 
+const reload = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/reloadPage", () => ({ reloadPage: reload }));
+
 vi.mock("./actions", () => ({
   getWaitlistAction: vi.fn(),
   setWaitlistStatusAction: vi.fn(async () => ({ ok: true })),
@@ -259,5 +262,31 @@ describe("sections, filters and empty states", () => {
     fireEvent.click(screen.getByText("Removed"));
     expect(await screen.findByText("Nobody removed")).toBeTruthy();
     expect(screen.getByText(/kept, not deleted/i)).toBeTruthy();
+  });
+});
+
+describe("when the list can't be read", () => {
+  it("🔴 a failed read says so and offers Try again - never 'Nobody's waiting'", async () => {
+    mockGet.mockResolvedValueOnce({ ok: false, error: "failed" });
+    render(<WaitlistBoard {...props} />);
+    expect(await screen.findByText(/Couldn.t load the waitlist\./)).toBeTruthy();
+    expect(screen.queryByText("Nobody's waiting")).toBeNull();
+
+    mockGet.mockResolvedValueOnce(page([entry()]));
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Marcus Reed")).toBeTruthy();
+    expect(screen.queryByText(/Couldn.t load the waitlist/)).toBeNull();
+  });
+
+  it("a page left open across a deploy offers Reload, not an endless Loading…", async () => {
+    // Next 14.2 resolves a call to a server action the new build lacks with
+    // undefined (lib/loadAction.ts).
+    mockGet.mockResolvedValueOnce(undefined as never);
+    reload.mockClear();
+    render(<WaitlistBoard {...props} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/ChairBack was updated/)).toBeTruthy();
+    expect(screen.queryByText("Loading…")).toBeNull();
   });
 });

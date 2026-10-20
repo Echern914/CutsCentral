@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { Dialog } from "@/components/ui/Dialog";
+import { LoadFailed } from "@/components/ui/LoadFailed";
+import { loadAction, type LoadFailure } from "@/lib/loadAction";
 import { chip, Field, FormFooter, Group, INPUT } from "./formkit";
 import type { ServiceRow, StaffRow } from "./page";
 import {
@@ -104,6 +106,14 @@ export function TierOpeningForm({
   const [openings, setOpenings] = useState<TierOpeningRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Each read can fail, and each failure used to read as an answer: no "Held
+  // now" (so a second hold looked safe), "No open times that day.", or
+  // "Counting members…" for good. `*Try` re-runs the read.
+  const [openingsFailure, setOpeningsFailure] = useState<LoadFailure | null>(null);
+  const [slotsFailure, setSlotsFailure] = useState<LoadFailure | null>(null);
+  const [slotsTry, setSlotsTry] = useState(0);
+  const [previewFailure, setPreviewFailure] = useState<LoadFailure | null>(null);
+  const [previewTry, setPreviewTry] = useState(0);
   const inFlight = useRef(false);
 
   const timeFmt = useMemo(
@@ -124,8 +134,11 @@ export function TierOpeningForm({
   );
 
   const loadOpenings = () =>
-    listTierOpeningsAction().then((res) => {
-      if (res.ok && res.openings) setOpenings(res.openings.filter((o) => o.state === "held"));
+    loadAction(listTierOpeningsAction).then((r) => {
+      if (r.ok && r.value.ok && r.value.openings) {
+        setOpenings(r.value.openings.filter((o) => o.state === "held"));
+        setOpeningsFailure(null);
+      } else setOpeningsFailure(r.ok ? "failed" : r.failure);
     });
   useEffect(() => {
     void loadOpenings();
@@ -135,6 +148,7 @@ export function TierOpeningForm({
   // page itself would offer. Anything else would be refused anyway.
   useEffect(() => {
     setStartsAt(null);
+    setSlotsFailure(null);
     if (!serviceId || !staffId || !date) {
       setSlots([]);
       return;
@@ -145,32 +159,40 @@ export function TierOpeningForm({
     const from = new Date(anchor - 36 * 3600_000).toISOString();
     const to = new Date(anchor + 36 * 3600_000).toISOString();
     let cancelled = false;
-    getDashSlotsAction(staffId, serviceId, from, to).then((res) => {
+    void loadAction(() => getDashSlotsAction(staffId, serviceId, from, to)).then((r) => {
       if (cancelled) return;
       setLoadingSlots(false);
+      if (!r.ok || !r.value.ok) {
+        setSlots([]);
+        setSlotsFailure(r.ok ? "failed" : r.failure);
+        return;
+      }
       const now = Date.now();
       setSlots(
-        res.ok && res.slots
-          ? res.slots.filter((s) => dayKeyOf(s.startsAt, timezone) === date && new Date(s.startsAt).getTime() > now)
-          : [],
+        (r.value.slots ?? []).filter(
+          (s) => dayKeyOf(s.startsAt, timezone) === date && new Date(s.startsAt).getTime() > now,
+        ),
       );
     });
     return () => {
       cancelled = true;
     };
-  }, [serviceId, staffId, date, timezone]);
+  }, [serviceId, staffId, date, timezone, slotsTry]);
 
   // Who would hear about it - before anything is held.
   useEffect(() => {
     setPreview(null);
+    setPreviewFailure(null);
     let cancelled = false;
-    previewTierOpeningAction(minTier).then((res) => {
-      if (!cancelled && res.ok) setPreview({ members: res.members ?? 0, inApp: res.inApp ?? 0 });
+    void loadAction(() => previewTierOpeningAction(minTier)).then((r) => {
+      if (cancelled) return;
+      if (r.ok && r.value.ok) setPreview({ members: r.value.members ?? 0, inApp: r.value.inApp ?? 0 });
+      else setPreviewFailure(r.ok ? "failed" : r.failure);
     });
     return () => {
       cancelled = true;
     };
-  }, [minTier]);
+  }, [minTier, previewTry]);
 
   const who = TIER_CHOICES.find((t) => t.key === minTier)!.who;
   const heldUntil = startsAt
@@ -244,7 +266,16 @@ export function TierOpeningForm({
       }
     >
       <div className="flex min-w-0 flex-col gap-5">
-        {openings.length > 0 && (
+        {openingsFailure && (
+          <Group title="Held now">
+            <LoadFailed
+              what="what you're holding now"
+              failure={openingsFailure}
+              onRetry={() => void loadOpenings()}
+            />
+          </Group>
+        )}
+        {openings.length > 0 && !openingsFailure && (
           <Group title="Held now">
             <ul className="flex min-w-0 flex-col gap-2">
               {openings.map((o) => (
@@ -321,6 +352,8 @@ export function TierOpeningForm({
             <p className="text-xs text-muted">Pick a service{activeStaff.length > 1 ? " and a provider" : ""} to see open times.</p>
           ) : loadingSlots ? (
             <p className="text-sm text-muted">Loading times…</p>
+          ) : slotsFailure ? (
+            <LoadFailed what="open times" failure={slotsFailure} onRetry={() => setSlotsTry((n) => n + 1)} />
           ) : slots.length === 0 ? (
             <p className="text-xs text-muted">No open times that day.</p>
           ) : (
@@ -354,13 +387,21 @@ export function TierOpeningForm({
               </button>
             ))}
           </div>
-          <p className="text-xs leading-snug text-muted" aria-live="polite">
-            {preview === null
-              ? "Counting members…"
-              : preview.inApp === 0
-                ? `${preview.members} ${preview.members === 1 ? "member" : "members"} - none with the ChairBack app yet, so nobody could be told.`
-                : `${preview.inApp} of ${preview.members} ${preview.members === 1 ? "member has" : "members have"} the app and will be notified.`}
-          </p>
+          {previewFailure ? (
+            <LoadFailed
+              what="who would be told"
+              failure={previewFailure}
+              onRetry={() => setPreviewTry((n) => n + 1)}
+            />
+          ) : (
+            <p className="text-xs leading-snug text-muted" aria-live="polite">
+              {preview === null
+                ? "Counting members…"
+                : preview.inApp === 0
+                  ? `${preview.members} ${preview.members === 1 ? "member" : "members"} - none with the ChairBack app yet, so nobody could be told.`
+                  : `${preview.inApp} of ${preview.members} ${preview.members === 1 ? "member has" : "members have"} the app and will be notified.`}
+            </p>
+          )}
         </Group>
 
         <Group title="Hold it for">

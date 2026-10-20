@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog } from "@/components/ui/Dialog";
+import { LoadFailed } from "@/components/ui/LoadFailed";
+import { loadAction, type LoadFailure } from "@/lib/loadAction";
 import { cap, useVocab } from "@/components/VocabProvider";
 import {
   yearlyReportAction,
@@ -75,8 +77,11 @@ export function YearlyReport() {
   const [busy, setBusy] = useState<null | "download" | "share">(null);
   // The options read failed (null, or the action threw). Without this the
   // sheet opened onto two empty pickers and nothing else: no message, no
-  // report, and three disabled buttons.
-  const [optionsFailed, setOptionsFailed] = useState(false);
+  // report, and three disabled buttons. "stale" = the website was deployed
+  // while the page was open, which no retry fixes (lib/loadAction.ts).
+  const [optionsFailed, setOptionsFailed] = useState<LoadFailure | null>(null);
+  // The same for the report read, when the website was deployed under it.
+  const [reportStale, setReportStale] = useState(false);
   const [optionsTry, setOptionsTry] = useState(0);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
@@ -85,19 +90,18 @@ export function YearlyReport() {
   useEffect(() => {
     if (!open || options) return;
     let cancelled = false;
-    setOptionsFailed(false);
-    void yearlyReportOptionsAction()
-      .catch(() => null)
-      .then((o) => {
-        if (cancelled) return;
-        if (!o) {
-          setOptionsFailed(true);
-          return;
-        }
-        setOptions(o);
-        setYear((y) => y ?? o.years[0] ?? o.currentYear);
-        setSubject((s) => s ?? o.defaultSubject ?? (o.canReportShop ? "shop" : null));
-      });
+    setOptionsFailed(null);
+    void loadAction(yearlyReportOptionsAction).then((r) => {
+      if (cancelled) return;
+      const o = r.ok ? r.value : null;
+      if (!o) {
+        setOptionsFailed(r.ok ? "failed" : r.failure);
+        return;
+      }
+      setOptions(o);
+      setYear((y) => y ?? o.years[0] ?? o.currentYear);
+      setSubject((s) => s ?? o.defaultSubject ?? (o.canReportShop ? "shop" : null));
+    });
     return () => {
       cancelled = true;
     };
@@ -107,8 +111,15 @@ export function YearlyReport() {
     if (year === null || subject === null) return;
     setLoading(true);
     setError(null);
-    const res = await yearlyReportAction({ year, subject });
+    // A throw used to leave "Building your report…" up for good.
+    const call = await loadAction(() => yearlyReportAction({ year, subject }));
     setLoading(false);
+    setReportStale(!call.ok && call.failure === "stale");
+    if (!call.ok) {
+      if (call.failure === "failed") setError("Couldn't build that report. Try again in a moment.");
+      return;
+    }
+    const res = call.value;
     if (!res) {
       setError("Couldn't build that report. Try again in a moment.");
       return;
@@ -322,16 +333,14 @@ export function YearlyReport() {
           </div>
 
           {optionsFailed && (
-            <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-danger-soft">
-              <span>Couldn&rsquo;t load your report options.</span>
-              <button
-                type="button"
-                onClick={() => setOptionsTry((n) => n + 1)}
-                className="rounded-lg border border-offwhite/15 px-3 py-1.5 text-xs font-medium text-offwhite hover:bg-offwhite/5"
-              >
-                Try again
-              </button>
-            </div>
+            <LoadFailed
+              what="your report options"
+              failure={optionsFailed}
+              onRetry={() => setOptionsTry((n) => n + 1)}
+            />
+          )}
+          {reportStale && !optionsFailed && (
+            <LoadFailed what="your report" failure="stale" onRetry={() => void load()} />
           )}
           {!options && !optionsFailed && <p className="text-sm text-muted">Loading…</p>}
           {error && (
