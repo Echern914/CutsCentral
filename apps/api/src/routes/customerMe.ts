@@ -12,6 +12,7 @@ import {
   rewardPrograms,
   splitHistory,
   storefrontUrl,
+  walletPassUrl,
 } from "../services/customerPortal.js";
 import {
   claimProfile,
@@ -80,6 +81,19 @@ customerMeRouter.get("/appointments/:id", async (req, res) => {
 /** The shop's own manage page (reschedule / cancel) for one ChairBack booking. */
 customerMeRouter.get("/appointments/:id/manage", async (req, res) => {
   const url = await manageUrl(accountId(req), String(req.params.id));
+  if (!url) return notFound(res);
+  noStore(res);
+  res.json({ url });
+});
+
+/**
+ * Where to download the Apple Wallet pass for one of the customer's own
+ * upcoming bookings - self-booked or booked for them by the barber. The app
+ * hands the URL to PassKit. 404 unless the booking is theirs, BOOKED, ahead,
+ * and the server can sign passes (services/customerPortal.ts walletPassUrl).
+ */
+customerMeRouter.get("/appointments/:id/wallet-pass", async (req, res) => {
+  const url = await walletPassUrl(accountId(req), String(req.params.id));
   if (!url) return notFound(res);
   noStore(res);
   res.json({ url });

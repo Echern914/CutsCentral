@@ -25,6 +25,7 @@ import { livePromotions, type PublicPromotion } from "./livePromotions.js";
 import { syncCustomerLinks, syncCustomerView, type ActiveLink } from "./customerIdentity.js";
 import { PUBLIC_SHOP_SELECT, toPublicShop } from "./shopByHandle.js";
 import { mintBookingHandoff, withBookingHandoff } from "../auth/bookingHandoff.js";
+import { appointmentWalletEnabled } from "../wallet/appointmentPass.js";
 
 /**
  * MY CHAIRBACK'S READ MODEL - everything the customer home, history, details
@@ -100,6 +101,15 @@ export interface PortalAppointmentDetail extends PortalAppointment {
   address: string | null;
   durationMin: number | null;
   priceCents: number | null;
+  /**
+   * Whether the details screen may offer "Add to Apple Wallet": the server can
+   * sign the appointment pass at all (appointmentWalletEnabled), and THIS is a
+   * ChairBack booking that is BOOKED and still ahead - whoever made it (the
+   * customer online, or the barber by hand). A request, a cancellation, a past
+   * visit and a synced Acuity/Square visit (no Appointment to mint from) are
+   * all false. walletPassUrl() applies the same rule before handing out a URL.
+   */
+  canAddToWallet: boolean;
 }
 
 export interface PortalShop extends PortalShopRef {
@@ -541,6 +551,7 @@ function normalizeEvents(
       address,
       durationMin: a.service?.durationMin ?? null,
       priceCents: cents(a.priceAtBooking),
+      canAddToWallet: walletPassOffered(a, now),
     });
   }
 
@@ -579,6 +590,8 @@ function normalizeEvents(
       address,
       durationMin: null,
       priceCents: cents(v.price),
+      // A synced or logged visit has no Appointment, so nothing to mint from.
+      canAddToWallet: false,
     });
   }
   return out;
@@ -1055,6 +1068,20 @@ async function bookingHandoffMinter(accountId: string): Promise<(shopId: string)
  * Only a native appointment ("a_" id) on one of the account's linked records.
  */
 export async function manageUrl(accountId: string, eventId: string): Promise<string | null> {
+  const appt = await ownedAppointment(accountId, eventId);
+  return appt ? `${base()}/book/manage/${appt.manageToken}` : null;
+}
+
+/**
+ * The one ChairBack booking an "a_" event id names, IF it sits on one of the
+ * account's own ACTIVE links - the same proof-derived set every /api/me read
+ * uses (customerIdentity.ts, with the #628 rules). Anything else is null,
+ * indistinguishable from "does not exist", so a guessed id learns nothing.
+ */
+async function ownedAppointment(
+  accountId: string,
+  eventId: string,
+): Promise<{ manageToken: string; status: string; startsAt: Date } | null> {
   if (!/^a_[A-Za-z0-9]{8,40}$/.test(eventId)) return null;
   const apptId = eventId.slice(2);
   const links = await syncCustomerLinks(accountId);
@@ -1064,10 +1091,45 @@ export async function manageUrl(accountId: string, eventId: string): Promise<str
     const appt = await runWithShop(shopId, (tx) =>
       tx.appointment.findFirst({
         where: { id: apptId, shopId, clientId: { in: clientIds } },
-        select: { manageToken: true },
+        select: { manageToken: true, status: true, startsAt: true },
       }),
     );
-    if (appt) return `${base()}/book/manage/${appt.manageToken}`;
+    if (appt) return appt;
   }
   return null;
+}
+
+/**
+ * The details screen's "Add to Apple Wallet" rule, in one place: the server
+ * can sign the pass, and the booking is BOOKED and still ahead. Who made the
+ * booking does not enter into it - a cut the barber booked by hand is as much
+ * the customer's appointment as one they booked themselves.
+ */
+function walletPassOffered(a: { status: string; startsAt: Date }, now: Date): boolean {
+  return appointmentWalletEnabled() && a.status === "BOOKED" && a.startsAt.getTime() > now.getTime();
+}
+
+/**
+ * Where the app downloads the Apple Wallet pass for one of the customer's own
+ * bookings: the SAME manage-token pass the confirmation email and the manage
+ * page already link to (web relay -> GET /api/book/manage/:token/wallet-pass),
+ * so there is still exactly one pass builder and one download route.
+ *
+ * Why a URL and not the pass bytes: the app hands the URL to PassKit
+ * (modules/wallet-pass), which downloads it itself and cannot carry the
+ * customer's session header. The manage token in it is the customer's own -
+ * /appointments/:id/manage already gives them the page it opens - so this
+ * reveals nothing they could not already reach.
+ *
+ * Null (a 404) unless the pass is actually offered right now, so the app never
+ * gets a URL that would download a refusal.
+ */
+export async function walletPassUrl(
+  accountId: string,
+  eventId: string,
+  now = new Date(),
+): Promise<string | null> {
+  const appt = await ownedAppointment(accountId, eventId);
+  if (!appt || !walletPassOffered(appt, now)) return null;
+  return `${base()}/book/manage/${appt.manageToken}/wallet-pass`;
 }

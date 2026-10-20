@@ -1,12 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Alert, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { Stack, useRouter } from "expo-router";
-import { walletPassNative } from "@/modules/wallet-pass";
 import { AppWebView } from "@/src/AppWebView";
 import { WEB_ORIGIN } from "@/src/config";
 import { parseAddWalletPassRequest } from "@/src/walletBridge";
 import { errorCopy } from "./api";
 import { color, space } from "./theme";
+import { presentWalletPass } from "./wallet";
 import { ErrorState, Placeholder, Tap, Txt } from "./ui";
 
 /**
@@ -99,7 +99,7 @@ export function WebPage({
             // anywhere else.
             const pass = parseAddWalletPassRequest(raw, { webOrigin: WEB_ORIGIN });
             if (pass) {
-              void addToWallet(pass.url);
+              void presentWalletPass(pass.url);
               return;
             }
             onMessage?.(raw);
@@ -116,35 +116,6 @@ export function WebPage({
       )}
     </View>
   );
-}
-
-/**
- * Hand a pass URL to PassKit.
- *
- * Silent on success - Wallet's own sheet is the confirmation, and a second
- * "Added!" on top of it would be noise. Silent on a DISMISS too: choosing not
- * to add a pass is not an error and must not be reported as one.
- *
- * 🔴 Speaks up only when the pass could not be offered at all, because the
- * alternative is a button that visibly does nothing. The likeliest cause in
- * production is the server being unable to sign (the WALLET_APPT_* ceremony),
- * and "not available right now" is the honest customer-facing version of that
- * without leaking which of the several reasons it was.
- */
-async function addToWallet(url: string): Promise<void> {
-  const native = walletPassNative();
-  if (!native) {
-    // An older build with no native half. The web page should not have offered
-    // the button (it asks first), so this is a mismatch worth saying out loud
-    // rather than a dead tap.
-    Alert.alert("Update ChairBack", "Adding to Apple Wallet needs a newer version of the app.");
-    return;
-  }
-  try {
-    await native.presentPass(url);
-  } catch {
-    Alert.alert("Not available", "This appointment could not be added to Apple Wallet right now.");
-  }
 }
 
 const styles = StyleSheet.create({

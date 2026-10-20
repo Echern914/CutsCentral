@@ -1,6 +1,8 @@
-import { StyleSheet, View } from "react-native";
+import { useState } from "react";
+import { Platform, StyleSheet, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useResource } from "@/src/customer/CustomerProvider";
+import { WEB_ORIGIN } from "@/src/config";
+import { useCustomer, useResource } from "@/src/customer/CustomerProvider";
 import { Screen } from "@/src/customer/Screen";
 import { errorCopy } from "@/src/customer/api";
 import { dayLabel, money, timeRange, untilLabel } from "@/src/customer/format";
@@ -9,18 +11,51 @@ import { openDirections, openManage, openStorefront } from "@/src/customer/navig
 import { color, space } from "@/src/customer/theme";
 import type { AppointmentDetail } from "@/src/customer/types";
 import { Avatar, Button, ErrorState, Group, Placeholder, Row, Separator, StatusLabel, Txt } from "@/src/customer/ui";
+import {
+  AddToWalletBadge,
+  nativeCanAddPasses,
+  presentWalletPass,
+  walletUnavailableAlert,
+} from "@/src/customer/wallet";
+import { showAddToWallet, walletPassUrlFromApi } from "@/src/walletBridge";
 
 /**
  * One appointment, Wallet-clear: when, what, with whom, where, and what can be
  * done about it. Reschedule and cancel hand off to the shop's own manage page,
  * where every fee and deposit rule already lives - they are not re-implemented
  * here. A booking another system holds (Acuity, Square) says so plainly.
+ *
+ * "Add to Apple Wallet" sits here for every upcoming ChairBack booking the API
+ * says can have a pass - including one the barber booked by hand, which never
+ * passed through the booking page's own confirmation (and its Wallet badge).
  */
 export default function AppointmentScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { api } = useCustomer();
   const res = useResource<{ appointment: AppointmentDetail }>(id ? `/api/me/appointments/${encodeURIComponent(id)}` : null);
   const a = res.data?.appointment;
+  const [addingToWallet, setAddingToWallet] = useState(false);
+
+  /**
+   * Ask the API for THIS appointment's pass URL (it re-checks that the booking
+   * is ours, booked and ahead), accept it only in the shape this build would
+   * build itself, and hand it to PassKit. Any refusal is one honest alert.
+   */
+  async function addToWallet() {
+    if (!id || addingToWallet) return;
+    setAddingToWallet(true);
+    try {
+      const reply = await api.get<{ url?: unknown }>(`/api/me/appointments/${encodeURIComponent(id)}/wallet-pass`);
+      const url = walletPassUrlFromApi(reply.url, { webOrigin: WEB_ORIGIN });
+      if (!url) walletUnavailableAlert();
+      else await presentWalletPass(url);
+    } catch {
+      walletUnavailableAlert();
+    } finally {
+      setAddingToWallet(false);
+    }
+  }
 
   if (!a) {
     return (
@@ -32,6 +67,11 @@ export default function AppointmentScreen() {
 
   const until = untilLabel(new Date(a.startsAt), new Date(), a.timezone);
   const upcoming = a.status === "booked" || a.status === "requested";
+  const wallet = showAddToWallet({
+    offered: a.canAddToWallet,
+    platform: Platform.OS,
+    nativeCanAdd: nativeCanAddPasses(),
+  });
 
   return (
     <Screen underNavBar refreshing={res.refreshing} onRefresh={res.refresh}>
@@ -89,6 +129,7 @@ export default function AppointmentScreen() {
       </Group>
 
       <View style={styles.actions}>
+        {wallet ? <AddToWalletBadge onPress={addToWallet} busy={addingToWallet} /> : null}
         {a.canManage ? (
           <>
             <Button

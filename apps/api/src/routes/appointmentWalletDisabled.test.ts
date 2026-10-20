@@ -1,7 +1,7 @@
 import request from "supertest";
 import { beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
 
 /**
  * THE PRODUCTION STATE, PINNED: the appointment pass type is NOT configured.
@@ -39,7 +39,13 @@ process.env.WALLET_PASS_CERT_BASE64 = Buffer.from("test-cert").toString("base64"
 process.env.WALLET_PASS_KEY_BASE64 = Buffer.from("test-key").toString("base64");
 process.env.WALLET_WWDR_CERT_BASE64 = Buffer.from("test-wwdr").toString("base64");
 
+// My ChairBack is on, so the details screen's flag and its pass route are
+// exercised in the dark state too (case 5).
+process.env.CUSTOMER_ACCOUNTS_ENABLED = "true";
+__resetEnvCacheForTests();
+
 const { createApp } = await import("../app.js");
+const { mintCustomerSession } = await import("../auth/customerSession.js");
 const { appointmentWalletEnabled } = await import("../wallet/appointmentPass.js");
 const { walletEnabled } = await import("../wallet/pass.js");
 const { pokeAppointmentPass } = await import("../wallet/appointmentPass.js");
@@ -169,5 +175,50 @@ describe("the appointment pass is dark, and says so honestly", () => {
     expect(res.status).toBe(200);
     // The whole claim, in one object: loyalty live, appointment dark.
     expect(res.body.wallet).toEqual({ available: true, appointment: false });
+  });
+
+  it("5. NO BADGE IN THE APP — View details is told no, and the pass route 404s", async () => {
+    // A customer whose own record holds a real, BOOKED, upcoming booking: the
+    // only thing standing between them and the badge is the unsigned pass type.
+    const phone = `+1628${200 + Math.floor(Math.random() * 700)}${String(Math.floor(Math.random() * 1e4)).padStart(4, "0")}`;
+    const client = await prisma.client.create({
+      data: { shopId, acuityClientKey: `tel:${phone}`, magicToken: randomToken(), firstName: "Bo", phone },
+      select: { id: true },
+    });
+    const own = await prisma.appointment.findUniqueOrThrow({
+      where: { id: appointmentId },
+      select: { staffId: true, serviceId: true },
+    });
+    const startsAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+    const appt = await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId: own.staffId,
+        serviceId: own.serviceId,
+        clientId: client.id,
+        firstName: "Bo",
+        status: "BOOKED",
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+        manageToken: randomToken(),
+      },
+      select: { id: true },
+    });
+    const acct = await prisma.customerAccount.create({
+      data: { phoneE164: phone, phoneVerifiedAt: new Date() },
+      select: { id: true },
+    });
+    try {
+      const auth = `Bearer ${mintCustomerSession(acct.id, 0)}`;
+      const detail = await request(app).get(`/api/me/appointments/a_${appt.id}`).set("Authorization", auth);
+      expect(detail.status).toBe(200);
+      expect(detail.body.appointment.status).toBe("booked");
+      expect(detail.body.appointment.canAddToWallet).toBe(false);
+      const pass = await request(app).get(`/api/me/appointments/a_${appt.id}/wallet-pass`).set("Authorization", auth);
+      expect(pass.status).toBe(404);
+      expect(pass.body).toEqual({ error: "not_found" });
+    } finally {
+      await prisma.customerAccount.delete({ where: { id: acct.id } });
+    }
   });
 });
