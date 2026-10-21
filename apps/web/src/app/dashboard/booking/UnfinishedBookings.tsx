@@ -28,10 +28,10 @@ import {
  * or call them, book them into that time, or take them off the list.
  *
  * 🔴 BOOK THEM IS THE ORDINARY DASHBOARD BOOKING (createAppointmentAction),
- * with every guard it has, plus `confirmClient`: unlike a booking made at the
- * chair, ChairBack emails these clients their confirmation (and pushes the app),
- * because they tried to book online and the barber can't text everyone. The
- * row then says whether an email really went out. It asks first, because it
+ * with every guard it has, plus `confirmClient`: ChairBack emails these clients
+ * their confirmation (and pushes the app) as it does for every booking the shop
+ * makes, but here it WAITS for the email, because they tried to book online and
+ * the row then has to say whether an email really went out. It asks first, because it
  * creates a booking. It never forces anything: outside the open hours it asks
  * again, and a time someone else has taken is refused, never booked over.
  *

@@ -59,6 +59,11 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  * Custom time as small print ("I can't book it after hours"). So an hour he
  * TAPPED that is not an open time is offered as itself ("Book this time"), and
  * Custom time takes a price: his after-hours rate instead of the menu's.
+ *
+ * THE CLIENT IS TOLD. "Send them a confirmation" is ticked by default: the API
+ * sends the confirmation email a self-booked client gets, plus an app push,
+ * for a time still to come (never one already past - the box gives way to a
+ * line saying so). Unticked sends `notifyClient: false` and nothing goes out.
  */
 /**
  * "Book again", opened from an appointment's Full details: who and what carry
@@ -73,6 +78,11 @@ export interface RebookFrom {
   serviceName: string | null;
   staffId: string | null;
   staffName: string | null;
+}
+
+/** A light check before sending: one @, something on each side, a dot after it. */
+function looksLikeEmail(raw: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw.trim());
 }
 
 /** One per submission (the API's operationId: 8-100 characters). */
@@ -192,6 +202,15 @@ export function AppointmentForm({
   const [results, setResults] = useState<ClientOption[]>([]);
   const [newName, setNewName] = useState(waitlist?.name ?? "");
   const [newPhone, setNewPhone] = useState(waitlist?.phone ?? "");
+  // Where the confirmation goes for someone new (or off the waitlist, the
+  // address they gave): without one, only the app can tell them.
+  const [newEmail, setNewEmail] = useState(waitlist?.email ?? "");
+  /**
+   * "Send them a confirmation" - on unless the barber unticks it. The API
+   * sends the same email a client who books themselves gets, plus a push if
+   * they use the app, and never for a time that has already passed.
+   */
+  const [notify, setNotify] = useState(true);
   const [note, setNote] = useState("");
   // Recurrence: off by default ("Does not repeat"). When on, every N weeks for
   // `count` times OR until a date. Weekly only to start (the picked day+time is
@@ -536,6 +555,10 @@ export function AppointmentForm({
       return setError("Pick a time.");
     }
     if (!clientId && !newName.trim()) return setError("Pick a client or enter a name.");
+    // The API refuses an address it can't use, and books nothing: say so here.
+    if (!clientId && newEmail.trim() && !looksLikeEmail(newEmail)) {
+      return setError("That email doesn't look right. Fix it, or leave it blank.");
+    }
     if (repeat && endMode === "until" && !until) return setError("Pick an end date.");
     // A repeat box holding a number it cannot use: refuse, never guess.
     const badRepeat = repeat
@@ -574,6 +597,9 @@ export function AppointmentForm({
       clientId: clientId ?? undefined,
       firstName: clientId ? undefined : newName.trim(),
       phone: clientId ? undefined : newPhone.trim() || undefined,
+      email: clientId ? undefined : newEmail.trim() || undefined,
+      // Ticked (the default) sends nothing: the API tells the client by itself.
+      ...(notify ? {} : { notifyClient: false as const }),
       note: note.trim() || undefined,
       customTime,
       // Custom time only (typedPrice is null otherwise); empty = menu price.
@@ -714,9 +740,11 @@ export function AppointmentForm({
                     ? "An add-on you ticked isn't offered with this service any more. Close this and open it again to see the current list."
                     : res.error === "replay_not_booked"
                       ? (res.reason ?? "That booking didn't go through. Check the calendar before booking again.")
-                      : res.answered === false
-                        ? "No answer from ChairBack, so it may or may not have booked. Tap again to find out - it won't book twice."
-                        : "Couldn't schedule. Please try again.",
+                      : res.error === "invalid_input" && details.email
+                        ? "That email doesn't look right. Fix it, or leave it blank."
+                        : res.answered === false
+                          ? "No answer from ChairBack, so it may or may not have booked. Tap again to find out - it won't book twice."
+                          : "Couldn't schedule. Please try again.",
         );
         return;
       }
@@ -1242,8 +1270,39 @@ export function AppointmentForm({
                     onChange={(e) => setNewPhone(e.target.value)}
                   />
                 </Field>
+                <Field label="Email" hint="Optional. Where their confirmation goes.">
+                  <input
+                    type="email"
+                    inputMode="email"
+                    autoComplete="email"
+                    className={INPUT}
+                    placeholder="name@example.com"
+                    value={newEmail}
+                    onChange={(e) => setNewEmail(e.target.value)}
+                  />
+                </Field>
               </div>
             </>
+          )}
+          {startsAt && !repeat && new Date(startsAt).getTime() <= Date.now() ? (
+            // Entered after the fact: the API never sends "you're booked" for
+            // a time that has passed, so the box would promise nothing.
+            <p className="text-xs text-muted">This time has passed, so no confirmation is sent.</p>
+          ) : (
+            <label className="flex items-start gap-2 text-sm text-offwhite">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={notify}
+                onChange={(e) => setNotify(e.target.checked)}
+              />
+              <span>
+                Send them a confirmation
+                <span className="block text-xs text-muted">
+                  By email if they have one, and in the ChairBack app if they use it.
+                </span>
+              </span>
+            </label>
           )}
         </Group>
 

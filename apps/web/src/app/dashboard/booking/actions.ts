@@ -568,10 +568,17 @@ export interface CreateApptInput {
   /** An offer code checked against this visit (apps/api engines/offers.ts). */
   offerCode?: string;
   /**
-   * Email the client their confirmation (+ a push if they use the app). Only
-   * from "Didn't finish booking", whose clients tried to book online.
+   * Email the client their confirmation (+ a push if they use the app) AND
+   * wait to say whether it went (`clientConfirmation`). Only from "Didn't
+   * finish booking", whose row must say whether the client heard.
    */
   confirmClient?: true;
+  /**
+   * Every other booking tells the client by itself (email + app push, only
+   * for a time still to come). `false` = the barber unticked "Send them a
+   * confirmation"; leave it out to send.
+   */
+  notifyClient?: false;
   clientId?: string;
   firstName?: string;
   lastName?: string;
@@ -716,10 +723,15 @@ export async function createAppointmentAction(
     clientConfirmation?: "email" | "none";
   };
   let res = await apiSend<Created>("POST", "/api/booking/appointments", input);
-  // An API from before operationId (mid-deploy) refused it and booked
-  // nothing: book the way this screen used to (lib/apiCompat.ts).
-  if (input.operationId && refusedOnlyNewKeys(res, ["operationId"])) {
-    const { operationId: _dropped, ...legacy } = input;
+  // An API from before operationId / notifyClient (mid-deploy) refused them
+  // and booked nothing: book the way this screen used to (lib/apiCompat.ts).
+  // Such an API never told the client anyway, so dropping notifyClient: false
+  // keeps exactly what the barber asked for.
+  if (
+    (input.operationId || input.notifyClient === false) &&
+    refusedOnlyNewKeys(res, ["operationId", "notifyClient"])
+  ) {
+    const { operationId: _dropped, notifyClient: _old, ...legacy } = input;
     res = await apiSend<Created>("POST", "/api/booking/appointments", legacy);
   }
   if (res.ok) revalidatePath("/dashboard/booking");

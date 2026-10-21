@@ -106,6 +106,23 @@ describe("createAppointmentAction", () => {
     expect(r).toMatchObject({ ok: true, id: "a2" });
   });
 
+  it("🔴 an API from before notifyClient refuses it (with operationId): book again without both - it never told the client anyway", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        reply(400, {
+          error: "invalid_input",
+          issues: [{ path: [], message: "Unrecognized key(s) in object: 'operationId', 'notifyClient'" }],
+        }),
+      )
+      .mockResolvedValueOnce(reply(201, { ok: true, id: "a3" }));
+    const r = await createAppointmentAction({ ...input, notifyClient: false });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sentBody(0)).toMatchObject({ notifyClient: false });
+    expect(sentBody(1)).not.toHaveProperty("notifyClient");
+    expect(sentBody(1)).not.toHaveProperty("operationId");
+    expect(r).toMatchObject({ ok: true, id: "a3" });
+  });
+
   it("a real validation refusal is never resent", async () => {
     fetchMock.mockResolvedValueOnce(
       reply(400, { error: "invalid_input", issues: [{ path: ["startsAt"], message: "Invalid date" }] }),
