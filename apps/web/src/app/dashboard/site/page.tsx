@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { BookingModeKey } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
+import { getMe } from "@/lib/me";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { PageEditor } from "./PageEditor";
 import { DomainCard } from "./DomainCard";
@@ -69,11 +70,12 @@ export interface PageMenu {
 }
 
 export default async function PageSettingsPage() {
-  const [res, domainRes, servicesRes, staffRes] = await Promise.all([
+  const [res, domainRes, servicesRes, staffRes, me] = await Promise.all([
     apiGet<ShopPageSettings>("/api/shops/me"),
     apiGet<DomainStatus>("/api/domains"),
     apiGet<{ services: PageMenu["services"] }>("/api/booking/services"),
     apiGet<{ staff: PageMenu["staff"] }>("/api/booking/staff"),
+    getMe(), // memoized: the dashboard layout already asked
   ]);
   if (!res.ok || !res.data) {
     return <main className="p-8 text-muted">Could not load your page settings.</main>;
@@ -97,7 +99,15 @@ export default async function PageSettingsPage() {
         </p>
       </header>
       <div data-tour="site-setup">
-        <PageEditor settings={res.data} menu={menu} appBase={process.env.APP_BASE_URL ?? ""} />
+        <PageEditor
+          settings={res.data}
+          menu={menu}
+          appBase={process.env.APP_BASE_URL ?? ""}
+          // The API refuses every shop setting from a BARBER seat
+          // (BARBER_SETTINGS_ALLOWED is empty), the name included - so show it
+          // read-only rather than a field whose save can only fail.
+          canEditName={me.data?.shopRole !== "BARBER"}
+        />
       </div>
       {/* Custom domain: separate from the editor on purpose - it's a stateful
           connect/verify flow, not a form field, and must never ride (or dirty)

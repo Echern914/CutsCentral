@@ -42,6 +42,7 @@ import { ImageField } from "./ImageField";
 import { SectionOrderEditor } from "./SectionOrderEditor";
 import { RewardsSectionToggles } from "./RewardsSectionToggles";
 import { LivePreview } from "./LivePreview";
+import { SHOP_NAME_MAX, shopNameError } from "./shopName";
 
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
@@ -50,6 +51,7 @@ const labelCls = "text-xs text-muted";
 // Fields with an inline error slot right under their input. A server rejection
 // on any other field surfaces in the save bar, prefixed with a friendly label.
 const INLINE_ERROR_FIELDS = new Set([
+  "name",
   "slug",
   "accentColor",
   "instagramHandle",
@@ -80,15 +82,19 @@ export function PageEditor({
   settings,
   menu = { services: [], staff: [] },
   appBase,
+  canEditName = true,
 }: {
   settings: ShopPageSettings;
   /** The shop's services and team: photo tags, and the preview of the designs that show them. */
   menu?: PageMenu;
   appBase: string;
+  /** False for a seat the API refuses shop settings from: the name shows read-only. */
+  canEditName?: boolean;
 }) {
   const vocab = useVocab();
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
+  const [name, setName] = useState(settings.name);
   const [slug, setSlug] = useState(settings.slug ?? "");
   const [enabled, setEnabled] = useState(settings.publicPageEnabled);
   const [theme, setTheme] = useState<string>(settings.theme);
@@ -134,6 +140,10 @@ export function PageEditor({
   const [showPreviewMobile, setShowPreviewMobile] = useState(false);
 
   const pageUrl = `${appBase}/s/${slug || "your-shop"}`;
+  // The SAVED link, for the name hint: renaming never moves it (the API only
+  // mints a slug when a shop is created), so it is the one in clients' hands.
+  const savedPageUrl = settings.slug ? `${appBase}/s/${settings.slug}` : null;
+  const nameError = shopNameError(name) ?? fieldErrors.name;
   const activeTheme = PAGE_THEMES[(theme as PageThemeKey) in PAGE_THEMES ? (theme as PageThemeKey) : "classic"];
   // Client-side mirrors of the API's validation (same shared regexes), so a bad
   // value blocks Save with a specific message instead of a mystery rejection.
@@ -164,6 +174,7 @@ export function PageEditor({
   //
   // The full payload, exactly as a save would send it.
   const payload: PageSettingsInput = {
+    name: name.trim(),
     slug: slug.trim().toLowerCase(),
     publicPageEnabled: enabled,
     theme,
@@ -233,7 +244,8 @@ export function PageEditor({
   // live preview renders EXACTLY what clients will see (same component).
   const previewData: ShopPageData = useMemo(
     () => ({
-      name: settings.name,
+      // What the barber is typing, so the preview's heading changes with it.
+      name: name.trim() || settings.name,
       slug: slug || "your-shop",
       bio: bio.trim() || null,
       industry: settings.industry,
@@ -281,6 +293,7 @@ export function PageEditor({
       reviewSummary: { count: 0, avgRating: null },
     }),
     [
+      name,
       settings.name,
       settings.industry,
       settings.serviceNoun,
@@ -353,6 +366,47 @@ export function PageEditor({
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
       {/* ---------------- Controls ---------------- */}
       <div className="flex flex-col gap-6">
+        {/* Shop name: the heading of both public pages. It lived only in the
+            Settings card at the bottom of the Overview, inside the texting
+            settings, where barbers never found it. The Settings card keeps its
+            field too; both write the same column. */}
+        <Card className="flex flex-col gap-2 px-5 py-4">
+          {canEditName ? (
+            <label className={labelCls}>
+              Shop name
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Your shop's name"
+                aria-invalid={nameError ? true : undefined}
+                aria-describedby={nameError ? "err-shop-name hint-shop-name" : "hint-shop-name"}
+                className={`mt-1 ${field} text-base`}
+              />
+            </label>
+          ) : (
+            <div>
+              <p className={labelCls}>Shop name</p>
+              <p className="mt-1 text-base text-offwhite">{settings.name}</p>
+              <p className="mt-1 text-xs text-muted">Ask the shop owner to change it.</p>
+            </div>
+          )}
+          <FormError id="err-shop-name">{canEditName ? nameError : null}</FormError>
+          <p id="hint-shop-name" className="text-xs text-muted">
+            Shown at the top of your booking page and shop page.
+            {savedPageUrl && (
+              <>
+                {" "}
+                Your link (<span className="font-mono text-offwhite">{savedPageUrl}</span>) stays the same.
+              </>
+            )}
+          </p>
+          {canEditName && name.trim().length > SHOP_NAME_MAX - 20 && (
+            <p className="text-[11px] text-muted/80">
+              {name.trim().length}/{SHOP_NAME_MAX}
+            </p>
+          )}
+        </Card>
+
         {/* Live link */}
         <Card className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
           <div className="min-w-0">
@@ -904,7 +958,13 @@ export function PageEditor({
         {/* Save bar */}
         <div className="flex flex-wrap items-center gap-3">
           <button
-            disabled={pending || !dirty || !slugValid || Boolean(accentTrimmed && !validHex)}
+            disabled={
+              pending ||
+              !dirty ||
+              !slugValid ||
+              Boolean(accentTrimmed && !validHex) ||
+              Boolean(shopNameError(name))
+            }
             onClick={save}
             className="rounded-full bg-gold px-6 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
           >

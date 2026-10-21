@@ -180,3 +180,76 @@ describe("the page design", () => {
     });
   });
 });
+
+/**
+ * "We need a place where you can also switch your shop's name that is shown
+ * on the page." The name sat only in the Overview's Settings card; it now
+ * leads the page editor, previews as you type, and saves as its one field -
+ * never the slug, so links already in Instagram bios keep working.
+ */
+describe("the shop name", () => {
+  const nameField = () => screen.getByRole("textbox", { name: "Shop name" });
+  const saveButton = () => screen.getByRole("button", { name: "Save page" });
+
+  it("shows the current name and the link that will not change", () => {
+    render(<PageEditor settings={settings()} appBase="https://app.test" />);
+    expect(nameField()).toHaveValue("Home Studio");
+    // The hint is the field's description, and names the real link.
+    const hint = document.getElementById(nameField().getAttribute("aria-describedby")!)!;
+    expect(hint).toHaveTextContent(
+      "Shown at the top of your booking page and shop page. Your link (https://app.test/s/home-studio) stays the same.",
+    );
+  });
+
+  it("🔴 the preview takes the typed name at once", () => {
+    render(<PageEditor settings={settings()} appBase="https://app.test" />);
+    expect(preview.last?.name).toBe("Home Studio");
+    fireEvent.change(nameField(), { target: { value: "Fades by Mikey" } });
+    expect(preview.last?.name).toBe("Fades by Mikey");
+    // The link in the preview is the saved one - a rename does not move it.
+    expect(preview.last?.slug).toBe("home-studio");
+  });
+
+  it("🔴 saves the name alone, trimmed - no slug, nothing else", async () => {
+    render(<PageEditor settings={settings()} appBase="https://app.test" />);
+    fireEvent.change(nameField(), { target: { value: "  Fades by Mikey  " } });
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toEqual({ name: "Fades by Mikey" });
+  });
+
+  it("refuses an empty name before it saves", () => {
+    render(<PageEditor settings={settings()} appBase="https://app.test" />);
+    fireEvent.change(nameField(), { target: { value: "   " } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Your shop needs a name.");
+    expect(nameField()).toHaveAttribute("aria-invalid", "true");
+    expect(saveButton()).toBeDisabled();
+  });
+
+  it("refuses a name over 120 characters before it saves", () => {
+    render(<PageEditor settings={settings()} appBase="https://app.test" />);
+    fireEvent.change(nameField(), { target: { value: "x".repeat(121) } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Keep the shop name under 120 characters.");
+    expect(saveButton()).toBeDisabled();
+    fireEvent.change(nameField(), { target: { value: "x".repeat(120) } });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(saveButton()).toBeEnabled();
+  });
+
+  it("shows the API's refusal under the field", async () => {
+    save.mockResolvedValueOnce({ ok: false, fieldErrors: { name: "Your shop needs a name." } } as never);
+    render(<PageEditor settings={settings()} appBase="https://app.test" />);
+    fireEvent.change(nameField(), { target: { value: "New Name" } });
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(screen.getByText("Your shop needs a name.")).toBeInTheDocument());
+    // Inline, not repeated as "name: ..." in the save bar.
+    expect(screen.queryByText(/^name:/)).toBeNull();
+  });
+
+  it("🔴 a seat that can't rename sees the name read-only, with who to ask", () => {
+    render(<PageEditor settings={settings()} appBase="https://app.test" canEditName={false} />);
+    expect(screen.queryByRole("textbox", { name: "Shop name" })).toBeNull();
+    expect(screen.getByText("Home Studio")).toBeInTheDocument();
+    expect(screen.getByText("Ask the shop owner to change it.")).toBeInTheDocument();
+  });
+});

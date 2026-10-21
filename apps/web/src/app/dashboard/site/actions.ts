@@ -2,8 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { apiSend } from "@/lib/api";
+import { SHOP_NAME_EMPTY, SHOP_NAME_TOO_LONG } from "./shopName";
 
 export interface PageSettingsInput {
+  /** The shop's name: the heading of the booking page and the shop page. Never re-slugs. */
+  name: string;
   slug: string;
   publicPageEnabled: boolean;
   theme: string;
@@ -48,6 +51,7 @@ export interface SavePageResult {
  * longer clobber fields the barber never touched (the #142 bug class).
  */
 const PAGE_FIELDS = [
+  "name",
   "slug",
   "publicPageEnabled",
   "theme",
@@ -82,9 +86,23 @@ export async function savePageAction(
   for (const key of PAGE_FIELDS) {
     if (key in input && input[key] !== undefined) body[key] = input[key];
   }
-  const res = await apiSend("PATCH", "/api/shops/me", body);
+  const res = await apiSend<{ slug?: string | null }>("PATCH", "/api/shops/me", body);
   revalidatePath("/dashboard/site");
-  if (res.ok) return { ok: true };
+  if (res.ok) {
+    // A new name shows everywhere at once: the dashboard header and shop
+    // switcher read it in the layout, and the public pages are cached for a
+    // minute, so refresh those too rather than leave the old name up.
+    if ("name" in body) revalidatePath("/dashboard", "layout");
+    const slug = res.data?.slug;
+    if (slug) {
+      revalidatePath(`/s/${slug}`);
+      revalidatePath(`/book/${slug}`);
+    }
+    return { ok: true };
+  }
+  if (res.error === "forbidden_role") {
+    return { ok: false, error: "Only the shop owner or a manager can change the page. Ask the shop owner." };
+  }
   if (res.error === "slug_taken") {
     return {
       ok: false,
@@ -107,7 +125,14 @@ export async function savePageAction(
     for (const issue of res.issues) {
       const key = issue.path[0];
       if (typeof key === "string" && !(key in fieldErrors)) {
-        fieldErrors[key] = issue.message;
+        // The name's rule is zod's bare min/max, whose wording is not for
+        // people: say it the way the Settings card does.
+        fieldErrors[key] =
+          key === "name"
+            ? (issue as { code?: string }).code === "too_big"
+              ? SHOP_NAME_TOO_LONG
+              : SHOP_NAME_EMPTY
+            : issue.message;
       }
     }
     if (Object.keys(fieldErrors).length > 0) return { ok: false, fieldErrors };
