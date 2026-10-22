@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { SQUARE, apiEnv, decrypt, encrypt, squareHost } from "@chairback/config";
+import { SQUARE, apiEnv, squareHost } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import {
   OAUTH_STATE_COOKIE,
@@ -13,6 +13,7 @@ import { backfillSquareShop } from "../square/backfill.js";
 import { logger } from "../logger.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
+import { openToken, sealToken } from "../services/tokenKey.js";
 
 const env = apiEnv();
 export const squareOAuthRouter: Router = Router();
@@ -118,8 +119,8 @@ squareOAuthRouter.get("/callback", async (req, res) => {
         shopId: shop.id,
         squareMerchantId: token.merchant_id,
         squareLocationId: locationId,
-        accessToken: encrypt(token.access_token, env.TOKEN_ENCRYPTION_KEY),
-        refreshToken: encrypt(token.refresh_token, env.TOKEN_ENCRYPTION_KEY),
+        accessToken: sealToken(token.access_token),
+        refreshToken: sealToken(token.refresh_token),
         scope: SQUARE.scope,
         tokenExpiresAt: new Date(token.expires_at),
         revokedAt: null,
@@ -127,8 +128,8 @@ squareOAuthRouter.get("/callback", async (req, res) => {
       update: {
         squareMerchantId: token.merchant_id,
         squareLocationId: locationId,
-        accessToken: encrypt(token.access_token, env.TOKEN_ENCRYPTION_KEY),
-        refreshToken: encrypt(token.refresh_token, env.TOKEN_ENCRYPTION_KEY),
+        accessToken: sealToken(token.access_token),
+        refreshToken: sealToken(token.refresh_token),
         tokenExpiresAt: new Date(token.expires_at),
         revokedAt: null,
         // A reconnect re-reads the whole book (idempotent): whatever went
@@ -199,7 +200,7 @@ squareOAuthRouter.post("/repair", requireUser, requireShop, requireManager, asyn
     return;
   }
   try {
-    decrypt(conn.accessToken, env.TOKEN_ENCRYPTION_KEY); // sanity: token decryptable
+    openToken(conn.accessToken); // sanity: token decryptable
   } catch {
     res.status(500).json({ error: "token_decrypt_failed" });
     return;

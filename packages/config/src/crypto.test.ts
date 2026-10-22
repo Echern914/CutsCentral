@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { decrypt, encrypt, randomToken } from "./crypto.js";
+import { decrypt, decryptWithAny, encrypt, randomToken } from "./crypto.js";
 
 const KEY = randomBytes(32).toString("base64");
 
@@ -40,6 +40,26 @@ describe("encrypt/decrypt (AES-256-GCM)", () => {
   it("rejects a key of wrong length", () => {
     const shortKey = randomBytes(16).toString("base64");
     expect(() => encrypt("x", shortKey)).toThrow(/32 bytes/);
+  });
+});
+
+describe("decryptWithAny (key rotation)", () => {
+  const NEW = randomBytes(32).toString("base64");
+  const OLD = randomBytes(32).toString("base64");
+
+  it("opens with the first key that fits, and says which", () => {
+    expect(decryptWithAny(encrypt("t", NEW), [NEW, OLD])).toEqual({ plaintext: "t", keyIndex: 0 });
+    expect(decryptWithAny(encrypt("t", OLD), [NEW, OLD])).toEqual({ plaintext: "t", keyIndex: 1 });
+  });
+
+  it("throws when no key opens it - never returns garbage", () => {
+    const stranger = randomBytes(32).toString("base64");
+    expect(() => decryptWithAny(encrypt("t", stranger), [NEW, OLD])).toThrow();
+    expect(() => decryptWithAny("not-a-valid-payload", [NEW, OLD])).toThrow(/Malformed/);
+  });
+
+  it("throws with no keys at all", () => {
+    expect(() => decryptWithAny(encrypt("t", NEW), [])).toThrow();
   });
 });
 

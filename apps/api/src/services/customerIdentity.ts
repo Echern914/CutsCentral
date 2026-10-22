@@ -3,6 +3,7 @@ import { Prisma, runAsOwner } from "@chairback/db";
 import { DEMO, apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
 import type { SignInChannel } from "./customerSignIn.js";
+import { purposeKeys } from "./tokenKey.js";
 
 /**
  * THE CANONICAL CUSTOMER IDENTITY - one person, however many shops.
@@ -72,14 +73,36 @@ export interface CustomerView {
   ambiguousShopIds: string[];
 }
 
-/** Purpose-tagged key, derived from the existing secret (no new env var). */
-function claimKey(): string {
-  return `${apiEnv().TOKEN_ENCRYPTION_KEY}:customer_profile_claim_v1`;
+/** Purpose-tagged keys, derived from the at-rest secret, newest first. */
+const CLAIM_PURPOSE = "customer_profile_claim_v1";
+
+function digestUnder(key: string, magicToken: string): string {
+  return createHmac("sha256", key).update(magicToken, "utf8").digest("hex");
 }
 
 /** The stored proof that a customer held a record's own rewards link. */
 export function claimDigest(magicToken: string): string {
-  return createHmac("sha256", claimKey()).update(magicToken, "utf8").digest("hex");
+  return digestUnder(purposeKeys(CLAIM_PURPOSE)[0]!, magicToken);
+}
+
+/**
+ * Does a stored proof still match the record's CURRENT rewards link?
+ *
+ * 🔴 Under the current key OR the one being rotated out. A key rotation is not
+ * a credential rotation: without this, changing TOKEN_ENCRYPTION_KEY would
+ * detach every claimed record as "credential_rotated" at the customer's next
+ * read. The boot re-key (engines/tokenRekey.ts) rewrites old-key digests, so
+ * this fallback only carries the minutes in between.
+ */
+export function claimDigestMatches(stored: string | null, magicToken: string): boolean {
+  if (stored === null) return false;
+  return purposeKeys(CLAIM_PURPOSE).some((k) => digestUnder(k, magicToken) === stored);
+}
+
+/** The digest under the PREVIOUS key, or null when no rotation is underway. */
+export function previousClaimDigest(magicToken: string): string | null {
+  const keys = purposeKeys(CLAIM_PURPOSE);
+  return keys.length > 1 ? digestUnder(keys[1]!, magicToken) : null;
 }
 
 /**
@@ -433,7 +456,7 @@ export async function settleClientLinks(
       else if (!acct || !matched) bad = "contact_changed";
       else if (link.matchedBy === "claim") {
         // The credential is what proved this one; a rotated link revokes it.
-        if (link.claimDigest !== claimDigest(c.magicToken)) bad = "credential_rotated";
+        if (!claimDigestMatches(link.claimDigest, c.magicToken)) bad = "credential_rotated";
       } else if (dismissed.has(c.id)) bad = "marked_different_people";
       else if (competitors.length > 1 || competitors[0]?.id !== link.accountId) bad = "contested";
       else {

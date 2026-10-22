@@ -1,4 +1,4 @@
-import { ACUITY, apiEnv, decrypt, encrypt } from "@chairback/config";
+import { ACUITY, apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import {
@@ -14,6 +14,7 @@ import {
   type AcuityCalendar,
   type AcuityMe,
 } from "./types.js";
+import { openToken, sealToken } from "../services/tokenKey.js";
 
 const env = apiEnv();
 
@@ -85,9 +86,9 @@ export async function getAcuityClientForShop(
   const conn = await prisma.acuityConnection.findUnique({ where: { shopId } });
   if (!conn) throw new NotConnectedError(shopId);
 
-  let accessToken = decrypt(conn.accessToken, env.TOKEN_ENCRYPTION_KEY);
+  let accessToken = openToken(conn.accessToken);
   const refreshToken = conn.refreshToken
-    ? decrypt(conn.refreshToken, env.TOKEN_ENCRYPTION_KEY)
+    ? openToken(conn.refreshToken)
     : null;
 
   // Whether the row is marked refused right now. Tracked here so a healthy
@@ -320,9 +321,9 @@ async function refreshAccessToken(
   await prisma.acuityConnection.update({
     where: { shopId },
     data: {
-      accessToken: encrypt(token.access_token, env.TOKEN_ENCRYPTION_KEY),
+      accessToken: sealToken(token.access_token),
       refreshToken: token.refresh_token
-        ? encrypt(token.refresh_token, env.TOKEN_ENCRYPTION_KEY)
+        ? sealToken(token.refresh_token)
         : undefined,
       tokenExpiresAt: token.expires_in
         ? new Date(Date.now() + token.expires_in * 1000)

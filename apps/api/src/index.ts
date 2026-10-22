@@ -15,6 +15,7 @@ import { squareEnabled } from "./square/client.js";
 import { receptionistConfigured } from "./receptionist/config.js";
 import { captureError, flushSentry, initSentry } from "./sentry.js";
 import { reportAppVersionConfig } from "./routes/appVersion.js";
+import { rekeyStoredTokensAtBoot } from "./engines/tokenRekey.js";
 
 const env = apiEnv();
 initSentry();
@@ -47,6 +48,10 @@ startScheduler();
 // unregistered domain fails SILENTLY (the tab is simply absent). Re-asserting
 // it every boot is what stops that going unnoticed on a new environment.
 ensureWalletDomainsAtBoot();
+
+// Mid key rotation, move stored Acuity/Square tokens and claim proofs onto the
+// new TOKEN_ENCRYPTION_KEY; otherwise just check they still open (tokenRekey.ts).
+rekeyStoredTokensAtBoot();
 
 logIntegrationStatusAtBoot({
   billing: billingEnabled(),

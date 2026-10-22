@@ -95,13 +95,22 @@ function safeEqual(a: string, b: string): boolean {
  * anyone hitting the API directly could rotate the header to mint fresh
  * buckets and bypass per-IP limits entirely. Unset (or mismatched) secret
  * falls back to `req.ip`, i.e. exactly the old behavior.
+ *
+ * 🔴 ROTATION: `WEB_PROXY_SECRET_PREVIOUS` is accepted too. The secret lives on
+ * two hosts that deploy separately (Railway, Vercel), so changing it is never
+ * one atomic step, and a mismatch in between drops every visitor into ONE
+ * bucket - which 429s the platform and turns shop pages into 404s. Set the new
+ * value + PREVIOUS here first, then change Vercel, then remove PREVIOUS
+ * (docs/runbook/secret-rotation.md).
  */
 export function publicIpKey(req: Request): string {
-  const secret = process.env.WEB_PROXY_SECRET;
-  if (secret) {
+  const secrets = [process.env.WEB_PROXY_SECRET, process.env.WEB_PROXY_SECRET_PREVIOUS].filter(
+    (s): s is string => typeof s === "string" && s.trim() !== "",
+  );
+  if (secrets.length > 0) {
     const supplied = req.header("x-cb-proxy-secret");
     const forwarded = req.header("x-cb-client-ip");
-    if (supplied && forwarded && safeEqual(supplied, secret)) {
+    if (supplied && forwarded && secrets.some((s) => safeEqual(supplied, s))) {
       return `fwd:${forwarded.slice(0, 64)}`;
     }
   }

@@ -19,6 +19,7 @@ export const logger = pino({
       "accessToken",
       "refreshToken",
       "TOKEN_ENCRYPTION_KEY",
+      "TOKEN_ENCRYPTION_KEY_PREVIOUS",
       "SESSION_SECRET",
       // Belt and braces behind logRedaction.ts's res serializer: if a response
       // object is ever hand-logged instead of going through pino-http, the

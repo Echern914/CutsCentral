@@ -1,4 +1,4 @@
-import { SQUARE, apiEnv, decrypt, encrypt, squareHost } from "@chairback/config";
+import { SQUARE, apiEnv, squareHost } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import {
@@ -8,6 +8,7 @@ import {
   type SquareBooking,
   type SquareCustomer,
 } from "./types.js";
+import { openToken, sealToken } from "../services/tokenKey.js";
 
 const env = apiEnv();
 
@@ -108,8 +109,8 @@ export async function getSquareClientForShop(shopId: string): Promise<SquareClie
   const conn = await prisma.squareConnection.findUnique({ where: { shopId } });
   if (!conn) throw new NotConnectedError(shopId);
 
-  let accessToken = decrypt(conn.accessToken, env.TOKEN_ENCRYPTION_KEY);
-  const refreshToken = decrypt(conn.refreshToken, env.TOKEN_ENCRYPTION_KEY);
+  let accessToken = openToken(conn.accessToken);
+  const refreshToken = openToken(conn.refreshToken);
 
   async function call(method: string, path: string): Promise<unknown> {
     const doFetch = (token: string) =>
@@ -200,8 +201,8 @@ export async function refreshAccessToken(
   await prisma.squareConnection.update({
     where: { shopId },
     data: {
-      accessToken: encrypt(token.access_token, env.TOKEN_ENCRYPTION_KEY),
-      refreshToken: encrypt(token.refresh_token, env.TOKEN_ENCRYPTION_KEY),
+      accessToken: sealToken(token.access_token),
+      refreshToken: sealToken(token.refresh_token),
       tokenExpiresAt: new Date(token.expires_at),
     },
   });

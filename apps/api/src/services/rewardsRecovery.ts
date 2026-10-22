@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { Prisma, prisma, runAsOwner } from "@chairback/db";
 import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
-import { apiEnv, decrypt, encrypt, randomToken } from "@chairback/config";
+import { apiEnv, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
 import {
   CLEANUP_AFTER_MS,
@@ -21,6 +21,7 @@ import {
   bumpRecoverySmsMetric,
   takeRecoverySmsBudget,
 } from "./recoverySmsBudget.js";
+import { openToken, sealToken } from "./tokenKey.js";
 
 /**
  * Rewards recovery: prove you hold the phone, THEN learn what it unlocks.
@@ -204,7 +205,7 @@ export async function issueRecoveryChallenge(opts: {
         where: { id: existing.id },
         data: {
           codeHash: hashOtp(RECOVERY_PURPOSE, phone, RECOVERY_PURPOSE, code),
-          phoneEnc: encrypt(phone, apiEnv().TOKEN_ENCRYPTION_KEY),
+          phoneEnc: sealToken(phone),
           ipHash,
           attemptCount: 0,
           expiresAt: new Date(now.getTime() + CODE_TTL_MS),
@@ -247,7 +248,7 @@ export async function issueRecoveryChallenge(opts: {
         data: {
           purpose: RECOVERY_PURPOSE,
           phoneHash,
-          phoneEnc: encrypt(phone, apiEnv().TOKEN_ENCRYPTION_KEY),
+          phoneEnc: sealToken(phone),
           ipHash,
           codeHash: hashOtp(RECOVERY_PURPOSE, phone, RECOVERY_PURPOSE, code),
           expiresAt: new Date(now.getTime() + CODE_TTL_MS),
@@ -518,7 +519,7 @@ export async function listRecoveryShops(opts: {
     if (!row || row.proofConsumedAt || !row.proofExpiresAt || row.proofExpiresAt.getTime() <= now.getTime()) {
       return null;
     }
-    const phone = decrypt(row.phoneEnc, apiEnv().TOKEN_ENCRYPTION_KEY);
+    const phone = openToken(row.phoneEnc);
 
     const clients = await tx.client.findMany({
       where: { phone, archivedAt: null },
@@ -609,7 +610,7 @@ export async function selectRecoveryShop(opts: {
     if (!row || row.proofConsumedAt || !row.proofExpiresAt || row.proofExpiresAt.getTime() <= now.getTime()) {
       return { ok: false };
     }
-    const phone = decrypt(row.phoneEnc, apiEnv().TOKEN_ENCRYPTION_KEY);
+    const phone = openToken(row.phoneEnc);
 
     // Resolve the selection against the same eligibility the chooser used.
     const clients = await tx.client.findMany({

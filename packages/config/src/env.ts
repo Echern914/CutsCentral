@@ -113,6 +113,16 @@ const apiSchema = z.object({
       message:
         "must decode to 32 bytes (base64). Generate with: openssl rand -base64 32",
     }),
+  // The key being ROTATED OUT. Set it to the old TOKEN_ENCRYPTION_KEY value in
+  // the same change that sets the new one: rows sealed under it keep opening,
+  // and the boot re-key (apps/api engines/tokenRekey.ts) moves them to the new
+  // key. Remove it once the boot log says nothing is left on it. Deliberately
+  // NOT validated here - a typo must not stop the API booting mid-rotation;
+  // services/tokenKey.ts ignores a malformed value and says so loudly.
+  TOKEN_ENCRYPTION_KEY_PREVIOUS: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().optional(),
+  ),
   /**
    * Requests per minute per IP allowed at the remote MCP endpoint, before any
    * authentication runs.
