@@ -49,6 +49,30 @@ export function decrypt(payload: string, keyB64: string): string {
   return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
 }
 
+/**
+ * Decrypt with the first key that opens the payload, and say which one did.
+ *
+ * Exists for KEY ROTATION: during a switch, rows sealed under the previous key
+ * sit beside rows sealed under the new one. GCM authenticates, so a wrong key
+ * fails loudly at `final()` rather than returning garbage - trying each key in
+ * turn is therefore exact, never a guess. Throws the FIRST key's error when no
+ * key opens it, so a genuinely corrupt row reports as it always did.
+ */
+export function decryptWithAny(
+  payload: string,
+  keysB64: readonly string[],
+): { plaintext: string; keyIndex: number } {
+  let firstError: unknown;
+  for (let i = 0; i < keysB64.length; i++) {
+    try {
+      return { plaintext: decrypt(payload, keysB64[i]!), keyIndex: i };
+    } catch (err) {
+      if (i === 0) firstError = err;
+    }
+  }
+  throw firstError ?? new Error("No decryption key supplied");
+}
+
 /** Generate an unguessable URL-safe token (used for per-shop webhook secrets). */
 export function randomToken(bytes = 32): string {
   return randomBytes(bytes).toString("base64url");

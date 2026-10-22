@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { Prisma, runAsOwner } from "@chairback/db";
-import { apiEnv, decrypt, encrypt, randomToken } from "@chairback/config";
+import { decryptWithAny, encrypt, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
+import { purposeKeys } from "../services/tokenKey.js";
 import {
   NoopMessageProvider,
   getSignInMessageProvider,
@@ -64,14 +65,15 @@ function backoffFor(attempts: number): number {
 }
 
 /**
- * The key the code and destination are sealed under: derived from the
+ * The keys the code and destination are sealed under: derived from the
  * existing secret for THIS purpose only, so a leaked sign-in backup is not
- * also an Acuity token backup.
+ * also an Acuity token backup. Newest first - a row sealed just before a key
+ * rotation still opens under the previous key (services/tokenKey.ts).
  */
-function sealKey(): string {
-  return createHash("sha256")
-    .update(`${apiEnv().TOKEN_ENCRYPTION_KEY}:customer_signin_seal_v1`, "utf8")
-    .digest("base64");
+function sealKeys(): string[] {
+  return purposeKeys("customer_signin_seal_v1").map((k) =>
+    createHash("sha256").update(k, "utf8").digest("base64"),
+  );
 }
 
 export interface SealedSignIn {
@@ -80,12 +82,12 @@ export interface SealedSignIn {
 }
 
 export function sealSignIn(payload: SealedSignIn): string {
-  return encrypt(JSON.stringify(payload), sealKey());
+  return encrypt(JSON.stringify(payload), sealKeys()[0]!);
 }
 
 function openSealed(sealed: string): SealedSignIn | null {
   try {
-    const parsed = JSON.parse(decrypt(sealed, sealKey())) as SealedSignIn;
+    const parsed = JSON.parse(decryptWithAny(sealed, sealKeys()).plaintext) as SealedSignIn;
     return typeof parsed?.to === "string" && typeof parsed?.code === "string" ? parsed : null;
   } catch {
     // A key rotation, or a corrupt row. Never retryable, never loggable.

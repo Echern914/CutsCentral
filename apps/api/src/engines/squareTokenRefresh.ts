@@ -1,10 +1,7 @@
-import { decrypt } from "@chairback/config";
-import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { refreshAccessToken } from "../square/client.js";
-
-const env = apiEnv();
+import { openToken } from "../services/tokenKey.js";
 
 /**
  * Proactively refresh Square access tokens before they expire. Square access
@@ -27,7 +24,7 @@ export async function refreshExpiringSquareTokens(now = new Date()): Promise<num
   let refreshed = 0;
   for (const conn of due) {
     try {
-      const refreshToken = decrypt(conn.refreshToken, env.TOKEN_ENCRYPTION_KEY);
+      const refreshToken = openToken(conn.refreshToken);
       await refreshAccessToken(conn.shopId, refreshToken);
       refreshed++;
     } catch (err) {

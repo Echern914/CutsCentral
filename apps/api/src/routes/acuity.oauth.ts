@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { apiEnv, decrypt, encrypt } from "@chairback/config";
+import { apiEnv } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import {
   OAUTH_STATE_COOKIE,
@@ -21,6 +21,7 @@ import {
 } from "../engines/acuityMirror.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
+import { openToken, sealToken } from "../services/tokenKey.js";
 
 const env = apiEnv();
 export const acuityOAuthRouter: Router = Router();
@@ -94,9 +95,9 @@ acuityOAuthRouter.get("/callback", async (req, res) => {
       create: {
         shopId: shop.id,
         acuityAccountId: me.id,
-        accessToken: encrypt(token.access_token, env.TOKEN_ENCRYPTION_KEY),
+        accessToken: sealToken(token.access_token),
         refreshToken: token.refresh_token
-          ? encrypt(token.refresh_token, env.TOKEN_ENCRYPTION_KEY)
+          ? sealToken(token.refresh_token)
           : null,
         scope: token.scope ?? ACUITY.scope,
         tokenExpiresAt: token.expires_in
@@ -105,9 +106,9 @@ acuityOAuthRouter.get("/callback", async (req, res) => {
       },
       update: {
         acuityAccountId: me.id,
-        accessToken: encrypt(token.access_token, env.TOKEN_ENCRYPTION_KEY),
+        accessToken: sealToken(token.access_token),
         refreshToken: token.refresh_token
-          ? encrypt(token.refresh_token, env.TOKEN_ENCRYPTION_KEY)
+          ? sealToken(token.refresh_token)
           : null,
         tokenExpiresAt: token.expires_in
           ? new Date(Date.now() + token.expires_in * 1000)
@@ -211,7 +212,7 @@ acuityOAuthRouter.post("/repair", requireUser, requireShop, requireManager, asyn
   }
   let accessToken: string;
   try {
-    accessToken = decrypt(conn.accessToken, env.TOKEN_ENCRYPTION_KEY);
+    accessToken = openToken(conn.accessToken);
   } catch {
     res.status(500).json({ error: "token_decrypt_failed" });
     return;
@@ -320,7 +321,7 @@ acuityOAuthRouter.post("/disconnect", requireUser, requireShop, requireManager, 
   if (conn && shop.acuityWebhookIds.length) {
     let accessToken: string | null = null;
     try {
-      accessToken = decrypt(conn.accessToken, env.TOKEN_ENCRYPTION_KEY);
+      accessToken = openToken(conn.accessToken);
     } catch {
       accessToken = null;
     }
