@@ -36,6 +36,12 @@ try {
 // proves a path stays silent while it is off sets SMS_ENABLED=false itself.
 if (!("SMS_ENABLED" in process.env)) process.env.SMS_ENABLED = "true";
 
+// Admin two-step is ON in the app (ADMIN_STEP_UP_ENABLED defaults true). The
+// suites that test admin FEATURES run with it off, so each does not have to
+// pass a code first; routes/adminStepUp.test.ts turns it back on and tests the
+// gate itself - including that every admin route sits behind it.
+if (!("ADMIN_STEP_UP_ENABLED" in process.env)) process.env.ADMIN_STEP_UP_ENABLED = "false";
+
 // Hosts that are NEVER allowed to be a test target. Tests create and delete
 // shops freely, so they must run against a throwaway DB.
 const PROD_HOST_FRAGMENTS = ["supabase.co", "supabase.com"];

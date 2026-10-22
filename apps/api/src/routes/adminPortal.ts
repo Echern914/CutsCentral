@@ -4,6 +4,7 @@ import { apiEnv, BILLING, PLANS } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { requireAdmin } from "../middleware/admin.js";
+import { adminStepUpRouter, adminTwoStepRouter, requireAdminStepUp } from "./adminPortal.stepUp.js";
 import { awardsAdminRouter } from "./awardsAdmin.js";
 import { readBookingRefusals } from "../services/bookingRefusal.js";
 import { readEmailDeliverySummary } from "../services/emailDelivery.js";
@@ -37,6 +38,13 @@ import { partnerAdminRouter } from "./adminPortal.partners.js";
  */
 export const adminPortalRouter: Router = Router();
 adminPortalRouter.use(requireUser, requireAdmin);
+
+// 🔴 ADMIN TWO-STEP (adminPortal.stepUp.ts). The ways in come first; then the
+// gate, in front of EVERY route and sub-router below it - so it must stay
+// right here, above them all.
+adminPortalRouter.use("/step-up", adminStepUpRouter);
+adminPortalRouter.use(requireAdminStepUp);
+adminPortalRouter.use("/two-step", adminTwoStepRouter);
 
 // Affiliate program review (its own file; inherits the gates above, and adds
 // the AFFILIATE_PROGRAM_ENABLED dark-launch check - while the program is off,

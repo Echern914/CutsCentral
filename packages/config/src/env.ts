@@ -142,6 +142,11 @@ const apiSchema = z.object({
   // a 404 even with a valid admin session/token. When UNSET/empty the check is
   // skipped (fail-open) so you can never lock yourself out by misconfiguring it.
   ADMIN_IP_ALLOWLIST: z.string().optional().default(""),
+  // Admin two-step: the operator portal opens only for a session that passed
+  // an authenticator-app or emailed code (routes/adminPortal.stepUp.ts). ON by
+  // default. Exactly `false` is the ESCAPE HATCH for an operator locked out
+  // (phone lost AND email down) - set it, sign in, set up again, remove it.
+  ADMIN_STEP_UP_ENABLED: boolish.default("true"),
 
   // Custom shop domains (barber's own domain 301s to their /s/ page). All three
   // optional, same pattern as Square/Stripe: while TOKEN or PROJECT_ID is unset

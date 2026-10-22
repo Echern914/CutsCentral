@@ -159,6 +159,28 @@ describe("rekeyStoredTokens", () => {
     expect(rotated.claimDigest).toBe(rotatedDigest);
   });
 
+  it("an admin's authenticator secret moves to the new key too", async () => {
+    const user = await prisma.user.create({
+      data: {
+        email: `rekey-admin-${randomToken(6)}@test.local`.toLowerCase(),
+        name: "Admin",
+        adminTotpSecretEnc: encrypt("ADMINSECRET", OLD),
+        adminTotpPendingEnc: encrypt("PENDINGSECRET", OLD),
+      },
+      select: { id: true },
+    });
+    userIds.push(user.id);
+    setKeys(NEW, OLD);
+    const report = await rekeyStoredTokens();
+    expect(report.adminTotp.resealed).toBeGreaterThanOrEqual(1);
+    const row = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+      select: { adminTotpSecretEnc: true, adminTotpPendingEnc: true },
+    });
+    expect(decrypt(row.adminTotpSecretEnc!, NEW)).toBe("ADMINSECRET");
+    expect(decrypt(row.adminTotpPendingEnc!, NEW)).toBe("PENDINGSECRET");
+  });
+
   it("is idempotent: a second run moves nothing of ours", async () => {
     setKeys(NEW, OLD);
     const before = await prisma.acuityConnection.findUniqueOrThrow({ where: { shopId: acuityShop } });
@@ -185,6 +207,7 @@ describe("rekeySummary - what the deploy log says", () => {
     acuity: counts(0, 0, 0),
     square: counts(0, 0, 0),
     claims: counts(0, 0, 0),
+    adminTotp: counts(0, 0, 0),
     ...p,
   });
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { ACTIVE_SHOP_COOKIE_NAME } from "@chairback/config";
 import { prisma, type Shop } from "@chairback/db";
@@ -121,6 +122,13 @@ declare global {
       shop?: Shop;
       /** True when the session carries the read-only demo claim. */
       demoSession?: boolean;
+      /**
+       * sha256 hex of the session token that was accepted (cookie or bearer).
+       * Binds an admin two-step pass to THIS session (routes/adminPortal.stepUp.ts):
+       * a session forged with a leaked SESSION_SECRET has a different digest
+       * and has never passed. The token itself is never kept on the request.
+       */
+      sessionDigest?: string;
     }
   }
 }
@@ -151,15 +159,16 @@ export async function requireUser(
   const bearer = authHeader?.startsWith("Bearer ")
     ? authHeader.slice(7)
     : undefined;
-  const candidates = [sessionFromToken(cookie), sessionFromToken(bearer)].filter(
-    (p): p is NonNullable<typeof p> => p !== null,
-  );
+  const candidates = [cookie, bearer].flatMap((token) => {
+    const payload = token ? sessionFromToken(token) : null;
+    return payload && token ? [{ payload, token }] : [];
+  });
 
   // Revocation check: a token minted before the user's current tokenVersion
   // (e.g. before a password change or logout) is dead even if its
   // signature/expiry hold. Cache per userId - both candidates usually agree.
   const versions = new Map<string, number | null>();
-  for (const payload of candidates) {
+  for (const { payload, token } of candidates) {
     let version = versions.get(payload.userId);
     if (version === undefined) {
       const user = await prisma.user.findUnique({
@@ -182,6 +191,7 @@ export async function requireUser(
       }
       req.userId = payload.userId;
       req.sessionVersion = version;
+      req.sessionDigest = createHash("sha256").update(token).digest("hex");
       next();
       return;
     }
