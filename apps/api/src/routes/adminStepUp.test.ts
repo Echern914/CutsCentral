@@ -18,6 +18,9 @@ import { totpCode, totpStep } from "../auth/totp.js";
  */
 
 let app: Express;
+// vitest.setup.ts turns the step off for the feature suites; THIS suite runs
+// the app as production does, with it on.
+const savedStepUp = process.env.ADMIN_STEP_UP_ENABLED;
 const sent: SendEmailInput[] = [];
 const emails: string[] = [];
 const password = "supersecret123";
@@ -84,6 +87,8 @@ afterAll(async () => {
   await prisma.user.deleteMany({ where: { email: { in: emails } } });
   delete process.env.RESEND_API_KEY;
   delete process.env.EMAIL_FROM;
+  if (savedStepUp === undefined) delete process.env.ADMIN_STEP_UP_ENABLED;
+  else process.env.ADMIN_STEP_UP_ENABLED = savedStepUp;
   __resetEnvCacheForTests();
   await prisma.$disconnect();
 });
@@ -92,6 +97,26 @@ describe("the gate", () => {
   it("a non-admin still sees nothing at all", async () => {
     const u = await signup("plain");
     expect((await get("/metrics", [u.cookie])).status).toBe(404);
+  });
+
+  it("🔴 EVERY part of the portal sits behind it - routes and sub-routers alike", async () => {
+    const a = await admin("everywhere");
+    const paths = [
+      "/metrics",
+      "/shops",
+      "/analytics?days=30",
+      "/preflight",
+      "/switches/sms",
+      "/affiliate/flags",
+      "/partners",
+      "/awards",
+    ];
+    for (const p of paths) {
+      const res = await get(p, [a.cookie]);
+      expect({ p, status: res.status }).toEqual({ p, status: 403 });
+    }
+    // Writes too.
+    expect((await post("/shops/anything/comp", [a.cookie], { compAccess: true })).status).toBe(403);
   });
 
   it("🔴 an admin's session alone no longer opens the portal - it asks for the second step", async () => {
