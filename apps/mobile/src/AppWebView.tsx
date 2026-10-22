@@ -15,7 +15,7 @@ import * as WebBrowser from "expo-web-browser";
 import { setStatusBarStyle } from "expo-status-bar";
 import { API_ORIGIN, NEXT_UP_WIDGET_ENABLED, WEB_ORIGIN } from "@/src/config";
 import { parseOpenAuthRequest, resumeUrl } from "@/src/nativeBridge";
-import { FRAME } from "@/src/frameColors";
+import { FRAME, PAGE_BAR } from "@/src/frameColors";
 import { shouldReloadOnReturn } from "@/src/staleReturn";
 
 // If the real page content hasn't signaled ready within this long, stop spinning
@@ -229,6 +229,11 @@ export function AppWebView({
 }) {
   const [errored, setErrored] = useState(false);
   const [loading, setLoading] = useState(true);
+  // The scheme the page last reported. A dark page says so before it paints
+  // (lib/theme.ts PAGE_DARK_PREPAINT_SCRIPT), so the loading cover behind it
+  // goes dark too instead of flashing cream under a dark bar.
+  const [heardScheme, setHeardScheme] = useState<"light" | "dark">("light");
+  const cover = heardScheme === "dark" ? PAGE_BAR.dark : null;
   const [key, setKey] = useState(0); // bump to force a fresh WebView on retry
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webref = useRef<WebView>(null);
@@ -420,6 +425,7 @@ export function AppWebView({
           const theme = THEME_MESSAGE.exec(e.nativeEvent.data);
           if (theme) {
             setStatusBarStyle(theme[1] === "dark" ? "light" : "dark");
+            setHeardScheme(theme[1] as "light" | "dark");
             onTheme?.(theme[1] as "light" | "dark");
             return;
           }
@@ -466,8 +472,8 @@ export function AppWebView({
         {...props}
       />
       {loading && (
-        <View style={[styles.center, styles.overlay]}>
-          <ActivityIndicator color={FRAME.spinner} />
+        <View style={[styles.center, styles.overlay, cover && { backgroundColor: cover.bg }]}>
+          <ActivityIndicator color={cover ? cover.title : FRAME.spinner} />
         </View>
       )}
     </View>

@@ -99,6 +99,17 @@ describe("the header counts ratings", () => {
     expect(form.compareDocumentPosition(firstCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("🔴 tells the iPhone app the page's own scheme, so its bar matches (not in the editor preview)", () => {
+    const { unmount } = render(<ShopPageClient data={page({ theme: "classic" })} />);
+    expect(document.querySelector('[data-app-scheme="dark"]')).not.toBeNull();
+    unmount();
+    const light = render(<ShopPageClient data={page({ theme: "crisp" })} />);
+    expect(document.querySelector('[data-app-scheme="light"]')).not.toBeNull();
+    light.unmount();
+    render(<ShopPageClient data={page({ theme: "classic" })} preview />);
+    expect(document.querySelector("[data-app-scheme]")).toBeNull();
+  });
+
   it("one rating is singular", () => {
     render(<ShopPageClient data={page({ reviewSummary: { count: 1, avgRating: 4, writtenCount: 0 } })} />);
     expect(screen.getByText("· 1 rating")).toBeTruthy();

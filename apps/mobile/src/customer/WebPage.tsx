@@ -8,6 +8,7 @@ import { errorCopy } from "./api";
 import { color, space } from "./theme";
 import { presentWalletPass } from "./wallet";
 import { ErrorState, Placeholder, Tap, Txt } from "./ui";
+import { PAGE_BAR, type PageBarScheme } from "@/src/frameColors";
 
 /**
  * A shop's own web page (storefront, booking, manage) inside My ChairBack.
@@ -45,6 +46,10 @@ export function WebPage({
   banner?: ReactNode;
 }) {
   const router = useRouter();
+  // The page's own scheme, as it reports it ("cb:theme:*"): the bar above it
+  // wears the same, so a shop's black page never sits under a cream slab.
+  const [scheme, setScheme] = useState<PageBarScheme>("light");
+  const bar = PAGE_BAR[scheme];
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [attempt, setAttempt] = useState(0);
@@ -72,13 +77,16 @@ export function WebPage({
   }
 
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, { backgroundColor: bar.bg }]}>
       <Stack.Screen
         options={{
           title,
+          headerStyle: { backgroundColor: bar.bg },
+          headerTintColor: bar.tint,
+          headerTitleStyle: { color: bar.title },
           headerLeft: () => (
             <Tap onPress={done} accessibilityLabel="Done" accessibilityHint="Returns to My ChairBack" style={styles.done}>
-              <Txt variant="headline" tone="gold">
+              <Txt variant="headline" style={{ color: bar.tint }}>
                 Done
               </Txt>
             </Tap>
@@ -89,8 +97,9 @@ export function WebPage({
       {url ? (
         <AppWebView
           source={{ uri: url }}
-          style={styles.root}
+          style={[styles.root, { backgroundColor: bar.bg }]}
           awaitsReady
+          onTheme={setScheme}
           onMessage={(e) => {
             const raw = e.nativeEvent.data;
             // "Add to Apple Wallet", which the page cannot do for itself in a

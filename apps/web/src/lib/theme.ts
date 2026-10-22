@@ -81,9 +81,31 @@ function pageWantsDark(): boolean {
 
 /**
  * Pre-paint for a page that wears a dark shop scheme: the attribute is on
- * <html> before the first paint, so a hard load never flashes white.
+ * <html> before the first paint, so a hard load never flashes white. It also
+ * tells the iPhone app at once, so the app's bar above the page is dark from
+ * the first frame instead of flashing cream (react-native-webview injects its
+ * bridge before the page's own scripts run).
  */
-export const PAGE_DARK_PREPAINT_SCRIPT = `document.documentElement.dataset.theme="dark"`;
+export const PAGE_DARK_PREPAINT_SCRIPT = `document.documentElement.dataset.theme="dark";try{window.ReactNativeWebView&&window.ReactNativeWebView.postMessage("cb:theme:dark")}catch(e){}`;
+
+/**
+ * A public page with its OWN colours that never touches ChairBack's tokens -
+ * a shop's storefront (/s) and a client's rewards page (/r) paint themselves
+ * from the shop's page theme. They mark which scheme they show, so the iPhone
+ * app can colour its bar above them to match (components/PageScheme.tsx
+ * AppFrameScheme). The page itself is unchanged; only the app is told.
+ */
+export const APP_SCHEME_ATTR = "data-app-scheme";
+
+/** What the page on screen looks like, for the app: its marker, else light. */
+function appScheme(): Theme {
+  return document.querySelector(`[${APP_SCHEME_ATTR}="dark"]`) !== null ? "dark" : "light";
+}
+
+/** Tell the app which scheme the page shows, without changing the page. */
+export function tellAppScheme(theme: Theme): void {
+  tellApp(theme);
+}
 
 /** Set the shop's dark on <html> for the page that asked (never stored). */
 export function wearPageDark(): void {
@@ -102,7 +124,8 @@ export function suspendTheme(): void {
     return;
   }
   delete document.documentElement.dataset.theme;
-  tellApp("light");
+  // ChairBack's tokens go light; the app hears what the page actually shows.
+  tellApp(appScheme());
 }
 
 /**
