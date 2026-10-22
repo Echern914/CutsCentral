@@ -27,6 +27,9 @@ import { toE164 } from "../acuity/clientKey.js";
 import { editClient } from "../services/client.js";
 import { decimalToCents, recordPriceChange } from "../services/appointmentPriceLedger.js";
 import { resolveEditedAddOns } from "../engines/addOns.js";
+import { SLOT_SERVICES_SELECT, slotOffersService } from "../engines/targetedSlotServices.js";
+import { staffSpanBlocked } from "../engines/blockedTime.js";
+import { TARGETED_SLOT_ORIGIN } from "../engines/specialBooking.js";
 
 /**
  * EDIT AN APPOINTMENT. One endpoint, every editable field.
@@ -77,6 +80,23 @@ import { resolveEditedAddOns } from "../engines/addOns.js";
  *     lost. Either way it is the same price change as a typed one - refused
  *     on a paid booking that cannot take it (rule 4) and ledgered.
  *
+ *  7. A MOVE ONTO ONE OF HIS OWN SPECIALS TAKES THE SPECIAL (Drick,
+ *     2026-10-22: "I just need that after hours to be selectable when I try
+ *     to reschedule a client"). It used to be a dead end: an after-hours
+ *     special is outside his hours by design, so the move was refused as
+ *     invalid_slot; past "Save anyway", the open special owned its span, so
+ *     the move needed "Book anyway" - and landed marked Double-booked, with
+ *     the special still for sale over it. Now the move claims it exactly as
+ *     New appointment does (specialForMove): no hours gate, the special's id
+ *     passed to the guard, the claim a compare-and-swap in the same
+ *     transaction, and the booking marked as a special so "After hours"
+ *     shows by the name and an undone cancel can take it back.
+ *     The special a booking LEAVES goes back on sale in the same write, and a
+ *     booking moved off a special onto an ordinary time stops being called
+ *     one - the same rule the client's own reschedule follows. Its price and
+ *     length do not change (rule 4): the barber types a new price if he wants
+ *     one.
+ *
  * Imported bookings are refused outright: a Visit-linked row is owned by
  * Acuity, and editing it here would desynchronize the two systems with no
  * outbound appointment API to push the change back.
@@ -117,8 +137,104 @@ const editApptSchema = z
      * diff. Absent = unchanged; [] = remove them all. See rule 6.
      */
     addOnIds: z.array(z.string().min(1)).max(20).optional(),
+    /**
+     * Move this booking INTO one of the barber's own open specials (a tapped
+     * "After hours · 8:00 PM"). Optional: a typed time that lands exactly on
+     * one is found anyway (specialForMove). See rule 7.
+     */
+    targetedSlotId: z.string().trim().min(1).max(60).optional(),
   })
   .strict();
+
+type SpecialForMove =
+  | { kind: "none" }
+  | { kind: "claim"; id: string }
+  | { kind: "refused"; status: 400 | 409; error: "invalid_slot" | "slot_taken" };
+
+/**
+ * Rule 7: the open special this move lands on, if any.
+ *
+ * Asked by name (`explicitId`, the tapped special) it is checked exactly as
+ * New appointment checks one - this barber's, listed under this service,
+ * starting at this minute, still open, not inside his blocked time - and
+ * refused out loud when it is not. Found from a typed time, it is the oldest
+ * open special of this barber at exactly this start that offers this
+ * service; anything less than that is not a special move, and the ordinary
+ * checks below answer for the time.
+ *
+ * Not held to the shop's online booking rules (min notice, book up to): those
+ * protect the barber from customers, and here he is the one moving it.
+ */
+async function specialForMove(input: {
+  shopId: string;
+  appointmentId: string;
+  staffId: string;
+  serviceId: string;
+  startsAt: Date;
+  timezone: string;
+  now: Date;
+  explicitId: string | null;
+}): Promise<SpecialForMove> {
+  const select = {
+    id: true,
+    staffId: true,
+    serviceId: true,
+    services: SLOT_SERVICES_SELECT,
+    startsAt: true,
+    durationMin: true,
+    active: true,
+    bookedAppointmentId: true,
+  } as const;
+  const blocked = (slot: { staffId: string; startsAt: Date; durationMin: number }) =>
+    staffSpanBlocked({
+      shopId: input.shopId,
+      staffId: slot.staffId,
+      startsAt: slot.startsAt,
+      endsAt: new Date(slot.startsAt.getTime() + slot.durationMin * 60_000),
+      timezone: input.timezone,
+      serviceId: input.serviceId,
+    });
+
+  if (input.explicitId) {
+    const slot = await prisma.targetedSlot.findFirst({
+      where: { id: input.explicitId, shopId: input.shopId },
+      select,
+    });
+    if (
+      !slot ||
+      slot.staffId !== input.staffId ||
+      !slotOffersService(slot, input.serviceId) ||
+      slot.startsAt.getTime() !== input.startsAt.getTime()
+    ) {
+      return { kind: "refused", status: 400, error: "invalid_slot" };
+    }
+    // Already this booking's own special: nothing to take.
+    if (slot.bookedAppointmentId === input.appointmentId) return { kind: "none" };
+    if (!slot.active || slot.bookedAppointmentId !== null || slot.startsAt <= input.now) {
+      return { kind: "refused", status: 409, error: "slot_taken" };
+    }
+    // Blocked time wins over his own standing special, as on New appointment.
+    if (await blocked(slot)) return { kind: "refused", status: 409, error: "slot_taken" };
+    return { kind: "claim", id: slot.id };
+  }
+
+  const candidates = await prisma.targetedSlot.findMany({
+    where: {
+      shopId: input.shopId,
+      staffId: input.staffId,
+      startsAt: input.startsAt,
+      active: true,
+      bookedAppointmentId: null,
+    },
+    orderBy: { createdAt: "asc" },
+    select,
+  });
+  const slot = candidates.find(
+    (t) => t.startsAt > input.now && slotOffersService(t, input.serviceId),
+  );
+  if (!slot || (await blocked(slot))) return { kind: "none" };
+  return { kind: "claim", id: slot.id };
+}
 
 export function registerAppointmentEdit(
   router: Router,
@@ -217,6 +333,8 @@ export function registerAppointmentEdit(
         // test for telling them the new one (after commit, below).
         confirmationEmailSentAt: true,
         reminderEmailSentAt: true,
+        // Was it booked into a special (rule 7)?
+        bookedVia: true,
       },
     });
     if (!appt) {
@@ -397,9 +515,43 @@ export function registerAppointmentEdit(
       return;
     }
 
+    // Rule 7: the special this move lands on, and the one it leaves.
+    if (d.targetedSlotId && !clientVisibleMove) {
+      res.status(400).json({ error: "invalid_slot" });
+      return;
+    }
+    const special: SpecialForMove = clientVisibleMove
+      ? await specialForMove({
+          shopId,
+          appointmentId: appt.id,
+          staffId,
+          serviceId,
+          startsAt,
+          timezone: shop.timezone,
+          now,
+          explicitId: d.targetedSlotId ?? null,
+        })
+      : { kind: "none" };
+    if (special.kind === "refused") {
+      res.status(special.status).json({ error: special.error });
+      return;
+    }
+    const claimId = special.kind === "claim" ? special.id : null;
+    const held = clientVisibleMove
+      ? await prisma.targetedSlot.findFirst({
+          where: { shopId, bookedAppointmentId: appt.id },
+          select: { id: true, staffId: true, startsAt: true },
+        })
+      : null;
+    // Its own special still sits under it only if the chair and start held.
+    const leavesHeld =
+      held !== null && (held.staffId !== staffId || held.startsAt.getTime() !== startsAt.getTime());
+    const wasSpecial = appt.bookedVia === TARGETED_SLOT_ORIGIN;
+
     // The same availability gate the create path uses, unless the barber
-    // deliberately overrides it ("come in at 7, I'll stay late").
-    if (timeMoved && !d.customTime) {
+    // deliberately overrides it ("come in at 7, I'll stay late"). A special is
+    // sold outside the usual openings by design, so claiming one skips it.
+    if (timeMoved && !d.customTime && claimId === null) {
       const bookable = await isSlotBookable({
         shopId,
         staffId,
@@ -471,6 +623,8 @@ export function registerAppointmentEdit(
             overrideWaitlistHolds: true,
             // "Book anyway" - bound to the rows the last refusal named.
             overlapConfirmation: d.overlapConfirmation ?? null,
+            // Taking his own special must not be vetoed by that special.
+            ...(claimId ? { targetedSlotIdToIgnore: claimId } : {}),
           });
           forcedOverlap = guard.overlapsCrossed !== undefined;
           await recordExternalBlockOverrides(tx, {
@@ -481,6 +635,23 @@ export function registerAppointmentEdit(
             source: "dashboard_edit",
             blocks: guard.externalBlocksCrossed,
           });
+        }
+        // Rule 7, under the guard's lock. The special it leaves goes back on
+        // sale FIRST: a booking holds at most one (bookedAppointmentId is
+        // UNIQUE), so the claim below needs it free.
+        if (leavesHeld) {
+          await tx.targetedSlot.updateMany({
+            where: { shopId, bookedAppointmentId: appt.id },
+            data: { bookedAppointmentId: null },
+          });
+        }
+        if (claimId) {
+          // Compare-and-swap: a customer who took it a moment ago keeps it.
+          const { count } = await tx.targetedSlot.updateMany({
+            where: { id: claimId, shopId, active: true, bookedAppointmentId: null },
+            data: { bookedAppointmentId: appt.id },
+          });
+          if (count === 0) throw new SlotTakenError();
         }
         await tx.appointment.update({
           where: { id: appt.id },
@@ -505,6 +676,12 @@ export function registerAppointmentEdit(
               ? { addOns: addOnEdit.snapshot as unknown as Prisma.InputJsonValue }
               : {}),
             ...(d.notes !== undefined ? { notes: d.notes } : {}),
+            // Rule 7: a special now, or an ordinary booking that used to be one.
+            ...(claimId
+              ? { bookedVia: TARGETED_SLOT_ORIGIN }
+              : wasSpecial && clientVisibleMove && (held === null || leavesHeld)
+                ? { bookedVia: null }
+                : {}),
             // Send-state resets only when the TIME actually moved: fixing a
             // spelling must not re-text the customer a fresh confirmation.
             // 🔴 The EMAIL stamps move with a change the client can see. Email
