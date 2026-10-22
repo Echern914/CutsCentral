@@ -26,6 +26,7 @@ import { PrimaryCta, ShopChrome, ShopFooter, TextToBookBlock } from "./pageChrom
 import { DesignedPage } from "./designs/DesignedPage";
 import type { DesignCtx } from "./designs/model";
 import type { ShopPageData } from "./page";
+import { AppFrameScheme } from "@/components/PageScheme";
 
 /**
  * A barber's public mini-site. Fully identity-driven: every surface reads from
@@ -174,11 +175,18 @@ export function ShopPageClient({
       sections,
       order,
     };
-    return <DesignedPage design={design} ctx={ctx} />;
+    return (
+      <>
+        {!preview && <AppFrameScheme scheme={theme.scheme} />}
+        <DesignedPage design={design} ctx={ctx} />
+      </>
+    );
   }
 
   return (
     <div className="min-h-dvh" style={rootStyle}>
+      {/* The iPhone app's bar above this page wears the same scheme. */}
+      {!preview && <AppFrameScheme scheme={theme.scheme} />}
       <ShopChrome data={data} preview={preview} theme={theme} layout={layout} />
       <motion.main
         variants={staggerContainer}

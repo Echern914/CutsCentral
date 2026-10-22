@@ -50,6 +50,10 @@ Run it on the phone (pick your iPhone as the destination, ▶). Then:
       the status bar (clock, battery) is dark and readable.
 - [ ] Dashboard → Account → Appearance → **Black & Gold**: the dashboard turns
       dark and the status bar icons turn white. Switch back to White & Gold.
+- [ ] My ChairBack → open a shop whose page is **dark** (Classic Gold), then
+      **Book**: the bar with **Done** at the top is dark too (no cream strip),
+      the clock is readable, and loading never flashes cream. A shop with a
+      light page (Crisp Light) keeps the cream bar.
 
 **Widget** (from `docs/lock-screen-widget.md`; book yourself a test
 appointment later today first):

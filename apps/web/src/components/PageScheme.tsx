@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { PAGE_SCHEME_ATTR, wearPageDark } from "@/lib/theme";
+import { APP_SCHEME_ATTR, PAGE_SCHEME_ATTR, tellAppScheme, wearPageDark } from "@/lib/theme";
 
 /**
  * Marks a public page as wearing its SHOP'S dark scheme (lib/theme.ts).
@@ -21,4 +21,21 @@ export function PageScheme({ scheme }: { scheme: "light" | "dark" }) {
     if (scheme === "dark") wearPageDark();
   }, [scheme]);
   return <span hidden {...{ [PAGE_SCHEME_ATTR]: scheme }} />;
+}
+
+/**
+ * Tells the iPhone app which scheme a page with its OWN colours shows - a
+ * shop's storefront or a client's rewards page - so the app's bar above it
+ * (the one with "Done") matches instead of sitting cream over a black page
+ * (Eric, 2026-10-22: "white slab on top doesn't look professional").
+ *
+ * Unlike PageScheme it changes nothing on the page: ChairBack's tokens stay
+ * as they are. Said on mount, and again by ThemeScope on every route change,
+ * which reads this marker.
+ */
+export function AppFrameScheme({ scheme }: { scheme: "light" | "dark" }) {
+  useEffect(() => {
+    tellAppScheme(scheme);
+  }, [scheme]);
+  return <span hidden {...{ [APP_SCHEME_ATTR]: scheme }} />;
 }

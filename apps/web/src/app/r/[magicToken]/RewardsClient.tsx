@@ -22,6 +22,7 @@ import { AddToWallet } from "@/components/AddToWallet";
 import { TextToBook } from "@/components/TextToBook";
 import { DeleteMyData } from "./DeleteMyData";
 import { resolveRewardsTheme, rewardsFontVars, surfaceStyle, type RewardsTheme } from "./theme";
+import { AppFrameScheme } from "@/components/PageScheme";
 // The interface lives with the rewards sub-route (its page owns the API call);
 // this component just renders whichever page mounts it.
 import type { RewardsData } from "./rewards/page";
@@ -148,6 +149,8 @@ export function RewardsClient({
 
   return (
     <div className="min-h-dvh" style={rootStyle}>
+      {/* The iPhone app's bar above this page wears the same scheme. */}
+      <AppFrameScheme scheme={t.scheme} />
       {/* Guided client-experience tour — demo tenant only. Step anchors are the
           data-tour attributes below (keep in sync with
           packages/config/src/demoTour.ts). */}

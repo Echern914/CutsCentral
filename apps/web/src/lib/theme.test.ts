@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  APP_SCHEME_ATTR,
   PAGE_DARK_PREPAINT_SCRIPT,
   PAGE_SCHEME_ATTR,
   PREPAINT_SCRIPT,
@@ -85,6 +86,50 @@ describe("a booking page wearing its shop's dark page (Drick: \"switch it to bla
       expect(document.documentElement.dataset.theme).toBeUndefined();
     } finally {
       el.remove();
+    }
+  });
+});
+
+describe("🔴 the app's bar above a page matches the page (Eric: \"white slab on top\")", () => {
+  const bridge = () => {
+    const sent: string[] = [];
+    (window as unknown as { ReactNativeWebView?: unknown }).ReactNativeWebView = { postMessage: (m: string) => sent.push(m) };
+    return sent;
+  };
+  const unbridge = () => delete (window as unknown as { ReactNativeWebView?: unknown }).ReactNativeWebView;
+
+  it("a dark booking page tells the app BEFORE it paints, so the bar never flashes cream", () => {
+    const sent = bridge();
+    try {
+      new Function(PAGE_DARK_PREPAINT_SCRIPT)();
+      expect(sent).toEqual(["cb:theme:dark"]);
+    } finally {
+      unbridge();
+    }
+  });
+
+  it("a storefront in its own dark colours tells the app dark - and changes nothing on the page", () => {
+    const sent = bridge();
+    const el = document.createElement("span");
+    el.setAttribute(APP_SCHEME_ATTR, "dark");
+    document.body.appendChild(el);
+    try {
+      suspendTheme(); // what ThemeScope does on every public route
+      expect(sent).toEqual(["cb:theme:dark"]);
+      expect(document.documentElement.dataset.theme).toBeUndefined();
+    } finally {
+      el.remove();
+      unbridge();
+    }
+  });
+
+  it("no marker: the app hears light, as before", () => {
+    const sent = bridge();
+    try {
+      suspendTheme();
+      expect(sent).toEqual(["cb:theme:light"]);
+    } finally {
+      unbridge();
     }
   });
 });
