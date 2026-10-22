@@ -10,6 +10,7 @@ import { applyPaymentEvent } from "../billing/payments.js";
 import { claimStripeEvent, finishStripeEvent, livemodeMismatch } from "../billing/stripeEvents.js";
 import { errorClassification } from "../billing/stripeErrors.js";
 import { applyAffiliateStripeEvent } from "../services/affiliateQualification.js";
+import { confirmedOrAnswered } from "../billing/stripeEventConfirm.js";
 
 /**
  * Stripe webhook receiver. Mounted BEFORE the global express.json() (like the
@@ -20,6 +21,9 @@ import { applyAffiliateStripeEvent } from "../services/affiliateQualification.js
  *   1. signature   - an unsigned or mis-signed body is refused before it
  *                    touches the database at all
  *   2. livemode    - a test-mode event never reaches a live process's handlers
+ *   2b. confirm    - the event is fetched back from Stripe by id; a forgery
+ *                    (signed with a leaked secret) is refused, and only
+ *                    Stripe's own copy reaches the receipt and the handlers
  *   3. receipt     - one durable row per event id; a duplicate is acknowledged
  *                    without being applied, a failed delivery is re-applied
  *   4. handlers    - each still replay-safe on its own (that is not relaxed)
@@ -66,6 +70,11 @@ stripeWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) => 
     res.status(400).json({ error: "livemode_mismatch" });
     return;
   }
+
+  // 2b. confirm - only Stripe's own copy goes further (billing/stripeEventConfirm.ts).
+  const confirmed = await confirmedOrAnswered(event, res, "stripe");
+  if (!confirmed) return;
+  event = confirmed;
 
   const claim = await claimStripeEvent({
     id: event.id,

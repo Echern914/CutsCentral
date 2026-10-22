@@ -41,6 +41,10 @@ beforeAll(async () => {
   __resetEnvCacheForTests();
   const { createApp } = await import("../app.js");
   app = createApp();
+  // Stripe's API stands in: it has exactly the event each test signs, so these
+  // suites test the handlers (billing/stripeEventConfirm.ts has its own tests).
+  const { __setStripeEventFetcherForTests } = await import("../billing/stripeEventConfirm.js");
+  __setStripeEventFetcherForTests(async (signed) => signed);
 
   const signup = await request(app)
     .post("/api/auth/signup")
