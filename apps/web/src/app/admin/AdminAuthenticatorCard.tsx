@@ -76,9 +76,9 @@ export function AdminAuthenticatorCard({ enabled }: { enabled: boolean }) {
         {setup && (
           <div className="mt-3 flex flex-col gap-3">
             <ol className="list-decimal pl-5 text-sm text-muted">
-              <li>Open Google Authenticator, 1Password or any authenticator app.</li>
-              <li>Add an account and scan this code (or type the key below).</li>
-              <li>Enter the 6-digit code it shows.</li>
+              <li>Open Authy (or Google Authenticator, 1Password, any authenticator app).</li>
+              <li>Tap Add account and scan this code, or enter the key below.</li>
+              <li>Enter the 6-digit code it shows for ChairBack admin.</li>
             </ol>
             {/* eslint-disable-next-line @next/next/no-img-element -- a data: URL made on the server */}
             <img src={setup.qr} alt="QR code for your authenticator app" width={220} height={220} className="rounded-lg bg-white p-2" />

@@ -3,8 +3,10 @@
 The admin portal (`/admin`) opens only after a second check on top of your
 password:
 
-- **Authenticator app** (the main way): a 6-digit code from Google
-  Authenticator, 1Password or any authenticator app.
+- **Authenticator app** (the main way): a 6-digit code from **Authy** (what we
+  use), or Google Authenticator, 1Password, or any app that scans a standard
+  authenticator QR code. Authy keeps an encrypted backup of its accounts, which
+  helps if the phone is lost; set an Authy backup password when it offers one.
 - **Emailed code** (the fallback): a 6-digit code sent to your login email. It
   works for 10 minutes, allows 5 tries, and at most 5 codes go out an hour.
 
@@ -16,8 +18,9 @@ inbox.
 
 1. Open `/admin`. With no app set up yet, it offers an emailed code.
 2. Once you're in, the **Authenticator app** card at the top says *Not set up*.
-   Tap **Set up**, scan the QR code with your app (or type the key), and enter
-   the code the app shows. It now says *On*.
+   Tap **Set up**. In Authy, tap **Add account**, scan the QR code (or enter
+   the key shown under it), then type the 6-digit code Authy shows for
+   *ChairBack admin*. The card now says *On*.
 
 From then on, admin asks for the app's code. "Don't have your phone? Email me a
 code instead" is always there.

@@ -81,7 +81,7 @@ export function AdminTwoStepGate({
         <h1 className="font-display text-xl">Confirm it's you</h1>
         <p className="mt-2 text-sm text-muted">
           {mode === "totp"
-            ? "Enter the 6-digit code from your authenticator app."
+            ? "Enter the 6-digit code from your authenticator app (Authy)."
             : sentTo
               ? `We emailed a 6-digit code to ${sentTo}. It works for 10 minutes.`
               : `We'll email a 6-digit code to ${email ?? "your login email"}.`}
