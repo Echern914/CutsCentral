@@ -50,6 +50,7 @@ vi.mock("./actions", () => ({
   markArrivedAction: vi.fn(),
   noShowAppointmentAction: vi.fn(),
   editAppointmentAction: vi.fn(),
+  getDaySpecialsAction: vi.fn(async () => ({ ok: true, specials: [] })),
   getEditContextAction: getEditContext,
   previewSeriesEditAction: previewSeries,
   applySeriesEditAction: applySeries,

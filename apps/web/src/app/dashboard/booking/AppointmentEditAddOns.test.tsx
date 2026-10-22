@@ -50,6 +50,7 @@ vi.mock("./actions", () => ({
   markArrivedAction: vi.fn(),
   noShowAppointmentAction: vi.fn(),
   editAppointmentAction: editAppointment,
+  getDaySpecialsAction: vi.fn(async () => ({ ok: true, specials: [] })),
   getEditContextAction: getEditContext,
 }));
 vi.mock("@/components/VocabProvider", () => ({

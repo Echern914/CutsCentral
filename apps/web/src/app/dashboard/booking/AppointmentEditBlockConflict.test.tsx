@@ -20,6 +20,7 @@ const getEditContext = vi.hoisted(() =>
 );
 vi.mock("./actions", () => ({
   editAppointmentAction: editAppointment,
+  getDaySpecialsAction: vi.fn(async () => ({ ok: true, specials: [] })),
   getEditContextAction: getEditContext,
 }));
 vi.mock("@/components/VocabProvider", () => ({

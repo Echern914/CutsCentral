@@ -9,8 +9,10 @@ import { cn } from "@/lib/cn";
 import { formatPrice } from "@/lib/serviceFields";
 import {
   editAppointmentAction,
+  getDaySpecialsAction,
   getEditContextAction,
   type AppointmentDetail,
+  type DaySpecial,
   type EditContext,
 } from "./actions";
 import type { AgendaRow } from "./page";
@@ -206,6 +208,14 @@ export interface AppointmentEditState {
     addOnChoices: AddOnFigures[];
     /** What a service change took off, said once, in words. */
     addOnNote: string | null;
+    /**
+     * This barber's open specials on the chosen day, under this service - the
+     * times a move can TAKE (Drick: "I just need that after hours to be
+     * selectable when I try to reschedule a client"). `picked`: the one the
+     * date and start now land on, if any.
+     */
+    specials: { id: string; timeText: string; label: string; durationMin: number; picked: boolean }[];
+    pickSpecial: (id: string) => void;
   };
 }
 
@@ -299,6 +309,44 @@ export function useAppointmentEdit({
     setAddOnNote(null);
   }, [detail]);
 
+  // 🔴 HIS OPEN SPECIALS ON THE CHOSEN DAY. A special is sold outside the usual
+  // openings, so a typed after-hours time used to read as "not one of this
+  // service's usual openings", then as a clash with that very special - and
+  // landed Double-booked with the special still on sale. Listed here, a tap
+  // sets the time; Save sends the special so the move TAKES it (the API's
+  // rule 7 also finds one from a typed time that lands exactly on it).
+  const [daySpecials, setDaySpecials] = useState<DaySpecial[]>([]);
+  useEffect(() => {
+    const [y, m, d] = date.split("-").map(Number) as [number, number, number];
+    if (!ctx || !staffId || !y || !m || !d) {
+      setDaySpecials([]);
+      return;
+    }
+    const from = zonedWallTimeToUtc(y, m - 1, d, 0, ctx.timezone).toISOString();
+    const to = zonedWallTimeToUtc(y, m - 1, d + 1, 0, ctx.timezone).toISOString();
+    let live = true;
+    void getDaySpecialsAction(staffId, from, to).then((res) => {
+      if (live) setDaySpecials(res.ok && res.specials ? res.specials : []);
+    });
+    return () => {
+      live = false;
+    };
+  }, [ctx, staffId, date]);
+  const offeredSpecials = daySpecials.filter(
+    (t) => t.staffId === staffId && serviceId !== null && t.serviceIds.includes(serviceId),
+  );
+  /** The listed special the form's date and start land on, if any. */
+  function specialAt(startsAtIso: string): DaySpecial | null {
+    return offeredSpecials.find((t) => t.startsAt === startsAtIso) ?? null;
+  }
+  function pickSpecial(id: string) {
+    const t = offeredSpecials.find((x) => x.id === id);
+    if (!t || !ctx) return;
+    const parts = toLocalParts(t.startsAt, ctx.timezone);
+    setDate(parts.date);
+    setTime(parts.time);
+  }
+
   /** What the booking carries now: frozen figures, as the server keeps them. */
   const bookedAddOns: AddOnFigures[] = (detail?.addOns ?? []).map((a) => ({
     id: a.id,
@@ -378,6 +426,9 @@ export function useAppointmentEdit({
     if (startsAt.toISOString() !== row.start) patch.startsAt = startsAt.toISOString();
     if (staffId && staffId !== row.staffId) patch.staffId = staffId;
     if (serviceId && serviceId !== row.serviceId) patch.serviceId = serviceId;
+    // A move that lands on one of his listed specials takes that special.
+    const landsOn = specialAt(startsAt.toISOString());
+    if ((patch.startsAt || patch.staffId) && landsOn) patch.targetedSlotId = landsOn.id;
     let problem: string | null = null;
     const minutes = duration.trim() === "" ? 0 : Number(duration);
     if (minutes !== spanMinutes(row)) {
@@ -632,8 +683,32 @@ export function useAppointmentEdit({
       toggleAddOn,
       addOnChoices,
       addOnNote,
+      specials: offeredSpecials.map((t) => ({
+        id: t.id,
+        timeText: ctx ? specialTime(t.startsAt, ctx.timezone) : "",
+        label: t.label ?? "Special",
+        durationMin: t.durationMin,
+        picked: t.startsAt === formStartIso(),
+      })),
+      pickSpecial,
     },
   };
+
+  /** The instant the form's date and start describe, or null while unfinished. */
+  function formStartIso(): string | null {
+    if (!ctx) return null;
+    const [y, m, d] = date.split("-").map(Number) as [number, number, number];
+    const [hh, mm] = time.split(":").map(Number) as [number, number];
+    if (!y || !m || !d || Number.isNaN(hh) || Number.isNaN(mm)) return null;
+    return zonedWallTimeToUtc(y, m - 1, d, hh * 60 + mm, ctx.timezone).toISOString();
+  }
+}
+
+/** "8:00 PM", in the shop's own clock. */
+function specialTime(iso: string, timezone: string): string {
+  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: timezone }).format(
+    new Date(iso),
+  );
 }
 
 /**
@@ -872,6 +947,36 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
             />
           </Field>
         </div>
+
+        {/* His open specials that day: tap one to move the booking INTO it
+            (it comes off his website; the booked price stays). */}
+        {f.specials.length > 0 && (
+          <div role="group" aria-label="Your open specials this day" className="flex min-w-0 flex-col gap-1.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-gold">
+              Your open specials this day
+            </p>
+            {f.specials.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                aria-pressed={t.picked}
+                onClick={() => f.pickSpecial(t.id)}
+                className={cn(
+                  "flex min-h-[2.75rem] w-full min-w-0 items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-left text-sm transition-colors duration-150 ease-out",
+                  t.picked ? "border-gold/60 bg-gold/15" : "border-gold/30 hover:bg-gold/5",
+                )}
+              >
+                <span className="font-medium text-offwhite">{t.timeText}</span>
+                <span className="min-w-0 truncate text-xs text-muted">
+                  {t.label} · {t.durationMin} min
+                </span>
+              </button>
+            ))}
+            <p className="text-xs text-muted">
+              Moving into one takes it off your website. The price stays what they booked at.
+            </p>
+          </div>
+        )}
 
         <Field label="Duration" hint={`Minutes in the ${vocab.stationNoun}.`}>
           <input

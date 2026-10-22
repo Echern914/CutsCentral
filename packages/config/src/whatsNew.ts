@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-22-reschedule-into-after-hours",
+    date: "2026-10-22",
+    kind: "fix",
+    title: "Reschedule a client into an after-hours slot",
+    body:
+      "Tap Reschedule on a booking and your open specials that day now show under Start. Tap one to move the client in: " +
+      "it comes off your website, nothing is double-booked, and the slot they left goes back on sale.",
+  },
+  {
     id: "2026-10-22-turn-on-booking-banner",
     date: "2026-10-22",
     kind: "fix",
