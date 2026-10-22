@@ -84,6 +84,21 @@ describe("the header counts ratings", () => {
     expect(screen.queryByText(/37 reviews/)).toBeNull();
   });
 
+  it("🔴 'Leave a review' comes BEFORE the reviews (Drick: \"should be at top\")", () => {
+    render(
+      <ShopPageClient
+        data={page({
+          reviews: [review("r1", 5, "Marcus", "Best in town"), review("r2", 5, "Dre", "Never misses")],
+          reviewSummary: { count: 2, avgRating: 5, writtenCount: 2 },
+        })}
+      />,
+    );
+    const form = screen.getByText("Leave a review");
+    const firstCard = screen.getByText("Best in town");
+    // DOCUMENT_POSITION_FOLLOWING: the card comes after the form.
+    expect(form.compareDocumentPosition(firstCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("one rating is singular", () => {
     render(<ShopPageClient data={page({ reviewSummary: { count: 1, avgRating: 4, writtenCount: 0 } })} />);
     expect(screen.getByText("· 1 rating")).toBeTruthy();

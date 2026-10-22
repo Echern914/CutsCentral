@@ -59,15 +59,24 @@ describe("the name is required", () => {
 
   it("asks for a name or a nickname - and no longer calls it optional", () => {
     render(<ReviewForm {...props} />);
+    stars(5);
     expect(nameField()).toHaveAttribute("placeholder", "Your name or nickname");
     expect(nameField()).toHaveAttribute("aria-required", "true");
     expect(screen.queryByPlaceholderText(/name \(optional\)/i)).toBeNull();
   });
 
-  it("still asks for the stars first", () => {
+  it("still asks for the stars first - nothing else shows until one is tapped", () => {
+    // The form sits ABOVE the shop's reviews (Drick: "Leave a review should be
+    // at top"); empty fields there would push every review down the page.
     render(<ReviewForm {...props} />);
-    submit();
-    expect(screen.getByRole("alert")).toHaveTextContent("Please tap a star rating.");
+    expect(screen.getByRole("radiogroup", { name: "Star rating" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Your review")).toBeNull();
+    expect(screen.queryByLabelText("Your name or nickname")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Submit review" })).toBeNull();
+    stars(3);
+    expect(screen.getByLabelText("Your review")).toBeInTheDocument();
+    expect(nameField()).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Submit review" })).toBeInTheDocument();
     expect(mockSubmit).not.toHaveBeenCalled();
   });
 });
