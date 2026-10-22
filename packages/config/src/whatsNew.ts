@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-22-turn-on-booking-banner",
+    date: "2026-10-22",
+    kind: "fix",
+    title: "Turning on booking is one tap from the note",
+    body:
+      "If clients can't book you yet, the note at the top of Booking now names the exact switch, " +
+      "ChairBack Booking on the Settings tab, with a button that takes you there.",
+  },
+  {
     id: "2026-10-22-booking-matches-your-page",
     date: "2026-10-22",
     kind: "fix",

@@ -41,6 +41,7 @@ import { BookingCalendar } from "./BookingCalendar";
 import { UnfinishedBookings } from "./UnfinishedBookings";
 import { ConflictInbox, ConflictTabBadge, useUnresolvedConflictCount } from "./ConflictInbox";
 import { ShopQrCard } from "./ShopQrCard";
+import { NoBookingLinkBanner } from "./NoBookingLinkBanner";
 import { HolidaysAndSpecialDays } from "./HolidaysAndSpecialDays";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import { AcuityCalendarMap } from "./AcuityCalendarMap";
@@ -308,33 +309,10 @@ export function BookingManager({
           Book button opens Shop.bookingUrl). Nudge the barber to paste their
           link OR switch to ChairBack's own booking. */}
       {shop.bookingMode !== "native" && !shop.bookingUrl && (
-        <Card className="border-gold/30 bg-gold/5 px-5 py-4">
-          <p className="text-sm text-gold">
-            {shop.bookingMode === "square" ? (
-              <>
-                Square is syncing your appointments, but your public page has no
-                Book button yet. Paste your Square booking-site link in{" "}
-                <strong>Your booking link</strong> below so clients can book
-                straight from your page.
-              </>
-            ) : shop.bookingMode === "acuity" ? (
-              <>
-                Acuity is syncing your appointments, but your public page has no
-                Book button yet. Paste your Acuity scheduling link in{" "}
-                <strong>Your booking link</strong> below so clients can book
-                straight from your page.
-              </>
-            ) : (
-              <>
-                You haven&apos;t added a booking link yet. Paste your
-                Acuity/Booksy/Square link in <strong>Your booking link</strong>{" "}
-                below, or switch to <strong>Run booking on ChairBack</strong> to
-                take appointments right here — otherwise customers can only
-                request a time.
-              </>
-            )}
-          </p>
-        </Card>
+        <NoBookingLinkBanner
+          mode={shop.bookingMode}
+          onOpenSettings={tab === "Settings" ? null : () => void switchTab("Settings")}
+        />
       )}
 
       <div className="flex items-center gap-1 overflow-x-auto">
