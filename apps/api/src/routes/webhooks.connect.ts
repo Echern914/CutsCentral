@@ -4,6 +4,7 @@ import { logger } from "../logger.js";
 import { applyConnectEvent, connectEnabled, verifyConnectWebhook } from "../billing/connect.js";
 import { claimStripeEvent, finishStripeEvent, livemodeMismatch } from "../billing/stripeEvents.js";
 import { errorClassification } from "../billing/stripeErrors.js";
+import { confirmedOrAnswered } from "../billing/stripeEventConfirm.js";
 
 /**
  * Stripe CONNECT webhook receiver — SEPARATE endpoint + secret from the platform
@@ -52,6 +53,11 @@ connectWebhookRouter.post("/", express.raw({ type: "*/*" }), async (req, res) =>
     res.status(400).json({ error: "livemode_mismatch" });
     return;
   }
+
+  // Only Stripe's own copy goes further (billing/stripeEventConfirm.ts).
+  const confirmed = await confirmedOrAnswered(event, res, "connect");
+  if (!confirmed) return;
+  event = confirmed;
 
   const claim = await claimStripeEvent({
     id: event.id,
