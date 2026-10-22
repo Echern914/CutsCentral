@@ -1,4 +1,4 @@
-import { runAsOwner } from "@chairback/db";
+import { prisma, runAsOwner } from "@chairback/db";
 import { logger } from "../logger.js";
 import { claimDigest, previousClaimDigest } from "../services/customerIdentity.js";
 import { openTokenNoting, sealToken, tokenKeys } from "../services/tokenKey.js";
@@ -38,6 +38,8 @@ export interface RekeyReport {
   acuity: RekeyCounts;
   square: RekeyCounts;
   claims: RekeyCounts;
+  /** Admin authenticator secrets (services/adminStepUp.ts). */
+  adminTotp: RekeyCounts;
 }
 
 const zero = (): RekeyCounts => ({ resealed: 0, current: 0, unreadable: 0 });
@@ -141,12 +143,46 @@ async function rekeyClaims(out: RekeyCounts, rotating: boolean): Promise<void> {
   }
 }
 
+/**
+ * The admin authenticator secret (and one waiting to be confirmed), sealed
+ * with the same key - an unread one only costs its admin a fresh setup, by
+ * the emailed-code fallback, so it is reported but never fatal.
+ */
+async function rekeyAdminTotp(out: RekeyCounts, rotating: boolean): Promise<void> {
+  const rows = await prisma.user.findMany({
+    where: { OR: [{ adminTotpSecretEnc: { not: null } }, { adminTotpPendingEnc: { not: null } }] },
+    select: { id: true, adminTotpSecretEnc: true, adminTotpPendingEnc: true },
+  });
+  for (const r of rows) {
+    const secret = r.adminTotpSecretEnc === null ? null : tryOpen(r.adminTotpSecretEnc);
+    const pending = r.adminTotpPendingEnc === null ? null : tryOpen(r.adminTotpPendingEnc);
+    if ((r.adminTotpSecretEnc !== null && !secret) || (r.adminTotpPendingEnc !== null && !pending)) {
+      out.unreadable++;
+      continue;
+    }
+    if (!rotating || (!secret?.stale && !pending?.stale)) {
+      out.current++;
+      continue;
+    }
+    const swapped = await prisma.user.updateMany({
+      where: { id: r.id, adminTotpSecretEnc: r.adminTotpSecretEnc, adminTotpPendingEnc: r.adminTotpPendingEnc },
+      data: {
+        adminTotpSecretEnc: secret?.stale ? sealToken(secret.plaintext) : r.adminTotpSecretEnc,
+        adminTotpPendingEnc: pending?.stale ? sealToken(pending.plaintext) : r.adminTotpPendingEnc,
+      },
+    });
+    if (swapped.count === 1) out.resealed++;
+    else out.current++;
+  }
+}
+
 export async function rekeyStoredTokens(): Promise<RekeyReport> {
   const rotating = tokenKeys().previous !== null;
-  const report: RekeyReport = { rotating, acuity: zero(), square: zero(), claims: zero() };
+  const report: RekeyReport = { rotating, acuity: zero(), square: zero(), claims: zero(), adminTotp: zero() };
   await rekeyAcuity(report.acuity, rotating);
   await rekeySquare(report.square, rotating);
   await rekeyClaims(report.claims, rotating);
+  await rekeyAdminTotp(report.adminTotp, rotating);
   return report;
 }
 
@@ -164,7 +200,13 @@ export function rekeySummary(r: RekeyReport): { level: "info" | "error"; message
           : `${unreadable} of ${stored} stored Acuity/Square tokens do not open with TOKEN_ENCRYPTION_KEY - those shops need to reconnect.`,
     };
   }
-  const resealed = r.acuity.resealed + r.square.resealed + r.claims.resealed;
+  const resealed = r.acuity.resealed + r.square.resealed + r.claims.resealed + r.adminTotp.resealed;
+  if (r.adminTotp.unreadable > 0 && unreadable === 0) {
+    return {
+      level: "error",
+      message: `Key rotation: ${resealed} moved to the new key, but ${r.adminTotp.unreadable} admin authenticator secret(s) open with NEITHER key - that admin signs in with an emailed code and sets the app up again.`,
+    };
+  }
   if (unreadable > 0) {
     return {
       level: "error",
@@ -183,7 +225,7 @@ export function rekeyStoredTokensAtBoot(): void {
     .then((report) => {
       const s = rekeySummary(report);
       if (!s) return;
-      const fields = { acuity: report.acuity, square: report.square, claims: report.claims };
+      const fields = { acuity: report.acuity, square: report.square, claims: report.claims, adminTotp: report.adminTotp };
       if (s.level === "error") logger.error(fields, s.message);
       else logger.info(fields, s.message);
     })

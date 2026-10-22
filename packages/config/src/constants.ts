@@ -579,6 +579,14 @@ export const BACKFILL_MIN_DATE = "2015-01-01";
 export const SESSION_COOKIE_NAME = "cb_session";
 
 /**
+ * The admin two-step pass (apps/api services/adminStepUp.ts): a random token
+ * the API hands back when a code is accepted, kept by the web in an httpOnly
+ * cookie and forwarded with every API call. The admin portal needs it AND the
+ * session - a leaked session key can mint sessions, never this.
+ */
+export const ADMIN_PASS_COOKIE_NAME = "cb_admin_pass";
+
+/**
  * Active-shop selection cookie (shared by api + web). For a manager who owns
  * more than one shop, this NAMES which owned shop the dashboard is currently
  * acting on. It is only ever a HINT: requireShop re-verifies that the named shop

@@ -20,6 +20,8 @@ import {
 } from "./AffiliatesSection";
 import { PartnersSection, type AdminPartners } from "./PartnersSection";
 import { AwardsSection, type AdminAwards } from "./AwardsSection";
+import { AdminTwoStepGate } from "./AdminTwoStepGate";
+import { AdminAuthenticatorCard } from "./AdminAuthenticatorCard";
 
 export const metadata = { title: `${APP_NAME} Admin` };
 
@@ -62,6 +64,27 @@ interface AdminShop {
  * This page never trusts a client flag - the API session check is the gate.
  */
 export default async function AdminPage() {
+  // The second step first (apps/api routes/adminPortal.stepUp.ts): until this
+  // session has passed, every read below would be refused, so ask for the
+  // code instead of loading a page of failures. Non-admins get 404 here too.
+  const twoStep = await apiGet<{
+    required: boolean;
+    passedUntil: string | null;
+    totpEnabled: boolean;
+    emailAvailable: boolean;
+    email: string | null;
+  }>("/api/admin-portal/step-up/status");
+  if (twoStep.status === 404 || twoStep.status === 401) redirect("/dashboard");
+  if (twoStep.ok && twoStep.data?.required && !twoStep.data.passedUntil) {
+    return (
+      <AdminTwoStepGate
+        totpEnabled={twoStep.data.totpEnabled}
+        emailAvailable={twoStep.data.emailAvailable}
+        email={twoStep.data.email}
+      />
+    );
+  }
+
   const [metricsRes, shopsRes, analyticsRes, preflightRes, textingRes, affApps, affAccounts, affRewards, affLiability, affFlags, affCredits, partnersRes, awardsRes] =
     await Promise.all([
       apiGet<Metrics>("/api/admin-portal/metrics"),
@@ -105,6 +128,7 @@ export default async function AdminPage() {
       </header>
 
       <main className="mx-auto w-full max-w-6xl px-5 py-8">
+        {twoStep.data?.required && <AdminAuthenticatorCard enabled={twoStep.data.totpEnabled} />}
         <h1 className="font-display text-2xl tracking-tight">Platform overview</h1>
         <p className="mb-6 mt-1 text-sm text-muted">
           {m?.billingEnabled

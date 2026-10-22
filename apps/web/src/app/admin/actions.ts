@@ -1,6 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
+import QRCode from "qrcode";
+import { ADMIN_PASS_COOKIE_NAME } from "@chairback/config/constants";
 import { apiSend } from "@/lib/api";
 
 export async function setCompAccessAction(
@@ -133,4 +136,65 @@ export async function takeBackAwardAction(id: string, slug?: string | null): Pro
     revalidatePath(`/book/${slug}`);
   }
   return { ok: res.ok, error: res.error };
+}
+
+// --- Admin two-step (apps/api routes/adminPortal.stepUp.ts) ------------------
+
+/**
+ * The pass the API hands back when a code is accepted. Kept ONLY here, in an
+ * httpOnly cookie on this origin - lib/api.ts forwards this origin's cookies
+ * with every API call, so the portal's reads carry it from now on. Same-site
+ * strict and 12 hours, matching the pass itself.
+ */
+const PASS_COOKIE = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "strict",
+  path: "/",
+  maxAge: 12 * 60 * 60,
+} as const;
+
+function keepPass(token: unknown): void {
+  if (typeof token === "string" && token.length > 0) cookies().set(ADMIN_PASS_COOKIE_NAME, token, PASS_COOKIE);
+}
+
+export interface TwoStepResult {
+  ok: boolean;
+  error?: string;
+  sentTo?: string;
+}
+
+export async function sendAdminEmailCodeAction(): Promise<TwoStepResult> {
+  const res = await apiSend<{ sentTo?: string }>("POST", "/api/admin-portal/step-up/email/start");
+  return res.ok ? { ok: true, sentTo: res.data?.sentTo } : { ok: false, error: res.error };
+}
+
+export async function verifyAdminEmailCodeAction(code: string): Promise<TwoStepResult> {
+  const res = await apiSend<{ passToken?: string }>("POST", "/api/admin-portal/step-up/email/verify", { code });
+  if (!res.ok) return { ok: false, error: res.error };
+  keepPass(res.data?.passToken);
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
+export async function verifyAdminTotpAction(code: string): Promise<TwoStepResult> {
+  const res = await apiSend<{ passToken?: string }>("POST", "/api/admin-portal/step-up/totp", { code });
+  if (!res.ok) return { ok: false, error: res.error };
+  keepPass(res.data?.passToken);
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
+export async function startAdminTotpSetupAction(): Promise<{ ok: boolean; secret?: string; qr?: string; error?: string }> {
+  const res = await apiSend<{ secret: string; otpauthUri: string }>("POST", "/api/admin-portal/two-step/totp/setup");
+  if (!res.ok || !res.data) return { ok: false, error: res.error };
+  const qr = await QRCode.toDataURL(res.data.otpauthUri, { margin: 1, width: 220 });
+  return { ok: true, secret: res.data.secret, qr };
+}
+
+export async function confirmAdminTotpAction(code: string): Promise<TwoStepResult> {
+  const res = await apiSend("POST", "/api/admin-portal/two-step/totp/confirm", { code });
+  if (!res.ok) return { ok: false, error: res.error };
+  revalidatePath("/admin");
+  return { ok: true };
 }

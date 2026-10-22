@@ -91,6 +91,14 @@ model User {
   // Platform operator. Gates the /admin portal. Set by hand (or the bootstrap
   // script) - never settable through any self-serve endpoint.
   isAdmin       Boolean   @default(false)
+  // Admin two-step (routes/adminPortal.stepUp.ts). The authenticator secret is
+  // sealed with TOKEN_ENCRYPTION_KEY (services/tokenKey.ts) and re-keyed with
+  // it; PENDING holds a secret shown for setup until a code confirms it.
+  adminTotpSecretEnc  String?
+  adminTotpPendingEnc String?
+  adminTotpEnabledAt  DateTime?
+  // The last 30-second step accepted: a code is good once, never replayed.
+  adminTotpLastStep   Int?
   // Explicit SMS attestation: the barber affirmed they will only add/text
   // clients who consented and that they're authorized to send on their behalf.
   // Captured at signup (form) or first onboarding step (Google path). The legal
@@ -145,6 +153,8 @@ model User {
   mcpConnections      McpConnection[]
   // Provider of the Month applications this person sent for their shop.
   providerAwardApplications ProviderAwardApplication[]
+  adminStepUps        AdminStepUp[]
+  adminEmailCodes     AdminEmailCode[]
   // Punch-ledger entries this person made by hand (bonus, undo, edit, redeem).
   ledgerActions       PunchLedger[] @relation("LedgerActor")
 
@@ -6233,4 +6243,40 @@ model ProviderAward {
 
   @@unique([shopId, month])
   @@index([month])
+}
+
+/// A session that has passed the admin two-step check (an authenticator code,
+/// or an emailed one). The admin portal opens only for a session with a live
+/// row: bound to the session token itself (`sessionDigest` = its sha256), so a
+/// session forged with a leaked SESSION_SECRET has never passed. Default-deny:
+/// read and written as the owner only. Also the record of every admin sign-in.
+model AdminStepUp {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionDigest String
+  /// sha256 of a random pass token held in an httpOnly cookie: what a key that
+  /// can forge sessions cannot produce.
+  passHash      String   @unique
+  method        String // "totp" | "email"
+  userAgent     String?
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+
+  @@index([userId, sessionDigest, expiresAt])
+}
+
+/// An emailed admin code: the fallback when the authenticator is not to hand,
+/// and the gate in front of setting one up. Digest only; ten minutes; five tries.
+model AdminEmailCode {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash   String
+  attempts   Int       @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId, createdAt])
 }
