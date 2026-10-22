@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { PREPAINT_SCRIPT, applyTheme, storedTheme, suspendTheme, themeableRoute } from "./theme";
+import {
+  PAGE_DARK_PREPAINT_SCRIPT,
+  PAGE_SCHEME_ATTR,
+  PREPAINT_SCRIPT,
+  applyTheme,
+  storedTheme,
+  suspendTheme,
+  themeableRoute,
+  wearPageDark,
+} from "./theme";
 
 /**
  * Light is ChairBack's main look (Eric, 2026-10-17); dark is a barber's own
@@ -40,6 +49,43 @@ describe("appearance", () => {
     expect(document.documentElement.dataset.theme).toBeUndefined();
     expect(storedTheme()).toBe("dark");
     expect(themeableRoute("/dashboard/booking")).toBe(true);
+  });
+});
+
+describe("a booking page wearing its shop's dark page (Drick: \"switch it to black\")", () => {
+  const mark = (scheme: "light" | "dark") => {
+    const el = document.createElement("span");
+    el.setAttribute(PAGE_SCHEME_ATTR, scheme);
+    document.body.appendChild(el);
+    return el;
+  };
+
+  it("🔴 stays dark on a public route while the page says so - and is never remembered", () => {
+    const el = mark("dark");
+    try {
+      new Function(PAGE_DARK_PREPAINT_SCRIPT)();
+      suspendTheme(); // what ThemeScope does on every public route
+      expect(document.documentElement.dataset.theme).toBe("dark");
+      expect(storedTheme()).toBe("light"); // the shop's look, not anyone's choice
+    } finally {
+      el.remove();
+    }
+  });
+
+  it("leaving that page drops the dark", () => {
+    wearPageDark();
+    suspendTheme(); // no marker any more
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+  });
+
+  it("a light shop page is ChairBack's light", () => {
+    const el = mark("light");
+    try {
+      suspendTheme();
+      expect(document.documentElement.dataset.theme).toBeUndefined();
+    } finally {
+      el.remove();
+    }
   });
 });
 

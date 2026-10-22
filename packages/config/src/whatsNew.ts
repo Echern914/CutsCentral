@@ -36,6 +36,24 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-22-booking-matches-your-page",
+    date: "2026-10-22",
+    kind: "fix",
+    title: "Your booking page matches your page again",
+    body:
+      "Clients book in your page's colours: a black page gets a black booking page, a light page a light one. " +
+      "Change the look anytime under More → Public shop page → Theme.",
+  },
+  {
+    id: "2026-10-22-leave-a-review-at-top",
+    date: "2026-10-22",
+    kind: "feature",
+    title: "“Leave a review” is at the top",
+    body:
+      "On your page, the review form now sits above your reviews, so a client you send there finds it right away. " +
+      "It opens up once they tap a star.",
+  },
+  {
     id: "2026-10-17-light-is-the-main-look",
     date: "2026-10-17",
     kind: "feature",

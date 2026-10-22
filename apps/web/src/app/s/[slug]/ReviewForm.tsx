@@ -174,53 +174,58 @@ export function ReviewForm({
         ))}
       </div>
 
-      <div className="mt-4 flex flex-col gap-3">
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder="What stood out? (optional)"
-          aria-label="Your review"
-          rows={3}
-          maxLength={1000}
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
-          style={inputStyle}
-        />
-        <input
-          type="text"
-          value={authorName}
-          onChange={(e) => setAuthorName(e.target.value)}
-          placeholder="Your name or nickname"
-          aria-label="Your name or nickname"
-          aria-required="true"
-          aria-invalid={error && rating >= 1 && !authorName.trim() ? true : undefined}
-          aria-describedby={error && rating >= 1 && !authorName.trim() ? "review-error" : undefined}
-          maxLength={80}
-          className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
-          style={inputStyle}
-        />
-        {error && (
-          <p id="review-error" role="alert" className="flex items-start gap-1.5 text-xs text-red-500">
-            {/* Non-color cue so the error reads without relying on red (WCAG 1.4.1). */}
-            <span aria-hidden="true">⚠</span>
-            <span>{error}</span>
-          </p>
-        )}
-        <button
-          type="button"
-          onClick={submit}
-          disabled={pending}
-          aria-busy={pending}
-          className="w-full py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50"
-          style={{
-            backgroundColor: accent,
-            color: readableOn(accent),
-            boxShadow: `0 8px 30px -10px ${accent}AA`,
-            borderRadius: theme.buttonRadius,
-          }}
-        >
-          {pending ? "Sending…" : "Submit review"}
-        </button>
-      </div>
+      {/* 🔴 The rest opens once a star is tapped. The form sits ABOVE the
+          shop's reviews now, and three empty fields there pushed every review
+          down the page; the stars are the first thing anyone fills anyway. */}
+      {rating > 0 && (
+        <div className="mt-4 flex flex-col gap-3">
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder="What stood out? (optional)"
+            aria-label="Your review"
+            rows={3}
+            maxLength={1000}
+            className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
+            style={inputStyle}
+          />
+          <input
+            type="text"
+            value={authorName}
+            onChange={(e) => setAuthorName(e.target.value)}
+            placeholder="Your name or nickname"
+            aria-label="Your name or nickname"
+            aria-required="true"
+            aria-invalid={error && rating >= 1 && !authorName.trim() ? true : undefined}
+            aria-describedby={error && rating >= 1 && !authorName.trim() ? "review-error" : undefined}
+            maxLength={80}
+            className="w-full px-4 py-2.5 text-sm placeholder:opacity-70"
+            style={inputStyle}
+          />
+          {error && (
+            <p id="review-error" role="alert" className="flex items-start gap-1.5 text-xs text-red-500">
+              {/* Non-color cue so the error reads without relying on red (WCAG 1.4.1). */}
+              <span aria-hidden="true">⚠</span>
+              <span>{error}</span>
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={submit}
+            disabled={pending}
+            aria-busy={pending}
+            className="w-full py-3 text-center text-sm font-semibold transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50"
+            style={{
+              backgroundColor: accent,
+              color: readableOn(accent),
+              boxShadow: `0 8px 30px -10px ${accent}AA`,
+              borderRadius: theme.buttonRadius,
+            }}
+          >
+            {pending ? "Sending…" : "Submit review"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

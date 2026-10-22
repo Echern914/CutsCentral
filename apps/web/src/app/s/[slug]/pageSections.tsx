@@ -192,6 +192,30 @@ export function Reviews({
         </div>
       )}
 
+      {/* Anyone can leave a review; it lands pending until the barber approves.
+          🔴 FIRST, above the reviews (Drick, 2026-10-22: "Leave a review should
+          be at top"). At the bottom, a shop with a long list hid the form under
+          every card, so the client the review link was sent to had to scroll
+          past the whole list to find it. It shows only its star row until a
+          star is tapped, so the reviews are not pushed down by an empty form. */}
+      <div className="mb-3">
+        <ReviewForm
+          slug={data.slug}
+          shopName={data.name}
+          accent={accent}
+          googleReviewUrl={data.googleReviewUrl}
+          preview={preview}
+          theme={{
+            surface: theme.surface,
+            border: theme.border,
+            muted: theme.muted,
+            scheme: theme.scheme,
+            radius: layout.radius,
+            buttonRadius: layout.buttonRadius,
+          }}
+        />
+      </div>
+
       {showExamples && (
         <p className="mb-3 px-1 text-[11px] uppercase tracking-wide" style={{ color: theme.muted }}>
           Example — your approved written reviews will appear here
@@ -219,25 +243,6 @@ export function Reviews({
           ))}
         </div>
       )}
-
-      {/* Anyone can leave a review; it lands pending until the barber approves. */}
-      <div className="mt-3">
-        <ReviewForm
-          slug={data.slug}
-          shopName={data.name}
-          accent={accent}
-          googleReviewUrl={data.googleReviewUrl}
-          preview={preview}
-          theme={{
-            surface: theme.surface,
-            border: theme.border,
-            muted: theme.muted,
-            scheme: theme.scheme,
-            radius: layout.radius,
-            buttonRadius: layout.buttonRadius,
-          }}
-        />
-      </div>
     </motion.section>
   );
 }

@@ -66,8 +66,41 @@ export function applyTheme(theme: Theme): void {
   }
 }
 
-/** Back to the main (light) look WITHOUT forgetting the preference (public routes). */
+/**
+ * A public page that wears its SHOP'S colours rather than ChairBack's: the
+ * booking page of a shop whose own page is dark (Drick, 2026-10-22: "Any way
+ * i can switch it to black? Not sure why it's white now"). The page marks
+ * itself with this attribute (components/PageScheme.tsx); the marker, not the
+ * route, decides, so leaving the page drops the dark with it.
+ */
+export const PAGE_SCHEME_ATTR = "data-page-scheme";
+
+function pageWantsDark(): boolean {
+  return document.querySelector(`[${PAGE_SCHEME_ATTR}="dark"]`) !== null;
+}
+
+/**
+ * Pre-paint for a page that wears a dark shop scheme: the attribute is on
+ * <html> before the first paint, so a hard load never flashes white.
+ */
+export const PAGE_DARK_PREPAINT_SCRIPT = `document.documentElement.dataset.theme="dark"`;
+
+/** Set the shop's dark on <html> for the page that asked (never stored). */
+export function wearPageDark(): void {
+  document.documentElement.dataset.theme = "dark";
+  tellApp("dark");
+}
+
+/**
+ * Back to the main (light) look WITHOUT forgetting the preference (public
+ * routes) - unless the page on screen wears its shop's dark scheme, which is
+ * the shop's branding, not the barber's personal preference.
+ */
 export function suspendTheme(): void {
+  if (pageWantsDark()) {
+    wearPageDark();
+    return;
+  }
   delete document.documentElement.dataset.theme;
   tellApp("light");
 }
