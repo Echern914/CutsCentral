@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { disconnectAcuityAction, disconnectSquareAction } from "./actions";
 import type { BookingShop, ConnectStatus } from "./page";
 import { squareSyncLine } from "./squareSyncStatus";
+import { CONNECT_CARD_NAMES } from "./connectCardNames";
 
 /**
  * The branded "How customers book" picker — a grid of platform cards (ChairBack
@@ -60,27 +61,27 @@ export function ConnectPlatforms({
   const cards: PlatformCard[] = [
     {
       key: "native",
-      name: "ChairBack Booking",
+      name: CONNECT_CARD_NAMES.native,
       desc: "Take real bookings right here. No third party, no fees. Switching here keeps any other platform connected — appointments keep syncing.",
       Logo: ChairBackMark,
     },
     {
       key: "acuity",
-      name: "Acuity",
+      name: CONNECT_CARD_NAMES.acuity,
       desc: "Sync appointments from your Acuity Scheduling account.",
       Logo: AcuityMark,
       connectPath: "/api/acuity/oauth/start",
     },
     {
       key: "square",
-      name: "Square Appointments",
+      name: CONNECT_CARD_NAMES.square,
       desc: "Sync your Square Appointments — loyalty earns automatically.",
       Logo: SquareMark,
       connectPath: "/api/square/oauth/start",
     },
     {
       key: "link",
-      name: "Your own link",
+      name: CONNECT_CARD_NAMES.link,
       desc: "Send customers to any booking link (Booksy, Vagaro, your site…).",
       Logo: LinkMark,
     },

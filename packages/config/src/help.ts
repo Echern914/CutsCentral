@@ -145,7 +145,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "booking-link",
     q: "Where's my booking link?",
-    a: "Your public page is your booking link — it's on your Shop page settings, ready to copy.\n\nPut it in your Instagram bio, your Google listing, and your text signature. It's the one link that does everything: services, prices, live openings, and booking.",
+    a: "Your public page is your booking link — it's on your Shop page settings, ready to copy.\n\nPut it in your Instagram bio, your Google listing, and your text signature. It's the one link that does everything: services, prices, live openings, and booking.\n\nLink opens but clients can't book? Booking may still be set to \"Your own link\" with no link pasted. Open Booking, go to the Settings tab and tap ChairBack Booking — it saves right away.",
     keywords: [
       "link", "url", "share", "instagram bio", "my page", "booking link",
       "where do clients book", "booking page unavailable", "page unavailable",
