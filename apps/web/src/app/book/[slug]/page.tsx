@@ -400,15 +400,21 @@ export default async function BookPage({
         )}
         {/* The booking chat's door: only while it is switched on. It books
             for someone the shop already knows, and moves or cancels their own
-            bookings; anything that takes payment hands back to this page. */}
+            bookings; anything that takes payment hands back to this page.
+
+            🔴 A PLAIN <a>, NOT next/link. A client-router navigation tapped
+            while this page's openings are still loading can wait behind that
+            request and never happen (the release browser journey: 4 of 5 runs
+            stalled on an immediate tap; this page's own group link does it
+            too). A full page load to the chat has no such queue. */}
         {chatOn && (
-          <Link
+          <a
             href={`/book/${params.slug}/assistant`}
             className="mb-4 block text-center text-sm text-muted underline transition-colors hover:text-offwhite"
             data-qa="booking-chat-door"
           >
             Been here before? Book, move or cancel in chat
-          </Link>
+          </a>
         )}
         <RewardsDoor />
       </div>
