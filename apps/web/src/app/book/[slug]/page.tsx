@@ -333,12 +333,15 @@ export default async function BookPage({
   params: { slug: string };
   searchParams?: { service?: string; staff?: string; cb_domain?: string; cb_me?: string | string[] };
 }) {
-  const [data, chatOn] = await Promise.all([getDataFor(params.slug, searchParams), bookingChatOn()]);
+  const data = await getDataFor(params.slug, searchParams);
   if (!data) {
     const page = await pageInsteadOfBooking(params.slug, searchParams);
     if (page) redirect(page);
     notFound();
   }
+  // Only once this page has decided to render for THIS shop (a refused or
+  // redirected visit asks nothing more of the API).
+  const chatOn = await bookingChatOn();
   // 🔴 A PREFILL, NOT A PERMISSION. `?service=` and `?staff=` only pre-pick
   // what the client could have tapped themselves two screens in - these ids
   // are already public on this page. BookingClient validates them against what
