@@ -94,6 +94,22 @@ export function stripeErrorFacts(err: unknown): StripeErrorFacts {
   };
 }
 
+/**
+ * True only when the BANK refused the card: a card error, a decline code, or
+ * one of the card-answer codes. Every other definitive error is Stripe
+ * refusing the REQUEST (a connected account missing a capability, a payment
+ * method that no longer exists, a permission) - nothing the customer's card
+ * did, and nothing the barber can collect "at the next visit".
+ */
+export function isCardRefusal(err: unknown): boolean {
+  const e = (err ?? {}) as { type?: unknown; code?: unknown; decline_code?: unknown };
+  return (
+    e.type === "StripeCardError" ||
+    typeof e.decline_code === "string" ||
+    (typeof e.code === "string" && CARD_ANSWER_CODES.has(e.code))
+  );
+}
+
 /** True when Stripe answered and nothing was applied (safe to call it failed). */
 export function isDefinitiveStripeError(err: unknown): boolean {
   return stripeErrorFacts(err).definitive;

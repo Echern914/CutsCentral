@@ -1,7 +1,9 @@
 import {
+  cardDeclineWords,
   cardOnFileFeeCents,
   type CancellationTerms,
   type CardOnFileChargeReason,
+  type NoShowChargeResult,
 } from "@chairback/config";
 import { prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
@@ -35,8 +37,34 @@ import { sendToBarber } from "./barberNotify.js";
 export type SettleResult =
   | { action: "charged"; cents: number; reason: CardOnFileChargeReason }
   | { action: "declined"; cents: number; reason: CardOnFileChargeReason; code: string }
+  /** Stripe refused the request, not the card; the card is back to `saved` (a missing payment account leaves it saved too). */
+  | { action: "setup_problem"; cents: number; reason: CardOnFileChargeReason }
+  /** Stripe's answer never arrived; the reconciler will read it. */
+  | { action: "pending"; cents: number; reason: CardOnFileChargeReason }
   | { action: "released"; why: string }
-  | { action: "none" };
+  | { action: "none"; why?: "no_card" | "already" };
+
+/**
+ * settleCardOnFile's result as the barber reads it after marking a no-show
+ * (`describeNoShowChargeResult` in config/shopPolicy.ts words it). Null when
+ * there is nothing to say beyond "Marked no-show".
+ */
+export function noShowChargeResult(result: SettleResult): NoShowChargeResult | null {
+  switch (result.action) {
+    case "charged":
+      return { kind: "charged", cents: result.cents };
+    case "declined":
+      return { kind: "declined", cents: result.cents, code: result.code };
+    case "setup_problem":
+      return { kind: "setup_problem", cents: result.cents };
+    case "pending":
+      return { kind: "pending", cents: result.cents };
+    case "released":
+      return { kind: "not_charged", why: result.why === "fees_off" ? "fees_off" : "no_fee_due" };
+    case "none":
+      return result.why ? { kind: "not_charged", why: result.why } : null;
+  }
+}
 
 export async function settleCardOnFile(params: {
   shopId: string;
@@ -128,10 +156,26 @@ export async function settleCardOnFile(params: {
         { appointmentId: params.appointmentId, paymentId: charged.paymentId },
         "card on file: charge outcome unknown - waiting for the reconciler before anyone is told",
       );
-      return { action: "none" };
+      return { action: "pending", cents, reason };
     }
-    // no_card / already / nothing_to_charge / error: nothing more to do here;
-    // chargeCardOnFile logged the specifics.
+    if (charged.outcome === "setup_problem" || charged.outcome === "error") {
+      // Not the card: Stripe refused the request, or the shop has no payment
+      // account to send the money to. Never "collect it at the next visit" -
+      // the barber is told it is on ChairBack's side, and chargeCardOnFile
+      // logged it at error for us.
+      await tellBarberSetupProblem({
+        shopId: params.shopId,
+        appointmentId: params.appointmentId,
+        ownerId: shop.ownerId,
+        cents,
+        reason,
+      });
+      return { action: "setup_problem", cents, reason };
+    }
+    if (charged.outcome === "no_card" || charged.outcome === "already") {
+      return { action: "none", why: charged.outcome };
+    }
+    // nothing_to_charge: unreachable past the cents check above.
     return { action: "none" };
   } catch (err) {
     logger.error({ err, appointmentId: params.appointmentId }, "settleCardOnFile failed");
@@ -265,8 +309,43 @@ async function tellBarber(params: {
     kind: "cancel",
     message: {
       title: `Couldn't charge ${who}'s card`,
-      body: `The $${dollars} ${why} fee was declined (${params.code}). Collect it at their next visit.`,
+      // The code in words (cardDeclineWords), never Stripe's own text.
+      body: `The $${dollars} ${why} fee was declined: ${cardDeclineWords(params.code)}. Collect it at their next visit.`,
       tag: `cof-declined-${params.appointmentId}`,
+    },
+  });
+}
+
+/**
+ * The fee could not be charged for a reason that is NOT the card - Stripe
+ * refused the request, or the shop's payment account is missing. Same alert
+ * family as a decline, different instruction: the card was not refused, and
+ * collecting at the next visit is not the answer.
+ */
+async function tellBarberSetupProblem(params: {
+  shopId: string;
+  appointmentId: string;
+  ownerId: string;
+  cents: number;
+  reason: CardOnFileChargeReason;
+}): Promise<void> {
+  const appt = await runWithShop(params.shopId, (tx) =>
+    tx.appointment.findFirst({
+      where: { id: params.appointmentId, shopId: params.shopId },
+      select: { firstName: true, lastName: true, staff: { select: { userId: true } } },
+    }),
+  );
+  const who = [appt?.firstName, appt?.lastName].filter(Boolean).join(" ") || "A customer";
+  const dollars = (params.cents / 100).toFixed(2);
+  const why = params.reason === "no_show" ? "no-show" : "late cancellation";
+  await sendToBarber({
+    shopId: params.shopId,
+    userId: appt?.staff?.userId ?? params.ownerId,
+    kind: "cancel",
+    message: {
+      title: `Couldn't charge ${who}'s card`,
+      body: `The $${dollars} ${why} fee couldn't be charged because of a payment setup problem on ChairBack's side, not the card. ChairBack has been alerted and will look into it.`,
+      tag: `cof-setup-${params.appointmentId}`,
     },
   });
 }

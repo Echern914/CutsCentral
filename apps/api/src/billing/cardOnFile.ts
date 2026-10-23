@@ -11,7 +11,7 @@ import { SERVICE_PAYMENT_PURPOSES } from "../engines/appointmentPayment.js";
 import { logger } from "../logger.js";
 import { detachSavedCardIfUnused, saveCardConsentForBooking, saveCardFromBooking } from "./savedCard.js";
 import { stripeClient } from "./stripe.js";
-import { errorClassification, stripeErrorFacts } from "./stripeErrors.js";
+import { errorClassification, isCardRefusal, stripeErrorFacts } from "./stripeErrors.js";
 
 /**
  * Card on file: keep the customer's card at booking WITHOUT charging it.
@@ -943,6 +943,11 @@ export type ChargeOutcome =
   | { outcome: "declined"; paymentId: string; reason: string }
   /** Stripe did not answer. The card stays `charging`; the reconciler decides. */
   | { outcome: "ambiguous"; paymentId: string }
+  /**
+   * Stripe refused the REQUEST, not the card (account capability, permission,
+   * a payment method it no longer has). The card goes back to `saved`.
+   */
+  | { outcome: "setup_problem"; paymentId: string; reason: string }
   | { outcome: "no_card" }
   | { outcome: "nothing_to_charge" }
   | { outcome: "already" }
@@ -1054,7 +1059,12 @@ export async function chargeCardOnFile(params: {
             reason: params.reason,
           },
         },
-        { idempotencyKey: `cof-charge:${row.id}` },
+        // Per ATTEMPT, not per card. The status compare-and-set above is what
+        // makes one fee happen once; the key only has to make THIS request
+        // safe to resend. Keyed on the card alone, a retry after a setup
+        // problem (card back to `saved`, a new Payment row) would carry new
+        // metadata under the old key and Stripe would refuse it for 24 hours.
+        { idempotencyKey: `cof-charge:${row.id}:${paymentId}` },
       );
       const chargeId = typeof pi.latest_charge === "string" ? pi.latest_charge : pi.latest_charge?.id ?? null;
       await runWithShop(params.shopId, async (tx) => {
@@ -1095,10 +1105,33 @@ export async function chargeCardOnFile(params: {
         );
         return { outcome: "ambiguous", paymentId };
       }
-      // Stripe refuses an off-session charge with a card error whose
-      // payment_intent (when present) carries the decline. Record and move on.
       const reason = stripeErrorCode(err);
       const piId = stripeErrorIntentId(err);
+      if (!isCardRefusal(err)) {
+        // 🔴 NOT A DECLINE. Stripe answered, and refused the request itself -
+        // nothing the card did. This used to fall into the decline branch
+        // below: the barber was told "declined, collect it at the next visit"
+        // and the card was marked `failed` for good, so every later try read
+        // "no card was saved". The card goes back to `saved` and someone at
+        // ChairBack has to look - logged at error for exactly that.
+        await runWithShop(params.shopId, async (tx) => {
+          await tx.payment.update({
+            where: { id: paymentId },
+            data: { status: "failed", ...(piId ? { stripePaymentIntentId: piId } : {}) },
+          });
+          await tx.cardOnFile.updateMany({
+            where: { id: row.id, status: "charging" },
+            data: { status: "saved" },
+          });
+        });
+        logger.error(
+          { appointmentId: params.appointmentId, cardOnFileId: row.id, paymentId, ...facts },
+          "card on file: Stripe refused the charge request (setup problem, not the card) - card kept",
+        );
+        return { outcome: "setup_problem", paymentId, reason };
+      }
+      // The bank refused the card. Stripe raises it as a card error whose
+      // payment_intent (when present) carries the decline. Record and move on.
       await runWithShop(params.shopId, async (tx) => {
         await tx.payment.update({
           where: { id: paymentId },
@@ -1125,9 +1158,16 @@ async function setStatus(shopId: string, id: string, status: string): Promise<vo
   await runWithShop(shopId, (tx) => tx.cardOnFile.update({ where: { id }, data: { status } }));
 }
 
+/**
+ * Stripe's decline / error CODE - a fixed token. Never its message: that is
+ * prose that can quote what a customer typed, and this value reaches the
+ * barber's phone.
+ */
 function stripeErrorCode(err: unknown): string {
-  const e = err as { code?: string; decline_code?: string; message?: string } | null;
-  return e?.decline_code ?? e?.code ?? e?.message ?? "unknown";
+  const e = err as { code?: unknown; decline_code?: unknown } | null;
+  if (typeof e?.decline_code === "string") return e.decline_code;
+  if (typeof e?.code === "string") return e.code;
+  return "unknown";
 }
 
 function stripeErrorIntentId(err: unknown): string | null {

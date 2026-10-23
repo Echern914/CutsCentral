@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-22-no-show-card-says-what-happened",
+    date: "2026-10-22",
+    kind: "fix",
+    title: "Mark no-show now tells you what the card did",
+    body:
+      "After you mark a no-show, the booking says whether the card was charged, declined (and why, like an expired card), " +
+      "or not charged and why. A problem on ChairBack's side is no longer called a decline, and the card stays saved.",
+  },
+  {
     id: "2026-10-22-reschedule-into-after-hours",
     date: "2026-10-22",
     kind: "fix",

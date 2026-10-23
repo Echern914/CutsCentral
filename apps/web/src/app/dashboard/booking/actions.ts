@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { BookingModeKey } from "@chairback/config/constants";
 import type { ServiceVisibility } from "@chairback/config/serviceVisibility";
-import type { NoShowCardOutcome } from "@chairback/config/shopPolicy";
+import type { NoShowCardOutcome, NoShowChargeResult } from "@chairback/config/shopPolicy";
 import { apiGet, apiSend, type ApiResult } from "@/lib/api";
 import { apiAnswered } from "@/lib/apiAnswered";
 import { refusedOnlyNewKeys } from "@/lib/apiCompat";
@@ -1742,13 +1742,21 @@ export async function correctCompletedVisitAction(
   return { ok: true };
 }
 
+/**
+ * Mark a no-show. `card` is what the kept card actually did (charged,
+ * declined, a setup problem, nothing) - null when no card was settled, and
+ * from an older API that does not send it.
+ */
 export async function noShowAppointmentAction(
   id: string,
-): Promise<{ ok: boolean; error?: string; message?: string }> {
-  const res = await apiSend("POST", `/api/booking/appointments/${encodeURIComponent(id)}/no-show`);
+): Promise<{ ok: boolean; error?: string; message?: string; card?: NoShowChargeResult | null }> {
+  const res = await apiSend<{ card?: NoShowChargeResult | null }>(
+    "POST",
+    `/api/booking/appointments/${encodeURIComponent(id)}/no-show`,
+  );
   if (!res.ok) return { ok: false, error: res.error ?? "failed", message: res.message };
   revalidatePath("/dashboard/booking");
-  return { ok: true };
+  return { ok: true, card: res.data?.card ?? null };
 }
 
 /**

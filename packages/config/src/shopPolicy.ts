@@ -741,7 +741,11 @@ export type NoShowNoChargeReason =
   /** A card was saved and has already been let go. */
   | "card_released"
   /** The sweep closed the visit as done after it ended, letting the card go. */
-  | "visit_closed";
+  | "visit_closed"
+  /** A charge was already tried on this card and the bank declined it. */
+  | "already_declined"
+  /** A charge on this card is still waiting on Stripe's answer. */
+  | "charge_in_progress";
 
 export type NoShowCardOutcome =
   | { charge: true; cents: number; last4: string | null }
@@ -771,6 +775,10 @@ export function noShowCardOutcome(input: {
   }
   if (!cardFeeConfigured(input.terms)) return why("no_fee_set");
   if (input.feeCents <= 0) return why("no_price");
+  // A card that was TRIED is not "no card": saying so sent a barber looking
+  // for a card the client did save.
+  if (input.cardStatus === "failed") return why("already_declined");
+  if (input.cardStatus === "charging") return why("charge_in_progress");
   if (input.cardStatus !== "saved" && input.cardStatus !== "released" && input.cardStatus !== "charged") {
     return why("no_card");
   }
@@ -828,5 +836,100 @@ export function describeNoShowCardOutcome(outcome: NoShowCardOutcome): {
         text: "Nothing is charged: ChairBack closed this visit as done after its end time, and that let the saved card go. To charge the fee, mark the no-show before the visit's end time passes.",
         settingsLink: false,
       };
+    case "already_declined":
+      return {
+        text: "Nothing more is charged: a charge was already tried on this card and the bank declined it. Collect it at their next visit.",
+        settingsLink: false,
+      };
+    case "charge_in_progress":
+      return {
+        text: "Nothing more is charged: a charge on this card is still waiting on Stripe's answer.",
+        settingsLink: false,
+      };
+  }
+}
+
+/**
+ * WHAT ACTUALLY HAPPENED to the card when a no-show was marked - the answer
+ * the barber reads AFTER Confirm, where describeNoShowCardOutcome above is the
+ * promise before it. Built by the API from settleCardOnFile's result.
+ *
+ * Drick, 2026-10-22: "he hits an error or the card on file cant be charged".
+ * The screen used to say "Marked no-show" whatever the card did, and a payment
+ * SETUP problem (Stripe refusing the request, not the bank refusing the card)
+ * reached him as an ordinary decline.
+ */
+export type NoShowChargeResult =
+  | { kind: "charged"; cents: number }
+  | { kind: "declined"; cents: number; code: string | null }
+  /** Stripe refused the REQUEST (account, permission, configuration) - not the card. */
+  | { kind: "setup_problem"; cents: number }
+  /** Stripe's answer never arrived; the reconciler will read it. */
+  | { kind: "pending"; cents: number }
+  | { kind: "not_charged"; why: "fees_off" | "no_fee_due" | "no_card" | "already" };
+
+/**
+ * A bank's decline code in the barber's words. Never Stripe's message text
+ * (it can quote what a customer typed), only a fixed phrase per code; an
+ * unknown or missing code reads as a plain decline.
+ */
+export function cardDeclineWords(code: string | null | undefined): string {
+  switch (code) {
+    case "insufficient_funds":
+      return "not enough money on the card";
+    case "expired_card":
+      return "the card has expired";
+    case "authentication_required":
+      return "the bank wants the client to approve it themselves";
+    case "incorrect_cvc":
+    case "incorrect_number":
+    case "invalid_expiry_month":
+    case "invalid_expiry_year":
+      return "the card details don't match";
+    case "processing_error":
+      return "a processing error at the bank";
+    case "card_not_supported":
+      return "the card doesn't support this charge";
+    case "card_velocity_exceeded":
+      return "the card is over its limit";
+    default:
+      return "the bank declined it";
+  }
+}
+
+export function describeNoShowChargeResult(
+  result: NoShowChargeResult,
+  last4: string | null,
+): { text: string; tone: "good" | "warn" | "muted" } {
+  const card = last4 ? `the card ending ${last4}` : "the saved card";
+  switch (result.kind) {
+    case "charged":
+      return { text: `Charged ${dollarsFromCents(result.cents)} to ${card}.`, tone: "good" };
+    case "declined":
+      return {
+        text: `The ${dollarsFromCents(result.cents)} fee was declined: ${cardDeclineWords(result.code)}. Collect it at their next visit.`,
+        tone: "warn",
+      };
+    case "setup_problem":
+      return {
+        text: `The ${dollarsFromCents(result.cents)} fee couldn't be charged, and it isn't the card: ChairBack hit a payment setup problem. ChairBack has been alerted and will look into it.`,
+        tone: "warn",
+      };
+    case "pending":
+      return {
+        text: `The ${dollarsFromCents(result.cents)} fee was sent to Stripe and its answer hasn't come back yet. Check this booking again in a few minutes before collecting anything.`,
+        tone: "warn",
+      };
+    case "not_charged":
+      switch (result.why) {
+        case "fees_off":
+          return { text: "Nothing was charged: no-show fees were off for this booking.", tone: "muted" };
+        case "no_fee_due":
+          return { text: "Nothing was charged: no fee was due on this booking.", tone: "muted" };
+        case "no_card":
+          return { text: "Nothing was charged: no card was saved on this booking.", tone: "muted" };
+        case "already":
+          return { text: "Nothing more was charged: this card was already charged or tried.", tone: "muted" };
+      }
   }
 }
