@@ -181,8 +181,11 @@ export default async function AdminPage() {
                   <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium">Plan</th>
                   <th className="px-4 py-3 font-medium">Clients</th>
+                  <th className="px-4 py-3 font-medium" title="Visits on record, all time - imported history included">
+                    Visits
+                  </th>
                   <th className="px-4 py-3 font-medium">Joined</th>
-                  <th className="px-4 py-3 font-medium">Free access</th>
+                  <th className="px-4 py-3 font-medium" title="Comped: full access without paying">Comped</th>
                 </tr>
               </thead>
               <tbody>
@@ -202,10 +205,8 @@ export default async function AdminPage() {
                     <td className="px-4 py-3">
                       <PlanCell shop={s} />
                     </td>
-                    <td className="px-4 py-3 text-muted">
-                      {s.clientCount}
-                      <span className="text-xs"> · {s.visitCount}v</span>
-                    </td>
+                    <td className="px-4 py-3 tabular-nums text-muted">{s.clientCount}</td>
+                    <td className="px-4 py-3 tabular-nums text-muted">{s.visitCount}</td>
                     <td className="px-4 py-3 text-xs text-muted">
                       <LocalDate iso={s.createdAt} />
                     </td>
@@ -216,7 +217,7 @@ export default async function AdminPage() {
                 ))}
                 {shops.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-8 text-center text-sm text-muted">
+                    <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted">
                       No shops yet.
                     </td>
                   </tr>
@@ -261,7 +262,7 @@ function StatusPill({ shop }: { shop: AdminShop }) {
         : ["Paying", "bg-emerald-soft/15 text-emerald-soft"]
       : shop.hasAccess
         ? ["Trial", "bg-charcoal-700 text-offwhite"]
-        : ["Free", "bg-charcoal-700 text-muted"];
+        : ["Locked", "bg-danger-soft/15 text-danger-soft"];
   return (
     <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${cls}`}>{text}</span>
   );

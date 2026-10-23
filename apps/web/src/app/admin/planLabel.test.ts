@@ -50,13 +50,27 @@ describe("planLabel", () => {
     });
   });
 
-  it("a lapsed shop is on no plan, and says which one it had", () => {
+  it("a lapsed subscription says it ended, and which plan it had", () => {
     expect(planLabel({ ...base, plan: "pro", subscriptionStatus: "canceled" })).toMatchObject({
-      name: "No plan",
+      name: "Subscription ended",
       detail: "was Premium",
       chosen: false,
     });
-    expect(planLabel(base)).toMatchObject({ name: "No plan", detail: null });
+  });
+
+  it("🔴 there is no free tier: an expired trial says so, with the date", () => {
+    const iso = "2026-10-14T00:00:00.000Z";
+    expect(planLabel({ ...base, trialEndsAt: iso })).toEqual({
+      name: "Trial ended",
+      detail: "ended",
+      endsAt: iso,
+      chosen: false,
+    });
+    expect(planLabel(base)).toMatchObject({ name: "No trial or plan", detail: null });
+  });
+
+  it("billing off (everyone has access) still reads No plan", () => {
+    expect(planLabel({ ...base, hasAccess: true })).toMatchObject({ name: "No plan", detail: null });
   });
 
   it("lists the paid plans cheapest first", () => {

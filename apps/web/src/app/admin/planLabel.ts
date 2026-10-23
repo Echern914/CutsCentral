@@ -49,6 +49,13 @@ export function planLabel(shop: PlanShop): PlanLabel {
   if (shop.hasAccess && shop.trialEndsAt) {
     return { name: "Trial", detail: "ends", endsAt: shop.trialEndsAt, chosen: false };
   }
+  // There is no free tier: a shop with no access is walled
+  // (middleware/billing.ts), so say why rather than "No plan".
+  if (!shop.hasAccess) {
+    if (lapsed) return { name: "Subscription ended", detail: lapsed, endsAt: null, chosen: false };
+    if (shop.trialEndsAt) return { name: "Trial ended", detail: "ended", endsAt: shop.trialEndsAt, chosen: false };
+    return { name: "No trial or plan", detail: null, endsAt: null, chosen: false };
+  }
   return { name: "No plan", detail: lapsed, endsAt: null, chosen: false };
 }
 
