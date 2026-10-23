@@ -210,9 +210,11 @@ async function sendAppointmentEmail(params: {
   html: string;
   kind: string;
   appointmentId?: string;
+  idempotencyKey?: string;
 }): Promise<boolean> {
   try {
     const result = await sendEmail({
+      ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
       to: params.to,
       subject: params.subject,
       text: params.text,
@@ -491,6 +493,12 @@ async function notifyAppointmentConfirmationImpl(params: {
           html: email.html,
           kind: "confirmation",
           appointmentId: appt.id,
+          // The stamp below stops a second send once this one is recorded; the
+          // provider key covers the gap before it is (two dispatches in flight,
+          // a crash between send and stamp - e.g. a chat Confirm retried after
+          // a lost answer). Keyed on the TIME too, so a moved booking's new
+          // confirmation is a new email, not a replay.
+          idempotencyKey: `appt-confirmation:${appt.id}:${appt.startsAt.toISOString()}`,
         });
         if (sent) {
           await forShop(shop.id).appointment.update({

@@ -323,6 +323,12 @@ const apiSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1).optional(),
   RECEPTIONIST_MODEL: z.string().min(1).default("claude-sonnet-5"),
   RECEPTIONIST_PROMPT_PATH: z.string().min(1).optional(),
+  // 🔴 THE BOOKING CHAT (apps/api/src/assistant): a menu of buttons plus
+  // server rules for typed messages. NO model of any kind, no API key, no
+  // outside service - it runs entirely inside this API. Off by default: while
+  // false every /api/assistant-chat route answers 404 and the booking page
+  // shows no door to it.
+  ASSISTANT_CHAT_ENABLED: boolish.default("false"),
   // Stripe price for the $40/mo receptionist add-on subscription. While unset,
   // self-serve upgrade is unavailable and only receptionistCompAccess shops
   // (pilots) can use the feature.

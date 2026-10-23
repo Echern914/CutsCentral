@@ -33,6 +33,7 @@ import { rewardsRouter } from "./routes/rewards.js";
 import { rewardsRecoveryRouter } from "./routes/rewardsRecovery.js";
 import { customerAuthRouter } from "./routes/customerAuth.js";
 import { customerMeRouter } from "./routes/customerMe.js";
+import { assistantChatRouter } from "./routes/assistantChat.js";
 import { findShopRouter } from "./routes/findShop.public.js";
 import { appVersionRouter } from "./routes/appVersion.js";
 import { unsubscribeRouter } from "./routes/unsubscribe.public.js";
@@ -86,6 +87,7 @@ import { requireAdminIp } from "./middleware/adminIp.js";
 import {
   adminLimiter,
   affiliateClaimLimiter,
+  assistantLimiter,
   dashboardLimiter,
   mcpIpLimiter,
   oauthLimiter,
@@ -201,6 +203,8 @@ export function createApp(): Express {
   // Sign-in carries its own per-route limits; /api/me is keyed by session.
   app.use("/api/customer-auth", customerAuthRouter);
   app.use("/api/me", customerMeRouter);
+  // The booking chat (menu + rules, no model): dark unless ASSISTANT_CHAT_ENABLED.
+  app.use("/api/assistant-chat", assistantLimiter, assistantChatRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
   app.use("/api/wallet", rewardsLimiter, walletRouter); // Apple Wallet pass web service (public, ApplePass-token auth)
   // 🔴 Its OWN mount, not a /find route under /api/page. publicPageRouter owns

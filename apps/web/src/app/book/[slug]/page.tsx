@@ -317,6 +317,15 @@ export async function generateMetadata({
   };
 }
 
+/**
+ * Is the booking chat on? FAIL CLOSED: an API that predates it, an error or a
+ * 404 (the switch off) all mean no door. Cached like the page shell.
+ */
+async function bookingChatOn(): Promise<boolean> {
+  const res = await apiPublicGet<{ enabled: boolean }>("/api/assistant-chat/status", BOOK_SHELL_REVALIDATE_S);
+  return res.ok && res.data?.enabled === true;
+}
+
 export default async function BookPage({
   params,
   searchParams,
@@ -324,7 +333,7 @@ export default async function BookPage({
   params: { slug: string };
   searchParams?: { service?: string; staff?: string; cb_domain?: string; cb_me?: string | string[] };
 }) {
-  const data = await getDataFor(params.slug, searchParams);
+  const [data, chatOn] = await Promise.all([getDataFor(params.slug, searchParams), bookingChatOn()]);
   if (!data) {
     const page = await pageInsteadOfBooking(params.slug, searchParams);
     if (page) redirect(page);
@@ -387,6 +396,18 @@ export default async function BookPage({
             className="mb-4 block text-center text-sm text-muted underline transition-colors hover:text-offwhite"
           >
             Booking for 2 or 3 people?
+          </Link>
+        )}
+        {/* The booking chat's door: only while it is switched on. It books
+            for someone the shop already knows, and moves or cancels their own
+            bookings; anything that takes payment hands back to this page. */}
+        {chatOn && (
+          <Link
+            href={`/book/${params.slug}/assistant`}
+            className="mb-4 block text-center text-sm text-muted underline transition-colors hover:text-offwhite"
+            data-qa="booking-chat-door"
+          >
+            Been here before? Book, move or cancel in chat
           </Link>
         )}
         <RewardsDoor />
