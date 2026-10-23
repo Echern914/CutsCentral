@@ -25,6 +25,7 @@ import {
   timerView,
 } from "./rewardsTab";
 import { Cancel, Details, MapPin, Reschedule } from "./icons";
+import { TierLadder } from "./status";
 import { tierProgressLine } from "./tierStatus";
 import { Avatar, Button, Group, ProgressBar, Row, Separator, StatusLabel, Tap, Txt, useLargeText } from "./ui";
 import type {
@@ -472,6 +473,18 @@ export function RewardProgramCard({
 
       {shows(program, "promotions") && program.promotions && program.promotions.length > 0 ? (
         <Deals promotions={program.promotions} timezone={program.shop.timezone} now={now} />
+      ) : null}
+
+      {/* Your status: every tier here - what it takes, what it gets, and
+          where they stand - always open on this tab (Profile keeps it behind
+          "How tiers work here"). Words only, no second bar beside the stamps. */}
+      {(program.tier.ladder?.length ?? 0) > 0 ? (
+        <View style={styles.activity}>
+          <Txt variant="footnoteStrong" tone="secondary" accessibilityRole="header">
+            Your status
+          </Txt>
+          <TierLadder program={program} />
+        </View>
       ) : null}
 
       {shows(program, "claimed") && claimedRows.length > 0 ? (

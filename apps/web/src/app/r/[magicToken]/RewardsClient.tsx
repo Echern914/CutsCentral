@@ -21,6 +21,7 @@ import { GetTheApp } from "./GetTheApp";
 import { AddToWallet } from "@/components/AddToWallet";
 import { TextToBook } from "@/components/TextToBook";
 import { DeleteMyData } from "./DeleteMyData";
+import { YourStatus } from "./YourStatus";
 import { resolveRewardsTheme, rewardsFontVars, surfaceStyle, type RewardsTheme } from "./theme";
 import { AppFrameScheme } from "@/components/PageScheme";
 // The interface lives with the rewards sub-route (its page owns the API call);
@@ -637,6 +638,19 @@ export function RewardsClient({
                 </a>
               ) : null}
             </motion.div>
+          )}
+
+          {/* Your status: every tier here - what it takes, what it gets, which
+              one they hold and which is next. Rewards on only (the API also
+              sends an empty ladder when off). Not one of the shop's section
+              toggles: the badge above never was either. */}
+          {rewardsOn && (loyalty.ladder?.length ?? 0) > 0 && (
+            <motion.section variants={fadeUp} className="flex flex-col gap-3" data-qa="your-status-section">
+              <h2 className="px-1 text-sm font-medium" style={{ color: t.muted }}>
+                Your status
+              </h2>
+              <YourStatus loyalty={loyalty} theme={t} />
+            </motion.section>
           )}
 
           {/* Rewards the client has claimed - their loyalty payoff, shown only

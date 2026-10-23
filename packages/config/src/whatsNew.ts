@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-23-clients-see-every-tier",
+    date: "2026-10-23",
+    kind: "feature",
+    title: "Clients can see every tier and what it gets them",
+    body:
+      "Your clients' rewards page now shows Your status: each tier, what it takes and the perk you set under Rewards, " +
+      "with their tier marked and the next one flagged. In the ChairBack app it's on the Rewards tab after the next app update.",
+  },
+  {
     id: "2026-10-22-no-show-card-says-what-happened",
     date: "2026-10-22",
     kind: "fix",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bestTier, displayName, heroLine, tierProgressLine } from "./tierStatus";
+import { bestTier, displayName, heroLine, ladderRows, tierProgressLine } from "./tierStatus";
 import type { RewardProgram } from "./types";
 
 const program = (name: string, tier: Partial<RewardProgram["tier"]>): RewardProgram => ({
@@ -55,4 +55,20 @@ describe("the profile's status", () => {
     expect(tierProgressLine(program("Sharp Cuts", { label: "Gold", next: null }))).toBe("You're at the top tier at Sharp Cuts");
     expect(tierProgressLine(program("Sharp Cuts", { label: null, next: null }))).toBeNull();
   });
+});
+
+describe("Your status: where the client stands on each rung", () => {
+  const ladder = [
+    { tier: "BRONZE" as const, label: "Bronze", color: "#B8772F", takes: "1 visit", perk: null },
+    { tier: "SILVER" as const, label: "Silver", color: "#C7CBD1", takes: "6 visits", perk: "10% off" },
+    { tier: "GOLD" as const, label: "Gold", color: "#D4AF37", takes: "12 visits", perk: "Priority booking" },
+  ];
+  const states = (tier: Partial<RewardProgram["tier"]>) => ladderRows(program("A", { ladder, ...tier })).map((r) => r.state);
+
+  it("no tier yet: the first rung is next", () => expect(states({})).toEqual(["next", "ahead", "ahead"]));
+  it("holding the first tier", () => expect(states({ key: "BRONZE", label: "Bronze" })).toEqual(["here", "next", "ahead"]));
+  it("holding the middle tier", () => expect(states({ key: "SILVER", label: "Silver" })).toEqual(["reached", "here", "next"]));
+  it("at the top", () => expect(states({ key: "GOLD", label: "Gold" })).toEqual(["reached", "reached", "here"]));
+  it("an older API (label only) still finds the held rung", () => expect(states({ label: "Silver" })).toEqual(["reached", "here", "next"]));
+  it("no ladder sent: no rows", () => expect(ladderRows(program("A", {}))).toEqual([]));
 });

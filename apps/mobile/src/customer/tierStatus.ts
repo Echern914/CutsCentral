@@ -72,3 +72,19 @@ export function tierProgressLine(program: RewardProgram): string | null {
   // An API that predates custom rules: tiers were visit counts.
   return `${next.visitsAway} ${next.visitsAway === 1 ? "visit" : "visits"} to ${next.label}`;
 }
+
+/**
+ * Where the client stands on each rung of a shop's ladder ("Your status"):
+ * the held tier is "here", those below "reached", the one right above it
+ * "next" (the first rung, before any tier), the rest "ahead". The app's own
+ * copy of config tierRules.ts `ladderStates` (the app cannot import config);
+ * the same cases are pinned in both test files.
+ */
+export type LadderState = "here" | "reached" | "next" | "ahead";
+export function ladderRows(program: RewardProgram): Array<NonNullable<RewardProgram["tier"]["ladder"]>[number] & { state: LadderState }> {
+  const ladder = program.tier.ladder ?? [];
+  const held = tierKeyOf(program);
+  const at = held ? ladder.findIndex((r) => r.tier === held) : -1;
+  if (held && at === -1) return ladder.map((r) => ({ ...r, state: "ahead" as const }));
+  return ladder.map((r, i) => ({ ...r, state: i < at ? "reached" : i === at ? "here" : i === at + 1 ? "next" : "ahead" }));
+}
