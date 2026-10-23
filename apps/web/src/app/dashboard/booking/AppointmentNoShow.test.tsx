@@ -182,6 +182,48 @@ describe("Mark no-show", () => {
     expect(noShow).toHaveBeenCalledTimes(1);
     expect(onChanged).not.toHaveBeenCalled();
   });
+
+  // Drick, 2026-10-22: "he hits an error or the card on file cant be charged".
+  // The sheet used to say "Marked no-show" whatever the card did.
+  async function markWith(card: unknown) {
+    noShow.mockResolvedValue({ ok: true, card });
+    await openMore({ ...base, noShowFee: { cents: 2000, last4: "4242" } } as AppointmentDetail);
+    fireEvent.click(await screen.findByText("Mark no-show"));
+    await screen.findByTestId("no-show-confirm");
+    fireEvent.click(confirmButton("Mark no-show"));
+    return screen.findByTestId("no-show-marked");
+  }
+
+  it("🔴 charged: the sheet says how much and to which card, until Done", async () => {
+    const box = await markWith({ kind: "charged", cents: 2000 });
+    expect(box.textContent).toContain("Marked no-show.");
+    expect(box.textContent).toContain("Charged $20 to the card ending 4242.");
+    expect(toast).not.toHaveBeenCalled();
+    expect(onChanged).toHaveBeenCalled();
+    fireEvent.click(Array.from(box.querySelectorAll("button")).find((b) => b.textContent === "Done")!);
+    expect(screen.queryByTestId("no-show-marked")).toBeNull();
+  });
+
+  it("🔴 declined: why, in words, and to collect it at the next visit", async () => {
+    const box = await markWith({ kind: "declined", cents: 2000, code: "expired_card" });
+    expect(box.textContent).toContain("The $20 fee was declined: the card has expired. Collect it at their next visit.");
+  });
+
+  it("🔴 a setup problem is not called a decline", async () => {
+    const box = await markWith({ kind: "setup_problem", cents: 2000 });
+    expect(box.textContent).toContain("it isn't the card: ChairBack hit a payment setup problem");
+    expect(box.textContent).not.toMatch(/declined|next visit/);
+  });
+
+  it("no card settled (or an older API): the plain toast, as before", async () => {
+    noShow.mockResolvedValue({ ok: true, card: null });
+    await openMore(base);
+    fireEvent.click(await screen.findByText("Mark no-show"));
+    await screen.findByTestId("no-show-confirm");
+    fireEvent.click(confirmButton("Mark no-show"));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Marked no-show", "success"));
+    expect(screen.queryByTestId("no-show-marked")).toBeNull();
+  });
 });
 
 describe("Undo no-show", () => {

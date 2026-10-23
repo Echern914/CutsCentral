@@ -24,7 +24,7 @@ import { __setSendEmailForTests } from "../messaging/email.js";
 
 const fake = vi.hoisted(() => {
   const setupIntents = new Map<string, { id: string; status: string; client_secret: string; customer: string; payment_method: string | null; metadata: Record<string, string> }>();
-  const state = { charges: [] as Array<{ params: Record<string, unknown>; key: string | undefined }>, declineNext: false, detached: [] as string[] };
+  const state = { charges: [] as Array<{ params: Record<string, unknown>; key: string | undefined }>, declineNext: false, throwNext: null as Record<string, unknown> | null, detached: [] as string[] };
   let n = 0;
   return {
     setupIntents,
@@ -50,6 +50,11 @@ const fake = vi.hoisted(() => {
       paymentIntents: {
         create: vi.fn(async (params: Record<string, unknown>, opts?: { idempotencyKey?: string }) => {
           state.charges.push({ params, key: opts?.idempotencyKey });
+          if (state.throwNext) {
+            const e = state.throwNext;
+            state.throwNext = null;
+            throw Object.assign(new Error(String(e.message ?? "stripe error")), e);
+          }
           if (state.declineNext) {
             state.declineNext = false;
             throw Object.assign(new Error("Your card was declined."), {
@@ -264,7 +269,12 @@ describe("the switch is ON", () => {
       transfer_data: { destination: ACCT },
     });
     expect((params.metadata as Record<string, string>).reason).toBe("no_show");
-    expect(key).toBe(`cof-charge:${b.cardOnFileId}`);
+    // Per attempt (the card row AND this attempt's Payment), so a retry after
+    // a setup problem is a new request rather than a replay Stripe refuses.
+    const firstPayment = await prisma.payment.findFirst({ where: { appointmentId: b.appointmentId } });
+    expect(key).toBe(`cof-charge:${b.cardOnFileId}:${firstPayment!.id}`);
+    // The barber's sheet is told what the card did.
+    expect(res.body.card).toEqual({ kind: "charged", cents: 2000 });
 
     expect(await cardStatus(b.appointmentId)).toBe("charged");
     const payment = await prisma.payment.findFirst({ where: { appointmentId: b.appointmentId } });
@@ -337,8 +347,60 @@ describe("the switch is ON", () => {
     expect(payment?.stripePaymentIntentId).toMatch(/^pi_declined_/);
     expect(chargeAlerts()).toHaveLength(1);
     expect(chargeAlerts()[0]!.title).toMatch(/Couldn't charge Card Keeper's card/);
-    expect(chargeAlerts()[0]!.body).toMatch(/\$20\.00 no-show fee was declined \(insufficient_funds\)/);
+    expect(chargeAlerts()[0]!.body).toMatch(/\$20\.00 no-show fee was declined: not enough money on the card\. Collect it/);
     expect(chargeEmails()).toHaveLength(0);
+    expect(res.body.card).toEqual({ kind: "declined", cents: 2000, code: "insufficient_funds" });
+  });
+
+  it("🔴 Stripe refusing the REQUEST is not a decline: the card stays saved, the barber is told it's a setup problem, and a retry charges", async () => {
+    const b = await bookedWithCard(4, 15);
+    // What a missing capability / a payment method Stripe no longer has looks
+    // like: an invalid-request error, no decline code, no card answer.
+    fake.state.throwNext = {
+      type: "StripeInvalidRequestError",
+      code: "resource_missing",
+      message: "No such PaymentMethod: 'pm_secret_detail'",
+    };
+    const res = await onceStarted(b.appointmentId, () =>
+      request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.card).toEqual({ kind: "setup_problem", cents: 2000 });
+    // Not burned: the next try can still charge it.
+    expect(await cardStatus(b.appointmentId)).toBe("saved");
+    const failed = await prisma.payment.findFirst({ where: { appointmentId: b.appointmentId } });
+    expect(failed?.status).toBe("failed");
+    expect(chargeAlerts()).toHaveLength(1);
+    expect(chargeAlerts()[0]!.body).toMatch(/payment setup problem on ChairBack's side, not the card/);
+    expect(chargeAlerts()[0]!.body).not.toMatch(/declined|next visit|pm_secret_detail/);
+
+    // Put it back and mark it again: a NEW request under a new key, and it charges.
+    await onceStarted(b.appointmentId, async () => {
+      const undo = await request(app)
+        .post(`/api/booking/appointments/${b.appointmentId}/undo-no-show`)
+        .set("Cookie", cookie);
+      expect(undo.status).toBe(200);
+      const again = await request(app)
+        .post(`/api/booking/appointments/${b.appointmentId}/no-show`)
+        .set("Cookie", cookie);
+      expect(again.body.card).toEqual({ kind: "charged", cents: 2000 });
+    });
+    expect(fake.state.charges).toHaveLength(2);
+    expect(fake.state.charges[0]!.key).not.toBe(fake.state.charges[1]!.key);
+    expect(await cardStatus(b.appointmentId)).toBe("charged");
+  });
+
+  it("🔴 a decline never puts Stripe's own message text in the barber's push", async () => {
+    const b = await bookedWithCard(4, 16);
+    fake.state.throwNext = { type: "StripeCardError", message: "Card 4000 0000 0000 0002 declined for Card Keeper" };
+    const res = await onceStarted(b.appointmentId, () =>
+      request(app).post(`/api/booking/appointments/${b.appointmentId}/no-show`).set("Cookie", cookie),
+    );
+    expect(res.body.card).toEqual({ kind: "declined", cents: 2000, code: "unknown" });
+    expect(chargeAlerts()).toHaveLength(1);
+    expect(chargeAlerts()[0]!.body).toMatch(/declined: the bank declined it\./);
+    expect(chargeAlerts()[0]!.body).not.toMatch(/4000|Card Keeper/);
+    expect(await cardStatus(b.appointmentId)).toBe("failed");
   });
 
   // 🔴 INSIDE THE WINDOW, SO BOTH RACERS OWE A FEE. Booked four days out, only

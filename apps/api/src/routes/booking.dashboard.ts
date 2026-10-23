@@ -66,7 +66,8 @@ import {
 } from "../engines/bookingWrite.js";
 import { findConflicts, recordConflicts } from "../engines/bookingConflict.js";
 import { sendToBarber } from "../services/barberNotify.js";
-import { apiEnv, walkInBackdateRefusal } from "@chairback/config";
+import { apiEnv, walkInBackdateRefusal, type NoShowChargeResult } from "@chairback/config";
+import { noShowChargeResult } from "../services/cardOnFileSettle.js";
 import {
   blockedTimeIsTheOnlyObstacle,
   blockSentence,
@@ -5254,8 +5255,14 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   // their CANCELED booking became a no-show and a kept card was charged the
   // no-show fee. Now that write moves nothing, and the answer is the same
   // refusal as a booking that was never BOOKED.
+  // What the kept card did, so the sheet can SAY it instead of a bare
+  // "Marked no-show" (Drick, 2026-10-22: "the card on file cant be charged").
+  let card: NoShowChargeResult | null = null;
   const ok = await cancelAppointment(shopId, req.params.id!, "NO_SHOW", new Date(), {
     onlyFrom: ["BOOKED"],
+    onCardSettled: (settled) => {
+      card = noShowChargeResult(settled);
+    },
   });
   if (!ok) {
     res.status(409).json({ ok: false, error: "not_booked" });
@@ -5268,7 +5275,7 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
     (err: unknown) =>
       logger.error({ err, shopId, appointmentId: req.params.id }, "no-show: status record failed"),
   );
-  res.json({ ok: true });
+  res.json({ ok: true, card });
 });
 
 /**

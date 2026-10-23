@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  cardDeclineWords,
   describeNoShowCardOutcome,
+  describeNoShowChargeResult,
   noShowCardOutcome,
   type CancellationTerms,
 } from "./shopPolicy.js";
@@ -49,7 +51,7 @@ describe("noShowCardOutcome", () => {
   });
 
   it("no card was saved (none, or the card step never finished)", () => {
-    for (const cardStatus of [null, "pending", "failed"]) {
+    for (const cardStatus of [null, "pending"]) {
       expect(noShowCardOutcome({ ...base, cardStatus, feeCents: 2000 })).toEqual({
         charge: false,
         reason: "no_card",
@@ -97,8 +99,75 @@ describe("noShowCardOutcome", () => {
       "no_card",
       "card_released",
       "visit_closed",
+      "already_declined",
+      "charge_in_progress",
     ] as const) {
       expect(describeNoShowCardOutcome({ charge: false, reason }).text).toMatch(/^Nothing/);
     }
+  });
+
+  it("🔴 a card that was TRIED is not 'no card was saved'", () => {
+    expect(noShowCardOutcome({ ...base, cardStatus: "failed" })).toEqual({ charge: false, reason: "already_declined" });
+    expect(noShowCardOutcome({ ...base, cardStatus: "charging" })).toEqual({
+      charge: false,
+      reason: "charge_in_progress",
+    });
+    expect(noShowCardOutcome({ ...base, cardStatus: null })).toEqual({ charge: false, reason: "no_card" });
+  });
+});
+
+/**
+ * What the card DID, said after Mark no-show (Drick, 2026-10-22: the screen
+ * said "Marked no-show" whatever happened, and a setup problem read as a
+ * decline).
+ */
+describe("describeNoShowChargeResult", () => {
+  it("charged: the amount and the card", () => {
+    expect(describeNoShowChargeResult({ kind: "charged", cents: 2500 }, "4242")).toEqual({
+      text: "Charged $25 to the card ending 4242.",
+      tone: "good",
+    });
+    expect(describeNoShowChargeResult({ kind: "charged", cents: 2500 }, null).text).toBe(
+      "Charged $25 to the saved card.",
+    );
+  });
+
+  it("declined: why, in the bank's terms, and to collect it at the next visit", () => {
+    const d = describeNoShowChargeResult({ kind: "declined", cents: 2000, code: "insufficient_funds" }, "4242");
+    expect(d).toEqual({
+      text: "The $20 fee was declined: not enough money on the card. Collect it at their next visit.",
+      tone: "warn",
+    });
+  });
+
+  it("🔴 a setup problem is never called a decline or sent to the next visit", () => {
+    const d = describeNoShowChargeResult({ kind: "setup_problem", cents: 2000 }, "4242");
+    expect(d.text).toMatch(/isn't the card/);
+    expect(d.text).not.toMatch(/declined|next visit/);
+    expect(d.tone).toBe("warn");
+  });
+
+  it("an answer still out says to wait before collecting", () => {
+    expect(describeNoShowChargeResult({ kind: "pending", cents: 2000 }, null).text).toMatch(
+      /before collecting anything/,
+    );
+  });
+
+  it("nothing charged names the reason", () => {
+    for (const why of ["fees_off", "no_fee_due", "no_card", "already"] as const) {
+      expect(describeNoShowChargeResult({ kind: "not_charged", why }, null).text).toMatch(/^Nothing/);
+    }
+  });
+});
+
+describe("cardDeclineWords", () => {
+  it("common codes read as words; unknown, missing and raw text read as a plain decline", () => {
+    expect(cardDeclineWords("insufficient_funds")).toBe("not enough money on the card");
+    expect(cardDeclineWords("expired_card")).toBe("the card has expired");
+    expect(cardDeclineWords("authentication_required")).toMatch(/approve it themselves/);
+    expect(cardDeclineWords("generic_decline")).toBe("the bank declined it");
+    expect(cardDeclineWords("unknown")).toBe("the bank declined it");
+    expect(cardDeclineWords(null)).toBe("the bank declined it");
+    expect(cardDeclineWords("Your card number 4242 was declined.")).toBe("the bank declined it");
   });
 });

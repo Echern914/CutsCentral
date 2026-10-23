@@ -176,7 +176,8 @@ describe("🔴 Mark no-show against a client's own cancel", () => {
     const id = await bookedWithKeptCard(-10);
     const res = await markNoShow(id);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
+    // `card` is what the kept card did; the settle here is a stub that settles nothing.
+    expect(res.body).toEqual({ ok: true, card: null });
     expect((await prisma.appointment.findUniqueOrThrow({ where: { id } })).status).toBe("NO_SHOW");
     expect(settleCardOnFile).toHaveBeenCalledTimes(1);
     expect(settleCardOnFile).toHaveBeenCalledWith(expect.objectContaining({ appointmentId: id, outcome: "NO_SHOW" }));

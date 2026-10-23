@@ -1,5 +1,5 @@
 import { releaseCardOnFile } from "../billing/cardOnFile.js";
-import { settleCardOnFile } from "../services/cardOnFileSettle.js";
+import { settleCardOnFile, type SettleResult } from "../services/cardOnFileSettle.js";
 import {
   CANCELLATION_TERMS_SNAPSHOT_SELECT,
   termsForBooking,
@@ -370,6 +370,10 @@ export async function cancelAppointment(
     refuseIfMoney?: boolean;
     refuseIfCheckedOut?: boolean;
     keepBookingPayment?: boolean;
+    // onCardSettled: what happened to a kept card, for the caller that has a
+    //   barber waiting on the answer (POST /appointments/:id/no-show). Called
+    //   only when a saved card was settled; the boolean return stays as is.
+    onCardSettled?: (result: SettleResult) => void;
   } = {},
 ): Promise<boolean> {
   // Shop is owner-only, so this is read before the tenant transaction; the
@@ -632,7 +636,7 @@ export async function cancelAppointment(
   if (opts.refuseIfMoney) {
     // Refused above if a card was kept; nothing to settle or release.
   } else if (result.cardOnFile && result.cardOnFile.status === "saved") {
-    await settleCardOnFile({
+    const settled = await settleCardOnFile({
       shopId,
       appointmentId,
       outcome,
@@ -643,6 +647,7 @@ export async function cancelAppointment(
       now,
       terms: await termsForBooking(shopId, result.termsSnapshot),
     });
+    opts.onCardSettled?.(settled);
   } else if (result.cardOnFile && result.cardOnFile.status === "pending") {
     // A booking made WITHOUT a card (the card step is optional) whose card
     // never arrived. Nothing to charge; let the unfinished card go, so a card

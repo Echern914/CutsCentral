@@ -6,7 +6,9 @@ import Link from "next/link";
 import { cn } from "@/lib/cn";
 import {
   describeNoShowCardOutcome,
+  describeNoShowChargeResult,
   type NoShowCardOutcome,
+  type NoShowChargeResult,
 } from "@chairback/config/shopPolicy";
 import { copyText, mailtoUri, smsUri, telUri } from "@/lib/contactUri";
 import { parsePrice } from "@/lib/serviceFields";
@@ -177,7 +179,7 @@ export function AppointmentSheet({
       onChanged();
       load();
     },
-  });
+  });
   const series = useSeriesEdit({
     row,
     active: rawView === "series",
@@ -464,10 +466,17 @@ export function AppointmentSheet({
   const [noShowError, setNoShowError] = useState<string | null>(null);
   const [noShowBusy, setNoShowBusy] = useState(false);
   const [undoneNotes, setUndoneNotes] = useState<string[] | null>(null);
+  // What the kept card did once the no-show was marked, said in the footer
+  // (a toast draws beneath this sheet on a phone). Drick, 2026-10-22: the
+  // screen said "Marked no-show" whether the card was charged or not.
+  const [markedCard, setMarkedCard] = useState<{ result: NoShowChargeResult; last4: string | null } | null>(
+    null,
+  );
   useEffect(() => {
     if (rawView !== "detail") {
       setNoShowAsk(null);
       setUndoneNotes(null);
+      setMarkedCard(null);
     }
   }, [rawView]);
 
@@ -478,6 +487,7 @@ export function AppointmentSheet({
     setConfirmRemove(false);
     setConfirmCorrect(null);
     setUndoneNotes(null);
+    setMarkedCard(null);
     setNoShowAsk(kind);
   }
 
@@ -501,7 +511,16 @@ export function AppointmentSheet({
             return;
           }
           setNoShowAsk(null);
-          toast("Marked no-show", "success");
+          if (res.card) {
+            // The card line before Confirm named its last four; keep them.
+            const promised = detail?.noShowCard;
+            setMarkedCard({
+              result: res.card,
+              last4: detail?.noShowFee?.last4 ?? (promised?.charge ? promised.last4 : null),
+            });
+          } else {
+            toast("Marked no-show", "success");
+          }
           onChanged();
           load();
           return;
@@ -661,6 +680,12 @@ export function AppointmentSheet({
       />
     ) : undoneNotes ? (
       <UndoneNoShowFooter notes={undoneNotes} onDone={() => setUndoneNotes(null)} />
+    ) : markedCard ? (
+      <MarkedNoShowFooter
+        result={markedCard.result}
+        last4={markedCard.last4}
+        onDone={() => setMarkedCard(null)}
+      />
     ) : confirmRemove && detail ? (
       <RemoveWalkInFooter
         detail={detail}
@@ -2981,6 +3006,45 @@ function UndoneNoShowFooter({ notes, onDone }: { notes: string[]; onDone: () => 
           </li>
         ))}
       </ul>
+      <button
+        type="button"
+        onClick={onDone}
+        className="flex h-11 w-full items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+      >
+        Done
+      </button>
+    </div>
+  );
+}
+
+/**
+ * After Mark no-show: what the kept card actually did, in words - charged,
+ * declined (and why, in the bank's terms), a payment setup problem on
+ * ChairBack's side, or nothing - and waits for Done.
+ */
+function MarkedNoShowFooter({
+  result,
+  last4,
+  onDone,
+}: {
+  result: NoShowChargeResult;
+  last4: string | null;
+  onDone: () => void;
+}) {
+  const said = describeNoShowChargeResult(result, last4);
+  return (
+    <div className="flex w-full flex-col gap-2" data-testid="no-show-marked">
+      <p role="status" className="text-sm font-medium text-offwhite">
+        Marked no-show.
+      </p>
+      <p
+        className={cn(
+          "text-xs leading-relaxed",
+          said.tone === "good" ? "text-emerald-soft" : said.tone === "warn" ? "text-warning-soft" : "text-muted",
+        )}
+      >
+        {said.text}
+      </p>
       <button
         type="button"
         onClick={onDone}
