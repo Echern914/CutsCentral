@@ -844,6 +844,7 @@ model Shop {
   // Affiliate program (the NEW one; the Referral rows above are the legacy
   // program). At most one application open and one account ever, per shop.
   affiliateApplications AffiliateApplication[]
+  assistantConfirmations AssistantConfirmation[]
   affiliateAccount      AffiliateAccount?
 
   @@index([ownerId])
@@ -6279,4 +6280,39 @@ model AdminEmailCode {
   createdAt  DateTime  @default(now())
 
   @@index([userId, createdAt])
+}
+
+/// THE BOOKING CHAT'S CONFIRMATIONS (apps/api/src/assistant). One row per
+/// previewed change - "Book Skin Fade with Drew at Fixture Cuts, Sat, Oct 31,
+/// 2:30 PM PDT, $40?" - redeemed only by that customer's own tap. The row is
+/// what makes a tap run ONCE across retries, lost responses, restarts and
+/// several API instances: pending -> running is a compare-and-set, and the
+/// answer is kept for replay. A newer request moves an open row to superseded,
+/// so an old Confirm button changes nothing. `id` is sha256 of the token the
+/// customer holds; the token itself is never stored. Default-deny: read and
+/// written as the owner only.
+model AssistantConfirmation {
+  id        String    @id
+  shopId    String
+  shop      Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  /// "c:<customerAccountId>" - who may redeem it.
+  actor     String
+  /// book | move | cancel (CHECK-pinned)
+  action    String
+  /// The RESOLVED ids and figures the preview showed.
+  args      Json
+  /// Fingerprint of the appointment state the preview was made from; a
+  /// different state at the tap = a fresh preview, never a silent change.
+  stateKey  String
+  summary   String
+  /// pending | running | done | failed | superseded (CHECK-pinned)
+  status    String    @default("pending")
+  result    Json?
+  expiresAt DateTime
+  claimedAt DateTime?
+  settledAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([shopId, actor, createdAt])
+  @@index([expiresAt])
 }

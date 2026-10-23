@@ -317,6 +317,15 @@ export async function generateMetadata({
   };
 }
 
+/**
+ * Is the booking chat on? FAIL CLOSED: an API that predates it, an error or a
+ * 404 (the switch off) all mean no door. Cached like the page shell.
+ */
+async function bookingChatOn(): Promise<boolean> {
+  const res = await apiPublicGet<{ enabled: boolean }>("/api/assistant-chat/status", BOOK_SHELL_REVALIDATE_S);
+  return res.ok && res.data?.enabled === true;
+}
+
 export default async function BookPage({
   params,
   searchParams,
@@ -330,6 +339,9 @@ export default async function BookPage({
     if (page) redirect(page);
     notFound();
   }
+  // Only once this page has decided to render for THIS shop (a refused or
+  // redirected visit asks nothing more of the API).
+  const chatOn = await bookingChatOn();
   // 🔴 A PREFILL, NOT A PERMISSION. `?service=` and `?staff=` only pre-pick
   // what the client could have tapped themselves two screens in - these ids
   // are already public on this page. BookingClient validates them against what
@@ -388,6 +400,24 @@ export default async function BookPage({
           >
             Booking for 2 or 3 people?
           </Link>
+        )}
+        {/* The booking chat's door: only while it is switched on. It books
+            for someone the shop already knows, and moves or cancels their own
+            bookings; anything that takes payment hands back to this page.
+
+            🔴 A PLAIN <a>, NOT next/link. A client-router navigation tapped
+            while this page's openings are still loading can wait behind that
+            request and never happen (the release browser journey: 4 of 5 runs
+            stalled on an immediate tap; this page's own group link does it
+            too). A full page load to the chat has no such queue. */}
+        {chatOn && (
+          <a
+            href={`/book/${params.slug}/assistant`}
+            className="mb-4 block text-center text-sm text-muted underline transition-colors hover:text-offwhite"
+            data-qa="booking-chat-door"
+          >
+            Been here before? Book, move or cancel in chat
+          </a>
         )}
         <RewardsDoor />
       </div>

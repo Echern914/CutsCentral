@@ -235,6 +235,25 @@ export async function apiPublicSend<T>(
   });
 }
 
+/**
+ * A CUSTOMER's call (the booking chat). Sends the customer session as a
+ * Bearer token and NOTHING else of the visitor's: unlike apiSend it forwards
+ * no cookies, so a shop owner's dashboard session in the same browser can
+ * never ride along onto a customer endpoint. Server actions only.
+ */
+export async function apiCustomerSend<T>(
+  method: "GET" | "POST",
+  path: string,
+  bearer: string,
+  body?: unknown,
+): Promise<ApiResult<T>> {
+  return doFetch<T>(path, {
+    method,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${bearer}`, ...clientIpHeaders() },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
 async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let data: T | null = null;
   let error: string | undefined;

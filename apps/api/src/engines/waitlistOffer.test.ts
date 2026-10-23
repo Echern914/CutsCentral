@@ -48,6 +48,12 @@ let entrySeq = 0;
 
 const TZ = "America/New_York";
 
+/** The shop zone's UTC offset at `at` ("GMT-04:00"). */
+const offsetAt = (at: Date) =>
+  new Intl.DateTimeFormat("en-US", { timeZone: TZ, timeZoneName: "longOffset" }).formatToParts(at).find((p) => p.type === "timeZoneName")!.value;
+/** True when the offset changes within an hour either side (a DST change). */
+const nearDstChange = (at: Date) => [-3600_000, 3600_000].some((d) => offsetAt(new Date(at.getTime() + d)) !== offsetAt(at));
+
 /** Deterministic, collision-free future slots: a fresh 30-min lane per call. */
 let slotSeq = 0;
 function freshSlot(overrides: Partial<FreedSlot> = {}): FreedSlot {
@@ -59,7 +65,15 @@ function freshSlot(overrides: Partial<FreedSlot> = {}): FreedSlot {
   // the NEXT day, so a test's "that day only" window can't fit it - which
   // turned whichever test drew that lane red at one hour of the night (CI,
   // 2026-10-17 07:08 UTC). Skip to the next lane instead.
-  while (wallParts(startsAt, TZ).date !== wallParts(new Date(startsAt.getTime() + 30 * 60_000), TZ).date) {
+  // 🔴 Nor a lane within an hour of a daylight-saving change. On the
+  // fall-back night 1:00-2:00 AM happens TWICE, and the engine does not offer
+  // the repeated 1:30 - so whichever test drew "Sun Nov 1, 1:30 AM EST" got
+  // "unavailable" (CI and local, 2026-10-23: a different test each time,
+  // depending on the hour the suite started).
+  while (
+    wallParts(startsAt, TZ).date !== wallParts(new Date(startsAt.getTime() + 30 * 60_000), TZ).date ||
+    nearDstChange(startsAt)
+  ) {
     startsAt = new Date(base + slotSeq++ * 2 * 3600_000);
   }
   return {

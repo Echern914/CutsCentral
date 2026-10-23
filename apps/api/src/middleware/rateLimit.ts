@@ -358,6 +358,26 @@ export const accountLimiter = make({
   keyGenerator: sessionKey,
 });
 
+/**
+ * The booking chat: per CUSTOMER SESSION. Its calls carry a Bearer token and
+ * no dashboard cookie, and they all reach the API from the web server - so
+ * dashboardLimiter (cookie, else IP) would put every customer on the platform
+ * in ONE bucket. Keyed on a digest of the bearer; otherwise the forwarded
+ * visitor IP (publicIpKey). The route adds its own per-person budget on top.
+ */
+export function assistantRateKey(req: Request): string {
+  if (req.header("Authorization")) return `b:${credentialKey(req.header("Authorization"), "none")}`;
+  return `ip:${publicIpKey(req)}`;
+}
+export const assistantLimiter = make({
+  name: "assistant",
+  windowMs: 60 * 1000,
+  limit: 60,
+  keyGenerator: assistantRateKey,
+});
+/** For the test that pins why the chat has its own key. */
+export const __dashboardKeyForTests = sessionKey;
+
 /** General authenticated dashboard reads: per-user, loose. */
 export const dashboardLimiter = make({
   name: "dashboard",

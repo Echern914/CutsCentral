@@ -151,6 +151,8 @@ beforeEach(() => {
       const s = world.find((x) => x.slug === decodeURIComponent(book[1]!));
       return s ? { ok: true, status: 200, data: bookPayload(s) } : notFound;
     }
+    // The booking chat's on/off (its door on the booking page): off, the default.
+    if (path === "/api/assistant-chat/status") return notFound;
     throw new Error(`unexpected API call ${path}`);
   });
 });
