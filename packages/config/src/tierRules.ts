@@ -640,6 +640,20 @@ export function describeTierGap(
   return `${parts.join(progress.match === "any" ? " or " : " and ")} ${lone ? "to" : "to reach"} ${label}`;
 }
 
+/**
+ * Where a client stands on each rung of the ladder, for the "Your status"
+ * card: the tier they hold is "here", the ones below it "reached", the one
+ * right above it "next" (the first rung, before any tier), the rest "ahead".
+ * The ladder arrives low to high (loyaltyView's `ladder`); a held tier the
+ * ladder doesn't list marks nothing as here.
+ */
+export type LadderState = "here" | "reached" | "next" | "ahead";
+export function ladderStates<T extends { tier: string }>(ladder: readonly T[], held: string | null): Array<T & { state: LadderState }> {
+  const at = held ? ladder.findIndex((r) => r.tier === held) : -1;
+  if (held && at === -1) return ladder.map((r) => ({ ...r, state: "ahead" as const }));
+  return ladder.map((r, i) => ({ ...r, state: i < at ? "reached" : i === at ? "here" : i === at + 1 ? "next" : "ahead" }));
+}
+
 /** The tier's display label, for callers that hold only the key. */
 export function tierLabel(key: LoyaltyTierKey): string {
   return LOYALTY_TIERS[key].label;

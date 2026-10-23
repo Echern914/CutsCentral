@@ -60,7 +60,17 @@ export interface RewardsData {
       perk: string | null;
       /** "1 more visit in the last 30 days to reach Gold". Absent from an older API. */
       summary?: string | null;
+      /** Whether every requirement must be met, or any one. Absent from an older API. */
+      match?: "all" | "any";
+      /** Each requirement's standing, in words. Absent from an older API. */
+      requirements?: Array<{ kind: string; met: boolean; text: string }>;
     } | null;
+    /**
+     * Every tier at this shop, lowest first: what it takes (the shop's rule in
+     * words) and what it gets (the shop's perk). Empty with rewards off;
+     * absent from an older API. Drives "Your status".
+     */
+    ladder?: Array<{ tier: string; label: string; color: string; takes: string; perk: string | null }>;
   };
   /**
    * What "book my usual" would book - the service and provider from this

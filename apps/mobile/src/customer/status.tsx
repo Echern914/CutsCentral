@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { initials } from "./format";
 import { Check, Person } from "./icons";
 import { color, radius, space } from "./theme";
-import { tierProgressLine, type BestTier } from "./tierStatus";
+import { ladderRows, tierProgressLine, type BestTier, type LadderState } from "./tierStatus";
 import type { RewardProgram } from "./types";
 import { Avatar, ProgressBar, Tap, Txt } from "./ui";
 
@@ -156,38 +156,52 @@ export function TierStatusCard({ program, onOpen }: { program: RewardProgram; on
               {ladderOpen ? "Hide tiers" : "How tiers work here"}
             </Txt>
           </Tap>
-          {ladderOpen ? (
-            <View style={styles.ladder}>
-              {ladder.map((rung) => {
-                const held = rung.tier === tier.key;
-                return (
-                  <View
-                    key={rung.tier}
-                    style={styles.rung}
-                    accessible
-                    accessibilityLabel={`${rung.label}${held ? ", your tier" : ""}: ${rung.takes}${rung.perk ? `. Gets ${rung.perk}` : ""}`}
-                  >
-                    <View style={[styles.dot, styles.rungDot, { backgroundColor: rung.color }]} />
-                    <View style={styles.flex}>
-                      <Txt variant={held ? "footnoteStrong" : "footnote"}>
-                        {held ? `${rung.label} · you're here` : rung.label}
-                      </Txt>
-                      <Txt variant="footnote" tone="secondary">
-                        {rung.takes}
-                      </Txt>
-                      {rung.perk ? (
-                        <Txt variant="caption" tone="tertiary">
-                          {rung.perk}
-                        </Txt>
-                      ) : null}
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-          ) : null}
+          {ladderOpen ? <TierLadder program={program} /> : null}
         </>
       ) : null}
+    </View>
+  );
+}
+
+/** What each rung says about where the client stands. "ahead" says nothing. */
+const MARK: Record<LadderState, string | null> = { here: "You're here", reached: "Reached", next: "Next", ahead: null };
+
+/**
+ * Every tier at one shop, lowest first: what it takes, what it gets, and
+ * where the client stands on it. Shared by the Profile card (behind "How tiers
+ * work here") and the Rewards tab's "Your status" (always open).
+ */
+export function TierLadder({ program }: { program: RewardProgram }) {
+  const rows = ladderRows(program);
+  if (rows.length === 0) return null;
+  return (
+    <View style={styles.ladder}>
+      {rows.map((rung) => {
+        const mark = MARK[rung.state];
+        return (
+          <View
+            key={rung.tier}
+            style={styles.rung}
+            accessible
+            accessibilityLabel={`${rung.label}${mark ? `, ${mark.toLowerCase()}` : ""}. Takes ${rung.takes}${rung.perk ? `. Gets you ${rung.perk}` : ""}`}
+          >
+            <View style={[styles.dot, styles.rungDot, { backgroundColor: rung.color }]} />
+            <View style={styles.flex}>
+              <Txt variant={rung.state === "here" ? "footnoteStrong" : "footnote"}>
+                {mark ? `${rung.label} · ${mark}` : rung.label}
+              </Txt>
+              <Txt variant="footnote" tone="secondary">
+                {`Takes ${rung.takes}`}
+              </Txt>
+              {rung.perk ? (
+                <Txt variant="caption" tone="tertiary">
+                  {`Gets you: ${rung.perk}`}
+                </Txt>
+              ) : null}
+            </View>
+          </View>
+        );
+      })}
     </View>
   );
 }

@@ -407,9 +407,11 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
     // 🔴 No tier with rewards off - not even to a raw API reader, which is what
     // the gate comment above promises. Same shape rather than null, so a web
     // page deployed before this API never dereferences a missing object.
+    // The ladder too: it carries every tier's rule and perk, which the page now
+    // shows as "Your status" (it rode along here, unshown, before).
     loyalty: rewardsOn
       ? loyalty
-      : { ...loyalty, tier: null, label: null, color: null, fraction: 0, perk: null, nextTier: null },
+      : { ...loyalty, tier: null, label: null, color: null, fraction: 0, perk: null, nextTier: null, ladder: [] },
     consent: consentView(client),
     // Their own switch for the shop's marketing email. Separate from texts,
     // and from appointment emails, which keep coming either way.

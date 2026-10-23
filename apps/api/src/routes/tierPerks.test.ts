@@ -166,6 +166,9 @@ describe("the client sees where they stand", () => {
       // The flag rides on the shop object, not the top level.
       expect(res.body.shop.rewardsEnabled).toBe(false);
       expect(res.body.punches.balance).toBe(0);
+      // ...and no tier at all: not the held one, not the next, not the ladder
+      // of every tier's rule and perk.
+      expect(res.body.loyalty).toMatchObject({ tier: null, label: null, perk: null, nextTier: null, ladder: [] });
     } finally {
       await prisma.shop.update({ where: { id: shopId }, data: { rewardsEnabled: true } });
     }
