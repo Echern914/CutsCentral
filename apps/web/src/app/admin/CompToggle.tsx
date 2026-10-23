@@ -30,7 +30,7 @@ export function CompToggle({
       const r = await setCompAccessAction(shopId, next);
       if (r.ok) {
         toast(
-          next ? `${shopName} now has free access` : `Free access removed from ${shopName}`,
+          next ? `${shopName} is now comped (full access, no charge)` : `${shopName} is no longer comped`,
           "success",
         );
       } else {
@@ -45,7 +45,7 @@ export function CompToggle({
       type="button"
       role="switch"
       aria-checked={comped}
-      aria-label={`Free access for ${shopName}`}
+      aria-label={`Comp ${shopName} (full access, no charge)`}
       disabled={pending}
       onClick={toggle}
       className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors duration-200 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50 disabled:opacity-60 ${
