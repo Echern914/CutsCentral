@@ -1,6 +1,7 @@
 import request from "supertest";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
+import { apiEnv } from "@chairback/config";
 import { createApp } from "../app.js";
 
 /**
@@ -12,24 +13,40 @@ import { createApp } from "../app.js";
  * During the Aug 29 booking outage that left exactly one way to confirm a fix
  * had rolled out - repeatedly attempting a REAL booking on a live shop's
  * calendar until the behaviour changed. One short SHA replaces that.
+ *
+ * 🔴 And only the operator gets it: the repo is public, so the live SHA names
+ * exactly which code is running for anyone who asks.
  */
 
+vi.hoisted(() => {
+  process.env.ADMIN_TOKEN ??= "health-test-admin-token-0123";
+});
+
 const app = createApp();
+const OPERATOR = { Authorization: `Bearer ${apiEnv().ADMIN_TOKEN}` };
 
 afterAll(async () => {
   await prisma.$disconnect();
 });
 
 describe("GET /healthz", () => {
-  it("answers without touching the database", async () => {
+  it("answers anyone without touching the database (Railway's liveness poll)", async () => {
     const res = await request(app).get("/healthz");
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.service).toBe("chairback-api");
   });
 
-  it("carries a deploy marker: commit and process start", async () => {
-    const res = await request(app).get("/healthz");
+  it("tells an anonymous caller NOTHING about which build is live", async () => {
+    for (const headers of [{}, { Authorization: "Bearer wrong-token" }, { Authorization: "garbage" }]) {
+      const res = await request(app).get("/healthz").set(headers);
+      expect(res.status).toBe(200);
+      expect(Object.keys(res.body).sort()).toEqual(["ok", "service"]);
+    }
+  });
+
+  it("carries a deploy marker for the operator: commit and process start", async () => {
+    const res = await request(app).get("/healthz").set(OPERATOR);
     // `commit` is null wherever the platform injects no SHA (local, CI); the
     // FIELD must exist regardless, so a caller can always ask.
     expect(res.body).toHaveProperty("commit");
@@ -43,14 +60,14 @@ describe("GET /healthz", () => {
   });
 
   it("is stable across calls - the marker names the BUILD, not the request", async () => {
-    const a = await request(app).get("/healthz");
-    const b = await request(app).get("/healthz");
+    const a = await request(app).get("/healthz").set(OPERATOR);
+    const b = await request(app).get("/healthz").set(OPERATOR);
     expect(b.body.startedAt).toBe(a.body.startedAt);
     expect(b.body.commit).toBe(a.body.commit);
   });
 
-  it("leaks nothing else about the environment", async () => {
-    const res = await request(app).get("/healthz");
+  it("leaks nothing else about the environment, even to the operator", async () => {
+    const res = await request(app).get("/healthz").set(OPERATOR);
     expect(Object.keys(res.body).sort()).toEqual(
       ["commit", "ok", "region", "service", "startedAt"].sort(),
     );
@@ -58,5 +75,20 @@ describe("GET /healthz", () => {
     for (const secret of ["postgres", "password", "SECRET", "KEY", "token"]) {
       expect(flat).not.toContain(secret);
     }
+  });
+});
+
+describe("GET /healthz/db", () => {
+  it("refuses an anonymous caller before touching the database", async () => {
+    const res = await request(app).get("/healthz/db");
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: "unauthorized" });
+  });
+
+  it("answers the operator with a timed round trip", async () => {
+    const res = await request(app).get("/healthz/db").set(OPERATOR);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(typeof res.body.queryMs).toBe("number");
   });
 });

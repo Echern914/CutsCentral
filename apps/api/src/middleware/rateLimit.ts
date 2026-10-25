@@ -61,6 +61,8 @@ function make(opts: {
   windowMs: number;
   limit: number;
   keyGenerator?: (req: Request) => string;
+  /** Count in this process's memory instead of Postgres. See baselineLimiter. */
+  memoryStore?: boolean;
 }): RateLimitRequestHandler {
   return rateLimit({
     windowMs: opts.windowMs,
@@ -70,7 +72,7 @@ function make(opts: {
     keyGenerator: opts.keyGenerator,
     handler: rateLimitedHandler(opts.name, opts.code),
     // Postgres store in real envs; MemoryStore (default) in tests.
-    ...(TEST ? {} : { store: new PgRateStore(`${opts.name}:`) }),
+    ...(TEST || opts.memoryStore ? {} : { store: new PgRateStore(`${opts.name}:`) }),
   });
 }
 
@@ -427,6 +429,47 @@ export const mcpIpLimiter = make({
   windowMs: 60 * 1000,
   limit: apiEnv().MCP_IP_RATE_LIMIT,
   keyGenerator: publicIpKey,
+});
+
+/**
+ * Key for the platform-wide backstop: the caller's credential when it carries
+ * one (hashed, never stored raw), otherwise the visitor (publicIpKey).
+ *
+ * Why not the IP for everyone: dashboard calls reach us from the web server
+ * WITHOUT a forwarded visitor IP, so an IP key would put every signed-in barber
+ * in Vercel's one egress bucket - the platform-wide-login-budget mistake
+ * authLimiter already made once.
+ *
+ * Known gap, same as dashboardLimiter's sessionKey: a caller inventing a new
+ * token per request gets a new bucket. Such a request is refused at its route's
+ * auth check before doing any work, and every public route has its own
+ * IP-keyed limiter underneath.
+ */
+export function baselineKey(req: Request): string {
+  const cookie = req.cookies?.[SESSION_COOKIE_NAME] as string | undefined;
+  if (cookie) return `s:${credentialKey(`Bearer ${cookie}`, "none")}`;
+  const auth = req.header("Authorization");
+  if (auth) return `b:${credentialKey(auth, "none")}`;
+  return `ip:${publicIpKey(req)}`;
+}
+
+/**
+ * 🔴 THE BACKSTOP: every /api route, before its own limiter. Each surface keeps
+ * its tighter, purpose-built limit; this exists so a route added later without
+ * one is never unlimited.
+ *
+ * Deliberately loose (600/min, ~10/s per caller) - a ceiling on floods, not a
+ * fair-share rule. Counted in MEMORY, not Postgres: it runs on every request,
+ * and a database write per request on a 10-connection pool would cost more
+ * than the abuse it bounds. Per replica and reset by a deploy, which is fine for
+ * a backstop.
+ */
+export const baselineLimiter = make({
+  name: "baseline",
+  windowMs: 60 * 1000,
+  limit: 600,
+  keyGenerator: baselineKey,
+  memoryStore: true,
 });
 
 /** Admin endpoints: per-token, tight (expensive ops; contain a leaked token). */

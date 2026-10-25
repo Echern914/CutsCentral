@@ -88,6 +88,7 @@ import {
   adminLimiter,
   affiliateClaimLimiter,
   assistantLimiter,
+  baselineLimiter,
   dashboardLimiter,
   mcpIpLimiter,
   oauthLimiter,
@@ -152,6 +153,10 @@ export function createApp(): Express {
   // (2) Global parsers for the rest of the app.
   app.use(express.json({ limit: "100kb" }));
   app.use(cookieParser());
+
+  // The backstop: no /api route is ever unlimited, whatever mounts below it.
+  // Each surface still adds its own tighter limit (rateLimit.ts).
+  app.use("/api", baselineLimiter);
 
   // (3) JSON API.
   app.use("/api/auth", authRouter); // signup/login limited inside the router
