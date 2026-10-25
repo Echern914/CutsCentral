@@ -41,6 +41,19 @@ export function isStorageConfigured(): boolean {
   return Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
+/**
+ * How the server key travels to Supabase. Two key formats exist:
+ *  - a legacy `service_role` key is a JWT (`eyJ...`) and is accepted both as
+ *    `apikey` and as `Authorization: Bearer`;
+ *  - a new secret key (`sb_secret_...`) is NOT a JWT and is accepted ONLY as
+ *    `apikey` - sent as a Bearer token it is refused.
+ * Sending `apikey` always (plus Bearer for a JWT) works with either, so the key
+ * can be rotated to the new format without a code change.
+ */
+export function storageAuthHeaders(key: string): Record<string, string> {
+  return key.startsWith("eyJ") ? { apikey: key, authorization: `Bearer ${key}` } : { apikey: key };
+}
+
 export interface UploadResult {
   url: string;
   path: string;
@@ -73,7 +86,7 @@ export async function uploadShopImage(params: {
   const res = await fetch(uploadUrl, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      ...storageAuthHeaders(env.SUPABASE_SERVICE_ROLE_KEY),
       "content-type": params.contentType,
       "cache-control": "public, max-age=31536000, immutable",
       // Object paths are random, so a collision means a retry of the same upload.
