@@ -90,7 +90,22 @@ export interface ToolContext {
   /** Resolved Client row id, when the phone matches one. */
   clientId: string | null;
   now: Date;
+  /**
+   * Who is booking, written as the appointment's `bookedVia`. The SMS
+   * receptionist (default) or the booking chat, which reuses these tools - so a
+   * chat booking is not miscounted as the receptionist's.
+   */
+  origin?: ConversationalOrigin;
 }
+
+/** The two surfaces that book through these tools. */
+export type ConversationalOrigin = "receptionist" | "assistant";
+/**
+ * 🔴 EVERY hold lookup matches BOTH, never one: a person's hold must be found
+ * (re-held, booked, released) whichever surface placed it, exactly as when both
+ * were tagged "receptionist".
+ */
+export const CONVERSATIONAL_ORIGINS: ConversationalOrigin[] = ["receptionist", "assistant"];
 
 /** Soft-lock TTL while a client decides ("want Thu 2:30?"). */
 export const CONVERSATIONAL_HOLD_TTL_MS = 10 * 60 * 1000;
@@ -308,7 +323,7 @@ export async function describeActiveHolds(params: {
       shopId: params.shopId,
       clientId: params.clientId,
       status: "PENDING",
-      bookedVia: "receptionist",
+      bookedVia: { in: CONVERSATIONAL_ORIGINS },
       holdExpiresAt: { gt: params.now },
     },
     orderBy: { startsAt: "asc" },
@@ -930,7 +945,7 @@ async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecut
           email: identity.email,
           status: "PENDING",
           holdExpiresAt: expiresAt,
-          bookedVia: "receptionist",
+          bookedVia: ctx.origin ?? "receptionist",
           startsAt: slot.startsAt,
           endsAt: slot.endsAt,
           priceAtBooking: slot.price ?? undefined,
@@ -969,7 +984,7 @@ async function holdSlot(ctx: ToolContext, rawInput: unknown): Promise<ToolExecut
           startsAt: slot.startsAt,
           clientId: identity.clientId,
           status: "PENDING",
-          bookedVia: "receptionist",
+          bookedVia: { in: CONVERSATIONAL_ORIGINS },
           holdExpiresAt: { gt: ctx.now },
         },
         select: { id: true },
@@ -1030,7 +1045,7 @@ async function bookAppointment(
       startsAt: slot.startsAt,
       clientId: identity.clientId,
       status: "PENDING",
-      bookedVia: "receptionist",
+      bookedVia: { in: CONVERSATIONAL_ORIGINS },
       holdExpiresAt: { gt: ctx.now },
     },
     select: { id: true },
@@ -1085,7 +1100,7 @@ async function bookAppointment(
           startsAt: slot.startsAt,
           clientId: identity.clientId,
           status: "PENDING",
-          bookedVia: "receptionist",
+          bookedVia: { in: CONVERSATIONAL_ORIGINS },
           holdExpiresAt: { not: null },
         },
         orderBy: { createdAt: "desc" },
@@ -1103,7 +1118,7 @@ async function bookAppointment(
           shopId: ctx.shopId,
           clientId: identity.clientId,
           status: "PENDING",
-          bookedVia: "receptionist",
+          bookedVia: { in: CONVERSATIONAL_ORIGINS },
           holdExpiresAt: { not: null },
           ...(hold ? { id: { not: hold.id } } : {}),
         },
@@ -1188,7 +1203,7 @@ async function bookAppointment(
           phone: ctx.phone,
           email: identity.email,
           status: "BOOKED",
-          bookedVia: "receptionist",
+          bookedVia: ctx.origin ?? "receptionist",
           startsAt: slot.startsAt,
           endsAt: slot.endsAt,
           priceAtBooking: slot.price ?? undefined,
@@ -1513,7 +1528,7 @@ async function rescheduleTool(
           shopId: ctx.shopId,
           clientId: ctx.clientId!,
           status: "PENDING",
-          bookedVia: "receptionist",
+          bookedVia: { in: CONVERSATIONAL_ORIGINS },
           holdExpiresAt: { not: null },
         },
         data: { status: "CANCELED", canceledAt: ctx.now },
@@ -1552,6 +1567,13 @@ async function rescheduleTool(
           // Check-in state from the old time is cleared too.
           confirmationSentAt: ctx.now,
           reminderSentAt: null,
+          // 🔴 And the confirmation EMAIL re-arms: email is the only channel a
+          // customer hears on (confirmation SMS is off), and the booking chat's
+          // "moved" notice is gated on this being null. Left set, a chat move
+          // told the customer nothing - they kept the email with the OLD time.
+          // (Nothing sends just because it is null; only an explicit
+          // notifyAppointmentConfirmation does - see booking.public.ts.)
+          confirmationEmailSentAt: null,
           // The email reminder must re-arm for the new time too - see the
           // note on the other reschedule paths.
           reminderEmailSentAt: null,

@@ -3737,7 +3737,8 @@ model Appointment {
   // prevent. shouldMirrorOnCreate reads this. Everything else - the busy set,
   // the overlap guards, the sweep - treats both kinds identically.
   holdReason    String?
-  // Origin marker, stamped at create: "receptionist" (AI-created),
+  // Origin marker, stamped at create: "receptionist" (the SMS receptionist),
+  // "assistant" (the booking chat - same tools, see CONVERSATIONAL_ORIGINS),
   // "targeted_slot" (booked into a barber's special - the calendar's "After
   // hours" / "Special" chip reads this), "waitlist_offer", "tier_opening",
   // "walk_in_queue"; null for an ordinary booking. The one rewrite: a

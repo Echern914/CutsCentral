@@ -329,6 +329,11 @@ const apiSchema = z.object({
   // false every /api/assistant-chat route answers 404 and the booking page
   // shows no door to it.
   ASSISTANT_CHAT_ENABLED: boolish.default("false"),
+  // The chat's canary, same two dials as SERVICE_CHECKOUT_SHOP_IDS:
+  // comma-separated shop ids or booking-page slugs (e.g. "cherncuts"), empty =
+  // every shop. With any set, every other
+  // shop gets the same 404 (and no door) as if the chat did not exist.
+  ASSISTANT_CHAT_SHOP_IDS: z.string().default(""),
   // Stripe price for the $40/mo receptionist add-on subscription. While unset,
   // self-serve upgrade is unavailable and only receptionistCompAccess shops
   // (pilots) can use the feature.

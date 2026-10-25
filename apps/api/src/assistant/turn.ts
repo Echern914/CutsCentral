@@ -18,6 +18,9 @@ import {
   type ConfirmRow,
 } from "./confirm.js";
 import { notifyAppointmentConfirmation, notifyBarberBookingEvent } from "../services/appointmentNotify.js";
+import { hasActiveAccess } from "../billing/stripe.js";
+import { checkPolicyAcceptance } from "../engines/bookingPolicy.js";
+import { bookingQuestionsForShop, questionsForService, resolveIntake } from "../engines/bookingIntake.js";
 
 /**
  * ONE BOOKING-CHAT TURN.
@@ -70,7 +73,21 @@ const actorKey = (a: AssistantActor) => `c:${a.accountId}`;
 // ── context ──────────────────────────────────────────────────────────────
 
 interface Ctx extends TurnContext {
-  shop: { id: string; name: string; slug: string | null; timezone: string; paymentsMode: string; requireCardToBook: boolean };
+  shop: {
+    id: string;
+    name: string;
+    slug: string | null;
+    timezone: string;
+    paymentsMode: string;
+    requireCardToBook: boolean;
+    // The booking page's own rules, which a chat booking must not get around.
+    requireBookingApproval: boolean;
+    subscriptionStatus: string;
+    trialEndsAt: Date | null;
+    compAccess: boolean;
+    bookingPolicyText: string | null;
+    bookingPolicyChecklist: string[];
+  };
   /** ref -> appointment id. Only the actor's own. */
   refIds: Map<string, string>;
 }
@@ -78,7 +95,20 @@ interface Ctx extends TurnContext {
 async function loadContext(actor: AssistantActor, now: Date): Promise<Ctx> {
   const shop = await prisma.shop.findUniqueOrThrow({
     where: { id: actor.shopId },
-    select: { id: true, name: true, slug: true, timezone: true, paymentsMode: true, requireCardToBook: true },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      timezone: true,
+      paymentsMode: true,
+      requireCardToBook: true,
+      requireBookingApproval: true,
+      subscriptionStatus: true,
+      trialEndsAt: true,
+      compAccess: true,
+      bookingPolicyText: true,
+      bookingPolicyChecklist: true,
+    },
   });
   const db = forShop(shop.id);
   const [services, staff] = await Promise.all([
@@ -212,6 +242,7 @@ function toolCtx(actor: AssistantActor, now: Date): ToolContext {
     phone: actor.phone ?? "",
     clientId: actor.clientId,
     now,
+    origin: "assistant",
   };
 }
 
@@ -283,12 +314,16 @@ async function execute(actor: AssistantActor, ctx: Ctx, name: string, args: Reco
     case "menu":
       return { action: name, text: "What would you like to do?", choices: menuChoices(actor) };
 
-    case "book_start":
+    case "book_start": {
+      // Up front, so nobody picks a day and a time only to be told at the end.
+      const gate = bookingGate(actor, ctx, now);
+      if (gate) return { ...gate, action: name };
       return {
         action: name,
         text: ctx.services.length ? "What would you like to book?" : "There's nothing on the menu to book yet.",
         choices: ctx.services.map((s) => ({ label: s, pick: pick(actor, "book_service", { service: s }) })),
       };
+    }
 
     case "book_service": {
       const service = ctx.services.find((s) => s === args.service);
@@ -376,6 +411,8 @@ async function execute(actor: AssistantActor, ctx: Ctx, name: string, args: Reco
     }
 
     case "find_openings": {
+      const off = lapsed(ctx, name, now);
+      if (off) return off;
       const from = (args.date as string | undefined) ?? ctx.today;
       const to = (args.to_date as string | undefined) ?? (args.date ? from : addDays(from, 6));
       const barber = args.barber as string | undefined;
@@ -442,10 +479,21 @@ async function execute(actor: AssistantActor, ctx: Ctx, name: string, args: Reco
     }
 
     case "pick_slot": {
-      const gate = bookingGate(actor, ctx);
-      if (gate) return gate;
       const slot = decodeSlotId(String(args.slot_id));
+      // The service and barber they chose ride along to the booking page if
+      // this has to finish there.
+      const prefill = slot ? { serviceId: slot.serviceId, staffId: slot.staffId } : undefined;
+      const gate = bookingGate(actor, ctx, now, prefill);
+      if (gate) return gate;
       if (!slot) return { action: name, text: "That time is no longer valid. Ask again for fresh times.", choices: [] };
+      if (await needsIntake(actor.shopId, slot.serviceId)) {
+        return {
+          action: name,
+          text: "This service has a few questions to answer first, so finish on the booking page.",
+          choices: [],
+          link: bookingLink(ctx, prefill),
+        };
+      }
       const detail = await slotDetail(actor, now, slot, ctx);
       if (!detail) return { action: name, text: "That time was just taken. Ask again for fresh times.", choices: [] };
       // Hold it while they decide, so nobody else books it between the
@@ -470,6 +518,10 @@ async function execute(actor: AssistantActor, ctx: Ctx, name: string, args: Reco
 
     case "pick_new_slot": {
       if (actor.ambiguous) return ambiguousOut(ctx, name);
+      // A lapsed shop can't churn its calendar from chat either (the manage
+      // link's reschedule refuses the same).
+      const off = lapsed(ctx, name, now);
+      if (off) return off;
       const own = await ownAppointment(actor, ctx, String(args.appointment_id), now);
       const slot = decodeSlotId(String(args.slot_id));
       if (!own || !slot) return { action: name, text: "I couldn't find that appointment or time.", choices: [] };
@@ -547,25 +599,62 @@ function ambiguousOut(ctx: Ctx, action: string): Out {
   };
 }
 
-function bookingLink(ctx: Ctx): { label: string; url: string } | undefined {
-  return ctx.shop.slug ? { label: "Open the booking page", url: `${apiEnv().APP_BASE_URL}/book/${ctx.shop.slug}` } : undefined;
+/**
+ * The shop's booking page. With `prefill`, the service (and barber) the person
+ * already chose in chat come pre-selected (the page's ?service=&staff=), so a
+ * handoff never makes them start over. It never pre-selects a time: only the
+ * page itself holds a slot.
+ */
+function bookingLink(ctx: Ctx, prefill?: { serviceId: string; staffId?: string }): { label: string; url: string } | undefined {
+  if (!ctx.shop.slug) return undefined;
+  const q = new URLSearchParams();
+  if (prefill) {
+    q.set("service", prefill.serviceId);
+    if (prefill.staffId) q.set("staff", prefill.staffId);
+  }
+  const qs = q.toString();
+  return { label: "Open the booking page", url: `${apiEnv().APP_BASE_URL}/book/${ctx.shop.slug}${qs ? `?${qs}` : ""}` };
+}
+
+/** A shop whose subscription lapsed takes no online bookings or moves (the booking page refuses them too). */
+function lapsed(ctx: Ctx, action: string, now: Date): Out | null {
+  if (hasActiveAccess(ctx.shop, { now })) return null;
+  return { action, text: `${ctx.shop.name} isn't taking online bookings right now. Please contact the shop directly.`, choices: [] };
 }
 
 /**
- * 🔴 CHECKOUT HANDOFF. Booking from chat writes no payment (the receptionist's
- * book takes none). A shop that takes payment or requires a card at booking is
- * sent to its booking page - which runs the real checkout - instead of chat
- * booking around it; an unknown or ambiguous person likewise.
+ * 🔴 THE BOOKING PAGE'S RULES, NOT A WAY AROUND THEM. Booking from chat writes
+ * no payment, asks no intake questions, shows no policy and makes no request
+ * for approval - so a shop that needs any of those sends the person to its
+ * booking page (which does them all) instead of chat booking around it. An
+ * unknown or ambiguous person likewise; a lapsed shop takes no bookings at all.
  */
-function bookingGate(actor: AssistantActor, ctx: Ctx): Out | null {
+function bookingGate(
+  actor: AssistantActor,
+  ctx: Ctx,
+  now: Date,
+  prefill?: { serviceId: string; staffId?: string },
+): Out | null {
+  const off = lapsed(ctx, "pick_slot", now);
+  if (off) return off;
+  const handoff = (text: string): Out => ({ action: "pick_slot", text, choices: [], link: bookingLink(ctx, prefill) });
   const paysAtBooking =
     ctx.shop.paymentsMode === "ahead" || ctx.shop.paymentsMode === "deposit" || (ctx.shop.paymentsMode === "card_on_file" && ctx.shop.requireCardToBook);
-  if (paysAtBooking) return { action: "pick_slot", text: "This shop takes payment when you book, so finish on the booking page.", choices: [], link: bookingLink(ctx) };
+  if (paysAtBooking) return handoff("This shop takes payment when you book, so finish on the booking page.");
+  if (ctx.shop.requireBookingApproval) return handoff("This shop approves each booking itself, so send your request from the booking page.");
+  if (!checkPolicyAcceptance(ctx.shop, undefined, now).ok) {
+    return handoff("This shop asks you to agree to its booking policy first, so finish on the booking page.");
+  }
   // Ambiguous first: a shared phone also leaves clientId null, and the person
   // should hear the real reason, not "book your first visit".
   if (actor.ambiguous) return ambiguousOut(ctx, "pick_slot");
-  if (!actor.clientId) return { action: "pick_slot", text: "Book your first visit on the booking page; after that I can book for you here.", choices: [], link: bookingLink(ctx) };
+  if (!actor.clientId) return handoff("Book your first visit on the booking page; after that I can book for you here.");
   return null;
+}
+
+/** Does this service ask a REQUIRED question the chat can't? Then the booking page asks it. */
+async function needsIntake(shopId: string, serviceId: string): Promise<boolean> {
+  return !resolveIntake(questionsForService(await bookingQuestionsForShop(shopId), serviceId), []).ok;
 }
 
 interface OwnAppt {
@@ -933,6 +1022,15 @@ async function redeem(actor: AssistantActor, ctx: Ctx, row: ConfirmRow, now: Dat
     if (actor.ambiguous || !actor.clientId) return failed("I can't book from chat for you here. Use the booking page.");
     const slot = decodeSlotId(String(args.slot_id));
     if (!slot) return failed("That time is no longer valid. Ask again for fresh times.");
+    // The shop's rules AGAIN, at the moment of booking: a shop can switch on
+    // approval, a policy, a required question or a deposit - or lapse - between
+    // the preview and the tap. Nothing is booked; the hold lapses on its own.
+    const prefill = { serviceId: slot.serviceId, staffId: slot.staffId };
+    const gate = bookingGate(actor, ctx, now, prefill);
+    if (gate) return { status: "failed", reply: { ok: false, text: `Nothing was booked. ${gate.text}` } };
+    if (await needsIntake(actor.shopId, slot.serviceId)) {
+      return failed("Nothing was booked. This service now has questions to answer first, so finish on the booking page.");
+    }
     // 2a. The hold lapsed or was taken: offer it again if it is still free.
     const holdLive = hold && hold.status === "PENDING" && hold.holdExpiresAt && hold.holdExpiresAt > now && hold.clientId === actor.clientId;
     if (!holdLive) {
@@ -972,6 +1070,8 @@ async function redeem(actor: AssistantActor, ctx: Ctx, row: ConfirmRow, now: Dat
       return done({ ok: true, appointmentId: appt.id, text: `${receipt(ctx, "Moved", appt)}${await acuityNote(actor.shopId, appt.id)}` });
     }
     if (actor.ambiguous) return failed("I can't change bookings from chat for you here.");
+    const off = lapsed(ctx, "move", now);
+    if (off) return failed(`Nothing was moved. ${off.text}`);
     if (!row.stateKey.startsWith(`${fingerprint(appt)}|`)) {
       if (appt.status !== "BOOKED" || appt.startsAt <= now) return failed("That appointment has changed since, so nothing was moved.");
       const own = await ownAppointment(actor, ctx, appt.id, now);

@@ -1,7 +1,7 @@
 import request from "supertest";
 import type { Express } from "express";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { prisma } from "@chairback/db";
+import { prisma, type Prisma } from "@chairback/db";
 import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { mintCustomerSession } from "../auth/customerSession.js";
 import { __resetAssistantBudgetForTests } from "../routes/assistantChat.js";
@@ -346,6 +346,21 @@ describe("🔴 identity and boundaries", () => {
     const r = await tap(token, choices[0]!.pick);
     expect(r.body.confirm).toBeUndefined();
     expect(r.body.text).toMatch(/first visit on the booking page/);
+    // The service and barber they picked come pre-selected - never the time.
+    const url = new URL(r.body.link!.url);
+    expect(url.pathname).toBe(`/book/${slug}`);
+    expect(url.searchParams.get("service")).toBeTruthy();
+    expect([staffId, staff2Id]).toContain(url.searchParams.get("staff"));
+    expect([...url.searchParams.keys()].sort()).toEqual(["service", "staff"]);
+  });
+
+  it("not on file: told up front, before choosing a service, day or time", async () => {
+    const acct = await prisma.customerAccount.create({ data: { phoneE164: randomPhone(), phoneVerifiedAt: new Date() } });
+    accountIds.add(acct.id);
+    const r = await nav(mintCustomerSession(acct.id, 0), "book");
+    expect(r.body.action).toBe("book_start");
+    expect(r.body.text).toMatch(/first visit on the booking page/);
+    expect(r.body.choices).toEqual([]);
     expect(r.body.link?.url).toMatch(new RegExp(`/book/${slug}$`));
   });
 
@@ -361,7 +376,7 @@ describe("🔴 identity and boundaries", () => {
       const r = await tap(c.token, choices[0]!.pick);
       expect(r.body.confirm).toBeUndefined();
       expect(r.body.text).toBe("This shop takes payment when you book, so finish on the booking page.");
-      expect(r.body.link).toEqual({ label: "Open the booking page", url: expect.stringMatching(new RegExp(`/book/${slug}$`)) });
+      expect(r.body.link).toEqual({ label: "Open the booking page", url: expect.stringMatching(new RegExp(`/book/${slug}\\?service=[^&]+&staff=[^&]+$`)) });
       expect(await prisma.appointment.count({ where: { shopId, clientId: c.clientId! } })).toBe(0);
     } finally {
       await prisma.shop.update({ where: { id: shopId }, data: { paymentsMode: "off", requireCardToBook: false } });
@@ -779,5 +794,165 @@ describe("🔴 a newer request replaces the open preview - on the server", () =>
       pages++;
     }
     expect(pages).toBe(8);
+  });
+});
+
+/**
+ * 🔴 READY TO SWITCH ON: one shop at a time, labelled as the chat, a moved
+ * booking emails the new time, and the booking page's own rules - approval,
+ * policy, required questions, a lapsed shop - are never booked around.
+ */
+describe("🔴 ready to switch on", () => {
+  const emails: Array<{ to: string; subject: string; key?: string }> = [];
+  beforeAll(async () => {
+    const { __setSendEmailForTests } = await import("../messaging/email.js");
+    __setSendEmailForTests(async (input) => {
+      emails.push({ to: input.to, subject: input.subject, key: input.idempotencyKey });
+      return { status: "sent", id: `em_ready_${emails.length}` };
+    });
+    const { armBackgroundWorkTracking } = await import("../backgroundWork.js");
+    armBackgroundWorkTracking();
+  });
+  afterAll(async () => {
+    const { __setSendEmailForTests } = await import("../messaging/email.js");
+    __setSendEmailForTests(undefined);
+  });
+  const settle = async () => (await import("../backgroundWork.js")).settleBackgroundWork();
+  const withEnv = async (vars: Record<string, string>, fn: () => Promise<void>) => {
+    const before = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, vars);
+    __resetEnvCacheForTests();
+    try {
+      await fn();
+    } finally {
+      for (const [k, v] of Object.entries(before)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      __resetEnvCacheForTests();
+    }
+  };
+
+  it("one shop only: ASSISTANT_CHAT_SHOP_IDS opens it there, and every other shop gets the same 404 as 'off'", async () => {
+    const c = await customer();
+    await withEnv({ ASSISTANT_CHAT_SHOP_IDS: shopId }, async () => {
+      expect((await request(app).get(`/api/assistant-chat/c/${slug}/status`)).body).toEqual({ enabled: true });
+      expect((await nav(c.token, "menu")).status).toBe(200);
+      // A shop-less status can't say yes to "which shop?" - so it says no.
+      expect((await request(app).get("/api/assistant-chat/status")).body).toEqual({ enabled: false });
+    });
+    await withEnv({ ASSISTANT_CHAT_SHOP_IDS: "some_other_shop" }, async () => {
+      expect((await request(app).get(`/api/assistant-chat/c/${slug}/status`)).status).toBe(404);
+      expect((await nav(c.token, "menu")).status).toBe(404);
+      expect((await say(c.token, "hi")).status).toBe(404);
+    });
+    // The booking-page slug works as well as the id (it is what an operator can read).
+    await withEnv({ ASSISTANT_CHAT_SHOP_IDS: `some_other_shop, ${slug}` }, async () => {
+      expect((await request(app).get(`/api/assistant-chat/c/${slug}/status`)).body).toEqual({ enabled: true });
+      expect((await nav(c.token, "menu")).status).toBe(200);
+    });
+    // Empty = every shop.
+    expect((await request(app).get(`/api/assistant-chat/c/${slug}/status`)).body).toEqual({ enabled: true });
+    expect((await request(app).get("/api/assistant-chat/c/no-such-shop-xyz/status")).status).toBe(404);
+  });
+
+  it("a chat booking - its hold and the booking - is labelled the chat's, not the SMS receptionist's", async () => {
+    const c = await customer();
+    const { choices } = await openingsOn(c.token, futureDay(30));
+    const preview = await tap(c.token, choices[0]!.pick);
+    const hold = await prisma.appointment.findFirstOrThrow({ where: { shopId, clientId: c.clientId!, status: "PENDING" } });
+    expect(hold.bookedVia).toBe("assistant");
+    expect((await confirm(c.token, preview.body.confirm.token)).body.ok).toBe(true);
+    const booked = await prisma.appointment.findFirstOrThrow({ where: { shopId, clientId: c.clientId!, status: "BOOKED" } });
+    expect(booked.id).toBe(hold.id); // the hold itself became the booking - found under the new label
+    expect(booked.bookedVia).toBe("assistant");
+  });
+
+  it("🔴 a move from chat emails the NEW time (it used to send nothing)", async () => {
+    const address = `asst-move-${randomToken(5)}@example.com`.toLowerCase();
+    const c = await customer({ email: address });
+    const { choices } = await openingsOn(c.token, futureDay(31));
+    await confirm(c.token, (await tap(c.token, choices[0]!.pick)).body.confirm.token);
+    await settle();
+    expect(emails.filter((e) => e.to === address)).toHaveLength(1);
+    const options = await say(c.token, `move my skin fade to ${spoken(futureDay(32))}`);
+    const prev = await tap(c.token, options.body.choices[0].pick);
+    expect((await confirm(c.token, prev.body.confirm.token)).body.ok).toBe(true);
+    await settle();
+    const mine = emails.filter((e) => e.to === address);
+    expect(mine).toHaveLength(2);
+    expect(mine[1]!.key).not.toBe(mine[0]!.key);
+    const appt = await prisma.appointment.findFirstOrThrow({ where: { shopId, clientId: c.clientId!, status: "BOOKED" } });
+    expect(appt.confirmationEmailSentAt).not.toBeNull();
+  });
+
+  it.each<[string, Prisma.ShopUpdateInput, RegExp]>([
+    ["approves each booking", { requireBookingApproval: true }, /approves each booking itself/],
+    ["has a policy to agree to", { bookingPolicyText: "Be on time.", bookingPolicyChecklist: ["I will arrive 5 minutes early"] }, /agree to its booking policy/],
+  ])("🔴 a shop that %s: handed to the booking page up front and at the time - nothing held or booked", async (_why, data, said) => {
+    await prisma.shop.update({ where: { id: shopId }, data });
+    try {
+      const c = await customer();
+      const start = await nav(c.token, "book");
+      expect(start.body.text).toMatch(said);
+      expect(start.body.choices).toEqual([]);
+      const { choices } = await openingsOn(c.token, futureDay(33));
+      const r = await tap(c.token, choices[0]!.pick);
+      expect(r.body.confirm).toBeUndefined();
+      expect(r.body.text).toMatch(said);
+      expect(r.body.link?.url).toMatch(/\?service=[^&]+&staff=[^&]+$/);
+      expect(await prisma.appointment.count({ where: { shopId, clientId: c.clientId! } })).toBe(0);
+    } finally {
+      await prisma.shop.update({ where: { id: shopId }, data: { requireBookingApproval: false, bookingPolicyText: null, bookingPolicyChecklist: [] } });
+    }
+  });
+
+  it("🔴 the shop switches on approval between the preview and the tap: nothing is booked", async () => {
+    const c = await customer();
+    const { choices } = await openingsOn(c.token, futureDay(34));
+    const preview = await tap(c.token, choices[0]!.pick);
+    expect(preview.body.confirm).toBeTruthy();
+    await prisma.shop.update({ where: { id: shopId }, data: { requireBookingApproval: true } });
+    try {
+      const r = await confirm(c.token, preview.body.confirm.token);
+      expect(r.body.ok).toBe(false);
+      expect(r.body.text).toMatch(/^Nothing was booked\. This shop approves each booking itself/);
+      expect(await prisma.appointment.count({ where: { shopId, clientId: c.clientId!, status: "BOOKED" } })).toBe(0);
+    } finally {
+      await prisma.shop.update({ where: { id: shopId }, data: { requireBookingApproval: false } });
+    }
+  });
+
+  it("🔴 a service with a REQUIRED question: finished on the booking page, with that service chosen", async () => {
+    const services = await prisma.service.findMany({ where: { shopId }, select: { id: true, name: true } });
+    const fade = services.find((s) => s.name === "Skin Fade")!;
+    const q = await prisma.bookingQuestion.create({ data: { shopId, serviceIds: [fade.id], label: "Any allergies?", required: true } });
+    try {
+      const c = await customer();
+      const { choices } = await openingsOn(c.token, futureDay(35));
+      const r = await tap(c.token, choices[0]!.pick);
+      expect(r.body.confirm).toBeUndefined();
+      expect(r.body.text).toMatch(/questions to answer first/);
+      expect(new URL(r.body.link!.url).searchParams.get("service")).toBe(fade.id);
+      expect(await prisma.appointment.count({ where: { shopId, clientId: c.clientId! } })).toBe(0);
+      // An OPTIONAL question doesn't stop a chat booking - the page wouldn't either.
+      await prisma.bookingQuestion.update({ where: { id: q.id }, data: { required: false } });
+      expect((await tap(c.token, choices[0]!.pick)).body.confirm).toBeTruthy();
+    } finally {
+      await prisma.bookingQuestion.delete({ where: { id: q.id } });
+    }
+  });
+
+  it("🔴 a lapsed shop takes no bookings from chat (as on its booking page)", async () => {
+    const c = await customer();
+    await prisma.shop.update({ where: { id: shopId }, data: { compAccess: false, subscriptionStatus: "canceled", trialEndsAt: new Date(Date.now() - 86_400_000) } });
+    try {
+      await withEnv({ STRIPE_SECRET_KEY: "sk_test_ready", STRIPE_PRICE_ID: "price_ready", STRIPE_WEBHOOK_SECRET: "whsec_ready" }, async () => {
+        expect((await nav(c.token, "book")).body.text).toMatch(/isn't taking online bookings right now/);
+        expect((await say(c.token, `any skin fade on ${spoken(futureDay(37))}?`)).body.text).toMatch(/isn't taking online bookings right now/);
+      });
+    } finally {
+      await prisma.shop.update({ where: { id: shopId }, data: { compAccess: true } });
+    }
   });
 });

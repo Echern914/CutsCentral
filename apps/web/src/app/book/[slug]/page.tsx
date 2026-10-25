@@ -318,11 +318,15 @@ export async function generateMetadata({
 }
 
 /**
- * Is the booking chat on? FAIL CLOSED: an API that predates it, an error or a
- * 404 (the switch off) all mean no door. Cached like the page shell.
+ * Is the booking chat on at THIS shop? FAIL CLOSED: an API that predates it,
+ * an error or a 404 (switch off, or the shop is outside ASSISTANT_CHAT_SHOP_IDS)
+ * all mean no door. Cached like the page shell.
  */
-async function bookingChatOn(): Promise<boolean> {
-  const res = await apiPublicGet<{ enabled: boolean }>("/api/assistant-chat/status", BOOK_SHELL_REVALIDATE_S);
+async function bookingChatOn(slug: string): Promise<boolean> {
+  const res = await apiPublicGet<{ enabled: boolean }>(
+    `/api/assistant-chat/c/${encodeURIComponent(slug)}/status`,
+    BOOK_SHELL_REVALIDATE_S,
+  );
   return res.ok && res.data?.enabled === true;
 }
 
@@ -341,7 +345,7 @@ export default async function BookPage({
   }
   // Only once this page has decided to render for THIS shop (a refused or
   // redirected visit asks nothing more of the API).
-  const chatOn = await bookingChatOn();
+  const chatOn = await bookingChatOn(params.slug);
   // 🔴 A PREFILL, NOT A PERMISSION. `?service=` and `?staff=` only pre-pick
   // what the client could have tapped themselves two screens in - these ids
   // are already public on this page. BookingClient validates them against what

@@ -152,7 +152,7 @@ beforeEach(() => {
       return s ? { ok: true, status: 200, data: bookPayload(s) } : notFound;
     }
     // The booking chat's on/off (its door on the booking page): off, the default.
-    if (path === "/api/assistant-chat/status") return notFound;
+    if (/^\/api\/assistant-chat\/c\/[^/]+\/status$/.test(path)) return notFound;
     throw new Error(`unexpected API call ${path}`);
   });
 });
