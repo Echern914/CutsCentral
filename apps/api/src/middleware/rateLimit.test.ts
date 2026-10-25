@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { Request, Response } from "express";
-import { publicIpKey, rateLimitedHandler } from "./rateLimit.js";
+import { baselineKey, publicIpKey, rateLimitedHandler } from "./rateLimit.js";
 
 /**
  * publicIpKey decides which bucket a PUBLIC request lands in. The stakes:
@@ -79,5 +79,41 @@ describe("rateLimitedHandler", () => {
     );
     expect(status).toBe(429);
     expect(body).toEqual({ error: "rate_limited" });
+  });
+});
+
+describe("baselineKey (the /api backstop)", () => {
+  function reqFull(opts: { cookie?: string; auth?: string; headers?: Record<string, string> }): Request {
+    const headers: Record<string, string> = { ...(opts.headers ?? {}) };
+    if (opts.auth) headers.authorization = opts.auth;
+    return {
+      ip: "203.0.113.9",
+      cookies: opts.cookie ? { cb_session: opts.cookie } : {},
+      header: (name: string) => headers[name.toLowerCase()],
+    } as unknown as Request;
+  }
+
+  it("gives each signed-in barber their OWN bucket - not Vercel's one egress IP", () => {
+    const a = baselineKey(reqFull({ cookie: "barber-a-session" }));
+    const b = baselineKey(reqFull({ cookie: "barber-b-session" }));
+    expect(a.startsWith("s:")).toBe(true);
+    expect(a).not.toBe(b);
+    expect(a).not.toContain("barber-a-session");
+  });
+
+  it("keys a bearer caller on a HASH of the token, never the token itself", () => {
+    const key = baselineKey(reqFull({ auth: "Bearer customer-session-token-abc" }));
+    expect(key.startsWith("b:")).toBe(true);
+    expect(key).not.toContain("customer-session-token-abc");
+    expect(baselineKey(reqFull({ auth: "Bearer customer-session-token-abc" }))).toBe(key);
+    expect(baselineKey(reqFull({ auth: "Bearer someone-else" }))).not.toBe(key);
+  });
+
+  it("keys an anonymous caller on the visitor (publicIpKey), not the web server", () => {
+    process.env.WEB_PROXY_SECRET = SECRET;
+    expect(
+      baselineKey(reqFull({ headers: { "x-cb-client-ip": "198.51.100.7", "x-cb-proxy-secret": SECRET } })),
+    ).toBe("ip:fwd:198.51.100.7");
+    expect(baselineKey(reqFull({}))).toBe("ip:203.0.113.9");
   });
 });
