@@ -12,7 +12,9 @@ export const dynamic = "force-dynamic";
  * is off, and the booking page shows no door to it.
  */
 export default async function AssistantPage({ params }: { params: { slug: string } }) {
-  const status = await apiPublicGet<{ enabled: boolean }>("/api/assistant-chat/status");
+  const status = await apiPublicGet<{ enabled: boolean }>(
+    `/api/assistant-chat/c/${encodeURIComponent(params.slug)}/status`,
+  );
   if (!status.ok || !status.data?.enabled) notFound();
   const page = await apiPublicGet<{ shop?: { name?: string }; name?: string }>(`/api/page/${encodeURIComponent(params.slug)}`, 60);
   const shopName = page.data?.shop?.name ?? page.data?.name ?? "this shop";

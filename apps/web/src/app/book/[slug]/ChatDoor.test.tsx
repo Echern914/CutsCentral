@@ -29,7 +29,7 @@ function elements(node: ReactNode): ReactElement[] {
 const SHOP = { ok: true, data: { shop: { name: "Fixture Cuts", slug: "fixture-cuts", customDomain: null }, staff: [], services: [] } };
 
 async function doorFor(status: { ok: boolean; status?: number; data?: unknown }) {
-  apiPublicGet.mockImplementation(async (path: string) => (path === "/api/assistant-chat/status" ? status : SHOP));
+  apiPublicGet.mockImplementation(async (path: string) => (path === "/api/assistant-chat/c/fixture-cuts/status" ? status : SHOP));
   const tree = await BookPage({ params: { slug: "fixture-cuts" }, searchParams: {} });
   return elements(tree).find((e) => (e.props as { "data-qa"?: string })?.["data-qa"] === "booking-chat-door");
 }

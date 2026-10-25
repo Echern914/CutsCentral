@@ -27,8 +27,32 @@ assistantChatRouter.use((_req, res, next) => {
   next();
 });
 
-/** Is the chat on? For the web to show (or hide) its door. Says nothing about any shop or person. */
+/**
+ * Is the chat on for this shop? Global switch + ASSISTANT_CHAT_SHOP_IDS (empty
+ * = every shop), which takes a shop's id OR its booking-page slug - the slug is
+ * what an operator can read off the link. With an allowlist set, a caller that
+ * cannot name its shop is refused - "not yours" is the safe answer to "which
+ * shop?".
+ */
+export function assistantChatEnabledFor(shop?: { id: string; slug: string | null }): boolean {
+  const env = apiEnv();
+  if (!env.ASSISTANT_CHAT_ENABLED) return false;
+  const allowed = env.ASSISTANT_CHAT_SHOP_IDS.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (allowed.length === 0) return true;
+  return shop !== undefined && (allowed.includes(shop.id) || (shop.slug !== null && allowed.includes(shop.slug)));
+}
+
+/** Shop-less status: on only when the chat is on for EVERY shop. Kept for older web builds. */
 assistantChatRouter.get("/status", (_req, res) => {
+  res.json({ enabled: assistantChatEnabledFor() });
+});
+
+/** Is the chat on at THIS shop? For the booking page's door. Says nothing about any person. */
+assistantChatRouter.get("/c/:slug/status", async (req, res) => {
+  const shop = await prisma.shop.findUnique({ where: { slug: String(req.params.slug) }, select: { id: true, slug: true } });
+  if (!shop || !assistantChatEnabledFor(shop)) return void res.status(404).json({ error: "not_found" });
   res.json({ enabled: true });
 });
 
@@ -62,8 +86,8 @@ export function __resetAssistantBudgetForTests(): void {
 
 async function customerActor(req: Request, res: Response): Promise<AssistantActor | null> {
   const accountId = req.customer!.accountId;
-  const shop = await prisma.shop.findUnique({ where: { slug: String(req.params.slug) }, select: { id: true } });
-  if (!shop) {
+  const shop = await prisma.shop.findUnique({ where: { slug: String(req.params.slug) }, select: { id: true, slug: true } });
+  if (!shop || !assistantChatEnabledFor(shop)) {
     res.status(404).json({ error: "not_found" });
     return null;
   }
