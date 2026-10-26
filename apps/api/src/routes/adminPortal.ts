@@ -29,6 +29,8 @@ import { buildPreflight } from "../ops/preflight.js";
 import { fetchWebConfig } from "../ops/webConfig.js";
 import { affiliateAdminRouter } from "./adminPortal.affiliate.js";
 import { partnerAdminRouter } from "./adminPortal.partners.js";
+import { logger } from "../logger.js";
+import { notifyCompEnded, type CompEndedOutcome } from "../engines/trialReminder.js";
 
 /**
  * Operator portal API (the founder's own admin surface). Session-gated to
@@ -343,16 +345,33 @@ adminPortalRouter.post("/shops/:shopId/comp", async (req, res) => {
     res.status(400).json({ error: "invalid_input" });
     return;
   }
+  const before = await prisma.shop.findUnique({ where: { id: req.params.shopId }, select: { compAccess: true } });
+  if (!before) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  let shop: { id: string; compAccess: boolean };
   try {
-    const shop = await prisma.shop.update({
+    shop = await prisma.shop.update({
       where: { id: req.params.shopId },
       data: { compAccess: parsed.data.compAccess },
       select: { id: true, compAccess: true },
     });
-    res.json({ ok: true, ...shop });
   } catch {
     res.status(404).json({ error: "not_found" });
+    return;
   }
+  // Comp switched OFF: if that left the shop with no plan, the owner hears it
+  // now ("your free access has ended - choose a plan") rather than finding a
+  // locked dashboard. A failed send never undoes the switch.
+  let ownerEmail: CompEndedOutcome | "failed" | undefined;
+  if (before.compAccess && !shop.compAccess) {
+    ownerEmail = await notifyCompEnded(shop.id).catch((err: unknown) => {
+      logger.error({ err, shopId: shop.id }, "comp-ended email failed");
+      return "failed" as const;
+    });
+  }
+  res.json({ ok: true, ...shop, ...(ownerEmail ? { ownerEmail } : {}) });
 });
 
 /**

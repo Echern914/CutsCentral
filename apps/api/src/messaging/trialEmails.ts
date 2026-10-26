@@ -193,3 +193,40 @@ export function buildTrialEmail(stage: TrialEmailStage, ctx: TrialEmailContext):
     }
   }
 }
+
+/**
+ * The operator switched a shop's complimentary access OFF and that left it with
+ * no plan (no subscription, trial over). Same promise as the trial-ended email
+ * - what paused, that nothing is lost, how to pick a plan - but it must not
+ * call a comped shop's access a "trial".
+ */
+export function buildCompEndedEmail(ctx: { shopName: string; ownerName: string; plans: TrialPlanLine[] }): EmailCopy {
+  const billingUrl = `${apiEnv().APP_BASE_URL}/dashboard/billing`;
+  const cheapest = ctx.plans[0];
+  const from = cheapest ? ` from ${money(cheapest.priceMonthlyUsd)}/mo` : "";
+  const lines = [
+    `Your complimentary ${APP_NAME} access for ${ctx.shopName} has ended, so ${WHAT_PAUSES} are paused.`,
+    `Nothing is lost. ${WHAT_STAYS.charAt(0).toUpperCase()}${WHAT_STAYS.slice(1)} are all still here, exactly as you left them.`,
+    `Choose a plan${from} and your shop picks up right where it left off.`,
+  ];
+  return {
+    subject: `Your free ${APP_NAME} access has ended - choose a plan to keep everything`,
+    text: [
+      `Hi ${ctx.ownerName},`,
+      "",
+      ...lines,
+      "",
+      ...(ctx.plans.length > 0 ? ["Plans:", ...planLinesText(ctx.plans), ""] : []),
+      `Choose a plan: ${billingUrl}`,
+      "",
+      `— ${APP_NAME}`,
+    ].join("\n"),
+    html: shell({
+      heading: "Your free access has ended",
+      paragraphs: lines,
+      plans: ctx.plans,
+      cta: { label: "Choose a plan", url: billingUrl },
+      closing: "You can still sign in any time to read or export your client book.",
+    }),
+  };
+}

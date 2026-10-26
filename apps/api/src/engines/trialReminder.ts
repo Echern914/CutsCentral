@@ -1,9 +1,9 @@
 import { PAID_PLAN_KEYS, PLANS } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
-import { billingEnabled, priceIdForTier } from "../billing/stripe.js";
+import { billingEnabled, hasActiveAccess, priceIdForTier } from "../billing/stripe.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
-import { buildTrialEmail, type TrialPlanLine } from "../messaging/trialEmails.js";
+import { buildCompEndedEmail, buildTrialEmail, type TrialPlanLine } from "../messaging/trialEmails.js";
 
 /**
  * Trial-expiry reminder emails. A daily sweep that walks shops still on their
@@ -188,4 +188,62 @@ export async function runTrialReminders(
 
   logger.info({ considered: shops.length, sent: summaries.length }, "trial reminder sweep complete");
   return summaries;
+}
+
+export type CompEndedOutcome = "sent" | "still_has_access" | "billing_off" | "email_off" | "not_found";
+
+/**
+ * The operator just switched a shop's complimentary access OFF. If that leaves
+ * the shop with no plan - no subscription and no trial time left - tell the
+ * owner now, the way the trial-ended email does, instead of the shop simply
+ * going dark.
+ *
+ *  - Still has access (a live subscription, or trial days left): nothing to
+ *    say yet. The trial ladder above emails them as their trial runs out.
+ *  - Billing off: switching comp off locks nothing, so there is nothing to say.
+ *
+ * 🔴 The trial ladder is marked finished (stage 3) BEFORE sending, so the next
+ * daily sweep cannot follow this with a "your free TRIAL has ended" email for a
+ * shop that was comped - one email, the right one.
+ */
+export async function notifyCompEnded(
+  shopId: string,
+  now: Date = new Date(),
+  opts: TrialReminderOptions = {},
+): Promise<CompEndedOutcome> {
+  const billingOn = opts.billingOn ?? billingEnabled();
+  if (!billingOn) return "billing_off";
+  if (!emailEnabled()) return "email_off";
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: {
+      id: true,
+      name: true,
+      compAccess: true,
+      subscriptionStatus: true,
+      trialEndsAt: true,
+      owner: { select: { email: true, name: true } },
+    },
+  });
+  if (!shop) return "not_found";
+  if (hasActiveAccess(shop, { now, enabled: billingOn })) return "still_has_access";
+
+  await prisma.shop.update({ where: { id: shop.id }, data: { trialReminderStage: 3 } });
+  const { subject, text, html } = buildCompEndedEmail({
+    shopName: shop.name,
+    ownerName: shop.owner.name,
+    plans: purchasablePlans({ billingOn }),
+  });
+  await sendEmail({
+    to: shop.owner.email,
+    subject,
+    text,
+    html,
+    stream: "lifecycle",
+    // One per shop per day: a double-click on the switch is one email.
+    idempotencyKey: `comp-ended:${shop.id}:${now.toISOString().slice(0, 10)}`,
+    meta: { shopId: shop.id, kind: "comp_ended" },
+  });
+  logger.info({ shopId: shop.id }, "comp-ended email sent");
+  return "sent";
 }
