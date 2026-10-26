@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { z } from "zod";
 import {
   businessType,
@@ -197,6 +197,19 @@ import { liveAttemptFor } from "../services/serviceCheckoutAttempt.js";
  *
  * The public customer-facing booking lives in booking.public.ts.
  */
+/**
+ * The parts of a request the three SHARED write handlers read (book, cancel,
+ * reschedule). They are exported so the barber chat runs the dashboard's own
+ * rules - never a copy of them. A caller outside Express passes the shop, the
+ * acting user and their seat exactly as the dashboard's middleware sets them.
+ */
+export type DashboardWriteReq = Pick<Request, "shop" | "userId" | "shopStaffId" | "body" | "params">;
+/** What those handlers answer with: a status and JSON, nothing else. */
+export interface DashboardWriteRes {
+  status(code: number): { json(body: unknown): unknown };
+  json(body: unknown): unknown;
+}
+
 export const bookingDashboardRouter: Router = Router();
 bookingDashboardRouter.use(requireUser, requireShop, requireManager, requireActiveAccess);
 
@@ -3381,7 +3394,7 @@ const FORCED_UNDO_SETTLE_MS = 2 * 60_000;
  *  - Otherwise: the booking as saved - its own time, and its Acuity state.
  */
 async function answerReplay(
-  res: import("express").Response,
+  res: DashboardWriteRes,
   shopId: string,
   operationId: string,
   ask: ReplayAsk,
@@ -3474,7 +3487,7 @@ async function answerReplay(
   return true;
 }
 
-bookingDashboardRouter.post("/appointments", async (req, res) => {
+export async function createAppointmentCore(req: DashboardWriteReq, res: DashboardWriteRes): Promise<void> {
   // One clock for the whole request, named once: the outbound mirror decides
   // "does this still occupy the chair" against it, and a handler that reads
   // the wall clock in two places can decide two different things.
@@ -4260,7 +4273,8 @@ bookingDashboardRouter.post("/appointments", async (req, res) => {
     logger.error({ err, shopId }, "dashboard appointment create failed");
     res.status(500).json({ error: "create_failed" });
   }
-});
+}
+bookingDashboardRouter.post("/appointments", (req, res) => createAppointmentCore(req, res));
 
 /**
  * 🔴 THE BARBER'S OWN OPEN SPECIALS - one definition for every list in his
@@ -4485,7 +4499,7 @@ bookingDashboardRouter.get("/specials", async (req, res) => {
   });
 });
 
-bookingDashboardRouter.post("/appointments/:id/cancel", async (req, res) => {
+export async function cancelAppointmentCore(req: DashboardWriteReq, res: DashboardWriteRes): Promise<void> {
   // 🔴 A TIPPED VISIT IS NOT CANCELLED WHILE THE TIP IS STILL TAKEN. This is
   // the one route that can cancel a COMPLETED visit, and cancelling one claws
   // back its loyalty, drops it from revenue and emails the client a
@@ -4531,7 +4545,8 @@ bookingDashboardRouter.post("/appointments/:id/cancel", async (req, res) => {
   }
   const ok = await cancelAppointment(req.shop!.id, req.params.id!, "CANCELED");
   res.status(ok ? 200 : 404).json({ ok });
-});
+}
+bookingDashboardRouter.post("/appointments/:id/cancel", (req, res) => cancelAppointmentCore(req, res));
 
 /**
  * How long after a cancel the barber may still take it back.
@@ -4852,7 +4867,7 @@ const rescheduleApptSchema = z
   })
   .strict();
 
-bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => {
+export async function rescheduleAppointmentCore(req: DashboardWriteReq, res: DashboardWriteRes): Promise<void> {
   // One clock for the whole request - see the note on MirrorIntentInput.now.
   const now = new Date();
   const shopId = req.shop!.id;
@@ -5201,7 +5216,8 @@ bookingDashboardRouter.post("/appointments/:id/reschedule", async (req, res) => 
         ? { kind: "repriced", fromCents: move.fromCents, toCents: move.toCents }
         : { kind: move.kind, totalCents: move.totalCents },
   });
-});
+}
+bookingDashboardRouter.post("/appointments/:id/reschedule", (req, res) => rescheduleAppointmentCore(req, res));
 
 // Edit an appointment (its own module - see booking.appointmentEdit.ts for the
 // reuse-the-same-engine rules and the Acuity-safe move ordering).
