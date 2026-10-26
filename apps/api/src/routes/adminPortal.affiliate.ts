@@ -5,6 +5,9 @@ import {
   AFFILIATE_SUSPENSION_REASONS,
   apiEnv,
 } from "@chairback/config";
+import { prisma } from "@chairback/db";
+import { logger } from "../logger.js";
+import { sendPushToUser } from "../messaging/push.js";
 import { correctAttribution } from "../services/affiliateAttribution.js";
 import {
   listCreditOperations,
@@ -103,8 +106,32 @@ affiliateAdminRouter.post("/applications/:id/approve", async (req, res) => {
       .json({ error: result.error });
     return;
   }
+  // The approval email is already queued in the approval's own transaction.
+  // A push reaches them now, on the phone - after the commit, never inside it,
+  // and never able to fail the approval.
+  void pushAffiliateApproved(result.value.application.shopId);
   res.json(result.value);
 });
+
+/** "You're in" on the owner's phone/browser. Push only: free, and once per approval. */
+export async function pushAffiliateApproved(shopId: string): Promise<void> {
+  try {
+    const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { ownerId: true } });
+    if (!shop) return;
+    await sendPushToUser({
+      userId: shop.ownerId,
+      shopId,
+      payload: {
+        title: "You're approved for the affiliate program",
+        body: "Your referral link is ready. Open ChairBack to share it and see what you earn.",
+        url: `${apiEnv().APP_BASE_URL}/dashboard/affiliates`,
+        tag: "affiliate-approved",
+      },
+    });
+  } catch (err) {
+    logger.error({ err, shopId }, "affiliate approved push failed");
+  }
+}
 
 const rejectSchema = z
   .object({

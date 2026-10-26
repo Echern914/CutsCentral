@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { WHATS_NEW, unseenWhatsNew } from "@chairback/config/whatsNew";
 import type { BellSignal } from "@/lib/notificationSignals";
 import { WhatsNewSection } from "./WhatsNewSection";
@@ -42,6 +43,13 @@ export function NotificationBell({
   demo?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  // The signals are gathered on the server when the page renders, so the list
+  // only changes when the page does. Refresh re-runs that gathering in place
+  // (router.refresh - no full reload, nothing typed is lost) for a barber who
+  // keeps the dashboard open all day.
+  const router = useRouter();
+  const [refreshing, startRefresh] = useTransition();
+  const refresh = () => startRefresh(() => router.refresh());
   // What was new when the page loaded. Kept for this visit so the entries stay
   // marked "New" in the open panel after the marker has been saved.
   const unseenIds = useMemo(
@@ -186,9 +194,32 @@ export function NotificationBell({
               className="glass mx-auto w-full max-w-sm overflow-hidden rounded-2xl shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             >
-              <p className="border-b border-subtle px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted">
-                Needs you
-              </p>
+              <div className="flex items-center justify-between gap-3 border-b border-subtle px-4 py-1.5">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted">Needs you</p>
+                <button
+                  type="button"
+                  onClick={refresh}
+                  disabled={refreshing || demo}
+                  data-qa="bell-refresh"
+                  aria-label={refreshing ? "Refreshing notifications" : "Refresh notifications"}
+                  className="-mr-2 inline-flex min-h-[44px] items-center gap-1.5 rounded-full px-3 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-60"
+                >
+                  <svg
+                    className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`}
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                    <path d="M21 3v6h-6" />
+                  </svg>
+                  {refreshing ? "Refreshing" : "Refresh"}
+                </button>
+              </div>
               {signals.length === 0 ? (
                 <p className="px-4 py-6 text-center text-sm text-muted">
                   You&apos;re all caught up.
