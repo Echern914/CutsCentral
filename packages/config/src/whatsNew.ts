@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-25-affiliate-earnings-progress",
+    date: "2026-10-25",
+    kind: "feature",
+    title: "Affiliates: see what you earn and how close you are",
+    body:
+      "The Affiliates tab now leads with what you get for every business you bring in: a month off your ChairBack plan, no cap. " +
+      "A bar shows how close your next month off is, and a tally shows the months you've made, used and still waiting on.",
+  },
+  {
     id: "2026-10-25-cleaner-day-ahead-summary",
     date: "2026-10-25",
     kind: "fix",
