@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { randomToken } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
-import { runTrialReminders, trialStageAt } from "./trialReminder.js";
+import { notifyCompEnded, runTrialReminders, trialStageAt } from "./trialReminder.js";
 
 /**
  * Trial-expiry reminder sweep: the week/tomorrow/ended stage ladder, monotonic
@@ -241,5 +241,49 @@ describe("runTrialReminders", () => {
       });
     }
     expect(mine().length).toBe(0);
+  });
+});
+
+/**
+ * 🔴 COMP SWITCHED OFF: the owner hears it the moment it leaves them with no
+ * plan - and hears it ONCE, in the right words (never "your trial ended" for a
+ * shop that was comped).
+ */
+describe("notifyCompEnded", () => {
+  it("no subscription and no trial left: emails the owner to choose a plan, and closes the trial ladder", async () => {
+    const shop = await makeShop({ compAccess: false, trialEndsAt: new Date(NOW.getTime() - 30 * MS_PER_DAY) });
+    expect(await notifyCompEnded(shop.id, NOW, { billingOn: true })).toBe("sent");
+    const emails = mine();
+    expect(emails).toHaveLength(1);
+    expect(emails[0]!.subject).toMatch(/free .* access has ended - choose a plan/i);
+    expect(emails[0]!.text).toContain("Your complimentary");
+    expect(emails[0]!.text).not.toMatch(/free trial|trial (has )?ended/i);
+    expect(emails[0]!.idempotencyKey).toBe(`comp-ended:${shop.id}:${NOW.toISOString().slice(0, 10)}`);
+    // The next daily sweep must not follow up with a "trial ended" email.
+    expect((await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } })).trialReminderStage).toBe(3);
+    await runFiltered(NOW);
+    // (Other shops in this file share the owner - count only emails about THIS shop.)
+    expect(mine().filter((e) => (e.meta as { shopId?: string } | undefined)?.shopId === shop.id)).toHaveLength(1);
+  });
+
+  it("never had a trial date (comped from the start): still told", async () => {
+    const shop = await makeShop({ compAccess: false, trialEndsAt: null });
+    expect(await notifyCompEnded(shop.id, NOW, { billingOn: true })).toBe("sent");
+    expect(mine()).toHaveLength(1);
+  });
+
+  it.each([
+    ["trial days left", { trialEndsAt: new Date(NOW.getTime() + 10 * MS_PER_DAY) }],
+    ["a live subscription", { subscriptionStatus: "active", trialEndsAt: null }],
+  ])("still has access (%s): nothing to say yet", async (_why, data) => {
+    const shop = await makeShop({ compAccess: false, ...data });
+    expect(await notifyCompEnded(shop.id, NOW, { billingOn: true })).toBe("still_has_access");
+    expect(mine()).toHaveLength(0);
+  });
+
+  it("billing off: switching comp off locks nothing, so no email", async () => {
+    const shop = await makeShop({ compAccess: false, trialEndsAt: null });
+    expect(await notifyCompEnded(shop.id, NOW, { billingOn: false })).toBe("billing_off");
+    expect(mine()).toHaveLength(0);
   });
 });
