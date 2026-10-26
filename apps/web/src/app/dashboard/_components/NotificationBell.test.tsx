@@ -6,6 +6,8 @@ const markSeen = vi.fn(async () => {});
 vi.mock("./whatsNewActions", () => ({
   markWhatsNewSeenAction: (...a: unknown[]) => markSeen(...(a as [])),
 }));
+const refresh = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
 const { NotificationBell } = await import("./NotificationBell");
 
@@ -91,5 +93,23 @@ describe("what's new in the bell", () => {
   it("an older API that sends no marker shows no dot", () => {
     render(<NotificationBell signals={[]} />);
     expect(document.querySelector('[data-qa="whats-new-dot"]')).toBeNull();
+  });
+});
+
+describe("refresh", () => {
+  it("the open panel has a Refresh button that re-gathers the list in place", () => {
+    refresh.mockClear();
+    render(<NotificationBell signals={[signal]} />);
+    fireEvent.click(screen.getByRole("button", { name: /Notifications/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh notifications" }));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("the demo dashboard can't refresh (there is nothing live to re-gather)", () => {
+    refresh.mockClear();
+    render(<NotificationBell signals={[]} demo />);
+    fireEvent.click(screen.getByRole("button", { name: /Notifications/ }));
+    const button = screen.getByRole("button", { name: "Refresh notifications" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
   });
 });

@@ -42,6 +42,9 @@ interface NotesAhead {
  * dropped instead, on the same principle as a zero count. A badge you cannot
  * act on is worse than no badge.
  */
+/** How long "you're approved for the affiliate program" stays in the bell. */
+export const AFFILIATE_APPROVED_SHOWS_MS = 7 * 24 * 60 * 60 * 1000;
+
 function hrefFor(featureId: string): string | null {
   return resolveHref(featureId);
 }
@@ -77,7 +80,7 @@ export async function collectNotificationSignals(opts: {
    */
   settingUp?: boolean;
 }): Promise<BellSignal[]> {
-  const [readiness, waitlist, inbox, walkIns, reviews, notes, award] = await Promise.all([
+  const [readiness, waitlist, inbox, walkIns, reviews, notes, award, affiliate] = await Promise.all([
     apiGet<ReadinessSummary>("/api/readiness/summary"),
     opts.barberOnly
       ? null
@@ -109,6 +112,10 @@ export async function collectNotificationSignals(opts: {
     opts.barberOnly
       ? null
       : apiGet<{ pending?: { title: string; monthLabel: string } | null }>("/api/awards/pending"),
+    // Approved as an affiliate (owner-only; 404 while the program is dark).
+    opts.barberOnly
+      ? null
+      : apiGet<{ application?: { status?: string; decidedAt?: string | null } | null }>("/api/affiliate/status"),
   ]);
 
   const out: BellSignal[] = [];
@@ -123,6 +130,25 @@ export async function collectNotificationSignals(opts: {
       label: `You're ${chosen.title} for ${chosen.monthLabel} - approve it to post`,
       count: 1,
       href: awardHref,
+    });
+  }
+
+  // Just approved as an affiliate: the one item here that decays by TIME rather
+  // than by work - there is no queue to clear, so it shows for a week after the
+  // decision and then drops off (still nothing stored, nothing to mark seen).
+  const application = affiliate?.ok ? affiliate.data?.application : null;
+  const affiliateHref = hrefFor("affiliates");
+  if (
+    application?.status === "APPROVED" &&
+    application.decidedAt &&
+    Date.now() - new Date(application.decidedAt).getTime() < AFFILIATE_APPROVED_SHOWS_MS &&
+    affiliateHref
+  ) {
+    out.push({
+      key: "affiliate-approved",
+      label: "You're approved for the affiliate program - share your link",
+      count: 1,
+      href: affiliateHref,
     });
   }
 

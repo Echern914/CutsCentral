@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-25-bell-refresh",
+    date: "2026-10-25",
+    kind: "feature",
+    title: "Refresh your notifications without reloading",
+    body:
+      "Open the bell and tap Refresh to bring in anything new since you opened the page. " +
+      "And when you're approved for the affiliate program, the bell and your phone now tell you, with a tap to your referral link.",
+  },
+  {
     id: "2026-10-25-affiliate-earnings-progress",
     date: "2026-10-25",
     kind: "feature",

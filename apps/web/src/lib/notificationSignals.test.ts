@@ -325,3 +325,32 @@ describe("the pending-review signal", () => {
     expect(out.map((s) => s.key)).toEqual(["readiness"]);
   });
 });
+
+describe("approved as an affiliate", () => {
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+
+  it("for a week after the approval, the bell says so and taps through to the affiliate page", async () => {
+    routes({ "affiliate/status": ok({ application: { status: "APPROVED", decidedAt: daysAgo(2) } }) });
+    const out = await collectNotificationSignals(MANAGER);
+    const s = out.find((x) => x.key === "affiliate-approved");
+    expect(s).toMatchObject({ count: 1, href: "/dashboard/affiliates" });
+    expect(s!.label).toMatch(/approved for the affiliate program/);
+  });
+
+  it.each([
+    ["approved more than a week ago", { status: "APPROVED", decidedAt: daysAgo(8) }],
+    ["still pending", { status: "PENDING", decidedAt: null }],
+    ["rejected", { status: "REJECTED", decidedAt: daysAgo(1) }],
+  ])("%s: nothing in the bell", async (_why, application) => {
+    routes({ "affiliate/status": ok({ application }) });
+    const out = await collectNotificationSignals(MANAGER);
+    expect(out.find((x) => x.key === "affiliate-approved")).toBeUndefined();
+  });
+
+  it("a staff barber's bell never asks about the shop's affiliate status", async () => {
+    routes({ "affiliate/status": ok({ application: { status: "APPROVED", decidedAt: daysAgo(1) } }) });
+    const out = await collectNotificationSignals({ barberOnly: true, premiumAiLocked: false });
+    expect(out.find((x) => x.key === "affiliate-approved")).toBeUndefined();
+    expect(apiGet.mock.calls.map((c) => c[0])).not.toContain("/api/affiliate/status");
+  });
+});
