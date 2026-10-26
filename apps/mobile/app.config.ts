@@ -210,7 +210,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        docs/lock-screen-widget.md - see docs/release-1.1.6.md. Without the
   //        flag, prebuild leaves the target, the App Group entitlement and the
   //        names setting out.
-  version: "1.1.6",
+  version: "1.1.7",
   orientation: "portrait",
   // Light: the app's screens are white & gold, so system controls (alerts,
   // pickers, keyboards) match them rather than following the phone's setting.
@@ -229,7 +229,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "53",
+    buildNumber: "54",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
