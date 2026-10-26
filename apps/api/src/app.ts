@@ -34,6 +34,7 @@ import { rewardsRecoveryRouter } from "./routes/rewardsRecovery.js";
 import { customerAuthRouter } from "./routes/customerAuth.js";
 import { customerMeRouter } from "./routes/customerMe.js";
 import { assistantChatRouter } from "./routes/assistantChat.js";
+import { barberChatRouter } from "./routes/barberChat.js";
 import { findShopRouter } from "./routes/findShop.public.js";
 import { appVersionRouter } from "./routes/appVersion.js";
 import { unsubscribeRouter } from "./routes/unsubscribe.public.js";
@@ -210,6 +211,9 @@ export function createApp(): Express {
   app.use("/api/me", customerMeRouter);
   // The booking chat (menu + rules, no model): dark unless ASSISTANT_CHAT_ENABLED.
   app.use("/api/assistant-chat", assistantLimiter, assistantChatRouter);
+  // The barber's side of it (book / move / cancel through the dashboard's own
+  // handlers): dark unless BARBER_CHAT_ENABLED. Per signed-in barber.
+  app.use("/api/barber-chat", dashboardLimiter, barberChatRouter);
   app.use("/api/rewards", rewardsLimiter, rewardsRouter);
   app.use("/api/wallet", rewardsLimiter, walletRouter); // Apple Wallet pass web service (public, ApplePass-token auth)
   // 🔴 Its OWN mount, not a /find route under /api/page. publicPageRouter owns
