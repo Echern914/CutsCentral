@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-26-reload-not-blank",
+    date: "2026-10-26",
+    kind: "fix",
+    title: "A Reload button instead of a blank page",
+    body:
+      "If a page ever fails to load, you now get a Reload button instead of a blank screen, and Try again actually fetches again. " +
+      "Your dashboard also starts a little faster.",
+  },
+  {
     id: "2026-10-25-holiday-price-preview",
     date: "2026-10-25",
     kind: "fix",

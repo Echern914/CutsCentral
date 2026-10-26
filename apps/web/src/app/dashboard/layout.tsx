@@ -74,7 +74,7 @@ export default async function DashboardLayout({
   // trialing/subscribed/comped shops, billing-off installs, demo, and employee
   // seats (403 on /api/billing) — see lib/billing.ts. Employee seats skip the
   // fetch entirely: it can only 403 for them.
-  const locks = barberOnly ? undefined : featureLocks(await getBillingSummary());
+  //
   // What the header bell shows. Derived per render from counts that already
   // exist — nothing is stored, and every source fails silently, so an employee
   // seat or a lapsed shop gets a quiet bell rather than a broken header.
@@ -82,7 +82,15 @@ export default async function DashboardLayout({
   // setup checklist on the home page (Eric, 2026-10-16: no interruptions). So
   // until clients can book: no trial banner (unless the trial is nearly over)
   // and no go-live count on the bell. The owner's alone; memoized per request.
-  const setup = seatRole === "OWNER" && !me.data?.demo ? await getOnboardingState() : null;
+  //
+  // 🔴 TOGETHER, not one after the other: nothing is sent to the phone until
+  // this layout finishes, and in the app that wait is a blank page. Billing and
+  // setup don't depend on each other, so they cost one round trip, not two.
+  const [billing, setup] = await Promise.all([
+    barberOnly ? Promise.resolve(null) : getBillingSummary(),
+    seatRole === "OWNER" && !me.data?.demo ? getOnboardingState() : Promise.resolve(null),
+  ]);
+  const locks = barberOnly || billing === null ? undefined : featureLocks(billing);
   const settingUp = Boolean(setup && !setupComplete(setup.facts));
   const bellSignals = await collectNotificationSignals({
     barberOnly,
