@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { AffiliatesClient, toolkitFor } from "./AffiliatesClient";
+import { AFFILIATE_POLICY } from "@chairback/config/affiliateProgram";
+import {
+  AffiliatesClient,
+  earningsSoFar,
+  milestoneLabels,
+  nextMonthProgress,
+  toolkitFor,
+} from "./AffiliatesClient";
 import {
   applyAffiliateAction,
   getAffiliateQrAction,
@@ -90,7 +97,14 @@ function overview(over: Partial<AffiliateOverview> = {}): AffiliateOverview {
         reversalMessage: null,
       },
     ],
-    policy: { attributionWindowDays: 60, qualifyingInvoices: 2, holdDays: 14, expiryMonths: 12 },
+    // What the API echoes - built from the program's own config, so a policy
+    // change moves these tests with it instead of hiding behind a stale copy.
+    policy: {
+      attributionWindowDays: AFFILIATE_POLICY.attribution.windowDays,
+      qualifyingInvoices: AFFILIATE_POLICY.qualification.qualifyingInvoices,
+      holdDays: AFFILIATE_POLICY.qualification.holdDaysAfterSecond,
+      expiryMonths: AFFILIATE_POLICY.reward.expiryMonthsAfterAvailable,
+    },
     ...over,
   };
 }
@@ -242,8 +256,11 @@ describe("dashboard", () => {
 
   it("leads with months, shows the link, one toolkit card per style, and masked referrals with stages", () => {
     render(<AffiliatesClient status={active} overview={overview()} appBase={APP} shopName="Fade Lab" />);
-    expect(screen.getByText("months earned").previousSibling?.textContent).toBe("2");
-    expect(screen.getByText("on the way").previousSibling?.textContent).toBe("1");
+    // 2 applied + 1 in the hold (the fixture's one PENDING reward).
+    expect(screen.getByText("months off so far").previousSibling?.textContent).toBe("3");
+    expect(screen.getByText("used on your bill").previousSibling?.textContent).toBe("2");
+    expect(screen.getByText("ready to use").previousSibling?.textContent).toBe("0");
+    expect(screen.getByText("waiting out the hold").previousSibling?.textContent).toBe("1");
     expect(screen.getByText(`${APP}/join?ref=abcDEF123456`)).toBeTruthy();
     expect(screen.getAllByTestId("toolkit-card")).toHaveLength(2);
     expect(screen.getByText("Short video")).toBeTruthy();
@@ -285,6 +302,174 @@ describe("dashboard", () => {
     expect(screen.getByText("Change how you promote")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByText("Your toolkit")).toBeTruthy();
+  });
+});
+
+describe("what you earn, and the bar toward the next month off", () => {
+  const active = status({
+    account: { code: "abcDEF123456", status: "ACTIVE", createdAt: "2026-08-01T00:00:00.000Z" },
+  });
+  const Q = AFFILIATE_POLICY.qualification.qualifyingInvoices;
+  const MAX = Q + 2; // signed up, each payment, the month itself
+
+  type Ref = AffiliateOverview["referrals"][number];
+  function ref(over: Partial<Ref>): Ref {
+    return {
+      id: "x",
+      label: "Business ••••0001",
+      stage: "signed_up",
+      signedUpAt: "2026-09-01T00:00:00.000Z",
+      qualifyingInvoices: 0,
+      holdEndsAt: null,
+      availableAt: null,
+      expiresAt: null,
+      reversedAt: null,
+      reversalMessage: null,
+      ...over,
+    };
+  }
+
+  function bar() {
+    const el = screen.getByRole("progressbar", { name: "Progress to your next month off" });
+    return {
+      min: el.getAttribute("aria-valuemin"),
+      now: el.getAttribute("aria-valuenow"),
+      max: el.getAttribute("aria-valuemax"),
+      text: el.getAttribute("aria-valuetext") ?? "",
+    };
+  }
+
+  it("says what every business brings in, with the program's real numbers and never cash", () => {
+    const { container } = render(
+      <AffiliatesClient status={active} overview={overview()} appBase={APP} shopName="Fade Lab" />,
+    );
+    expect(screen.getByText("For every business you bring in")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "A month off your ChairBack plan" })).toBeTruthy();
+    const terms = screen.getByTestId("earn-terms").textContent ?? "";
+    expect(terms).toContain(`paid for ${Q} months`);
+    expect(terms).toContain(`${AFFILIATE_POLICY.qualification.holdDaysAfterSecond}-day hold`);
+    expect(terms).toMatch(/no cap/);
+    expect(terms).toMatch(/never cash/);
+    expect(container.textContent).not.toMatch(/\$\s?\d/);
+  });
+
+  it("an empty bar at 0 for a referral that has not started, and for nobody at all", () => {
+    expect(nextMonthProgress({ referrals: [], policy: overview().policy })).toMatchObject({
+      state: "empty",
+      value: 0,
+      max: MAX,
+    });
+    // Only finished-badly rows (taken back / expired) leave nothing on the road.
+    const p = nextMonthProgress({
+      referrals: [ref({ stage: "reversed" }), ref({ stage: "expired" })],
+      policy: overview().policy,
+    });
+    expect(p).toMatchObject({ state: "empty", value: 0 });
+  });
+
+  it("partial: a step per milestone, from the furthest business along", () => {
+    render(
+      <AffiliatesClient
+        status={active}
+        overview={overview({
+          referrals: [
+            ref({ id: "s", label: "Business ••••1111", stage: "signed_up" }),
+            ref({ id: "p", label: "Business ••••2222", stage: "first_payment", qualifyingInvoices: 1 }),
+          ],
+          rewards: [],
+          months: { earned: 0, onTheWay: 0, underReview: 0, reversed: 0, expired: 0 },
+        })}
+        appBase={APP}
+        shopName="Fade Lab"
+      />,
+    );
+    const b = bar();
+    expect(b).toMatchObject({ min: "0", now: "2", max: String(MAX) });
+    expect(b.text).toBe(`Business ••••2222: 1 of ${Q} payments made`);
+    expect(screen.getByTestId("next-month-caption").textContent).toBe(b.text);
+    expect(screen.getByText("1 more business is on the way too.")).toBeTruthy();
+
+    // Each in-progress stage sits on its own step.
+    const at = (r: Ref) => nextMonthProgress({ referrals: [r], policy: overview().policy }).value;
+    expect(at(ref({ stage: "signed_up" }))).toBe(1);
+    expect(at(ref({ stage: "first_payment", qualifyingInvoices: 1 }))).toBe(2);
+    expect(at(ref({ stage: "hold", qualifyingInvoices: Q }))).toBe(Q + 1);
+  });
+
+  it("the hold says how long it is", () => {
+    render(<AffiliatesClient status={active} overview={overview()} appBase={APP} shopName="Fade Lab" />);
+    const b = bar();
+    expect(b.now).toBe(String(Q + 1));
+    expect(b.text).toContain(`Business ••••1027: paid ${Q} of ${Q}, now in the ${AFFILIATE_POLICY.qualification.holdDaysAfterSecond}-day hold, ready `);
+  });
+
+  it("complete: a month off that is ready fills the bar", () => {
+    render(
+      <AffiliatesClient
+        status={active}
+        overview={overview({
+          referrals: [
+            ref({ stage: "month_off", label: "Business ••••3333", qualifyingInvoices: Q, availableAt: "2026-10-01T00:00:00.000Z" }),
+          ],
+          rewards: [
+            {
+              id: "r9",
+              label: "Business ••••3333",
+              status: "AVAILABLE",
+              qualifiedAt: "2026-09-10T00:00:00.000Z",
+              holdEndsAt: "2026-09-24T00:00:00.000Z",
+              availableAt: "2026-10-01T00:00:00.000Z",
+              expiresAt: "2027-10-01T00:00:00.000Z",
+              reversedAt: null,
+              reversalMessage: null,
+            },
+          ],
+          months: { earned: 0, onTheWay: 1, underReview: 0, reversed: 0, expired: 0 },
+        })}
+        appBase={APP}
+        shopName="Fade Lab"
+      />,
+    );
+    const b = bar();
+    expect(b).toMatchObject({ now: String(MAX), max: String(MAX) });
+    expect(b.text).toMatch(/Business ••••3333: your month off is ready/);
+    expect(screen.getByText("month off so far").previousSibling?.textContent).toBe("1");
+    expect(screen.getByText("ready to use").previousSibling?.textContent).toBe("1");
+  });
+
+  it("empty state: a brand-new affiliate sees the promise, the link and code, and a bar at 0 - never a blank page", () => {
+    render(
+      <AffiliatesClient
+        status={active}
+        overview={overview({
+          referrals: [],
+          rewards: [],
+          months: { earned: 0, onTheWay: 0, underReview: 0, reversed: 0, expired: 0 },
+        })}
+        appBase={APP}
+        shopName="Fade Lab"
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "A month off your ChairBack plan" })).toBeTruthy();
+    expect(screen.getByText(`${APP}/join?ref=abcDEF123456`)).toBeTruthy();
+    expect(screen.getByText("abcDEF123456")).toBeTruthy();
+    const b = bar();
+    expect(b).toMatchObject({ min: "0", now: "0", max: String(MAX) });
+    expect(b.text).toMatch(/^Nobody on the way yet/);
+    expect(screen.getByText("months off so far").previousSibling?.textContent).toBe("0");
+    expect(screen.getByText(/Nobody yet\. Businesses that sign up/)).toBeTruthy();
+  });
+
+  it("milestones and totals come from the policy and the reward ledger", () => {
+    expect(milestoneLabels(2)).toEqual(["Signed up", "Payment 1", "Payment 2", "Month off"]);
+    expect(milestoneLabels(Q)).toHaveLength(MAX);
+    const r = (status: string) => ({ ...overview().rewards[0]!, status });
+    expect(
+      earningsSoFar({
+        months: { earned: 1, onTheWay: 3, underReview: 1, reversed: 1, expired: 0 },
+        rewards: [r("APPLIED"), r("AVAILABLE"), r("RESERVED"), r("PENDING"), r("REVIEW_REQUIRED"), r("REVERSED")],
+      }),
+    ).toEqual({ total: 4, used: 1, ready: 2, inHold: 1, underReview: 1 });
   });
 });
 

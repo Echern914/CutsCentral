@@ -160,10 +160,17 @@ export function AffiliatesClient({
         ← Dashboard
       </Link>
       <h1 className="mb-1 mt-1 font-display text-3xl tracking-tight">Affiliates</h1>
-      <p className="mb-6 text-sm text-muted">
-        Bring a business onto ChairBack. When they&rsquo;ve paid for{" "}
-        {AFFILIATE_POLICY.qualification.qualifyingInvoices} months, you get a month off.
-      </p>
+      {/* The dashboard leads with its own "what you earn" card; every other
+          screen keeps the one-line version of the same promise. */}
+      {screen === "dashboard" ? (
+        <div className="mb-6" />
+      ) : (
+        <p className="mb-6 text-sm text-muted">
+          Bring a business onto ChairBack. For every one that pays for{" "}
+          {AFFILIATE_POLICY.qualification.qualifyingInvoices} months, you get a month off your
+          plan. No cap.
+        </p>
+      )}
 
       {screen === "signup" && <SignUp status={status} />}
       {screen === "waiting" && <Waiting status={status} />}
@@ -508,6 +515,196 @@ function Stat({ value, label, muted = false }: { value: number; label: string; m
   );
 }
 
+/**
+ * The milestones on the road to one month off, from the program's own policy
+ * (the API echoes AFFILIATE_POLICY in `overview.policy`): signed up, each
+ * qualifying payment, then the month itself once the hold is over.
+ */
+export function milestoneLabels(qualifyingInvoices: number): string[] {
+  return [
+    "Signed up",
+    ...Array.from({ length: qualifyingInvoices }, (_, i) => `Payment ${i + 1}`),
+    "Month off",
+  ];
+}
+
+type Referral = AffiliateOverview["referrals"][number];
+
+const IN_PROGRESS: ReadonlySet<ReferralStage> = new Set([
+  "signed_up",
+  "first_payment",
+  "second_payment",
+  "hold",
+]);
+
+/** How many milestones one referral has reached, out of `q + 2`. */
+function milestonesReached(r: Referral, q: number): number {
+  switch (r.stage) {
+    case "signed_up":
+      return 1;
+    case "first_payment":
+    case "second_payment":
+      return 1 + Math.min(Math.max(r.qualifyingInvoices, 1), q);
+    case "hold":
+      return 1 + q;
+    case "month_off":
+    case "applied":
+      return q + 2;
+    default:
+      return 0;
+  }
+}
+
+export interface NextMonthProgress {
+  state: "empty" | "in_progress" | "ready";
+  value: number;
+  max: number;
+  /** One sentence: the visible caption AND the bar's aria-valuetext. */
+  text: string;
+  /** Businesses still on the road besides the one the bar shows. */
+  othersOnTheWay: number;
+}
+
+/**
+ * The bar toward the affiliate's NEXT month off: the business furthest along
+ * the road (ties go to the one that signed up first). Nothing on the road but
+ * a month waiting = a full bar. Nothing at all = an empty bar with a nudge.
+ * Reads only what the overview already returns.
+ */
+export function nextMonthProgress(
+  overview: Pick<AffiliateOverview, "referrals" | "policy">,
+): NextMonthProgress {
+  const q = overview.policy.qualifyingInvoices;
+  const max = q + 2;
+  const onTheRoad = overview.referrals
+    .filter((r) => IN_PROGRESS.has(r.stage))
+    .sort(
+      (a, b) =>
+        milestonesReached(b, q) - milestonesReached(a, q) ||
+        a.signedUpAt.localeCompare(b.signedUpAt),
+    );
+
+  const lead = onTheRoad[0];
+  if (lead) {
+    const paid = Math.min(lead.qualifyingInvoices, q);
+    let where: string;
+    if (lead.stage === "signed_up") {
+      where = "signed up, waiting on their first payment";
+    } else if (lead.stage === "hold") {
+      where = `paid ${q} of ${q}, now in the ${overview.policy.holdDays}-day hold`;
+      if (lead.holdEndsAt) where += `, ready ${fmtDate(lead.holdEndsAt)}`;
+    } else {
+      where = `${paid} of ${q} payments made`;
+    }
+    return {
+      state: "in_progress",
+      value: milestonesReached(lead, q),
+      max,
+      text: `${lead.label}: ${where}`,
+      othersOnTheWay: onTheRoad.length - 1,
+    };
+  }
+
+  const ready = overview.referrals
+    .filter((r) => r.stage === "month_off")
+    .sort((a, b) => (b.availableAt ?? "").localeCompare(a.availableAt ?? ""))[0];
+  if (ready) {
+    return {
+      state: "ready",
+      value: max,
+      max,
+      text: `${ready.label}: your month off is ready and goes on a ChairBack bill automatically`,
+      othersOnTheWay: 0,
+    };
+  }
+
+  return {
+    state: "empty",
+    value: 0,
+    max,
+    text:
+      overview.referrals.length === 0
+        ? "Nobody on the way yet. Share your link: the first business that signs up starts this bar."
+        : "Nobody on the way right now. Share your link to start your next month off.",
+    othersOnTheWay: 0,
+  };
+}
+
+export interface EarningsSoFar {
+  /** Every month that is yours or about to be: used + ready + inHold. */
+  total: number;
+  /** Already taken off a ChairBack bill. */
+  used: number;
+  /** Ready, or being put on a bill right now. */
+  ready: number;
+  /** Qualified, waiting out the hold. */
+  inHold: number;
+  underReview: number;
+}
+
+/** Totals from the reward ledger the overview returns (one reward = one month). */
+export function earningsSoFar(
+  overview: Pick<AffiliateOverview, "months" | "rewards">,
+): EarningsSoFar {
+  const count = (...statuses: string[]) =>
+    overview.rewards.filter((r) => statuses.includes(r.status)).length;
+  const used = overview.months.earned;
+  const ready = count("AVAILABLE", "RESERVED");
+  const inHold = count("PENDING");
+  return { total: used + ready + inHold, used, ready, inHold, underReview: overview.months.underReview };
+}
+
+function NextMonthBar({ progress, q }: { progress: NextMonthProgress; q: number }) {
+  const pct = progress.max > 0 ? Math.round((progress.value / progress.max) * 100) : 0;
+  const labels = milestoneLabels(q);
+  return (
+    <div className="min-w-0">
+      <div
+        role="progressbar"
+        aria-label="Progress to your next month off"
+        aria-valuemin={0}
+        aria-valuemax={progress.max}
+        aria-valuenow={progress.value}
+        aria-valuetext={progress.text}
+        className="h-3 w-full overflow-hidden rounded-full bg-offwhite/10"
+      >
+        <div
+          className="h-full rounded-full bg-gold transition-[width] duration-500 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <ol
+        aria-hidden="true"
+        className="mt-1.5 grid gap-1 text-[10px] text-muted"
+        style={{ gridTemplateColumns: `repeat(${labels.length}, minmax(0, 1fr))` }}
+      >
+        {labels.map((label, i) => (
+          <li
+            key={label}
+            className={cn(
+              "min-w-0 truncate",
+              i === 0 ? "text-left" : i === labels.length - 1 ? "text-right" : "text-center",
+              i < progress.value && "text-offwhite",
+            )}
+          >
+            {label}
+          </li>
+        ))}
+      </ol>
+      <p className="mt-2 min-w-0 break-words text-sm text-offwhite" data-testid="next-month-caption">
+        {progress.text}
+      </p>
+      {progress.othersOnTheWay > 0 && (
+        <p className="mt-0.5 text-xs text-muted">
+          {progress.othersOnTheWay === 1
+            ? "1 more business is on the way too."
+            : `${progress.othersOnTheWay} more businesses are on the way too.`}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Dashboard({
   overview,
   appBase,
@@ -563,6 +760,9 @@ function Dashboard({
   }
 
   const m = overview.months;
+  const q = overview.policy.qualifyingInvoices;
+  const progress = nextMonthProgress(overview);
+  const earned = earningsSoFar(overview);
   const styles = overview.account.promotionStyles as AffiliatePromotionStyle[];
   const vocab = useVocab();
   const toolkit = useMemo(
@@ -582,11 +782,35 @@ function Dashboard({
       )}
 
       <Card className="px-5 py-5">
-        <p className="text-[10px] uppercase tracking-wide text-muted">Months off</p>
-        <div className="mt-2 flex flex-wrap gap-x-8 gap-y-3">
-          <Stat value={m.earned} label={m.earned === 1 ? "month earned" : "months earned"} />
-          <Stat value={m.onTheWay} label="on the way" muted />
-          {m.underReview > 0 && <Stat value={m.underReview} label="under review" muted />}
+        <p className="text-[10px] uppercase tracking-wide text-muted">
+          For every business you bring in
+        </p>
+        <h2 className="mt-1 font-display text-2xl leading-tight text-offwhite">
+          A month off your ChairBack plan
+        </h2>
+        <p className="mt-2 text-sm leading-relaxed text-muted" data-testid="earn-terms">
+          When a business that signed up through your link has paid for {q} months, and a{" "}
+          {overview.policy.holdDays}-day hold has passed, a month off your own plan is yours. One
+          for each business, no cap on how many. It&rsquo;s credit on your bill, never cash.
+        </p>
+
+        <p className="mt-5 text-[10px] uppercase tracking-wide text-muted">Your next month off</p>
+        <div className="mt-2">
+          <NextMonthBar progress={progress} q={q} />
+        </div>
+
+        <p className="mt-5 text-[10px] uppercase tracking-wide text-muted">What you&rsquo;ve made</p>
+        <div className="mt-2 flex flex-wrap items-end gap-x-8 gap-y-3">
+          <Stat
+            value={earned.total}
+            label={earned.total === 1 ? "month off so far" : "months off so far"}
+          />
+          <Stat value={earned.used} label="used on your bill" muted />
+          <Stat value={earned.ready} label="ready to use" muted />
+          <Stat value={earned.inHold} label="waiting out the hold" muted />
+          {earned.underReview > 0 && (
+            <Stat value={earned.underReview} label="under review" muted />
+          )}
         </div>
         {(m.reversed > 0 || m.expired > 0) && (
           <p className="mt-3 text-xs text-muted">
@@ -595,9 +819,15 @@ function Dashboard({
             {m.expired > 0 && `${m.expired} expired`}
           </p>
         )}
+      </Card>
 
-        <p className="mt-5 text-[10px] uppercase tracking-wide text-muted">Your link</p>
+      <Card className="mt-6 px-5 py-5">
+        <p className="text-[10px] uppercase tracking-wide text-muted">Your link</p>
         <p className="mt-1 truncate font-mono text-sm text-offwhite">{link}</p>
+        <p className="mt-1 min-w-0 break-words text-xs text-muted">
+          Your code: <span className="font-mono text-offwhite">{overview.account.code}</span>.
+          Someone on another device can enter it at {origin}/join/enter before they sign up.
+        </p>
         <p className="mt-1 text-xs text-muted">
           Opened {overview.clicks.last7Days} times this week · {overview.clicks.last30Days} this
           month · {overview.clicks.allTime} all time
