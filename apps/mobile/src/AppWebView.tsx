@@ -16,7 +16,7 @@ import { setStatusBarStyle } from "expo-status-bar";
 import { API_ORIGIN, NEXT_UP_WIDGET_ENABLED, WEB_ORIGIN } from "@/src/config";
 import { parseOpenAuthRequest, resumeUrl } from "@/src/nativeBridge";
 import { FRAME, PAGE_BAR } from "@/src/frameColors";
-import { shouldReloadOnReturn } from "@/src/staleReturn";
+import { ALIVE_PING, ALIVE_PROBE_JS, ALIVE_TIMEOUT_MS, shouldProbeOnReturn, shouldReloadOnReturn } from "@/src/staleReturn";
 
 // If the real page content hasn't signaled ready within this long, stop spinning
 // and offer a retry. The page posts "cb:ready" when its real UI mounts; we do NOT
@@ -229,6 +229,13 @@ export function AppWebView({
 }) {
   const [errored, setErrored] = useState(false);
   const [loading, setLoading] = useState(true);
+  // The return-to-front check below is registered once, so it reads these
+  // through refs rather than a stale first-render closure.
+  const loadingRef = useRef(true);
+  const erroredRef = useRef(false);
+  loadingRef.current = loading;
+  erroredRef.current = errored;
+  const aliveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The scheme the page last reported. A dark page says so before it paints
   // (lib/theme.ts PAGE_DARK_PREPAINT_SCRIPT), so the loading cover behind it
   // goes dark too instead of flashing cream under a dark bar.
@@ -328,14 +335,29 @@ export function AppWebView({
       if (state === "background") {
         leftAt = Date.now();
       } else if (state === "active") {
-        if (shouldReloadOnReturn(leftAt, Date.now())) {
+        const reloading = shouldReloadOnReturn(leftAt, Date.now());
+        if (reloading) {
           restarts.current = 0;
           retry();
+        } else if (
+          shouldProbeOnReturn({ leftAt, loading: loadingRef.current, errored: erroredRef.current, reloading })
+        ) {
+          // A short absence: keep the page if it is alive, replace it if it
+          // went blank behind our back (see ALIVE_PING in staleReturn.ts).
+          if (aliveTimer.current) clearTimeout(aliveTimer.current);
+          aliveTimer.current = setTimeout(() => {
+            aliveTimer.current = null;
+            retry();
+          }, ALIVE_TIMEOUT_MS);
+          webref.current?.injectJavaScript(ALIVE_PROBE_JS);
         }
         leftAt = null;
       }
     });
-    return () => sub.remove();
+    return () => {
+      sub.remove();
+      if (aliveTimer.current) clearTimeout(aliveTimer.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -421,6 +443,15 @@ export function AppWebView({
         // The page posts "cb:ready" when its REAL content mounts - the reliable
         // signal that we can hide the spinner. Chain any caller-provided onMessage.
         onMessage={(e) => {
+          if (e.nativeEvent.data === ALIVE_PING) {
+            // The page answered: it is alive, keep it. A page that has proven
+            // itself healthy also earns back the automatic-restart allowance,
+            // so a long day of short trips away never runs it out.
+            if (aliveTimer.current) clearTimeout(aliveTimer.current);
+            aliveTimer.current = null;
+            restarts.current = 0;
+            return;
+          }
           if (e.nativeEvent.data === READY_MESSAGE) clearLoading();
           const theme = THEME_MESSAGE.exec(e.nativeEvent.data);
           if (theme) {

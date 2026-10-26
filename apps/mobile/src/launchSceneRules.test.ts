@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   __resetLaunchSceneForTests,
+  LAUNCH_SCENE_BACKSTOP_MS,
   LAUNCH_SCENE_MAX_MS,
   launchSceneTiming,
   launchSceneTotalMs,
@@ -51,5 +52,12 @@ describe("🔴 cold start only", () => {
     expect(shouldPlayLaunchScene()).toBe(true);
     __resetLaunchSceneForTests();
     expect(shouldPlayLaunchScene()).toBe(true);
+  });
+});
+
+describe("the launch overlay can never stay up", () => {
+  it("a backstop timer removes it shortly after the longest real sequence", () => {
+    expect(LAUNCH_SCENE_BACKSTOP_MS).toBeGreaterThan(LAUNCH_SCENE_MAX_MS);
+    expect(LAUNCH_SCENE_BACKSTOP_MS).toBeLessThanOrEqual(3000);
   });
 });

@@ -16,7 +16,7 @@ import Svg, {
   Rect,
   Stop,
 } from "react-native-svg";
-import { launchSceneTiming, shouldPlayLaunchScene } from "./launchSceneRules";
+import { LAUNCH_SCENE_BACKSTOP_MS, launchSceneTiming, shouldPlayLaunchScene } from "./launchSceneRules";
 
 /**
  * The opening: a short cut from the static splash into the app.
@@ -86,6 +86,16 @@ export function LaunchScene({ onDone }: { onDone: () => void }) {
       return;
     }
     let cancelled = false;
+    // Leave exactly once - whichever comes first, the animation finishing or
+    // the backstop timer (launchSceneRules LAUNCH_SCENE_BACKSTOP_MS).
+    let left = false;
+    const leave = () => {
+      if (cancelled || left) return;
+      left = true;
+      setVisible(false);
+      onDone();
+    };
+    const backstop = setTimeout(leave, LAUNCH_SCENE_BACKSTOP_MS);
     (async () => {
       let reduceMotion = false;
       try {
@@ -138,16 +148,16 @@ export function LaunchScene({ onDone }: { onDone: () => void }) {
           ]);
 
       seq.start(({ finished }) => {
-        if (cancelled) return;
         // Whether it finished or was interrupted, the overlay is done. The
-        // hard cap is the sum of the timings above; nothing here can extend it.
+        // hard cap is the sum of the timings above, and the backstop timer
+        // removes it even if this callback never comes.
         void finished;
-        setVisible(false);
-        onDone();
+        leave();
       });
     })();
     return () => {
       cancelled = true;
+      clearTimeout(backstop);
     };
     // Runs once on mount by design; the drivers are stable refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps

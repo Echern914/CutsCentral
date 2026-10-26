@@ -67,6 +67,15 @@ export function shouldPlayLaunchScene(): boolean {
   return true;
 }
 
+/**
+ * 🔴 THE BACKSTOP. The overlay leaves when its animation reports finished -
+ * after an awaited accessibility check that has no timeout of its own. If
+ * either never settles, a full-screen cream logo would sit over the app until
+ * a relaunch. A plain timer removes it this long after mount, whatever the
+ * animation is doing: the longest real sequence plus a margin.
+ */
+export const LAUNCH_SCENE_BACKSTOP_MS = LAUNCH_SCENE_MAX_MS + 800;
+
 /** Test-only: pretend the process just started. */
 export function __resetLaunchSceneForTests(): void {
   played = false;
