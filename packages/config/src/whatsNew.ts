@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-25-cleaner-day-ahead-summary",
+    date: "2026-10-25",
+    kind: "fix",
+    title: "A shorter, clearer summary of tomorrow",
+    body:
+      "Your evening notification now reads like \"Tomorrow: 2 confirmed appointments\" with your hours and who's first up. " +
+      "Booking requests waiting for your OK are counted too, so you know to accept or decline them.",
+  },
+  {
     id: "2026-10-23-clients-see-every-tier",
     date: "2026-10-23",
     kind: "feature",

@@ -305,6 +305,26 @@ describe("barber day-ahead digest", () => {
         },
       });
     }
+    // A request waiting for approval (PENDING, no hold expiry) IS counted, as
+    // "requested"; a checkout/receptionist HOLD (PENDING with an expiry) is not.
+    for (const [hour, holdExpiresAt] of [[12, null], [14, new Date(Date.now() + 10 * 60_000)]] as const) {
+      const startsAt = new Date(tomorrow);
+      startsAt.setUTCHours(hour, 0, 0, 0);
+      await prisma.appointment.create({
+        data: {
+          shopId,
+          staffId: staffAId,
+          serviceId,
+          clientId,
+          firstName: holdExpiresAt ? "Held" : "Asking",
+          status: "PENDING",
+          holdExpiresAt,
+          startsAt,
+          endsAt: new Date(startsAt.getTime() + 45 * 60_000),
+          manageToken: randomToken(),
+        },
+      });
+    }
 
     await runAtHour(18); // not yet his hour
     expect(sent.filter((s) => s.kind === "dayAhead")).toHaveLength(0);
@@ -312,8 +332,8 @@ describe("barber day-ahead digest", () => {
     await runAtHour(19);
     const digest = sent.filter((s) => s.kind === "dayAhead" && s.userId === ownerId);
     expect(digest).toHaveLength(1);
-    expect(digest[0]!.title).toContain("2 cuts");
-    expect(digest[0]!.body).toContain("First"); // who's first up
+    expect(digest[0]!.title).toBe("Tomorrow: 2 confirmed, 1 requested");
+    expect(digest[0]!.body).toBe("9:00 AM to 4:00 PM. First up: First. 1 request is waiting for your OK.");
 
     // A later tick in the same hour must not send a second one.
     sent.length = 0;

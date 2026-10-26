@@ -25,7 +25,8 @@ import { noteLines, readIntakeSnapshot } from "./bookingIntake.js";
  *             actually ask for: who is walking in, and what they booked.
  *             On a job the barber DRIVES to it fires `travelBufferMin`
  *             earlier still and says when to leave - see leadFor().
- *  DAY AHEAD - "Tomorrow: 6 cuts, 9:00 AM to 4:30 PM. First: Sam - Fade."
+ *  DAY AHEAD - "Tomorrow: 6 confirmed appointments" / "9:00 AM to 4:30 PM.
+ *             First up: Sam Cole." (see dayAheadMessage)
  *             Sent the evening before at the barber's chosen hour, so he can
  *             plan the night before rather than discovering it at 8am.
  *
@@ -90,8 +91,62 @@ function serviceAddress(a: ApptRow): string | null {
   return value.replace(/\s*\n+\s*/g, ", ");
 }
 
-function clientName(a: ApptRow): string {
+function clientName(a: { firstName: string; lastName: string | null }): string {
   return [a.firstName, a.lastName].filter(Boolean).join(" ").trim() || "A client";
+}
+
+/** One of tomorrow's appointments, as the day-ahead summary reads it. */
+export interface DayAheadRow {
+  startsAt: Date;
+  /** BOOKED = confirmed; PENDING (no hold expiry) = a request awaiting the barber's OK. */
+  status: string;
+  firstName: string;
+  lastName: string | null;
+}
+
+/** "8:30 AM" in the shop's zone - the day is already in the title, so no date. */
+function clockTime(at: Date, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit" }).format(at);
+  } catch {
+    return formatApptTime(at, timezone);
+  }
+}
+
+/**
+ * THE DAY-AHEAD SUMMARY, the way Booksy and TheCut write it: counts first,
+ * then one short line.
+ *
+ *   Tomorrow: 2 confirmed appointments
+ *   8:30 AM to 9:00 AM. First up: Jordan R.
+ *
+ * 🔴 "appointments", never "cuts": ChairBack runs nail, detailing and tattoo
+ * shops too, and "2 cuts" on a nail tech's lock screen is wrong. No service
+ * name (a long one swallowed the whole notification) and no date twice.
+ * Requests waiting for approval are counted separately - they are not
+ * confirmed, and they are the one thing here that needs the barber to act.
+ *
+ * `rows` must be in start order and non-empty.
+ */
+export function dayAheadMessage(rows: DayAheadRow[], timezone: string): { title: string; body: string } {
+  const confirmed = rows.filter((r) => r.status === "BOOKED");
+  const requested = rows.filter((r) => r.status !== "BOOKED");
+  const n = (count: number) => (count === 1 ? "appointment" : "appointments");
+  const title =
+    requested.length === 0
+      ? `Tomorrow: ${confirmed.length} confirmed ${n(confirmed.length)}`
+      : confirmed.length === 0
+        ? `Tomorrow: ${requested.length} requested ${n(requested.length)}`
+        : `Tomorrow: ${confirmed.length} confirmed, ${requested.length} requested`;
+  const firstAt = clockTime(rows[0]!.startsAt, timezone);
+  const lastAt = clockTime(rows[rows.length - 1]!.startsAt, timezone);
+  const span = rows.length === 1 || firstAt === lastAt ? firstAt : `${firstAt} to ${lastAt}`;
+  const waiting = requested.length === 1 ? "1 request is waiting for your OK." : `${requested.length} requests are waiting for your OK.`;
+  const body =
+    confirmed.length === 0
+      ? `${span}. Tap to accept or decline.`
+      : `${span}. First up: ${clientName(confirmed[0]!)}.${requested.length ? ` ${waiting}` : ""}`;
+  return { title, body };
 }
 
 /**
@@ -292,7 +347,11 @@ async function runDayAhead(shopId: string, ownerId: string, now: Date): Promise<
       tx.appointment.findMany({
         where: {
           shopId,
-          status: "BOOKED",
+          // Confirmed bookings AND requests waiting for the barber's OK. A
+          // request is PENDING with no hold expiry - exactly what the
+          // dashboard's Approve accepts; a checkout or receptionist HOLD is
+          // also PENDING but carries holdExpiresAt, so it is not counted.
+          status: { in: ["BOOKED", "PENDING"] },
           holdExpiresAt: null,
           startsAt: { gte: startOfTomorrowUtc, lt: endOfTomorrowUtc },
           // A barber sees his own chair; the owner sees the whole shop (which
@@ -303,14 +362,13 @@ async function runDayAhead(shopId: string, ownerId: string, now: Date): Promise<
         take: 100,
         select: {
           id: true,
+          status: true,
           startsAt: true,
           firstName: true,
           lastName: true,
-          service: { select: { name: true } },
-          staff: { select: { name: true, userId: true } },
         },
       }),
-    )) as ApptRow[];
+    )) as DayAheadRow[];
 
     if (!(await claimDigest(`barber-digest:${shopId}:${userId}:${tomorrowKey}`))) continue;
     // A day with nothing on it still gets claimed above (so we stop checking)
@@ -318,23 +376,12 @@ async function runDayAhead(shopId: string, ownerId: string, now: Date): Promise<
     // to swipe notifications away without reading them.
     if (rows.length === 0) continue;
 
-    const first = rows[0]!;
-    const last = rows[rows.length - 1]!;
-    const count = rows.length;
-    const span =
-      count === 1
-        ? formatApptTime(first.startsAt, tz)
-        : `${formatApptTime(first.startsAt, tz)} to ${formatApptTime(last.startsAt, tz)}`;
     await sendToBarber({
       shopId,
       userId,
       kind: "dayAhead",
       prefs,
-      message: {
-        title: `Tomorrow: ${count} ${count === 1 ? "cut" : "cuts"}`,
-        body: `${count} booked, ${span}. First up: ${clientName(first)} - ${first.service.name}.`,
-        tag: `day-ahead-${tomorrowKey}`,
-      },
+      message: { ...dayAheadMessage(rows, tz), tag: `day-ahead-${tomorrowKey}` },
     });
     sent++;
   }
