@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-25-holiday-price-preview",
+    date: "2026-10-25",
+    kind: "fix",
+    title: "Holiday live view: clearer, and opens a blocked-off day",
+    body:
+      "The live view now says plainly what your day is: a day you blocked off reads Blocked off all day, and Fill the day " +
+      "sums up what it skipped in one line. Blocked a holiday off? Tap Open special times anyway to sell openings at your " +
+      "holiday price. Your bookings stay.",
+  },
+  {
     id: "2026-10-25-bell-refresh",
     date: "2026-10-25",
     kind: "feature",

@@ -47,6 +47,14 @@ export interface DayViewItem {
   startMin: number;
   endMin: number;
   label: string;
+  /**
+   * Set on a block only: the barber's OWN one-off block-off on this chair
+   * (made in ChairBack, "Block off time") that lies wholly inside this date.
+   * Only these may be replaced by special openings (`overOwnBlocks` on a
+   * save) - a weekly break, an Acuity block, a booking, or a block that runs
+   * into another day never can be.
+   */
+  ownBlockId?: string;
 }
 
 export interface DayViewChair {
@@ -253,6 +261,10 @@ export async function readDayView(
           startMin: toMin(e.startsAt),
           endMin: toMin(e.endsAt),
           label: e.reason?.trim() || "Blocked",
+          // Wholly inside this date: replacing it can never unblock another day.
+          ...(e.startsAt.getTime() >= dayStart.getTime() && e.endsAt.getTime() <= dayEnd.getTime()
+            ? { ownBlockId: e.id }
+            : {}),
         })),
       ...recurring
         .filter((r) => r.staffId === staffId)
@@ -291,13 +303,17 @@ export function loadDayView(input: Parameters<typeof readDayView>[1]): Promise<D
   return runWithShop(input.shopId, (tx) => readDayView(tx, input));
 }
 
-/** What is on a chair, as spans in minutes, for the shared placement rule. */
-export function chairDaySpans(chair: DayViewChair) {
+/**
+ * What is on a chair, as spans in minutes, for the shared placement rule.
+ * `overOwnBlocks` leaves out the barber's own one-off block-offs that day (see
+ * DayViewItem.ownBlockId) - never a booking, a weekly break or an Acuity block.
+ */
+export function chairDaySpans(chair: DayViewChair, opts: { overOwnBlocks?: boolean } = {}) {
   const span = (i: { startMin: number; endMin: number }): Span => ({ start: i.startMin, end: i.endMin });
   return {
     bookings: chair.bookings.map(span),
     external: chair.external.map(span),
-    blocks: chair.blocks.map(span),
+    blocks: chair.blocks.filter((b) => !(opts.overOwnBlocks && b.ownBlockId)).map(span),
   };
 }
 
@@ -349,6 +365,22 @@ export async function saveDay(input: {
   requestId: string | null;
   basis: string;
   now: Date;
+  /**
+   * The barber chose, in the live view, to open special times on a day he
+   * BLOCKED OFF himself (Eric: "be able to do afterhours and everything for
+   * the holiday days"). His own one-off block-offs that day (ownBlockId) stop
+   * refusing openings, and each one an opening lands on is DELETED in this
+   * same transaction - the special day's own blocks then close every minute
+   * the openings do not own, so the day stays shut to everything but them.
+   *
+   * Deleting rather than "ignoring" the block is the point: every read and
+   * write path (the public page's specials filter, the booking claim's block
+   * check, the receptionist) keeps its one rule - blocked time wins - and an
+   * opening is bookable exactly because nothing blocks it any more. A block
+   * the barber adds LATER still hides the openings it covers, as always.
+   * Bookings, weekly breaks and Acuity time are never affected.
+   */
+  overOwnBlocks?: boolean;
 }): Promise<SaveDayOutcome> {
   const { shopId, timezone, date } = input;
   const { start: dayStart, end: dayEnd } = dayBoundsUtc(date, timezone);
@@ -403,6 +435,8 @@ export async function saveDay(input: {
         create: DesiredOpening[];
         update: (DesiredOpening & { id: string })[];
         remove: string[];
+        /** The barber's own block-offs this save replaces (overOwnBlocks). */
+        replaceBlockIds: string[];
       };
       const plans: Plan[] = [];
       for (const ask of input.chairs) {
@@ -444,7 +478,7 @@ export async function saveDay(input: {
         }
         // Only what is new or moved is judged: an untouched opening was fine
         // when it was placed, and the basis says nothing has changed since.
-        const spans = chairDaySpans(chair);
+        const spans = chairDaySpans(chair, { overOwnBlocks: input.overOwnBlocks === true });
         for (const i of placed) {
           const p = final[i]!;
           const reason = openingConflict({ start: p.startMin, end: p.startMin + p.durationMin }, spans, {
@@ -459,12 +493,32 @@ export async function saveDay(input: {
           if (reason) return { ok: false, error: "invalid_opening", staffId: ask.staffId, startMin: p.startMin, reason };
         }
         const remove = chair.openings.filter((o) => !o.booked && !keptIds.has(o.id)).map((o) => o.id);
-        plans.push({ chair, final, create, update, remove });
+        // Each own block-off an opening (with its turnover tail) lands on - the
+        // same overlap test openingConflict uses for blocks.
+        const replaceBlockIds =
+          input.overOwnBlocks === true
+            ? chair.blocks
+                .filter(
+                  (b) =>
+                    b.ownBlockId !== undefined &&
+                    final.some((f) => b.startMin < f.startMin + f.durationMin + bufferMin && b.endMin > f.startMin),
+                )
+                .map((b) => b.ownBlockId!)
+            : [];
+        plans.push({ chair, final, create, update, remove, replaceBlockIds });
       }
 
-      for (const { chair, final, create, update, remove } of plans) {
+      for (const { chair, final, create, update, remove, replaceBlockIds } of plans) {
         const staffId = chair.staffId;
         summary.bookedKept += final.filter((f) => f.booked).length;
+        if (replaceBlockIds.length > 0) {
+          // Read under the locks with the basis checked, so these are exactly
+          // the rows the barber was shown. Never a special_day row (those are
+          // not in the view's blocks), never another chair's.
+          await tx.availabilityException.deleteMany({
+            where: { shopId, staffId, isBlock: true, id: { in: replaceBlockIds } },
+          });
+        }
         if (remove.length > 0) {
           const gone = await tx.targetedSlot.deleteMany({
             where: { shopId, id: { in: remove }, bookedAppointmentId: null },

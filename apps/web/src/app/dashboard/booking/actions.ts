@@ -2580,6 +2580,8 @@ export interface DayViewItem {
   startMin: number;
   endMin: number;
   label: string;
+  /** Blocks only: the barber's own block-off, wholly inside this date - openings may replace it. */
+  ownBlockId?: string;
 }
 
 export interface DayViewOpening {
@@ -2621,6 +2623,8 @@ export interface SaveDayInput {
   }[];
   basis: string;
   requestId?: string;
+  /** Openings may replace the barber's own block-off that day (he chose it in the live view). */
+  overOwnBlocks?: boolean;
 }
 
 export interface SaveDaySummary {

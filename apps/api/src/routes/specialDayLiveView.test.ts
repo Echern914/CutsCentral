@@ -368,3 +368,130 @@ describe("a day published from the Special day builder", () => {
 function strip(o: { id: string; startMin: number; durationMin: number; price: number }) {
   return { id: o.id, startMin: o.startMin, durationMin: o.durationMin, price: o.price };
 }
+
+type BlockItem = { startMin: number; endMin: number; label: string; ownBlockId?: string };
+
+describe("a day the barber BLOCKED OFF himself (holiday specials through targeted slots)", () => {
+  const date = daysOut(13);
+  const nextDay = daysOut(14);
+  let ownBlockId: string;
+  let nextDayBlockId: string;
+
+  it("shows his own block-off as replaceable - and refuses openings over it until he chooses that", async () => {
+    // A client booked 14:00 before he blocked the day off; the booking stays.
+    expect((await book(at(date, "14:00"), cutId)).status).toBe(201);
+    const groupId = `grp-${randomToken(6)}`;
+    ownBlockId = (
+      await prisma.availabilityException.create({
+        data: { shopId, staffId, startsAt: at(date, "00:00"), endsAt: at(nextDay, "00:00"), isBlock: true, groupId, pattern: "continuous" },
+      })
+    ).id;
+    nextDayBlockId = (
+      await prisma.availabilityException.create({
+        data: { shopId, staffId, startsAt: at(nextDay, "00:00"), endsAt: at(daysOut(15), "00:00"), isBlock: true, groupId, pattern: "continuous" },
+      })
+    ).id;
+    // Acuity time that evening - never his to replace from here.
+    await prisma.externalBlock.create({
+      data: { shopId, externalId: `ext-${randomToken(6)}`, startsAt: at(date, "18:00"), endsAt: at(date, "19:00") },
+    });
+
+    const v = await view(date);
+    const blocks = v.chairs.find((c) => c.staffId === staffId)!.blocks as BlockItem[];
+    expect(blocks.find((b) => b.startMin === 0 && b.endMin === 1440)?.ownBlockId).toBe(ownBlockId);
+    const acuity = blocks.find((b) => b.startMin === min("18:00"));
+    expect(acuity).toBeDefined();
+    expect(acuity!.ownBlockId).toBeUndefined();
+    // Nothing for clients that day, as he asked.
+    expect(await daySlots(date, cutId)).toEqual({ normal: [], special: [] });
+
+    const res = await save(date, v, [{ startMin: min("10:00"), durationMin: 20, price: 60 }]);
+    expect(res.status).toBe(400);
+    expect(res.body.reason).toBe("blocked");
+    expect(await prisma.availabilityException.count({ where: { id: ownBlockId } })).toBe(1);
+  });
+
+  it("with overOwnBlocks, still never over a booking and never over Acuity time", async () => {
+    const v = await view(date);
+    const overBooking = await save(
+      date,
+      v,
+      [
+        { startMin: min("10:00"), durationMin: 20, price: 60 },
+        { startMin: min("14:10"), durationMin: 20, price: 60 },
+      ],
+      { overOwnBlocks: true },
+    );
+    expect(overBooking.status).toBe(400);
+    expect(overBooking.body.reason).toBe("booking");
+    const overAcuity = await save(date, v, [{ startMin: min("18:20"), durationMin: 20, price: 60 }], { overOwnBlocks: true });
+    expect(overAcuity.status).toBe(400);
+    expect(overAcuity.body.reason).toBe("blocked");
+    expect(await prisma.availabilityException.count({ where: { id: ownBlockId } })).toBe(1);
+    expect(
+      await prisma.targetedSlot.count({ where: { shopId, startsAt: { gte: at(date, "00:00"), lt: at(nextDay, "00:00") } } }),
+    ).toBe(0);
+  });
+
+  it("publishes specials over his own block-off: the page lists them, a client books one, the day stays shut otherwise", async () => {
+    const v = await view(date);
+    const res = await save(
+      date,
+      v,
+      [
+        { startMin: min("10:00"), durationMin: 20, price: 60 },
+        { startMin: min("10:20"), durationMin: 20, price: 60 },
+        { startMin: min("20:00"), durationMin: 20, price: 75 },
+      ],
+      { overOwnBlocks: true },
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.summary).toMatchObject({ added: 3 });
+    // That day's block-off is replaced; the next day's row of the same
+    // block-off is untouched.
+    expect(await prisma.availabilityException.count({ where: { id: ownBlockId } })).toBe(0);
+    expect(await prisma.availabilityException.count({ where: { id: nextDayBlockId } })).toBe(1);
+
+    // The public page sells exactly the openings, at their prices; no normal hours.
+    const cut = await daySlots(date, cutId);
+    expect(cut.normal).toEqual([]);
+    expect(cut.special.map((s) => [s.startsAt, s.targeted!.price])).toEqual([
+      [at(date, "10:00").toISOString(), 60],
+      [at(date, "10:20").toISOString(), 60],
+      [at(date, "20:00").toISOString(), 75],
+    ]);
+    // ...and the booking write takes one: what is offered is what is accepted.
+    const target = cut.special[0]!.targeted!.id;
+    expect((await book(at(date, "10:00"), cutId, target)).status).toBe(201);
+    const slot = await prisma.targetedSlot.findUniqueOrThrow({ where: { id: target } });
+    expect(slot.bookedAppointmentId).not.toBeNull();
+    // The booking from before the block is exactly as it was.
+    const earlier = await prisma.appointment.findFirstOrThrow({ where: { shopId, startsAt: at(date, "14:00") } });
+    expect(earlier.status).toBe("BOOKED");
+    // The rest of the day is closed by the special day's own blocks.
+    const shut = await prisma.availabilityException.findMany({
+      where: { shopId, staffId, pattern: "special_day", startsAt: { gte: at(date, "00:00"), lt: at(nextDay, "00:00") } },
+      orderBy: { startsAt: "asc" },
+    });
+    expect(shut.map((b) => [b.startsAt.toISOString(), b.endsAt.toISOString()])).toEqual([
+      [at(date, "00:00").toISOString(), at(date, "10:00").toISOString()],
+      [at(date, "10:40").toISOString(), at(date, "20:00").toISOString()],
+      [at(date, "20:20").toISOString(), at(nextDay, "00:00").toISOString()],
+    ]);
+  });
+
+  it("a block-off that runs into another day is never offered for replacing", async () => {
+    const d = daysOut(16);
+    const crossing = await prisma.availabilityException.create({
+      data: { shopId, staffId, startsAt: at(d, "17:00"), endsAt: at(daysOut(17), "02:00"), isBlock: true },
+    });
+    const v = await view(d);
+    const b = (v.chairs.find((c) => c.staffId === staffId)!.blocks as BlockItem[]).find((x) => x.startMin === min("17:00"));
+    expect(b).toBeDefined();
+    expect(b!.ownBlockId).toBeUndefined();
+    const res = await save(d, v, [{ startMin: min("18:00"), durationMin: 20, price: 60 }], { overOwnBlocks: true });
+    expect(res.status).toBe(400);
+    expect(res.body.reason).toBe("blocked");
+    expect(await prisma.availabilityException.count({ where: { id: crossing.id } })).toBe(1);
+  });
+});
