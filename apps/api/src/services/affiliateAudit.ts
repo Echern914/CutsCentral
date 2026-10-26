@@ -51,7 +51,17 @@ export type AffiliateEventType =
   | "reward.review_flagged"
   // ---- credit-execution phase (reserved) ----
   | "credit.applied"
-  | "credit.adjusted";
+  | "credit.adjusted"
+  // ---- v2 commission ledger (migration 20261077000000) ----
+  /** A base-plan invoice earned a HELD commission line. */
+  | "commission.earned"
+  /** A line was written (or swept) to REVIEW_REQUIRED instead of HELD/AVAILABLE. */
+  | "commission.review_flagged"
+  | "commission.available"
+  /** A refund, dispute or credit note reversed a line not yet paid. */
+  | "commission.reversed"
+  /** Same, but the line was already PAID - the payout phase must net it. */
+  | "commission.clawback_due";
 
 /**
  * `admin` is a signed-in isAdmin session and MUST carry a user id - the
@@ -78,6 +88,11 @@ export const AFFILIATE_AUDIT_METADATA_KEYS = [
   "rejectionReason",
   "reversalReason",
   "basisPlan",
+  // commission lines: the frozen kind ("cash" | "credit"), rate and amount -
+  // numbers and fixed codes, never prose.
+  "commissionKind",
+  "rateBps",
+  "amountCents",
   // attribution corrections: previous and new value, as ids. The admin's
   // written reason is deliberately NOT here - it is free text, and free text
   // can never be redacted out of an append-only table. It lives on the

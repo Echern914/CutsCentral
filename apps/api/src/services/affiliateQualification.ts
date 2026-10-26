@@ -2,6 +2,11 @@ import { Prisma, runAsOwner } from "@chairback/db";
 import { AFFILIATE_POLICY, PLANS, apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
 import { recordAffiliateEvent } from "./affiliateAudit.js";
+import {
+  commissionsEnabled,
+  earnCommissionForInvoice,
+  reverseCommissionForInvoice,
+} from "./affiliateCommission.js";
 import { enqueueAffiliateEmail } from "./affiliateNotify.js";
 
 /**
@@ -228,6 +233,28 @@ async function qualifyFromInvoice(
     skipDuplicates: true,
   });
 
+  // v2 COMMISSION LEDGER. Dark unless AFFILIATE_COMMISSIONS_ENABLED; with it
+  // off this block is skipped and everything below is exactly the v1 path.
+  const commissionsOn = commissionsEnabled();
+  if (commissionsOn) {
+    // Commission is on what the business actually PAID for the base plan:
+    // never more than the invoice's amount paid net of tax, so a coupon or a
+    // customer-balance credit cannot earn a commission on money never paid.
+    const taxCents = typeof invoice.tax === "number" ? invoice.tax : 0;
+    await earnCommissionForInvoice(tx, {
+      stripeInvoiceId: invoiceId,
+      referredShopId: referredShop.id,
+      affiliateAccountId: attribution.affiliateAccountId,
+      basisCents: Math.min(baseCents, amountPaid - taxCents),
+      currency: typeof invoice.currency === "string" ? invoice.currency : "usd",
+      paidAt,
+    });
+    // The commission REPLACES the one-free-month reward for new
+    // qualifications. Rewards already created are untouched (their sweep,
+    // reversal and credit execution carry on exactly as before).
+    return;
+  }
+
   const qualifying = await tx.affiliateQualifyingInvoice.count({
     where: { referredShopId: referredShop.id },
   });
@@ -336,6 +363,12 @@ async function reverseFromEvent(
       : type === "credit_note.created"
         ? "credit_note"
         : "invoice_refunded";
+
+  // v2: the invoice's commission line, if it earned one. Not gated on the
+  // commissions flag - switching earning off must never leave a refunded line
+  // standing. Independent of the reward below, which is handled exactly as
+  // before.
+  await reverseCommissionForInvoice(tx, invoiceId, reason, new Date(nowMs ?? Date.now()));
 
   // Only a reward we have not yet handed over can be reversed this way. The
   // CAS is the guard: if it is already APPLIED or REVERSED, count is 0.

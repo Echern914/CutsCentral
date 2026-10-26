@@ -46,6 +46,8 @@ const WAVES = {
       "AffiliateReward_referredShopId_key",
       "StripeWebhookEvent_eventId_key",
       "AffiliateQualifyingInvoice_stripeInvoiceId_key",
+      // One commission line per invoice (affiliateCommission.test.ts).
+      "AffiliateCommission_stripeInvoiceId_key",
       "Shop_twilioNumber_key",
       // The key that makes one review produce at most one alert per recipient
       // per channel, however many times the enqueue runs.

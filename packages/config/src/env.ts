@@ -439,6 +439,13 @@ const apiSchema = z.object({
   // them.
   AFFILIATE_QUALIFICATION_ENABLED: boolish.default("false"),
   AFFILIATE_CREDIT_EXECUTION_ENABLED: boolish.default("false"),
+  // The v2 commission LEDGER (services/affiliateCommission.ts). Needs the
+  // master and qualification flags too. On: each base-plan invoice a referred
+  // business pays in its first 12 months writes one HELD commission line, and
+  // the one-free-month reward is no longer created for NEW qualifications.
+  // Off: byte-for-byte the v1 behaviour, and the hold sweep dry-runs. Moves
+  // no money either way - it only writes our own rows.
+  AFFILIATE_COMMISSIONS_ENABLED: boolish.default("false"),
   // The payments reconciler (billing/reconcile.ts): compares Payment rows
   // whose Stripe outcome is unknown or stale against Stripe's own state and
   // repairs LOCAL rows only - it never creates a charge, refund or credit.
