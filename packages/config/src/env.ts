@@ -334,6 +334,14 @@ const apiSchema = z.object({
   // every shop. With any set, every other
   // shop gets the same 404 (and no door) as if the chat did not exist.
   ASSISTANT_CHAT_SHOP_IDS: z.string().default(""),
+  // 🔴 THE BARBER'S BOOKING CHAT (apps/api/src/assistant/barberChat.ts): the
+  // same menu + server rules on the dashboard side - see the day, book, move
+  // and cancel, each through the dashboard's OWN write functions. No model, no
+  // outside service. Off by default; the same two dials as the customer chat:
+  // BARBER_CHAT_SHOP_IDS takes shop ids or booking-page slugs, empty = every
+  // shop, and every other shop gets a 404 as if it did not exist.
+  BARBER_CHAT_ENABLED: boolish.default("false"),
+  BARBER_CHAT_SHOP_IDS: z.string().default(""),
   // Stripe price for the $40/mo receptionist add-on subscription. While unset,
   // self-serve upgrade is unavailable and only receptionistCompAccess shops
   // (pilots) can use the feature.
