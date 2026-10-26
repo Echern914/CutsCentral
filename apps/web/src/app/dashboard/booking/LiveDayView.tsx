@@ -19,11 +19,16 @@ import {
   addOpening,
   changeCount,
   clock,
+  clockRange,
+  closedDay,
+  dayLabel,
   draftFromView,
   fillChair,
   hhmm,
   minutesOf,
   rebaseDraft,
+  spanLabel,
+  summarizeFill,
   type Draft,
   type DraftOpening,
 } from "./liveDay";
@@ -61,11 +66,7 @@ const SNAP = 5;
 
 const field = "h-11 rounded-xl border border-subtle bg-charcoal-700 px-3 text-sm text-offwhite";
 
-function prettyDate(date: string): string {
-  const [y, m, d] = date.split("-").map(Number);
-  if (!y || !m || !d) return date;
-  return new Date(y, m - 1, d, 12).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-}
+const prettyDate = dayLabel;
 
 function newRequestId(): string {
   const c = globalThis.crypto as Crypto | undefined;
@@ -149,6 +150,13 @@ export function LiveDayView({
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // The barber chose to open special times on a day he blocked off himself:
+  // his own block-off that day stops refusing openings, and publishing
+  // replaces it where they sit (the server does the same - saveDay
+  // `overOwnBlocks`). Off until he taps it; never covers a booking.
+  const [overBlocks, setOverBlocks] = useState(false);
+  // The service chips fold to one line when every service is picked.
+  const [chipsOpen, setChipsOpen] = useState(false);
   const inFlight = useRef(false);
   // One id per save attempt: a double tap or a retried request replays.
   const requestId = useRef(newRequestId());
@@ -173,6 +181,8 @@ export function LiveDayView({
     requestId.current = newRequestId();
     setLaneId((cur) => (cur && v.chairs.some((c) => c.staffId === cur) ? cur : v.chairs[0]?.staffId ?? null));
     if (opts.keepForm) return;
+    setOverBlocks(false);
+    setChipsOpen(false);
     setName(v.name ?? defaultName ?? "");
     setCounts(new Set(v.serviceIds));
     const first = v.chairs[0];
@@ -222,6 +232,27 @@ export function LiveDayView({
   const totalOpenings = Object.values(draft).reduce((n, list) => n + list.length, 0);
   const wasLive = !!view && view.chairs.some((c) => c.openings.length > 0);
   const selected = mine.find((o) => o.key === selectedKey) ?? null;
+  const place = { overOwnBlocks: overBlocks };
+  // What the day is BEFORE any opening: shut by blocked time, a day he does
+  // not work, or his usual hours. Every sentence below says which - a blocked
+  // day must never be described as "clients book your normal hours".
+  const closed = lane ? closedDay(lane) : null;
+  const ownBlocks = lane ? lane.blocks.filter((b) => b.ownBlockId) : [];
+  const usualHours = lane ? lane.hours.map((h) => clockRange(h.startMin, h.endMin)).join(", ") : "";
+  const bookedThatDay = lane ? lane.bookings.length + lane.external.length : 0;
+  // An opening in the draft sits on his own block-off: publishing replaces it.
+  const replacesBlock =
+    overBlocks &&
+    !!view &&
+    view.chairs.some((c) =>
+      (draft[c.staffId] ?? []).some((o) =>
+        c.blocks.some(
+          (b) => b.ownBlockId && b.startMin < o.startMin + o.durationMin + view.bufferMin && b.endMin > o.startMin,
+        ),
+      ),
+    );
+  const OPEN_ANYWAY = "Open special times anyway";
+  const chipsFolded = activeServices.length > 1 && activeServices.every((s) => counts.has(s.id)) && !chipsOpen;
 
   function setLaneDraft(staffId: string, list: DraftOpening[]) {
     setDraft((cur) => ({ ...cur, [staffId]: list }));
@@ -257,20 +288,26 @@ export function LiveDayView({
     }
     const lines: string[] = [];
     const next = { ...draft };
+    let total = 0;
+    let ownBlocked = false;
     for (const c of targets) {
-      const r = fillChair(view, c, draft[c.staffId] ?? [], { startMin, endMin, cutMin: d.cutMin, price: d.price });
+      const r = fillChair(view, c, draft[c.staffId] ?? [], { startMin, endMin, cutMin: d.cutMin, price: d.price }, place);
       next[c.staffId] = r.openings;
       const made = r.openings.filter((o) => !o.booked).length;
-      let line = `${nameOf(c.staffId)}: ${made} opening${made === 1 ? "" : "s"}`;
-      if (r.skipped.length > 0) {
-        line += `. Left out ${r.skipped.map((s) => `${clock(s.startMin)} (${OPENING_CONFLICT_WORDS[s.reason]})`).join(", ")}`;
-      }
-      lines.push(line);
+      total += made;
+      if (r.skipped.some((s) => s.reason === "blocked") && c.blocks.some((b) => b.ownBlockId)) ownBlocked = true;
+      // One short line per chair - grouped ranges, never every slot.
+      const line = summarizeFill({ made, price: d.price, cutMin: d.cutMin, bufferMin: view.bufferMin, skipped: r.skipped });
+      lines.push(targets.length > 1 || view.chairs.length > 1 ? `${nameOf(c.staffId)}: ${line}` : line);
     }
     setDraft(next);
     setSelectedKey(null);
     setProblem(null);
-    setNotice(`${lines.join(" · ")}. Not saved yet - check the day, then save.`);
+    setNotice(
+      lines.join(" ") +
+        (!overBlocks && ownBlocked ? ` To put openings over your block-off, tap "${OPEN_ANYWAY}".` : "") +
+        (total > 0 ? " Not published yet - check the day, then publish." : ""),
+    );
     setFillOpen(false);
   }
 
@@ -282,9 +319,14 @@ export function LiveDayView({
       setFillOpen(true);
       return;
     }
-    const r = addOpening(view, lane, mine, { startMin, durationMin: d.cutMin, price: d.price });
+    const r = addOpening(view, lane, mine, { startMin, durationMin: d.cutMin, price: d.price }, place);
     if (!r.ok) {
-      setProblem(`Can't add an opening at ${clock(startMin)}: ${OPENING_CONFLICT_WORDS[r.reason]}.`);
+      setProblem(
+        `Can't add an opening at ${clock(startMin)}: ${OPENING_CONFLICT_WORDS[r.reason]}.` +
+          (r.reason === "blocked" && !overBlocks && ownBlocks.length > 0
+            ? ` To put openings over your block-off, tap "${OPEN_ANYWAY}".`
+            : ""),
+      );
       return;
     }
     setLaneDraft(lane.staffId, r.openings);
@@ -338,6 +380,7 @@ export function LiveDayView({
       serviceIds: [...counts],
       basis: view.basis,
       requestId: requestId.current,
+      ...(overBlocks ? { overOwnBlocks: true } : {}),
       chairs: view.chairs.map((c) => ({
         staffId: c.staffId,
         openings: (draft[c.staffId] ?? []).map((o) => ({
@@ -365,7 +408,7 @@ export function LiveDayView({
         return;
       }
       if (r.error === "changed" && r.view) {
-        const { draft: rebased, dropped } = rebaseDraft(r.view, draft);
+        const { draft: rebased, dropped } = rebaseDraft(r.view, draft, place);
         setView(r.view);
         setDraft(rebased);
         setSelectedKey(null);
@@ -479,10 +522,15 @@ export function LiveDayView({
       )}
       <p className="text-xs text-muted" aria-live="polite">
         {changes > 0
-          ? `${changes} unsaved change${changes === 1 ? "" : "s"} - clients still see the day as it was until you save.`
+          ? `${changes} unsaved change${changes === 1 ? "" : "s"} - clients still see the day as it was until you ${wasLive ? "save" : "publish"}.` +
+            (replacesBlock ? " Publishing replaces your block-off where the openings sit." : "")
           : wasLive
             ? `Live: clients can book only these ${totalOpenings} opening${totalOpenings === 1 ? "" : "s"} that day, each at the price shown.`
-            : "Not a special day yet - clients book your normal hours."}
+            : closed === "blocked"
+              ? "Not published - the day is blocked off, so clients can't book it."
+              : closed === "off"
+                ? "Not published - clients can't book this day."
+                : "Not published - clients book your usual hours that day."}
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <button
@@ -516,7 +564,7 @@ export function LiveDayView({
       open={open}
       onClose={close}
       title={title}
-      subtitle="Live view - see the day, fill it, and tap to change one opening."
+      subtitle="Set this day's openings. Once published, clients can book only these, at their prices - not your usual hours."
       footer={footer}
       className="sm:max-w-xl"
       scrollResetKey={date}
@@ -570,8 +618,61 @@ export function LiveDayView({
             />
           </label>
 
+          {closed === "blocked" && (
+            <div role="note" className="rounded-xl border border-gold/40 bg-gold/5 p-3 text-xs text-offwhite">
+              {ownBlocks.length === 0 ? (
+                <p>
+                  {nameOf(lane.staffId)}&apos;s calendar is blocked all day on {prettyDate(view.date)}, so clients can&apos;t book
+                  that day. Openings can&apos;t go over a weekly break or time blocked in Acuity - change it there first.
+                </p>
+              ) : overBlocks ? (
+                <p>
+                  Opening your blocked-off day: the openings you add are the only times clients can book{" "}
+                  {nameOf(lane.staffId)} on {prettyDate(view.date)}. Publishing replaces your block-off where they sit
+                  {bookedThatDay > 0 ? "; bookings that day stay as they are" : ""}.
+                </p>
+              ) : (
+                <p>
+                  You&apos;ve blocked {prettyDate(view.date)} off, so clients can&apos;t book {nameOf(lane.staffId)} that day.
+                  Want special openings anyway (after hours, holiday prices)?
+                </p>
+              )}
+              {ownBlocks.length > 0 && (
+                <button
+                  type="button"
+                  aria-pressed={overBlocks}
+                  onClick={() => {
+                    setOverBlocks((v) => !v);
+                    setProblem(null);
+                  }}
+                  className={cn(
+                    "mt-2 min-h-[44px] rounded-xl border px-3 text-sm font-medium transition-colors",
+                    overBlocks ? "border-subtle text-muted hover:text-offwhite" : "border-gold/60 bg-gold/15 text-gold hover:bg-gold/25",
+                  )}
+                >
+                  {overBlocks ? "Keep the day blocked" : OPEN_ANYWAY}
+                </button>
+              )}
+            </div>
+          )}
+
           <div>
-            <p className="text-xs text-muted">Openings can be booked as</p>
+            <p className="text-xs text-muted">
+              Openings can be booked as
+              {chipsFolded && (
+                <>
+                  <span className="text-offwhite"> every service</span>
+                  <button
+                    type="button"
+                    onClick={() => setChipsOpen(true)}
+                    className="ml-2 min-h-[44px] rounded px-1 text-gold underline"
+                  >
+                    Change
+                  </button>
+                </>
+              )}
+            </p>
+            {!(chipsFolded) && (
             <div role="group" aria-label="Services the openings count as" className="mt-1 flex flex-wrap gap-1.5">
               {activeServices.map((s) => {
                 const on = counts.has(s.id);
@@ -591,6 +692,7 @@ export function LiveDayView({
                 );
               })}
             </div>
+            )}
           </div>
 
           {view.chairs.length > 1 && (
@@ -635,6 +737,13 @@ export function LiveDayView({
             </button>
             {fillOpen && (
               <div className="border-t border-subtle p-3">
+                {/* The times are THIS day's hours. They start from his usual
+                    hours, which he may not recognise as such without a word. */}
+                <p className="mb-2 text-xs text-muted">
+                  {view.chairs[0] && view.chairs[0].hours.length > 0
+                    ? `Starts from your usual hours (${view.chairs[0].hours.map((h) => clockRange(h.startMin, h.endMin)).join(", ")}) - change them for this day.`
+                    : "Set the hours for this day."}
+                </p>
                 <div className="grid grid-cols-2 gap-2">
                   <label className="flex flex-col gap-1 text-xs text-muted">
                     From
@@ -670,7 +779,7 @@ export function LiveDayView({
                 )}
                 <p className="mt-2 text-xs text-muted">
                   Replaces the open (unbooked) openings{view.chairs.length > 1 ? " for the people picked" : ""}. Booked ones
-                  stay. Nothing is placed over a booking or blocked time
+                  stay. Nothing is placed over a booking{overBlocks ? "" : " or blocked time"}
                   {view.bufferMin > 0 ? `, and openings are spaced by your ${view.bufferMin}-min turnover` : ""}.
                 </p>
                 <button
@@ -694,22 +803,22 @@ export function LiveDayView({
           <div className="rounded-xl bg-offwhite/5 px-3 py-2 text-xs text-muted">
             {mine.length > 0 ? (
               <>
-                On {prettyDate(view.date)}, clients can book <span className="text-gold">only the gold openings</span>,
-                each at the price on it. {nameOf(lane.staffId)}&apos;s normal hours
-                {lane.hours.length > 0
-                  ? ` (${lane.hours.map((h) => `${clock(h.startMin)}–${clock(h.endMin)}`).join(", ")})`
-                  : ""}{" "}
-                are closed that day.
+                Once published, clients can book <span className="text-gold">only the gold openings</span> on{" "}
+                {prettyDate(view.date)}, each at the price on it
+                {closed === null && usualHours ? ` - not ${nameOf(lane.staffId)}'s usual hours (${usualHours})` : ""}.
               </>
+            ) : closed === "blocked" ? (
+              <>No openings for {nameOf(lane.staffId)} yet - the day is blocked off, so clients can&apos;t book it.</>
+            ) : closed === "off" ? (
+              <>No openings for {nameOf(lane.staffId)} yet - no usual hours this weekday, so clients can&apos;t book it.</>
             ) : (
               <>
-                No openings for {nameOf(lane.staffId)}
-                {lane.hours.length > 0
-                  ? ` - clients book the normal hours (${lane.hours.map((h) => `${clock(h.startMin)}–${clock(h.endMin)}`).join(", ")})`
-                  : ""}
-                . Fill the day, or tap empty time below to add an opening.
+                No openings for {nameOf(lane.staffId)} yet - clients book the usual hours ({usualHours}). Fill the day, or
+                tap empty time below to add an opening.
               </>
             )}
+            {bookedThatDay > 0 &&
+              ` ${bookedThatDay} booking${bookedThatDay === 1 ? "" : "s"} that day stay${bookedThatDay === 1 ? "s" : ""} as booked.`}
           </div>
 
           <div className="flex items-end gap-2">
@@ -779,13 +888,22 @@ export function LiveDayView({
               {lane.blocks.map((b, i) => {
                 const { s, e } = clip(b.startMin, b.endMin);
                 if (e <= s) return null;
+                // Say what the grey IS: his block-off, a weekly break, Acuity
+                // time - and "all day" for a whole day, never "12:00 AM-12:00 AM".
+                const what = b.label === "Blocked" ? "Blocked off" : b.label;
+                const when = spanLabel(b.startMin, b.endMin);
+                const replaceable = overBlocks && !!b.ownBlockId;
                 return (
                   <div
                     key={`b${i}`}
-                    className="pointer-events-none absolute inset-x-1 overflow-hidden rounded-lg border border-dashed border-subtle-strong bg-charcoal-700/70 px-2 py-0.5 text-[11px] text-muted"
+                    className={cn(
+                      "pointer-events-none absolute inset-x-1 overflow-hidden rounded-lg border border-dashed px-2 py-0.5 text-[11px] text-muted",
+                      replaceable ? "border-subtle bg-charcoal-700/30" : "border-subtle-strong bg-charcoal-700/70",
+                    )}
                     style={{ top: (s - range.lo) * PX, height: Math.max((e - s) * PX - 2, 14) }}
                   >
-                    {b.label} · {clock(b.startMin)}–{clock(b.endMin)}
+                    {when === "all day" ? `${what} all day` : `${what} · ${when}`}
+                    {replaceable ? " - openings can go here" : ""}
                   </div>
                 );
               })}

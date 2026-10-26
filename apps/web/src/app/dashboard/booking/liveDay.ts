@@ -52,10 +52,24 @@ export function draftFromView(view: DayView): Draft {
   return out;
 }
 
-/** What is on a chair, as minute spans, for the shared placement rule. */
-export function chairSpans(chair: DayViewChair) {
+/** The barber chose to open special times over his OWN block-off that day. */
+export interface PlaceOptions {
+  overOwnBlocks?: boolean;
+}
+
+/**
+ * What is on a chair, as minute spans, for the shared placement rule. With
+ * `overOwnBlocks` the barber's own block-offs that day (ownBlockId) are left
+ * out - exactly what the server's save does - never a booking, a weekly break
+ * or an Acuity block.
+ */
+export function chairSpans(chair: DayViewChair, opts: PlaceOptions = {}) {
   const span = (i: { startMin: number; endMin: number }): Span => ({ start: i.startMin, end: i.endMin });
-  return { bookings: chair.bookings.map(span), external: chair.external.map(span), blocks: chair.blocks.map(span) };
+  return {
+    bookings: chair.bookings.map(span),
+    external: chair.external.map(span),
+    blocks: chair.blocks.filter((b) => !(opts.overOwnBlocks && b.ownBlockId)).map(span),
+  };
 }
 
 /**
@@ -68,8 +82,9 @@ export function placementProblem(
   draft: DraftOpening[],
   opening: { startMin: number; durationMin: number },
   skipKey?: string,
+  opts: PlaceOptions = {},
 ): OpeningConflict | null {
-  return openingConflict({ start: opening.startMin, end: opening.startMin + opening.durationMin }, chairSpans(chair), {
+  return openingConflict({ start: opening.startMin, end: opening.startMin + opening.durationMin }, chairSpans(chair, opts), {
     buffer: view.bufferMin,
     now: view.nowMin,
     others: draft
@@ -92,6 +107,7 @@ export function fillChair(
   chair: DayViewChair,
   current: DraftOpening[],
   spec: { startMin: number; endMin: number; cutMin: number; price: number },
+  opts: PlaceOptions = {},
 ): { openings: DraftOpening[]; skipped: { startMin: number; reason: OpeningConflict }[] } {
   const booked = current.filter((d) => d.booked);
   const saved = new Map(
@@ -102,7 +118,7 @@ export function fillChair(
     endMin: spec.endMin,
     cutMin: spec.cutMin,
     bufferMin: view.bufferMin,
-    day: chairSpans(chair),
+    day: chairSpans(chair, opts),
     keep: booked.map((b) => ({ start: b.startMin, end: b.startMin + b.durationMin })),
     now: view.nowMin,
   });
@@ -129,8 +145,9 @@ export function addOpening(
   chair: DayViewChair,
   current: DraftOpening[],
   opening: { startMin: number; durationMin: number; price: number },
+  opts: PlaceOptions = {},
 ): { ok: true; openings: DraftOpening[]; key: string } | { ok: false; reason: OpeningConflict } {
-  const reason = placementProblem(view, chair, current, opening);
+  const reason = placementProblem(view, chair, current, opening, undefined, opts);
   if (reason) return { ok: false, reason };
   const key = newKey();
   return { ok: true, key, openings: [...current, { key, ...opening, booked: false }].sort(byStart) };
@@ -164,7 +181,11 @@ export function changeCount(view: DayView, draft: Draft): number {
  * booking landed there) is dropped and reported, never saved on top of it. An
  * opening whose saved row is gone becomes a new one if it still fits.
  */
-export function rebaseDraft(fresh: DayView, draft: Draft): { draft: Draft; dropped: { staffId: string; startMin: number }[] } {
+export function rebaseDraft(
+  fresh: DayView,
+  draft: Draft,
+  opts: PlaceOptions = {},
+): { draft: Draft; dropped: { staffId: string; startMin: number }[] } {
   const out: Draft = {};
   const dropped: { staffId: string; startMin: number }[] = [];
   for (const chair of fresh.chairs) {
@@ -176,7 +197,7 @@ export function rebaseDraft(fresh: DayView, draft: Draft): { draft: Draft; dropp
     for (const d of draft[chair.staffId] ?? []) {
       if (d.id && bookedIds.has(d.id)) continue; // already in, as booked
       const candidate: DraftOpening = d.id && savedIds.has(d.id) ? d : { ...d, id: undefined, booked: false };
-      if (placementProblem(fresh, chair, next, candidate)) {
+      if (placementProblem(fresh, chair, next, candidate, undefined, opts)) {
         dropped.push({ staffId: chair.staffId, startMin: d.startMin });
         continue;
       }
@@ -194,6 +215,107 @@ export function clock(min: number): string {
   const mm = m % 60;
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${String(mm).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+}
+
+/**
+ * "2:20–3:40 PM", "10:00 AM–2:20 PM", "11:00 PM–midnight". The day's end
+ * (1440) is midnight, never a second "12:00 AM" that reads like the start.
+ */
+export function clockRange(startMin: number, endMin: number): string {
+  if (endMin >= 1440) return `${startMin <= 0 ? "midnight" : clock(startMin)}–midnight`;
+  const a = clock(startMin);
+  const b = clock(endMin);
+  if (a.slice(-2) === b.slice(-2)) return `${a.slice(0, -3)}–${b}`;
+  return `${a}–${b}`;
+}
+
+/** A span on the timeline: "all day" for a whole-day block, else its times. */
+export function spanLabel(startMin: number, endMin: number): string {
+  return startMin <= 0 && endMin >= 1440 ? "all day" : clockRange(startMin, endMin);
+}
+
+/**
+ * "2026-11-26" -> "Thu, Nov 26". Built and printed in UTC, so the weekday is
+ * the date's own whatever zone the browser (or the shop) is in - a Thanksgiving
+ * never reads as a Wednesday on the West Coast or a Friday further east.
+ */
+export function dayLabel(date: string): string {
+  const [y, m, d] = date.split("-").map(Number);
+  if (!y || !m || !d) return date;
+  return new Date(Date.UTC(y, m - 1, d, 12)).toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+/**
+ * Is this chair's day already shut to clients before any special opening?
+ *   "off"     - he does not work that weekday;
+ *   "blocked" - every minute of his hours is under blocked time;
+ *   null      - clients can book at least part of his normal hours.
+ */
+export function closedDay(chair: Pick<DayViewChair, "hours" | "blocks">): "off" | "blocked" | null {
+  if (chair.hours.length === 0) return "off";
+  const blocks = [...chair.blocks].sort((a, b) => a.startMin - b.startMin);
+  const covered = (s: number, e: number) => {
+    let cursor = s;
+    for (const b of blocks) {
+      if (b.startMin > cursor) break;
+      cursor = Math.max(cursor, b.endMin);
+      if (cursor >= e) return true;
+    }
+    return cursor >= e;
+  };
+  return chair.hours.every((h) => covered(h.startMin, h.endMin)) ? "blocked" : null;
+}
+
+/** Short words for why a run of times was left out of a fill. */
+const SKIP_WORDS: Record<OpeningConflict, string> = {
+  booking: "bookings",
+  blocked: "blocked off",
+  past: "already passed",
+  opening: "other openings",
+  outside_day: "past midnight",
+};
+
+/**
+ * The result of "Fill the day" in ONE short line, never a list of every slot:
+ *   "Added 22 openings at $60. Skipped 2:20–3:40 PM (bookings)."
+ *   "No openings added. Skipped 10:00 AM–2:20 PM and 3:40–8:00 PM (blocked off); 2:20–3:40 PM (bookings)."
+ * Skipped starts one step apart (cut + turnover) with the same reason merge
+ * into one range, which runs to the end of the last skipped cut.
+ */
+export function summarizeFill(input: {
+  made: number;
+  price: number;
+  cutMin: number;
+  bufferMin: number;
+  skipped: { startMin: number; reason: OpeningConflict }[];
+}): string {
+  const step = input.cutMin + Math.max(0, input.bufferMin);
+  const runs: { reason: OpeningConflict; start: number; lastStart: number }[] = [];
+  for (const s of [...input.skipped].sort((a, b) => a.startMin - b.startMin)) {
+    const last = runs[runs.length - 1];
+    if (last && last.reason === s.reason && s.startMin - last.lastStart <= step) last.lastStart = s.startMin;
+    else runs.push({ reason: s.reason, start: s.startMin, lastStart: s.startMin });
+  }
+  const order: OpeningConflict[] = [];
+  for (const r of runs) if (!order.includes(r.reason)) order.push(r.reason);
+  const groups = order.map((reason) => {
+    const ranges = runs
+      .filter((r) => r.reason === reason)
+      .map((r) => clockRange(r.start, r.lastStart + input.cutMin));
+    const list = ranges.length > 1 ? `${ranges.slice(0, -1).join(", ")} and ${ranges[ranges.length - 1]}` : ranges[0];
+    return `${list} (${SKIP_WORDS[reason]})`;
+  });
+  const price = Number.isInteger(input.price) ? `$${input.price}` : `$${input.price.toFixed(2)}`;
+  const head =
+    input.made === 0
+      ? "No openings added."
+      : `Added ${input.made} opening${input.made === 1 ? "" : "s"} at ${price}.`;
+  return groups.length > 0 ? `${head} Skipped ${groups.join("; ")}.` : head;
 }
 
 /** "HH:MM" <-> minutes, for <input type="time">. */

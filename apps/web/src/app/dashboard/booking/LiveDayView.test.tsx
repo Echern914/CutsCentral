@@ -109,7 +109,9 @@ describe("Open live view", () => {
     // What is already there, before anything changes.
     await screen.findByText(/Booked: Ana - Cut/);
     expect(screen.getByText(/Lunch/)).toBeTruthy();
-    expect(screen.getByText(/Not a special day yet/)).toBeTruthy();
+    expect(screen.getByText(/Not published - clients book your usual hours that day/)).toBeTruthy();
+    // The fill's times are named for what they are: his usual hours.
+    expect(screen.getByText("Starts from your usual hours (9:00 AM–5:00 PM) - change them for this day.")).toBeTruthy();
 
     // "every 20 min from 9:00 to 5:00 at $65" - the fill opens prefilled
     // from the chair's hours and the holiday's price.
@@ -118,7 +120,12 @@ describe("Open live view", () => {
     expect(openings).toHaveLength(19);
     expect(screen.getByRole("button", { name: "Opening 9:00 AM, $65" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Opening 10:00 AM/ })).toBeNull();
-    expect(screen.getByText(/Left out 10:00 AM \(it overlaps a booking\)/)).toBeTruthy();
+    // One short line, grouped by reason - never every skipped slot.
+    expect(
+      screen.getByText(
+        "Added 19 openings at $65. Skipped 10:00–10:40 AM (bookings); 12:00–1:00 PM (blocked off). Not published yet - check the day, then publish.",
+      ),
+    ).toBeTruthy();
     expect(saveSpecialDayViewAction).not.toHaveBeenCalled();
 
     // No services picked yet: Publish says so instead of saving.
@@ -207,6 +214,85 @@ describe("Open live view", () => {
     expect(screen.getByText(/Booked: Bo - Cut/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Opening 11:00 AM, $65" })).toBeNull();
     expect(toast).not.toHaveBeenCalled();
+  });
+
+  it("a day he BLOCKED OFF says so, and opens for specials only when he chooses it", async () => {
+    // Drick's Thanksgiving: blocked off all day, 10-8 usual hours, two
+    // bookings already on it from before the block.
+    const blocked = view(
+      {
+        hours: [{ startMin: m("10:00"), endMin: m("20:00") }],
+        bookings: [
+          { startMin: m("14:20"), endMin: m("15:00"), label: "Booked: Ana - Cut" },
+          { startMin: m("15:00"), endMin: m("15:40"), label: "Booked: Bo - Cut" },
+        ],
+        blocks: [{ startMin: 0, endMin: 1440, label: "Blocked", ownBlockId: "blk1" }],
+      },
+      { serviceIds: ["cut"] },
+    );
+    getSpecialDayViewAction.mockResolvedValue({ ok: true, view: blocked });
+    saveSpecialDayViewAction.mockResolvedValue({ ok: true, replay: false, summary: { added: 0, removed: 0, repriced: 0, bookedKept: 0 }, view: blocked });
+    open();
+    await screen.findByText(/Booked: Ana - Cut/);
+
+    // The truth about the day - never "clients book the normal hours".
+    expect(screen.getByText("Blocked off all day")).toBeTruthy();
+    expect(screen.queryByText(/12:00 AM–12:00 AM/)).toBeNull();
+    expect(screen.queryByText(/clients book the usual hours/)).toBeNull();
+    expect(screen.getByText(/the day is blocked off, so clients can't book it\. 2 bookings that day stay as booked\./)).toBeTruthy();
+    expect(screen.getByText("Not published - the day is blocked off, so clients can't book it.")).toBeTruthy();
+    expect(screen.getByText(/You've blocked Thu, Nov 26 off/)).toBeTruthy();
+
+    // Without his say-so the block-off still refuses, in one short line.
+    fireEvent.change(screen.getByLabelText("To"), { target: { value: "20:00" } });
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "10:00" } });
+    fireEvent.click(screen.getByRole("button", { name: "Fill the day" }));
+    expect(
+      screen.getByText(
+        'No openings added. Skipped 10:00 AM–2:20 PM and 3:40–8:00 PM (blocked off); 2:20–3:40 PM (bookings). To put openings over your block-off, tap "Open special times anyway".',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryAllByRole("button", { name: /^Opening / })).toHaveLength(0);
+
+    // He chooses it: the block-off stops refusing; the bookings never do.
+    fireEvent.click(screen.getByRole("button", { name: "Open special times anyway" }));
+    expect(screen.getByText(/the openings you add are the only times clients can book Drick on Thu, Nov 26/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Fill the day in one step/ }));
+    fireEvent.change(screen.getByLabelText("Price each"), { target: { value: "60" } });
+    fireEvent.click(screen.getByRole("button", { name: "Fill the day" }));
+    expect(
+      screen.getByText("Added 26 openings at $60. Skipped 2:20–3:40 PM (bookings). Not published yet - check the day, then publish."),
+    ).toBeTruthy();
+    expect(screen.getByText(/Publishing replaces your block-off where the openings sit/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Publish 26 openings" }));
+    await waitFor(() => expect(saveSpecialDayViewAction).toHaveBeenCalledTimes(1));
+    const sent = saveSpecialDayViewAction.mock.calls[0]![0];
+    expect(sent.overOwnBlocks).toBe(true);
+    expect(sent.chairs[0].openings).toHaveLength(26);
+    expect(sent.chairs[0].openings.some((o: { startMin: number }) => o.startMin >= m("14:20") && o.startMin < m("15:40"))).toBe(false);
+  });
+
+  it("a block that is not his to replace (Acuity, a weekly break) offers no override", async () => {
+    getSpecialDayViewAction.mockResolvedValue({
+      ok: true,
+      view: view({ bookings: [], blocks: [{ startMin: 0, endMin: 1440, label: "Blocked in Acuity" }] }),
+    });
+    open();
+    await screen.findByText("Blocked in Acuity all day");
+    expect(screen.getByText(/change it there first/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open special times anyway" })).toBeNull();
+  });
+
+  it("titles the day with its own weekday and folds the services when all are picked", async () => {
+    getSpecialDayViewAction.mockResolvedValue({ ok: true, view: view({}, { serviceIds: ["cut", "beard"] }) });
+    open();
+    await screen.findByText(/Booked: Ana - Cut/);
+    expect(screen.getByText("Thanksgiving · Thu, Nov 26")).toBeTruthy();
+    expect(screen.getByText(/every service/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Beard" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Change" }));
+    expect(screen.getByRole("button", { name: "Beard" })).toBeTruthy();
   });
 
   it("says why a tapped time can't take an opening", async () => {

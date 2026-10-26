@@ -206,6 +206,9 @@ const liveSaveSchema = z
     basis: z.string().min(8).max(128),
     // Minted once per save; a retried save replays instead of writing twice.
     requestId: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/).optional(),
+    // The barber chose to open special times over his OWN block-off that day
+    // (engines/specialDayView.ts saveDay `overOwnBlocks`).
+    overOwnBlocks: z.boolean().optional(),
   })
   .strict()
   .refine((d) => d.serviceIds.length > 0 || d.chairs.every((c) => c.openings.length === 0), {
@@ -434,6 +437,7 @@ export function registerSpecialDayRoutes(router: Router): void {
       requestId: d.requestId ?? null,
       basis: d.basis,
       now: new Date(),
+      overOwnBlocks: d.overOwnBlocks === true,
     });
     if (out.ok) {
       res.json({ ok: true, replay: out.replay, summary: out.summary, view: out.view });
