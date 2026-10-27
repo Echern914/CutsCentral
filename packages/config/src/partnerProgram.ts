@@ -8,7 +8,8 @@ import { PAID_PLAN_KEYS, PLANS, type PaidPlanKey } from "./constants.js";
  *  - the legacy referral program (services/referral.ts) pays a SHOP a free
  *    month for referring another shop;
  *  - the affiliate program (affiliateProgram.ts) is a shop that applied, with a
- *    random code, earning subscription credit - "never cash" is in its terms;
+ *    random code, earning a recurring commission (cash or bill credit, terms
+ *    v2; v1 paid a month of subscription credit);
  *  - a partner is a PERSON (Eric, a barber coach) with a code they can say out
  *    loud ("ERIC C"), created by a platform admin, earning a one-time cash
  *    amount per business, paid out BY HAND when they ask for it.

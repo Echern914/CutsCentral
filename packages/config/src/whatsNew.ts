@@ -19,6 +19,8 @@
  * whatsNew.test.ts holds the list to all of this.
  */
 
+import { commissionPeriodPhrase } from "./affiliateProgram.js";
+
 export type WhatsNewKind = "feature" | "fix";
 
 export interface WhatsNewEntry {
@@ -35,6 +37,17 @@ export interface WhatsNewEntry {
 
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
+  {
+    // No rates or dollars: the bell renders inside the iOS app too.
+    id: "2026-10-26-affiliates-get-paid",
+    date: "2026-10-26",
+    kind: "feature",
+    title: "Affiliates: get paid for every business you bring in",
+    body:
+      "Affiliates now earn a commission: a share of what each business you bring in pays for its plan, every month for its " +
+      `${commissionPeriodPhrase()}, as cash or as ChairBack credit. Months off you've already earned are kept. ` +
+      "The details are on your Affiliates tab.",
+  },
   {
     id: "2026-10-26-reload-not-blank",
     date: "2026-10-26",

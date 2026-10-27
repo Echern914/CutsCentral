@@ -15,10 +15,13 @@
  * AFFILIATE_POLICY_VERSION with it - accounts record the version they were
  * approved under.
  */
+import { PLANS } from "./constants.js";
 
 /** The affiliate terms document version an applicant accepts. Never edit the
- *  terms text in place - add a version, exactly like the SMS consent rule. */
-export const AFFILIATE_TERMS_VERSION = "v1";
+ *  terms text in place - add a version, exactly like the SMS consent rule.
+ *  v1: one month off per qualified business (kept at /affiliate-terms/v1).
+ *  v2 (2026-10): the commission program - cash or bill credit. */
+export const AFFILIATE_TERMS_VERSION = "v2";
 
 /** Bump when any business rule below changes.
  *  v2 (2026-10): the commission program - a percentage of every base-plan
@@ -144,6 +147,85 @@ export function commissionCents(
 ): number {
   if (!Number.isSafeInteger(baseCents) || baseCents <= 0) return 0;
   return Math.floor((baseCents * commissionRateBps(kind)) / 10_000);
+}
+
+/**
+ * THE COMMISSION, IN WORDS. Every affiliate-facing sentence (the Affiliates
+ * tab, the terms page, the approval email) reads its numbers from here, so a
+ * change to AFFILIATE_POLICY.commission or to a plan price moves the copy with
+ * it - nothing downstream writes "20%" or "$25" by hand.
+ *
+ * 🔴 DOLLARS AND PERCENTAGES ARE WEB-ONLY. Inside the iOS app the tab and the
+ * terms wrap these in HideInNativeApp (App Store Guideline 3.1.1); the plain
+ * descriptions below (`commissionPeriodPhrase`, `ordinal`) carry no money.
+ */
+
+/** Basis points as a percent for copy: 2000 -> "20", 2050 -> "20.5". */
+export function bpsToPercent(bps: number): string {
+  return String(bps / 100);
+}
+
+/** Whole cents as dollars for copy: 2500 -> "$25", 699 -> "$6.99". */
+export function formatUsdCents(cents: number): string {
+  return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
+}
+
+/** 1 -> "1st", 2 -> "2nd", 3 -> "3rd", 4 -> "4th", 11 -> "11th". */
+export function ordinal(n: number): string {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}
+
+/** "first year" for 12 months, "first 2 years" for 24, else "first N months". */
+export function commissionPeriodPhrase(
+  months: number = AFFILIATE_POLICY.commission.months,
+): string {
+  if (months === 12) return "first year";
+  if (months % 12 === 0) return `first ${months / 12} years`;
+  return `first ${months} months`;
+}
+
+export interface CommissionExample {
+  planName: string;
+  planCents: number;
+  cashMonthlyCents: number;
+  creditMonthlyCents: number;
+  /** Most a monthly plan earns over the whole window (one invoice a month). */
+  cashWindowCents: number;
+  creditWindowCents: number;
+}
+
+/**
+ * The worked example the tab shows: one business on `plan` (the base Premium
+ * plan by default) paying full price every month. Uses `commissionCents`, so
+ * the example rounds exactly the way the ledger will. The price comes from
+ * PLANS - this file still holds no price of its own.
+ */
+export function commissionExample(
+  plan: { name: string; priceMonthlyUsd: number } = PLANS.pro,
+): CommissionExample {
+  const planCents = Math.round(plan.priceMonthlyUsd * 100);
+  const cash = commissionCents(planCents, "cash");
+  const credit = commissionCents(planCents, "credit");
+  const months = AFFILIATE_POLICY.commission.months;
+  return {
+    planName: plan.name,
+    planCents,
+    cashMonthlyCents: cash,
+    creditMonthlyCents: credit,
+    cashWindowCents: cash * months,
+    creditWindowCents: credit * months,
+  };
 }
 
 /**

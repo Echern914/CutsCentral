@@ -1035,7 +1035,8 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
       "promote",
       "bring a business",
     ],
-    description: "Bring businesses onto ChairBack and get months off your plan",
+    // No rates here: this line renders in the iOS app (search, the assistant).
+    description: "Bring businesses onto ChairBack and earn for each one",
     href: "/dashboard/affiliates",
     // Same shelf as referrals: the owner's own plan, never a client-facing thing.
     category: "account",

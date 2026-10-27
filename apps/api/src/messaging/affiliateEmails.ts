@@ -1,10 +1,19 @@
-import { apiEnv } from "@chairback/config";
+import {
+  AFFILIATE_POLICY,
+  apiEnv,
+  bpsToPercent,
+  commissionPeriodPhrase,
+  ordinal,
+} from "@chairback/config";
 import type { EmailCopy } from "./templates.js";
 import type { AffiliateEmailKind } from "../services/affiliateNotify.js";
 
 /**
- * The affiliate program's five emails. Months, never dollars - the same rule
- * as the tab. Every email points at the Affiliates tab, and the approval one
+ * The affiliate program's five emails. Never a dollar figure. The approval
+ * email states the commission RATES, read from AFFILIATE_POLICY.commission
+ * (an email is not the iOS app, where the tab hides them). The three reward
+ * emails describe month-off credits from the earlier (v1) program, which are
+ * honoured - they only ever fire for a reward that exists. Every email points at the Affiliates tab, and the approval one
  * carries the link itself so the affiliate can start before opening the app.
  *
  * A REFERRED business is only ever named by its masked label; this module
@@ -68,6 +77,8 @@ export function buildAffiliateEmail(kind: AffiliateEmailKind, ctx: AffiliateEmai
   const env = apiEnv();
   const dashboard = `${env.APP_BASE_URL}/dashboard/affiliates`;
   const link = ctx.code ? `${env.APP_BASE_URL}/join?ref=${encodeURIComponent(ctx.code)}` : null;
+  const c = AFFILIATE_POLICY.commission;
+  const q = AFFILIATE_POLICY.qualification.qualifyingInvoices;
   const disclosure =
     "Wherever you share it, say you're a ChairBack affiliate - every template on your dashboard already does.";
 
@@ -77,7 +88,8 @@ export function buildAffiliateEmail(kind: AffiliateEmailKind, ctx: AffiliateEmai
         `${ctx.shopName}, you're in. Your affiliate link is ready:`,
         link ?? dashboard,
         "Next, open your Affiliates tab, choose how you'll get the word out, and pick up ready-made copy for each style.",
-        `Every business that signs up through your link and pays for two months earns you a month off your plan.`,
+        `For every business that signs up through your link, you earn ${bpsToPercent(c.cashBps)}% of what it pays for its ChairBack plan as cash, or ${bpsToPercent(c.creditBps)}% as ChairBack credit, on every payment in its ${commissionPeriodPhrase(c.months)}. ` +
+          `Each commission is held ${c.holdDays} days, and nothing is paid out until the business has made its ${ordinal(q)} payment. Credit is the default.`,
         disclosure,
       ];
       return {

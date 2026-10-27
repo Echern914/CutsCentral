@@ -254,7 +254,7 @@ export async function approveApplication(params: {
       return await runAsOwner(async (tx) => {
         const existing = await tx.affiliateApplication.findUnique({
           where: { id: params.applicationId },
-          select: { id: true, shopId: true, status: true },
+          select: { id: true, shopId: true, status: true, acceptedTermsVersion: true },
         });
         if (!existing) return { ok: false as const, error: "not_found" as const };
 
@@ -290,7 +290,10 @@ export async function approveApplication(params: {
             shopId: existing.shopId,
             applicationId: existing.id,
             code,
-            acceptedTermsVersion: AFFILIATE_TERMS_VERSION,
+            // The terms the applicant ACCEPTED, not whatever is current at
+            // approval: an application sent under v1 and approved after a
+            // terms bump must not be recorded as accepting text it never saw.
+            acceptedTermsVersion: existing.acceptedTermsVersion,
             policyVersion: AFFILIATE_POLICY_VERSION,
           },
           select: { id: true, code: true, status: true },
@@ -304,7 +307,7 @@ export async function approveApplication(params: {
           metadata: {
             fromStatus: "PENDING",
             toStatus: "APPROVED",
-            termsVersion: AFFILIATE_TERMS_VERSION,
+            termsVersion: existing.acceptedTermsVersion,
             policyVersion: AFFILIATE_POLICY_VERSION,
           },
         });

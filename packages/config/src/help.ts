@@ -756,7 +756,9 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     id: "referrals",
     q: "Do I get anything for referring another barber?",
     a: "Yes. Send your referral link — they get an extra month on top of their trial the moment they sign up, and you get a free month once their first invoice clears.\n\nNo cap on how many you refer.",
-    keywords: ["referral", "refer", "refer a friend", "affiliate", "free month", "invite barber", "share link"],
+    // Not "affiliate": that is a different program (commission, not a free
+    // month), and this answer would tell an affiliate the wrong reward.
+    keywords: ["referral", "refer", "refer a friend", "free month", "invite barber", "share link"],
     category: "clients",
     hidesInApp: true,
     action: { label: "Open referrals", featureId: "referrals" },
