@@ -110,6 +110,7 @@ describe("the gate", () => {
       "/affiliate/flags",
       "/partners",
       "/awards",
+      "/notices",
     ];
     for (const p of paths) {
       const res = await get(p, [a.cookie]);
@@ -117,6 +118,10 @@ describe("the gate", () => {
     }
     // Writes too.
     expect((await post("/shops/anything/comp", [a.cookie], { compAccess: true })).status).toBe(403);
+    // A notice reaches every barber's dashboard (and can buzz owners' phones).
+    expect(
+      (await post("/notices", [a.cookie], { title: "t", body: "b", severity: "info" })).status,
+    ).toBe(403);
   });
 
   it("🔴 an admin's session alone no longer opens the portal - it asks for the second step", async () => {

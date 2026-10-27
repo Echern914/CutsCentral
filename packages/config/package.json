@@ -20,6 +20,7 @@
     "./relativeTime": "./src/relativeTime.ts",
     "./customerStatus": "./src/customerStatus.ts",
     "./whatsNew": "./src/whatsNew.ts",
+    "./platformNotices": "./src/platformNotices.ts",
     "./demo": "./src/demo.ts",
     "./demoTour": "./src/demoTour.ts",
     "./features": "./src/features.ts",

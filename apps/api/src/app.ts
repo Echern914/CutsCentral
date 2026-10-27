@@ -74,6 +74,7 @@ import { connectWebhookRouter } from "./routes/webhooks.connect.js";
 import { paymentsDashboardRouter } from "./routes/payments.dashboard.js";
 import { checkoutRouter } from "./routes/booking.checkout.js";
 import { adminPortalRouter } from "./routes/adminPortal.js";
+import { platformNoticesRouter } from "./routes/platformNotices.js";
 import { partnerRouter } from "./routes/partner.js";
 import { demoRouter } from "./routes/demo.js";
 import { captureError } from "./sentry.js";
@@ -296,6 +297,9 @@ export function createApp(): Express {
   // header of routes/yearlyReport.ts.
   app.use("/api/yearly-report", dashboardLimiter, yearlyReportRouter);
   app.use("/api/notifications", dashboardLimiter, notificationsRouter); // the barber's own alert settings
+  // Platform status notices ("we know, we're fixing it"). NEVER WALLED and
+  // needs no shop: a lapsed shop must still be told about an outage.
+  app.use("/api/platform-notices", dashboardLimiter, platformNoticesRouter);
   // Launch readiness (READ-ONLY). NEVER WALLED on purpose - see the router's
   // own note: a lapsed shop has to be able to read WHY booking stopped, and
   // "your subscription lapsed" is one of the answers it reports. It carries

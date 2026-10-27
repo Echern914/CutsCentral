@@ -6,6 +6,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { WHATS_NEW, unseenWhatsNew } from "@chairback/config/whatsNew";
 import type { BellSignal } from "@/lib/notificationSignals";
+import type { PlatformNotice } from "@/lib/platformNotices";
+import { PLATFORM_NOTICE_SEVERITY_LABEL } from "@chairback/config/platformNotices";
+import { NoticeMark } from "./PlatformNoticeBanner";
 import { WhatsNewSection } from "./WhatsNewSection";
 import { markWhatsNewSeenAction } from "./whatsNewActions";
 
@@ -31,13 +34,21 @@ import { markWhatsNewSeenAction } from "./whatsNewActions";
  * count: news must not look like work that needs the barber right now.
  * Opening the bell marks them seen - on every device - while this open still
  * shows which ones were new.
+ *
+ * SERVICE STATUS leads the panel when the platform has posted a notice ("we
+ * know about it and we're fixing it"; PlatformNoticeBanner). Listed even after
+ * its banner was closed, so it can be read again while it is live. A gold dot
+ * too, never the red count: an outage is not work the barber has to do.
  */
 export function NotificationBell({
   signals,
   whatsNew = null,
   demo = false,
+  notices = [],
 }: {
   signals: BellSignal[];
+  /** Live or just-fixed platform status notices (lib/platformNotices). */
+  notices?: PlatformNotice[];
   whatsNew?: { seenId: string | null; accountCreatedAt: string } | null;
   /** The read-only demo session: nothing may be stamped as seen. */
   demo?: boolean;
@@ -61,6 +72,8 @@ export function NotificationBell({
   );
   const [updatesSeen, setUpdatesSeen] = useState(false);
   const hasUnseenUpdates = unseenIds.size > 0 && !updatesSeen;
+  // A live notice whose banner is still open keeps the dot lit.
+  const openNotices = notices.filter((n) => n.state === "active" && !n.dismissed).length;
 
   function toggle() {
     setOpen((v) => !v);
@@ -92,9 +105,13 @@ export function NotificationBell({
     total === 0
       ? "Notifications — nothing needs you right now."
       : `Notifications — ${total} ${total === 1 ? "thing needs" : "things need"} you.`;
-  const label = hasUnseenUpdates
+  const withUpdates = hasUnseenUpdates
     ? `${needs} ${unseenIds.size} new ${unseenIds.size === 1 ? "update" : "updates"}.`
     : needs;
+  const label =
+    openNotices > 0
+      ? `${withUpdates} ${openNotices} service ${openNotices === 1 ? "notice" : "notices"}.`
+      : withUpdates;
 
   return (
     <>
@@ -135,7 +152,7 @@ export function NotificationBell({
             {shown}
           </span>
         )}
-        {total === 0 && hasUnseenUpdates && (
+        {total === 0 && (hasUnseenUpdates || openNotices > 0) && (
           // News, not work: a gold dot, never the red count. aria-hidden -
           // the label already says how many updates are new.
           <span
@@ -220,6 +237,44 @@ export function NotificationBell({
                   {refreshing ? "Refreshing" : "Refresh"}
                 </button>
               </div>
+              {notices.length > 0 && (
+                <div data-qa="bell-notices" className="border-b border-subtle">
+                  <p className="px-4 pt-3 text-xs font-semibold uppercase tracking-wide text-muted">Service status</p>
+                  <ul className="pb-1.5">
+                    {notices.map((n) => {
+                      const fixed = n.state === "resolved";
+                      return (
+                        <li key={n.id} className="flex items-start gap-2.5 px-4 py-2 text-sm">
+                          <NoticeMark
+                            fixed={fixed}
+                            severity={n.severity}
+                            className={`mt-0.5 h-4 w-4 shrink-0 ${
+                              fixed
+                                ? "text-emerald-soft"
+                                : n.severity === "issue"
+                                  ? "text-danger-soft"
+                                  : n.severity === "maintenance"
+                                    ? "text-warning-soft"
+                                    : "text-info-soft"
+                            }`}
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-offwhite [overflow-wrap:anywhere]">
+                              {fixed ? "Fixed: " : `${PLATFORM_NOTICE_SEVERITY_LABEL[n.severity] ?? "Notice"}: `}
+                              {n.title}
+                            </span>
+                            {!fixed && (
+                              <span className="mt-0.5 block whitespace-pre-line text-xs leading-relaxed text-muted [overflow-wrap:anywhere]">
+                                {n.body}
+                              </span>
+                            )}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
               {signals.length === 0 ? (
                 <p className="px-4 py-6 text-center text-sm text-muted">
                   You&apos;re all caught up.

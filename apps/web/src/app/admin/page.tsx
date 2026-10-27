@@ -9,6 +9,7 @@ import { PAID_PLAN_KEYS, planLabel, planName } from "./planLabel";
 import { AnalyticsSection, type Analytics } from "./Analytics";
 import { PreflightSection, type Preflight } from "./Preflight";
 import { TextingSwitch, type TextingState } from "./TextingSwitch";
+import { NoticesSection, type AdminNotice } from "./NoticesSection";
 import {
   AffiliatesSection,
   type AdminAccount,
@@ -85,13 +86,14 @@ export default async function AdminPage() {
     );
   }
 
-  const [metricsRes, shopsRes, analyticsRes, preflightRes, textingRes, affApps, affAccounts, affRewards, affLiability, affFlags, affCredits, partnersRes, awardsRes] =
+  const [metricsRes, shopsRes, analyticsRes, preflightRes, textingRes, noticesRes, affApps, affAccounts, affRewards, affLiability, affFlags, affCredits, partnersRes, awardsRes] =
     await Promise.all([
       apiGet<Metrics>("/api/admin-portal/metrics"),
       apiGet<{ shops: AdminShop[] }>("/api/admin-portal/shops"),
       apiGet<Analytics>("/api/admin-portal/analytics?days=30"),
       apiGet<Preflight>("/api/admin-portal/preflight"),
       apiGet<TextingState>("/api/admin-portal/switches/sms"),
+      apiGet<{ notices: AdminNotice[] }>("/api/admin-portal/notices"),
       // The affiliate program answers 404 while its flag is off; the whole
       // section then stays out of the page rather than rendering empty.
       apiGet<{ applications: AdminApplication[] }>("/api/admin-portal/affiliate/applications?status=PENDING"),
@@ -150,6 +152,10 @@ export default async function AdminPage() {
         {m?.payingByPlan && <PlanBreakdown byPlan={m.payingByPlan} />}
 
         {texting && <TextingSwitch initial={texting} />}
+
+        {/* Shown even on a failed read (an API older than this page): posting
+            is what matters during an outage, and the list is just history. */}
+        <NoticesSection notices={noticesRes.data?.notices ?? []} />
 
         {preflight && <PreflightSection p={preflight} />}
 

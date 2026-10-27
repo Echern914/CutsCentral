@@ -155,6 +155,8 @@ model User {
   providerAwardApplications ProviderAwardApplication[]
   adminStepUps        AdminStepUp[]
   adminEmailCodes     AdminEmailCode[]
+  // Platform notices (status banners) this person closed.
+  platformNoticeDismissals PlatformNoticeDismissal[]
   // Punch-ledger entries this person made by hand (bonus, undo, edit, redeem).
   ledgerActions       PunchLedger[] @relation("LedgerActor")
 
@@ -5326,6 +5328,47 @@ model PlatformSwitch {
   /// with a bill attached.
   updatedById String?
   updatedAt   DateTime @updatedAt
+}
+
+/// PLATFORM NOTICES - a status banner the platform owner posts from the admin
+/// portal ("we know about it and we're fixing it"). Platform-wide, not
+/// shop-scoped. Live while startsAt <= now < endsAt (no endsAt = until
+/// resolved or deleted); once resolved it shows a short "Fixed" state for a
+/// few hours, then drops off (apps/api/src/services/platformNotices.ts owns
+/// the rule). Default-deny like PlatformSwitch: read and written as the owner
+/// only (runAsOwner), never by the tenant role.
+model PlatformNotice {
+  id          String    @id @default(cuid())
+  title       String
+  body        String
+  /// 'info' | 'maintenance' | 'issue' (CHECK-pinned in the migration).
+  severity    String
+  startsAt    DateTime  @default(now())
+  endsAt      DateTime?
+  resolvedAt  DateTime?
+  /// Stamped by the one push to shop owners' phones - the guard that keeps a
+  /// notice from ever buzzing anyone twice.
+  pushedAt    DateTime?
+  /// The admin who posted it (no FK: removing an admin keeps the notice).
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  dismissals PlatformNoticeDismissal[]
+
+  @@index([startsAt])
+}
+
+/// One person closed one notice's banner. A new notice has no row, so it shows.
+model PlatformNoticeDismissal {
+  noticeId  String
+  notice    PlatformNotice @relation(fields: [noticeId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+
+  @@id([noticeId, userId])
+  @@index([userId])
 }
 
  // EMAIL DELIVERY LEDGER - what actually happened to a transactional email.
