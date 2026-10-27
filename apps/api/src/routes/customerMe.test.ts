@@ -810,6 +810,72 @@ describe("links out to the shop's own pages", () => {
   });
 });
 
+/**
+ * "Book again" opens the booking page on the SAME service and provider, so the
+ * customer lands on the time step instead of the shop's front page.
+ */
+describe("book again", () => {
+  const appBase = () => apiEnv().APP_BASE_URL.replace(/\/$/, "");
+  const slugOf = async (id: string) =>
+    (await prisma.shop.findUniqueOrThrow({ where: { id }, select: { slug: true } })).slug!;
+
+  it("repeats THAT booking: its service and provider, with who is booking", async () => {
+    const { me, done } = await regular();
+    const alpha = (await get("/api/me/home", me.token)).body.shops[0];
+    const res = await get(`/api/me/shops/${alpha.key}/book-again?appointment=a_${done.id}`, me.token);
+    expect(res.status).toBe(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    const url = new URL(res.body.url);
+    expect(`${url.origin}${url.pathname}`).toBe(`${appBase()}/book/${await slugOf(shopA)}`);
+    expect(url.searchParams.get("service")).toBe(serviceA);
+    expect(url.searchParams.get("staff")).toBe(staffA);
+    expect(url.searchParams.get("cb_me")).toBeTruthy();
+  });
+
+  it("no booking named: the customer's usual there", async () => {
+    const { me } = await regular();
+    const alpha = (await get("/api/me/home", me.token)).body.shops[0];
+    const url = new URL((await get(`/api/me/shops/${alpha.key}/book-again`, me.token)).body.url);
+    expect(url.pathname).toBe(`/book/${await slugOf(shopA)}`);
+    expect(url.searchParams.get("service")).toBe(serviceA);
+  });
+
+  it("a synced visit has nothing to preselect: the storefront, as before", async () => {
+    const { me, a1, acuityNext } = await regular();
+    const alpha = (await get("/api/me/home", me.token)).body.shops[0];
+    const res = await get(`/api/me/shops/${alpha.key}/book-again?appointment=v_${acuityNext.id}`, me.token);
+    expect(res.status).toBe(200);
+    expect(new URL(res.body.url).pathname).toBe(`/r/${a1.magicToken}`);
+  });
+
+  it("🔴 someone else's booking id is ignored - never their service, never an error", async () => {
+    const { me, a1 } = await regular();
+    const stranger = await client(shopA, { phone: randomPhone() });
+    const theirs = await appointment(shopA, stranger.id, { status: "COMPLETED", startsAt: from(-3 * DAY) });
+    const alpha = (await get("/api/me/home", me.token)).body.shops[0];
+    const res = await get(`/api/me/shops/${alpha.key}/book-again?appointment=a_${theirs.id}`, me.token);
+    expect(res.status).toBe(200);
+    expect(new URL(res.body.url).pathname).toBe(`/r/${a1.magicToken}`);
+  });
+
+  it("a shop whose page is off: the storefront, never a booking page that refuses them", async () => {
+    const { me, a1, done } = await regular();
+    const alpha = (await get("/api/me/home", me.token)).body.shops[0];
+    await prisma.shop.update({ where: { id: shopA }, data: { publicPageEnabled: false } });
+    try {
+      const res = await get(`/api/me/shops/${alpha.key}/book-again?appointment=a_${done.id}`, me.token);
+      expect(new URL(res.body.url).pathname).toBe(`/r/${a1.magicToken}`);
+    } finally {
+      await prisma.shop.update({ where: { id: shopA }, data: { publicPageEnabled: true } });
+    }
+  });
+
+  it("a shop key that is not the customer's own is a 404", async () => {
+    const me = await account({ phone: randomPhone() });
+    expect((await get(`/api/me/shops/not-mine/book-again`, me.token)).status).toBe(404);
+  });
+});
+
 describe("notifications", () => {
   it("texts are per shop: turning one off touches that shop's record only", async () => {
     const { me, a1, b1 } = await regular();

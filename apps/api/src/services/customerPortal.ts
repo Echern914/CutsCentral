@@ -20,6 +20,8 @@ import {
 } from "@chairback/config";
 import { createHmac } from "node:crypto";
 import { customerChange } from "@chairback/config/customerChangeRules";
+import { rebookPath } from "@chairback/config/bookingLinks";
+import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { buildLoyaltyView, loadLoyaltyInputs, type LoyaltyView } from "./loyaltyView.js";
 import { livePromotions, type PublicPromotion } from "./livePromotions.js";
 import { syncCustomerLinks, syncCustomerView, type ActiveLink } from "./customerIdentity.js";
@@ -1041,6 +1043,78 @@ export async function storefrontUrl(accountId: string, linkKey: string): Promise
   // (auth/bookingHandoff.ts, services/appBooking.ts).
   const handoff = await bookingHandoffFor(accountId, link.shopId);
   const url = `${base()}/r/${client.magicToken}`;
+  return handoff ? withBookingHandoff(url, handoff) : url;
+}
+
+/**
+ * "Book again" from the app: the shop's booking page with the SAME service
+ * (and provider) preselected, so the customer lands on the time step - the
+ * booking page's rebook prefill (config/bookingLinks.ts rebookPath), the one
+ * the rewards page's "Book the usual" already uses.
+ *
+ * Which booking it repeats:
+ *   - an "a_" id: that booking - only when it is one of the account's OWN
+ *     bookings at THIS shop (any of its linked records there). An id from
+ *     anywhere else is ignored, never an error, so a guessed id learns nothing;
+ *   - no id (the rewards card's Book): the latest booked or completed booking
+ *     whose service and provider a client can still book - the rewards page's
+ *     "usual" rule.
+ * Anything with nothing to preselect - a synced Acuity/Square visit, a shop
+ * that does not take ChairBack bookings or whose page is off, no booking to
+ * repeat - is the storefront, exactly what Book again opened before.
+ *
+ * 🔴 A PREFILL, NEVER A PERMISSION: the booking page re-checks both ids
+ * against what the shop offers now and drops a stale one. The booking handoff
+ * rides along as it does on the storefront, so the booking lands on this
+ * customer's own record and shows in the app.
+ *
+ * Null (a 404) only when the shop key is not one of the account's own links.
+ */
+export async function bookAgainUrl(
+  accountId: string,
+  linkKey: string,
+  eventId: string | null,
+): Promise<string | null> {
+  const links = await syncCustomerLinks(accountId);
+  const link = links.find((l) => l.id === linkKey);
+  if (!link) return null;
+  const shop = await runAsOwner((tx) =>
+    tx.shop.findUnique({
+      where: { id: link.shopId },
+      select: { slug: true, bookingMode: true, publicPageEnabled: true },
+    }),
+  );
+  const bookable = shop && shop.slug && shop.bookingMode === "native" && shop.publicPageEnabled;
+  if (!bookable) return storefrontUrl(accountId, linkKey);
+
+  const clientIds = links.filter((l) => l.shopId === link.shopId).map((l) => l.clientId);
+  const apptId = eventId && /^a_[A-Za-z0-9]{8,40}$/.test(eventId) ? eventId.slice(2) : null;
+  const repeat = await runWithShop(link.shopId, async (tx) => {
+    // A named booking that is not a ChairBack one (a synced "v_" visit) has
+    // no service id to repeat: the storefront, never somebody else's usual.
+    if (eventId !== null) {
+      if (!apptId) return null;
+      return tx.appointment.findFirst({
+        where: { id: apptId, shopId: link.shopId, clientId: { in: clientIds } },
+        select: { serviceId: true, staffId: true },
+      });
+    }
+    return tx.appointment.findFirst({
+      where: {
+        shopId: link.shopId,
+        clientId: { in: clientIds },
+        status: { in: ["BOOKED", "COMPLETED"] },
+        service: { ...PUBLIC_SERVICE },
+        staff: { active: true },
+      },
+      orderBy: { startsAt: "desc" },
+      select: { serviceId: true, staffId: true },
+    });
+  });
+  if (!repeat) return storefrontUrl(accountId, linkKey);
+
+  const handoff = await bookingHandoffFor(accountId, link.shopId);
+  const url = `${base()}${rebookPath(shop.slug!, repeat)}`;
   return handoff ? withBookingHandoff(url, handoff) : url;
 }
 

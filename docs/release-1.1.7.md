@@ -76,6 +76,10 @@ signing* → Team **ZLP9T7HSYJ**. General shows **1.1.7 (54)**.
 - [ ] Barber moves a booking while the customer app is in the background ->
       reopen -> new time shows without pull-to-refresh.
 - [ ] A shop with a dark page → Book: the bar at the top is dark.
+- [ ] My ChairBack → a past ChairBack visit → **Book again**: the booking page
+      opens on that visit's service (and barber), scrolled to the times - not
+      the shop's front page or the service menu. (Needs the API deployed with
+      it; on an older API it opens the shop's page, as before.)
 
 ## 5. Archive, upload, submit
 

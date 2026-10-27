@@ -1480,6 +1480,14 @@ export function BookingClient({
    * controls, and two auto-drivers racing would land somewhere neither meant.
    */
   const prefilled = useRef(false);
+  /**
+   * The prefill resolved to a calendar: bring "Pick a time" into view. It
+   * mounts BELOW the day picker and the whole service menu, so without this a
+   * customer who tapped "Book again" landed looking at the menu they meant to
+   * skip, with the times somewhere under their thumb. Set in the same effect
+   * that picks the service, so the time step mounts already knowing.
+   */
+  const [prefillLanded, setPrefillLanded] = useState(false);
   useEffect(() => {
     if (demoTour || prefilled.current || !prefill) return;
     if (serviceId || bookableServices.length === 0) return;
@@ -1505,6 +1513,8 @@ export function BookingClient({
       setStaffId(stf.id);
       loadSlots(svc.id, [stf.id]);
     }
+    // A provider is settled either way here, so the time step will mount.
+    if (pool.length === 1 || stf) setPrefillLanded(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill, demoTour, bookableServices.length]);
 
@@ -3215,6 +3225,8 @@ export function BookingClient({
             <BackStep onClick={isMultiBarber ? backToProvider : backToService} />
           }
           focusOnMount={!demoTour}
+          // "Book again" lands HERE, not on the menu above it (see prefillLanded).
+          revealOnMount={!demoTour && prefillLanded}
         >
           {loadingSlots ? (
             <p role="status" className="text-sm text-muted">

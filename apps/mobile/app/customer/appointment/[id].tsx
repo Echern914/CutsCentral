@@ -7,7 +7,7 @@ import { Screen } from "@/src/customer/Screen";
 import { errorCopy } from "@/src/customer/api";
 import { dayLabel, money, timeRange, untilLabel } from "@/src/customer/format";
 import { Cancel, MapPin, Reschedule, Store } from "@/src/customer/icons";
-import { openDirections, openManage, openStorefront } from "@/src/customer/navigate";
+import { openBookAgain, openDirections, openManage, openStorefront } from "@/src/customer/navigate";
 import { color, space } from "@/src/customer/theme";
 import type { AppointmentDetail } from "@/src/customer/types";
 import { Avatar, Button, ErrorState, Group, Placeholder, Row, Separator, StatusLabel, Txt } from "@/src/customer/ui";
@@ -164,8 +164,9 @@ export default function AppointmentScreen() {
         <Button
           label={upcoming ? `Visit ${a.shop.name}` : "Book again"}
           icon={<Store size={18} color={color.onGold} />}
-          onPress={() => openStorefront(router, a.shop)}
-          accessibilityHint="Opens the shop's page"
+          // Book again repeats THIS visit: its service (and provider) at the times.
+          onPress={() => (upcoming ? openStorefront(router, a.shop) : openBookAgain(router, a))}
+          accessibilityHint={upcoming ? "Opens the shop's page" : "Opens booking for the same service, at the times"}
         />
       </View>
     </Screen>

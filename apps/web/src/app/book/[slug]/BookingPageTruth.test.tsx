@@ -245,4 +245,28 @@ describe("a rebook prefill", () => {
     expect(dayBundles.mock.calls.length).toBeGreaterThan(1);
     expect(screen.getByText("Pick a time for Standard visit")).toBeTruthy();
   });
+
+  it("'Book again' lands ON the time step - scrolled past the day picker and the menu", async () => {
+    const merged = vi.mocked(actions.getMergedSlotsAction);
+    merged.mockResolvedValue({
+      ok: true,
+      data: { timezone: "UTC", slots: [{ startsAt: SLOT, staffIds: ["stf_1"] }] },
+    } as never);
+    dayBundles.mockResolvedValue({
+      ok: true,
+      data: { timezone: "UTC", date: DAY, bundles: [], ungrouped: [] },
+    });
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    try {
+      render(<BookingClient data={shopData()} prefill={{ serviceId: "svc_1", staffId: "stf_1" }} />);
+      const heading = await screen.findByText("Pick a time for Standard visit");
+      const timeStep = heading.closest("section");
+      expect(timeStep).toBeTruthy();
+      // The time step's own section was brought into view, top first.
+      const calls = scrolled.mock.contexts.map((el, i) => ({ el, arg: scrolled.mock.calls[i]?.[0] }));
+      expect(calls.some((c) => c.el === timeStep && (c.arg as ScrollIntoViewOptions)?.block === "start")).toBe(true);
+    } finally {
+      scrolled.mockRestore();
+    }
+  });
 });

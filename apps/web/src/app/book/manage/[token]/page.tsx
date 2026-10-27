@@ -92,8 +92,13 @@ export interface ManageData {
     /** The owner's note for clients ("Please arrive 10 minutes early"). Optional = older API. */
     clientNote?: string | null;
   };
-  service: { name: string; durationMin: number };
-  staff: { name: string };
+  /**
+   * `id`s: for "Book a new time" / "Book again", which open the booking page
+   * on this service and provider (config/bookingLinks.ts rebookPath).
+   * Optional = an older API, and the link is the plain booking page.
+   */
+  service: { id?: string; name: string; durationMin: number };
+  staff: { id?: string; name: string };
   canCancel: boolean;
   canReschedule: boolean;
   /**

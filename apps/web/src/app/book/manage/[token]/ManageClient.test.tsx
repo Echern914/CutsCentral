@@ -252,6 +252,45 @@ describe("a booking left at its card step, from its own link", () => {
     expect(screen.getByRole("link", { name: "Book a new time" })).toBeTruthy();
   });
 
+  it("'Book a new time' opens the booking page on the SAME service and provider", () => {
+    render(
+      <ManageClient
+        token="tok"
+        data={data({
+          status: "CANCELED",
+          service: { id: "svc_1", name: "Haircut", durationMin: 30 },
+          staff: { id: "stf_1", name: "Dre" },
+        })}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Book a new time" }).getAttribute("href")).toBe(
+      "/book/chern-cuts?service=svc_1&staff=stf_1",
+    );
+  });
+
+  it("an older API with no ids still links the plain booking page", () => {
+    render(<ManageClient token="tok" data={data({ status: "CANCELED" })} />);
+    expect(screen.getByRole("link", { name: "Book a new time" }).getAttribute("href")).toBe("/book/chern-cuts");
+  });
+
+  it("a finished visit offers 'Book again' on the same service", () => {
+    render(
+      <ManageClient
+        token="tok"
+        data={data({
+          status: "COMPLETED",
+          canCancel: false,
+          canReschedule: false,
+          service: { id: "svc_1", name: "Haircut", durationMin: 30 },
+          staff: { id: "stf_1", name: "Dre" },
+        })}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Book again" }).getAttribute("href")).toBe(
+      "/book/chern-cuts?service=svc_1&staff=stf_1",
+    );
+  });
+
   it("a real cancellation still reads 'Canceled'", () => {
     render(<ManageClient token="tok" data={data({ status: "CANCELED", neverBooked: false })} />);
     expect(screen.getByText("Canceled")).toBeTruthy();

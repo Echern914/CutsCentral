@@ -389,7 +389,7 @@ export function RewardProgramCard({
 }: {
   program: RewardProgram;
   now?: Date;
-  /** Opens the shop's page, where Book is. */
+  /** Opens booking at the shop - on their usual service when there is one. */
   onBook?: () => void;
 }) {
   const claimedRows = claimed(program);

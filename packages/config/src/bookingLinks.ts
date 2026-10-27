@@ -96,6 +96,31 @@ export function messageBookingUrl(shop: BookingLinkShop, appBaseUrl: string): st
   return bookNowUrl(shop, appBaseUrl);
 }
 
+/**
+ * "Book again": the shop's booking page with a past visit's service and
+ * provider preselected - `/book/<slug>?service=<id>&staff=<id>`, the rebook
+ * prefill the booking page reads (book/[slug]/page.tsx) and lands on the time
+ * step. The manage page's "Book a new time" and the app's "Book again" both
+ * build it here, so the two can never send a different shape.
+ *
+ * 🔴 A PREFILL, NEVER A PERMISSION. These ids are already public on the
+ * booking page, and the page re-checks them against what the shop offers NOW:
+ * a retired service or a provider who no longer does it is dropped, and the
+ * customer gets the ordinary booking page. A missing id is simply left off.
+ *
+ * Plain string work only: imported by client components.
+ */
+export function rebookPath(
+  slug: string,
+  prefill: { serviceId?: string | null; staffId?: string | null } | null | undefined,
+): string {
+  const query: string[] = [];
+  if (prefill?.serviceId) query.push(`service=${encodeURIComponent(prefill.serviceId)}`);
+  // A provider without a service pre-picks nothing the page can use.
+  if (prefill?.serviceId && prefill.staffId) query.push(`staff=${encodeURIComponent(prefill.staffId)}`);
+  return `/book/${encodeURIComponent(slug)}${query.length > 0 ? `?${query.join("&")}` : ""}`;
+}
+
 // The link a shop HANDS OUT (dashboard link, share tile, QR code, broadcast
 // push landing) stays /book/<slug> in every mode, built where it is used. That
 // page decides at visit time - the booking form on ChairBack booking, else a

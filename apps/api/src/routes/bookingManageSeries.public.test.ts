@@ -148,6 +148,13 @@ describe("GET /api/book/manage/:token", () => {
     expect(res.status).toBe(200);
     expect(res.body.series).toBeNull();
   });
+
+  it("names the service and provider by id, so 'Book a new time' can preselect them", async () => {
+    const a = await appointmentAt(inHours(30), null);
+    const res = await manage(a.token);
+    expect(res.body.service).toEqual({ id: serviceId, name: "Haircut", durationMin: 30 });
+    expect(res.body.staff).toEqual({ id: staffId, name: "Sam" });
+  });
 });
 
 describe("POST /api/book/manage/:token/cancel", () => {

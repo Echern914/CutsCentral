@@ -2,7 +2,7 @@ import { useRouter } from "expo-router";
 import { useResource } from "@/src/customer/CustomerProvider";
 import { Screen } from "@/src/customer/Screen";
 import { errorCopy } from "@/src/customer/api";
-import { openStorefront } from "@/src/customer/navigate";
+import { openBookAgain } from "@/src/customer/navigate";
 import { RewardProgramCard } from "@/src/customer/sections";
 import type { RewardProgram } from "@/src/customer/types";
 import { EmptyState, ErrorState, Placeholder, StaleBanner, Txt } from "@/src/customer/ui";
@@ -41,7 +41,7 @@ export default function RewardsScreen() {
             Each shop runs its own rewards. Ask for a ready reward at your next visit.
           </Txt>
           {programs.map((p) => (
-            <RewardProgramCard key={p.shop.key} program={p} onBook={() => openStorefront(router, p.shop)} />
+            <RewardProgramCard key={p.shop.key} program={p} onBook={() => openBookAgain(router, { shop: p.shop })} />
           ))}
         </>
       )}
