@@ -8,6 +8,7 @@ import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import { VocabProvider } from "@/components/VocabProvider";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { collectNotificationSignals } from "@/lib/notificationSignals";
+import { getPlatformNotices } from "@/lib/platformNotices";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { ThemeSync } from "@/components/ThemeSync";
 import { PREPAINT_SCRIPT } from "@/lib/theme";
@@ -16,6 +17,7 @@ import { DashboardNavInline, DashboardTabBar } from "./_components/DashboardNav"
 import { DemoBanner } from "./_components/DemoBanner";
 import { FeatureSearch } from "./_components/FeatureSearch";
 import { NotificationBell } from "./_components/NotificationBell";
+import { PlatformNoticeBanner } from "./_components/PlatformNoticeBanner";
 import { ShopSwitcher } from "./_components/ShopSwitcher";
 import { TrialBanner } from "./_components/TrialBanner";
 import { getOnboardingState } from "@/app/onboarding/state";
@@ -86,9 +88,14 @@ export default async function DashboardLayout({
   // 🔴 TOGETHER, not one after the other: nothing is sent to the phone until
   // this layout finishes, and in the app that wait is a blank page. Billing and
   // setup don't depend on each other, so they cost one round trip, not two.
-  const [billing, setup] = await Promise.all([
+  //
+  // Platform status notices ride the same round trip, for EVERY seat. The
+  // helper never throws and turns any failure into "no notices", so an older
+  // API or a blip costs a missing banner, never the dashboard.
+  const [billing, setup, platformNotices] = await Promise.all([
     barberOnly ? Promise.resolve(null) : getBillingSummary(),
     seatRole === "OWNER" && !me.data?.demo ? getOnboardingState() : Promise.resolve(null),
+    getPlatformNotices(),
   ]);
   const locks = barberOnly || billing === null ? undefined : featureLocks(billing);
   const settingUp = Boolean(setup && !setupComplete(setup.facts));
@@ -131,6 +138,7 @@ export default async function DashboardLayout({
               signals={bellSignals}
               whatsNew={me.data?.whatsNew ?? null}
               demo={me.data?.demo ?? false}
+              notices={platformNotices}
             />
             {shops.length + teams.length > 1 && (
               <ShopSwitcher shops={shops} teams={teams} activeShopId={activeShopId} />
@@ -167,6 +175,10 @@ export default async function DashboardLayout({
           </div>
         </nav>
       </header>
+      {/* "We know about it and we're fixing it" - above everything else, for
+          every seat: it explains whatever might look broken below it. A client
+          component RENDERED here, never called (the 2026-08-31 outage). */}
+      <PlatformNoticeBanner notices={platformNotices} demo={me.data?.demo ?? false} />
       {/* Read-only demo session: the ribbon replaces the trial banner (a demo
           session has no trial to nag about). */}
       {me.data?.demo ? (

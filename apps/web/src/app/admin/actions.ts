@@ -198,3 +198,48 @@ export async function confirmAdminTotpAction(code: string): Promise<TwoStepResul
   revalidatePath("/admin");
   return { ok: true };
 }
+
+//  Platform notices (the status banner on every barber's dashboard; the API
+//  owns the rules - routes/adminPortal.notices.ts)
+
+export interface NoticeWriteInput {
+  title: string;
+  body: string;
+  severity: "info" | "maintenance" | "issue";
+  /** ISO, already converted from the admin's own time zone. Omitted = now. */
+  startsAt?: string;
+  /** ISO, or null for "until resolved". */
+  endsAt?: string | null;
+  /** Send ONE push to shop owners' phones (the API refuses a second). */
+  notifyPhones?: boolean;
+}
+
+export interface NoticeResult {
+  ok: boolean;
+  error?: string;
+  /** What happened to "notify phones": sending | dry_run | already_sent | resolved | not_requested. */
+  push?: string;
+}
+
+async function notices(
+  method: "POST" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<NoticeResult> {
+  const res = await apiSend<{ push?: string }>(method, `/api/admin-portal/notices${path}`, body);
+  revalidatePath("/admin");
+  return res.ok ? { ok: true, push: res.data?.push } : { ok: false, error: res.error ?? "failed" };
+}
+
+export async function createPlatformNoticeAction(input: NoticeWriteInput): Promise<NoticeResult> {
+  return notices("POST", "", input);
+}
+export async function updatePlatformNoticeAction(id: string, input: Partial<NoticeWriteInput>): Promise<NoticeResult> {
+  return notices("PATCH", `/${encodeURIComponent(id)}`, input);
+}
+export async function resolvePlatformNoticeAction(id: string): Promise<NoticeResult> {
+  return notices("POST", `/${encodeURIComponent(id)}/resolve`);
+}
+export async function deletePlatformNoticeAction(id: string): Promise<NoticeResult> {
+  return notices("DELETE", `/${encodeURIComponent(id)}`);
+}

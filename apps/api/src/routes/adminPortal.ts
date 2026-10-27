@@ -29,6 +29,7 @@ import { buildPreflight } from "../ops/preflight.js";
 import { fetchWebConfig } from "../ops/webConfig.js";
 import { affiliateAdminRouter } from "./adminPortal.affiliate.js";
 import { partnerAdminRouter } from "./adminPortal.partners.js";
+import { noticeAdminRouter } from "./adminPortal.notices.js";
 import { logger } from "../logger.js";
 import { notifyCompEnded, type CompEndedOutcome } from "../engines/trialReminder.js";
 
@@ -58,6 +59,9 @@ adminPortalRouter.use("/partners", partnerAdminRouter);
 
 // Provider of the Month: applications, and choosing who wins (same gates).
 adminPortalRouter.use("/awards", awardsAdminRouter);
+
+// Platform notices: the status banner on every barber's dashboard (same gates).
+adminPortalRouter.use("/notices", noticeAdminRouter);
 
 const MS_PER_DAY = 86_400_000;
 
