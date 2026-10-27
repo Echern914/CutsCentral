@@ -68,7 +68,7 @@ beforeAll(async () => {
   __resetEnvCacheForTests();
   const { createApp } = await import("../app.js");
   app = createApp();
-  const signup = await request(app).post("/api/auth/signup").send({ email: ownerEmail, password: "supersecret123", name: "Asst Owner", smsAttested: true });
+  const signup = await request(app).post("/api/auth/signup").send({ email: ownerEmail, password: "supersecret123", name: "Asst Owner", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   shopId = (await request(app).post("/api/shops").set("Cookie", cookie).send({ name: SHOP_NAME, bookingUrl: "https://book.test", smsAttested: true })).body.id;
@@ -439,7 +439,7 @@ describe("🔴 shop isolation", () => {
   let slugB = "";
   let shopB = "";
   beforeAll(async () => {
-    const signup = await request(app).post("/api/auth/signup").send({ email: otherOwnerEmail, password: "supersecret123", name: "Other Owner", smsAttested: true });
+    const signup = await request(app).post("/api/auth/signup").send({ email: otherOwnerEmail, password: "supersecret123", name: "Other Owner", smsAttested: true, acceptTerms: true });
     const ck = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     shopB = (await request(app).post("/api/shops").set("Cookie", ck).send({ name: "Other Shop", bookingUrl: "https://other.test", smsAttested: true })).body.id;
     slugB = (await request(app).patch("/api/shops/me").set("Cookie", ck).send({ bookingMode: "native", timezone: "UTC", bookingLeadHours: 1 })).body.slug;

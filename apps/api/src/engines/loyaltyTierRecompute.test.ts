@@ -73,7 +73,7 @@ beforeAll(async () => {
   emails.push(email);
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Tiers", smsAttested: true });
+    .send({ email, password, name: "Tiers", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
@@ -165,7 +165,7 @@ describe("PATCH /api/shops/me { tierThresholds }", () => {
   it("a shop that never set any reads as the platform defaults", async () => {
     const other = await request(app)
       .post("/api/auth/signup")
-      .send({ email: `tiers2-${randomToken(6)}@test.local`.toLowerCase(), password, name: "T2", smsAttested: true });
+      .send({ email: `tiers2-${randomToken(6)}@test.local`.toLowerCase(), password, name: "T2", smsAttested: true, acceptTerms: true });
     emails.push(JSON.parse(JSON.stringify(other.body)).email ?? "");
     const c2 = (other.headers["set-cookie"] as unknown as string[])[0]!;
     const shop2 = await request(app)

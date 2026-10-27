@@ -32,7 +32,7 @@ describe("DELETE /api/auth/me", () => {
   it("deletes the user and every owned shop only on a typed email confirmation", async () => {
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email, password, name: "Deleter", smsAttested: true });
+      .send({ email, password, name: "Deleter", smsAttested: true, acceptTerms: true });
     expect(signup.status).toBe(201);
     const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
 

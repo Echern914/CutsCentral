@@ -4068,6 +4068,19 @@ export function BookingClient({
                 {POLICY_HINT}
               </p>
             )}
+            {/* Guest booking needs no account, so no checkbox: the passive
+                notice, right under the button it describes. */}
+            <p className="text-center text-xs text-muted" data-qa="booking-terms-notice">
+              By booking, you agree to the{" "}
+              <Link href="/terms" target="_blank" rel="noopener noreferrer" className="underline">
+                Terms of Service
+              </Link>{" "}
+              and{" "}
+              <Link href="/privacy" target="_blank" rel="noopener noreferrer" className="underline">
+                Privacy Policy
+              </Link>
+              .
+            </p>
           </div>
         </Section>
       )}

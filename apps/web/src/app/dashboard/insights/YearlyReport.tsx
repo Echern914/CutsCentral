@@ -515,8 +515,8 @@ function ReportPreview({
 
       <p className="text-[10px] text-muted">
         All amounts in {report.currency}. An appointment counts in the month it was scheduled
-        for, in {report.timezone}. Operational performance summary. Not a tax return or audited
-        financial statement.
+        for, in {report.timezone}. Operational performance summary. Figures are estimates and
+        may not be exact. Not a tax return or audited financial statement.
       </p>
     </div>
   );

@@ -29,7 +29,7 @@ async function signup(name: string): Promise<string> {
   emails.push(email);
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password: "supersecret123", name, smsAttested: true });
+    .send({ email, password: "supersecret123", name, smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   return (res.headers["set-cookie"] as unknown as string[])[0]!;
 }

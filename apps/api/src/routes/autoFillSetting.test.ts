@@ -28,7 +28,7 @@ let barberCookie: string;
 async function signup(label: string): Promise<{ cookie: string; id: string }> {
   const email = `af-${label}-${tag}@test.chairback`;
   emails.push(email);
-  const res = await request(app).post("/api/auth/signup").send({ email, password, name: label, smsAttested: true });
+  const res = await request(app).post("/api/auth/signup").send({ email, password, name: label, smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   const user = await prisma.user.findUniqueOrThrow({ where: { email } });
   return { cookie: (res.headers["set-cookie"] as unknown as string[])[0]!.split(";")[0]!, id: user.id };

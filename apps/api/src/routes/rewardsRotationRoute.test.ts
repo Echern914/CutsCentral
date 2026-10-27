@@ -35,7 +35,7 @@ async function signup(label: string, admin: boolean): Promise<string> {
   emails.push(email);
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: label, smsAttested: true });
+    .send({ email, password, name: label, smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   if (admin) await prisma.user.update({ where: { email }, data: { isAdmin: true } });
   return (res.headers["set-cookie"] as unknown as string[])[0]!;
@@ -53,7 +53,7 @@ async function shopWithWalletPass(): Promise<{ clientId: string; token: string }
   emails.push(email);
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "rotr-pass", smsAttested: true });
+    .send({ email, password, name: "rotr-pass", smsAttested: true, acceptTerms: true });
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
     .post("/api/shops")

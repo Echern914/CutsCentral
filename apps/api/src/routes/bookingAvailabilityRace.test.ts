@@ -78,7 +78,7 @@ beforeAll(async () => {
   email = `race-${randomToken(6)}@test.local`;
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password: "supersecret123", name: "Race Tester", smsAttested: true });
+    .send({ email, password: "supersecret123", name: "Race Tester", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shopRes = await request(app)

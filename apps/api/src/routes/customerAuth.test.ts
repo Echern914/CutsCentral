@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
-import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
+import { __resetEnvCacheForTests, randomToken, TERMS_VERSION } from "@chairback/config";
 import { createApp } from "../app.js";
 import { __setMessageProviderForTests } from "../messaging/twilio.js";
 import { __setSendEmailForTests } from "../messaging/email.js";
@@ -73,13 +73,13 @@ const RUN_IP = `10.${octet()}.${octet()}.${octet()}`;
 const post = (path: string, body: unknown, ip = RUN_IP) =>
   request(app).post(path).set("X-Forwarded-For", ip).send(body as object);
 
-async function signIn(phone: string): Promise<request.Response> {
+async function signIn(phone: string, extra: Record<string, unknown> = {}): Promise<request.Response> {
   // Wait for THIS request's text, not any earlier one: re-issuing supersedes
   // the previous code, so reading the older message would type a dead code.
   const before = sms.filter((s) => s.to === phone).length;
   await post("/api/customer-auth/start", { channel: "sms", phone });
   await settle(() => sms.filter((s) => s.to === phone).length > before);
-  const res = await post("/api/customer-auth/verify", { channel: "sms", phone, code: lastSmsCode(phone) });
+  const res = await post("/api/customer-auth/verify", { channel: "sms", phone, code: lastSmsCode(phone), ...extra });
   const aid = res.body.token ? customerSessionFromToken(res.body.token)?.accountId : undefined;
   if (aid) accountIds.add(aid);
   return res;
@@ -371,5 +371,58 @@ describe("nothing person-shaped in a log line", () => {
         },
       });
     }
+  });
+});
+
+describe("the Terms + Privacy tick on sign-in", () => {
+  /** A second sign-in on the same contact, past the resend wait the first one started. */
+  async function againWithout(): Promise<void> {
+    await prisma.customerSignInCode.deleteMany({ where: { identifierHash: { in: [...usedHashes] } } });
+  }
+
+  async function termsOf(token: string) {
+    const id = customerSessionFromToken(token)!.accountId;
+    return prisma.customerAccount.findUniqueOrThrow({
+      where: { id },
+      select: { termsAcceptedAt: true, termsAcceptedVersion: true },
+    });
+  }
+
+  it("ticked: the new account records the current version and when", async () => {
+    const res = await signIn(freshPhone(), { acceptTerms: true });
+    expect(res.status).toBe(200);
+    const row = await termsOf(res.body.token);
+    expect(row.termsAcceptedVersion).toBe(TERMS_VERSION);
+    expect(row.termsAcceptedAt).toBeInstanceOf(Date);
+  });
+
+  it("not sent (an app build from before the checkbox): still signs in, records nothing", async () => {
+    const res = await signIn(freshPhone());
+    expect(res.status).toBe(200);
+    expect(typeof res.body.token).toBe("string");
+    const row = await termsOf(res.body.token);
+    expect(row.termsAcceptedVersion).toBeNull();
+    expect(row.termsAcceptedAt).toBeNull();
+  });
+
+  it("agreeing again to the same version keeps the FIRST timestamp", async () => {
+    const phone = freshPhone();
+    const first = await termsOf((await signIn(phone, { acceptTerms: true })).body.token);
+    await againWithout();
+    const second = await termsOf((await signIn(phone, { acceptTerms: true })).body.token);
+    expect(second.termsAcceptedAt?.getTime()).toBe(first.termsAcceptedAt?.getTime());
+  });
+
+  it("an older agreement is brought up to the current version", async () => {
+    const phone = freshPhone();
+    const token = (await signIn(phone)).body.token as string;
+    const id = customerSessionFromToken(token)!.accountId;
+    await prisma.customerAccount.update({
+      where: { id },
+      data: { termsAcceptedVersion: "2000-01-01", termsAcceptedAt: new Date("2000-01-01T00:00:00Z") },
+    });
+    await againWithout();
+    await signIn(phone, { acceptTerms: true });
+    expect((await termsOf(token)).termsAcceptedVersion).toBe(TERMS_VERSION);
   });
 });

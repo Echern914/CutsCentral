@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { TermsAgreement } from "@/components/legal/TermsAgreement";
 import {
   confirmAction,
   sendTurnAction,
@@ -281,6 +282,7 @@ function SignIn({ shopName, lost, onSignedIn }: { shopName: string; lost?: boole
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [stage, setStage] = useState<"email" | "code">("email");
+  const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -307,7 +309,7 @@ function SignIn({ shopName, lost, onSignedIn }: { shopName: string; lost?: boole
               if (r.ok) setStage("code");
               else setError("That email doesn't look right.");
             } else {
-              const r = await verifySignInAction(email.trim(), code.trim());
+              const r = await verifySignInAction(email.trim(), code.trim(), agreed);
               if (r.ok) onSignedIn();
               else setError("That code didn't work. Check it and try again.");
             }
@@ -330,6 +332,9 @@ function SignIn({ shopName, lost, onSignedIn }: { shopName: string; lost?: boole
               className="rounded-xl border border-subtle bg-transparent px-3 py-2.5 text-sm"
               data-qa="assistant-email"
             />
+            {/* Signing in can create a My ChairBack account: the Terms +
+                Privacy tick comes first, and travels with the code. */}
+            <TermsAgreement checked={agreed} onChange={setAgreed} audience="customer" id="assistant-terms" />
           </>
         ) : (
           <>
@@ -348,7 +353,7 @@ function SignIn({ shopName, lost, onSignedIn }: { shopName: string; lost?: boole
           </>
         )}
         {error && <p className="text-xs text-danger-soft">{error}</p>}
-        <Button type="submit" disabled={busy} data-qa="assistant-signin-submit">
+        <Button type="submit" disabled={busy || !agreed} data-qa="assistant-signin-submit">
           {stage === "email" ? "Email me a code" : "Sign in"}
         </Button>
       </form>

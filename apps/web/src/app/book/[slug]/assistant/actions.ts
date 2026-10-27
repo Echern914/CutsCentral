@@ -53,11 +53,17 @@ export async function startSignInAction(email: string): Promise<{ ok: boolean; e
   return r.ok ? { ok: true } : { ok: false, error: r.error ?? "failed" };
 }
 
-export async function verifySignInAction(email: string, code: string): Promise<{ ok: boolean }> {
+export async function verifySignInAction(
+  email: string,
+  code: string,
+  acceptTerms = false,
+): Promise<{ ok: boolean }> {
   const r = await apiPublicSend<{ verified: boolean; token?: string }>("POST", "/api/customer-auth/verify", {
     channel: "email",
     email,
     code,
+    // The sign-in screen's Terms + Privacy tick; the API records it on the account.
+    ...(acceptTerms === true ? { acceptTerms: true } : {}),
   });
   if (!r.ok || !r.data?.verified || !r.data.token) return { ok: false };
   cookies().set(COOKIE, r.data.token, {

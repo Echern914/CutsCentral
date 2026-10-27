@@ -21,7 +21,7 @@ async function signUp(tag: string): Promise<string> {
   const email = `biztype-${tag}-${randomToken(6)}@test.local`.toLowerCase();
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password: "supersecret123", name: "B", smsAttested: true });
+    .send({ email, password: "supersecret123", name: "B", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   return (signup.headers["set-cookie"] as unknown as string[])[0]!;
 }
@@ -296,7 +296,7 @@ describe("PATCH /api/shops/me/business-type - changing it later", () => {
     const barberEmail = `seat-${randomToken(6)}@test.local`.toLowerCase();
     const barberSignup = await request(app)
       .post("/api/auth/signup")
-      .send({ email: barberEmail, password: "supersecret123", name: "Seat", smsAttested: true });
+      .send({ email: barberEmail, password: "supersecret123", name: "Seat", smsAttested: true, acceptTerms: true });
     const barberCookie = (barberSignup.headers["set-cookie"] as unknown as string[])[0]!;
     await prisma.shopMember.create({
       data: { shopId, userId: barberSignup.body.id as string, role: "BARBER" },

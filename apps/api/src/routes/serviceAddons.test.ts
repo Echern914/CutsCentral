@@ -24,7 +24,7 @@ const emails: string[] = [];
 async function signup(email: string): Promise<string> {
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "AddOn Tester", smsAttested: true });
+    .send({ email, password, name: "AddOn Tester", smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   return (res.headers["set-cookie"] as unknown as string[])[0]!;
 }

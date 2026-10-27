@@ -201,7 +201,7 @@ beforeAll(async () => {
   const { createApp } = await import("../app.js");
   app = createApp();
 
-  const signup = await request(app).post("/api/auth/signup").send({ email, password: "supersecret123", name: "COFS", smsAttested: true });
+  const signup = await request(app).post("/api/auth/signup").send({ email, password: "supersecret123", name: "COFS", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app).post("/api/shops").set("Cookie", cookie).send({ name: "Fee Cuts", bookingUrl: "https://book.test", smsAttested: true });
@@ -810,7 +810,7 @@ describe("the flat fee setting", () => {
   async function seat(role: "MANAGER" | "BARBER") {
     const e = `cofs-${role.toLowerCase()}-${randomToken(6)}@test.local`.toLowerCase();
     extra.push(e);
-    const res = await request(app).post("/api/auth/signup").send({ email: e, password: "supersecret123", name: role, smsAttested: true });
+    const res = await request(app).post("/api/auth/signup").send({ email: e, password: "supersecret123", name: role, smsAttested: true, acceptTerms: true });
     expect(res.status).toBe(201);
     const user = (await prisma.user.findUnique({ where: { email: e }, select: { id: true } }))!;
     await prisma.shopMember.create({

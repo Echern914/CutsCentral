@@ -40,7 +40,7 @@ describe("signup acquisition attribution", () => {
         email,
         password: "supersecret123",
         name: "Attributed Barber",
-        smsAttested: true,
+        smsAttested: true, acceptTerms: true,
         acquisition: {
           utm_source: "meta",
           utm_campaign: "spring-fades",
@@ -65,7 +65,7 @@ describe("signup acquisition attribution", () => {
     const email = freshEmail("organic");
     const res = await request(app)
       .post("/api/auth/signup")
-      .send({ email, password: "supersecret123", name: "Organic", smsAttested: true });
+      .send({ email, password: "supersecret123", name: "Organic", smsAttested: true, acceptTerms: true });
     expect(res.status).toBe(201);
 
     const user = await prisma.user.findUnique({ where: { email } });
@@ -81,7 +81,7 @@ describe("signup acquisition attribution", () => {
         email,
         password: "supersecret123",
         name: "Unknown Keys",
-        smsAttested: true,
+        smsAttested: true, acceptTerms: true,
         acquisition: { utm_source: "google", evil: "x".repeat(9999), nope: "drop" },
       });
     expect(res.status).toBe(201);

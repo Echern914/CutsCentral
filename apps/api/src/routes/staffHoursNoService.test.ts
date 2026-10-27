@@ -76,7 +76,7 @@ async function publicSlotCount(date: Date): Promise<number> {
 beforeAll(async () => {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "NoSvc", smsAttested: true });
+    .send({ email, password, name: "NoSvc", smsAttested: true, acceptTerms: true });
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   await request(app)
     .post("/api/shops")

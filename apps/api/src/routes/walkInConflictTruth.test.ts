@@ -63,7 +63,7 @@ async function makeShop(label: string): Promise<Shop> {
   const email = `wtruth-${randomToken(6)}@test.local`.toLowerCase();
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: label, smsAttested: true });
+    .send({ email, password, name: label, smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
@@ -662,7 +662,7 @@ describe("tenancy and authorization, enforced on the server", () => {
   it("🔴 a BARBER seat cannot record one at all - refused by the server, not hidden by the UI", async () => {
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email: `wtruth-barber-${randomToken(6)}@test.local`, password, name: "Seat", smsAttested: true });
+      .send({ email: `wtruth-barber-${randomToken(6)}@test.local`, password, name: "Seat", smsAttested: true, acceptTerms: true });
     const barberCookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     await prisma.shopMember.create({
       data: { shopId: A.shopId, userId: signup.body.id as string, role: "BARBER" },

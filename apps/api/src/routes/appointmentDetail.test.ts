@@ -42,7 +42,7 @@ beforeAll(async () => {
   agent = request.agent(app);
   const signup = await agent
     .post("/api/auth/signup")
-    .send({ email, password: "hunter2hunter2", name: "D", smsAttested: true });
+    .send({ email, password: "hunter2hunter2", name: "D", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBeLessThan(400);
 
   const created = await agent

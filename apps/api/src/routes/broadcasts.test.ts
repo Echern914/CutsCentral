@@ -91,7 +91,7 @@ beforeAll(async () => {
   emails.push(email);
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "B", smsAttested: true });
+    .send({ email, password, name: "B", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
@@ -771,7 +771,7 @@ describe("who may send one", () => {
     emails.push(otherEmail);
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email: otherEmail, password, name: "C", smsAttested: true });
+      .send({ email: otherEmail, password, name: "C", smsAttested: true, acceptTerms: true });
     const otherCookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     const otherShop = await request(app)
       .post("/api/shops")

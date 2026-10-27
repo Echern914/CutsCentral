@@ -27,7 +27,7 @@ async function nativeShop(tag: string): Promise<{
   emails.push(email);
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Undo Tester", smsAttested: true });
+    .send({ email, password, name: "Undo Tester", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)

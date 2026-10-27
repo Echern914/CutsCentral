@@ -81,7 +81,7 @@ async function makeShop(): Promise<void> {
   emails.push(email);
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password: "supersecret123", name: "Out Owner", smsAttested: true });
+    .send({ email, password: "supersecret123", name: "Out Owner", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
@@ -670,7 +670,7 @@ describe("a notification row pointing at another shop's review", () => {
     emails.push(otherEmail);
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email: otherEmail, password: "supersecret123", name: "Other", smsAttested: true });
+      .send({ email: otherEmail, password: "supersecret123", name: "Other", smsAttested: true, acceptTerms: true });
     const otherCookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     const otherShop = await request(app)
       .post("/api/shops")

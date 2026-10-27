@@ -61,7 +61,7 @@ async function slotAt(startsAt: Date) {
 beforeAll(async () => {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "T", smsAttested: true });
+    .send({ email, password, name: "T", smsAttested: true, acceptTerms: true });
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
     .post("/api/shops")
@@ -164,7 +164,7 @@ describe("publishing under several services", () => {
         email: `tms2-${randomToken(6)}@test.local`.toLowerCase(),
         password,
         name: "O",
-        smsAttested: true,
+        smsAttested: true, acceptTerms: true,
       });
     const otherCookie = (otherUser.headers["set-cookie"] as unknown as string[])[0]!;
     await request(app)

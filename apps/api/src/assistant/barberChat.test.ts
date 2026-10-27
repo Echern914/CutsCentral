@@ -37,7 +37,7 @@ const at = (n: number, hour: number) => new Date(`${day(n)}T${String(hour).padSt
 async function signup(label: string) {
   const email = `${label}-${randomToken(6)}@test.local`.toLowerCase();
   emails.push(email);
-  const res = await request(app).post("/api/auth/signup").send({ email, password, name: label, smsAttested: true });
+  const res = await request(app).post("/api/auth/signup").send({ email, password, name: label, smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   const user = await prisma.user.findUniqueOrThrow({ where: { email } });
   return { cookie: (res.headers["set-cookie"] as unknown as string[])[0]!, userId: user.id };

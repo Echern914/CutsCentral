@@ -87,7 +87,7 @@ async function makeAppointment(
 beforeAll(async () => {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Insights Tester", smsAttested: true });
+    .send({ email, password, name: "Insights Tester", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shopRes = await request(app)
@@ -413,7 +413,7 @@ describe("GET /api/insights", () => {
     const otherEmail = `ins2-${randomToken(6)}@test.local`;
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email: otherEmail, password, name: "Other", smsAttested: true });
+      .send({ email: otherEmail, password, name: "Other", smsAttested: true, acceptTerms: true });
     const otherCookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     await request(app)
       .post("/api/shops")

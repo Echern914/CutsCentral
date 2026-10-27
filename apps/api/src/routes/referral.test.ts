@@ -35,7 +35,7 @@ async function newShop(
       email,
       password,
       name: label,
-      smsAttested: true,
+      smsAttested: true, acceptTerms: true,
       // The web middleware captures ?ref into a cookie and signup persists it
       // here; passing it directly is the same code path the browser exercises.
       ...(ref ? { referralCode: ref } : {}),

@@ -27,7 +27,7 @@ describe("DELETE /api/shops/me", () => {
   it("refuses another name, and accepts the shop's own name in any case with a trailing space", async () => {
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email, password: "supersecret123", name: "D", smsAttested: true });
+      .send({ email, password: "supersecret123", name: "D", smsAttested: true, acceptTerms: true });
     expect(signup.status).toBe(201);
     const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     const shop = await request(app)

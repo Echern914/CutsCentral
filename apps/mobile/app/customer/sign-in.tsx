@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from "react-native";
+import { KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { API_ORIGIN, STORAGE } from "@/src/config";
+import { API_ORIGIN, STORAGE, WEB_ORIGIN } from "@/src/config";
 import { useCustomer } from "@/src/customer/CustomerProvider";
 import { ApiError, errorCopy, publicPost } from "@/src/customer/api";
 import { secondsLeft, sendKey, startCooldown, type Cooldowns } from "@/src/customer/codeCooldown";
@@ -44,6 +44,9 @@ export default function SignInScreen() {
   const [now, setNow] = useState(() => Date.now());
   const [pendingToken, setPendingToken] = useState<string | null>(null);
   const [legacyToken, setLegacyToken] = useState<string | null>(null);
+  // The Terms + Privacy tick. The first good code creates the account, so it
+  // is asked before a code is sent, starts unticked, and travels with the code.
+  const [agreed, setAgreed] = useState(false);
 
   // A customer updating from the one-shop app keeps a way to their shop.
   useEffect(() => {
@@ -63,7 +66,7 @@ export default function SignInScreen() {
   const field = channel === "sms" ? "phone" : "email";
 
   async function sendCode() {
-    if (busy || wait > 0 || !contact.trim()) return;
+    if (busy || wait > 0 || !contact.trim() || !agreed) return;
     const resending = step === "code";
     setBusy(true);
     setMessage(null);
@@ -101,7 +104,13 @@ export default function SignInScreen() {
         verified: boolean;
         token?: string;
         account?: { firstName: string | null; suggestedFirstName: string | null; isNew: boolean };
-      }>(API_ORIGIN, "/api/customer-auth/verify", { channel, [field]: contact.trim(), code: entered });
+      }>(API_ORIGIN, "/api/customer-auth/verify", {
+        channel,
+        [field]: contact.trim(),
+        code: entered,
+        // Recorded on the account (CustomerAccount.termsAcceptedAt/Version).
+        acceptTerms: agreed,
+      });
       if (!res.verified || !res.token) {
         setMessage("That code didn't work. Check it, or send a new one.");
         return;
@@ -200,6 +209,7 @@ export default function SignInScreen() {
               accessibilityLabel={channel === "sms" ? "Mobile number" : "Email"}
               style={styles.input}
             />
+            <TermsCheckbox checked={agreed} onChange={setAgreed} />
             {message ? (
               <Txt variant="footnote" tone="secondary" accessibilityLiveRegion="polite" style={styles.message}>
                 {message}
@@ -210,7 +220,7 @@ export default function SignInScreen() {
             <Button
               label={`${channel === "sms" ? "Text me a code" : "Email me a code"}${wait > 0 ? ` (${wait}s)` : ""}`}
               busy={busy}
-              disabled={!contact.trim() || wait > 0}
+              disabled={!contact.trim() || wait > 0 || !agreed}
               onPress={() => void sendCode()}
               style={styles.primary}
             />
@@ -362,7 +372,62 @@ export default function SignInScreen() {
   );
 }
 
+/**
+ * "I agree to the Terms of Service and Privacy Policy." Unticked to start;
+ * the whole row toggles it, and each document opens in the browser.
+ */
+function TermsCheckbox({ checked, onChange }: { checked: boolean; onChange: (next: boolean) => void }) {
+  const open = (path: string) => () => {
+    Linking.openURL(`${WEB_ORIGIN}${path}`).catch(() => {});
+  };
+  return (
+    <Pressable
+      onPress={() => onChange(!checked)}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      accessibilityLabel="I agree to the Terms of Service and Privacy Policy"
+      testID="terms-checkbox"
+      style={styles.terms}
+    >
+      <View style={[styles.box, checked && styles.boxOn]}>
+        {checked ? (
+          <Text style={styles.tick} allowFontScaling={false}>
+            ✓
+          </Text>
+        ) : null}
+      </View>
+      <Txt variant="footnote" tone="secondary" style={styles.termsText}>
+        I agree to the{" "}
+        <Text style={styles.link} onPress={open("/terms")} accessibilityRole="link">
+          Terms of Service
+        </Text>{" "}
+        and{" "}
+        <Text style={styles.link} onPress={open("/privacy")} accessibilityRole="link">
+          Privacy Policy
+        </Text>
+        .
+      </Txt>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
+  terms: { flexDirection: "row", alignItems: "flex-start", gap: space.s1 + 2, marginTop: space.s2, minHeight: 44 },
+  box: {
+    width: 22,
+    height: 22,
+    marginTop: 1,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: color.hairlineStrong,
+    backgroundColor: color.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  boxOn: { backgroundColor: color.gold, borderColor: color.gold },
+  tick: { color: color.onGold, fontSize: 14, fontWeight: "700", lineHeight: 16 },
+  termsText: { flex: 1 },
+  link: { color: color.goldText, textDecorationLine: "underline" },
   flex: { flex: 1, backgroundColor: color.bg },
   content: { paddingHorizontal: space.s3, flexGrow: 1 },
   block: { marginTop: space.s5 },

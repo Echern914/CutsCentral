@@ -59,7 +59,7 @@ beforeAll(async () => {
   const email = `walkidem-${randomToken(6)}@test.local`.toLowerCase();
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Idem", smsAttested: true });
+    .send({ email, password, name: "Idem", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)

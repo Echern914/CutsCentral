@@ -64,7 +64,7 @@ beforeAll(async () => {
   email = `agendasync-${randomToken(6)}@test.chairback`;
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Agenda Sync", smsAttested: true });
+    .send({ email, password, name: "Agenda Sync", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
 

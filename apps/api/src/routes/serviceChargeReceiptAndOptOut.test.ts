@@ -219,7 +219,7 @@ beforeAll(async () => {
   const ownerEmail = `rcpt-${randomToken(6)}@test.local`.toLowerCase();
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email: ownerEmail, password: "supersecret123", name: "Rcpt", smsAttested: true });
+    .send({ email: ownerEmail, password: "supersecret123", name: "Rcpt", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)

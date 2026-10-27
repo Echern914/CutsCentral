@@ -33,7 +33,7 @@ async function barber(name: string): Promise<Barber> {
   emails.push(email);
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password: "supersecret123", name, smsAttested: true });
+    .send({ email, password: "supersecret123", name, smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app).post("/api/shops").set("Cookie", cookie).send({ name: `${name} Cuts`, smsAttested: true });

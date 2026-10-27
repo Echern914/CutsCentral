@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { useFormState, useFormStatus } from "react-dom";
 import { APP_NAME } from "@chairback/config/constants";
 import { motion } from "framer-motion";
@@ -10,6 +11,7 @@ import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { ShowInNativeApp } from "@/components/ShowInNativeApp";
 import { FormError } from "@/components/ui/FormError";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
+import { TermsAgreement } from "@/components/legal/TermsAgreement";
 
 function SubmitButton({ label, disabled = false }: { label: string; disabled?: boolean }) {
   const { pending } = useFormStatus();
@@ -74,6 +76,8 @@ export function AuthForm({
   businessType?: string;
 }) {
   const [state, formAction] = useFormState(action, {});
+  // The Terms + Privacy clickwrap: unticked on every visit, never pre-checked.
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const isSignup = mode === "signup";
   const errorText = state.error ?? initialError;
   // App Store Guideline 3.1.1: business registration must not exist inside the
@@ -237,6 +241,14 @@ export function AuthForm({
               </p>
             )}
             {isSignup && (
+              <TermsAgreement
+                name="acceptTerms"
+                checked={termsAccepted}
+                onChange={setTermsAccepted}
+                audience="business"
+              />
+            )}
+            {isSignup && (
               <label className="mt-1 flex items-start gap-2.5 text-xs leading-relaxed text-muted">
                 <input
                   type="checkbox"
@@ -257,26 +269,11 @@ export function AuthForm({
             <div className="mt-1">
               <SubmitButton
                 label={isSignup ? "Create account" : "Sign in"}
-                disabled={signupGateUnknown}
+                // Signup: nothing is created until the Terms box is ticked
+                // (the action and the API refuse it too).
+                disabled={signupGateUnknown || (isSignup && !termsAccepted)}
               />
             </div>
-            {isSignup && (
-              <p className="mt-1 text-center text-xs leading-relaxed text-muted">
-                By creating an account, you agree to our{" "}
-                <Link href="/terms" className="text-gold hover:underline">
-                  Terms of Service
-                </Link>{" "}
-                and{" "}
-                <Link href="/privacy" className="text-gold hover:underline">
-                  Privacy Policy
-                </Link>
-                , including the{" "}
-                <Link href="/sms" className="text-gold hover:underline">
-                  SMS Messaging Policy
-                </Link>
-                .
-              </p>
-            )}
           </form>
         </Card>
         </HideInAppWhen>

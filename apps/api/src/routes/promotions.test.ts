@@ -24,7 +24,7 @@ const sentBodies: { to: string; body: string }[] = [];
 async function signupAndShop(email: string, name: string): Promise<{ cookie: string; shopId: string }> {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Promo Tester", smsAttested: true });
+    .send({ email, password, name: "Promo Tester", smsAttested: true, acceptTerms: true });
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
     .post("/api/shops")

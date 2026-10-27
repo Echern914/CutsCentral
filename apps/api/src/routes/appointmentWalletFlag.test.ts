@@ -45,7 +45,7 @@ const magicToken = randomToken();
 beforeAll(async () => {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Wallet Flag", smsAttested: true });
+    .send({ email, password, name: "Wallet Flag", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
 

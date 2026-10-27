@@ -36,7 +36,7 @@ async function makeShop(label: string): Promise<Shop> {
   const email = `cinbox-${randomToken(6)}@test.local`.toLowerCase();
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: label, smsAttested: true });
+    .send({ email, password, name: label, smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
@@ -167,7 +167,7 @@ describe("2. manager authorization", () => {
     const barberEmail = `cinbox-barber-${randomToken(6)}@test.local`.toLowerCase();
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email: barberEmail, password, name: "Barber", smsAttested: true });
+      .send({ email: barberEmail, password, name: "Barber", smsAttested: true, acceptTerms: true });
     const barberUserId = signup.body.id as string;
     const barberCookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     await prisma.shopMember.create({
@@ -195,7 +195,7 @@ describe("2. manager authorization", () => {
     const mEmail = `cinbox-mgr-${randomToken(6)}@test.local`.toLowerCase();
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email: mEmail, password, name: "Mgr", smsAttested: true });
+      .send({ email: mEmail, password, name: "Mgr", smsAttested: true, acceptTerms: true });
     const uid = signup.body.id as string;
     const c = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     await prisma.shopMember.create({ data: { shopId: A.shopId, userId: uid, role: "MANAGER" } });
@@ -659,7 +659,7 @@ describe("9. resolve all", () => {
     const barberEmail = `cinbox-barber-all-${randomToken(6)}@test.local`.toLowerCase();
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email: barberEmail, password, name: "Barber", smsAttested: true });
+      .send({ email: barberEmail, password, name: "Barber", smsAttested: true, acceptTerms: true });
     const barberUserId = signup.body.id as string;
     const barberCookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     await prisma.shopMember.create({

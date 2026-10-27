@@ -137,7 +137,7 @@ beforeAll(async () => {
   const { createApp } = await import("../app.js");
   app = createApp();
 
-  const signup = await request(app).post("/api/auth/signup").send({ email, password: "supersecret123", name: "NSC", smsAttested: true });
+  const signup = await request(app).post("/api/auth/signup").send({ email, password: "supersecret123", name: "NSC", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app).post("/api/shops").set("Cookie", cookie).send({ name: "Missed Cuts", bookingUrl: "https://book.test", smsAttested: true });

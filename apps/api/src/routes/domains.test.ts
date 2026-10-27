@@ -70,7 +70,7 @@ let shopId: string;
 beforeAll(async () => {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Domain Tester", smsAttested: true });
+    .send({ email, password, name: "Domain Tester", smsAttested: true, acceptTerms: true });
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
     .post("/api/shops")
@@ -247,7 +247,7 @@ describe("owner routes with the Vercel seam SET (mocked fetch)", () => {
     // A second shop to stage the conflict.
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email: emailB, password, name: "Domain Tester B", smsAttested: true });
+      .send({ email: emailB, password, name: "Domain Tester B", smsAttested: true, acceptTerms: true });
     cookieB = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     const shopB = await request(app)
       .post("/api/shops")

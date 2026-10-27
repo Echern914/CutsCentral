@@ -509,7 +509,7 @@ describe.skipIf(!RUN)(`task evaluation (${CONFIG})`, () => {
     __resetEnvCacheForTests();
     const { createApp } = await import("../app.js");
     app = createApp();
-    const signup = await request(app).post("/api/auth/signup").send({ email: ownerEmail, password: "supersecret123", name: "Tasks Owner", smsAttested: true });
+    const signup = await request(app).post("/api/auth/signup").send({ email: ownerEmail, password: "supersecret123", name: "Tasks Owner", smsAttested: true, acceptTerms: true });
     const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     shopId = (await request(app).post("/api/shops").set("Cookie", cookie).send({ name: SHOP_NAME, bookingUrl: "https://book.test", smsAttested: true })).body.id;
     await request(app).patch("/api/shops/me").set("Cookie", cookie).send({ bookingMode: "native", timezone: TZ, bookingLeadHours: 1 });

@@ -47,7 +47,7 @@ async function signup(email: string, name = "Person"): Promise<string> {
   emails.push(email);
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name, smsAttested: true });
+    .send({ email, password, name, smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   return (res.headers["set-cookie"] as unknown as string[])[0]!;
 }
@@ -644,7 +644,7 @@ describe("authorization code + PKCE", () => {
     emails.push(email);
     const res = await request(app)
       .post("/api/auth/signup")
-      .send({ email, password, name: "Cookie", smsAttested: true });
+      .send({ email, password, name: "Cookie", smsAttested: true, acceptTerms: true });
     const cookies = res.headers["set-cookie"] as unknown as string[];
     const session = cookies.find((c) => c.startsWith("cb_session="))!;
     // Load-bearing for the CSRF argument above, and easy to weaken by accident

@@ -63,7 +63,7 @@ beforeAll(async () => {
   email = `util-${randomToken(6)}@test.chairback`;
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Util", smsAttested: true });
+    .send({ email, password, name: "Util", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   await request(app)

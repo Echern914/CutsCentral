@@ -22,7 +22,7 @@ let shopIdA: string;
 async function signupAndShop(email: string, shopName: string): Promise<{ cookie: string; shopId: string }> {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Merge Tester", smsAttested: true });
+    .send({ email, password, name: "Merge Tester", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)

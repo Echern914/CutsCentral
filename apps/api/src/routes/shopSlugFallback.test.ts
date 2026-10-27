@@ -88,7 +88,7 @@ describe("the 99th same-named shop", () => {
     emails.push(email);
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email, password: "supersecret123", name: "T", smsAttested: true });
+      .send({ email, password: "supersecret123", name: "T", smsAttested: true, acceptTerms: true });
     expect(signup.status).toBe(201);
     const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
 
@@ -120,7 +120,7 @@ describe("the 99th same-named shop", () => {
     emails.push(email);
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email, password: "supersecret123", name: "T", smsAttested: true });
+      .send({ email, password: "supersecret123", name: "T", smsAttested: true, acceptTerms: true });
     const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     const created = await request(app)
       .post("/api/shops")
