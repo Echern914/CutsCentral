@@ -38,13 +38,28 @@ export function walletEnabled(): boolean {
 }
 
 /**
+ * The key every pass authenticationToken is derived from: WALLET_AUTH_SECRET,
+ * or SESSION_SECRET when that is unset (the original scheme, byte for byte).
+ *
+ * 🔴 The token is printed INTO the pass on the customer's phone and is sent
+ * back on every update for the life of the pass; nothing here can re-issue it.
+ * Tying it to the session key meant the 2026-10-25 session rotation made every
+ * pass downloaded before it fail with "Authentication failure" - no reschedule,
+ * punch or cancel reached those phones. A separate, long-lived key keeps a
+ * future session rotation from doing that again.
+ */
+export function walletAuthKey(): string {
+  return env.WALLET_AUTH_SECRET ?? env.SESSION_SECRET;
+}
+
+/**
  * The pass's authenticationToken (PassKit requires >=16 chars; devices send it
  * back as `Authorization: ApplePass <token>` on every web-service call).
- * Stateless: an HMAC of the client id under SESSION_SECRET, so there is no
+ * Stateless: an HMAC of the client id under walletAuthKey(), so there is no
  * token table and a DB leak reveals nothing usable without the secret.
  */
 export function passAuthToken(clientId: string): string {
-  return createHmac("sha256", env.SESSION_SECRET)
+  return createHmac("sha256", walletAuthKey())
     .update(`wallet-pass:${clientId}`)
     .digest("hex");
 }
