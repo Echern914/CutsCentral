@@ -363,6 +363,30 @@ export function formatApptTime(at: Date, timezone: string): string {
 }
 
 /**
+ * "Tue, Oct 28 at 3:00 PM" in the SHOP's zone - the new time in a "your
+ * appointment moved" notice, where it is the whole message and reads as a
+ * sentence rather than a field.
+ */
+export function formatApptDayAt(at: Date, timezone: string): string {
+  try {
+    const day = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    }).format(at);
+    const time = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(at);
+    return `${day} at ${time}`;
+  } catch {
+    return at.toUTCString();
+  }
+}
+
+/**
  * "Booking confirmed" SMS, sent right after a customer self-books on the native
  * page. Transactional (the customer just asked for this), but it still carries
  * the STOP notice and a link to manage (cancel/reschedule) the appointment.
@@ -652,8 +676,18 @@ export function buildAppointmentConfirmationEmail(params: {
   } | null;
   /** The shop's note for clients ("Please arrive 10 minutes early"). */
   clientNote?: string | null;
+  /**
+   * This booking was MOVED (a new time or a different person), not just made.
+   * Said in the subject and the heading: a "Booking confirmed" email for a
+   * booking the client already had reads like a duplicate of the first one,
+   * and the changed time inside it goes unnoticed. The caller sends no series
+   * or party summary with it (those describe the original booking).
+   */
+  moved?: boolean;
 }): EmailCopy {
   const when = formatApptTime(params.startsAt, params.timezone);
+  const moved = params.moved === true;
+  const movedWhen = formatApptDayAt(params.startsAt, params.timezone);
   const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
   // Served by the API (they stream files); the manage PAGE stays on the web app.
   const calendarUrl = `${env.API_BASE_URL}/api/book/manage/${params.manageToken}/calendar.ics`;
@@ -717,13 +751,17 @@ export function buildAppointmentConfirmationEmail(params: {
   return {
     // A party gets its own subject: naming one service when three people are
     // booked would understate what the customer is opening.
-    subject: grp
-      ? `Booking confirmed: ${grp.count} appointments at ${params.shopName}`
-      : `Booking confirmed: ${params.serviceName} at ${params.shopName}`,
+    subject: moved
+      ? `Your appointment moved: ${movedWhen}`
+      : grp
+        ? `Booking confirmed: ${grp.count} appointments at ${params.shopName}`
+        : `Booking confirmed: ${params.serviceName} at ${params.shopName}`,
     text:
-      (grp
-        ? `Hi ${who}, your group is booked at ${params.shopName}${withWhom}, starting ${when}.\n`
-        : `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}.\n`) +
+      (moved
+        ? `Hi ${who}, your ${params.serviceName} at ${params.shopName} has moved. It's now ${movedWhen}${withWhom}.\n`
+        : grp
+          ? `Hi ${who}, your group is booked at ${params.shopName}${withWhom}, starting ${when}.\n`
+          : `Hi ${who}, your ${params.serviceName} at ${params.shopName}${withWhom} is booked for ${when}.\n`) +
       groupText +
       seriesText +
       `\n` +
@@ -734,10 +772,12 @@ export function buildAppointmentConfirmationEmail(params: {
       `\nNeed to reschedule or cancel? ${manageUrl}\n\n` +
       `Book faster next time - get the ChairBack app: ${MOBILE_APP.appStoreUrl}`,
     html: appointmentEmailHtml({
-      heading: "You're booked",
-      intro: grp
-        ? `Hi ${who}, your group is confirmed. Here is the whole visit:`
-        : `Hi ${who}, your appointment is confirmed. Here are the details:`,
+      heading: moved ? "Your appointment moved" : "You're booked",
+      intro: moved
+        ? `Hi ${who}, your appointment has moved. Here are the new details:`
+        : grp
+          ? `Hi ${who}, your group is confirmed. Here is the whole visit:`
+          : `Hi ${who}, your appointment is confirmed. Here are the details:`,
       // A booking is never BOTH a party and a standing appointment (a group is
       // one visit; a series repeats), so concatenating is safe and keeps the
       // template from growing a second slot it does not need.

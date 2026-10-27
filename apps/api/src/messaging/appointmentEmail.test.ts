@@ -229,6 +229,37 @@ describe("a standing appointment is never rounded up", () => {
   });
 });
 
+describe("a moved booking says it moved", () => {
+  /**
+   * 🔴 A move used to send this same email as "Booking confirmed: Skin Fade at
+   * ...", which reads like a copy of the first confirmation - the new time
+   * inside it went unnoticed. The subject and heading now say it moved, and
+   * the time is the shop's own wall clock (15:00Z is 11 AM in New York).
+   */
+  const moved = buildAppointmentConfirmationEmail({ ...base, moved: true });
+
+  it("leads with the new time, in the shop's zone", () => {
+    expect(moved.subject).toBe("Your appointment moved: Wed, Sep 2 at 11:00 AM");
+    expect(moved.text).toContain("your Skin Fade at Drick's Barbershop has moved. It's now Wed, Sep 2 at 11:00 AM with Drick.");
+    expect(moved.html).toContain("Your appointment moved");
+    expect(moved.html).not.toContain("You're booked");
+  });
+
+  it("never says 'confirmed' as if it were a new booking", () => {
+    expect(moved.subject).not.toMatch(/confirmed/i);
+    expect(moved.html).not.toContain("is confirmed");
+  });
+
+  it("keeps the calendar link and the manage button", () => {
+    expect(moved.text).toContain("/book/manage/tok_abc123");
+    expect(moved.text).toContain("calendar.ics");
+  });
+
+  it("an ordinary booking is untouched", () => {
+    expect(buildAppointmentConfirmationEmail(base).subject).toBe("Booking confirmed: Skin Fade at Drick's Barbershop");
+  });
+});
+
 describe("calendar, wallet and the app CTA", () => {
   const dark = buildAppointmentConfirmationEmail(base);
   const lit = buildAppointmentConfirmationEmail({ ...base, walletPassAvailable: true });

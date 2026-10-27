@@ -10,6 +10,7 @@ import {
   buildAppointmentReminderEmail,
   buildSyncedVisitReminderBody,
   buildSyncedVisitReminderEmail,
+  formatApptDayAt,
   formatApptTime,
 } from "../messaging/templates.js";
 import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
@@ -483,6 +484,9 @@ async function notifyAppointmentConfirmationImpl(params: {
           // an Add-to-Wallet button whose link 404s is worse than none.
           walletPassAvailable: appointmentWalletEnabled(),
           clientNote: shop.clientNote,
+          // A move says so in the subject: "Booking confirmed" for a booking
+          // the client already had read as a repeat, and the new time was lost.
+          moved: params.moved === true,
         });
         const sent = await sendAppointmentEmail({
           shopId: shop.id,
@@ -613,6 +617,80 @@ async function notifyClientBookedByShopImpl(params: {
     logger.error(
       { err, shopId: params.shopId, appointmentId: params.appointmentId },
       "notifyClientBookedByShop failed",
+    );
+  }
+}
+
+/**
+ * TELL A CLIENT THE SHOP MOVED THEM - an app push the moment a barber or
+ * manager moves a booking to a new time or a different person, from the
+ * Reschedule button, the appointment editor, or the barber's booking chat
+ * (which goes through the Reschedule route's own handler, so it is one push).
+ *
+ * Owner report, 2026-10-26: a barber moved an appointment and the client's app
+ * never showed it. The only notice was the confirmation EMAIL (texts are off),
+ * and the editor sends that only when an email went out for the old time - so
+ * a booking made at the chair moved in silence. A push costs nothing and goes
+ * to a phone that already chose to hear from this shop, so it does not wait on
+ * any earlier email: the email rule stays exactly as it was.
+ *
+ * Same gates as "you're booked" (pushClientBooked): the shop has access and the
+ * client is not archived; a device row (or a linked account with its push
+ * switch on) IS the consent - sendPushToClient reaches only those. Read from
+ * the SAVED row, never the request: only a BOOKED visit still to come is
+ * announced. Tagged like "you're booked", so the phone replaces that stale
+ * notice (with the OLD time) instead of stacking beside it.
+ *
+ * Fire-and-forget like the email: the move never waits on, or fails because
+ * of, a push service. Tracked so a test can wait for it. Never throws.
+ */
+export function notifyClientMovedByShop(params: {
+  shopId: string;
+  appointmentId: string;
+  now?: Date;
+  /** The move put them with a different person - named in the notice. */
+  staffChanged?: boolean;
+}): Promise<void> {
+  return trackBackgroundWork(notifyClientMovedByShopImpl(params));
+}
+
+async function notifyClientMovedByShopImpl(params: {
+  shopId: string;
+  appointmentId: string;
+  now?: Date;
+  staffChanged?: boolean;
+}): Promise<void> {
+  const now = params.now ?? new Date();
+  try {
+    const loaded = await loadAppointment(params.shopId, params.appointmentId);
+    if (!loaded) return;
+    const { shop, appt } = loaded;
+    if (appt.status !== "BOOKED" || appt.startsAt.getTime() <= now.getTime()) {
+      logger.info(
+        { shopId: shop.id, appointmentId: appt.id, reason: appt.status !== "BOOKED" ? "not_booked" : "in_the_past" },
+        "moved-by-shop push skipped",
+      );
+      return;
+    }
+    if (!appt.client || appt.client.archivedAt !== null) return;
+    if (!hasActiveAccess(shop, { now })) return;
+    const withWhom = params.staffChanged ? ` with ${appt.staff.name}` : "";
+    await sendPushToClient({
+      shopId: shop.id,
+      clientId: appt.client.id,
+      kind: "appointment",
+      payload: {
+        title: "Appointment moved",
+        body: `${shop.name}: now ${formatApptDayAt(appt.startsAt, shop.timezone)}${withWhom}`,
+        url: `${apiEnv().APP_BASE_URL}/book/manage/${appt.manageToken}`,
+        tag: `booked-${appt.id}`,
+        data: { kind: "appointment_moved", appointmentId: appt.id },
+      },
+    });
+  } catch (err) {
+    logger.warn(
+      { err, shopId: params.shopId, appointmentId: params.appointmentId },
+      "moved-by-shop push failed",
     );
   }
 }

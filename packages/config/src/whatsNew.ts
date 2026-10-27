@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-27-clients-told-when-moved",
+    date: "2026-10-27",
+    kind: "fix",
+    title: "Clients are told when you move their appointment",
+    body:
+      "Move a booking to a new time or to someone else and your client's phone now gets an \"Appointment moved\" notification " +
+      "with the new time, if they have the app. The email they get now says it moved instead of \"Booking confirmed\".",
+  },
+  {
     id: "2026-10-26-reload-not-blank",
     date: "2026-10-26",
     kind: "fix",

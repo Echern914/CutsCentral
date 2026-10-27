@@ -392,4 +392,29 @@ describe("sendPushToClient - the real Expo sender (HTTP outcomes)", () => {
     expect(res).toMatchObject({ sent: 0, pruned: 1, anyDelivered: false });
     expect(after).toBeNull();
   });
+
+  it("the app's data carries a notice's own fields beside the url - and the url always wins", async () => {
+    const bodies: { data?: Record<string, string> }[] = [];
+    const sender = makeExpoSender({
+      fetchImpl: (async (_url: unknown, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init!.body)));
+        return json({ data: { status: "ok", id: "t1" } });
+      }) as unknown as typeof fetch,
+      timeoutMs: 50,
+    });
+    await sender.send("ExponentPushToken[x]", {
+      title: "t",
+      body: "b",
+      url: "https://app.test/book/manage/abc",
+      data: { kind: "appointment_moved", appointmentId: "appt_1", url: "https://elsewhere.test" },
+    });
+    await sender.send("ExponentPushToken[x]", { title: "t", body: "b", url: "https://app.test/r" });
+    expect(bodies[0]!.data).toEqual({
+      kind: "appointment_moved",
+      appointmentId: "appt_1",
+      url: "https://app.test/book/manage/abc",
+    });
+    // Nothing extra asked for: exactly what every push sent before.
+    expect(bodies[1]!.data).toEqual({ url: "https://app.test/r" });
+  });
 });

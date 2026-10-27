@@ -503,6 +503,15 @@ describe("history - native and synced, one list", () => {
     });
     expect((await get("/api/me/appointments/a_doesnotexist123", me.token)).status).toBe(404);
   });
+
+  it("🔴 the home, the list and one appointment are never cached - a time the shop moved shows on the next read", async () => {
+    const { me, booked } = await regular();
+    for (const path of ["/api/me/home", "/api/me/appointments", `/api/me/appointments/a_${booked.id}`]) {
+      const res = await get(path, me.token);
+      expect(res.status, path).toBe(200);
+      expect(res.headers["cache-control"], path).toBe("no-store");
+    }
+  });
 });
 
 describe("🔴 isolation", () => {
