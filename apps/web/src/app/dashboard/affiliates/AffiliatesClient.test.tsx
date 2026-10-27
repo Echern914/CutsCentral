@@ -1,11 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { AFFILIATE_POLICY } from "@chairback/config/affiliateProgram";
+import {
+  AFFILIATE_POLICY,
+  bpsToPercent,
+  commissionCents,
+  formatUsdCents,
+} from "@chairback/config/affiliateProgram";
+import { PLANS } from "@chairback/config/constants";
 import {
   AffiliatesClient,
+  businessCounts,
   earningsSoFar,
   milestoneLabels,
-  nextMonthProgress,
+  nextBusinessProgress,
   toolkitFor,
 } from "./AffiliatesClient";
 import {
@@ -26,10 +33,20 @@ const toast = vi.fn();
 vi.mock("@/components/ui/Toast", () => ({ useToast: () => ({ toast }) }));
 
 /**
- * The four screens, each chosen from the API's view, and the two promises
- * the dashboard makes: months are the number that matters, and no dollar
- * amount ever renders (the App Store 3.1.1 rule that rejected build 32).
+ * The four screens, each chosen from the API's view, and the promises the
+ * dashboard makes: the commission program with numbers read from the policy,
+ * dollars and percentages on the WEB only (inside the iOS app - App Store
+ * 3.1.1, the rule that rejected build 32 - none render), and no invented
+ * earnings total.
  */
+
+/** Render as if inside the native shell: the bridge useIsNativeApp reads. */
+function inTheApp() {
+  (window as { ReactNativeWebView?: unknown }).ReactNativeWebView = { postMessage: () => {} };
+}
+afterEach(() => {
+  delete (window as { ReactNativeWebView?: unknown }).ReactNativeWebView;
+});
 
 const mockApply = vi.mocked(applyAffiliateAction);
 const mockStyles = vi.mocked(setAffiliateStylesAction);
@@ -254,9 +271,14 @@ describe("dashboard", () => {
     account: { code: "abcDEF123456", status: "ACTIVE", createdAt: "2026-08-01T00:00:00.000Z" },
   });
 
-  it("leads with months, shows the link, one toolkit card per style, and masked referrals with stages", () => {
+  it("leads with the commission, shows the link, one toolkit card per style, masked referrals, and earlier month-off credits", () => {
     render(<AffiliatesClient status={active} overview={overview()} appBase={APP} shopName="Fade Lab" />);
+    expect(screen.getByRole("heading", { name: "Get paid for every business you bring in" })).toBeTruthy();
+    // Month-off credits earned under the earlier program are honoured, so still shown:
     // 2 applied + 1 in the hold (the fixture's one PENDING reward).
+    const credits = screen.getByTestId("month-off-credits");
+    expect(credits.textContent).toMatch(/Your month-off credits/);
+    expect(credits.textContent).toMatch(/earlier program, and kept/);
     expect(screen.getByText("months off so far").previousSibling?.textContent).toBe("3");
     expect(screen.getByText("used on your bill").previousSibling?.textContent).toBe("2");
     expect(screen.getByText("ready to use").previousSibling?.textContent).toBe("0");
@@ -266,18 +288,36 @@ describe("dashboard", () => {
     expect(screen.getByText("Short video")).toBeTruthy();
     expect(screen.getByText("In the workspace")).toBeTruthy();
     expect(screen.getByText("Business ••••1027")).toBeTruthy();
-    // The referral badge and the reward row both say it - one per surface.
-    expect(screen.getAllByText("In the hold")).toHaveLength(2);
+    // A v1 reward's badge says what it is: a month off, not a commission.
+    expect(screen.getByText("Month off in the hold")).toBeTruthy();
+    expect(screen.getByText("In the hold")).toBeTruthy(); // the reward row
     expect(screen.getByText("Taken back")).toBeTruthy();
     expect(screen.getByText(/Opened 3 times this week/)).toBeTruthy();
   });
 
-  it("🔴 never renders a dollar amount (App Store 3.1.1) and never a plan name", () => {
+  it("🔴 inside the iOS app: no dollar amount, no percentage, no plan price - and a pointer to the web", async () => {
+    inTheApp();
     const { container } = render(
       <AffiliatesClient status={active} overview={overview()} appBase={APP} shopName="Fade Lab" />,
     );
+    await waitFor(() =>
+      expect(screen.getByTestId("earn-example").textContent).toMatch(/getchairback\.com in your web browser/),
+    );
     expect(container.textContent).not.toMatch(/\$\s?\d/);
+    expect(container.textContent).not.toMatch(/\d\s?%/);
     expect(container.textContent).not.toMatch(/\bpro_ai\b|\bPro AI\b|\$34|\$74/);
+    // The promise itself still reads, without numbers.
+    expect(screen.getByTestId("earn-terms").textContent).toMatch(/a share of what they pay for their plan/);
+    expect(container.textContent).not.toMatch(/never cash/i);
+  });
+
+  it("inside the iOS app the sign-up pitch carries no money either", async () => {
+    inTheApp();
+    const { container } = render(
+      <AffiliatesClient status={status()} overview={null} appBase={APP} shopName="Fade Lab" />,
+    );
+    await waitFor(() => expect(container.textContent).toMatch(/a share of what they pay/));
+    expect(container.textContent).not.toMatch(/\$\s?\d|\d\s?%/);
   });
 
   it("shows the suspension sentence when the link is paused", () => {
@@ -305,12 +345,13 @@ describe("dashboard", () => {
   });
 });
 
-describe("what you earn, and the bar toward the next month off", () => {
+describe("what you earn, and the bar toward your next business", () => {
   const active = status({
     account: { code: "abcDEF123456", status: "ACTIVE", createdAt: "2026-08-01T00:00:00.000Z" },
   });
   const Q = AFFILIATE_POLICY.qualification.qualifyingInvoices;
-  const MAX = Q + 2; // signed up, each payment, the month itself
+  const C = AFFILIATE_POLICY.commission;
+  const MAX = Q + 1; // signed up, then each qualifying payment
 
   type Ref = AffiliateOverview["referrals"][number];
   function ref(over: Partial<Ref>): Ref {
@@ -330,7 +371,7 @@ describe("what you earn, and the bar toward the next month off", () => {
   }
 
   function bar() {
-    const el = screen.getByRole("progressbar", { name: "Progress to your next month off" });
+    const el = screen.getByRole("progressbar", { name: "Progress of your next business" });
     return {
       min: el.getAttribute("aria-valuemin"),
       now: el.getAttribute("aria-valuenow"),
@@ -339,32 +380,107 @@ describe("what you earn, and the bar toward the next month off", () => {
     };
   }
 
-  it("says what every business brings in, with the program's real numbers and never cash", () => {
+  const empty = {
+    referrals: [],
+    rewards: [],
+    months: { earned: 0, onTheWay: 0, underReview: 0, reversed: 0, expired: 0 },
+  };
+
+  it("on the web: the commission rates, window and hold, all from AFFILIATE_POLICY.commission - and never 'never cash'", () => {
     const { container } = render(
       <AffiliatesClient status={active} overview={overview()} appBase={APP} shopName="Fade Lab" />,
     );
-    expect(screen.getByText("For every business you bring in")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "A month off your ChairBack plan" })).toBeTruthy();
     const terms = screen.getByTestId("earn-terms").textContent ?? "";
-    expect(terms).toContain(`paid for ${Q} months`);
-    expect(terms).toContain(`${AFFILIATE_POLICY.qualification.holdDaysAfterSecond}-day hold`);
-    expect(terms).toMatch(/no cap/);
-    expect(terms).toMatch(/never cash/);
-    expect(container.textContent).not.toMatch(/\$\s?\d/);
+    expect(terms).toContain(`${bpsToPercent(C.cashBps)}% of what they pay for their plan`);
+    expect(terms).toContain(`${bpsToPercent(C.creditBps)}% as ChairBack credit`);
+    expect(terms).toContain("for their first year");
+    expect(terms).toContain(`held ${C.holdDays} days`);
+    expect(terms).toMatch(/2nd payment/);
+    expect(terms).toMatch(/No cap/);
+    expect(container.textContent).not.toMatch(/never cash/i);
+    expect(container.textContent).not.toMatch(/month off your (ChairBack )?plan/i);
+    expect(screen.getByTestId("earn-choice").textContent).toMatch(/Credit is the default/);
+  });
+
+  it("🔴 the worked example is commissionCents on the real Premium price, not typed numbers", () => {
+    render(<AffiliatesClient status={active} overview={overview()} appBase={APP} shopName="Fade Lab" />);
+    const planCents = Math.round(PLANS.pro.priceMonthlyUsd * 100);
+    const cash = commissionCents(planCents, "cash");
+    const credit = commissionCents(planCents, "credit");
+    const text = (screen.getByTestId("earn-example").textContent ?? "").replace(/\s+/g, " ");
+    expect(text).toContain(`a business on ${PLANS.pro.name} at ${formatUsdCents(planCents)} a month`);
+    expect(text).toContain(`earns you ${formatUsdCents(cash)} a month in cash or ${formatUsdCents(credit)} in credit`);
+    expect(text).toContain(
+      `up to ${formatUsdCents(cash * C.months)} or ${formatUsdCents(credit * C.months)} over its first year`,
+    );
+    // The payout minimum, also from the policy, on the web only.
+    expect(screen.getByTestId("how-it-works").textContent).toContain(
+      `${formatUsdCents(C.minimumCashPayoutCents)} or more`,
+    );
+  });
+
+  it("🔴 nothing is typed by hand: a different rate in the policy moves every number on the tab", () => {
+    // The policy object is plain at runtime; bend it for this one render.
+    const policy = AFFILIATE_POLICY.commission as { cashBps: number; creditBps: number; minimumCashPayoutCents: number };
+    const saved = { ...policy };
+    try {
+      policy.cashBps = 2500;
+      policy.creditBps = 3700;
+      policy.minimumCashPayoutCents = 4000;
+      const { container } = render(
+        <AffiliatesClient status={active} overview={overview()} appBase={APP} shopName="Fade Lab" />,
+      );
+      const text = (container.textContent ?? "").replace(/\s+/g, " ");
+      const planCents = Math.round(PLANS.pro.priceMonthlyUsd * 100);
+      expect(text).toContain("25% of what they pay");
+      expect(text).toContain("37% as ChairBack credit");
+      expect(text).toContain(`earns you ${formatUsdCents(Math.floor((planCents * 2500) / 10_000))} a month in cash`);
+      expect(text).toContain(`${formatUsdCents(Math.floor((planCents * 3700) / 10_000))} in credit`);
+      expect(text).toContain("$40 or more");
+      expect(text).not.toMatch(/\b20%|\b30%|\$25\b/);
+    } finally {
+      Object.assign(policy, saved);
+    }
+  });
+
+  it("shows no invented earnings total - counts of businesses and a plain note instead", () => {
+    render(
+      <AffiliatesClient
+        status={active}
+        overview={overview({
+          ...empty,
+          referrals: [
+            ref({ id: "a", stage: "signed_up" }),
+            ref({ id: "b", stage: "first_payment", qualifyingInvoices: 1 }),
+            ref({ id: "c", stage: "second_payment", qualifyingInvoices: Q }),
+            ref({ id: "d", stage: "reversed", qualifyingInvoices: Q }),
+          ],
+        })}
+        appBase={APP}
+        shopName="Fade Lab"
+      />,
+    );
+    expect(screen.getByText("signed up through your link").previousSibling?.textContent).toBe("4");
+    expect(screen.getByText("paying").previousSibling?.textContent).toBe("2");
+    expect(screen.getByText(`made ${Q} payments`).previousSibling?.textContent).toBe("1");
+    expect(screen.getByTestId("earnings-note").textContent).toMatch(/aren.t shown on this page yet/);
+    // No earlier-program history = no month-off card at all.
+    expect(screen.queryByTestId("month-off-credits")).toBeNull();
   });
 
   it("an empty bar at 0 for a referral that has not started, and for nobody at all", () => {
-    expect(nextMonthProgress({ referrals: [], policy: overview().policy })).toMatchObject({
+    expect(nextBusinessProgress({ referrals: [], policy: overview().policy })).toMatchObject({
       state: "empty",
       value: 0,
       max: MAX,
     });
     // Only finished-badly rows (taken back / expired) leave nothing on the road.
-    const p = nextMonthProgress({
+    const p = nextBusinessProgress({
       referrals: [ref({ stage: "reversed" }), ref({ stage: "expired" })],
       policy: overview().policy,
     });
     expect(p).toMatchObject({ state: "empty", value: 0 });
+    expect(p.text).toMatch(/bring in your next business/);
   });
 
   it("partial: a step per milestone, from the furthest business along", () => {
@@ -372,12 +488,11 @@ describe("what you earn, and the bar toward the next month off", () => {
       <AffiliatesClient
         status={active}
         overview={overview({
+          ...empty,
           referrals: [
             ref({ id: "s", label: "Business ••••1111", stage: "signed_up" }),
             ref({ id: "p", label: "Business ••••2222", stage: "first_payment", qualifyingInvoices: 1 }),
           ],
-          rewards: [],
-          months: { earned: 0, onTheWay: 0, underReview: 0, reversed: 0, expired: 0 },
         })}
         appBase={APP}
         shopName="Fade Lab"
@@ -386,45 +501,21 @@ describe("what you earn, and the bar toward the next month off", () => {
     const b = bar();
     expect(b).toMatchObject({ min: "0", now: "2", max: String(MAX) });
     expect(b.text).toBe(`Business ••••2222: 1 of ${Q} payments made`);
-    expect(screen.getByTestId("next-month-caption").textContent).toBe(b.text);
+    expect(screen.getByTestId("next-business-caption").textContent).toBe(b.text);
     expect(screen.getByText("1 more business is on the way too.")).toBeTruthy();
 
-    // Each in-progress stage sits on its own step.
-    const at = (r: Ref) => nextMonthProgress({ referrals: [r], policy: overview().policy }).value;
+    const at = (r: Ref) => nextBusinessProgress({ referrals: [r], policy: overview().policy }).value;
     expect(at(ref({ stage: "signed_up" }))).toBe(1);
     expect(at(ref({ stage: "first_payment", qualifyingInvoices: 1 }))).toBe(2);
-    expect(at(ref({ stage: "hold", qualifyingInvoices: Q }))).toBe(Q + 1);
   });
 
-  it("the hold says how long it is", () => {
-    render(<AffiliatesClient status={active} overview={overview()} appBase={APP} shopName="Fade Lab" />);
-    const b = bar();
-    expect(b.now).toBe(String(Q + 1));
-    expect(b.text).toContain(`Business ••••1027: paid ${Q} of ${Q}, now in the ${AFFILIATE_POLICY.qualification.holdDaysAfterSecond}-day hold, ready `);
-  });
-
-  it("complete: a month off that is ready fills the bar", () => {
+  it("full: a business past its qualifying payments says its commissions are payable as each hold ends", () => {
     render(
       <AffiliatesClient
         status={active}
         overview={overview({
-          referrals: [
-            ref({ stage: "month_off", label: "Business ••••3333", qualifyingInvoices: Q, availableAt: "2026-10-01T00:00:00.000Z" }),
-          ],
-          rewards: [
-            {
-              id: "r9",
-              label: "Business ••••3333",
-              status: "AVAILABLE",
-              qualifiedAt: "2026-09-10T00:00:00.000Z",
-              holdEndsAt: "2026-09-24T00:00:00.000Z",
-              availableAt: "2026-10-01T00:00:00.000Z",
-              expiresAt: "2027-10-01T00:00:00.000Z",
-              reversedAt: null,
-              reversalMessage: null,
-            },
-          ],
-          months: { earned: 0, onTheWay: 1, underReview: 0, reversed: 0, expired: 0 },
+          ...empty,
+          referrals: [ref({ stage: "second_payment", label: "Business ••••3333", qualifyingInvoices: Q })],
         })}
         appBase={APP}
         shopName="Fade Lab"
@@ -432,37 +523,46 @@ describe("what you earn, and the bar toward the next month off", () => {
     );
     const b = bar();
     expect(b).toMatchObject({ now: String(MAX), max: String(MAX) });
-    expect(b.text).toMatch(/Business ••••3333: your month off is ready/);
-    expect(screen.getByText("month off so far").previousSibling?.textContent).toBe("1");
-    expect(screen.getByText("ready to use").previousSibling?.textContent).toBe("1");
+    expect(b.text).toBe(
+      `Business ••••3333: ${Q} of ${Q} payments made, so each commission is payable once its ${C.holdDays}-day hold ends`,
+    );
+  });
+
+  it("a business that earned a month off under the earlier program is not on the commission bar", () => {
+    const p = nextBusinessProgress({
+      referrals: [ref({ stage: "month_off", qualifyingInvoices: Q }), ref({ stage: "hold", qualifyingInvoices: Q })],
+      policy: overview().policy,
+    });
+    expect(p.state).toBe("empty");
+    expect(p.text).not.toMatch(/month off/i);
   });
 
   it("empty state: a brand-new affiliate sees the promise, the link and code, and a bar at 0 - never a blank page", () => {
-    render(
-      <AffiliatesClient
-        status={active}
-        overview={overview({
-          referrals: [],
-          rewards: [],
-          months: { earned: 0, onTheWay: 0, underReview: 0, reversed: 0, expired: 0 },
-        })}
-        appBase={APP}
-        shopName="Fade Lab"
-      />,
-    );
-    expect(screen.getByRole("heading", { name: "A month off your ChairBack plan" })).toBeTruthy();
+    render(<AffiliatesClient status={active} overview={overview(empty)} appBase={APP} shopName="Fade Lab" />);
+    expect(screen.getByRole("heading", { name: "Get paid for every business you bring in" })).toBeTruthy();
     expect(screen.getByText(`${APP}/join?ref=abcDEF123456`)).toBeTruthy();
     expect(screen.getByText("abcDEF123456")).toBeTruthy();
     const b = bar();
     expect(b).toMatchObject({ min: "0", now: "0", max: String(MAX) });
     expect(b.text).toMatch(/^Nobody on the way yet/);
-    expect(screen.getByText("months off so far").previousSibling?.textContent).toBe("0");
+    expect(screen.getByText("signed up through your link").previousSibling?.textContent).toBe("0");
     expect(screen.getByText(/Nobody yet\. Businesses that sign up/)).toBeTruthy();
   });
 
-  it("milestones and totals come from the policy and the reward ledger", () => {
-    expect(milestoneLabels(2)).toEqual(["Signed up", "Payment 1", "Payment 2", "Month off"]);
+  it("milestones, counts and earlier-program totals come from the policy and the ledgers", () => {
+    expect(milestoneLabels(2)).toEqual(["Signed up", "Payment 1", "Payment 2"]);
     expect(milestoneLabels(Q)).toHaveLength(MAX);
+    expect(
+      businessCounts({
+        referrals: [
+          ref({ qualifyingInvoices: 0 }),
+          ref({ stage: "first_payment", qualifyingInvoices: 1 }),
+          ref({ stage: "second_payment", qualifyingInvoices: Q }),
+          ref({ stage: "expired", qualifyingInvoices: Q }),
+        ],
+        policy: overview().policy,
+      }),
+    ).toEqual({ signedUp: 4, paying: 2, qualified: 1 });
     const r = (status: string) => ({ ...overview().rewards[0]!, status });
     expect(
       earningsSoFar({
@@ -470,6 +570,21 @@ describe("what you earn, and the bar toward the next month off", () => {
         rewards: [r("APPLIED"), r("AVAILABLE"), r("RESERVED"), r("PENDING"), r("REVIEW_REQUIRED"), r("REVERSED")],
       }),
     ).toEqual({ total: 4, used: 1, ready: 2, inHold: 1, underReview: 1 });
+  });
+
+  it("the sign-up screen pitches the commission with the policy's numbers, and never 'never cash'", () => {
+    const { container } = render(
+      <AffiliatesClient status={status()} overview={null} appBase={APP} shopName="Fade Lab" />,
+    );
+    expect(screen.getByTestId("affiliates-tagline").textContent).toMatch(/^Get paid for every business/);
+    const text = container.textContent ?? "";
+    expect(text).toContain(`${bpsToPercent(C.cashBps)}% of what they pay`);
+    expect(text).toContain(`${bpsToPercent(C.creditBps)}% as ChairBack credit`);
+    expect(screen.getByTestId("pitch-rules").textContent).toContain(
+      `${formatUsdCents(C.minimumCashPayoutCents)} or more`,
+    );
+    expect(text).not.toMatch(/never cash/i);
+    expect(text).not.toMatch(/month off/i);
   });
 });
 

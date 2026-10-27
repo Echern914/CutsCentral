@@ -215,6 +215,37 @@ describe("affiliate admin: review queue and decisions", () => {
     expect(accounts).toBe(1);
   });
 
+  it("🔴 an application sent under OLDER terms is approved under those terms, not the current version", async () => {
+    const admin = await makeAdmin("afa-oldterms-admin");
+    const owner = await newShop("afa-oldterms");
+    const applicationId = await submitApplication(owner.cookie);
+    // As if it had been sent before the last terms bump and approved after.
+    const older = `${AFFILIATE_TERMS_VERSION}-older`;
+    await runAsOwner((tx) =>
+      tx.affiliateApplication.update({
+        where: { id: applicationId },
+        data: { acceptedTermsVersion: older },
+      }),
+    );
+
+    const approved = await request(app)
+      .post(`/api/admin-portal/affiliate/applications/${applicationId}/approve`)
+      .set("Cookie", admin.cookie)
+      .send({});
+    expect(approved.status).toBe(200);
+
+    const account = await runAsOwner((tx) =>
+      tx.affiliateAccount.findUniqueOrThrow({ where: { shopId: owner.shopId } }),
+    );
+    expect(account.acceptedTermsVersion).toBe(older);
+    const audit = await runAsOwner((tx) =>
+      tx.affiliateAuditEvent.findFirstOrThrow({
+        where: { shopId: owner.shopId, type: "application.approved" },
+      }),
+    );
+    expect((audit.metadata as { termsVersion?: string }).termsVersion).toBe(older);
+  });
+
   it("reject requires an on-vocabulary classification and is replay-safe too", async () => {
     const admin = await makeAdmin("afa-rej-admin");
     const owner = await newShop("afa-rej");
