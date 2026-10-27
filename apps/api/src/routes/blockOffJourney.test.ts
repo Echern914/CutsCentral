@@ -47,7 +47,7 @@ async function makeShop(label: string) {
   const shopId = shopRes.body.id as string;
   await prisma.shop.update({
     where: { id: shopId },
-    data: { bookingMode: "native", timezone: "UTC", bookingLeadHours: 0 },
+    data: { bookingMode: "native", timezone: "UTC", bookingLeadMinutes: 0 },
   });
   const me = await request(app).get("/api/shops/me").set("Cookie", cookie);
   const service = await prisma.service.create({

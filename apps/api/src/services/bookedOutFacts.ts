@@ -47,7 +47,7 @@ export async function collectBookedOutFacts(scope: BookedOutScope): Promise<Book
       instagramHandle: true,
       googleReviewUrl: true,
       waitlistEnabled: true,
-      bookingLeadHours: true,
+      bookingLeadMinutes: true,
       bookingMaxDays: true,
       rewardsEnabled: true,
     },
@@ -326,7 +326,7 @@ export async function collectBookedOutFacts(scope: BookedOutScope): Promise<Book
         },
     profileMissingPhoto: staff.filter((s) => !s.imageUrl).length,
     booking: {
-      leadHours: shop.bookingLeadHours,
+      leadMinutes: shop.bookingLeadMinutes,
       maxDays: shop.bookingMaxDays,
       waitlistEnabled: shop.waitlistEnabled,
     },

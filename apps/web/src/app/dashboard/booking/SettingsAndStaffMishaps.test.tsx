@@ -42,6 +42,7 @@ const SHOP = {
   bookingMode: "native",
   bookingUrl: null,
   bookingLeadHours: 2,
+  bookingLeadMinutes: 120,
   bookingMaxDays: 60,
   bookingBufferMin: 0,
   waitlistEnabled: true,
@@ -78,15 +79,11 @@ function renderSettings() {
 }
 
 describe("booking rules", () => {
-  it("🔴 a notice over the API's 720 hours is never sent", async () => {
+  it("🔴 no notice over the API's 30 days is even offered", () => {
     renderSettings();
-    const box = screen.getByRole("spinbutton", { name: /Min notice/ });
-    fireEvent.focus(box);
-    fireEvent.change(box, { target: { value: "1000" } });
-    fireEvent.blur(box);
-    fireEvent.click(screen.getByRole("button", { name: /Save/ }));
-    await waitFor(() => expect(a.saveBookingSettingsAction).toHaveBeenCalled());
-    expect(a.saveBookingSettingsAction.mock.calls[0]![0].bookingLeadHours).toBeLessThanOrEqual(720);
+    const box = screen.getByRole("combobox", { name: /Last-minute booking limit/ }) as HTMLSelectElement;
+    const values = [...box.options].map((o) => Number(o.value));
+    expect(Math.max(...values)).toBeLessThanOrEqual(43_200);
   });
 
   it("🔴 a refused toggle goes back to what the server still has", async () => {

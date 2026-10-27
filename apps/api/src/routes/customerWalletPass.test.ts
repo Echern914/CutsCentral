@@ -149,7 +149,7 @@ beforeAll(async () => {
   shopId = shop.body.id;
   await prisma.shop.update({
     where: { id: shopId },
-    data: { timezone: "UTC", bookingMode: "native", bookingLeadHours: 0 },
+    data: { timezone: "UTC", bookingMode: "native", bookingLeadMinutes: 0 },
   });
   staffId = (await prisma.staff.create({ data: { shopId, name: "Drick" }, select: { id: true } })).id;
   serviceId = (

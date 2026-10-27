@@ -45,7 +45,7 @@ function ready(over: Partial<ReadinessFacts> = {}): ReadinessFacts {
     publicPageEnabled: true,
     bookingMode: "native",
     bookingUrl: null,
-    bookingLeadHours: 2,
+    bookingLeadMinutes: 120,
     bookingMaxDays: 60,
     hasActiveAccess: true,
     staff: [
@@ -312,7 +312,7 @@ describe("every required item, broken one at a time", () => {
     ["slug", { slug: null }, "shop.slug"],
     ["active barber", { staff: [], activeOfferingPairs: 0 }, "shop.staff.active"],
     ["active service", { services: [], activeOfferingPairs: 0 }, "shop.service.active"],
-    ["booking window", { bookingLeadHours: 720, bookingMaxDays: 1 }, "shop.booking.window"],
+    ["booking window", { bookingLeadMinutes: 43_200, bookingMaxDays: 1 }, "shop.booking.window"],
   ];
   for (const [label, over, id] of cases) {
     it(`blocks on ${label}, and only that`, () => {
@@ -1152,7 +1152,7 @@ describe("milestones", () => {
       if (i.silentWhenDone && i.done) expect(r.blocking).not.toContain(i);
     }
     // ...and surface the moment they fail.
-    const broken = build({ bookingLeadHours: 720, bookingMaxDays: 1 });
+    const broken = build({ bookingLeadMinutes: 43_200, bookingMaxDays: 1 });
     expect(blockingIds(broken)).toContain("shop.booking.window");
   });
 });

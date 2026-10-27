@@ -375,7 +375,7 @@ describe("status updates", () => {
         bookingMode: "native",
         waitlistEnabled: true,
         slotOpenedTextsEnabled: true,
-        bookingLeadHours: 0,
+        bookingLeadMinutes: 0,
         bookingBufferMin: 0,
       },
     });

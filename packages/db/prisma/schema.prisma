@@ -583,7 +583,13 @@ model Shop {
   // barber explicitly switches to `native`. The bounds below shape the public
   // slot picker - all interpreted in this shop's `timezone`.
   bookingMode      BookingMode @default(link)
-  bookingLeadHours Int         @default(2) // earliest bookable slot = now + this many hours
+  // 🔴 LEGACY. Every reader uses bookingLeadMinutes; the API still writes this
+  // as ceil(minutes / 60) so code deployed before the minutes column stays
+  // right. Drop it once nothing deployed reads it.
+  bookingLeadHours Int         @default(2)
+  // Minimum notice: the earliest bookable slot = now + this many MINUTES.
+  // 0..43200 (30 days), CHECK-pinned. Rule: engines/bookingWindow.ts.
+  bookingLeadMinutes Int       @default(120)
   bookingMaxDays   Int         @default(60) // how far ahead a customer may book
   // How close to the start a CLIENT may still move a booking themselves (the
   // manage link, a text to the receptionist). Inside it they are told to

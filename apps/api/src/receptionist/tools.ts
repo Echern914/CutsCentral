@@ -9,6 +9,7 @@ import {
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { logger } from "../logger.js";
 import { computeOpenSlots, isSlotBookable, type Slot } from "../engines/slots.js";
+import { bookingWindow } from "../engines/bookingWindow.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { bookingBlockedFor } from "../services/clientBookingBlock.js";
@@ -1074,12 +1075,11 @@ async function bookAppointment(
     // move (startsAt < now + lead is too soon; > now + maxDays is too far).
     const bounds = await prisma.shop.findUnique({
       where: { id: ctx.shopId },
-      select: { bookingLeadHours: true, bookingMaxDays: true },
+      select: { bookingLeadMinutes: true, bookingMaxDays: true },
     });
     if (bounds) {
-      const earliest = ctx.now.getTime() + bounds.bookingLeadHours * 3_600_000;
-      const latest = ctx.now.getTime() + bounds.bookingMaxDays * 24 * 3_600_000;
-      if (slot.startsAt.getTime() < earliest || slot.startsAt.getTime() > latest) {
+      const { earliest, latest } = bookingWindow(bounds, ctx.now);
+      if (slot.startsAt.getTime() < earliest.getTime() || slot.startsAt.getTime() > latest.getTime()) {
         return fail(
           "that time is no longer bookable - it's now inside the shop's minimum notice " +
             "(or past how far ahead it books). Nothing was booked. Run check_availability " +

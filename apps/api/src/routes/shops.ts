@@ -56,6 +56,7 @@ import {
 import { CLIENT_NOTE_MAX, normalizeClientNote } from "@chairback/config/clientNote";
 import { RESCHEDULE_CUTOFF_MAX_HOURS } from "@chairback/config/rescheduleCutoff";
 import { CANCEL_CUTOFF_MAX_HOURS } from "@chairback/config/customerChangeRules";
+import { BOOKING_LEAD_MAX_MINUTES, leadMinutesToLegacyHours } from "@chairback/config/bookingRuleUnits";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
 import { livePromotions } from "../services/livePromotions.js";
 import { bookingBlockedFor, CONTACT_SHOP_ERROR } from "../services/clientBookingBlock.js";
@@ -403,6 +404,11 @@ const updateShopSchema = createShopSchema
     // Native booking engine. bookingMode picks the ONE active source; the bounds
     // shape the public slot picker (all interpreted in the shop's timezone).
     bookingMode: z.enum(BOOKING_MODES),
+    // Minimum notice, in MINUTES (config/bookingRuleUnits.ts): 15 minutes is
+    // a real choice. bookingLeadHours is the LEGACY spelling - still accepted
+    // so a settings page loaded before the deploy keeps saving; the handler
+    // converts it, and minutes wins when both arrive.
+    bookingLeadMinutes: z.number().int().min(0).max(BOOKING_LEAD_MAX_MINUTES),
     bookingLeadHours: z.number().int().min(0).max(720),
     bookingMaxDays: z.number().int().min(1).max(365),
     bookingBufferMin: z.number().int().min(0).max(240),
@@ -888,6 +894,16 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
   const { gallery, ...rest } = parsed.data;
   // Normalize empty strings on optional branding/page fields to null.
   const data: Record<string, unknown> = { ...rest };
+  // Minimum notice: minutes is the rule every reader uses. Legacy hours from
+  // an older page become minutes; whichever arrived, the legacy hours column
+  // is written alongside as ceil(minutes / 60) so code deployed before the
+  // minutes column never reads a SHORTER notice than the shop chose.
+  if (data.bookingLeadMinutes === undefined && typeof data.bookingLeadHours === "number") {
+    data.bookingLeadMinutes = data.bookingLeadHours * 60;
+  }
+  if (typeof data.bookingLeadMinutes === "number") {
+    data.bookingLeadHours = leadMinutesToLegacyHours(data.bookingLeadMinutes);
+  }
   // Booking link is optional: blank/whitespace clears it (no external booking
   // source; "Book" CTAs fall back to the rewards page).
   if (typeof data.bookingUrl === "string" && !data.bookingUrl.trim()) {
@@ -1900,7 +1916,7 @@ function serializeShop(shop: {
   rewardsEnabled: boolean;
   loyaltyTextsEnabled: boolean;
   bookingMode: string;
-  bookingLeadHours: number;
+  bookingLeadMinutes: number;
   bookingMaxDays: number;
   bookingBufferMin: number;
   rescheduleCutoffHours: number;
@@ -1985,7 +2001,10 @@ function serializeShop(shop: {
     tierRulesCustom: shop.tierRules !== null,
     loyaltyTextsEnabled: shop.loyaltyTextsEnabled,
     bookingMode: shop.bookingMode,
-    bookingLeadHours: shop.bookingLeadHours,
+    // Minutes is the rule; hours is derived (rounded up) for a page built
+    // before minutes existed, so the two never disagree on the wire.
+    bookingLeadMinutes: shop.bookingLeadMinutes,
+    bookingLeadHours: leadMinutesToLegacyHours(shop.bookingLeadMinutes),
     bookingMaxDays: shop.bookingMaxDays,
     bookingBufferMin: shop.bookingBufferMin,
     rescheduleCutoffHours: shop.rescheduleCutoffHours,

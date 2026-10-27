@@ -321,7 +321,7 @@ export async function offerFreedSlot(
         depositAmountCents: true,
         requireCardToBook: true,
         autoFillEnabled: true,
-        bookingLeadHours: true,
+        bookingLeadMinutes: true,
       },
     }),
     prisma.service.findFirst({
@@ -347,7 +347,7 @@ export async function offerFreedSlot(
   // booking page gets the time back while it can still be booked. Every
   // advance comes through here, so each next person gets the same rule.
   if (policyShop.autoFillEnabled) {
-    const deadline = autoFillDeadline(slot.startsAt, policyShop.bookingLeadHours);
+    const deadline = autoFillDeadline(slot.startsAt, policyShop.bookingLeadMinutes);
     expiresAt = new Date(Math.min(now.getTime() + AUTO_FILL_STAGE_MS, deadline.getTime(), expiresAt.getTime()));
     if (expiresAt.getTime() - now.getTime() < AUTO_FILL_MIN_WAITLIST_HOLD_MS) return { outcome: "too_soon" };
   }

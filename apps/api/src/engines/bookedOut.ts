@@ -3,6 +3,7 @@ import {
   type BookedOutBrief,
   type BookedOutItem,
 } from "@chairback/config/bookedOut";
+import { formatDuration } from "@chairback/config/bookingRuleUnits";
 
 /**
  * "How do I get booked out more?" - turned into THIS shop's own list.
@@ -60,7 +61,8 @@ export interface BookedOutFacts {
   /** The provider's own profile (own scope), or any provider missing one (shop scope). */
   profileMissingPhoto: number;
   booking: {
-    leadHours: number;
+    /** Minimum notice, in MINUTES (Shop.bookingLeadMinutes). */
+    leadMinutes: number;
     maxDays: number;
     waitlistEnabled: boolean;
   };
@@ -96,8 +98,8 @@ export const BOOKED_OUT_RULES = {
   minOverdue: 3,
   /** A booking window shorter than this many days turns planners away. */
   shortMaxDays: 28,
-  /** A lead time longer than this many hours turns same-day clients away. */
-  longLeadHours: 24,
+  /** A lead time longer than this many minutes (a day) turns same-day clients away. */
+  longLeadMinutes: 24 * 60,
   /** Fewer gallery photos than this and the page reads as empty. */
   minGallery: 3,
 } as const;
@@ -298,12 +300,12 @@ export function diagnoseBookedOut(f: BookedOutFacts): BookedOutBrief {
         action: { label: "Change booking rules", featureId: "booking-rules" },
       });
     }
-    if (f.booking.leadHours > R.longLeadHours) {
+    if (f.booking.leadMinutes > R.longLeadMinutes) {
       items.push({
         id: "long_lead",
         weight: 28,
         title: "Take same-day bookings",
-        finding: `Clients have to book at least ${plural(f.booking.leadHours, "hour")} ahead.`,
+        finding: `Clients have to book at least ${formatDuration(f.booking.leadMinutes)} ahead.`,
         fix: "Last-minute clients go to whoever can take them today. A shorter notice time keeps them.",
         action: { label: "Change booking rules", featureId: "booking-rules" },
       });

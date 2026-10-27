@@ -44,7 +44,7 @@ async function makeShop(name: string) {
       webhookSecret: randomToken(),
       timezone: TZ,
       bookingMode: "native",
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
       trialEndsAt: new Date(Date.now() + 30 * 86_400_000),
     },
     select: { id: true, slug: true },

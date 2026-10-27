@@ -114,7 +114,7 @@ beforeAll(async () => {
       waitlistEnabled: true,
       slotOpenedTextsEnabled: true,
       bookingBufferMin: 0,
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
     },
     select: { slug: true },
   });

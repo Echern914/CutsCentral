@@ -93,7 +93,7 @@ beforeAll(async () => {
       waitlistEnabled: true,
       slotOpenedTextsEnabled: true,
       bookingBufferMin: 0,
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
       trialEndsAt: new Date(Date.now() + 30 * 86_400_000),
     },
     select: { id: true },

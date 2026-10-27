@@ -107,7 +107,7 @@ export async function collectReadinessFacts(
       publicPageEnabled: true,
       bookingMode: true,
       bookingUrl: true,
-      bookingLeadHours: true,
+      bookingLeadMinutes: true,
       bookingMaxDays: true,
       ownerId: true,
       notifyPhone: true,
@@ -348,7 +348,7 @@ export async function collectReadinessFacts(
     publicPageEnabled: shop.publicPageEnabled,
     bookingMode: shop.bookingMode,
     bookingUrl: shop.bookingUrl,
-    bookingLeadHours: shop.bookingLeadHours,
+    bookingLeadMinutes: shop.bookingLeadMinutes,
     bookingMaxDays: shop.bookingMaxDays,
     hasActiveAccess: hasActiveAccess(shop),
 

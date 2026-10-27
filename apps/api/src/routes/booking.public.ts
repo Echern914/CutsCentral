@@ -89,6 +89,7 @@ import { checkPolicyAcceptance, publicBookingPolicy } from "../engines/bookingPo
 import { normalizeClientNote } from "@chairback/config/clientNote";
 import { parseHolidayNames } from "@chairback/config/servicePricing";
 import { rescheduleClosesAt } from "@chairback/config/rescheduleCutoff";
+import { leadMinutesToLegacyHours } from "@chairback/config/bookingRuleUnits";
 import {
   customerChange,
   customerChangeClosesAt,
@@ -721,7 +722,10 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       // actually put in their Instagram bio — never did, so the traffic arrived
       // from Instagram with no way back to it.
       instagramHandle: shop.instagramHandle,
-      bookingLeadHours: shop.bookingLeadHours,
+      // Minutes is the rule; hours stays on the wire for a page built before
+      // minutes existed (rounded UP, so it never shows a shorter notice).
+      bookingLeadMinutes: shop.bookingLeadMinutes,
+      bookingLeadHours: leadMinutesToLegacyHours(shop.bookingLeadMinutes),
       bookingMaxDays: shop.bookingMaxDays,
       // Lapsed shops can't take bookings (the create POST 403s) - tell the UI
       // up front so a customer isn't walked through the whole flow into a
@@ -1509,7 +1513,7 @@ bookingPublicRouter.get("/:slug/open-days", bookingReadLimiter, async (req, res)
 async function computeOpenDays(shop: {
   id: string;
   timezone: string;
-  bookingLeadHours: number;
+  bookingLeadMinutes: number;
   bookingMaxDays: number;
 }): Promise<unknown> {
   const now = new Date();
@@ -4415,7 +4419,7 @@ bookingPublicRouter.post(
           select: {
             name: true,
             timezone: true,
-            bookingLeadHours: true,
+            bookingLeadMinutes: true,
             bookingMaxDays: true,
             bookingBufferMin: true,
             rescheduleCutoffHours: true,
@@ -4517,13 +4521,13 @@ bookingPublicRouter.post(
         timeWindows: appt.service.timeOverrides,
       },
     );
-    const earliest = now.getTime() + appt.shop.bookingLeadHours * 60 * 60_000;
-    const latest = now.getTime() + appt.shop.bookingMaxDays * 24 * 60 * 60_000;
-    if (startsAt.getTime() < earliest) {
+    // The same window as the booking POST and the slot grid (bookingWindow.ts).
+    const { earliest, latest } = bookingWindow(appt.shop, now);
+    if (startsAt.getTime() < earliest.getTime()) {
       res.status(400).json({ error: "too_soon" });
       return;
     }
-    if (startsAt.getTime() > latest) {
+    if (startsAt.getTime() > latest.getTime()) {
       res.status(400).json({ error: "too_far" });
       return;
     }

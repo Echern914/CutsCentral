@@ -51,7 +51,7 @@ async function makeShop(label: string) {
 
   await prisma.shop.update({
     where: { id: shopId },
-    data: { bookingMode: "native", timezone: "UTC", bookingLeadHours: 0 },
+    data: { bookingMode: "native", timezone: "UTC", bookingLeadMinutes: 0 },
   });
   const staff = await prisma.staff.create({
     data: { shopId, name: "Sam" },

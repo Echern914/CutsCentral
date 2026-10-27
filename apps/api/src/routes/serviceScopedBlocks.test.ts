@@ -49,7 +49,7 @@ async function makeShop() {
   await prisma.shop.update({
     where: { id: shopId },
     // No lead time, no reschedule cutoff: the block is the only rule in play.
-    data: { bookingMode: "native", timezone: "UTC", bookingLeadHours: 0, rescheduleCutoffHours: 0 },
+    data: { bookingMode: "native", timezone: "UTC", bookingLeadMinutes: 0, rescheduleCutoffHours: 0 },
   });
   const me = await request(app).get("/api/shops/me").set("Cookie", cookie);
   const svc = async (name: string, durationMin: number) =>

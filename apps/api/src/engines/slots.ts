@@ -18,6 +18,7 @@ import {
   shopLocalDayWindow,
 } from "./serviceDailyLimit.js";
 import { QUEUE_ORDER } from "./walkInLifecycle.js";
+import { leadMs } from "./bookingWindow.js";
 import { planWalkInReservations } from "./walkInCapacity.js";
 
 /**
@@ -30,7 +31,7 @@ import { planWalkInReservations } from "./walkInCapacity.js";
  *      via zonedWallTimeToUtc - never a hand-rolled offset),
  *   2. add one-off "open" exceptions and subtract "block" exceptions + existing
  *      BOOKED appointments (padded by the shop's turnover buffer),
- *   3. clip to [now+leadHours, now+maxDays],
+ *   3. clip to [now+leadMinutes, now+maxDays],
  *   4. slice each remaining free window into service-duration steps.
  *
  * The returned list is ADVISORY (the customer's browser may be stale): the
@@ -261,8 +262,8 @@ export interface FreeRangesInput {
    */
   ignoreServiceScopedBlocks?: boolean;
   /**
-   * Skip the shop's bookingLeadHours when computing the lower bound. The lead
-   * time is a BOOKING rule (how far ahead a customer must book online), not a
+   * Skip the shop's minimum notice (bookingLeadMinutes) when computing the
+   * lower bound. The lead time is a BOOKING rule (how far ahead a customer must book online), not a
    * physics rule - a walk-in standing in the shop can be served now. Default
    * false, so every existing caller keeps the online-booking behavior.
    */
@@ -315,7 +316,7 @@ export async function computeFreeRanges(
     where: { id: input.shopId },
     select: {
       timezone: true,
-      bookingLeadHours: true,
+      bookingLeadMinutes: true,
       bookingMaxDays: true,
       bookingBufferMin: true,
       walkInEnabled: true,
@@ -329,7 +330,9 @@ export async function computeFreeRanges(
   // (a walk-in can start now); the horizon clamp stays either way.
   const earliest =
     now.getTime() +
-    (input.ignoreLeadTime ? 0 : shop.bookingLeadHours * 60 * MS_PER_MIN);
+    // 🔴 The SAME conversion the booking POST uses (bookingWindow.ts leadMs):
+    // a grid that offered what the write refuses was a live outage (#344).
+    (input.ignoreLeadTime ? 0 : leadMs(shop));
   const maxHorizon = input.ignoreHorizon
     ? Number.POSITIVE_INFINITY
     : addDays(now, shop.bookingMaxDays).getTime();

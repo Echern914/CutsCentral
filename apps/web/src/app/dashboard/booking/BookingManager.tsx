@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   useTransition,
@@ -99,6 +100,17 @@ import { ServiceOrderList, inSavedOrder } from "./ServiceOrder";
 import { isHiddenService } from "@chairback/config/serviceVisibility";
 import { RESCHEDULE_CUTOFF_MAX_HOURS, formatCutoffHours } from "@chairback/config/rescheduleCutoff";
 import { CANCEL_CUTOFF_MAX_HOURS } from "@chairback/config/customerChangeRules";
+import {
+  bufferOptions,
+  cutoffOptions,
+  describeBuffer,
+  describeLead,
+  describeMaxDays,
+  leadMinutesToLegacyHours,
+  leadOptions,
+  maxDaysOptions,
+  type RuleOption,
+} from "@chairback/config/bookingRuleUnits";
 import { UpgradeRules } from "./UpgradeRules";
 import {
   MAX_ADD_ON_MINUTES,
@@ -454,9 +466,55 @@ function clientChangeFields(
 }
 
 /**
+ * One booking rule as a dropdown whose every choice says its unit ("15
+ * minutes", "2 hours", "1 week"), with the sentence that explains it beneath.
+ * It replaced bare number boxes ("Min notice (hours, 0 to 720)"): a barber
+ * typed 15 meaning minutes and got 15 hours. The options come from
+ * config/bookingRuleUnits.ts and always include the shop's current value, so
+ * opening the card and saving never silently changes a rule.
+ */
+function RuleSelect({
+  label,
+  value,
+  options,
+  onChange,
+  helpId,
+  help,
+}: {
+  label: string;
+  value: number;
+  options: RuleOption[];
+  onChange: (n: number) => void;
+  helpId: string;
+  help: string;
+}) {
+  return (
+    <label className="block min-w-0">
+      <span className={labelCls}>{label}</span>
+      <select
+        className={field}
+        value={String(value)}
+        onChange={(e) => onChange(Number(e.target.value))}
+        aria-describedby={helpId}
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <p id={helpId} className="mt-1 text-[11px] text-muted">
+        {help}
+      </p>
+    </label>
+  );
+}
+
+/**
  * One "Clients can ... online" rule in Booking rules: the switch (saves on its
- * own, like every other switch on this page) and the hours box (saved with
- * the booking rules). Either half is left out when the API never answered it.
+ * own, like every other switch on this page) and the cutoff dropdown (saved
+ * with the booking rules). Either half is left out when the API never
+ * answered it.
  */
 function ClientChangeRule({
   title,
@@ -465,7 +523,7 @@ function ClientChangeRule({
   pending,
   hours,
   onHours,
-  maxHours,
+  hoursOptions,
   hoursLabel,
   helpId,
   help,
@@ -478,7 +536,7 @@ function ClientChangeRule({
   pending: boolean;
   hours: number | null;
   onHours: (n: number) => void;
-  maxHours: number;
+  hoursOptions: RuleOption[];
   hoursLabel: string;
   helpId: string;
   help: string;
@@ -509,17 +567,20 @@ function ClientChangeRule({
         )}
       </div>
       {hours !== null && on !== false && (
-        <label className="mt-3 block sm:max-w-sm">
+        <label className="mt-3 block min-w-0 sm:max-w-sm">
           <span className={labelCls}>{hoursLabel}</span>
-          <NumberField
-            min={0}
-            max={maxHours}
-            integer
+          <select
             className={field}
-            value={hours}
-            onChange={onHours}
+            value={String(hours)}
+            onChange={(e) => onHours(Number(e.target.value))}
             aria-describedby={helpId}
-          />
+          >
+            {hoursOptions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
         </label>
       )}
       <p id={helpId} className="mt-2 text-[11px] text-muted">
@@ -545,7 +606,25 @@ export function SettingsTab({
 }) {
   const [mode, setMode] = useState(shop.bookingMode);
   const [bookingUrl, setBookingUrl] = useState(shop.bookingUrl ?? "");
-  const [lead, setLead] = useState(shop.bookingLeadHours);
+  // Minimum notice, in MINUTES. An older API answers only whole hours: the
+  // card then offers whole hours only and saves them the old way, so nothing
+  // it shows is rounded on the way out.
+  const leadInMinutes = shop.bookingLeadMinutes !== undefined;
+  const [lead, setLead] = useState(shop.bookingLeadMinutes ?? shop.bookingLeadHours * 60);
+  // Options from what the shop HAS (not the live pick), so its current value
+  // always stays a choice, labelled in its unit.
+  const ruleOptions = useMemo(
+    () => ({
+      lead: leadOptions(shop.bookingLeadMinutes ?? shop.bookingLeadHours * 60).filter(
+        (o) => leadInMinutes || o.value % 60 === 0,
+      ),
+      maxDays: maxDaysOptions(shop.bookingMaxDays),
+      buffer: bufferOptions(shop.bookingBufferMin),
+      reschedule: cutoffOptions(shop.rescheduleCutoffHours, RESCHEDULE_CUTOFF_MAX_HOURS),
+      cancel: cutoffOptions(shop.cancelCutoffHours, CANCEL_CUTOFF_MAX_HOURS),
+    }),
+    [shop, leadInMinutes],
+  );
   const [maxDays, setMaxDays] = useState(shop.bookingMaxDays);
   const [buffer, setBuffer] = useState(shop.bookingBufferMin);
   // Null = an older API that never answered it: nothing shown, nothing sent.
@@ -587,7 +666,9 @@ export function SettingsTab({
         // Only the "Your booking link" card sends the URL; toggles omit it so a
         // half-typed link can never fail an unrelated save (schema is partial).
         ...(next.bookingUrl !== undefined ? { bookingUrl: next.bookingUrl } : {}),
-        bookingLeadHours: lead,
+        ...(leadInMinutes
+          ? { bookingLeadMinutes: lead }
+          : { bookingLeadHours: leadMinutesToLegacyHours(lead) }),
         bookingMaxDays: maxDays,
         bookingBufferMin: buffer,
         ...(cutoff !== null ? { rescheduleCutoffHours: cutoff } : {}),
@@ -746,49 +827,34 @@ export function SettingsTab({
             subtitle="How far out and how tight customers can book - targeted slots included."
           />
           <div className="mt-4 grid gap-4 sm:grid-cols-3">
-            <label className="block">
-              <span className={labelCls}>Min notice (hours, 0 to 720)</span>
-              <NumberField
-                min={0}
-                max={720}
-                integer
-                className={field}
-                value={lead}
-                onChange={setLead}
-              />
-            </label>
-            <label className="block">
-              <span className={labelCls}>Book up to (days ahead, 1 to 365)</span>
-              <NumberField
-                min={1}
-                max={365}
-                integer
-                className={field}
-                value={maxDays}
-                onChange={setMaxDays}
-              />
-            </label>
-            <label className="block">
-              <span className={labelCls}>Buffer between (min, 0 to 240)</span>
-              <NumberField
-                min={0}
-                max={240}
-                integer
-                className={field}
-                value={buffer}
-                onChange={setBuffer}
-                aria-describedby="buffer-help"
-              />
-              {/* The buffer must FIT after every slot, including the day's
-                  last - so it silently retreats the final bookable time
-                  (pilot: "no 7pm slot" on a 7:30 close with a buffer). Say it
-                  here, the one place the number is set. */}
-              <p id="buffer-help" className="mt-1 text-[11px] text-muted">
-                Breathing room after every booking. The last slot of the day
-                needs its buffer too — a 15-min buffer means the final booking
-                ends 15 min before closing.
-              </p>
-            </label>
+            <RuleSelect
+              label="Last-minute booking limit"
+              value={lead}
+              options={ruleOptions.lead}
+              onChange={setLead}
+              helpId="lead-help"
+              help={describeLead(lead)}
+            />
+            <RuleSelect
+              label="Future booking limit"
+              value={maxDays}
+              options={ruleOptions.maxDays}
+              onChange={setMaxDays}
+              helpId="max-days-help"
+              help={describeMaxDays(maxDays)}
+            />
+            {/* The buffer must FIT after every slot, including the day's
+                last - so it silently retreats the final bookable time
+                (pilot: "no 7pm slot" on a 7:30 close with a buffer). Say it
+                here, the one place it is set. */}
+            <RuleSelect
+              label="Buffer between appointments"
+              value={buffer}
+              options={ruleOptions.buffer}
+              onChange={setBuffer}
+              helpId="buffer-help"
+              help={describeBuffer(buffer)}
+            />
           </div>
           {/* WHAT CLIENTS MAY CHANGE THEMSELVES (config/customerChangeRules.ts):
               from their link, their group link, or by text. The barber is
@@ -802,8 +868,8 @@ export function SettingsTab({
               pending={pending}
               hours={cutoff}
               onHours={setCutoff}
-              maxHours={RESCHEDULE_CUTOFF_MAX_HOURS}
-              hoursLabel={`Clients can reschedule up to (hours before, 0 to ${RESCHEDULE_CUTOFF_MAX_HOURS})`}
+              hoursOptions={ruleOptions.reschedule}
+              hoursLabel="Clients can reschedule up to"
               helpId="cutoff-help"
               help={
                 clientMoves === false
@@ -823,8 +889,8 @@ export function SettingsTab({
               pending={pending}
               hours={cancelCutoff}
               onHours={setCancelCutoff}
-              maxHours={CANCEL_CUTOFF_MAX_HOURS}
-              hoursLabel={`Clients can cancel up to (hours before, 0 to ${CANCEL_CUTOFF_MAX_HOURS})`}
+              hoursOptions={ruleOptions.cancel}
+              hoursLabel="Clients can cancel up to"
               helpId="cancel-cutoff-help"
               help={
                 clientCancels === false

@@ -108,7 +108,7 @@ beforeAll(async () => {
       timezone: "UTC",
       bookingMode: "native",
       bookingBufferMin: 0,
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
       walkInEnabled: true,
     },
     select: { id: true },

@@ -117,7 +117,7 @@ async function openDays(): Promise<string[]> {
   return res.body.openDays as string[];
 }
 
-async function setRules(rules: { bookingLeadHours?: number; bookingMaxDays?: number }) {
+async function setRules(rules: { bookingLeadHours?: number; bookingLeadMinutes?: number; bookingMaxDays?: number }) {
   const res = await request(app).patch("/api/shops/me").set("Cookie", cookie).send(rules);
   expect(res.status).toBe(200);
 }
@@ -202,7 +202,7 @@ describe("🔴 a special inside the min notice", () => {
     const at = minutesFromNow(60);
     const id = await publishSlot(at);
     expect(await flatTargetedIds()).not.toContain(id);
-    await setRules({ bookingLeadHours: 0 });
+    await setRules({ bookingLeadMinutes: 0 });
     try {
       expect(await flatTargetedIds()).toContain(id);
       const res = await bookSlot(at, id);
