@@ -521,6 +521,18 @@ export default function TermsPage() {
         INCLUDING CLIENT RETENTION OR REBOOKINGS. NOTHING IN THE SERVICE IS
         LEGAL ADVICE.
       </Notice>
+      <P>
+        <Strong>Figures are estimates.</Strong> The insights, revenue and
+        earnings figures, goals, forecasts, and reports the Service shows you
+        are estimates built from the data in the Service: your bookings, the
+        calendars you sync, and what you and your team enter. They can be
+        incomplete, and they can differ from what you actually received, for
+        example because of cash and tips, refunds, payment processor fees,
+        taxes, payments taken outside {APP_NAME}, or gaps in a calendar sync.
+        They are not accounting, tax, legal, or financial advice. Check them
+        against your own records before relying on them, and ask a qualified
+        professional about your taxes and finances.
+      </P>
 
       <H2>16. Limitation of liability</H2>
       <Notice>

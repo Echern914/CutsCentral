@@ -200,6 +200,13 @@ export default function PrivacyPage() {
           hear about them.
         </li>
         <li>
+          Show Shops insights, revenue and earnings figures, goals, and
+          reports. These are derived from the data in the Service (bookings,
+          synced calendars, and what the Shop enters), so they are estimates
+          and may not be exact; see Section 15 of our{" "}
+          <A href="/terms">Terms of Service</A>.
+        </li>
+        <li>
           Communicate with Shop owners about their account, billing, and
           important Service changes.
         </li>

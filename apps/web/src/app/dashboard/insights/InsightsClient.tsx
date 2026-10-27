@@ -396,6 +396,12 @@ export function InsightsClient({
           />
         </motion.div>
       )}
+      {/* Under every figure on the tab, the peek included (it shows Revenue
+          too). The long form is Terms §15 "Figures are estimates". */}
+      <motion.p variants={fadeUp} className="text-[11px] leading-snug text-muted" data-testid="insights-estimates">
+        Estimates from your ChairBack bookings and synced calendars, and the expenses you enter — not exact, and not tax or
+        financial advice. Check against your own records.
+      </motion.p>
     </motion.div>
   );
 }

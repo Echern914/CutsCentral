@@ -29,7 +29,7 @@ vi.mock("@/components/VocabProvider", () => ({
   cap: (w: string) => w.charAt(0).toUpperCase() + w.slice(1),
 }));
 
-const { ServiceBars, UtilizationCard } = await import("./InsightsClient");
+const { InsightsClient, ServiceBars, UtilizationCard } = await import("./InsightsClient");
 const { GoalPlanner } = await import("./GoalPlanner");
 
 beforeEach(() => {
@@ -132,5 +132,58 @@ describe("the goal planner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save goal & plan" }));
     expect((await screen.findByRole("alert")).textContent).toMatch(/Couldn't save the plan/);
     expect((screen.getByRole("button", { name: "Save goal & plan" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+/**
+ * The figures are estimates (Terms §15): the tab says so under them, and the
+ * goal planner says so under its projections.
+ */
+describe("figures are estimates", () => {
+  const NOTE = /Estimates from your ChairBack bookings and synced calendars, and the expenses you enter.*not tax or\s+financial advice/;
+
+  it("the Insights tab says so under its figures - the Starter peek included", () => {
+    render(
+      <InsightsClient
+        initial={{
+          scope: "peek",
+          period: "30d",
+          periodLabel: "Last 30 days",
+          bucket: "day",
+          bucketNoun: "day",
+          bucketOptions: ["day"],
+          windowStart: "2026-09-01",
+          windowEnd: "2026-09-30",
+          periods: [{ key: "30d", label: "Last 30 days" }],
+          buckets: [],
+          services: [],
+          totals: {
+            visits: 4,
+            revenue: 160,
+            avgTicket: 40,
+            pricedCount: 4,
+            unpricedCount: 0,
+            uniqueClients: 3,
+            newClients: 1,
+            returningClients: 2,
+            walkIns: 0,
+          },
+          busiest: { weekday: "Sat", counts: [0, 0, 0, 0, 1, 3, 0] },
+          loyalty: { punchesEarned: 0, punchesRedeemed: 0, redemptions: 0 },
+        }}
+      />,
+    );
+    expect(screen.getByTestId("insights-estimates").textContent).toMatch(NOTE);
+    expect(screen.getByTestId("insights-estimates").className).toContain("text-muted");
+  });
+
+  it("the goal planner says so under its projections", () => {
+    const goal: Goal = { metric: "revenue", period: "week", target: 1000, plan: null, progress: null };
+    const planner: PlannerData = {
+      services: [],
+      capacity: { week: { openMin: 2400 }, month: { openMin: 9600 } },
+    };
+    render(<GoalPlanner goal={goal} planner={planner} onSaved={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByTestId("planner-estimates").textContent).toMatch(/estimates.*not tax or\s+financial advice/);
   });
 });
