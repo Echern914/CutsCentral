@@ -1396,9 +1396,15 @@ describe("phase D: the windows decide, in ranked order", () => {
 
   it("an entry inserted WHILE the scan runs never breaks it: one offer, and the next scan sees them", async () => {
     const slot = freshSlot();
+    // 🔴 Draw the follow-up slot NOW and widen both windows to reach it. It is
+    // the next 2h lane, so after ~10 PM in New York it lands on the NEXT date;
+    // a "slotDate only" window then fits nobody and the follow-up scan said
+    // no_candidates (CI 2026-10-27 02:25 UTC, two unrelated PRs red at once).
+    const later = freshSlot();
     const slotDate = wallParts(slot.startsAt, TZ).date;
+    const laterDate = wallParts(later.startsAt, TZ).date;
     const existing = await makeEntry();
-    await addWindow(existing.id, { startDate: slotDate, endDate: slotDate });
+    await addWindow(existing.id, { startDate: slotDate, endDate: laterDate });
 
     // Race a fitting insert (backdated to rank FIRST) against the scan.
     const insertRacer = (async () => {
@@ -1411,7 +1417,7 @@ describe("phase D: the windows decide, in ranked order", () => {
         },
         select: { id: true },
       });
-      await addWindow(e.id, { startDate: slotDate, endDate: slotDate });
+      await addWindow(e.id, { startDate: slotDate, endDate: laterDate });
       return e;
     })();
     const [offered, inserted] = await Promise.all([
@@ -1430,7 +1436,7 @@ describe("phase D: the windows decide, in ranked order", () => {
       offered.outcome === "offered" && offered.entryId === inserted.id
         ? existing.id
         : inserted.id;
-    const next = await offerTo(freshSlot());
+    const next = await offerTo(later);
     expect(next.entryId).toBe(winner);
   });
 
