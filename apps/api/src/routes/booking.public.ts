@@ -3400,8 +3400,11 @@ const MANAGE_SELECT = {
           cancelCutoffHours: true,
         },
       },
-      service: { select: { name: true, durationMin: true } },
-      staff: { select: { name: true } },
+      // The ids ride along for "Book a new time": the booking page's rebook
+      // prefill (config/bookingLinks.ts rebookPath). Both are already public
+      // on the shop's own booking page, and that page re-checks them.
+      service: { select: { id: true, name: true, durationMin: true } },
+      staff: { select: { id: true, name: true } },
       // What was paid AT BOOKING and on which refund terms - so a client is
       // told, before they tap Cancel, that a non-refundable deposit stays.
       payments: {

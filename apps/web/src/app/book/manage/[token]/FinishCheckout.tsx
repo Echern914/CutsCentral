@@ -27,14 +27,15 @@ export function FinishCheckout({
   token,
   finish,
   shopName,
-  shopSlug,
+  bookHref,
   until,
   onBooked,
 }: {
   token: string;
   finish: Finish;
   shopName: string;
-  shopSlug: string | null;
+  /** "Book a new time": the booking page, the same service preselected (null = no page). */
+  bookHref: string | null;
   /** "1:04 PM", in the shop's time. */
   until: string;
   onBooked: () => void;
@@ -87,8 +88,8 @@ export function FinishCheckout({
         <p className="mt-1 text-muted">
           You have not been charged - anything taken is refunded in full, and the card has been let go.
         </p>
-        {shopSlug && (
-          <Link href={`/book/${shopSlug}`} className="mt-2 inline-block font-semibold text-offwhite underline">
+        {bookHref && (
+          <Link href={bookHref} className="mt-2 inline-block font-semibold text-offwhite underline">
             Book a new time
           </Link>
         )}

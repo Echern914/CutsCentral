@@ -5,6 +5,7 @@ import { runAsOwner, runWithShop } from "@chairback/db";
 import { customerApiLimiter } from "../middleware/rateLimit.js";
 import { requireCustomer, requireCustomerAccounts } from "../middleware/requireCustomer.js";
 import {
+  bookAgainUrl,
   buildHome,
   findEvent,
   loadPortal,
@@ -111,6 +112,20 @@ customerMeRouter.get("/appointments/:id/wallet-pass", async (req, res) => {
 /** The shop's existing storefront, as this customer's record sees it. */
 customerMeRouter.get("/shops/:key/storefront", async (req, res) => {
   const url = await storefrontUrl(accountId(req), String(req.params.key));
+  if (!url) return notFound(res);
+  noStore(res);
+  res.json({ url });
+});
+
+/**
+ * "Book again": the shop's booking page with the same service (and provider)
+ * preselected - `?appointment=<event id>` repeats that booking, no parameter
+ * repeats the customer's usual there. Falls back to the storefront whenever
+ * there is nothing to preselect (services/customerPortal.ts bookAgainUrl).
+ */
+customerMeRouter.get("/shops/:key/book-again", async (req, res) => {
+  const appointment = typeof req.query.appointment === "string" ? req.query.appointment : null;
+  const url = await bookAgainUrl(accountId(req), String(req.params.key), appointment);
   if (!url) return notFound(res);
   noStore(res);
   res.json({ url });

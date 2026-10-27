@@ -19,8 +19,11 @@ export const LEGAL_EFFECTIVE_DATE = "June 12, 2026";
  * Both promise Shops notice BEFORE a material change takes effect, so the
  * revision is published (and announced in What's New) ahead of its effective
  * date. The owner sets the effective date; move both when publishing later.
+ *
+ * October 27: Terms §15 "Figures are estimates" and the matching line in
+ * Privacy §3. "Last updated" moved; the effective date is the owner's call.
  */
-export const PRIVACY_TERMS_UPDATED_DATE = "October 10, 2026";
+export const PRIVACY_TERMS_UPDATED_DATE = "October 27, 2026";
 export const PRIVACY_TERMS_EFFECTIVE_DATE = "October 23, 2026";
 
 export function LegalShell({

@@ -386,6 +386,11 @@ export function GoalPlanner({
         <p className="text-[11px] leading-snug text-muted sm:hidden">
           The plan saves with the goal — your card shows goal vs plan vs actual.
         </p>
+        {/* Same footnote as under the Insights figures (Terms §15). */}
+        <p className="text-[11px] leading-snug text-muted" data-testid="planner-estimates">
+          Projections are estimates from your menu prices and your ChairBack bookings — not exact,
+          and not tax or financial advice. Check against your own records.
+        </p>
       </div>
     </Dialog>
   );

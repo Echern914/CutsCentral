@@ -3,7 +3,7 @@ import { useRouter } from "expo-router";
 import { useResource } from "@/src/customer/CustomerProvider";
 import { Screen } from "@/src/customer/Screen";
 import { errorCopy } from "@/src/customer/api";
-import { openAppointment, openStorefront } from "@/src/customer/navigate";
+import { openAppointment, openBookAgain } from "@/src/customer/navigate";
 import { HistoryGroup } from "@/src/customer/sections";
 import { space } from "@/src/customer/theme";
 import type { History } from "@/src/customer/types";
@@ -44,7 +44,7 @@ export default function AppointmentsScreen() {
             <HistoryGroup
               items={data.upcoming}
               onOpen={(a) => openAppointment(router, a.id)}
-              onBookAgain={(a) => openStorefront(router, a.shop)}
+              onBookAgain={(a) => openBookAgain(router, a)}
             />
           ) : (
             <EmptyState title="Nothing booked" action="Book an appointment" onAction={() => router.navigate("/customer/book")} />
@@ -55,7 +55,7 @@ export default function AppointmentsScreen() {
               <HistoryGroup
                 items={data.past}
                 onOpen={(a) => openAppointment(router, a.id)}
-                onBookAgain={(a) => openStorefront(router, a.shop)}
+                onBookAgain={(a) => openBookAgain(router, a)}
               />
             </>
           ) : null}

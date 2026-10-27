@@ -3,6 +3,7 @@ import {
   bookNowUrl,
   isUsableBookingLink,
   messageBookingUrl,
+  rebookPath,
   showsRequestForm,
   type BookingLinkShop,
 } from "./bookingLinks.js";
@@ -94,5 +95,26 @@ describe("isUsableBookingLink", () => {
     for (const bad of [null, undefined, "", "   ", "not a link", "javascript:alert(1)", "ftp://x.y", "https://"]) {
       expect(isUsableBookingLink(bad), String(bad)).toBe(false);
     }
+  });
+});
+
+describe("rebookPath - Book again lands on the same service", () => {
+  it("carries the service and the provider the booking page prefills", () => {
+    expect(rebookPath("fresh-cuts", { serviceId: "svc_1", staffId: "stf_9" })).toBe(
+      "/book/fresh-cuts?service=svc_1&staff=stf_9",
+    );
+  });
+
+  it("leaves off what it does not have - never an empty parameter", () => {
+    expect(rebookPath("fresh-cuts", { serviceId: "svc_1", staffId: null })).toBe("/book/fresh-cuts?service=svc_1");
+    expect(rebookPath("fresh-cuts", null)).toBe("/book/fresh-cuts");
+    // A provider alone pre-picks nothing the page can use.
+    expect(rebookPath("fresh-cuts", { serviceId: null, staffId: "stf_9" })).toBe("/book/fresh-cuts");
+  });
+
+  it("encodes what it is handed", () => {
+    expect(rebookPath("fresh-cuts", { serviceId: "a&b", staffId: "c d" })).toBe(
+      "/book/fresh-cuts?service=a%26b&staff=c%20d",
+    );
   });
 });

@@ -6,7 +6,7 @@ import { errorCopy } from "@/src/customer/api";
 import { ANNOUNCEMENTS_PATH, type Announcements } from "@/src/customer/announcements";
 import { useAnnouncementWake } from "@/src/customer/useAnnouncementWake";
 import { greeting } from "@/src/customer/format";
-import { openAppointment, openDirections, openManage, openStorefront } from "@/src/customer/navigate";
+import { openAppointment, openBookAgain, openDirections, openManage, openStorefront } from "@/src/customer/navigate";
 import { useSavedShopActions } from "@/src/customer/savedShops";
 import {
   ConnectProfileList,
@@ -209,7 +209,7 @@ function HomeBody({ data, onChanged }: { data: Home; onChanged: () => void }) {
           <HistoryGroup
             items={data.recent}
             onOpen={(a) => openAppointment(router, a.id)}
-            onBookAgain={(a) => openStorefront(router, a.shop)}
+            onBookAgain={(a) => openBookAgain(router, a)}
           />
         </>
       ) : null}

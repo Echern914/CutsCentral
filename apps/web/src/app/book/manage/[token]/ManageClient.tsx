@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { DEMO } from "@chairback/config/demo";
 import { untilLabel } from "@chairback/config/relativeTime";
+import { rebookPath } from "@chairback/config/bookingLinks";
 import {
   CUSTOMER_STATUS_LABEL,
   customerStatusForAppointment,
@@ -76,6 +77,13 @@ export function ManageClient({
     demoTour && data.nudges.length === 0
       ? [{ body: "Chair's open early if you can make it — come through!", sentAt: new Date().toISOString() }]
       : data.nudges;
+  // "Book a new time" / "Book again": the shop's booking page on THIS
+  // appointment's service and provider, so the customer lands on the times.
+  // A prefill only - the booking page drops a service or provider the shop no
+  // longer offers. An older API sends no ids, and the link is the plain page.
+  const bookAgainHref = data.shop.slug
+    ? rebookPath(data.shop.slug, { serviceId: data.service.id, staffId: data.staff.id })
+    : null;
 
   const whenFmt = useMemo(
     () =>
@@ -246,11 +254,8 @@ export function ManageClient({
               : canceledScope === "future"
                 ? `This appointment and your ${laterVisits} later ${laterVisits === 1 ? "visit" : "visits"} are canceled.`
                 : "This appointment is canceled."}
-            {data.shop.slug && (
-              <Link
-                href={`/book/${data.shop.slug}`}
-                className="mt-2 block font-semibold text-offwhite underline"
-              >
+            {bookAgainHref && (
+              <Link href={bookAgainHref} className="mt-2 block font-semibold text-offwhite underline">
                 Book a new time
               </Link>
             )}
@@ -262,7 +267,7 @@ export function ManageClient({
             token={token}
             finish={data.finish}
             shopName={data.shop.name}
-            shopSlug={data.shop.slug}
+            bookHref={bookAgainHref}
             until={holdEndsAt}
             onBooked={() => router.refresh()}
           />
@@ -274,6 +279,14 @@ export function ManageClient({
                 ? `${data.shop.name} marked this appointment as a no-show.`
                 : `Thanks for visiting ${data.shop.name}!`}
             </p>
+            {data.status === "COMPLETED" && bookAgainHref && !demoTour && (
+              <Link
+                href={bookAgainHref}
+                className="mt-2 block text-center text-sm font-semibold text-offwhite underline"
+              >
+                Book again
+              </Link>
+            )}
             {/* A tip after the visit, when the shop takes tips online. The
                 server decides whether to offer it; the demo never does. */}
             {data.tip && !demoTour && (
