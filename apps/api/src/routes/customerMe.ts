@@ -63,16 +63,23 @@ function noStore(res: Response): void {
 
 // --- Home, history, details -----------------------------------------------------
 
+// 🔴 NO CACHED COPY OF A CLIENT'S SCHEDULE. A barber moves a booking and the
+// app must show the new time the next time it asks. These replies carried no
+// Cache-Control at all, so a WebView or proxy was free to hand back the old
+// time as if the move never happened. Same header as the manage link below.
 customerMeRouter.get("/home", async (req, res) => {
+  noStore(res);
   res.json(await buildHome(accountId(req)));
 });
 
 customerMeRouter.get("/appointments", async (req, res) => {
+  noStore(res);
   const now = new Date();
   res.json(splitHistory(await loadPortal(accountId(req), now), now));
 });
 
 customerMeRouter.get("/appointments/:id", async (req, res) => {
+  noStore(res);
   const event = findEvent(await loadPortal(accountId(req)), String(req.params.id));
   if (!event) return notFound(res);
   res.json({ appointment: event });

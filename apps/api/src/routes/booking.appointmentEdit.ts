@@ -22,7 +22,7 @@ import {
 import { completeReschedule, swapForReschedule } from "../engines/acuityMirror.js";
 import { appointmentOwnedByPlatform } from "../engines/visitOrigin.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
-import { notifyAppointmentConfirmation } from "../services/appointmentNotify.js";
+import { notifyAppointmentConfirmation, notifyClientMovedByShop } from "../services/appointmentNotify.js";
 import { toE164 } from "../acuity/clientKey.js";
 import { editClient } from "../services/client.js";
 import { decimalToCents, recordPriceChange } from "../services/appointmentPriceLedger.js";
@@ -908,6 +908,20 @@ export function registerAppointmentEdit(
       // `moved`: this is a notice about ONE visit, not the original booking,
       // so no series or party summary rides along (see the notifier).
       void notifyAppointmentConfirmation({ shopId, appointmentId: appt.id, moved: true });
+    }
+    // 🔴 THE APP HEARS OF EVERY MOVE, emailed before or not. The rule above
+    // keeps a booking ChairBack never MAILED about from getting mail; a push
+    // only reaches a phone that chose to hear from this shop, and a client who
+    // booked at the chair and uses the app is exactly who was left looking at
+    // the old time. Only for a BOOKED visit still to come (re-checked from the
+    // saved row by the notifier); a note, price or length edit sends nothing.
+    if (clientVisibleMove && appt.status === "BOOKED" && startsAt.getTime() > now.getTime()) {
+      void notifyClientMovedByShop({
+        shopId,
+        appointmentId: appt.id,
+        now,
+        staffChanged: staffId !== appt.staffId,
+      });
     }
 
     invalidateAvailability(shopId);

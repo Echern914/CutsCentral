@@ -28,6 +28,12 @@ export interface PushPayload {
   url: string;
   /** Collapse tag so re-sends replace rather than stack (e.g. "rebook"). */
   tag?: string;
+  /**
+   * Extra fields for the APP's `data` beside `url` (e.g. what kind of notice
+   * this is and which appointment), so it can refresh the right screen. Ids
+   * only, never personal details. `url` always wins a name clash.
+   */
+  data?: Record<string, string>;
 }
 
 export interface PushSendResult {
@@ -179,7 +185,7 @@ export function makeExpoSender(
             to: expoPushToken,
             title: payload.title,
             body: payload.body,
-            data: { url: payload.url },
+            data: { ...(payload.data ?? {}), url: payload.url },
             ...(payload.tag ? { collapseId: payload.tag } : {}),
           }),
           // Covers reading the body too, not just the headers.

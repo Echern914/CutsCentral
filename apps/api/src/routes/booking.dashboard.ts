@@ -52,6 +52,7 @@ import {
   confirmBookedFromList,
   notifyAppointmentConfirmation,
   notifyClientBookedByShop,
+  notifyClientMovedByShop,
 } from "../services/appointmentNotify.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
 import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
@@ -5204,6 +5205,12 @@ export async function rescheduleAppointmentCore(req: DashboardWriteReq, res: Das
   // The customer is told their time moved. No barber alert here, unlike the
   // customer-initiated path - the barber is the one who just did it.
   void notifyAppointmentConfirmation({ shopId, appointmentId: appt.id, moved: true });
+  // And their APP is told, whether or not an email ever went out - the email
+  // alone never reached a client who booked at the chair or uses only the app.
+  // The barber chat moves through this handler too, so this is its one push.
+  if (startsAt.getTime() !== appt.startsAt.getTime()) {
+    void notifyClientMovedByShop({ shopId, appointmentId: appt.id, now });
+  }
   // Devices holding this appointment's Wallet pass re-fetch the NEW time.
   // Fire-and-forget: a wallet problem must never affect the reschedule.
   void pokeAppointmentPass(appt.id);
