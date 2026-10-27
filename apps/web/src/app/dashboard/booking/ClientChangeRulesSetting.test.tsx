@@ -35,6 +35,7 @@ const SHOP = {
   bookingMode: "native",
   bookingUrl: null,
   bookingLeadHours: 2,
+  bookingLeadMinutes: 120,
   bookingMaxDays: 60,
   bookingBufferMin: 0,
   rescheduleCutoffHours: 24,
@@ -72,12 +73,10 @@ function renderSettings(shop: BookingShop = SHOP) {
 }
 
 const sw = (name: RegExp) => screen.getByRole("switch", { name });
-const cancelBox = () => screen.getByRole("spinbutton", { name: /Clients can cancel up to/ });
+const cancelBox = () => screen.getByRole("combobox", { name: /Clients can cancel up to/ }) as HTMLSelectElement;
 
 function type(el: HTMLElement, value: string) {
-  fireEvent.focus(el);
   fireEvent.change(el, { target: { value } });
-  fireEvent.blur(el);
 }
 
 const lastSave = () =>
@@ -88,7 +87,8 @@ describe("what clients can change online", () => {
     renderSettings();
     expect(sw(/Clients can reschedule online/).getAttribute("aria-checked")).toBe("true");
     expect(sw(/Clients can cancel online/).getAttribute("aria-checked")).toBe("true");
-    expect((cancelBox() as HTMLInputElement).value).toBe("0");
+    expect(cancelBox().value).toBe("0");
+    expect(cancelBox().selectedOptions[0]!.textContent).toBe("Anytime");
     expect(screen.getByText(/No limit: clients can cancel any time before the appointment starts/)).toBeTruthy();
     expect(screen.getByText(/You can always cancel any appointment yourself/)).toBeTruthy();
     expect(screen.getByRole("link", { name: "Payments" }).getAttribute("href")).toBe("/dashboard/payments");
@@ -102,7 +102,7 @@ describe("what clients can change online", () => {
     expect(sw(/Clients can cancel online/).getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText(/Off: clients can't cancel from their link or by text/)).toBeTruthy();
     // No hours to set for something that is off.
-    expect(screen.queryByRole("spinbutton", { name: /Clients can cancel up to/ })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /Clients can cancel up to/ })).toBeNull();
   });
 
   it("🔴 turning rescheduling off saves at once", async () => {
@@ -130,10 +130,8 @@ describe("what clients can change online", () => {
     await waitFor(() => expect(a.saveBookingSettingsAction).toHaveBeenCalled());
     expect(lastSave().cancelCutoffHours).toBe(12);
 
-    type(cancelBox(), "500");
-    fireEvent.click(screen.getByRole("button", { name: /Save booking rules/ }));
-    await waitFor(() => expect(a.saveBookingSettingsAction).toHaveBeenCalledTimes(2));
-    expect(lastSave().cancelCutoffHours).toBeLessThanOrEqual(168);
+    // Nothing past a week is offered at all.
+    expect(Math.max(...[...cancelBox().options].map((o) => Number(o.value)))).toBe(168);
   });
 
   it("🔴 an older API that never answered them: no switches, and nothing sent for them", async () => {
@@ -148,7 +146,7 @@ describe("what clients can change online", () => {
     expect(screen.queryByRole("switch", { name: /Clients can cancel online/ })).toBeNull();
     expect(screen.queryByText(/Clients can cancel online/)).toBeNull();
     // The #637 hours box still shows - that API answered it.
-    expect(screen.getByRole("spinbutton", { name: /Clients can reschedule up to/ })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: /Clients can reschedule up to/ })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Save booking rules/ }));
     await waitFor(() => expect(a.saveBookingSettingsAction).toHaveBeenCalled());
     const sent = lastSave();

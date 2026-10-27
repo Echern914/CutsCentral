@@ -59,7 +59,7 @@ beforeAll(async () => {
       timezone: "UTC",
       bookingMode: "native",
       bookingBufferMin: 0,
-      bookingLeadHours: 2,
+      bookingLeadMinutes: 120,
       walkInEnabled: true,
     },
     select: { id: true },
@@ -113,7 +113,7 @@ afterEach(async () => {
   await prisma.recurringBlock.deleteMany({ where: { shopId } });
   await prisma.shop.update({
     where: { id: shopId },
-    data: { bookingBufferMin: 0, bookingLeadHours: 2 },
+    data: { bookingBufferMin: 0, bookingLeadMinutes: 120 },
   });
 });
 
@@ -334,10 +334,10 @@ describe("queue mechanics", () => {
     expect(est.get(e1.id)!.waitMin).toBeNull();
   });
 
-  it("bookingLeadHours is a booking rule, not a physics rule - walk-ins ignore it", async () => {
+  it("the minimum notice (bookingLeadMinutes) is a booking rule, not a physics rule - walk-ins ignore it", async () => {
     await prisma.shop.update({
       where: { id: shopId },
-      data: { bookingLeadHours: 24 },
+      data: { bookingLeadMinutes: 1440 },
     });
     const e1 = entry();
     const est = await estimateQueue({ shopId, now: NOW, queue: [e1] });

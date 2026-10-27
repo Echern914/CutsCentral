@@ -381,7 +381,7 @@ describe("a walk-in's capacity cannot be booked around over HTTP", () => {
       where: { id: shopId },
       data: {
         walkInEnabled: true,
-        bookingLeadHours: 0,
+        bookingLeadMinutes: 0,
         bookingBufferMin: 0,
         slug: `wd-book-${randomToken(5)}`.toLowerCase(),
       },

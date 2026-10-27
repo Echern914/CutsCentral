@@ -24,6 +24,7 @@ export * from "./shopPolicy.js";
 export * from "./rescheduleCutoff.js";
 export * from "./blockScope.js";
 export * from "./customerChangeRules.js";
+export * from "./bookingRuleUnits.js";
 export * from "./tierPerks.js";
 export * from "./tierRules.js";
 export * from "./shopHandle.js";

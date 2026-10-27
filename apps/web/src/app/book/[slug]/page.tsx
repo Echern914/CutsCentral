@@ -46,6 +46,8 @@ export interface BookShopData {
     // Instagram handle WITHOUT the "@" (the API strips it on save).
     instagramHandle: string | null;
     bookingLeadHours: number;
+    /** Minimum notice in minutes. Optional = an older API. */
+    bookingLeadMinutes?: number;
     bookingMaxDays: number;
     // True when the shop's subscription/trial has lapsed: the create POST
     // would 403, so the UI shows a "booking paused" notice instead of the flow.

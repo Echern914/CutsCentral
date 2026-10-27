@@ -104,7 +104,7 @@ const SHOP_SELECT = {
   id: true,
   timezone: true,
   bookingMode: true,
-  bookingLeadHours: true,
+  bookingLeadMinutes: true,
   bookingBufferMin: true,
   autoFillEnabled: true,
   rewardsEnabled: true,
@@ -394,7 +394,7 @@ async function startRun(run: RunRow, now: Date): Promise<void> {
     return;
   }
 
-  const deadline = autoFillDeadline(run.startsAt, shop.bookingLeadHours);
+  const deadline = autoFillDeadline(run.startsAt, shop.bookingLeadMinutes);
   const windowMs = deadline.getTime() - now.getTime();
   if (windowMs < MIN_WINDOW_MS) {
     await closeAndMaybeHandOff(run, "queued", "too_soon", now, true);

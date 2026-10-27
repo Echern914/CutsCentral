@@ -54,7 +54,7 @@ async function makeShop(label: string, timezone = "UTC") {
     data: {
       bookingMode: "native",
       timezone,
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
       publicPageEnabled: true,
       compAccess: true,
       // Each test sets the rule it is about; the #637 move cutoff is its own file.

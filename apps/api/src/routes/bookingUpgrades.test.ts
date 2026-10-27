@@ -62,7 +62,7 @@ async function makeShop() {
       bookingMode: "native",
       publicPageEnabled: true,
       timezone: TZ,
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
       bookingMaxDays: 60,
     },
     select: { id: true, slug: true },

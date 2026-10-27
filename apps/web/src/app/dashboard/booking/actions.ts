@@ -73,7 +73,10 @@ function done(res: { ok: boolean; error?: string }): Result {
 export async function saveBookingSettingsAction(input: {
   bookingMode: BookingModeKey;
   bookingUrl?: string;
-  bookingLeadHours: number;
+  /** Minimum notice in minutes - sent when the API answered it. */
+  bookingLeadMinutes?: number;
+  /** Legacy whole hours - sent only to an older API that answers hours alone. */
+  bookingLeadHours?: number;
   bookingMaxDays: number;
   bookingBufferMin: number;
   /** Sent only when the API answered it (an older API refuses an unknown field). */

@@ -56,7 +56,7 @@ beforeAll(async () => {
       webhookSecret: randomToken(),
       bookingMode: "native",
       timezone: "UTC",
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
       bookingMaxDays: 30,
       bookingBufferMin: 0,
     },

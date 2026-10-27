@@ -167,7 +167,7 @@ beforeAll(async () => {
       rewardsEnabled: true,
       autoFillEnabled: true,
       publicPageEnabled: true,
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
       bookingBufferMin: 0,
       waitlistEnabled: true,
       slotOpenedTextsEnabled: true,

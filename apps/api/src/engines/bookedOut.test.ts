@@ -32,7 +32,7 @@ function healthy(over: Partial<BookedOutFacts> = {}): BookedOutFacts {
       hasGoogleReviewUrl: true,
     },
     profileMissingPhoto: 0,
-    booking: { leadHours: 2, maxDays: 60, waitlistEnabled: true },
+    booking: { leadMinutes: 120, maxDays: 60, waitlistEnabled: true },
     rewardsEnabled: true,
     services: { total: 5, unpriced: 0 },
     ...over,
@@ -171,14 +171,16 @@ describe("the booking page and rules", () => {
 
   it("a page gap ranks above booking rules when new clients are low", () => {
     const gaps = { publicPageEnabled: true, hasBio: false, hasHeroImage: true, galleryCount: 6, hasInstagram: true, hasGoogleReviewUrl: true };
-    const f = healthy({ page: gaps, newClients: { last30: 1, prior30: 1 }, booking: { leadHours: 2, maxDays: 14, waitlistEnabled: true } });
+    const f = healthy({ page: gaps, newClients: { last30: 1, prior30: 1 }, booking: { leadMinutes: 120, maxDays: 14, waitlistEnabled: true } });
     expect(ids(f).indexOf("page_gaps")).toBeLessThan(ids(f).indexOf("short_window"));
   });
 
   it("booking rules only for a shop ChairBack books for", () => {
-    const tight = { leadHours: 48, maxDays: 14, waitlistEnabled: true };
+    const tight = { leadMinutes: 2_880, maxDays: 14, waitlistEnabled: true };
     expect(ids(healthy({ booking: tight }))).toEqual(expect.arrayContaining(["short_window", "long_lead"]));
     expect(item(healthy({ booking: tight }), "short_window")!.finding).toBe("Clients can only book 14 days ahead.");
+    // The notice reads in its own unit (minutes stored), never "48 hours" or "0.25 hours".
+    expect(item(healthy({ booking: tight }), "long_lead")!.finding).toBe("Clients have to book at least 2 days ahead.");
     expect(ids(healthy({ booking: tight, bookingMode: "acuity" }))).not.toContain("short_window");
   });
 
@@ -197,7 +199,7 @@ describe("the answer as a whole", () => {
       returning: { cohort: 20, returned: 4 },
       newClients: { last30: 1, prior30: 1 },
       noShows: { bookings: 50, noShows: 9 },
-      booking: { leadHours: 48, maxDays: 14, waitlistEnabled: false },
+      booking: { leadMinutes: 2_880, maxDays: 14, waitlistEnabled: false },
       services: { total: 4, unpriced: 2 },
     });
     expect(ids(f)).toEqual(["upcoming_fill", "overdue_regulars", "return_rate", "new_clients", "no_shows"]);

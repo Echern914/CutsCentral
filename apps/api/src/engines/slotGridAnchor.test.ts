@@ -6,7 +6,7 @@ import { computeOpenSlots } from "./slots.js";
 /**
  * WHERE THE SLOT GRID IS ANCHORED on the CURRENT day.
  *
- * The lower bound (now + bookingLeadHours) used to be clipped INTO the free
+ * The lower bound (now + bookingLeadMinutes) used to be clipped INTO the free
  * window, which re-anchored the grid to that bound - an arbitrary instant, to
  * the millisecond. A customer loading the page at 10:23:07.123 with the default
  * 2h lead was offered "12:23 PM, 1:23 PM, 2:23 PM" while every FUTURE day
@@ -44,7 +44,7 @@ async function makeShop(leadHours: number) {
       webhookSecret: randomToken(),
       bookingMode: "native",
       timezone: TZ,
-      bookingLeadHours: leadHours,
+      bookingLeadMinutes: leadHours * 60,
       bookingMaxDays: 60,
     },
     select: { id: true },

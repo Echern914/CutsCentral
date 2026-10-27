@@ -47,6 +47,7 @@ import type { BusinessVocabulary } from "@chairback/config";
 // Whether a saved link is one a customer can open - the same check every "Book"
 // surface uses, so Go Live and the buttons cannot disagree.
 import { isUsableBookingLink } from "@chairback/config/bookingLinks";
+import { formatDaysAhead, formatDuration } from "@chairback/config/bookingRuleUnits";
 
 /** How hard an item is. */
 export type ReadinessClass = "required" | "conditional" | "recommended" | "info";
@@ -319,7 +320,8 @@ export interface ReadinessFacts {
   publicPageEnabled: boolean;
   bookingMode: string;
   bookingUrl: string | null;
-  bookingLeadHours: number;
+  /** Minimum notice, in MINUTES (Shop.bookingLeadMinutes). */
+  bookingLeadMinutes: number;
   bookingMaxDays: number;
   /** hasActiveAccess(shop) - trial, subscription or comp. */
   hasActiveAccess: boolean;
@@ -728,7 +730,7 @@ function shopItems(
   const closedAllWeek = activeServices.filter((s) => s.closedEveryWeekday);
   const externalMode = !native && facts.bookingMode !== "link";
   const linkUsable = isUsableBookingLink(facts.bookingUrl);
-  const leadDays = facts.bookingLeadHours / 24;
+  const leadDays = facts.bookingLeadMinutes / 1_440;
   const windowOk = leadDays < facts.bookingMaxDays;
   const pricedServices = activeServices.filter((s) => s.hasPrice);
   const paymentsOn = facts.paymentsMode !== "off";
@@ -1005,8 +1007,8 @@ function shopItems(
       done: windowOk,
       silentWhenDone: true,
       evidence: windowOk
-        ? `Bookable from ${facts.bookingLeadHours}h ahead, up to ${facts.bookingMaxDays} days out`
-        : `Earliest booking is ${facts.bookingLeadHours}h away but the furthest is ${facts.bookingMaxDays} day${facts.bookingMaxDays === 1 ? "" : "s"} - nothing can be booked`,
+        ? `Bookable from ${formatDuration(facts.bookingLeadMinutes)} ahead, up to ${formatDaysAhead(facts.bookingMaxDays)} out`
+        : `Earliest booking is ${formatDuration(facts.bookingLeadMinutes)} away but the furthest is ${formatDaysAhead(facts.bookingMaxDays)} - nothing can be booked`,
       cta: { label: "Booking settings", featureId: "booking-rules" },
     }),
     item({

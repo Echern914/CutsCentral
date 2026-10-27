@@ -583,7 +583,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
   {
     id: "booking-rules",
     name: "Booking rules",
-    synonyms: ["lead time", "minimum notice", "how far out", "days ahead", "buffer", "turnaround", "cleanup time", "pause bookings", "stop taking bookings", "booking settings"],
+    synonyms: ["lead time", "minimum notice", "last-minute booking limit", "future booking limit", "how far out", "days ahead", "buffer", "turnaround", "cleanup time", "pause bookings", "stop taking bookings", "booking settings"],
     description: "How far ahead people can book, how much notice you need, and gaps between cuts",
     href: "/dashboard/booking?tab=Settings",
     category: "booking",

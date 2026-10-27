@@ -48,7 +48,7 @@ async function makeShop(opts: {
       webhookSecret: randomToken(),
       bookingMode: "native",
       timezone: "UTC",
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
       bookingMaxDays: opts.bookingMaxDays,
     },
     select: { id: true },

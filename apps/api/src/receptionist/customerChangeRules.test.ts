@@ -93,7 +93,7 @@ beforeAll(async () => {
         webhookSecret: randomToken(),
         bookingMode: "native",
         compAccess: true,
-        bookingLeadHours: 2,
+        bookingLeadMinutes: 120,
         rescheduleCutoffHours: 0,
       },
       select: { id: true },

@@ -43,7 +43,7 @@ async function makeShop(label: string) {
   const shopId = shopRes.body.id as string;
   await prisma.shop.update({
     where: { id: shopId },
-    data: { bookingMode: "native", timezone: "UTC", bookingLeadHours: 0 },
+    data: { bookingMode: "native", timezone: "UTC", bookingLeadMinutes: 0 },
   });
   const user = await prisma.user.findUniqueOrThrow({ where: { email }, select: { id: true } });
   const staff = await prisma.staff.create({ data: { shopId, name: "Sam" }, select: { id: true } });

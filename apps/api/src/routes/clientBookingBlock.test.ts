@@ -93,7 +93,7 @@ beforeAll(async () => {
       bookingMode: "native",
       publicPageEnabled: true,
       waitlistEnabled: true,
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
       // The next open slot can be under a day away; the client reschedule
       // cutoff has its own tests (routes/rescheduleCutoff.test.ts).
       rescheduleCutoffHours: 0,

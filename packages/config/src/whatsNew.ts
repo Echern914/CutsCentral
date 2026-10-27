@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-27-booking-rules-in-plain-units",
+    date: "2026-10-27",
+    kind: "feature",
+    title: "Booking rules now say minutes, hours or days",
+    body:
+      "Each booking rule is now a choice that says its unit, like 15 minutes, 2 hours or 1 week, with a line explaining it. " +
+      "Your last-minute limit can now be as short as 15 minutes. Your current settings are unchanged.",
+  },
+  {
     id: "2026-10-27-clients-told-when-moved",
     date: "2026-10-27",
     kind: "fix",

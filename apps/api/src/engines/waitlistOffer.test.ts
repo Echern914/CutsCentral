@@ -128,7 +128,7 @@ beforeAll(async () => {
       bookingBufferMin: 0,
       // The DST case mints an offer 45 minutes before the slot; the default
       // lead window would veto that, and lead time is not what these test.
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
       trialEndsAt: new Date(Date.now() + 30 * 86_400_000),
     },
     select: { id: true },

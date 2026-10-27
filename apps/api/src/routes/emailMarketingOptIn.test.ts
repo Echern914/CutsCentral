@@ -60,7 +60,7 @@ beforeAll(async () => {
   shopId = await makeShop(cookie, "Marcus Reed Cuts");
   const shop = await prisma.shop.update({
     where: { id: shopId },
-    data: { bookingMode: "native", timezone: "UTC", bookingLeadHours: 0 },
+    data: { bookingMode: "native", timezone: "UTC", bookingLeadMinutes: 0 },
     select: { slug: true },
   });
   slug = shop.slug!;

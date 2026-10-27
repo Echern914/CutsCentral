@@ -123,7 +123,7 @@ beforeAll(async () => {
       bookingMode: "native",
       rewardsEnabled: true,
       publicPageEnabled: true,
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
       bookingBufferMin: 0,
     },
   });

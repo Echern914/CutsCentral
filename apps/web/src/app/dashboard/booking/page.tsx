@@ -18,7 +18,10 @@ export interface BookingShop {
   slug: string | null;
   bookingMode: BookingModeKey;
   bookingUrl: string | null;
+  /** Legacy whole hours (rounded up); the card uses minutes when answered. */
   bookingLeadHours: number;
+  /** Minimum notice in MINUTES. Optional = an older API that answers hours only. */
+  bookingLeadMinutes?: number;
   bookingMaxDays: number;
   bookingBufferMin: number;
   /** How close to the start a client may still move it themselves. Optional = older API. */

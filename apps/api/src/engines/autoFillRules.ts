@@ -20,6 +20,6 @@ export const AUTO_FILL_MIN_WAITLIST_HOLD_MS = 10 * 60_000;
  * anyone, so a claim can never land inside the notice the shop asks of
  * everyone else.
  */
-export function autoFillDeadline(startsAt: Date, bookingLeadHours: number): Date {
-  return new Date(startsAt.getTime() - bookingLeadHours * 60 * 60_000 - AUTO_FILL_MARGIN_MS);
+export function autoFillDeadline(startsAt: Date, bookingLeadMinutes: number): Date {
+  return new Date(startsAt.getTime() - bookingLeadMinutes * 60_000 - AUTO_FILL_MARGIN_MS);
 }

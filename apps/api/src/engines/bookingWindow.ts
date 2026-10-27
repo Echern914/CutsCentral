@@ -1,7 +1,8 @@
 /**
- * THE SHOP'S BOOKING RULES, as instants: "Min notice (hours)" and "Book up to
- * (days ahead)" on the dashboard's Booking rules card (Shop.bookingLeadHours,
- * Shop.bookingMaxDays).
+ * THE SHOP'S BOOKING RULES, as instants: the last-minute limit ("min notice")
+ * and the future limit ("book up to") on the dashboard's Booking rules card
+ * (Shop.bookingLeadMinutes, Shop.bookingMaxDays). 🔴 The notice is MINUTES -
+ * bookingLeadHours is a legacy column nothing reads any more.
  *
  * Every time a CUSTOMER can book starts inside this window - a regular slot
  * and a special-priced slot (TargetedSlot) alike. Specials used to skip it
@@ -24,17 +25,26 @@ export interface BookingWindow {
   latest: Date;
 }
 
-const HOUR_MS = 3_600_000;
+const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
 export function bookingWindow(
-  shop: { bookingLeadHours: number; bookingMaxDays: number },
+  shop: { bookingLeadMinutes: number; bookingMaxDays: number },
   now: Date,
 ): BookingWindow {
   return {
-    earliest: new Date(now.getTime() + shop.bookingLeadHours * HOUR_MS),
+    earliest: new Date(now.getTime() + leadMs(shop)),
     latest: new Date(now.getTime() + shop.bookingMaxDays * DAY_MS),
   };
+}
+
+/**
+ * The minimum notice in ms. THE one conversion: the slot grid (slots.ts), the
+ * booking POST, the manage-link move and the receptionist all go through it,
+ * so the grid can never offer a time the write then refuses as too_soon.
+ */
+export function leadMs(shop: { bookingLeadMinutes: number }): number {
+  return shop.bookingLeadMinutes * MINUTE_MS;
 }
 
 /** A customer may book a time starting at `startsAt`. Never in the past, whatever the rules say. */

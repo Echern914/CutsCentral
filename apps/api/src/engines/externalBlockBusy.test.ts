@@ -37,7 +37,7 @@ beforeAll(async () => {
       webhookSecret: randomToken(),
       timezone: "UTC",
       bookingMode: "native",
-      bookingLeadHours: 0,
+      bookingLeadMinutes: 0,
     },
   });
   shopId = shop.id;
