@@ -11,6 +11,7 @@ import {
 } from "react";
 import { AppState, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Notifications from "expo-notifications";
 import { useFocusEffect } from "expo-router";
 import { API_ORIGIN, STORAGE } from "@/src/config";
 import { getExpoPushToken } from "@/src/push";
@@ -18,6 +19,7 @@ import { ApiError, createApiClient, type ApiClient } from "./api";
 import { clearCustomerSession, loadCustomerSession, pushDeviceMemory, saveCustomerSession } from "./sessionStore";
 import { createDeviceRegistrar, type DeviceRegistrar } from "./deviceRegistration";
 import { createDeviceRelease, releaseSender, type DeviceRelease } from "./deviceRelease";
+import { connectResourceWake, resourceWake, shouldRefetchOnWake } from "./resourceWake";
 
 /**
  * Who is signed in to My ChairBack, and the API client that speaks for them.
@@ -145,6 +147,22 @@ export function CustomerProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Back from the background, or a push while open: the screens on show read
+  // their data again (resourceWake.ts says why focus alone misses both - a
+  // booking the barber moved stayed at the old time until a pull). One
+  // listener for the whole app; signed out there is nothing to read.
+  useEffect(() => {
+    if (status !== "signedIn") return;
+    return connectResourceWake(
+      {
+        onAppState: (listener) => AppState.addEventListener("change", listener),
+        onNotificationReceived: (listener) =>
+          Notifications.addNotificationReceivedListener((n) => listener(n.request.content.data)),
+      },
+      resourceWake,
+    );
+  }, [status]);
+
   const signIn = useCallback(async (next: string, opts: { demo?: boolean } = {}) => {
     token.current = next;
     clearCache();
@@ -245,11 +263,14 @@ export function useResource<T>(path: string | null): Resource<T> {
   const [loading, setLoading] = useState(path !== null && !cache.has(path));
   const [refreshing, setRefreshing] = useState(false);
   const inFlight = useRef(false);
+  // When this resource last STARTED a request, for the foreground throttle.
+  const lastFetchAt = useRef<number | null>(null);
 
   const load = useCallback(
     async (mode: "focus" | "refresh") => {
       if (!path || status !== "signedIn" || inFlight.current) return;
       inFlight.current = true;
+      lastFetchAt.current = Date.now();
       if (mode === "refresh") setRefreshing(true);
       else if (!cache.has(path)) setLoading(true);
       try {
@@ -275,6 +296,20 @@ export function useResource<T>(path: string | null): Resource<T> {
       if (cached !== undefined) setData(cached);
       void load("focus");
     }, [load, path]),
+  );
+
+  // Back from the background or a push while open (the provider's listener):
+  // read again, quietly - the cached answer stays on screen until the fresh
+  // one replaces it. Mounted screens only; the rest read on their next focus.
+  const latestLoad = useRef(load);
+  latestLoad.current = load;
+  useEffect(
+    () =>
+      resourceWake.subscribe((reason) => {
+        if (!shouldRefetchOnWake(reason, lastFetchAt.current, Date.now(), inFlight.current)) return;
+        void latestLoad.current("focus");
+      }),
+    [],
   );
 
   return {

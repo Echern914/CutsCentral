@@ -45,7 +45,10 @@ export default function HomeScreen() {
   // The bell's count. Its own request, so an API older than the bell (or a
   // failed call) costs only the badge - never the home.
   const announcements = useResource<Announcements>(ANNOUNCEMENTS_PATH);
-  // Back from the background, or a push while open: focus alone would miss both.
+  // Back from the background, or a push while open: focus alone would miss
+  // both. The home itself (and every other mounted resource) is read again by
+  // CustomerProvider's wake (resourceWake.ts); this keeps the bell's own rule.
+  // Both landing together is one request - a resource never reads twice at once.
   useAnnouncementWake(announcements.reload);
   useRegisterDevice();
 
