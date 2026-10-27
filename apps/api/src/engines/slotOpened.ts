@@ -107,10 +107,11 @@ export async function notifySlotOpened(params: {
     if (appt.startsAt.getTime() <= now.getTime()) return; // slot already passed
 
     // 🔴 AUTO-FILL OWNS THIS TIME when it queued a run for this very
-    // cancellation (engines/autoFill.ts): its members get first pick, and the
-    // waitlist gets its turn through the run, after them. Offering the
-    // waitlist now would put the waitlist ahead of Gold. The barber is still
-    // told - whether or not their waitlist is on.
+    // cancellation (engines/autoFill.ts): Gold gets a head start, then
+    // everyone with the app is told it is open. The waitlist's held offer gets
+    // the time only when the run cannot reach anyone - a hold for one person
+    // would hide the time from everyone just told about it. The barber is
+    // still told - whether or not their waitlist is on.
     const run = await runWithShop(params.shopId, (tx) =>
       tx.autoFillRun.findUnique({
         where: { triggerKey: autoFillTriggerKey(appt.id, appt.cancellationRevision) },

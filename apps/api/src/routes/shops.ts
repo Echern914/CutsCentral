@@ -58,6 +58,7 @@ import { RESCHEDULE_CUTOFF_MAX_HOURS } from "@chairback/config/rescheduleCutoff"
 import { CANCEL_CUTOFF_MAX_HOURS } from "@chairback/config/customerChangeRules";
 import { BOOKING_LEAD_MAX_MINUTES, leadMinutesToLegacyHours } from "@chairback/config/bookingRuleUnits";
 import { PUBLIC_SERVICE } from "../engines/serviceVisibility.js";
+import { autoFillBlockers, type AutoFillGateShop } from "../engines/autoFill.js";
 import { livePromotions } from "../services/livePromotions.js";
 import { bookingBlockedFor, CONTACT_SHOP_ERROR } from "../services/clientBookingBlock.js";
 import {
@@ -359,6 +360,10 @@ const updateShopSchema = createShopSchema
     // "A slot just opened" auto-notify to matching waitlisters (push + email).
     // Off by default; the barber's own alert doesn't need this. See slotOpened.ts.
     slotOpenedTextsEnabled: z.boolean(),
+    // "Fill cancellations automatically" (engines/autoFill.ts): Gold head
+    // start, then a push to everyone with the app. Off by default. A manager
+    // decision - PATCH /me already refuses every field to a barber seat.
+    autoFillEnabled: z.boolean(),
     // Request-before-booking: public native bookings land PENDING until approved.
     requireBookingApproval: z.boolean(),
     // "Join shop" in the customer app waits for the shop's OK (a request on the
@@ -1937,7 +1942,8 @@ function serializeShop(shop: {
   tierPerks: unknown;
   tierThresholds: unknown;
   tierRules: unknown;
-}) {
+  autoFillEnabled: boolean;
+} & AutoFillGateShop) {
   // Note: webhookSecret is intentionally NOT exposed to the client.
   return {
     id: shop.id,
@@ -1985,6 +1991,10 @@ function serializeShop(shop: {
     walkInEnabled: shop.walkInEnabled,
     walkInAcceptingNow: shop.walkInAcceptingNow,
     slotOpenedTextsEnabled: shop.slotOpenedTextsEnabled,
+    // The barber's switch, and why it would do nothing right now (codes;
+    // config/fillCancellations.ts says them in words). Empty = it runs.
+    autoFillEnabled: shop.autoFillEnabled,
+    autoFillBlockers: autoFillBlockers(shop),
     requireBookingApproval: shop.requireBookingApproval,
     approveNewClients: shop.approveNewClients,
     pushReminder24hEnabled: shop.pushReminder24hEnabled,

@@ -58,7 +58,8 @@
     "./providerAward": "./src/providerAward.ts",
     "./openSlots": "./src/openSlots.ts",
     "./specialDay": "./src/specialDay.ts",
-    "./expenseSchedule": "./src/expenseSchedule.ts"
+    "./expenseSchedule": "./src/expenseSchedule.ts",
+    "./fillCancellations": "./src/fillCancellations.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-27-fill-cancellations",
+    date: "2026-10-27",
+    kind: "feature",
+    title: "Fill cancellations automatically",
+    body:
+      "When someone cancels, your Gold members get a 15-minute head start, then everyone with your app gets a notification. " +
+      "First to book gets it. Turn it on in Booking, Settings.",
+  },
+  {
     id: "2026-10-27-status-notices",
     date: "2026-10-27",
     kind: "feature",

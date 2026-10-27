@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { __resetEnvCacheForTests, randomToken, zonedDateParts, zonedWallTimeToUtc } from "@chairback/config";
+import { __resetEnvCacheForTests, apiEnv, randomToken, zonedDateParts, zonedWallTimeToUtc } from "@chairback/config";
 import { createApp } from "../app.js";
 import { mintCustomerSession } from "../auth/customerSession.js";
 import {
@@ -11,6 +11,7 @@ import {
 } from "../backgroundWork.js";
 import { __setExpoSenderForTests, type PushPayload } from "../messaging/push.js";
 import { __setSendEmailForTests } from "../messaging/email.js";
+import { formatOpeningWhen } from "../messaging/templates.js";
 import { __setMessageProviderForTests } from "../messaging/twilio.js";
 import type { MessageProvider } from "../messaging/provider.js";
 import { cancelAppointment } from "./appointmentPromotion.js";
@@ -19,18 +20,24 @@ import { claimTierOpening, releaseTierOpening } from "./tierOpenings.js";
 import { raceBehindRowLock, winners } from "../testing/raceBarrier.js";
 
 /**
- * AUTO-FILL, END TO END.
+ * AUTO-FILL ("Fill cancellations automatically"), END TO END.
  *
- * A client cancels; the time goes to Gold members in the app, then Silver,
- * then the waitlist, then the booking page. The contract:
- *   1. Only a CLIENT's own cancellation starts it - never the barber's.
- *   2. Gold first; Silver joins the same opening; nobody is told twice.
- *   3. Never the person who cancelled, someone already booked, someone the
- *      shop blocked, someone the app cannot reach, or someone told too often.
- *   4. Never a time too close to start, nobody woken at night, never a
- *      service the booking page hides or one a claim would have to pay for.
- *   5. When the tiers pass, the waitlist gets its turn; when a member books
- *      it or the barber steps in, everything stops.
+ * A client cancels; Gold members get the time to themselves for 15 minutes,
+ * then EVERY client of the shop with the app is told it is open, and whoever
+ * books it first on the booking page gets it. The contract:
+ *   1. Only a CLIENT's own cancellation starts it - never the barber's - and
+ *      only at a shop that switched it on.
+ *   2. Gold first, held; then everyone, told once each, with nothing held.
+ *      Under two hours' notice, or nobody Gold to reach: everyone at once.
+ *   3. Only this shop's clients: never another shop's, an archived or
+ *      blocked one, one who switched pushes off or has no phone registered,
+ *      the person who cancelled, someone already booked, or someone told
+ *      twice today already.
+ *   4. It stops the moment the time is gone - booked, ended by the barber -
+ *      or the shop switches it off; never a time too close to start; nobody
+ *      woken at night.
+ *   5. The waitlist's held offer gets the time only when nobody with the app
+ *      can be reached.
  *
  * Every engine call is handed a fixed `now` at midday in the shop's zone, so
  * quiet hours never depend on when this file happens to run.
@@ -40,8 +47,10 @@ const app = createApp();
 const TZ = "America/New_York";
 const emails: string[] = [];
 const accountIds: string[] = [];
-let cookie = "";
+const tag = randomToken(6).toLowerCase().replace(/[^a-z0-9]/g, "0");
 let shopId = "";
+let otherShopId = "";
+let slug = "";
 let staffId = "";
 let serviceId = "";
 
@@ -51,6 +60,13 @@ let gold2: Member;
 let silver1: Member;
 let silverNoApp: Member;
 let bronze: Member;
+/** A client with the app and no rewards tier yet. */
+let fresh: Member;
+let archived: Member;
+let optedOut: Member;
+let blocked: Member;
+/** A client of ANOTHER shop, with the app. */
+let outsider: Member;
 let walkerClientId = "";
 
 /** Tomorrow, 12:00 in the shop's zone. */
@@ -68,10 +84,22 @@ function randomPhone(): string {
   return `+1629${exch}${line}`;
 }
 
-async function member(tier: "BRONZE" | "SILVER" | "GOLD" | null, name: string, withApp = true): Promise<Member> {
+async function member(
+  tier: "BRONZE" | "SILVER" | "GOLD" | null,
+  name: string,
+  opts: { withApp?: boolean; shop?: string } = {},
+): Promise<Member> {
   const phone = randomPhone();
   const client = await prisma.client.create({
-    data: { shopId, acuityClientKey: `tel:${phone}`, magicToken: randomToken(), firstName: name, phone, loyaltyTier: tier, source: "manual" },
+    data: {
+      shopId: opts.shop ?? shopId,
+      acuityClientKey: `tel:${phone}`,
+      magicToken: randomToken(),
+      firstName: name,
+      phone,
+      loyaltyTier: tier,
+      source: "manual",
+    },
     select: { id: true },
   });
   const account = await prisma.customerAccount.create({
@@ -83,7 +111,7 @@ async function member(tier: "BRONZE" | "SILVER" | "GOLD" | null, name: string, w
   const auth = { Authorization: `Bearer ${token}` };
   expect((await request(app).get("/api/me/home").set(auth)).status).toBe(200);
   let device: string | null = null;
-  if (withApp) {
+  if (opts.withApp ?? true) {
     device = `ExponentPushToken[${randomToken(12)}]`;
     await request(app).post("/api/me/devices").set(auth).send({ expoPushToken: device, platform: "ios" });
   }
@@ -93,6 +121,7 @@ async function member(tier: "BRONZE" | "SILVER" | "GOLD" | null, name: string, w
 /** Every push, by the phone it reached. */
 let pushes: { to: string; payload: PushPayload }[] = [];
 const pushedTo = (m: Member) => pushes.filter((p) => p.to === m.device);
+const everyonePushes = () => pushes.filter((p) => p.payload.title === "An opening just came up");
 
 /** A booked visit `startOffsetMs` after NOW, cancelled by the client at `cancelAt`. */
 let lane = 0;
@@ -120,8 +149,56 @@ async function clientCancels(opts: { startOffsetMs?: number; clientId?: string; 
   return { id: appt.id, startsAt, manageToken: appt.manageToken };
 }
 
+/** Someone books the time, the way the booking page writes it. */
+function bookedBySomeoneElse(startsAt: Date) {
+  return prisma.appointment.create({
+    data: {
+      shopId,
+      staffId,
+      serviceId,
+      clientId: walkerClientId,
+      firstName: "Quick",
+      status: "BOOKED",
+      startsAt,
+      endsAt: new Date(startsAt.getTime() + 30 * MIN),
+      manageToken: randomToken(),
+    },
+  });
+}
+
+/** An upcoming visit for this member: they are left out, as someone already booked. */
+function upcomingVisit(m: Member, offsetMs: number) {
+  return prisma.appointment.create({
+    data: {
+      shopId,
+      staffId,
+      serviceId,
+      clientId: m.clientId,
+      firstName: "Booked",
+      status: "BOOKED",
+      startsAt: at(offsetMs),
+      endsAt: at(offsetMs + 30 * MIN),
+      manageToken: randomToken(),
+    },
+  });
+}
+
 const runFor = (appointmentId: string) =>
   prisma.autoFillRun.findFirst({ where: { appointmentId }, orderBy: { createdAt: "desc" } });
+const toldIn = async (runId: string) =>
+  (await prisma.autoFillRecipient.findMany({ where: { runId }, select: { accountId: true } }))
+    .map((r) => r.accountId)
+    .sort();
+const ids = (...ms: Member[]) => ms.map((m) => m.accountId).sort();
+
+/**
+ * Put a finished everyone stage back to "chosen, nobody told yet" - where a
+ * restart between choosing and telling leaves it - so the next sweep sends.
+ */
+async function rewindToUntold(runId: string, nextAt: Date) {
+  await prisma.autoFillRecipient.updateMany({ where: { runId }, data: { notifiedAt: null, delivered: null } });
+  await prisma.autoFillRun.update({ where: { id: runId }, data: { state: "everyone", nextAt, outcome: null } });
+}
 
 /** Run the sweep at `when` and wait for everything it set off. */
 async function sweep(when: Date) {
@@ -130,6 +207,8 @@ async function sweep(when: Date) {
 }
 
 const started = at(AUTO_FILL_START_DELAY_MS + 1_000);
+/** Gold's head start, begun at `started`, is over. */
+const headStartOver = at(AUTO_FILL_START_DELAY_MS + 1_000 + 15 * MIN + 1_000);
 
 // The waitlist half really offers and really sends - with DRY_RUN on it would
 // suppress every offer, and the tests below that say "the waitlist was not
@@ -142,6 +221,19 @@ const noSms: MessageProvider = {
   },
 };
 
+async function ownerShop(name: string): Promise<string> {
+  const email = `autofill-${randomToken(6)}@test.local`.toLowerCase();
+  emails.push(email);
+  const signup = await request(app)
+    .post("/api/auth/signup")
+    .send({ email, password: "supersecret123", name: "Filler", smsAttested: true });
+  expect(signup.status).toBe(201);
+  const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
+  const shop = await request(app).post("/api/shops").set("Cookie", cookie).send({ name, smsAttested: true });
+  expect(shop.status).toBe(201);
+  return shop.body.id as string;
+}
+
 beforeAll(async () => {
   process.env.CUSTOMER_ACCOUNTS_ENABLED = "true";
   process.env.DRY_RUN = "false";
@@ -149,19 +241,12 @@ beforeAll(async () => {
   __setMessageProviderForTests(noSms);
   __setSendEmailForTests(async () => ({ id: "email", status: "sent" }));
   armBackgroundWorkTracking();
-  const email = `autofill-${randomToken(6)}@test.local`.toLowerCase();
-  emails.push(email);
-  const signup = await request(app)
-    .post("/api/auth/signup")
-    .send({ email, password: "supersecret123", name: "Filler", smsAttested: true });
-  expect(signup.status).toBe(201);
-  cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
-  const shop = await request(app).post("/api/shops").set("Cookie", cookie).send({ name: "Fill Cuts", smsAttested: true });
-  expect(shop.status).toBe(201);
-  shopId = shop.body.id as string;
+  shopId = await ownerShop("Fill Cuts");
+  slug = `fill-cuts-${tag}`;
   await prisma.shop.update({
     where: { id: shopId },
     data: {
+      slug,
       timezone: TZ,
       bookingMode: "native",
       rewardsEnabled: true,
@@ -182,11 +267,25 @@ beforeAll(async () => {
     data: Array.from({ length: 7 }, (_, weekday) => ({ shopId, staffId, weekday, startMin: 0, endMin: 1440 })),
   });
 
+  otherShopId = await ownerShop("Other Cuts");
+  await prisma.shop.update({
+    where: { id: otherShopId },
+    data: { timezone: TZ, bookingMode: "native", rewardsEnabled: true, publicPageEnabled: true },
+  });
+
   gold1 = await member("GOLD", "Goldie");
   gold2 = await member("GOLD", "Aurum");
   silver1 = await member("SILVER", "Sterling");
-  silverNoApp = await member("SILVER", "Paper", false);
+  silverNoApp = await member("SILVER", "Paper", { withApp: false });
   bronze = await member("BRONZE", "Copper");
+  fresh = await member(null, "Newbie");
+  archived = await member("SILVER", "Gone");
+  await prisma.client.update({ where: { id: archived.clientId }, data: { archivedAt: NOW } });
+  optedOut = await member("BRONZE", "Quiet");
+  await prisma.customerAccount.update({ where: { id: optedOut.accountId }, data: { pushEnabled: false } });
+  blocked = await member("BRONZE", "Banned");
+  await prisma.client.update({ where: { id: blocked.clientId }, data: { bookingBlockedAt: NOW } });
+  outsider = await member("GOLD", "Elsewhere", { shop: otherShopId });
   walkerClientId = (
     await prisma.client.create({
       data: { shopId, acuityClientKey: `walker-${randomToken(6)}`, magicToken: randomToken(), firstName: "Walker", source: "manual" },
@@ -206,10 +305,11 @@ afterEach(async () => {
   // Each test starts from nobody invited and nobody booked: the caps and the
   // "already booked" rule would otherwise carry from one test to the next.
   await prisma.tierOpening.deleteMany({ where: { shopId } });
-  await prisma.autoFillRun.deleteMany({ where: { shopId } });
+  await prisma.autoFillRun.deleteMany({ where: { shopId } }); // and its recipients
   await prisma.waitlistOffer.deleteMany({ where: { shopId } });
   await prisma.waitlistEntry.deleteMany({ where: { shopId } });
   await prisma.appointment.deleteMany({ where: { shopId } });
+  await prisma.service.update({ where: { id: serviceId }, data: { visibility: "public" } });
   await prisma.shop.update({
     where: { id: shopId },
     data: { autoFillEnabled: true, rewardsEnabled: true, requireCardToBook: false, paymentsMode: "off" },
@@ -224,9 +324,9 @@ afterAll(async () => {
   if (ORIGINAL_DRY_RUN === undefined) delete process.env.DRY_RUN;
   else process.env.DRY_RUN = ORIGINAL_DRY_RUN;
   __resetEnvCacheForTests();
-  if (shopId) await prisma.emailIntent.deleteMany({ where: { shopId } });
+  for (const id of [shopId, otherShopId]) if (id) await prisma.emailIntent.deleteMany({ where: { shopId: id } });
   if (accountIds.length) await prisma.customerAccount.deleteMany({ where: { id: { in: accountIds } } });
-  if (shopId) await prisma.shop.deleteMany({ where: { id: shopId } });
+  for (const id of [shopId, otherShopId]) if (id) await prisma.shop.deleteMany({ where: { id } });
   for (const e of emails) await prisma.user.deleteMany({ where: { email: e } });
 });
 
@@ -258,8 +358,10 @@ describe("what starts it", () => {
     await prisma.shop.update({ where: { id: shopId }, data: { autoFillEnabled: false } });
     const off = await make(6 * 60 * MIN);
     await cancelAppointment(shopId, off.id, "CANCELED", NOW, { applyPolicyFee: true, initiator: "customer" });
+    await sweep(started);
 
     expect(await prisma.autoFillRun.count({ where: { shopId } })).toBe(0);
+    expect(pushes).toEqual([]);
   });
 
   it("the manage page's cancel is the client's", async () => {
@@ -281,13 +383,11 @@ describe("what starts it", () => {
     const without = await clientCancels();
     await settleBackgroundWork();
     expect(await prisma.waitlistOffer.count({ where: { shopId, startsAt: without.startsAt } })).toBe(1);
-    // A fresh person for the second half: whoever was just offered one is
-    // holding it, and in the six-hour cooldown besides.
     await prisma.waitlistOffer.deleteMany({ where: { shopId } });
     await prisma.waitlistEntry.deleteMany({ where: { shopId } });
     await prisma.waitlistEntry.create({ data: { shopId, firstName: "Fresh", email: `f-${randomToken(4)}@t.local` } });
 
-    // ...with it, the run owns the time, and the waitlist waits its turn.
+    // ...with it, the run owns the time.
     await prisma.shop.update({ where: { id: shopId }, data: { autoFillEnabled: true } });
     const withIt = await clientCancels();
     await settleBackgroundWork();
@@ -296,194 +396,181 @@ describe("what starts it", () => {
   });
 });
 
-describe("Gold first, then Silver", () => {
-  it("🔴 both tiers and time for two stages: Gold alone for 15 minutes, held for 30", async () => {
+describe("Gold's head start, then everyone", () => {
+  it("🔴 Gold alone, held for 15 minutes; nobody else hears yet", async () => {
     const appt = await clientCancels();
     await sweep(started);
 
     const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId }, include: { recipients: true } });
-    expect(opening).toMatchObject({ source: "auto", minTier: "GOLD", heldUntil: at(AUTO_FILL_START_DELAY_MS + 1_000 + 30 * MIN), startsAt: appt.startsAt });
-    expect(opening.recipients.map((r) => r.accountId).sort()).toEqual([gold1.accountId, gold2.accountId].sort());
+    expect(opening).toMatchObject({ source: "auto", minTier: "GOLD", heldUntil: at(AUTO_FILL_START_DELAY_MS + 1_000 + 15 * MIN), startsAt: appt.startsAt });
+    expect(opening.recipients.map((r) => r.accountId).sort()).toEqual(ids(gold1, gold2));
     expect(opening.recipients.every((r) => r.wave === "gold" && r.notifiedAt !== null)).toBe(true);
-    expect(await runFor(appt.id)).toMatchObject({ state: "gold", openingId: opening.id });
+    const run = await runFor(appt.id);
+    expect(run).toMatchObject({ state: "gold", openingId: opening.id, nextAt: opening.heldUntil });
 
     expect(pushedTo(gold1)).toHaveLength(1);
     expect(pushedTo(gold1)[0]!.payload.title).toBe("Fill Cuts: first pick for Gold members");
-    expect(pushedTo(silver1)).toEqual([]);
-    expect(pushedTo(bronze)).toEqual([]);
+    expect(pushes).toHaveLength(2);
+    expect(await toldIn(run!.id)).toEqual([]);
   });
 
-  it("🔴 after 15 minutes Silver joins the SAME opening; Gold is not told twice and can still book", async () => {
+  it("🔴 then everyone with the app at THIS shop hears, once each - exactly the right people", async () => {
+    await prisma.waitlistEntry.create({ data: { shopId, firstName: "Patient", email: `p-${randomToken(4)}@t.local` } });
     const appt = await clientCancels();
     await sweep(started);
-    const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId } });
     pushes = [];
 
-    await sweep(at(AUTO_FILL_START_DELAY_MS + 1_000 + 15 * MIN + 1_000));
-    const widened = await prisma.tierOpening.findUniqueOrThrow({ where: { id: opening.id }, include: { recipients: true } });
-    expect(widened.minTier).toBe("SILVER");
-    expect(widened.recipientCount).toBe(3);
-    expect(widened.recipients.find((r) => r.accountId === silver1.accountId)?.wave).toBe("silver");
-    expect(pushedTo(silver1)).toHaveLength(1);
-    expect(pushedTo(silver1)[0]!.payload.title).toBe("Fill Cuts: an opening for Silver and Gold members");
-    expect(pushedTo(gold1)).toEqual([]);
-    expect(await runFor(appt.id)).toMatchObject({ state: "silver", nextAt: widened.heldUntil });
+    await sweep(headStartOver);
+    const run = await runFor(appt.id);
+    // Silver, Bronze, and a client with no tier yet. Not Gold (told already),
+    // not Paper (no phone registered), not the archived, blocked or
+    // opted-out client, and not another shop's client.
+    expect(await toldIn(run!.id)).toEqual(ids(silver1, bronze, fresh));
+    for (const m of [silver1, bronze, fresh]) expect(pushedTo(m), m.accountId).toHaveLength(1);
+    for (const m of [gold1, gold2, archived, optedOut, blocked, outsider]) expect(pushedTo(m)).toEqual([]);
+    expect(pushes).toHaveLength(3);
 
-    // A Gold member who waited still has their invitation.
-    const booked = await claimTierOpening({ accountId: gold1.accountId, openingId: opening.id, now: at(25 * MIN) });
-    expect(booked.outcome).toBe("claimed");
-    await sweep(new Date(widened.heldUntil.getTime() + 1_000));
-    expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "claimed" });
+    const p = pushedTo(fresh)[0]!.payload;
+    expect(p.title).toBe("An opening just came up");
+    expect(p.body).toBe(`Fill Cuts: ${formatOpeningWhen(appt.startsAt, TZ)} - tap to book`);
+    expect(formatOpeningWhen(appt.startsAt, TZ)).toMatch(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} (AM|PM)$/);
+    const base = apiEnv().APP_BASE_URL.replace(/\/$/, "");
+    expect(p.url).toBe(`${base}/book/${slug}?service=${serviceId}&staff=${staffId}`);
+    // No client's name in it: the same words go to everyone.
+    expect(JSON.stringify(p)).not.toMatch(/Walker|Newbie|Goldie/);
+
+    // Everyone told: the run is done, nothing is held, and the waitlist's
+    // held offer is NOT made - the time is on the booking page for whoever
+    // books first.
+    expect(run).toMatchObject({ state: "closed", outcome: "broadcast" });
     expect(await prisma.waitlistOffer.count({ where: { shopId } })).toBe(0);
+    const recipients = await prisma.autoFillRecipient.findMany({ where: { runId: run!.id } });
+    expect(recipients.every((r) => r.notifiedAt !== null && r.delivered === true && r.shopId === shopId)).toBe(true);
+
+    // A later sweep tells nobody again.
+    pushes = [];
+    await sweep(at(40 * MIN));
+    expect(pushes).toEqual([]);
   });
 
-  it("🔴 a Gold member books it in the first stage: Silver is never invited", async () => {
+  it("🔴 a Gold member books it during the head start: nobody else is told", async () => {
     const appt = await clientCancels();
     await sweep(started);
     const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId } });
     expect((await claimTierOpening({ accountId: gold2.accountId, openingId: opening.id, now: at(5 * MIN) })).outcome).toBe("claimed");
     pushes = [];
 
-    await sweep(at(AUTO_FILL_START_DELAY_MS + 1_000 + 15 * MIN + 1_000));
-    expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "claimed" });
-    expect(await prisma.tierOpeningRecipient.count({ where: { openingId: opening.id, wave: "silver" } })).toBe(0);
-    expect(pushedTo(silver1)).toEqual([]);
+    await sweep(headStartOver);
+    const run = await runFor(appt.id);
+    expect(run).toMatchObject({ state: "closed", outcome: "claimed" });
+    expect(await toldIn(run!.id)).toEqual([]);
+    expect(pushes).toEqual([]);
   });
 
-  it("only Gold can be reached: one stage of 15 minutes, for Gold", async () => {
-    // Silver already has a visit booked.
-    await prisma.appointment.create({
-      data: { shopId, staffId, serviceId, clientId: silver1.clientId, firstName: "S", status: "BOOKED", startsAt: at(3 * 24 * 60 * MIN), endsAt: at(3 * 24 * 60 * MIN + 30 * MIN), manageToken: randomToken() },
-    });
+  it("🔴 booked on the booking page the moment the head start ended: nobody is told", async () => {
     const appt = await clientCancels();
     await sweep(started);
-    const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId } });
-    expect(opening).toMatchObject({ minTier: "GOLD", heldUntil: at(AUTO_FILL_START_DELAY_MS + 1_000 + 15 * MIN) });
-    expect(await runFor(appt.id)).toMatchObject({ state: "silver", nextAt: opening.heldUntil });
+    pushes = [];
+    await bookedBySomeoneElse(appt.startsAt);
+
+    await sweep(headStartOver);
+    const run = await runFor(appt.id);
+    expect(run).toMatchObject({ state: "closed", outcome: "filled" });
+    expect(await toldIn(run!.id)).toEqual([]);
+    expect(pushes).toEqual([]);
+    expect(await prisma.waitlistOffer.count({ where: { shopId } })).toBe(0);
   });
 
-  it("under half an hour to spare: both tiers at once, for one stage", async () => {
-    // Starts an hour from now: nothing held past 30 minutes before, so about
-    // 29 minutes once the run starts - not enough for two stages.
-    const appt = await clientCancels({ startOffsetMs: 60 * MIN });
+  it("🔴 under two hours' notice: no head start - everyone, Gold included, at once", async () => {
+    const appt = await clientCancels({ startOffsetMs: 90 * MIN });
     await sweep(started);
-    const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId }, include: { recipients: true } });
-    expect(opening.minTier).toBe("SILVER");
-    expect(opening.recipients).toHaveLength(3);
-    expect(opening.heldUntil).toEqual(at(AUTO_FILL_START_DELAY_MS + 1_000 + 15 * MIN));
-    expect(pushedTo(gold1)[0]!.payload.title).toBe("Fill Cuts: an opening for Silver and Gold members");
-    expect(await runFor(appt.id)).toMatchObject({ state: "silver" });
+    expect(await prisma.tierOpening.count({ where: { shopId } })).toBe(0);
+    const run = await runFor(appt.id);
+    expect(await toldIn(run!.id)).toEqual(ids(gold1, gold2, silver1, bronze, fresh));
+    expect(everyonePushes()).toHaveLength(5);
+    expect(pushes).toHaveLength(5);
+    expect(run).toMatchObject({ state: "closed", outcome: "broadcast" });
+  });
+
+  it("nobody Gold to reach: everyone at once", async () => {
+    await upcomingVisit(gold1, 3 * 24 * 60 * MIN);
+    await upcomingVisit(gold2, 3 * 24 * 60 * MIN + 60 * MIN);
+    const appt = await clientCancels();
+    await sweep(started);
+    expect(await prisma.tierOpening.count({ where: { shopId } })).toBe(0);
+    expect(await toldIn((await runFor(appt.id))!.id)).toEqual(ids(silver1, bronze, fresh));
   });
 });
 
-describe("who is never asked", () => {
+describe("who is never told", () => {
   it("🔴 the person who cancelled - through the record they cancelled, or its email", async () => {
-    const goldEmail = `goldie-${randomToken(4)}@t.local`;
-    await prisma.client.update({ where: { id: gold2.clientId }, data: { email: goldEmail } });
+    const copperEmail = `copper-${randomToken(4)}@t.local`;
+    await prisma.client.update({ where: { id: silver1.clientId }, data: { email: copperEmail } });
     try {
-      // Gold 1 cancels their own visit; Gold 2's record shares the email on the
-      // visit Walker cancelled.
-      await clientCancels({ clientId: gold1.clientId });
+      const own = await clientCancels({ clientId: bronze.clientId, startOffsetMs: 60 * MIN });
       await sweep(started);
-      const first = await prisma.tierOpening.findFirstOrThrow({ where: { shopId }, include: { recipients: true } });
-      expect(first.recipients.map((r) => r.accountId)).not.toContain(gold1.accountId);
-      await prisma.tierOpening.deleteMany({ where: { shopId } });
+      expect(await toldIn((await runFor(own.id))!.id)).not.toContain(bronze.accountId);
 
-      await clientCancels({ email: goldEmail.toUpperCase() });
+      const byEmail = await clientCancels({ email: copperEmail.toUpperCase(), startOffsetMs: 90 * MIN });
       await sweep(started);
-      const second = await prisma.tierOpening.findFirstOrThrow({ where: { shopId }, include: { recipients: true } });
-      expect(second.recipients.map((r) => r.accountId)).not.toContain(gold2.accountId);
+      expect(await toldIn((await runFor(byEmail.id))!.id)).not.toContain(silver1.accountId);
     } finally {
-      await prisma.client.update({ where: { id: gold2.clientId }, data: { email: null } });
+      await prisma.client.update({ where: { id: silver1.clientId }, data: { email: null } });
     }
   });
 
-  it("🔴 someone already booked, someone blocked, someone without the app, and Bronze", async () => {
-    await prisma.appointment.create({
-      data: { shopId, staffId, serviceId, clientId: gold2.clientId, firstName: "G", status: "BOOKED", startsAt: at(2 * 24 * 60 * MIN), endsAt: at(2 * 24 * 60 * MIN + 30 * MIN), manageToken: randomToken() },
-    });
-    await prisma.client.update({ where: { id: gold1.clientId }, data: { bookingBlockedAt: NOW } });
-    try {
-      await clientCancels();
-      await sweep(started);
-      const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId }, include: { recipients: true } });
-      // Silver 1 is all that is left: Gold 2 is booked, Gold 1 blocked,
-      // Paper has no app, Copper is Bronze.
-      expect(opening.recipients.map((r) => r.accountId)).toEqual([silver1.accountId]);
-    } finally {
-      await prisma.client.update({ where: { id: gold1.clientId }, data: { bookingBlockedAt: null } });
-    }
+  it("🔴 someone who already has a visit booked here", async () => {
+    await upcomingVisit(silver1, 2 * 24 * 60 * MIN);
+    const appt = await clientCancels({ startOffsetMs: 90 * MIN });
+    await sweep(started);
+    expect(await toldIn((await runFor(appt.id))!.id)).toEqual(ids(gold1, gold2, bronze, fresh));
   });
 
-  it("🔴 nobody hears more than twice a day from one shop", async () => {
+  it("🔴 nobody hears more than twice a day from one shop: the third opening tells nobody", async () => {
+    for (const offset of [60, 90]) {
+      await clientCancels({ startOffsetMs: offset * MIN });
+      await sweep(started);
+    }
+    expect(pushedTo(fresh)).toHaveLength(2);
+    pushes = [];
+
+    const third = await clientCancels({ startOffsetMs: 120 * MIN });
+    await sweep(started);
+    expect(pushes).toEqual([]);
+    // Nobody with the app left to tell: the waitlist's turn.
+    expect(await runFor(third.id)).toMatchObject({ state: "closed", outcome: "no_members" });
+  });
+
+  it("🔴 the head start counts against the cap too", async () => {
     // Gold 1 was invited (and told) twice in the last few hours.
-    const old = await prisma.tierOpening.create({
-      data: { shopId, staffId, serviceId, startsAt: at(5 * 24 * 60 * MIN), endsAt: at(5 * 24 * 60 * MIN + 30 * MIN), minTier: "GOLD", heldUntil: at(-60 * MIN), status: "RELEASED" },
-      select: { id: true },
-    });
-    const other = await prisma.tierOpening.create({
-      data: { shopId, staffId, serviceId, startsAt: at(5 * 24 * 60 * MIN + 60 * MIN), endsAt: at(5 * 24 * 60 * MIN + 90 * MIN), minTier: "GOLD", heldUntil: at(-60 * MIN), status: "RELEASED" },
-      select: { id: true },
-    });
-    for (const openingId of [old.id, other.id]) {
+    for (const h of [0, 1]) {
+      const old = await prisma.tierOpening.create({
+        data: { shopId, staffId, serviceId, startsAt: at(5 * 24 * 60 * MIN + h * 60 * MIN), endsAt: at(5 * 24 * 60 * MIN + h * 60 * MIN + 30 * MIN), minTier: "GOLD", heldUntil: at(-60 * MIN), status: "RELEASED" },
+        select: { id: true },
+      });
       await prisma.tierOpeningRecipient.create({
-        data: { openingId, accountId: gold1.accountId, clientId: gold1.clientId, createdAt: at(-3 * 60 * MIN), notifiedAt: at(-3 * 60 * MIN), delivered: true },
+        data: { openingId: old.id, accountId: gold1.accountId, clientId: gold1.clientId, createdAt: at(-3 * 60 * MIN), notifiedAt: at(-3 * 60 * MIN), delivered: true },
       });
     }
-    await clientCancels();
+    const appt = await clientCancels();
     await sweep(started);
     const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId, source: "auto" }, include: { recipients: true } });
-    expect(opening.recipients.map((r) => r.accountId)).not.toContain(gold1.accountId);
-    expect(opening.recipients.map((r) => r.accountId)).toContain(gold2.accountId);
+    expect(opening.recipients.map((r) => r.accountId)).toEqual([gold2.accountId]);
+    await sweep(headStartOver);
+    expect(await toldIn((await runFor(appt.id))!.id)).not.toContain(gold1.accountId);
+    expect(pushedTo(gold1)).toEqual([]);
   });
 });
 
-describe("when it holds nothing", () => {
-  it("🔴 too close to the start: held for nobody - the booking page has it", async () => {
+describe("when it stops, or never starts", () => {
+  it("🔴 too close to the start: held for nobody, told to nobody - the booking page has it", async () => {
     await prisma.waitlistEntry.create({ data: { shopId, firstName: "Patient", email: `p-${randomToken(4)}@t.local` } });
-    // 40 minutes out: the deadline is 10 minutes away. At an Auto-fill shop
-    // nothing is held inside it, the waitlist included, so anyone can book
-    // it while they still can.
     const appt = await clientCancels({ startOffsetMs: 40 * MIN });
     await sweep(started);
     expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "too_soon" });
     expect(await prisma.tierOpening.count({ where: { shopId } })).toBe(0);
     expect(await prisma.waitlistOffer.count({ where: { shopId } })).toBe(0);
     expect(pushes).toEqual([]);
-  });
-
-  it("🔴 a Silver stage that falls after 21:00 invites nobody; Gold keeps the rest of its hold", async () => {
-    const p = zonedDateParts(NOW, TZ);
-    // Cancelled 20:34: Gold alone until 20:50, held until 21:05.
-    const evening = zonedWallTimeToUtc(p.year, p.month0, p.day, 20 * 60 + 34, TZ);
-    const night = zonedWallTimeToUtc(p.year, p.month0, p.day, 21 * 60 + 1, TZ);
-    const nextMorning = zonedWallTimeToUtc(p.year, p.month0, p.day + 1, 11 * 60, TZ);
-    const appt = await clientCancels({ startOffsetMs: nextMorning.getTime() - NOW.getTime(), cancelAt: evening });
-    await sweep(new Date(evening.getTime() + AUTO_FILL_START_DELAY_MS + 1_000));
-    const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId } });
-    expect(await runFor(appt.id)).toMatchObject({ state: "gold" });
-    expect(opening.heldUntil.getTime()).toBeGreaterThan(night.getTime());
-
-    // The sweep that should have widened at 20:50 runs late, at 21:01.
-    await sweep(night);
-    expect(await prisma.tierOpeningRecipient.count({ where: { openingId: opening.id, wave: "silver" } })).toBe(0);
-    expect(await runFor(appt.id)).toMatchObject({ state: "silver", nextAt: opening.heldUntil });
-    expect(pushedTo(silver1)).toEqual([]);
-  });
-
-  it("🔴 the service hidden during the Gold stage: Silver is never pushed, and the waitlist gets it", async () => {
-    await prisma.waitlistEntry.create({ data: { shopId, firstName: "Patient", email: `p-${randomToken(4)}@t.local` } });
-    const appt = await clientCancels();
-    await sweep(started);
-    await prisma.service.update({ where: { id: serviceId }, data: { visibility: "hidden" } });
-    try {
-      await sweep(at(AUTO_FILL_START_DELAY_MS + 1_000 + 15 * MIN + 1_000));
-      expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "service_hidden" });
-      expect(pushedTo(silver1)).toEqual([]);
-      expect(await prisma.waitlistOffer.count({ where: { shopId, startsAt: appt.startsAt } })).toBe(1);
-    } finally {
-      await prisma.service.update({ where: { id: serviceId }, data: { visibility: "public" } });
-    }
   });
 
   it("🔴 at night it waits for 08:00, then runs", async () => {
@@ -501,7 +588,7 @@ describe("when it holds nothing", () => {
     expect(pushedTo(gold1)).toHaveLength(1);
   });
 
-  it("at night with no time left by morning: no hold", async () => {
+  it("at night with no time left by morning: nothing", async () => {
     const p = zonedDateParts(NOW, TZ);
     const night = zonedWallTimeToUtc(p.year, p.month0, p.day, 23 * 60, TZ);
     const morning = zonedWallTimeToUtc(p.year, p.month0, p.day + 1, 8 * 60, TZ);
@@ -510,9 +597,34 @@ describe("when it holds nothing", () => {
     await sweep(new Date(night.getTime() + AUTO_FILL_START_DELAY_MS + 1_000));
     expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "quiet_hours" });
     expect(await prisma.tierOpening.count({ where: { shopId } })).toBe(0);
+    expect(pushes).toEqual([]);
   });
 
-  it("🔴 a service the booking page hides, or rewards switched off since the cancel: nothing held", async () => {
+  it("🔴 a head start that ends after 21:00: everyone hears at 08:00, not at night", async () => {
+    const p = zonedDateParts(NOW, TZ);
+    // Cancelled 20:34: Gold alone until 20:50.
+    const evening = zonedWallTimeToUtc(p.year, p.month0, p.day, 20 * 60 + 34, TZ);
+    const night = zonedWallTimeToUtc(p.year, p.month0, p.day, 21 * 60 + 1, TZ);
+    const morning = zonedWallTimeToUtc(p.year, p.month0, p.day + 1, 8 * 60, TZ);
+    const nextLate = zonedWallTimeToUtc(p.year, p.month0, p.day + 1, 11 * 60, TZ);
+    const appt = await clientCancels({ startOffsetMs: nextLate.getTime() - NOW.getTime(), cancelAt: evening });
+    await sweep(new Date(evening.getTime() + AUTO_FILL_START_DELAY_MS + 1_000));
+    expect(await runFor(appt.id)).toMatchObject({ state: "gold" });
+    pushes = [];
+
+    // The sweep that should have opened it at 20:50 runs late, at 21:01.
+    await sweep(night);
+    const run = await runFor(appt.id);
+    expect(run).toMatchObject({ state: "gold", nextAt: morning });
+    expect(await toldIn(run!.id)).toEqual([]);
+    expect(pushes).toEqual([]);
+
+    await sweep(morning);
+    expect(await toldIn(run!.id)).toEqual(ids(silver1, bronze, fresh));
+    expect(everyonePushes()).toHaveLength(3);
+  });
+
+  it("🔴 a service the booking page hides, rewards off, or the switch off since the cancel: nothing", async () => {
     const cases: { setup: () => Promise<unknown>; undo: () => Promise<unknown>; outcome: string }[] = [
       {
         setup: () => prisma.service.update({ where: { id: serviceId }, data: { visibility: "hidden" } }),
@@ -522,6 +634,11 @@ describe("when it holds nothing", () => {
       {
         setup: () => prisma.shop.update({ where: { id: shopId }, data: { rewardsEnabled: false } }),
         undo: () => prisma.shop.update({ where: { id: shopId }, data: { rewardsEnabled: true } }),
+        outcome: "gates",
+      },
+      {
+        setup: () => prisma.shop.update({ where: { id: shopId }, data: { autoFillEnabled: false } }),
+        undo: () => prisma.shop.update({ where: { id: shopId }, data: { autoFillEnabled: true } }),
         outcome: "gates",
       },
     ];
@@ -539,6 +656,75 @@ describe("when it holds nothing", () => {
     expect(pushes).toEqual([]);
   });
 
+  it("🔴 the service hidden during the head start: nobody else is pushed, and the waitlist gets it", async () => {
+    await prisma.waitlistEntry.create({ data: { shopId, firstName: "Patient", email: `p-${randomToken(4)}@t.local` } });
+    const appt = await clientCancels();
+    await sweep(started);
+    await prisma.service.update({ where: { id: serviceId }, data: { visibility: "hidden" } });
+    pushes = [];
+    await sweep(headStartOver);
+    const run = await runFor(appt.id);
+    expect(run).toMatchObject({ state: "closed", outcome: "service_hidden" });
+    expect(await toldIn(run!.id)).toEqual([]);
+    expect(pushes).toEqual([]);
+    expect(await prisma.waitlistOffer.count({ where: { shopId, startsAt: appt.startsAt } })).toBe(1);
+  });
+
+  it("🔴 switched off while everyone is being told: the rest are not, and nothing is handed on", async () => {
+    await prisma.waitlistEntry.create({ data: { shopId, firstName: "Patient", email: `p-${randomToken(4)}@t.local` } });
+    const appt = await clientCancels({ startOffsetMs: 90 * MIN });
+    await sweep(started);
+    const run = (await runFor(appt.id))!;
+    await rewindToUntold(run.id, started);
+    await prisma.shop.update({ where: { id: shopId }, data: { autoFillEnabled: false } });
+    pushes = [];
+
+    await sweep(at(3 * MIN));
+    expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "gates" });
+    expect(pushes).toEqual([]);
+    expect(await prisma.waitlistOffer.count({ where: { shopId } })).toBe(0);
+  });
+
+  it("🔴 booked before the next batch goes out: the rest are not told", async () => {
+    const appt = await clientCancels({ startOffsetMs: 90 * MIN });
+    await sweep(started);
+    const run = (await runFor(appt.id))!;
+    await rewindToUntold(run.id, started);
+    await bookedBySomeoneElse(appt.startsAt);
+    pushes = [];
+
+    await sweep(at(3 * MIN));
+    expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "filled" });
+    expect(pushes).toEqual([]);
+  });
+
+  it("🔴 booked while the pushes are going out: it stops within ten", async () => {
+    // Nine more clients with the app, so fourteen are told in all.
+    const extra: Member[] = [];
+    for (let i = 0; i < 9; i++) extra.push(await member(null, `Extra${i}`));
+    try {
+      const appt = await clientCancels({ startOffsetMs: 90 * MIN });
+      let booked = false;
+      __setExpoSenderForTests({
+        send: async (to, payload) => {
+          pushes.push({ to, payload });
+          if (!booked) {
+            booked = true;
+            await bookedBySomeoneElse(appt.startsAt);
+          }
+        },
+      });
+      await sweep(started);
+      const run = (await runFor(appt.id))!;
+      expect(run).toMatchObject({ state: "closed", outcome: "filled" });
+      // The time was taken during the first push; the check after every tenth caught it.
+      expect(pushes).toHaveLength(10);
+      expect(await prisma.autoFillRecipient.count({ where: { runId: run.id, notifiedAt: null } })).toBe(14 - 10);
+    } finally {
+      await prisma.client.updateMany({ where: { id: { in: extra.map((m) => m.clientId) } }, data: { archivedAt: NOW } });
+    }
+  });
+
   it("🔴 undone before it starts: closed, and nobody told", async () => {
     const appt = await clientCancels();
     await prisma.appointment.update({ where: { id: appt.id }, data: { status: "BOOKED", canceledAt: null } });
@@ -548,25 +734,20 @@ describe("when it holds nothing", () => {
   });
 });
 
-describe("how it ends", () => {
-  it("🔴 nobody in the tiers takes it: the waitlist gets its turn when the hold runs out", async () => {
+describe("the head start's own endings", () => {
+  it("🔴 nobody with the app left after Gold: the waitlist gets its turn", async () => {
     await prisma.waitlistEntry.create({ data: { shopId, firstName: "Patient", email: `p-${randomToken(4)}@t.local` } });
-    // Only Gold reachable, so one 15-minute stage.
-    await prisma.appointment.create({
-      data: { shopId, staffId, serviceId, clientId: silver1.clientId, firstName: "S", status: "BOOKED", startsAt: at(3 * 24 * 60 * MIN), endsAt: at(3 * 24 * 60 * MIN + 30 * MIN), manageToken: randomToken() },
-    });
+    for (const [i, m] of [silver1, bronze, fresh].entries()) await upcomingVisit(m, 3 * 24 * 60 * MIN + i * 60 * MIN);
     const appt = await clientCancels();
     await sweep(started);
-    const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId } });
     expect(await prisma.waitlistOffer.count({ where: { shopId } })).toBe(0);
 
-    const after = new Date(opening.heldUntil.getTime() + 1_000);
-    await sweep(after);
-    expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "lapsed" });
+    await sweep(headStartOver);
+    expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "no_members" });
     const offer = await prisma.waitlistOffer.findFirstOrThrow({ where: { shopId } });
     expect(offer.startsAt).toEqual(appt.startsAt);
     // At an Auto-fill shop each waitlist hold is 15 minutes too.
-    expect(offer.expiresAt).toEqual(new Date(after.getTime() + 15 * MIN));
+    expect(offer.expiresAt).toEqual(new Date(headStartOver.getTime() + 15 * MIN));
   });
 
   it("🔴 a service hidden after the push is not booked through the app; the hold goes", async () => {
@@ -574,80 +755,54 @@ describe("how it ends", () => {
     await sweep(started);
     const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId } });
     await prisma.service.update({ where: { id: serviceId }, data: { visibility: "hidden" } });
-    try {
-      const tap = await claimTierOpening({ accountId: gold1.accountId, openingId: opening.id, now: at(5 * MIN) });
-      expect(tap.outcome).toBe("not_found");
-      expect(await prisma.tierOpening.findUniqueOrThrow({ where: { id: opening.id } })).toMatchObject({ status: "RELEASED" });
-      expect(await prisma.appointment.count({ where: { shopId, status: "BOOKED" } })).toBe(0);
-    } finally {
-      await prisma.service.update({ where: { id: serviceId }, data: { visibility: "public" } });
-    }
+    const tap = await claimTierOpening({ accountId: gold1.accountId, openingId: opening.id, now: at(5 * MIN) });
+    expect(tap.outcome).toBe("not_found");
+    expect(await prisma.tierOpening.findUniqueOrThrow({ where: { id: opening.id } })).toMatchObject({ status: "RELEASED" });
+    expect(await prisma.appointment.count({ where: { shopId, status: "BOOKED" } })).toBe(0);
   });
 
-  it("🔴 the barber ends it: Auto-fill stops and hands nothing on", async () => {
+  it("🔴 the barber ends it: Auto-fill stops, tells nobody else and hands nothing on", async () => {
     await prisma.waitlistEntry.create({ data: { shopId, firstName: "Patient", email: `p-${randomToken(4)}@t.local` } });
     const appt = await clientCancels();
     await sweep(started);
     const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId } });
     expect(await releaseTierOpening(shopId, opening.id, at(5 * MIN))).toBe(true);
-    await sweep(at(AUTO_FILL_START_DELAY_MS + 1_000 + 15 * MIN + 1_000));
-    expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "released" });
+    pushes = [];
+    await sweep(headStartOver);
+    const run = await runFor(appt.id);
+    expect(run).toMatchObject({ state: "closed", outcome: "released" });
+    expect(await toldIn(run!.id)).toEqual([]);
+    expect(pushes).toEqual([]);
     expect(await prisma.waitlistOffer.count({ where: { shopId } })).toBe(0);
   });
 
   it("🔴 the waitlist never gets back the time its own canceller just gave up", async () => {
     const leaver = `leaver-${randomToken(4)}@t.local`;
-    // The canceller is FIRST on the waitlist, under the same email.
     await prisma.waitlistEntry.create({ data: { shopId, firstName: "Leaver", email: leaver } });
     const other = await prisma.waitlistEntry.create({
       data: { shopId, firstName: "Other", email: `o-${randomToken(4)}@t.local`, createdAt: new Date(Date.now() + 1_000) },
       select: { id: true },
     });
     const appt = await clientCancels({ email: leaver.toUpperCase() });
-    // Rewards switched off before the run starts: no tiers, so the time goes
-    // straight on to the waitlist.
+    // Rewards switched off before the run starts: the time goes straight on to the waitlist.
     await prisma.shop.update({ where: { id: shopId }, data: { rewardsEnabled: false } });
     await sweep(started);
     expect(await runFor(appt.id)).toMatchObject({ outcome: "gates" });
     const offer = await prisma.waitlistOffer.findFirstOrThrow({ where: { shopId } });
     expect(offer.entryId).toBe(other.id);
   });
-
-  it("🔴 nor a member who was offered it in the app and let it go", async () => {
-    const goldEmail = `goldie-${randomToken(4)}@t.local`;
-    await prisma.client.update({ where: { id: gold1.clientId }, data: { email: goldEmail } });
-    try {
-      await prisma.waitlistEntry.create({ data: { shopId, firstName: "Goldie", email: goldEmail } });
-      const other = await prisma.waitlistEntry.create({
-        data: { shopId, firstName: "Other", email: `o-${randomToken(4)}@t.local`, createdAt: new Date(Date.now() + 1_000) },
-        select: { id: true },
-      });
-      // Only Gold, one stage; nobody books it.
-      await prisma.appointment.create({
-        data: { shopId, staffId, serviceId, clientId: silver1.clientId, firstName: "S", status: "BOOKED", startsAt: at(3 * 24 * 60 * MIN), endsAt: at(3 * 24 * 60 * MIN + 30 * MIN), manageToken: randomToken() },
-      });
-      await clientCancels();
-      await sweep(started);
-      const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId } });
-      await sweep(new Date(opening.heldUntil.getTime() + 1_000));
-      const offer = await prisma.waitlistOffer.findFirstOrThrow({ where: { shopId } });
-      expect(offer.entryId).toBe(other.id);
-    } finally {
-      await prisma.client.update({ where: { id: gold1.clientId }, data: { email: null } });
-    }
-  });
 });
 
 describe("two things at once", () => {
-  it("🔴 a Gold member booking while Silver is added: one booking, and no invitations after it", async () => {
+  it("🔴 a Gold member booking as the head start ends: one booking, and nobody told after a claim", async () => {
     const appt = await clientCancels();
     await sweep(started);
     const opening = await prisma.tierOpening.findFirstOrThrow({ where: { shopId } });
-    const widenAt = at(AUTO_FILL_START_DELAY_MS + 1_000 + 15 * MIN + 1_000);
+    pushes = [];
 
     const { results, settledEarly } = await raceBehindRowLock<unknown>("TierOpening", opening.id, [
-      () => claimTierOpening({ accountId: gold1.accountId, openingId: opening.id, now: widenAt }),
-      () => advanceAutoFill(widenAt),
+      () => claimTierOpening({ accountId: gold1.accountId, openingId: opening.id, now: new Date(opening.heldUntil.getTime() - 1_000) }),
+      () => advanceAutoFill(headStartOver),
     ]);
     expect(settledEarly).toBe(0);
     expect(results.every((r) => r.status === "fulfilled")).toBe(true);
@@ -655,15 +810,15 @@ describe("two things at once", () => {
     await settleBackgroundWork();
 
     expect(await prisma.appointment.count({ where: { shopId, startsAt: appt.startsAt, status: "BOOKED" } })).toBe(1);
-    const run = await runFor(appt.id);
-    const silverInvites = await prisma.tierOpeningRecipient.count({ where: { openingId: opening.id, wave: "silver" } });
-    if (run?.state === "closed") {
-      // The booking won: nobody else was invited to a time already taken.
-      expect(run.outcome).toBe("claimed");
-      expect(silverInvites).toBe(0);
+    const run = (await runFor(appt.id))!;
+    expect(run.state).toBe("closed");
+    if (run.outcome === "claimed") {
+      // The booking won: nobody was chosen for a time already taken.
+      expect(await toldIn(run.id)).toEqual([]);
+      expect(pushes).toEqual([]);
     } else {
-      // Silver was added first, then the booking: both are fine.
-      expect(run?.state).toBe("silver");
+      // The stage opened first, then the booking landed: it stopped on it.
+      expect(["filled", "broadcast"]).toContain(run.outcome);
     }
   });
 
@@ -679,5 +834,31 @@ describe("two things at once", () => {
     await settleBackgroundWork();
     expect(await prisma.tierOpening.count({ where: { shopId } })).toBe(1);
     expect(pushedTo(gold1)).toHaveLength(1);
+  });
+
+  it("🔴 two sweeps telling everyone at once: each person hears exactly once", async () => {
+    const appt = await clientCancels({ startOffsetMs: 90 * MIN });
+    await sweep(started);
+    const run = (await runFor(appt.id))!;
+    await rewindToUntold(run.id, started);
+    const [first] = await prisma.autoFillRecipient.findMany({
+      where: { runId: run.id },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 1,
+    });
+    pushes = [];
+
+    // Both sweeps choose the same unsent list, then meet at the first stamp.
+    const { results, settledEarly } = await raceBehindRowLock<unknown>("AutoFillRecipient", first!.id, [
+      () => advanceAutoFill(at(3 * MIN)),
+      () => advanceAutoFill(at(3 * MIN)),
+    ]);
+    expect(settledEarly).toBe(0);
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+    await settleBackgroundWork();
+
+    for (const m of [gold1, gold2, silver1, bronze, fresh]) expect(pushedTo(m), m.accountId).toHaveLength(1);
+    expect(pushes).toHaveLength(5);
+    expect(await runFor(appt.id)).toMatchObject({ state: "closed", outcome: "broadcast" });
   });
 });

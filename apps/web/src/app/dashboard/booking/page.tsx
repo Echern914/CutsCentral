@@ -32,6 +32,10 @@ export interface BookingShop {
   cancelCutoffHours?: number;
   waitlistEnabled: boolean;
   slotOpenedTextsEnabled: boolean;
+  /** "Fill cancellations automatically". Optional = an older API (shown off). */
+  autoFillEnabled?: boolean;
+  /** Why it could not run right now (codes, config/fillCancellations.ts). Absent = an older API: no card. */
+  autoFillBlockers?: string[];
   requireBookingApproval: boolean;
   /** "Join shop" in the customer app waits for the shop's OK. */
   approveNewClients: boolean;

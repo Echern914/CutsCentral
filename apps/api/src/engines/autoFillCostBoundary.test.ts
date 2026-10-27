@@ -19,9 +19,17 @@ const FORBIDDEN: { what: string; pattern: RegExp }[] = [
   { what: "a model provider key", pattern: /ANTHROPIC_API_KEY|OPENAI_API_KEY|GEMINI_API_KEY/ },
   { what: "a bare network call", pattern: /\bfetch\s*\(|axios|node:https?/ },
   { what: "a text message", pattern: /getMessageProvider|\.send\(\{\s*to:/ },
+  { what: "an email", pattern: /messaging\/email|sendEmail|enqueueEmail|emailIntent/i },
 ];
 
 describe("the Auto-fill engine", () => {
+  it("🔴 the everyone stage sends app pushes only, never to a browser or onto the marketing ledger", () => {
+    const source = readFileSync(fileURLToPath(new URL("./autoFill.ts", import.meta.url)), "utf8");
+    const send = /sendPushToClient\(\{[\s\S]*?\}\);/.exec(source)?.[0] ?? "";
+    expect(send).toMatch(/appOnly: true/);
+    expect(send).toMatch(/ledger: false/);
+  });
+
   for (const file of FILES) {
     const source = readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8");
     for (const { what, pattern } of FORBIDDEN) {
