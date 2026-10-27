@@ -110,8 +110,14 @@ afterEach(() => {
 afterAll(async () => {
   __setExpoSenderForTests(undefined);
   __setPushSenderForTests(undefined);
-  await runAsOwner((tx) => tx.platformNotice.deleteMany({ where: { id: { in: noticeIds } } }));
   const users = await prisma.user.findMany({ where: { email: { in: emails } }, select: { id: true } });
+  // By id AND by author: a broken guard (the falsifier removes it on purpose)
+  // lets a non-admin's notice through, and that one is in no list.
+  await runAsOwner((tx) =>
+    tx.platformNotice.deleteMany({
+      where: { OR: [{ id: { in: noticeIds } }, { createdById: { in: users.map((u) => u.id) } }] },
+    }),
+  );
   for (const u of users) {
     await prisma.shop.deleteMany({ where: { ownerId: u.id } });
     await prisma.user.delete({ where: { id: u.id } });
