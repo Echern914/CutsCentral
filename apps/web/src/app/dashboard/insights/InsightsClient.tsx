@@ -14,6 +14,7 @@ import { GoalPlanner } from "./GoalPlanner";
 import { PeriodControl } from "./PeriodControl";
 import { YearlyReport } from "./YearlyReport";
 import { UpgradeCallout } from "../_components/UpgradeCallout";
+import { ExpensesCard, fmtCents } from "./ExpensesCard";
 import type {
   Bucket,
   CustomRange,
@@ -138,7 +139,15 @@ export function InsightsClient({
     };
   }, [period, bucket, range, data.period, data.bucket, data.windowStart, data.windowEnd]);
 
-  const { buckets, services, totals, busiest, loyalty } = data;
+  // After an expense is added, edited or removed: re-read THIS window, so the
+  // Expenses and Take-home tiles move with it.
+  async function refreshNumbers() {
+    if (period === "custom" && !range) return;
+    const d = await insightsAction(period, bucket ?? undefined, range ?? undefined).catch(() => null);
+    if (d) setData(d);
+  }
+
+  const { buckets, services, totals, busiest, loyalty, expenses, takeHomeCents } = data;
 
   return (
     <motion.div
@@ -213,6 +222,36 @@ export function InsightsClient({
         />
         <Tile label="Busiest day" value={busiest.weekday ?? "n/a"} />
       </motion.div>
+
+      {/* Money out, and what is left: revenue above minus the expenses the
+          barber entered. An ESTIMATE, labelled as one, and shown negative
+          when it is negative. */}
+      {expenses && takeHomeCents !== undefined && (
+        <motion.div
+          variants={fadeUp}
+          data-testid="money-tiles"
+          className={cn("transition-opacity duration-150 ease-out", pending && "opacity-60")}
+        >
+          <div className="grid grid-cols-2 gap-4">
+            <Tile
+              label="Expenses"
+              value={fmtCents(expenses.totalCents)}
+              note={expenses.totalCents === 0 ? "None entered for this range" : undefined}
+            />
+            <Tile
+              label="Take-home (estimate)"
+              value={fmtCents(takeHomeCents)}
+              negative={takeHomeCents < 0}
+            />
+          </div>
+          <p className="mt-2 text-[11px] text-muted">
+            Estimate: revenue from your bookings minus the expenses you&apos;ve entered.{" "}
+            <a href="#expenses" className="text-gold underline-offset-2 hover:underline">
+              Your expenses
+            </a>
+          </p>
+        </motion.div>
+      )}
 
       {/* Starter's sneak peek: one honest panel where the analysis would be,
           naming what Premium adds. No price here - the billing page owns it. */}
@@ -345,6 +384,18 @@ export function InsightsClient({
           )}
         </Card>
       </motion.div>
+
+      {/* What the barber spends - feeds the Expenses and Take-home tiles. */}
+      {expenses && (
+        <motion.div variants={fadeUp}>
+          <ExpensesCard
+            summary={expenses}
+            periodLabel={data.periodLabel}
+            pending={pending}
+            onChanged={() => void refreshNumbers()}
+          />
+        </motion.div>
+      )}
     </motion.div>
   );
 }
@@ -353,20 +404,23 @@ function Tile({
   label,
   value,
   accent,
+  negative,
   note,
 }: {
   label: string;
   value: string;
   accent?: boolean;
+  /** A loss: shown in the danger tone, never hidden or floored at zero. */
+  negative?: boolean;
   note?: string;
 }) {
   return (
-    <Card className="p-4">
+    <Card className="min-w-0 p-4">
       <p className="text-[10px] uppercase tracking-wide text-muted">{label}</p>
       <p
         className={cn(
-          "mt-1 font-display text-xl tabular-nums",
-          accent ? "text-gold" : "text-offwhite",
+          "mt-1 font-display text-xl tabular-nums [overflow-wrap:anywhere]",
+          negative ? "text-danger-soft" : accent ? "text-gold" : "text-offwhite",
         )}
       >
         {value}

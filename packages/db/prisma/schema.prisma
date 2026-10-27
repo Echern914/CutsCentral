@@ -755,6 +755,7 @@ model Shop {
   promoUses           PromotionRedemption[]
   offers              Offer[]
   offerRedemptions    OfferRedemption[]
+  expenses            ShopExpense[]
   // Provider of the Month: what it applied with, and what it won.
   providerAwardApplications ProviderAwardApplication[]
   providerAwards      ProviderAward[]
@@ -1276,6 +1277,33 @@ model PromotionRedemption {
 
   @@index([shopId, promotionId])
   @@index([shopId, clientId])
+}
+
+// SHOP EXPENSES (migration 20261079000000): what the business SPENDS - rent the
+// barber pays, products, supplies, other - so Insights can show a take-home
+// ESTIMATE. Occurrences are never stored; @chairback/config/expenseSchedule
+// expands a row over a period at read time. NOT BoothRentRate/BoothRentPayment,
+// which is rent the owner RECEIVES from team members.
+model ShopExpense {
+  id              String    @id @default(cuid())
+  shopId          String
+  shop            Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  // 'rent' | 'products' | 'supplies' | 'other' (CHECK-pinned).
+  category        String
+  label           String?
+  amountCents     Int
+  // 'once' | 'weekly' | 'monthly' (CHECK-pinned).
+  cadence         String
+  // Shop-local calendar dates. 'once' = startDate only, endDate null.
+  startDate       DateTime  @db.Date
+  endDate         DateTime? @db.Date
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  // Soft delete: an archived expense stops counting in every period.
+  archivedAt      DateTime?
+
+  @@index([shopId, archivedAt])
 }
 
 // OFFERS & CODES (engines/offers.ts). Separate from Promotion on purpose: a

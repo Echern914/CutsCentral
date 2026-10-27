@@ -29,6 +29,8 @@ import {
   type PeriodKey,
   type ResolvedPeriod,
 } from "../engines/insightsWindow.js";
+import { expenseSummaryForWindow } from "../engines/shopExpenses.js";
+import { insightsExpensesRouter } from "./insightsExpenses.js";
 
 /**
  * Shop insights: the barber's own analytics page.
@@ -48,6 +50,9 @@ import {
  *     walk-ins don't drag the average to zero), unique/new/returning clients
  *   - busiest weekday
  *   - loyalty activity (punches earned/redeemed, standing redemptions)
+ *   - expenses + a take-home ESTIMATE: the one exception to "no new tables" -
+ *     the barber types costs in (ShopExpense, routes/insightsExpenses.ts), and
+ *     take-home is the revenue below minus those, never a second revenue sum
  *
  * REVENUE IS MONEY EARNED, not the sum of tickets. Where the shop takes payment
  * through the app it is real collected money net of refunds (so a refund lowers
@@ -59,6 +64,9 @@ import {
  */
 export const insightsRouter: Router = Router();
 insightsRouter.use(requireUser, requireShop, requireManager, requireActiveAccess);
+// The barber's own expenses (rent paid, products, supplies, other) - behind the
+// same OWNER/MANAGER + active-access gate as everything above.
+insightsRouter.use("/expenses", insightsExpensesRouter);
 
 /** Every response echoes the window it measured, so no label can drift from it. */
 function periodMeta(p: ResolvedPeriod) {
@@ -118,9 +126,16 @@ insightsRouter.get("/", async (req, res) => {
   // trip - the page used to open five per load, which is what "insights is
   // slow" feels like from a phone. Reads run sequentially inside (a Prisma tx
   // client can't multiplex), which still beats parallel transactions.
-  const { events, ledgerAgg, redemptions, shopServices, firstVisits, firstAppts } =
+  // The window as shop-local date keys, for the expense schedule. windowStart
+  // and today are already shop-local UTC-midnight markers (insightsWindow).
+  const windowFromKey = period.windowStart.toISOString().slice(0, 10);
+  const windowToKey = period.today.toISOString().slice(0, 10);
+
+  const { events, ledgerAgg, redemptions, shopServices, firstVisits, firstAppts, expenses } =
     await runWithShop(shop.id, async (tx) => {
       const { events } = await readChairEvents(shop.id, fetchFrom, fetchTo, { tx });
+      // What the shop SPENT in the same window, for the take-home estimate.
+      const expenses = await expenseSummaryForWindow(tx, shop.id, windowFromKey, windowToKey);
       const ledgerAgg = await tx.punchLedger.aggregate({
         // Standing activity only: exclude a reversed original (reversedAt set)
         // AND its offsetting correction (reversalOfId set), so a punch-and-undo
@@ -189,7 +204,7 @@ insightsRouter.get("/", async (req, res) => {
               },
               _min: { startsAt: true },
             });
-      return { events, ledgerAgg, redemptions, shopServices, firstVisits, firstAppts };
+      return { events, ledgerAgg, redemptions, shopServices, firstVisits, firstAppts, expenses };
     });
 
   const buckets = period.buckets.map((b) => ({
@@ -368,6 +383,13 @@ insightsRouter.get("/", async (req, res) => {
       punchesRedeemed: ledgerAgg._sum.punchesRedeemed ?? 0,
       redemptions,
     },
+    // What the barber entered as spent in this window, expanded by
+    // @chairback/config/expenseSchedule over [windowStart, windowEnd].
+    expenses,
+    // An ESTIMATE: the revenue above (readChairEvents - the one revenue
+    // definition) minus the expenses entered. May be negative, and is shown
+    // as such. In cents, so it carries the revenue's cents too.
+    takeHomeCents: Math.round(totalRevenue * 100) - expenses.totalCents,
   });
 });
 

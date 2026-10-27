@@ -56,7 +56,8 @@
     "./onboarding": "./src/onboarding.ts",
     "./providerAward": "./src/providerAward.ts",
     "./openSlots": "./src/openSlots.ts",
-    "./specialDay": "./src/specialDay.ts"
+    "./specialDay": "./src/specialDay.ts",
+    "./expenseSchedule": "./src/expenseSchedule.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
