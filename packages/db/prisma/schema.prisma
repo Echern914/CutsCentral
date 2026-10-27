@@ -1706,6 +1706,8 @@ model Client {
   customerLinks       CustomerClientLink[]
   // Openings held for this record's tier that it was told about. See TierOpening.
   tierOpeningInvites  TierOpeningRecipient[]
+  // Openings Auto-fill told this record about in its "everyone" stage.
+  autoFillNotices     AutoFillRecipient[]
   // The card this client asked the shop to keep for their future appointments
   // (at most one live at a time - see SavedCard).
   savedCards          SavedCard[]
@@ -2049,9 +2051,10 @@ model TierOpeningRecipient {
 //
 // 🔴 triggerKey = cancel:{appointmentId}:r{cancellationRevision}: one run per
 // cancellation, and a cancel, undo, cancel again is a second cancellation.
-// state queued -> gold -> silver -> closed; nextAt is when the sweep next acts
-// (null exactly when closed), outcome says how it ended (set exactly when
-// closed). Both pairings are CHECKs in the migration.
+// state queued -> gold -> everyone -> closed (a short-notice run skips gold;
+// 'silver' is the old second stage, still finished if a run is in it); nextAt
+// is when the sweep next acts (null exactly when closed), outcome says how it
+// ended (set exactly when closed). Both pairings are CHECKs in the migration.
 model AutoFillRun {
   id            String       @id @default(cuid())
   shopId        String
@@ -2073,9 +2076,36 @@ model AutoFillRun {
   outcome       String?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
+  recipients    AutoFillRecipient[]
 
   @@index([shopId, createdAt])
   @@index([appointmentId])
+}
+
+// Who one run tells in its "everyone" stage: every client of the shop with the
+// app, after the Gold head start. Frozen when the stage begins; one row per
+// person, so each hears at most once per opening.
+//
+// 🔴 PLATFORM-OWNED, like TierOpeningRecipient: it joins a shop record to a
+// person's account, so the tenant role cannot read it at all. shopId is a copy
+// for the per-person caps (no relation: the rows go with their run).
+model AutoFillRecipient {
+  id         String          @id @default(cuid())
+  runId      String
+  run        AutoFillRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  shopId     String
+  accountId  String
+  account    CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  clientId   String
+  client     Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt  DateTime        @default(now())
+  // When a send was CLAIMED for this person - at most one push each, ever.
+  notifiedAt DateTime?
+  // Whether any of their phones accepted it. Null until sent.
+  delivered  Boolean?
+
+  @@unique([runId, accountId])
+  @@index([accountId, shopId, createdAt])
 }
 
 // APPEND-ONLY history of every waitlist lifecycle mutation: who did what to
@@ -5059,6 +5089,7 @@ model CustomerAccount {
   devices            CustomerDevice[]
   savedShops         CustomerSavedShop[]
   tierOpeningInvites TierOpeningRecipient[]
+  autoFillNotices    AutoFillRecipient[]
 }
 
 // One account <-> one shop's Client row. Written ONLY by the linking engine

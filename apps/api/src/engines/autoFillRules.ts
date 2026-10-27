@@ -6,7 +6,7 @@
  * imports it).
  */
 
-/** How long each group - Gold, Silver, each person on the waitlist - has the time to itself. */
+/** How long Gold's head start lasts, and how long each person on the waitlist holds an offer. */
 export const AUTO_FILL_STAGE_MS = 15 * 60_000;
 
 /** Nothing is held later than this long before the shop's minimum notice. */

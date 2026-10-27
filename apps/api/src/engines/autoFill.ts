@@ -1,10 +1,12 @@
-import { QUIET_HOURS, localMinutesOfDay, zonedDateParts, zonedWallTimeToUtc } from "@chairback/config";
+import { QUIET_HOURS, apiEnv, localMinutesOfDay, zonedDateParts, zonedWallTimeToUtc } from "@chairback/config";
+import type { AutoFillBlocker } from "@chairback/config/fillCancellations";
 import { Prisma, prisma, runAsOwner, type LoyaltyTier } from "@chairback/db";
 import { logger } from "../logger.js";
-import { hasPremiumAccess } from "../billing/entitlements.js";
-import { pushDispatchMode } from "../messaging/push.js";
+import { hasPremiumAccess, type PlanShop } from "../billing/entitlements.js";
+import { pushDispatchMode, sendPushToClient } from "../messaging/push.js";
+import { buildAutoFillEveryonePush, formatOpeningWhen } from "../messaging/templates.js";
 import { smsEnabled } from "../messaging/twilio.js";
-import { receptionistConfigured, receptionistEnabledForShop } from "../receptionist/config.js";
+import { receptionistConfigured, receptionistEnabledForShop, type ReceptionistShop } from "../receptionist/config.js";
 import { noteAvailabilityChanged } from "../services/availabilityCache.js";
 import { loadBookingBlocks } from "../services/clientBookingBlock.js";
 import { staffMirrorBlocked } from "./acuityMirror.js";
@@ -19,17 +21,23 @@ import { clientsWithUpcomingBooking } from "./upcomingBooking.js";
 import { claimWouldRequirePayment, offerFreedSlotToWaitlist, offerLockKey, slotPrice } from "./waitlistOffer.js";
 
 /**
- * AUTO-FILL: when a client cancels, the time is offered to the shop's best
- * clients before anyone else - Gold members first, then Silver, then the
- * waitlist, then the booking page. Rules only: no model, nothing that costs a
- * message. Every offer is a push to the My ChairBack app, where one tap books
- * it under the member's own record (claimTierOpening).
+ * AUTO-FILL ("Fill cancellations automatically"): when a client cancels, the
+ * shop's Gold members get a short head start on the time, and then EVERY
+ * client of the shop who has the app is told it is open - first to book it on
+ * the booking page gets it. Rules only: no model, nothing that costs a message
+ * (app pushes only, never a text or an email).
  *
- * 🔴 IT IS BUILT FROM HOLDS THAT ALREADY EXIST, NOT A NEW KIND OF HOLD. Each
- * stage is a TierOpening (Gold, then the SAME row widened to Silver) or a
- * WaitlistOffer, so the slot grid and the booking guard already keep the time
- * off the booking page while it is offered, and a barber who books over it
- * already releases it. This file only decides who is offered it, and when.
+ * 🔴 THE HEAD START IS A HOLD THAT ALREADY EXISTS, NOT A NEW KIND OF HOLD. Gold
+ * gets a TierOpening, so the slot grid and the booking guard keep the time off
+ * the booking page for those 15 minutes, a Gold member books it with one tap
+ * in the app (claimTierOpening), and a barber who books over it releases it.
+ *
+ * 🔴 "EVERYONE" HOLDS NOTHING AND WRITES NO BOOKING. The time is simply on the
+ * booking page again; the push says so, and whoever taps it books through the
+ * ordinary booking flow and its ONE overlap guard. That is what makes "first
+ * to book wins" true: there is no second write path to race the first. The
+ * stage only decides who hears, and stops the moment the time is no longer on
+ * the booking page - booked, blocked off by the barber, or too close to start.
  *
  * 🔴 ONE ROW CARRIES ONE CANCELLATION THROUGH THE STAGES (AutoFillRun), written
  * in the cancellation's own transaction (queueAutoFillRun), so a restart can
@@ -38,19 +46,29 @@ import { claimWouldRequirePayment, offerFreedSlotToWaitlist, offerLockKey, slotP
  * looks at it. Every path through a stage either closes the run or moves
  * nextAt on, so no run is ever stuck due.
  *
- *   queued -> startRun:   checks the shop, the service, the money and the
- *                         clock, then holds the slot for Gold (or for Gold and
- *                         Silver at once when there is not time for two stages)
- *   gold   -> widenToSilver: Silver members join the SAME opening; Gold keeps
- *                         their invitation and is not pushed again
- *   silver -> finishTiers: the hold has run out; the waitlist gets its turn
+ *   queued   -> startRun: checks the shop, the service and the clock, then
+ *                         holds the slot for Gold for 15 minutes - or skips
+ *                         straight to everyone when the time starts within
+ *                         two hours, nobody Gold can be reached, or a hold is
+ *                         not possible (a claim would owe money, or the other
+ *                         calendar cannot be protected)
+ *   gold     -> openToEveryone: the head start is over (or ended by a booking
+ *                         or the barber); everyone else with the app is chosen
+ *   everyone -> sendToEveryone: a batch of pushes per sweep, each person once,
+ *                         until all are told or the time is gone
+ *   silver   -> (the old second stage) finishes the way gold does
+ *
+ * The waitlist's own held offers (waitlistOffer.ts) get the time only when a
+ * run cannot reach anyone - no app clients, the shop's gates, too late, night.
+ * A waitlister with the app hears in the everyone stage like anyone else; a
+ * hold for one person would hide the time from everyone just told about it.
  *
  * A hold ends early only by setting heldUntil = now, which every reader of a
  * hold already understands. Lock order (bookingWrite.ts header): staff ->
  * wloffer -> TierOpening row -> AutoFillRun row, never the reverse.
  *
- * Shop.autoFillEnabled is off for every shop. Nothing turns it on until the
- * app build that lets a member switch these pushes off.
+ * Shop.autoFillEnabled is the barber's switch (Booking -> Settings), off by
+ * default.
  */
 
 /** Only a cancellation inside this window is worth offering around. */
@@ -67,13 +85,27 @@ const CAP_PER_WEEK = 4;
 const BATCH = 25;
 /** How late the every-2-minutes sweep can run a stage, for planning around quiet hours. */
 const SWEEP_SLACK_MS = 5 * 60_000;
+/**
+ * A time starting sooner than this gets no Gold head start: everyone hears at
+ * once. Fifteen minutes is a real share of two hours, and a short-notice
+ * opening is filled by whoever can come, not by whoever ranks highest.
+ */
+export const AUTO_FILL_SHORT_NOTICE_MS = 2 * 60 * 60_000;
+/** Everyone-stage pushes per run per sweep tick; the rest go on the next tick. */
+const EVERYONE_PER_TICK = 150;
+/** Re-read whether the time is still on the booking page after this many pushes. */
+const RECHECK_EVERY = 10;
 
 export type AutoFillOutcome =
-  /** A member booked it. */
+  /** A Gold member booked it in the app during the head start. */
   | "claimed"
+  /** Someone booked it on the booking page while everyone was being told. */
+  | "filled"
+  /** Everyone was told; the time stays on the booking page for whoever books first. */
+  | "broadcast"
   /** The barber ended it, booked over it, or the shop changed so a claim was refused. */
   | "released"
-  /** Nobody in the tiers took it in time: handed to the waitlist. */
+  /** Nobody in the tiers took it in time: handed to the waitlist (the old Silver stage only). */
   | "lapsed"
   /** The cancellation was undone before Auto-fill began. */
   | "restored"
@@ -91,9 +123,11 @@ export type AutoFillOutcome =
   | "quiet_hours"
   /** The time is no longer free, or not one the booking page would offer. */
   | "unavailable"
-  /** Nobody in the tiers can be reached. */
+  /** Nobody with the app can be reached: handed to the waitlist. */
   | "no_members"
   | "error";
+
+type RunState = "queued" | "gold" | "silver" | "everyone";
 
 /** A run's identity: one per cancellation, never two. */
 export function autoFillTriggerKey(appointmentId: string, cancellationRevision: number): string {
@@ -102,6 +136,9 @@ export function autoFillTriggerKey(appointmentId: string, cancellationRevision: 
 
 const SHOP_SELECT = {
   id: true,
+  name: true,
+  slug: true,
+  publicPageEnabled: true,
   timezone: true,
   bookingMode: true,
   bookingLeadMinutes: true,
@@ -126,7 +163,12 @@ const SHOP_SELECT = {
   receptionistTermsAcceptedAt: true,
 } as const;
 
-type AutoFillShop = Prisma.ShopGetPayload<{ select: typeof SHOP_SELECT }>;
+export type AutoFillShop = Prisma.ShopGetPayload<{ select: typeof SHOP_SELECT }>;
+
+/** What autoFillBlockers reads: any Shop row has it. */
+export type AutoFillGateShop = Pick<AutoFillShop, "bookingMode" | "publicPageEnabled" | "slug" | "rewardsEnabled"> &
+  PlanShop &
+  ReceptionistShop;
 
 function loadShop(shopId: string): Promise<AutoFillShop | null> {
   // Owner read: a tenant session sees no Shop rows.
@@ -134,18 +176,30 @@ function loadShop(shopId: string): Promise<AutoFillShop | null> {
 }
 
 /**
- * Does this shop run Auto-fill right now? Everything that does not depend on
- * the particular time: the switch, rewards (tiers are a rewards feature), a
- * native calendar, the plan, a push that would really be sent, and the
- * receptionist not already owning freed slots by text.
+ * Why this shop's switch would do nothing right now - everything that does
+ * not depend on the particular time: a calendar ChairBack keeps, a booking
+ * page anyone can book on, rewards (Gold is a rewards tier), the plan, the
+ * receptionist not already owning freed slots by text, and a push that would
+ * really be sent. Empty = it runs when switched on. The dashboard shows these
+ * beside the switch (config/fillCancellations.ts says them in words), so a
+ * barber never turns on a switch that silently does nothing.
  */
+export function autoFillBlockers(shop: AutoFillGateShop, now: Date = new Date()): AutoFillBlocker[] {
+  const out: AutoFillBlocker[] = [];
+  if (shop.bookingMode !== "native") out.push("not_native");
+  else if (!shop.publicPageEnabled || !shop.slug) out.push("booking_page_off");
+  if (!shop.rewardsEnabled) out.push("rewards_off");
+  if (!hasPremiumAccess(shop, { now })) out.push("plan");
+  if (receptionistConfigured() && receptionistEnabledForShop(shop, { now }) && smsEnabled()) {
+    out.push("receptionist_texting");
+  }
+  if (pushDispatchMode() !== "live") out.push("pushes_paused");
+  return out;
+}
+
+/** Does this shop run Auto-fill right now? Switched on, and nothing in the way. */
 function shopRunsAutoFill(shop: AutoFillShop | null, now: Date): shop is AutoFillShop {
-  if (!shop) return false;
-  if (!shop.autoFillEnabled || !shop.rewardsEnabled || shop.bookingMode !== "native") return false;
-  if (!hasPremiumAccess(shop, { now })) return false;
-  if (pushDispatchMode() !== "live") return false;
-  if (receptionistConfigured() && receptionistEnabledForShop(shop, { now }) && smsEnabled()) return false;
-  return true;
+  return !!shop && shop.autoFillEnabled && autoFillBlockers(shop, now).length === 0;
 }
 
 /**
@@ -238,8 +292,8 @@ export async function advanceAutoFill(now: Date = new Date()): Promise<{ handled
   for (const run of due) {
     try {
       if (run.state === "queued") await startRun(run, now);
-      else if (run.state === "gold") await widenToSilver(run, now);
-      else if (run.state === "silver") await finishTiers(run, now);
+      else if (run.state === "gold" || run.state === "silver") await openToEveryone(run, run.state, now);
+      else if (run.state === "everyone") await sendToEveryone(run, now);
       handled += 1;
     } catch (err) {
       logger.error({ err, shopId: run.shopId, runId: run.id, state: run.state }, "auto-fill: stage failed");
@@ -271,6 +325,11 @@ async function closeAndMaybeHandOff(run: RunRow, from: string, outcome: AutoFill
   if (!closed) return; // another sweep moved it first
   logger.info({ shopId: run.shopId, runId: run.id, outcome }, "auto-fill: run closed");
   if (handOff) await handToWaitlist(run, now);
+}
+
+/** Come back to this run at `at`, from the state it was read in. */
+async function reschedule(run: RunRow, from: string, at: Date): Promise<void> {
+  await runAsOwner((tx) => tx.autoFillRun.updateMany({ where: { id: run.id, state: from }, data: { nextAt: at } }));
 }
 
 /**
@@ -324,11 +383,13 @@ async function failRun(run: RunRow, now: Date): Promise<void> {
       where: { id: run.id, state: fresh.state },
       data: { state: "closed", nextAt: null, outcome: "error" },
     });
-    return done.count === 1 ? { ...run, openingId: fresh.openingId } : null;
+    return done.count === 1 ? { run: { ...run, openingId: fresh.openingId }, state: fresh.state } : null;
   });
   if (!closed) return;
   await noteAvailabilityChanged(run.shopId);
-  await handToWaitlist(closed, now);
+  // 🔴 Not once everyone is being told: a waitlist hold would take the time
+  // off the booking page under the people who just heard it is open.
+  if (closed.state !== "everyone") await handToWaitlist(closed.run, now);
 }
 
 /**
@@ -350,7 +411,70 @@ function nextQuietEnd(timezone: string, now: Date): Date {
   return zonedWallTimeToUtc(p.year, p.month0, p.day + (today ? 0 : 1), startMin, timezone);
 }
 
-/** Stage 1: is this worth offering, and to whom? Then hold it. */
+/**
+ * May this time be offered to anyone at all? The shop's switch and gates, and
+ * a service the booking page shows. 🔴 Only what the booking page offers: the
+ * visibility rule is kept out of the slot engine on purpose
+ * (serviceVisibility.ts), so it is asked here - a barber-only or retired
+ * service is never pushed to anyone.
+ */
+async function offerStop(
+  shop: AutoFillShop | null,
+  run: RunRow,
+  now: Date,
+): Promise<{ stop: AutoFillOutcome } | { stop: null; shop: AutoFillShop; price: number | null }> {
+  if (!shopRunsAutoFill(shop, now)) return { stop: "gates" };
+  const service = await prisma.service.findFirst({
+    where: { id: run.serviceId, shopId: run.shopId, ...PUBLIC_SERVICE },
+    select: { price: true, priceOverrides: true, dateOverrides: true, timeOverrides: true },
+  });
+  if (!service) return { stop: "service_hidden" };
+  return { stop: null, shop, price: slotPrice(service, run.startsAt, shop.timezone) };
+}
+
+/**
+ * May Gold be given a HOLD on it? A claim in the app takes no payment and
+ * holds only this calendar, so a time that would owe money, or a chair whose
+ * other calendar cannot be protected, gets no head start - it goes straight
+ * to everyone, who book it through the booking page and its own checkout.
+ */
+async function holdStop(shop: AutoFillShop, price: number | null, run: RunRow): Promise<AutoFillOutcome | null> {
+  if (claimWouldRequirePayment(shop, price)) return "requires_payment";
+  if (await staffMirrorBlocked(run.shopId, run.staffId)) return "mirror_blocked";
+  return null;
+}
+
+/** Is this exact time on the booking page right now - free, open, far enough ahead? */
+async function slotStillOpen(run: RunRow, now: Date): Promise<boolean> {
+  const target = run.startsAt.getTime();
+  const slots = await computeOpenSlots({
+    shopId: run.shopId,
+    staffId: run.staffId,
+    serviceId: run.serviceId,
+    fromDate: new Date(target - 24 * 60 * 60_000),
+    toDate: new Date(target + 24 * 60 * 60_000),
+    now,
+  });
+  return slots.some((s) => s.startsAt.getTime() === target);
+}
+
+/** The time left the booking page: was it booked, or closed some other way? */
+async function takenOutcome(run: RunRow): Promise<AutoFillOutcome> {
+  const booked = await runAsOwner((tx) =>
+    tx.appointment.count({
+      where: {
+        shopId: run.shopId,
+        staffId: run.staffId,
+        status: "BOOKED",
+        startsAt: { lt: run.endsAt },
+        endsAt: { gt: run.startsAt },
+      },
+    }),
+  );
+  return booked > 0 ? "filled" : "unavailable";
+}
+
+/** Stage 1: is this worth offering? Then a head start for Gold, or straight to everyone. */
 async function startRun(run: RunRow, now: Date): Promise<void> {
   // The cancellation must still stand. Undo restores the booking; a second
   // cancellation after that is a different run with its own key.
@@ -370,31 +494,13 @@ async function startRun(run: RunRow, now: Date): Promise<void> {
   }
 
   const shop = await loadShop(run.shopId);
-  if (!shopRunsAutoFill(shop, now)) {
-    await closeAndMaybeHandOff(run, "queued", "gates", now, true);
-    return;
-  }
-  // 🔴 Only what the booking page offers. The visibility rule is kept out of
-  // the slot engine on purpose (serviceVisibility.ts), so it is asked here: a
-  // barber-only or retired service is never pushed to members.
-  const service = await prisma.service.findFirst({
-    where: { id: run.serviceId, shopId: run.shopId, ...PUBLIC_SERVICE },
-    select: { price: true, priceOverrides: true, dateOverrides: true, timeOverrides: true },
-  });
-  if (!service) {
-    await closeAndMaybeHandOff(run, "queued", "service_hidden", now, true);
-    return;
-  }
-  if (claimWouldRequirePayment(shop, slotPrice(service, run.startsAt, shop.timezone))) {
-    await closeAndMaybeHandOff(run, "queued", "requires_payment", now, true);
-    return;
-  }
-  if (await staffMirrorBlocked(run.shopId, run.staffId)) {
-    await closeAndMaybeHandOff(run, "queued", "mirror_blocked", now, true);
+  const offer = await offerStop(shop, run, now);
+  if (offer.stop !== null) {
+    await closeAndMaybeHandOff(run, "queued", offer.stop, now, true);
     return;
   }
 
-  const deadline = autoFillDeadline(run.startsAt, shop.bookingLeadMinutes);
+  const deadline = autoFillDeadline(run.startsAt, offer.shop.bookingLeadMinutes);
   const windowMs = deadline.getTime() - now.getTime();
   if (windowMs < MIN_WINDOW_MS) {
     await closeAndMaybeHandOff(run, "queued", "too_soon", now, true);
@@ -403,12 +509,10 @@ async function startRun(run: RunRow, now: Date): Promise<void> {
   // 🔴 No one is woken up. A cancellation at night waits for 08:00 if there
   // is still time then; if there is not, it goes the way a cancellation went
   // before Auto-fill.
-  if (inQuietHours(shop.timezone, now)) {
-    const wake = nextQuietEnd(shop.timezone, now);
+  if (inQuietHours(offer.shop.timezone, now)) {
+    const wake = nextQuietEnd(offer.shop.timezone, now);
     if (deadline.getTime() - wake.getTime() >= MIN_WINDOW_MS) {
-      await runAsOwner((tx) =>
-        tx.autoFillRun.updateMany({ where: { id: run.id, state: "queued" }, data: { nextAt: wake } }),
-      );
+      await reschedule(run, "queued", wake);
       return;
     }
     await closeAndMaybeHandOff(run, "queued", "quiet_hours", now, true);
@@ -416,8 +520,8 @@ async function startRun(run: RunRow, now: Date): Promise<void> {
   }
 
   // The exact time, as the booking page would offer it right now: closed,
-  // taken, past or off the grid is refused before anything is held, and the
-  // hold's end comes from the same duration rules the picker uses.
+  // taken, past or off the grid is refused before anything is held or sent,
+  // and the hold's end comes from the same duration rules the picker uses.
   const target = run.startsAt.getTime();
   const slot = (
     await computeOpenSlots({
@@ -434,7 +538,23 @@ async function startRun(run: RunRow, now: Date): Promise<void> {
     return;
   }
 
-  let plan: { kind: "gone" } | { kind: "nobody" } | { kind: "held"; openingId: string };
+  // 🔴 THE HEAD START. Gold gets the time to itself for AUTO_FILL_STAGE_MS
+  // only when that leaves a real chance for everyone after it: the time is at
+  // least AUTO_FILL_SHORT_NOTICE_MS away, the window outlasts the head start
+  // by a usable margin, and the push to everyone would not land in quiet
+  // hours (with room for the sweep that sends it running a tick or two late).
+  // A hold must also be possible (holdStop). Otherwise everyone hears now.
+  const headStart =
+    (await holdStop(offer.shop, offer.price, run)) === null &&
+    target - now.getTime() >= AUTO_FILL_SHORT_NOTICE_MS &&
+    windowMs >= AUTO_FILL_STAGE_MS + MIN_WINDOW_MS &&
+    !inQuietHours(offer.shop.timezone, new Date(now.getTime() + AUTO_FILL_STAGE_MS + SWEEP_SLACK_MS));
+  if (!headStart) {
+    await openToEveryone({ ...run, deadline }, "queued", now);
+    return;
+  }
+
+  let plan: { kind: "gone" } | { kind: "no_gold" } | { kind: "held"; openingId: string };
   try {
     plan = await runAsOwner(async (tx) => {
       // The guard every booking takes, with a CUSTOMER's rules: a member is
@@ -444,9 +564,9 @@ async function startRun(run: RunRow, now: Date): Promise<void> {
         shopId: run.shopId,
         startsAt: slot.startsAt,
         endsAt: slot.endsAt,
-        bufferMin: shop.bookingBufferMin,
+        bufferMin: offer.shop.bookingBufferMin,
         bookedServiceId: run.serviceId,
-        serviceDayLimit: { serviceId: run.serviceId, timezone: shop.timezone },
+        serviceDayLimit: { serviceId: run.serviceId, timezone: offer.shop.timezone },
         walkInCapacity: "enforce",
         now,
       });
@@ -457,34 +577,18 @@ async function startRun(run: RunRow, now: Date): Promise<void> {
       );
       if (!mine) return { kind: "gone" }; // another sweep got here first
 
-      const people = await autoFillInvitees(tx, {
+      const gold = await autoFillInvitees(tx, {
         shopId: run.shopId,
-        minTier: "SILVER",
+        minTier: "GOLD",
         canceller: { clientId: appt.clientId, email: appt.email },
         openingId: null,
+        runId: null,
         now,
       });
-      const gold = people.filter((p) => p.tier === "GOLD");
-      const silver = people.filter((p) => p.tier === "SILVER");
-      if (people.length === 0) {
-        // Only the sweep that really closes it hands the time on - never two.
-        return (await closeRun(tx, run, "queued", "no_members")) ? { kind: "nobody" } : { kind: "gone" };
-      }
+      // Nobody Gold to give a head start to: nothing written, everyone hears now.
+      if (gold.length === 0) return { kind: "no_gold" };
 
-      // Two stages need half an hour before the deadline, someone in each
-      // tier, and the second stage's push to land before quiet hours - with
-      // room for the sweep that runs it being a tick or two late (the widen
-      // refuses at night anyway). Otherwise both tiers get it at once.
-      const twoStages =
-        windowMs >= 2 * AUTO_FILL_STAGE_MS &&
-        gold.length > 0 &&
-        silver.length > 0 &&
-        !inQuietHours(shop.timezone, new Date(now.getTime() + AUTO_FILL_STAGE_MS + SWEEP_SLACK_MS));
-      const heldUntil = new Date(
-        Math.min(now.getTime() + (twoStages ? 2 : 1) * AUTO_FILL_STAGE_MS, deadline.getTime()),
-      );
-      const invited = twoStages ? gold : people;
-      const minTier: LoyaltyTier = twoStages || silver.length === 0 ? "GOLD" : "SILVER";
+      const heldUntil = new Date(Math.min(now.getTime() + AUTO_FILL_STAGE_MS, deadline.getTime()));
       const opening = await tx.tierOpening.create({
         data: {
           shopId: run.shopId,
@@ -492,30 +596,25 @@ async function startRun(run: RunRow, now: Date): Promise<void> {
           serviceId: run.serviceId,
           startsAt: slot.startsAt,
           endsAt: slot.endsAt,
-          minTier,
+          minTier: "GOLD",
           heldUntil,
           source: "auto",
-          recipientCount: invited.length,
+          recipientCount: gold.length,
         },
         select: { id: true },
       });
       await tx.tierOpeningRecipient.createMany({
-        data: invited.map((p) => ({
+        data: gold.map((p) => ({
           openingId: opening.id,
           accountId: p.accountId,
           clientId: p.clientId,
-          wave: p.tier === "GOLD" ? "gold" : "silver",
+          wave: "gold",
           createdAt: now,
         })),
       });
       await tx.autoFillRun.update({
         where: { id: run.id },
-        data: {
-          state: twoStages ? "gold" : "silver",
-          nextAt: twoStages ? new Date(now.getTime() + AUTO_FILL_STAGE_MS) : heldUntil,
-          openingId: opening.id,
-          deadline,
-        },
+        data: { state: "gold", nextAt: heldUntil, openingId: opening.id, deadline },
       });
       return { kind: "held", openingId: opening.id };
     });
@@ -529,157 +628,228 @@ async function startRun(run: RunRow, now: Date): Promise<void> {
     throw err;
   }
 
-  if (plan.kind === "nobody") {
-    logger.info({ shopId: run.shopId, runId: run.id, outcome: "no_members" }, "auto-fill: run closed");
-    await handToWaitlist(run, now);
+  if (plan.kind === "no_gold") {
+    await openToEveryone({ ...run, deadline }, "queued", now);
     return;
   }
   if (plan.kind === "held") {
     await noteAvailabilityChanged(run.shopId);
-    logger.info({ shopId: run.shopId, runId: run.id, openingId: plan.openingId }, "auto-fill: opening held");
+    logger.info({ shopId: run.shopId, runId: run.id, openingId: plan.openingId }, "auto-fill: Gold head start");
     await pushInvitations(run, plan.openingId, now);
   }
 }
 
 /**
- * Stage 2: Gold has had its turn. Silver members join the SAME opening, so a
- * Gold member who has not tapped yet still can; they are not pushed again.
+ * Stage 2: Gold's head start is over (or there was none). The time is on the
+ * booking page for anyone; choose everyone else with the app and start
+ * telling them. Writes no hold and no booking - only who is to be told.
+ *
+ * `from` is the state the run was read in: "queued" (no head start), "gold",
+ * or "silver" (a run begun by the build before this one).
  */
-async function widenToSilver(run: RunRow, now: Date): Promise<void> {
-  if (!run.openingId) {
-    await closeAndMaybeHandOff(run, "gold", "error", now, true);
+async function openToEveryone(run: RunRow, from: RunState, now: Date): Promise<void> {
+  // The head start, if there was one. Read unlocked first: the decisions
+  // below are re-made under the locks before anything is written.
+  if (run.openingId) {
+    const held = await prisma.tierOpening.findUnique({
+      where: { id: run.openingId },
+      select: { status: true, heldUntil: true },
+    });
+    if (!held || held.status === "RELEASED") {
+      // The barber ended it or booked over it: the time is theirs again.
+      await closeAndMaybeHandOff(run, from, "released", now, false);
+      return;
+    }
+    if (held.status === "CLAIMED") {
+      await closeAndMaybeHandOff(run, from, "claimed", now, false);
+      return;
+    }
+    if (held.heldUntil.getTime() > now.getTime()) {
+      // The sweep ran early: come back when the head start is over.
+      await reschedule(run, from, held.heldUntil);
+      return;
+    }
+  }
+
+  const shop = await loadShop(run.shopId);
+  const offer = await offerStop(shop, run, now);
+  if (offer.stop !== null) {
+    await closeAndMaybeHandOff(run, from, offer.stop, now, true);
     return;
   }
-  const shop = await loadShop(run.shopId);
-  // 🔴 Everything startRun checked, asked again: a service hidden, a deposit
-  // switched on or the other calendar unprotected since the Gold stage would
-  // otherwise be pushed to Silver - and the first Silver tap refused, with the
-  // hold released and nobody on the waitlist told.
-  let stop: AutoFillOutcome | null = null;
-  if (!shopRunsAutoFill(shop, now)) stop = "gates";
-  else {
-    const service = await prisma.service.findFirst({
-      where: { id: run.serviceId, shopId: run.shopId, ...PUBLIC_SERVICE },
-      select: { price: true, priceOverrides: true, dateOverrides: true, timeOverrides: true },
-    });
-    if (!service) stop = "service_hidden";
-    else if (claimWouldRequirePayment(shop, slotPrice(service, run.startsAt, shop.timezone))) stop = "requires_payment";
-    else if (await staffMirrorBlocked(run.shopId, run.staffId)) stop = "mirror_blocked";
+  const tz = offer.shop.timezone;
+  const deadline = run.deadline ?? autoFillDeadline(run.startsAt, offer.shop.bookingLeadMinutes);
+  if (deadline.getTime() - now.getTime() < MIN_WINDOW_MS) {
+    await closeAndMaybeHandOff(run, from, "too_soon", now, true);
+    return;
   }
-  const night = shop ? inQuietHours(shop.timezone, now) : false;
+  if (inQuietHours(tz, now)) {
+    // The sweep reached a Gold stage after 21:00. Everyone hears at 08:00 if
+    // there is still time then.
+    const wake = nextQuietEnd(tz, now);
+    if (deadline.getTime() - wake.getTime() >= MIN_WINDOW_MS) {
+      await reschedule(run, from, wake);
+      return;
+    }
+    await closeAndMaybeHandOff(run, from, "quiet_hours", now, true);
+    return;
+  }
+  // 🔴 Never tell anyone about a time the booking page would not give them.
+  if (!(await slotStillOpen(run, now))) {
+    await closeAndMaybeHandOff(run, from, await takenOutcome(run), now, false);
+    return;
+  }
   const appt = await runAsOwner((tx) =>
     tx.appointment.findUnique({ where: { id: run.appointmentId }, select: { clientId: true, email: true } }),
   );
 
   const step = await runAsOwner(async (tx) => {
     // wloffer, then the opening row, then the run row: the order every other
-    // writer takes them in. A member claiming it holds the barber's lock and
-    // then this row - never wloffer - so the two queue, never deadlock.
+    // writer takes them in.
     await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${offerLockKey(run.shopId)}))`);
-    const [opening] = await tx.$queryRaw<{ status: string; heldUntil: Date }[]>(
-      Prisma.sql`SELECT status, "heldUntil" FROM "TierOpening" WHERE id = ${run.openingId} FOR UPDATE`,
-    );
+    if (run.openingId) {
+      const [opening] = await tx.$queryRaw<{ status: string }[]>(
+        Prisma.sql`SELECT status FROM "TierOpening" WHERE id = ${run.openingId} FOR UPDATE`,
+      );
+      if (opening?.status === "CLAIMED") {
+        return (await closeRun(tx, run, from, "claimed")) ? ("closed" as const) : ("gone" as const);
+      }
+    }
     const [mine] = await tx.$queryRaw<{ id: string }[]>(
-      Prisma.sql`SELECT id FROM "AutoFillRun" WHERE id = ${run.id} AND state = 'gold' FOR UPDATE`,
+      Prisma.sql`SELECT id FROM "AutoFillRun" WHERE id = ${run.id} AND state = ${from} FOR UPDATE`,
     );
-    if (!mine) return { kind: "gone" as const };
-    if (!opening || opening.status === "RELEASED") {
-      await closeRun(tx, run, "gold", "released");
-      return { kind: "done" as const };
-    }
-    if (opening.status === "CLAIMED") {
-      await closeRun(tx, run, "gold", "claimed");
-      return { kind: "done" as const };
-    }
-    if (opening.heldUntil.getTime() <= now.getTime()) {
-      await closeRun(tx, run, "gold", "lapsed");
-      return { kind: "handoff" as const };
-    }
-    if (stop) {
-      // The shop or the service changed mid-run: end the hold now.
-      await tx.tierOpening.update({ where: { id: run.openingId! }, data: { heldUntil: now } });
-      await closeRun(tx, run, "gold", stop);
-      return { kind: "handoff" as const };
-    }
-    if (night) {
-      // 🔴 Nobody is invited at night - the sweep ran this stage late, past
-      // 21:00. Gold keeps the rest of its hold; the lapse hands it on as usual.
-      await tx.autoFillRun.update({ where: { id: run.id }, data: { state: "silver", nextAt: opening.heldUntil } });
-      return { kind: "done" as const };
-    }
+    if (!mine) return "gone" as const; // another sweep moved it first
 
-    // Everyone now eligible who is not already invited: Silver members, and a
-    // Gold member who could not be reached when the first stage began.
-    const silver = await autoFillInvitees(tx, {
+    const people = await autoFillInvitees(tx, {
       shopId: run.shopId,
-      minTier: "SILVER",
+      minTier: null,
       canceller: { clientId: appt?.clientId ?? null, email: appt?.email ?? null },
-      openingId: run.openingId!,
+      // Gold members told during the head start are not told twice.
+      openingId: run.openingId,
+      runId: run.id,
       now,
     });
-    if (silver.length > 0) {
-      await tx.tierOpening.update({
-        where: { id: run.openingId! },
-        data: { minTier: "SILVER", recipientCount: { increment: silver.length } },
-      });
-      await tx.tierOpeningRecipient.createMany({
-        data: silver.map((p) => ({
-          openingId: run.openingId!,
-          accountId: p.accountId,
-          clientId: p.clientId,
-          wave: "silver",
-          createdAt: now,
-        })),
-        skipDuplicates: true,
-      });
+    if (people.length === 0) {
+      return (await closeRun(tx, run, from, "no_members")) ? ("nobody" as const) : ("gone" as const);
     }
+    await tx.autoFillRecipient.createMany({
+      data: people.map((p) => ({
+        runId: run.id,
+        shopId: run.shopId,
+        accountId: p.accountId,
+        clientId: p.clientId,
+        createdAt: now,
+      })),
+      skipDuplicates: true,
+    });
     await tx.autoFillRun.update({
       where: { id: run.id },
-      data: { state: "silver", nextAt: opening.heldUntil },
+      data: { state: "everyone", nextAt: now, deadline },
     });
-    return { kind: silver.length > 0 ? ("widened" as const) : ("done" as const) };
+    return "everyone" as const;
   });
 
-  if (step.kind === "handoff") {
-    await noteAvailabilityChanged(run.shopId);
+  if (step === "nobody") {
+    logger.info({ shopId: run.shopId, runId: run.id, outcome: "no_members" }, "auto-fill: run closed");
     await handToWaitlist(run, now);
-  } else if (step.kind === "widened") {
-    await pushInvitations(run, run.openingId, now);
+    return;
+  }
+  if (step === "everyone") {
+    // A head start that just ended put the time back on the booking page.
+    if (run.openingId) await noteAvailabilityChanged(run.shopId);
+    logger.info({ shopId: run.shopId, runId: run.id }, "auto-fill: open to everyone");
+    await sendToEveryone({ ...run, state: "everyone", deadline }, now);
   }
 }
 
-/** Stage 3: the tiers' hold has run its course. */
-async function finishTiers(run: RunRow, now: Date): Promise<void> {
-  const step = await runAsOwner(async (tx) => {
-    // Rows only, opening first: this write only ENDS something.
-    const [opening] = run.openingId
-      ? await tx.$queryRaw<{ status: string; heldUntil: Date }[]>(
-          Prisma.sql`SELECT status, "heldUntil" FROM "TierOpening" WHERE id = ${run.openingId} FOR UPDATE`,
-        )
-      : [];
-    const [mine] = await tx.$queryRaw<{ id: string }[]>(
-      Prisma.sql`SELECT id FROM "AutoFillRun" WHERE id = ${run.id} AND state = 'silver' FOR UPDATE`,
-    );
-    if (!mine) return "gone" as const;
-    if (!opening || opening.status === "RELEASED") {
-      await closeRun(tx, run, "silver", "released");
-      return "done" as const;
-    }
-    if (opening.status === "CLAIMED") {
-      await closeRun(tx, run, "silver", "claimed");
-      return "done" as const;
-    }
-    if (opening.heldUntil.getTime() > now.getTime()) {
-      // Not over yet (the sweep ran early): come back when it is.
-      await tx.autoFillRun.update({ where: { id: run.id }, data: { nextAt: opening.heldUntil } });
-      return "done" as const;
-    }
-    await closeRun(tx, run, "silver", "lapsed");
-    return "handoff" as const;
+/** Where the push takes them: the shop's booking page, on this service and barber. */
+function bookingLink(shop: AutoFillShop, run: RunRow): string {
+  const base = apiEnv().APP_BASE_URL.replace(/\/$/, "");
+  const q = new URLSearchParams({ service: run.serviceId, staff: run.staffId });
+  return `${base}/book/${encodeURIComponent(shop.slug ?? "")}?${q.toString()}`;
+}
+
+/**
+ * Stage 3: tell the chosen people, a batch per sweep tick, each exactly once.
+ * 🔴 Stops the moment the time is no longer on the booking page - asked
+ * before the batch and again every RECHECK_EVERY pushes - so nobody is sent
+ * to a time someone else has just booked. Never hands the time to the
+ * waitlist: everyone told is free to book it, and a waitlist hold would take
+ * it away from them.
+ */
+async function sendToEveryone(run: RunRow, now: Date): Promise<void> {
+  const shop = await loadShop(run.shopId);
+  const offer = await offerStop(shop, run, now);
+  if (offer.stop !== null) {
+    await closeAndMaybeHandOff(run, "everyone", offer.stop, now, false);
+    return;
+  }
+  const tz = offer.shop.timezone;
+  const deadline = run.deadline ?? autoFillDeadline(run.startsAt, offer.shop.bookingLeadMinutes);
+  if (deadline.getTime() <= now.getTime()) {
+    await closeAndMaybeHandOff(run, "everyone", "too_soon", now, false);
+    return;
+  }
+  if (inQuietHours(tz, now)) {
+    const wake = nextQuietEnd(tz, now);
+    if (deadline.getTime() - wake.getTime() >= MIN_WINDOW_MS) await reschedule(run, "everyone", wake);
+    else await closeAndMaybeHandOff(run, "everyone", "quiet_hours", now, false);
+    return;
+  }
+  if (!(await slotStillOpen(run, now))) {
+    await closeAndMaybeHandOff(run, "everyone", await takenOutcome(run), now, false);
+    return;
+  }
+
+  const unsent = await runAsOwner((tx) =>
+    tx.autoFillRecipient.findMany({
+      where: { runId: run.id, notifiedAt: null },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: EVERYONE_PER_TICK,
+      select: { id: true, clientId: true },
+    }),
+  );
+  const message = buildAutoFillEveryonePush({
+    shopName: offer.shop.name,
+    when: formatOpeningWhen(run.startsAt, tz),
   });
-  if (step === "handoff") {
-    await noteAvailabilityChanged(run.shopId);
-    await handToWaitlist(run, now);
+  const url = bookingLink(offer.shop, run);
+  let sent = 0;
+  for (const [i, r] of unsent.entries()) {
+    if (i > 0 && i % RECHECK_EVERY === 0 && !(await slotStillOpen(run, now))) {
+      logger.info({ shopId: run.shopId, runId: run.id, sent, left: unsent.length - i }, "auto-fill: time taken mid-send");
+      await closeAndMaybeHandOff(run, "everyone", await takenOutcome(run), now, false);
+      return;
+    }
+    // 🔴 THE ONE-PUSH GUARD: whoever stamps the row tells the person; a
+    // second sweep on the same run finds it stamped and moves on.
+    const claimed = await runAsOwner((tx) =>
+      tx.autoFillRecipient.updateMany({ where: { id: r.id, notifiedAt: null }, data: { notifiedAt: now } }),
+    );
+    if (claimed.count === 0) continue;
+    const result = await sendPushToClient({
+      shopId: run.shopId,
+      clientId: r.clientId,
+      kind: "promo",
+      // Not marketing, and its action is in the app (messaging/push.ts).
+      ledger: false,
+      appOnly: true,
+      payload: { title: message.title, body: message.body, url, tag: `auto-fill-${run.id}` },
+    });
+    sent += 1;
+    await runAsOwner((tx) =>
+      tx.autoFillRecipient.update({ where: { id: r.id }, data: { delivered: result.anyDelivered } }),
+    ).catch((err: unknown) => {
+      // The push already went out (or didn't); a stamp failure must not throw.
+      logger.error({ err, shopId: run.shopId, runId: run.id }, "auto-fill: delivery stamp failed");
+    });
+  }
+  logger.info({ shopId: run.shopId, runId: run.id, sent }, "auto-fill: told everyone (batch)");
+  if (unsent.length < EVERYONE_PER_TICK) {
+    // Everyone has been told. The time stays on the booking page for whoever books first.
+    await closeAndMaybeHandOff(run, "everyone", "broadcast", now, false);
+  } else {
+    await reschedule(run, "everyone", now);
   }
 }
 
@@ -687,26 +857,30 @@ export interface AutoFillInvitee {
   accountId: string;
   /** The record they are invited as - their highest-tier one at this shop. */
   clientId: string;
-  tier: LoyaltyTier;
+  /** Null for a client with no rewards tier yet (told in the everyone stage only). */
+  tier: LoyaltyTier | null;
 }
 
 /**
- * Who Auto-fill may offer a time to: the manual opening's rule (My ChairBack
- * accounts actively linked to a live, unblocked record at this shop whose tier
- * qualifies; never a demo account), and then, because nobody chose these
- * people by hand:
+ * Who Auto-fill may offer a time to: My ChairBack accounts actively linked
+ * to a live (not archived), unblocked record at THIS shop - whose tier
+ * qualifies, when a tier is asked for (Gold's head start); any tier, or none,
+ * when it is not (everyone) - never a demo account, and then, because nobody
+ * chose these people by hand:
  *
  *   - never the person who just cancelled it - through ANY record of theirs
  *     here, matched by the record they cancelled or its email (never a phone
  *     alone: a shared phone is not the same person);
- *   - never someone already invited to this opening;
+ *   - never someone already invited to this opening, or already chosen in
+ *     this run's everyone stage;
  *   - never someone the shop has blocked, by record, phone or email;
  *   - never someone who already has an upcoming visit here: an extra
  *     appointment is not what they asked for;
  *   - only someone a push can reach: their own push switch on, and a phone
  *     registered to their account;
  *   - and at most CAP_PER_DAY invitations in 24 hours and CAP_PER_WEEK in 7
- *     days from this shop, counting manual openings too. Read under the
+ *     days from this shop, counting manual openings and everyone-stage
+ *     pushes too. Read under the
  *     shop's wloffer lock, which every invitation is written under.
  *
  * Runs on an owner transaction: the links, devices and invitations are
@@ -716,20 +890,28 @@ export async function autoFillInvitees(
   tx: Prisma.TransactionClient,
   p: {
     shopId: string;
-    minTier: LoyaltyTier;
+    /** The lowest tier invited; null = every client, tier or not. */
+    minTier: LoyaltyTier | null;
     canceller: { clientId: string | null; email: string | null };
     /** Leave out everyone already invited to this opening. */
     openingId: string | null;
+    /** Leave out everyone already chosen in this run's everyone stage. */
+    runId?: string | null;
     now: Date;
   },
 ): Promise<AutoFillInvitee[]> {
-  const rank = (t: LoyaltyTier) => ["BRONZE", "SILVER", "GOLD"].indexOf(t);
+  const rank = (t: LoyaltyTier | null) => (t ? ["BRONZE", "SILVER", "GOLD"].indexOf(t) : -1);
   const links = await tx.customerClientLink.findMany({
     where: {
       shopId: p.shopId,
       status: "active",
       account: { isDemo: false, pushEnabled: true },
-      client: { shopId: p.shopId, archivedAt: null, bookingBlockedAt: null, loyaltyTier: { in: tiersAtOrAbove(p.minTier) } },
+      client: {
+        shopId: p.shopId,
+        archivedAt: null,
+        bookingBlockedAt: null,
+        ...(p.minTier ? { loyaltyTier: { in: tiersAtOrAbove(p.minTier) } } : {}),
+      },
     },
     orderBy: [{ linkedAt: "asc" }, { id: "asc" }],
     select: {
@@ -739,9 +921,9 @@ export async function autoFillInvitees(
     },
   });
   if (links.length === 0) return [];
-  const best = new Map<string, { clientId: string; tier: LoyaltyTier; phone: string | null; email: string | null }>();
+  const best = new Map<string, { clientId: string; tier: LoyaltyTier | null; phone: string | null; email: string | null }>();
   for (const l of links) {
-    const tier = l.client.loyaltyTier!;
+    const tier = l.client.loyaltyTier ?? null;
     const seen = best.get(l.accountId);
     if (!seen || rank(tier) > rank(seen.tier)) {
       best.set(l.accountId, { clientId: l.clientId, tier, phone: l.client.phone, email: l.client.email });
@@ -768,9 +950,13 @@ export async function autoFillInvitees(
     }
   }
 
-  const [already, blocks, upcoming, devices, recent] = await Promise.all([
+  const weekAgo = new Date(p.now.getTime() - 7 * 24 * 60 * 60_000);
+  const [already, chosen, blocks, upcoming, devices, recent, recentEveryone] = await Promise.all([
     p.openingId
       ? tx.tierOpeningRecipient.findMany({ where: { openingId: p.openingId }, select: { accountId: true } })
+      : Promise.resolve([] as { accountId: string }[]),
+    p.runId
+      ? tx.autoFillRecipient.findMany({ where: { runId: p.runId }, select: { accountId: true } })
       : Promise.resolve([] as { accountId: string }[]),
     loadBookingBlocks(tx, p.shopId),
     clientsWithUpcomingBooking(tx, p.shopId, [...new Set(allLinks.map((l) => l.clientId))], p.now),
@@ -778,7 +964,7 @@ export async function autoFillInvitees(
     tx.tierOpeningRecipient.findMany({
       where: {
         accountId: { in: accountIds },
-        createdAt: { gt: new Date(p.now.getTime() - 7 * 24 * 60 * 60_000) },
+        createdAt: { gt: weekAgo },
         opening: { shopId: p.shopId },
         // An invitation that was never delivered does not count against them;
         // one not sent yet does, because it is about to be.
@@ -786,13 +972,24 @@ export async function autoFillInvitees(
       },
       select: { accountId: true, createdAt: true },
     }),
+    // An everyone-stage push counts the same way: one opening, one push.
+    tx.autoFillRecipient.findMany({
+      where: {
+        accountId: { in: accountIds },
+        shopId: p.shopId,
+        createdAt: { gt: weekAgo },
+        OR: [{ delivered: true }, { notifiedAt: null }],
+      },
+      select: { accountId: true, createdAt: true },
+    }),
   ]);
   for (const a of already) out.add(a.accountId);
+  for (const a of chosen) out.add(a.accountId);
   const reachable = new Set(devices.map((d) => d.accountId));
   const dayAgo = p.now.getTime() - 24 * 60 * 60_000;
   const perDay = new Map<string, number>();
   const perWeek = new Map<string, number>();
-  for (const r of recent) {
+  for (const r of [...recent, ...recentEveryone]) {
     perWeek.set(r.accountId, (perWeek.get(r.accountId) ?? 0) + 1);
     if (r.createdAt.getTime() > dayAgo) perDay.set(r.accountId, (perDay.get(r.accountId) ?? 0) + 1);
   }

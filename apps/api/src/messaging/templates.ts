@@ -1228,7 +1228,40 @@ export function buildAutoFillBarberPush(params: { serviceName: string | null; wh
   const svc = params.serviceName ? `${params.serviceName} ` : "";
   return {
     title: "A client cancelled",
-    body: `${svc}${params.when} opened. Auto-fill is offering it to your members first.`,
+    body: `${svc}${params.when} opened. Your Gold members get first pick, then everyone with your app hears about it.`,
+  };
+}
+
+/**
+ * "Tue, Oct 28 at 3:00 PM" in the shop's zone - the time an opening push names.
+ * Falls back to a UTC string for a zone the runtime does not know.
+ */
+export function formatOpeningWhen(at: Date, timezone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).formatToParts(at);
+    const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+    return `${get("weekday")}, ${get("month")} ${get("day")} at ${get("hour")}:${get("minute")} ${get("dayPeriod")}`;
+  } catch {
+    return at.toUTCString();
+  }
+}
+
+/**
+ * CUSTOMER push for Auto-fill's last stage: the time is open on the booking
+ * page, and every client of the shop with the app hears it at once - first to
+ * book gets it. The same words to everyone, so nobody's name is in it.
+ */
+export function buildAutoFillEveryonePush(params: { shopName: string; when: string }): PushCopy {
+  return {
+    title: "An opening just came up",
+    body: `${params.shopName}: ${params.when} - tap to book`,
   };
 }
 

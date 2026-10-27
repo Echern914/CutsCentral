@@ -10,7 +10,8 @@ import { createApp } from "../app.js";
  * The engine leans on these: a run still going is always due at some time
  * (so the sweep can never lose it), a finished run always says how it
  * finished, one cancellation can only ever start one run, and an invitation
- * cannot claim it was delivered without having been sent. Each is a CHECK or
+ * cannot claim it was delivered without having been sent - nor can an
+ * everyone-stage push, and nobody is told twice in one run. Each is a CHECK or
  * a unique index in the migration, so each is tested by trying to break it.
  */
 const app = createApp();
@@ -106,7 +107,9 @@ describe("AutoFillRun", () => {
     await expect(run({ outcome: "claimed" })).rejects.toThrow(/AutoFillRun_outcome_check/);
   });
 
-  it("only the four states", async () => {
+  it("only its states: queued, gold, everyone, closed (and silver, from the build before)", async () => {
+    await expect(run({ state: "everyone" })).resolves.toBeTruthy();
+    await expect(run({ state: "silver" })).resolves.toBeTruthy();
     await expect(run({ state: "bronze" })).rejects.toThrow(/AutoFillRun_state_check/);
   });
 
@@ -119,6 +122,30 @@ describe("AutoFillRun", () => {
   it("one run per opening", async () => {
     await run({ openingId });
     await expect(run({ openingId })).rejects.toThrow(/Unique constraint/);
+  });
+});
+
+describe("AutoFillRecipient (who the everyone stage tells)", () => {
+  it("🔴 cannot say it was delivered without having been sent", async () => {
+    const r = await run({ state: "everyone" });
+    await expect(
+      prisma.autoFillRecipient.create({ data: { runId: r.id, shopId, accountId, clientId, delivered: true } }),
+    ).rejects.toThrow(/AutoFillRecipient_delivered_check/);
+  });
+
+  it("🔴 one person, once per run", async () => {
+    const r = await run({ state: "everyone" });
+    await prisma.autoFillRecipient.create({ data: { runId: r.id, shopId, accountId, clientId } });
+    await expect(
+      prisma.autoFillRecipient.create({ data: { runId: r.id, shopId, accountId, clientId } }),
+    ).rejects.toThrow(/Unique constraint/);
+  });
+
+  it("goes with its run", async () => {
+    const r = await run({ state: "everyone" });
+    await prisma.autoFillRecipient.create({ data: { runId: r.id, shopId, accountId, clientId } });
+    await prisma.autoFillRun.delete({ where: { id: r.id } });
+    expect(await prisma.autoFillRecipient.count({ where: { runId: r.id } })).toBe(0);
   });
 });
 

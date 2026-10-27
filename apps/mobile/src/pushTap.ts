@@ -19,6 +19,13 @@ export function routeForNotification(data: unknown): string | null {
   // A shop's announcement (a broadcast) stays on the Announcements screen
   // after the notification is swiped away - that is where the tap goes.
   if (/[?&]announcement=[^&]+/.test(url)) return "/customer/announcements";
+  // A shop's booking page ("An opening just came up" - Auto-fill telling
+  // everyone a cancelled time is open). Same hop a scanned QR code takes
+  // (app/+native-intent.tsx): the booking page inside the app, with its
+  // ?service=&staff= prefill kept. Only a link that names a service: other
+  // booking-page links keep today's behaviour, the app opening where it was.
+  const book = bookPathOf(url);
+  if (book && /[?&]service=[^&]+/.test(book)) return `/customer/link?path=${encodeURIComponent(book)}`;
   // A BARBER alert ("Next up: ...", a new booking, a cancellation) links to a
   // dashboard page - usually one appointment. A barber, 2026-09-29: "when I tap
   // a notification it should take me directly to that day and time's
@@ -28,6 +35,16 @@ export function routeForNotification(data: unknown): string | null {
   if (dashboard) return `/barber?next=${encodeURIComponent(dashboard)}`;
   // Everything else keeps today's behaviour: the app opens where it was.
   return null;
+}
+
+/**
+ * The booking-page path (+ query) of a link - /book/<slug> only, never a
+ * deeper path - or null. Only the path is kept: /customer/link puts it after
+ * the app's own web origin, so a notification cannot choose the host.
+ */
+export function bookPathOf(url: string): string | null {
+  const m = /^https?:\/\/[^/?#\\]+(\/book\/[A-Za-z0-9_-]+(?:\?[^#\s\\]*)?)(?:#.*)?$/.exec(url);
+  return m ? m[1]! : null;
 }
 
 /**

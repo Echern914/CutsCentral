@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dashboardPathOf, routeForNotification, safeDashboardPath } from "./pushTap";
+import { bookPathOf, dashboardPathOf, routeForNotification, safeDashboardPath } from "./pushTap";
 
 /**
  * A tapped BARBER alert opens the page it links to (2026-09-29: "when I tap a
@@ -55,6 +55,20 @@ describe("routeForNotification", () => {
     expect(routeForNotification({ url: "https://getchairback.com/book/fades?announcement=bc_1" })).toBe(
       "/customer/announcements",
     );
+  });
+
+  it("🔴 'An opening just came up' opens that shop's booking page in the app, prefill kept", () => {
+    const url = "https://getchairback.com/book/fades?service=svc_1&staff=st_2";
+    expect(routeForNotification({ url })).toBe(
+      `/customer/link?path=${encodeURIComponent("/book/fades?service=svc_1&staff=st_2")}`,
+    );
+  });
+
+  it("a booking-page link keeps only the path - and never a deeper one", () => {
+    expect(bookPathOf("https://evil.example/book/fades?service=s")).toBe("/book/fades?service=s");
+    expect(bookPathOf("https://getchairback.com/book/manage/tok")).toBeNull();
+    expect(bookPathOf("https://getchairback.com/book/fa..des")).toBeNull();
+    expect(bookPathOf("https://getchairback.com/booking/fades")).toBeNull();
   });
 
   it("leaves every other notification where it was", () => {

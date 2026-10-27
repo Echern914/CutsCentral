@@ -123,6 +123,11 @@ export async function saveClientNoteAction(clientNote: string | null): Promise<R
   return done(await apiSend("PATCH", "/api/shops/me", { clientNote }));
 }
 
+/** "Fill cancellations automatically" - this one field, nothing else. Owner/manager (the API refuses a barber seat). */
+export async function saveAutoFillAction(autoFillEnabled: boolean): Promise<Result> {
+  return done(await apiSend("PATCH", "/api/shops/me", { autoFillEnabled }));
+}
+
 //  Staff
 
 export async function createStaffAction(input: {

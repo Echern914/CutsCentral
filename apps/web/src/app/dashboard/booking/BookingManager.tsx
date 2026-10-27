@@ -22,6 +22,7 @@ import { useToast } from "@/components/ui/Toast";
 import { BookingQuestionsCard } from "./BookingQuestionsCard";
 import { BookingPolicyCard } from "./BookingPolicyCard";
 import { ClientNoteCard } from "./ClientNoteCard";
+import { FillCancellationsCard } from "./FillCancellationsCard";
 import { useDemoTour } from "@/components/tour/state";
 import { useUrlTab } from "./useUrlTab";
 import Link from "next/link";
@@ -965,6 +966,17 @@ export function SettingsTab({
             </button>
           </div>
         </Card>
+      )}
+
+      {/* Beside the waitlist switch: both are "what happens when someone
+          cancels". Not gated on the mode picker - a shop that books
+          elsewhere is told that is why it cannot run. An older API that does
+          not answer the blockers gets no card at all. */}
+      {shop.autoFillBlockers && (
+        <FillCancellationsCard
+          initialEnabled={shop.autoFillEnabled ?? false}
+          blockers={shop.autoFillBlockers}
+        />
       )}
 
       {mode === "native" && (
