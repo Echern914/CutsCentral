@@ -1,5 +1,6 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
+import { TERMS_VERSION } from "@chairback/config";
 import { runAsOwner } from "@chairback/db";
 import { toE164 } from "../acuity/clientKey.js";
 import { signInTextsEnabled } from "../messaging/twilio.js";
@@ -80,7 +81,7 @@ customerAuthRouter.post("/verify", customerAuthLimiter, async (req, res) => {
     res.status(400).json({ error: "invalid_input" });
     return;
   }
-  const { code, ...rest } = body.data;
+  const { code, acceptTerms, ...rest } = body.data;
   const resolved = resolveIdentifier(rest);
   if ("error" in resolved) {
     res.status(400).json({ error: resolved.error });
@@ -94,6 +95,23 @@ customerAuthRouter.post("/verify", customerAuthLimiter, async (req, res) => {
   }
 
   const account = await accountForProof({ ...resolved, now });
+  // The sign-in screen's Terms + Privacy tick, recorded once a code proves the
+  // contact. Recorded when sent, never REQUIRED: the App Store build that is
+  // live today predates the checkbox, and refusing it would stop every new
+  // customer signing in until the next app release. Re-agreeing to the same
+  // version keeps the first timestamp; the demo account never records one.
+  if (acceptTerms === true) {
+    await runAsOwner((tx) =>
+      tx.customerAccount.updateMany({
+        where: {
+          id: account.id,
+          isDemo: false,
+          OR: [{ termsAcceptedVersion: null }, { termsAcceptedVersion: { not: TERMS_VERSION } }],
+        },
+        data: { termsAcceptedAt: now, termsAcceptedVersion: TERMS_VERSION },
+      }),
+    );
+  }
   const links = await syncCustomerLinks(account.id, now);
 
   // A first sign-in is asked what to call them. The name a shop already has

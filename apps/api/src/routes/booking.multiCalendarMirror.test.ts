@@ -84,7 +84,7 @@ const blocksFor = (appointmentId: string) =>
 beforeAll(async () => {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "MCal", smsAttested: true });
+    .send({ email, password, name: "MCal", smsAttested: true, acceptTerms: true });
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   await request(app)
     .post("/api/shops")

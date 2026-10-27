@@ -34,7 +34,7 @@ const ORIGINAL_DRY_RUN = process.env.DRY_RUN;
 async function signupAndShop(email: string, name: string): Promise<string> {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Checkin", smsAttested: true });
+    .send({ email, password, name: "Checkin", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)

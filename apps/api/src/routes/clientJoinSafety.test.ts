@@ -57,7 +57,7 @@ async function account(opts: { firstName?: string; lastName?: string; phone?: st
 async function signup() {
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email: randomEmail(), password: "supersecret123", name: "Owner", smsAttested: true });
+    .send({ email: randomEmail(), password: "supersecret123", name: "Owner", smsAttested: true, acceptTerms: true });
   return (res.headers["set-cookie"] as unknown as string[])[0]!;
 }
 

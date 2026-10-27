@@ -29,7 +29,7 @@ const noticeIds: string[] = [];
 async function signup(label: string, withShop: boolean): Promise<{ cookie: string; userId: string; shopId: string | null }> {
   const email = `pn-${label}-${randomToken(6)}@test.local`.toLowerCase();
   emails.push(email);
-  const res = await request(app).post("/api/auth/signup").send({ email, password, name: label, smsAttested: true });
+  const res = await request(app).post("/api/auth/signup").send({ email, password, name: label, smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   const cookie = (res.headers["set-cookie"] as unknown as string[])[0]!.split(";")[0]!;
   let shopId: string | null = null;

@@ -194,7 +194,7 @@ const press = () => `req_${randomToken(12)}`;
 async function makeShop(ownerEmail: string) {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email: ownerEmail, password, name: "Svc", smsAttested: true });
+    .send({ email: ownerEmail, password, name: "Svc", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const c = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)

@@ -19,7 +19,7 @@ let barberCookie: string;
 async function signupAndShop(): Promise<void> {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Consent", smsAttested: true });
+    .send({ email, password, name: "Consent", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   barberCookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)

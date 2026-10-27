@@ -46,7 +46,7 @@ const makeRule = (body: Record<string, unknown>) =>
 beforeAll(async () => {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "T", smsAttested: true });
+    .send({ email, password, name: "T", smsAttested: true, acceptTerms: true });
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   await request(app)
     .post("/api/shops")
@@ -288,7 +288,7 @@ describe("rule validation", () => {
         email: `tupg2-${randomToken(6)}@test.local`.toLowerCase(),
         password,
         name: "O",
-        smsAttested: true,
+        smsAttested: true, acceptTerms: true,
       });
     const otherCookie = (other.headers["set-cookie"] as unknown as string[])[0]!;
     await request(app)
@@ -329,7 +329,7 @@ describe("rule validation", () => {
         email: `tupg3-${randomToken(6)}@test.local`.toLowerCase(),
         password,
         name: "O2",
-        smsAttested: true,
+        smsAttested: true, acceptTerms: true,
       });
     const otherCookie = (other.headers["set-cookie"] as unknown as string[])[0]!;
     await request(app)

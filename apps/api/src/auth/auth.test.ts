@@ -30,7 +30,7 @@ describe("barber auth flow", () => {
   it("signs up and sets an httpOnly session cookie", async () => {
     const res = await request(app)
       .post("/api/auth/signup")
-      .send({ email, password, name: "Test Barber", smsAttested: true });
+      .send({ email, password, name: "Test Barber", smsAttested: true, acceptTerms: true });
     expect(res.status).toBe(201);
     expect(res.body.email).toBe(email);
 
@@ -44,14 +44,14 @@ describe("barber auth flow", () => {
   it("rejects a duplicate email with 409", async () => {
     const res = await request(app)
       .post("/api/auth/signup")
-      .send({ email, password, name: "Dupe", smsAttested: true });
+      .send({ email, password, name: "Dupe", smsAttested: true, acceptTerms: true });
     expect(res.status).toBe(409);
   });
 
   it("rejects signup without the SMS attestation", async () => {
     const res = await request(app)
       .post("/api/auth/signup")
-      .send({ email: `noattest-${email}`, password, name: "No Attest" });
+      .send({ email: `noattest-${email}`, password, name: "No Attest", acceptTerms: true });
     expect(res.status).toBe(400);
   });
 
@@ -126,7 +126,7 @@ describe("signing out stops the booking alerts", () => {
     // client's name, after the barber signed out in the app.
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email: otherEmail, password, name: "Front Desk", smsAttested: true });
+      .send({ email: otherEmail, password, name: "Front Desk", smsAttested: true, acceptTerms: true });
     const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     const shop = await request(app).post("/api/shops").set("Cookie", cookie).send({ name: "Desk Cuts", smsAttested: true });
     const shopId = shop.body.id as string;

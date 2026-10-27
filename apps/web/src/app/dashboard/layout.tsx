@@ -4,6 +4,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
 import { getMe } from "@/lib/me";
+import { getTermsStatus, termsGateShows } from "@/lib/terms";
+import { TermsGate } from "@/components/legal/TermsGate";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import { VocabProvider } from "@/components/VocabProvider";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
@@ -41,13 +43,29 @@ export default async function DashboardLayout({
   // ReactNode types mutually unassignable at any component boundary.
   children: ReactNode;
 }) {
-  const me = await getMe();
+  // The Terms read rides alongside /me, not after it: one round trip. It
+  // never throws, and any failure is null = no gate (lib/terms.ts).
+  const [me, terms] = await Promise.all([getMe(), getTermsStatus()]);
   // The edge middleware only checks the cookie EXISTS, not that it's still valid.
   // A stale/revoked session (e.g. token minted before a tokenVersion bump) keeps
   // the cookie but 401s every API call - which otherwise dead-ends each child
   // page on its own error state. Catch it once here, for the whole dashboard, and
   // send them to log back in (a fresh login mints a current-version token).
   if (me.status === 401) redirect("/login");
+  // No current Terms + Privacy agreement on record (Google/Apple signup, an
+  // invited team member, everyone from before the agreement was recorded):
+  // the "Before you continue" screen INSTEAD of the dashboard - nothing below
+  // renders or fetches until they agree. Demo sessions never see it. A failed
+  // read shows the dashboard (fail open: never lock a barber out mid-day).
+  if (termsGateShows(terms, { demo: me.data?.demo ?? false })) {
+    return (
+      <div className="min-h-dvh">
+        <script dangerouslySetInnerHTML={{ __html: PREPAINT_SCRIPT }} />
+        <ThemeSync theme={me.data?.theme ?? "light"} />
+        <TermsGate previouslyAgreed={terms?.acceptedVersion != null} />
+      </div>
+    );
+  }
   // Read straight off the same `me` payload the rest of this layout uses - one
   // round trip, already resolved server-side. NEUTRAL when the shop has not
   // chosen a type, or when the API is older than this web deploy.

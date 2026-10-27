@@ -43,7 +43,7 @@ beforeAll(async () => {
   emails.push(email);
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Force Tester", smsAttested: true });
+    .send({ email, password, name: "Force Tester", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   await request(app).post("/api/shops").set("Cookie", cookie).send({ name: "Force Cuts", smsAttested: true });

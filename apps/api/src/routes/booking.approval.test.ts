@@ -70,7 +70,7 @@ beforeAll(async () => {
 
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Appr", smsAttested: true });
+    .send({ email, password, name: "Appr", smsAttested: true, acceptTerms: true });
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   await request(app).post("/api/shops").set("Cookie", cookie).send({ name: "Approval Cuts", smsAttested: true });
   // Native + timezone UTC + require approval ON.

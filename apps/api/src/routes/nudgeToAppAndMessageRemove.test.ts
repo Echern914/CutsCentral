@@ -42,7 +42,7 @@ function randomPhone(): string {
 async function signup() {
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email: `nudge-${randomToken(6)}@test.local`.toLowerCase(), password: "supersecret123", name: "S", smsAttested: true });
+    .send({ email: `nudge-${randomToken(6)}@test.local`.toLowerCase(), password: "supersecret123", name: "S", smsAttested: true, acceptTerms: true });
   return (res.headers["set-cookie"] as unknown as string[])[0]!;
 }
 

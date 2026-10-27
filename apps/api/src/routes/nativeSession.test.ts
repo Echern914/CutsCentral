@@ -27,7 +27,7 @@ let userId: string;
 beforeAll(async () => {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Native HTTP", smsAttested: true });
+    .send({ email, password, name: "Native HTTP", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   token = signup.body.token as string;
   userId = signup.body.id as string;

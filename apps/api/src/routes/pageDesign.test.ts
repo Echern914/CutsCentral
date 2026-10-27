@@ -35,7 +35,7 @@ let otherStaff: string;
 async function shopFor(email: string, name: string): Promise<{ cookie: string; slug: string }> {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password: "supersecret123", name: "Design Tester", smsAttested: true });
+    .send({ email, password: "supersecret123", name: "Design Tester", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const c = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)

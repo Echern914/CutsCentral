@@ -25,6 +25,7 @@ function form(extra: Record<string, string> = {}) {
   f.set("email", "luigi@test.local");
   f.set("password", "supersecret123");
   f.set("smsAttested", "on");
+  f.set("acceptTerms", "on");
   for (const [k, v] of Object.entries(extra)) f.set(k, v);
   return f;
 }

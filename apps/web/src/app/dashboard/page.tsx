@@ -270,6 +270,14 @@ export default async function DashboardPage({
       <Section title="Revenue & trends" hint="How the money is moving">
         {trends.data && <RevenueTrends series={trends.data.series} />}
         {trends.data && <TrendsChart series={trends.data.series} />}
+        {/* The money summary on the home page carries the same one-line
+            caveat as Insights (Terms §15 "Figures are estimates"). */}
+        {trends.data && (
+          <p className="text-[11px] leading-snug text-muted" data-testid="home-estimates">
+            Estimates from your ChairBack bookings and synced calendars, not exact, and not tax or
+            financial advice.
+          </p>
+        )}
       </Section>
 
       <Section title="Win back clients" hint="Reach the people who've gone quiet">

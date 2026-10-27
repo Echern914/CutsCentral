@@ -73,7 +73,7 @@ beforeAll(async () => {
   });
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email: ownerEmail, password, name: "WL Tester", smsAttested: true });
+    .send({ email: ownerEmail, password, name: "WL Tester", smsAttested: true, acceptTerms: true });
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
     .post("/api/shops")

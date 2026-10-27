@@ -193,7 +193,7 @@ const ACCT = `acct_test_${randomToken(6)}`;
 async function makeShop(ownerEmail: string) {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email: ownerEmail, password, name: "Depositor", smsAttested: true });
+    .send({ email: ownerEmail, password, name: "Depositor", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const c = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
@@ -346,7 +346,7 @@ beforeAll(async () => {
   // A second person who may refund: a MANAGER seat on the same shop.
   const mgr = await request(app)
     .post("/api/auth/signup")
-    .send({ email: managerEmail, password, name: "Manager", smsAttested: true });
+    .send({ email: managerEmail, password, name: "Manager", smsAttested: true, acceptTerms: true });
   expect(mgr.status).toBe(201);
   managerCookie = (mgr.headers["set-cookie"] as unknown as string[])[0]!;
   managerUserId = (await prisma.user.findUnique({ where: { email: managerEmail }, select: { id: true } }))!.id;

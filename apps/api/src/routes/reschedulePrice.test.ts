@@ -69,7 +69,7 @@ const clientMove = (token: string, startsAt: Date, extra: Record<string, unknown
 beforeAll(async () => {
   agent = request.agent(app);
   const email = `resched-${randomToken(6)}@test.local`;
-  await agent.post("/api/auth/signup").send({ email, password: "supersecret123", name: "Mover", smsAttested: true });
+  await agent.post("/api/auth/signup").send({ email, password: "supersecret123", name: "Mover", smsAttested: true, acceptTerms: true });
   await agent.post("/api/shops").send({ name: "Move Cuts", bookingUrl: "https://move.test", smsAttested: true });
   // No reschedule cutoff: this suite moves bookings under a day out; the
   // cutoff has its own tests (routes/rescheduleCutoff.test.ts).

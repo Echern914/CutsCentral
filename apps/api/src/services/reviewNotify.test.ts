@@ -38,7 +38,7 @@ async function makeShop(tag: string): Promise<Shop> {
   emails.push(email);
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password: "supersecret123", name: `Owner ${tag}`, smsAttested: true });
+    .send({ email, password: "supersecret123", name: `Owner ${tag}`, smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)

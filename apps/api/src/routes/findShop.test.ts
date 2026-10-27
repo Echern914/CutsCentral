@@ -22,7 +22,7 @@ let neighbourId = "";
 async function signup(email: string): Promise<string> {
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password: "hunter2hunter2", name: "Find Owner", smsAttested: true });
+    .send({ email, password: "hunter2hunter2", name: "Find Owner", smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   return (res.headers["set-cookie"] as unknown as string[])[0]!.split(";")[0]!;
 }

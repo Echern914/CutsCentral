@@ -22,6 +22,12 @@ export const LEGAL_EFFECTIVE_DATE = "June 12, 2026";
  *
  * October 27: Terms §15 "Figures are estimates" and the matching line in
  * Privacy §3. "Last updated" moved; the effective date is the owner's call.
+ * Same day: §15 opens with "not a bank, accountant, ... or financial advisor"
+ * and §16 names decisions made on the Service's figures.
+ *
+ * 🔴 TERMS_VERSION (@chairback/config/legal) is the agreement key for this
+ * date. Move it with a revision people must re-accept: every signed-in barber
+ * is then asked to agree once before the dashboard opens.
  */
 export const PRIVACY_TERMS_UPDATED_DATE = "October 27, 2026";
 export const PRIVACY_TERMS_EFFECTIVE_DATE = "October 23, 2026";

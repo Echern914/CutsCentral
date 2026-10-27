@@ -6,6 +6,8 @@ import {
   serviceNounForShop,
   vocabularyForShop,
   WHATS_NEW,
+  TERMS_VERSION,
+  termsAcceptanceRequired,
 } from "@chairback/config";
 import { prisma, Prisma } from "@chairback/db";
 import { signOutEverywhere } from "../services/userDevice.js";
@@ -71,6 +73,10 @@ const signupSchema = z
     // SMS attestation: must be literally true. The barber affirms they'll only
     // add/text consented clients and are authorized to send on their behalf.
     smsAttested: z.literal(true),
+    // The Terms + Privacy clickwrap. Optional in the SHAPE so a missing tick
+    // gets its own answer (terms_required) instead of a generic invalid_input;
+    // anything but `true` is refused below.
+    acceptTerms: z.boolean().optional(),
     // Optional marketing attribution + the referral code (persisted separately).
     acquisition: attributionSchema.optional(),
     referralCode: z.string().max(200).optional(),
@@ -108,6 +114,12 @@ authRouter.post("/signup", authLimiter, async (req, res) => {
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
+  // No account without the Terms + Privacy agreement on record. Checked before
+  // anything is looked up or written, so a refusal creates nothing.
+  if (parsed.data.acceptTerms !== true) {
+    res.status(400).json({ error: "terms_required" });
+    return;
+  }
   const { email, password, name, acquisition, referralCode } = parsed.data;
   const normalizedEmail = email.trim().toLowerCase();
 
@@ -119,12 +131,16 @@ authRouter.post("/signup", authLimiter, async (req, res) => {
   }
 
   const passwordHash = await hashPassword(password);
+  const now = new Date();
   const user = await prisma.user.create({
     data: {
       email: normalizedEmail,
       passwordHash,
       name: name.trim(),
-      smsAttestedAt: new Date(), // schema requires smsAttested === true to reach here
+      smsAttestedAt: now, // schema requires smsAttested === true to reach here
+      // The clickwrap record, in the same write as the account itself.
+      termsAcceptedAt: now,
+      termsAcceptedVersion: TERMS_VERSION,
       ...attributionData({ acquisition, referralCode }),
     },
   });
@@ -345,6 +361,60 @@ authRouter.post("/whats-new-seen", requireUser, async (req, res) => {
     await prisma.user.update({ where: { id: req.userId }, data: { whatsNewSeenId: parsed.data.id } });
   }
   res.json({ ok: true });
+});
+
+// Terms + Privacy agreement, for the dashboard's "Before you continue" screen.
+//
+// Its own read, NOT a field on /me: /me is the read every dashboard page
+// waits on, and a column read there that the database does not have yet
+// would take the whole dashboard down (the 2026-06-24 appleId outage). Here a
+// failure costs the gate only, and the web shows the dashboard when this read
+// fails (a missed prompt is a nuisance; a barber locked out mid-day is harm).
+//
+// The API decides `required`, never the web: the version stamped by
+// /accept-terms and the version compared against are then the same constant,
+// so a web deploy ahead of the API cannot ask the same person forever.
+authRouter.get("/terms", requireUser, async (req, res) => {
+  // The read-only demo is one shared account and cannot write the answer.
+  if (req.demoSession === true) {
+    res.json({ currentVersion: TERMS_VERSION, acceptedVersion: null, acceptedAt: null, required: false });
+    return;
+  }
+  const user = await prisma.user.findUnique({
+    where: { id: req.userId },
+    select: { termsAcceptedAt: true, termsAcceptedVersion: true },
+  });
+  if (!user) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  res.json({
+    currentVersion: TERMS_VERSION,
+    acceptedVersion: user.termsAcceptedVersion,
+    acceptedAt: user.termsAcceptedAt?.toISOString() ?? null,
+    required: termsAcceptanceRequired(user.termsAcceptedVersion),
+  });
+});
+
+// "Agree and continue": stamp the current version. The body must carry the
+// tick itself (`acceptTerms: true`), so a stray POST is not an agreement.
+// Idempotent - agreeing again to the same version keeps the first timestamp.
+// Demo sessions never reach here: requireUser refuses their writes.
+const acceptTermsSchema = z.object({ acceptTerms: z.literal(true) }).strict();
+authRouter.post("/accept-terms", accountLimiter, requireUser, async (req, res) => {
+  const parsed = acceptTermsSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "terms_required" });
+    return;
+  }
+  await prisma.user.updateMany({
+    where: {
+      id: req.userId,
+      OR: [{ termsAcceptedVersion: null }, { termsAcceptedVersion: { not: TERMS_VERSION } }],
+    },
+    data: { termsAcceptedAt: new Date(), termsAcceptedVersion: TERMS_VERSION },
+  });
+  res.json({ ok: true, version: TERMS_VERSION });
 });
 
 // Update profile: display name and/or avatar. Both optional so the name form

@@ -27,7 +27,7 @@ async function signupAndShop(label: string, shopName: string) {
   emails.push(email);
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: label, smsAttested: true });
+    .send({ email, password, name: label, smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const c = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)

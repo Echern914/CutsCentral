@@ -36,7 +36,7 @@ async function signup(label: string) {
   emails.push(email);
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password: "correct horse battery staple", name: label, smsAttested: true });
+    .send({ email, password: "correct horse battery staple", name: label, smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   return (res.headers["set-cookie"] as unknown as string[])[0]!.split(";")[0]!;
 }

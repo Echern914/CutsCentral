@@ -59,7 +59,8 @@
     "./openSlots": "./src/openSlots.ts",
     "./specialDay": "./src/specialDay.ts",
     "./expenseSchedule": "./src/expenseSchedule.ts",
-    "./fillCancellations": "./src/fillCancellations.ts"
+    "./fillCancellations": "./src/fillCancellations.ts",
+    "./legal": "./src/legal.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

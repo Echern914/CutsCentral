@@ -19,7 +19,7 @@ let cookie: string;
 beforeAll(async () => {
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password: "supersecret123", name: "News Reader", smsAttested: true });
+    .send({ email, password: "supersecret123", name: "News Reader", smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   cookie = (res.headers["set-cookie"] as unknown as string[])[0]!;
 });

@@ -40,7 +40,7 @@ const HOLIDAY = futureAt(3, 12).toISOString().slice(0, 10);
 beforeAll(async () => {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Holiday", smsAttested: true });
+    .send({ email, password, name: "Holiday", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)

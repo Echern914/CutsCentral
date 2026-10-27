@@ -40,7 +40,7 @@ async function makeShop(label: string, timezone = "UTC") {
   emails.push(email);
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Rules", smsAttested: true });
+    .send({ email, password, name: "Rules", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shopRes = await request(app)

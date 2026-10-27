@@ -182,7 +182,7 @@ async function signup(tag: string): Promise<{ id: string; cookie: string }> {
   emails.push(email);
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: tag, smsAttested: true });
+    .send({ email, password, name: tag, smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   return { id: res.body.id as string, cookie: (res.headers["set-cookie"] as unknown as string[])[0]! };
 }

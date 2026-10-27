@@ -42,7 +42,7 @@ beforeAll(async () => {
   });
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Reset Tester", smsAttested: true });
+    .send({ email, password, name: "Reset Tester", smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   userId = res.body.id as string;
   cookie = (res.headers["set-cookie"] as unknown as string[])[0]!;

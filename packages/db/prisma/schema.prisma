@@ -104,6 +104,14 @@ model User {
   // Captured at signup (form) or first onboarding step (Google path). The legal
   // basis for ChairBack sending SMS on the shop's behalf.
   smsAttestedAt DateTime?
+  // Clickwrap record: when this person ticked "I agree to the Terms of Service
+  // and Privacy Policy", and which revision (TERMS_VERSION in
+  // @chairback/config/legal). Stamped by password signup and by the
+  // dashboard's "Before you continue" screen (POST /api/auth/accept-terms).
+  // null / an older version = the dashboard asks them, once. Timestamp and
+  // version only: no IP, no user agent.
+  termsAcceptedAt      DateTime?
+  termsAcceptedVersion String?
   // Dashboard appearance: "light" (white & gold - ChairBack's main look since
   // 2026-10-17, migration 20261071000000) or "dark" (the original black &
   // gold). A USER preference, not a shop one - it's about the reader's eyes,
@@ -5080,6 +5088,14 @@ model CustomerAccount {
   // bell only has to answer "anything new since you last looked?", and it is
   // the same answer on every phone the customer signs in on.
   announcementsSeenAt DateTime?
+
+  // Clickwrap record: the customer ticked "I agree to the Terms of Service and
+  // Privacy Policy" on the sign-in screen (TERMS_VERSION in
+  // @chairback/config/legal). Stamped on a good code when the box was ticked.
+  // null = no agreement on record (accounts made before this, or by an app
+  // build that predates the checkbox). Timestamp and version only.
+  termsAcceptedAt      DateTime?
+  termsAcceptedVersion String?
 
   lastSeenAt DateTime?
   createdAt  DateTime  @default(now())

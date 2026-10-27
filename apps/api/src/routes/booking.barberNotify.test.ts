@@ -93,7 +93,7 @@ beforeAll(async () => {
 
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email: emailOwner, password, name: "Notify", smsAttested: true });
+    .send({ email: emailOwner, password, name: "Notify", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
@@ -349,7 +349,7 @@ describe("barber booking alerts", () => {
     // A teammate user linked to the staff row, with their own device.
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email: emailMate, password, name: "Mate", smsAttested: true });
+      .send({ email: emailMate, password, name: "Mate", smsAttested: true, acceptTerms: true });
     expect(signup.status).toBe(201);
     const mate = await prisma.user.findUnique({
       where: { email: emailMate },

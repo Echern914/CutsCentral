@@ -74,7 +74,7 @@ async function signUpShop(name: string) {
   const email = `wl-f1-${randomToken(6).toLowerCase()}@test.local`;
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name, smsAttested: true });
+    .send({ email, password, name, smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const login = await request(app).post("/api/auth/login").send({ email, password });
   const setCookie = login.headers["set-cookie"];

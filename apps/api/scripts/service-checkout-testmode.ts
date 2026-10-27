@@ -111,6 +111,7 @@ async function seedShop() {
     password: "supersecret123",
     name: "Test mode",
     smsAttested: true,
+    acceptTerms: true,
   });
   if (signup.status !== 201) throw new Error(`signup failed: ${signup.status}`);
   cookie = (signup.setCookie ?? "").split(";")[0]!;

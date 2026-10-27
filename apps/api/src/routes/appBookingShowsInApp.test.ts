@@ -172,7 +172,7 @@ beforeAll(async () => {
   ownerEmails.push(owner);
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email: owner, password: "supersecret123", name: "D", smsAttested: true });
+    .send({ email: owner, password: "supersecret123", name: "D", smsAttested: true, acceptTerms: true });
   const cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
     .post("/api/shops")

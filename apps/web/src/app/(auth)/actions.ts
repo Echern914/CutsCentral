@@ -24,6 +24,9 @@ interface ActionState {
   error?: string;
 }
 
+const TERMS_REQUIRED_MESSAGE =
+  "Please agree to the Terms of Service and Privacy Policy to create your account.";
+
 async function proxyAuth(
   path: string,
   payload: Record<string, unknown>,
@@ -101,6 +104,11 @@ export async function signupAction(
 ): Promise<ActionState> {
   // The consent checkbox is required client-side; enforce server-side too so a
   // tampered form can't create an un-attested account (API rejects != true).
+  // Same for the Terms + Privacy agreement: the API refuses a signup without
+  // it (terms_required), so say what is missing before the round trip.
+  if (formData.get("acceptTerms") !== "on") {
+    return { error: TERMS_REQUIRED_MESSAGE };
+  }
   const smsAttested = formData.get("smsAttested") === "on";
   if (!smsAttested) {
     return { error: "Please confirm the SMS consent statement to continue." };
@@ -110,6 +118,7 @@ export async function signupAction(
     email: String(formData.get("email") ?? ""),
     password: String(formData.get("password") ?? ""),
     smsAttested: true,
+    acceptTerms: true,
     // Acquisition source captured on landing; optional (API tolerates absence).
     ...readAttribution(),
   });
@@ -120,6 +129,8 @@ export async function signupAction(
     const error =
       result.error === "rate_limited" || result.error === "http_429"
         ? "Too many attempts. Please wait a minute and try again."
+        : result.error === "terms_required"
+          ? TERMS_REQUIRED_MESSAGE
         : result.error === "email_taken"
           ? "That email is already registered. Try signing in instead."
           : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)

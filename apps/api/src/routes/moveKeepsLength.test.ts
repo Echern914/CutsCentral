@@ -97,7 +97,7 @@ beforeAll(async () => {
   const email = `movelen-${randomToken(6)}@test.local`.toLowerCase();
   await agent
     .post("/api/auth/signup")
-    .send({ email, password: "supersecret123", name: "Mover", smsAttested: true });
+    .send({ email, password: "supersecret123", name: "Mover", smsAttested: true, acceptTerms: true });
   await agent
     .post("/api/shops")
     .send({ name: "Length Cuts", bookingUrl: "https://len.test", smsAttested: true });

@@ -51,7 +51,7 @@ beforeAll(async () => {
   emails.push(email);
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Upcoming Tester", smsAttested: true });
+    .send({ email, password, name: "Upcoming Tester", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
 
@@ -159,7 +159,7 @@ describe("client detail: upcoming appointments", () => {
     emails.push(otherEmail);
     const signup = await request(app)
       .post("/api/auth/signup")
-      .send({ email: otherEmail, password, name: "Other", smsAttested: true });
+      .send({ email: otherEmail, password, name: "Other", smsAttested: true, acceptTerms: true });
     const otherCookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
     await request(app)
       .post("/api/shops")

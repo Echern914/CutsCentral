@@ -95,7 +95,7 @@ beforeAll(async () => {
   await import("../billing/stripe.js");
   const { createApp } = await import("../app.js");
   app = createApp();
-  const signup = await request(app).post("/api/auth/signup").send({ email, password: "supersecret123", name: "Zero", smsAttested: true });
+  const signup = await request(app).post("/api/auth/signup").send({ email, password: "supersecret123", name: "Zero", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   cookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   shopId = (

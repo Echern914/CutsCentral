@@ -51,7 +51,7 @@ async function signup(
   emails.push(email);
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: label, smsAttested: true, ...extra });
+    .send({ email, password, name: label, smsAttested: true, acceptTerms: true, ...extra });
   expect(res.status).toBe(201);
   const user = await prisma.user.findUnique({ where: { email } });
   return {

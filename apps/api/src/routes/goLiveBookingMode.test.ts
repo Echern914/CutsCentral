@@ -51,7 +51,7 @@ async function signup(email: string): Promise<string> {
   emails.push(email);
   const res = await request(app)
     .post("/api/auth/signup")
-    .send({ email, password, name: "Fixture Owner", smsAttested: true });
+    .send({ email, password, name: "Fixture Owner", smsAttested: true, acceptTerms: true });
   expect(res.status).toBe(201);
   return (res.headers["set-cookie"] as unknown as string[])[0]!;
 }

@@ -222,7 +222,7 @@ const ACCT = `acct_test_${randomToken(6)}`;
 async function makeShop(ownerEmail: string) {
   const signup = await request(app)
     .post("/api/auth/signup")
-    .send({ email: ownerEmail, password, name: "Tipped", smsAttested: true });
+    .send({ email: ownerEmail, password, name: "Tipped", smsAttested: true, acceptTerms: true });
   expect(signup.status).toBe(201);
   const c = (signup.headers["set-cookie"] as unknown as string[])[0]!;
   const shop = await request(app)
