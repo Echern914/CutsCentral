@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import forge from "node-forge";
+import { inflateRawSync } from "node:zlib";
 import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 
@@ -125,6 +126,25 @@ function zipEntries(buf: Buffer): string[] {
   return names;
 }
 
+/**
+ * One entry's bytes, read through the central directory (sizes there are
+ * authoritative even when the local header defers them to a data descriptor).
+ */
+function zipEntry(buf: Buffer, wanted: string): Buffer | null {
+  for (let i = 0; i + 46 <= buf.length; i++) {
+    if (buf.readUInt32LE(i) !== 0x02014b50) continue;
+    const nameLen = buf.readUInt16LE(i + 28);
+    if (buf.subarray(i + 46, i + 46 + nameLen).toString("utf8") !== wanted) continue;
+    const method = buf.readUInt16LE(i + 10);
+    const size = buf.readUInt32LE(i + 20);
+    const local = buf.readUInt32LE(i + 42);
+    const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+    const data = buf.subarray(start, start + size);
+    return method === 8 ? inflateRawSync(data) : Buffer.from(data);
+  }
+  return null;
+}
+
 describe("a configured shop gets a real signed pass", () => {
   it("is configured at all (the gate every route checks first)", () => {
     expect(appointmentWalletEnabled()).toBe(true);
@@ -143,6 +163,18 @@ describe("a configured shop gets a real signed pass", () => {
     // The art has to be in there too, or the pass renders blank.
     expect(entries).toContain("icon.png");
     expect(entries.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it("🔴 the SIGNED pass.json keeps relevantDates (the library validates and can drop it)", async () => {
+    // passkit-generator re-validates pass.json and silently discards a whole
+    // pass.json that fails its schema, so asserting on the builder's output is
+    // not enough: this reads the field back out of the archive Wallet gets.
+    const buf = await buildPassForAppointment(appointmentId);
+    const json = JSON.parse(zipEntry(buf!, "pass.json")!.toString("utf8"));
+    expect(json.relevantDates).toEqual([
+      { startDate: "2026-03-14T17:00:00.000Z", endDate: "2026-03-14T18:30:00.000Z" },
+    ]);
+    expect(json.relevantDate).toBe("2026-03-14T18:00:00.000Z");
   });
 
   it("is a ZIP, which is what the .pkpass content-type promises", async () => {

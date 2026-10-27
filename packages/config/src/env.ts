@@ -300,6 +300,14 @@ const apiSchema = z.object({
   WALLET_PASS_KEY_BASE64: z.string().min(1).optional(),
   WALLET_PASS_KEY_PASSPHRASE: z.string().optional(),
   WALLET_WWDR_CERT_BASE64: z.string().min(1).optional(),
+  // The key every Wallet pass's authenticationToken is an HMAC under (punch
+  // card AND appointment pass). The token is baked into the pass on the
+  // customer's phone and can never be re-issued from here, so this must
+  // OUTLIVE every pass ever downloaded. Unset = SESSION_SECRET, which is how
+  // the 2026-10-25 session rotation silently stopped every older pass from
+  // updating. Set it to the CURRENT SESSION_SECRET value (so passes issued
+  // since then keep working) and never rotate it alongside sessions.
+  WALLET_AUTH_SECRET: z.string().min(32).optional(),
 
   // Apple Wallet APPOINTMENT pass (optional; a SEPARATE Pass Type ID from the
   // punch card - an appointment is an eventTicket, a punch card is a

@@ -24,6 +24,7 @@ const {
   buildAppointmentPassJson,
   confirmationReference,
   finishedPassLabel,
+  PASS_RELEVANT_BEFORE_MS,
 } = await import("./appointmentPass.js");
 type Source = Parameters<typeof buildAppointmentPassJson>[0];
 
@@ -304,6 +305,28 @@ describe("relevance and expiry", () => {
     expect(pass.expirationDate).toBe("2026-03-14T20:30:00.000Z");
   });
 
+  it("🔴 stays relevant until the appointment is FINISHED, not just around the start (iOS 18+)", () => {
+    // The owner's ask: the pass must stay on the lock screen through the cut.
+    // relevantDate alone fades once the start passes; the interval runs to the end.
+    const pass = buildAppointmentPassJson(source());
+    expect(PASS_RELEVANT_BEFORE_MS).toBe(60 * 60 * 1000);
+    expect(pass.relevantDates).toEqual([
+      { startDate: "2026-03-14T17:00:00.000Z", endDate: ENDS_AT.toISOString() },
+    ]);
+  });
+
+  it("a reschedule moves the whole relevance window", () => {
+    const later = buildAppointmentPassJson(
+      source({
+        startsAt: new Date("2026-03-15T15:00:00.000Z"),
+        endsAt: new Date("2026-03-15T16:15:00.000Z"),
+      }),
+    );
+    expect(later.relevantDates).toEqual([
+      { startDate: "2026-03-15T14:00:00.000Z", endDate: "2026-03-15T16:15:00.000Z" },
+    ]);
+  });
+
   it("🔴 omits `locations` when the shop has no coordinates", () => {
     // Apple takes lat/lng and nothing else. Guessing a point from the address
     // would buzz a customer at the wrong building, which is worse than never
@@ -385,6 +408,8 @@ describe("a finished appointment says what happened", () => {
         source({ status, completedAt: FINISHED, canceledAt: FINISHED }),
       );
       expect(pass.relevantDate).toBe(STARTS_AT.toISOString());
+      // ...but a finished or canceled booking no longer claims the lock screen.
+      expect(pass.relevantDates).toBeUndefined();
     }
   });
 

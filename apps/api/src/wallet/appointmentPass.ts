@@ -17,6 +17,7 @@ import {
   hexToRgb,
   loadArt,
   pokeApnsRegistrations,
+  walletAuthKey,
   type WalletCerts,
   type WalletPokeResult,
 } from "./pass.js";
@@ -56,9 +57,10 @@ export function appointmentWalletEnabled(): boolean {
  * The pass's authenticationToken. Stateless HMAC like the punch card's, but
  * DOMAIN-SEPARATED ("wallet-appt-pass:") so a rewards pass token can never
  * authenticate an appointment pass even if the two id strings ever collided.
+ * Same long-lived key as the punch card - see walletAuthKey().
  */
 export function apptPassAuthToken(appointmentId: string): string {
-  return createHmac("sha256", env.SESSION_SECRET)
+  return createHmac("sha256", walletAuthKey())
     .update(`wallet-appt-pass:${appointmentId}`)
     .digest("hex");
 }
@@ -141,6 +143,26 @@ export function appointmentPassExpiration(
           ? appt.updatedAt
           : null;
   return finishedAt ?? new Date(appt.endsAt.getTime() + BOOKED_PASS_GRACE_MS);
+}
+
+/** How long before the start a live pass becomes relevant (travel time). */
+export const PASS_RELEVANT_BEFORE_MS = 60 * 60 * 1000;
+
+/**
+ * The pass's relevance window for iOS 18+ `relevantDates`. PURE.
+ *
+ * From PASS_RELEVANT_BEFORE_MS before the start until the END of the
+ * appointment, so the pass stays on the lock screen for the whole visit rather
+ * than fading once the start time passes. A reschedule moves both ends, and the
+ * poke that follows it carries the new window to the phone.
+ */
+export function appointmentPassRelevance(
+  appt: Pick<AppointmentPassSource, "startsAt" | "endsAt">,
+): { startDate: string; endDate: string } {
+  return {
+    startDate: new Date(appt.startsAt.getTime() - PASS_RELEVANT_BEFORE_MS).toISOString(),
+    endDate: appt.endsAt.toISOString(),
+  };
 }
 
 /**
@@ -341,8 +363,13 @@ export function buildAppointmentPassJson(
     webServiceURL: `${env.API_BASE_URL}/api/wallet`,
     authenticationToken: apptPassAuthToken(appt.id),
     sharingProhibited: true,
-    // iOS surfaces the pass on the lock screen around this instant.
+    // iOS 17 and earlier: surfaces the pass on the lock screen around this
+    // instant only, and drops it soon after the start.
     relevantDate: appt.startsAt.toISOString(),
+    // iOS 18+: relevant for the WHOLE window, so the pass stays on the lock
+    // screen from shortly before the start until the cut is finished. Live
+    // passes only - a canceled or finished booking must not keep surfacing.
+    ...(live ? { relevantDates: [appointmentPassRelevance(appt)] } : {}),
     // Wallet's expiry hint: a short grace after the end while booked, the
     // finish instant once it is over. See appointmentPassExpiration().
     expirationDate: appointmentPassExpiration(appt).toISOString(),
