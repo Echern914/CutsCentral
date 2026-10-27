@@ -79,6 +79,16 @@ export interface InsightsData extends PeriodMeta {
   };
   busiest: { weekday: string | null; counts: number[] };
   loyalty: { punchesEarned: number; punchesRedeemed: number; redemptions: number };
+  /**
+   * What the barber entered as spent in this window (cents), expanded by
+   * @chairback/config/expenseSchedule. Absent on an older payload.
+   */
+  expenses?: {
+    totalCents: number;
+    byCategory: Record<"rent" | "products" | "supplies" | "other", number>;
+  };
+  /** ESTIMATE: revenue (cents) minus `expenses.totalCents`. May be negative. */
+  takeHomeCents?: number;
 }
 
 /**

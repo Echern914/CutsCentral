@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-27-insights-expenses",
+    date: "2026-10-27",
+    kind: "feature",
+    title: "Track your expenses and see your take-home",
+    body:
+      "Insights now has an Expenses card. Add the rent you pay, product, supplies or anything else, one time or " +
+      "repeating weekly or monthly. Insights then shows what you spent in the range you picked and an estimate of what " +
+      "you took home.",
+  },
+  {
     id: "2026-10-27-booking-rules-in-plain-units",
     date: "2026-10-27",
     kind: "feature",
