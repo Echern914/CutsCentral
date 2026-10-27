@@ -720,6 +720,25 @@ export function noShowWindowClosed(endsAt: Date, now: Date): boolean {
 }
 
 /**
+ * True once a booking's end has passed - from then until NO_SHOW_WINDOW_MS
+ * later it is still BOOKED, so the dashboard still offers Cancel on it. A
+ * missing or unreadable end is not "ended".
+ */
+export function appointmentEnded(endsAt: string | Date | null | undefined, now: number = Date.now()): boolean {
+  if (!endsAt) return false;
+  const end = endsAt instanceof Date ? endsAt.getTime() : Date.parse(endsAt);
+  return Number.isFinite(end) && end <= now;
+}
+
+/**
+ * Asked before a barber cancels a booking that already ENDED. Cancel refunds
+ * a deposit and emails the client - a no-show does neither - and with the
+ * day-long window Cancel stays on screen right where No-show is.
+ */
+export const CANCEL_PAST_END_COPY =
+  "This appointment already ended. Cancelling refunds any deposit and emails the client. If they didn't show up, use No-show instead.";
+
+/**
  * Why Mark no-show was refused on a visit the sweep closed because the window
  * passed. Only said when that IS why - the card clause only when a kept card
  * was let go.

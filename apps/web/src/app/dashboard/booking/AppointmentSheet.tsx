@@ -5,6 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import Link from "next/link";
 import { cn } from "@/lib/cn";
 import {
+  appointmentEnded,
+  CANCEL_PAST_END_COPY,
   describeNoShowCardOutcome,
   describeNoShowChargeResult,
   type NoShowCardOutcome,
@@ -456,6 +458,32 @@ export function AppointmentSheet({
     })();
   }
 
+  //  ── Cancel, once the appointment has ENDED ──
+  // The completion sweep now waits a day after the end (NO_SHOW_WINDOW_MS) so
+  // a no-show can still be marked - which also leaves Cancel on a booking that
+  // already happened, or didn't. A barber cancel refunds any deposit and
+  // emails the client: not what a no-show should do. So past the end, Cancel
+  // asks first, in the footer, and offers Mark no-show beside it. The server
+  // stays permissive: a mistaken booking can still be cancelled.
+  const [cancelPastAsk, setCancelPastAsk] = useState(false);
+  useEffect(() => {
+    if (rawView !== "detail") setCancelPastAsk(false);
+  }, [rawView]);
+
+  function cancelOrAsk() {
+    setMenu(null);
+    setSavedNotice(null);
+    if (appointmentEnded(detail?.endsAt ?? row.end)) {
+      setNoShowAsk(null);
+      setNoShowError(null);
+      setConfirmRemove(false);
+      setConfirmCorrect(null);
+      setCancelPastAsk(true);
+      return;
+    }
+    act(cancelAppointmentAction, "Canceled", true);
+  }
+
   //  ── No-show: marked, and taken back ──
   // Both ask first, in the footer (a toast draws beneath this dialog and is
   // invisible on a phone), send ONE request (their own busy flag - a
@@ -465,6 +493,8 @@ export function AppointmentSheet({
   const [noShowAsk, setNoShowAsk] = useState<"mark" | "undo" | null>(null);
   const [noShowError, setNoShowError] = useState<string | null>(null);
   const [noShowBusy, setNoShowBusy] = useState(false);
+  // A ref as well: a double tap lands before the state above re-renders.
+  const noShowBusyRef = useRef(false);
   const [undoneNotes, setUndoneNotes] = useState<string[] | null>(null);
   // What the kept card did once the no-show was marked, said in the footer
   // (a toast draws beneath this sheet on a phone). Drick, 2026-10-22: the
@@ -491,9 +521,11 @@ export function AppointmentSheet({
     setNoShowAsk(kind);
   }
 
-  function confirmNoShowChange() {
-    if (noShowBusy || !noShowAsk) return;
-    const kind = noShowAsk;
+  function confirmNoShowChange(override?: "mark") {
+    if (noShowBusyRef.current || noShowBusy) return;
+    const kind = override ?? noShowAsk;
+    if (!kind) return;
+    noShowBusyRef.current = true;
     setNoShowError(null);
     setNoShowBusy(true);
     void (async () => {
@@ -545,6 +577,7 @@ export function AppointmentSheet({
           toast("Back on the calendar", "success");
         }
       } finally {
+        noShowBusyRef.current = false;
         setNoShowBusy(false);
       }
     })();
@@ -666,6 +699,21 @@ export function AppointmentSheet({
           />
         </div>
       )
+    ) : cancelPastAsk && detail ? (
+      <CancelPastFooter
+        busy={noShowBusy || pending}
+        onNoShow={() => {
+          setCancelPastAsk(false);
+          // The no-show's own footer carries its busy state and any refusal.
+          setNoShowAsk("mark");
+          confirmNoShowChange("mark");
+        }}
+        onCancelAnyway={() => {
+          setCancelPastAsk(false);
+          act(cancelAppointmentAction, "Canceled", true);
+        }}
+        onKeep={() => setCancelPastAsk(false)}
+      />
     ) : noShowAsk && detail ? (
       <NoShowFooter
         detail={detail}
@@ -676,7 +724,7 @@ export function AppointmentSheet({
           setNoShowAsk(null);
           setNoShowError(null);
         }}
-        onConfirm={confirmNoShowChange}
+        onConfirm={() => confirmNoShowChange()}
       />
     ) : undoneNotes ? (
       <UndoneNoShowFooter notes={undoneNotes} onDone={() => setUndoneNotes(null)} />
@@ -833,6 +881,7 @@ export function AppointmentSheet({
           onRemoveWalkIn={askRemoveWalkIn}
           onCorrect={askCorrect}
           onNoShow={askNoShow}
+          onCancel={cancelOrAsk}
           onPriceSaved={() => {
             onChanged();
             load();
@@ -874,6 +923,7 @@ function DetailView({
   onRemoveWalkIn,
   onCorrect,
   onNoShow,
+  onCancel,
   onPriceSaved,
   showRefunds,
   onDepositRefunded,
@@ -908,6 +958,8 @@ function DetailView({
   onCorrect: (outcome: "no_show" | "canceled") => void;
   /** Ask, in the sheet, whether to mark this booking a no-show, or to undo one. */
   onNoShow: (kind: "mark" | "undo") => void;
+  /** Cancel this one booking - asking first, in the footer, once it has ended. */
+  onCancel: () => void;
   /** The price changed on the server: re-read the booking and the agenda. */
   onPriceSaved: () => void;
   /** The new checkout is live for this shop, so its card payments can be refunded here. */
@@ -1116,6 +1168,10 @@ function DetailView({
           onNoShow={(kind) => {
             setMenu(null);
             onNoShow(kind);
+          }}
+          onCancel={() => {
+            setMenu(null);
+            onCancel();
           }}
         />
       )}
@@ -2399,6 +2455,7 @@ function MoreMenu({
   onRemoveWalkIn,
   onCorrect,
   onNoShow,
+  onCancel,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail;
@@ -2414,6 +2471,7 @@ function MoreMenu({
   onRemoveWalkIn: () => void;
   onCorrect: (outcome: "no_show" | "canceled") => void;
   onNoShow: (kind: "mark" | "undo") => void;
+  onCancel: () => void;
 }) {
   const items: MenuItem[] = [];
   const native = detail.source === "appointment" && detail.origin === "chairback";
@@ -2484,7 +2542,7 @@ function MoreMenu({
       label: row.seriesId ? "Cancel this occurrence" : "Cancel appointment",
       icon: <BanIcon />,
       tone: "danger",
-      onClick: () => onAct(cancelAppointmentAction, "Canceled", true),
+      onClick: onCancel,
     });
   }
   // A walk-in recorded by mistake - the only finished visit that can be taken
@@ -2789,6 +2847,54 @@ function RemoveWalkInFooter({
  * what does not, and a refusal (money on it, too long ago) is read here too,
  * in the server's own words.
  */
+/**
+ * Cancel on an appointment that already ENDED: asked in the footer, with the
+ * no-show beside it. Before the end, Cancel is one tap as it always was.
+ */
+function CancelPastFooter({
+  busy,
+  onNoShow,
+  onCancelAnyway,
+  onKeep,
+}: {
+  busy: boolean;
+  onNoShow: () => void;
+  onCancelAnyway: () => void;
+  onKeep: () => void;
+}) {
+  return (
+    <div className="flex w-full flex-col gap-2" data-testid="cancel-past-confirm">
+      <p className="text-sm leading-relaxed text-offwhite">{CANCEL_PAST_END_COPY}</p>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={onNoShow}
+          disabled={busy}
+          className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+        >
+          Mark no-show
+        </button>
+        <button
+          type="button"
+          onClick={onCancelAnyway}
+          disabled={busy}
+          className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl border border-danger-soft/50 px-4 text-sm font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50"
+        >
+          Cancel anyway
+        </button>
+      </div>
+      <button
+        type="button"
+        onClick={onKeep}
+        disabled={busy}
+        className="h-11 w-full rounded-xl text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+      >
+        Keep it
+      </button>
+    </div>
+  );
+}
+
 function CorrectVisitFooter({
   detail,
   outcome,
