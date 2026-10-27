@@ -183,6 +183,20 @@ describe("Mark no-show", () => {
     expect(onChanged).not.toHaveBeenCalled();
   });
 
+  // Drick, 2026-10-27: "presses the button to charge the card on file and it
+  // isn't working" - a day past the end the sweep has completed it.
+  it("🔴 more than 24 hours after the end: the sheet says why, in words", async () => {
+    const message =
+      "It's been more than 24 hours since this appointment ended, so it was marked done and the saved card was released.";
+    noShow.mockResolvedValue({ ok: false, error: "not_booked", message });
+    await openMore(base);
+    fireEvent.click(await screen.findByText("Mark no-show"));
+    await screen.findByTestId("no-show-confirm");
+    fireEvent.click(confirmButton("Mark no-show"));
+    expect((await screen.findByTestId("no-show-error")).textContent).toBe(message);
+    expect(screen.queryByTestId("no-show-marked")).toBeNull();
+  });
+
   // Drick, 2026-10-22: "he hits an error or the card on file cant be charged".
   // The sheet used to say "Marked no-show" whatever the card did.
   async function markWith(card: unknown) {

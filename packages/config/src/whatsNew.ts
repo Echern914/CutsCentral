@@ -36,6 +36,13 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-27-no-show-24-hours",
+    date: "2026-10-27",
+    kind: "fix",
+    title: "Mark a no-show up to 24 hours after the appointment",
+    body: "You can now mark a no-show for up to a day after the appointment ends - and the saved card is charged, if your no-show fee was on for that booking. Tapping Done still finishes a visit right away.",
+  },
+  {
     id: "2026-10-27-terms-agreement",
     date: "2026-10-27",
     kind: "feature",

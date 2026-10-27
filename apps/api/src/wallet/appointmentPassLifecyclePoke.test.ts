@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { NO_SHOW_WINDOW_MS, randomToken } from "@chairback/config";
 
 /**
  * Every way an appointment FINISHES tells its Wallet pass to re-fetch.
@@ -136,9 +136,9 @@ afterAll(async () => {
 });
 
 describe("a completion pokes the Wallet pass", () => {
-  it("🔴 the 15-minute promotion job", async () => {
+  it("🔴 the promotion job (a day after the end - NO_SHOW_WINDOW_MS)", async () => {
     const id = await book();
-    await promoteFulfilledAppointments(new Date());
+    await promoteFulfilledAppointments(new Date(Date.now() + NO_SHOW_WINDOW_MS), { shopId });
     expect(await status(id)).toBe("COMPLETED");
     expect(wallet.poke).toHaveBeenCalledWith(id);
     expect(await byShop(id)).toBe(false);

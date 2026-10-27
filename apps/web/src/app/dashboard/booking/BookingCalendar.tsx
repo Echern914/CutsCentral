@@ -31,6 +31,7 @@ import {
   initialsOf,
 } from "../_components/appointmentCardStyles";
 import { resolveServiceColor } from "@chairback/config/serviceColor";
+import { describeNoShowChargeResult } from "@chairback/config/shopPolicy";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import {
   earliestWalkInBackdate,
@@ -1169,6 +1170,7 @@ const ACT_REFUSAL: Record<string, string> = {
   not_found: "That request is gone. It may have been approved or cancelled elsewhere.",
   party_changed: "That group request changed while you were looking. Refresh and try again.",
   not_started: "It hasn't started yet, so it can't be a no-show. Cancel it instead.",
+  not_booked: "This booking isn't booked anymore - it was finished, cancelled or already marked. Refresh to see it.",
 };
 
 function isoForDayHour(dayKey: string, hour: number, tz: string, minute = 0): string {
@@ -2671,7 +2673,7 @@ export function AppointmentBlock({
   }
 
   function act(
-    fn: (id: string) => Promise<{ ok: boolean; error?: string; party?: number }>,
+    fn: (id: string) => Promise<{ ok: boolean; error?: string; message?: string; party?: number }>,
     label: string,
   ) {
     start(async () => {
@@ -2679,11 +2681,42 @@ export function AppointmentBlock({
       // A group request is answered as one: say that it was everyone.
       const said =
         res.party !== undefined && res.party > 1 ? `${label} the whole group (${res.party})` : label;
+      // The server's own sentence first: it knows WHY (Drick, 2026-10-27 - a
+      // no-show refused a day after the visit read "Couldn't update").
       toast(
-        res.ok ? said : (ACT_REFUSAL[res.error ?? ""] ?? "Couldn't update"),
+        res.ok ? said : (res.message ?? ACT_REFUSAL[res.error ?? ""] ?? "Couldn't update"),
         res.ok ? "success" : "error",
       );
       if (res.ok) onChanged();
+    });
+  }
+
+  /**
+   * Mark no-show from the card, and SAY what the kept card did - charged,
+   * declined, or why nothing was - instead of a bare "Marked no-show" whatever
+   * happened (the sheet already does; this card did not).
+   */
+  function markNoShow() {
+    start(async () => {
+      let res: Awaited<ReturnType<typeof noShowAppointmentAction>>;
+      try {
+        res = await noShowAppointmentAction(row.id);
+      } catch {
+        res = { ok: false };
+      }
+      if (!res.ok) {
+        toast(res.message ?? ACT_REFUSAL[res.error ?? ""] ?? "Couldn't update", "error");
+        // The row may have moved on under us (finished, cancelled): show it.
+        onChanged();
+        return;
+      }
+      if (res.card) {
+        const said = describeNoShowChargeResult(res.card, null);
+        toast(`Marked no-show. ${said.text}`, said.tone === "good" ? "success" : "info");
+      } else {
+        toast("Marked no-show", "success");
+      }
+      onChanged();
     });
   }
 
@@ -3175,7 +3208,7 @@ export function AppointmentBlock({
                   return;
                 }
                 setConfirmNoShow(false);
-                act(noShowAppointmentAction, "Marked no-show");
+                markNoShow();
               }}
               disabled={pending}
               data-testid="card-no-show"

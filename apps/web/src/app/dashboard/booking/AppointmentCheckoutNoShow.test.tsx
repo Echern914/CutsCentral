@@ -196,7 +196,7 @@ describe("Checkout: Didn't show up? Mark no-show", () => {
       correctable: true,
       noShowCard: { charge: false, reason: "visit_closed" },
     } as unknown as AppointmentDetail);
-    expect(screen.getByTestId("checkout-no-show-card").textContent).toMatch(/closed this visit as done/);
+    expect(screen.getByTestId("checkout-no-show-card").textContent).toMatch(/already marked done, and that let the saved card go/);
     fireEvent.click(screen.getByTestId("checkout-no-show").querySelector("button")!);
     const confirm = await screen.findByTestId("correct-visit-confirm");
     expect(confirm.textContent).toContain("Mark this visit a no-show?");

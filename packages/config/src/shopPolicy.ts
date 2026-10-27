@@ -698,6 +698,37 @@ export function statedCardOnFileFee(terms: {
   return terms.chargeCardOnFileFees && cardFeeConfigured(terms) ? describeCardOnFileFee(terms) : null;
 }
 
+/**
+ * 🔴 HOW LONG AFTER A BOOKING ENDS IT CAN STILL BE MARKED A NO-SHOW.
+ *
+ * Drick, 2026-10-27: "when no-shows come he presses the button to charge the
+ * card on file and it isn't working". The completion sweep used to finish
+ * every booked visit 15 minutes after its end - crediting the visit and a
+ * punch, and letting the kept card go - so a no-show could only be marked in
+ * the minutes between the start and that sweep. Eric chose a day: the sweep
+ * now leaves a booking alone until this long after it ENDS
+ * (apps/api engines/appointmentPromotion.ts), so the barber can still mark the
+ * no-show and the kept card can be charged on the booking's own terms. Done
+ * and checkout still finish a visit at once.
+ */
+export const NO_SHOW_WINDOW_HOURS = 24;
+export const NO_SHOW_WINDOW_MS = NO_SHOW_WINDOW_HOURS * 60 * 60 * 1000;
+
+/** True once a booking that ended at `endsAt` is past the no-show window. */
+export function noShowWindowClosed(endsAt: Date, now: Date): boolean {
+  return now.getTime() - endsAt.getTime() > NO_SHOW_WINDOW_MS;
+}
+
+/**
+ * Why Mark no-show was refused on a visit the sweep closed because the window
+ * passed. Only said when that IS why - the card clause only when a kept card
+ * was let go.
+ */
+export function noShowWindowEndedMessage(cardReleased: boolean): string {
+  return cardReleased
+    ? `It's been more than ${NO_SHOW_WINDOW_HOURS} hours since this appointment ended, so it was marked done and the saved card was released.`
+    : `It's been more than ${NO_SHOW_WINDOW_HOURS} hours since this appointment ended, so it was marked done.`;
+}
 
 /**
  * WHAT MARKING ONE BOOKING A NO-SHOW DOES TO ITS CARD - said BEFORE the mark,
@@ -716,7 +747,8 @@ export function statedCardOnFileFee(terms: {
  * happens cannot disagree:
  *   - `live`: a booked visit whose start has come. Mark no-show settles the
  *     kept card, so a saved card and a fee above zero IS a charge;
- *   - `correction`: a visit the 15-minute sweep already completed. That path
+ *   - `correction`: a visit already completed (Done, or the sweep a day after
+ *     it ended - NO_SHOW_WINDOW_MS). That path
  *     never moves money (engines/visitCorrection.ts) - and completing the
  *     visit already let the card go.
  *
@@ -740,7 +772,7 @@ export type NoShowNoChargeReason =
   | "no_card"
   /** A card was saved and has already been let go. */
   | "card_released"
-  /** The sweep closed the visit as done after it ended, letting the card go. */
+  /** The visit was completed (Done, or the sweep a day after it ended), letting the card go. */
   | "visit_closed"
   /** A charge was already tried on this card and the bank declined it. */
   | "already_declined"
@@ -833,7 +865,7 @@ export function describeNoShowCardOutcome(outcome: NoShowCardOutcome): {
       };
     case "visit_closed":
       return {
-        text: "Nothing is charged: ChairBack closed this visit as done after its end time, and that let the saved card go. To charge the fee, mark the no-show before the visit's end time passes.",
+        text: `Nothing is charged: this visit was already marked done, and that let the saved card go. ChairBack marks a visit done ${NO_SHOW_WINDOW_HOURS} hours after it ends, so to charge the fee, mark the no-show within that time and before tapping Done.`,
         settingsLink: false,
       };
     case "already_declined":

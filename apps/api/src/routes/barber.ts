@@ -140,8 +140,13 @@ barberRouter.get("/home", async (req, res) => {
   const completed = (await db.appointment.findMany({
     where: {
       staffId,
-      status: "COMPLETED",
       startsAt: { gte: monthAgo, lte: now },
+      // A cut that ENDED counts the day it happened, as it did when the sweep
+      // completed it 15 minutes later. It now waits a day after the end
+      // (NO_SHOW_WINDOW_MS) so a no-show can still be marked; until then an
+      // ended, unsettled booking is still BOOKED. A no-show marked in that
+      // day leaves the count.
+      OR: [{ status: "COMPLETED" }, { status: "BOOKED", endsAt: { lte: now } }],
     },
     select: { startsAt: true },
   })) as unknown as { startsAt: Date }[];

@@ -234,6 +234,45 @@ describe("🔴 never to a client who already booked (engines/upcomingBooking.ts)
     expect(sent).toHaveLength(0);
   });
 
+  // 🔴 The completion sweep waits a day after a booking ends (NO_SHOW_WINDOW_MS)
+  // so a no-show can still be marked. Until then there is no COMPLETED visit and
+  // lastVisitAt is the one before - so yesterday's cut must still count as "on
+  // the books", or the client sitting in the chair yesterday gets a win-back.
+  async function bookedEndingAt(shopId: string, clientId: string, endsAt: Date) {
+    const staff = await prisma.staff.create({ data: { shopId, name: "Sam" } });
+    const service = await prisma.service.create({ data: { shopId, name: "Cut", durationMin: 30 } });
+    await prisma.appointment.create({
+      data: {
+        shopId,
+        staffId: staff.id,
+        serviceId: service.id,
+        clientId,
+        firstName: "Lapsed",
+        status: "BOOKED",
+        startsAt: new Date(endsAt.getTime() - 30 * 60_000),
+        endsAt,
+        manageToken: randomToken(),
+      },
+    });
+  }
+
+  it("🔴 a booking that ended 3 hours ago and is not settled yet still counts - no win-back", async () => {
+    const shop = await makeShop();
+    const client = await makeLapsedClient(shop.id, "tel:+13025552303", "+13025552303", 120);
+    await bookedEndingAt(shop.id, client.id, new Date(NOW.getTime() - 3 * 3_600_000));
+    const summary = await sweepShopWinback(shop, { now: NOW, dryRun: false });
+    expect(summary.sent).toBe(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("a BOOKED row past the no-show window is not a booking ahead", async () => {
+    const shop = await makeShop();
+    const client = await makeLapsedClient(shop.id, "tel:+13025552304", "+13025552304", 120);
+    await bookedEndingAt(shop.id, client.id, addDays(NOW, -2));
+    const summary = await sweepShopWinback(shop, { now: NOW, dryRun: false });
+    expect(summary.sent).toBe(1);
+  });
+
   it("a lapsed client whose Acuity visit ahead was RESCHEDULED is not won back", async () => {
     const shop = await makeShop();
     const client = await makeLapsedClient(shop.id, "tel:+13025552302", "+13025552302", 120);

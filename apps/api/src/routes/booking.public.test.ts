@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
+import { NO_SHOW_WINDOW_MS, randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { __setMessageProviderForTests } from "../messaging/twilio.js";
 import type { SendMessageInput } from "../messaging/provider.js";
 import { promoteFulfilledAppointments } from "../engines/appointmentPromotion.js";
@@ -370,7 +370,8 @@ describe("appointment promotion + loyalty", () => {
     expect(appt).toBeTruthy();
     // Move it clearly into the past relative to our fixed `now` (midday today).
     const now = middayNow();
-    const past = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    // Past the no-show window too: the sweep leaves a booking alone for a day after it ends.
+    const past = new Date(now.getTime() - NO_SHOW_WINDOW_MS - 2 * 60 * 60 * 1000);
     await prisma.appointment.update({
       where: { id: appt!.id },
       data: { startsAt: past, endsAt: new Date(past.getTime() + 30 * 60 * 1000) },
