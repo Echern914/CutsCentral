@@ -20,8 +20,13 @@
  *  terms text in place - add a version, exactly like the SMS consent rule. */
 export const AFFILIATE_TERMS_VERSION = "v1";
 
-/** Bump when any business rule below changes. */
-export const AFFILIATE_POLICY_VERSION = 1;
+/** Bump when any business rule below changes.
+ *  v2 (2026-10): the commission program - a percentage of every base-plan
+ *  invoice in a referred business's first 12 months, cash or bill credit -
+ *  replaces the one-free-month reward for NEW qualifications. Accounts keep
+ *  the version they were approved under; rewards already earned under v1 are
+ *  honoured unchanged. */
+export const AFFILIATE_POLICY_VERSION = 2;
 
 export const AFFILIATE_POLICY = {
   version: AFFILIATE_POLICY_VERSION,
@@ -56,6 +61,36 @@ export const AFFILIATE_POLICY = {
     /** One qualification reward per referred Shop, ever. */
     perReferredShop: 1,
   },
+  /**
+   * v2: the commission program (owner decision, 2026-10). For every base-plan
+   * invoice a referred business pays during its first `months` months -
+   * counted from that business's FIRST paid base-plan invoice - the affiliate
+   * earns a share of the base-plan amount actually paid (never tax, add-ons,
+   * SMS, fees or one-time charges: the same exclusions as `reward`).
+   *
+   * The affiliate chooses CASH or CREDIT (ChairBack bill credit); the choice
+   * at the moment an invoice is paid is frozen onto that commission line, so
+   * changing it later never rewrites what was already earned.
+   *
+   * Each line is HELD for `holdDays` (the refund/dispute window) and becomes
+   * AVAILABLE only once that has passed AND the referred business has paid at
+   * least `qualification.qualifyingInvoices` base-plan invoices - nothing is
+   * ever paid on a one-month signup.
+   *
+   * Rates are basis points so the math stays in integers.
+   */
+  commission: {
+    /** 20% of the base-plan amount when the affiliate chose cash. */
+    cashBps: 2000,
+    /** 30% when they chose ChairBack bill credit. */
+    creditBps: 3000,
+    /** Invoices paid in this many calendar months from the first one earn. */
+    months: 12,
+    /** Days each commission line is held before it can become available. */
+    holdDays: 30,
+    /** Available cash below this is carried forward, never paid out. */
+    minimumCashPayoutCents: 2500,
+  },
   review: {
     /** More qualified rewards than this in a rolling year holds further
      *  rewards for admin review. Held, never silently discarded. */
@@ -70,6 +105,76 @@ export const AFFILIATE_POLICY = {
 } as const;
 
 export type AffiliatePolicy = typeof AFFILIATE_POLICY;
+
+/** How an affiliate takes their commission. Mirrors
+ *  AffiliateAccount_payoutPreference_check and AffiliateCommission_kind_check.
+ *  `credit` is the default: it is what the v1 program paid, so an affiliate
+ *  who never chooses is never moved onto cash without saying so. */
+export const AFFILIATE_PAYOUT_PREFERENCES = ["credit", "cash"] as const;
+export type AffiliatePayoutPreference = (typeof AFFILIATE_PAYOUT_PREFERENCES)[number];
+
+/** Mirrors AffiliateCommission_status_check. */
+export const AFFILIATE_COMMISSION_STATUSES = [
+  "HELD",
+  "AVAILABLE",
+  "REVIEW_REQUIRED",
+  "PAID",
+  "REVERSED",
+] as const;
+export type AffiliateCommissionStatus = (typeof AFFILIATE_COMMISSION_STATUSES)[number];
+
+/** The rate, in basis points, for a payout kind. */
+export function commissionRateBps(kind: AffiliatePayoutPreference): number {
+  return kind === "cash"
+    ? AFFILIATE_POLICY.commission.cashBps
+    : AFFILIATE_POLICY.commission.creditBps;
+}
+
+/**
+ * The commission on a base-plan amount, in whole cents, ROUNDED DOWN.
+ *
+ * Integer math only (cents x basis points / 10,000): a float percentage would
+ * drift a cent across enough invoices, and rounding down means the program
+ * never promises a fraction of a cent it then has to find. Anything that is
+ * not a positive whole number of cents earns nothing rather than a guess.
+ */
+export function commissionCents(
+  baseCents: number,
+  kind: AffiliatePayoutPreference,
+): number {
+  if (!Number.isSafeInteger(baseCents) || baseCents <= 0) return 0;
+  return Math.floor((baseCents * commissionRateBps(kind)) / 10_000);
+}
+
+/**
+ * The instant a referred business stops earning commissions: `months`
+ * calendar months after its first paid base-plan invoice, in UTC. An invoice
+ * earns only when paid STRICTLY BEFORE this instant, so a monthly plan earns
+ * on exactly twelve invoices (the thirteenth falls on the boundary).
+ *
+ * A day that does not exist in the target month is CLAMPED to that month's
+ * last day (Feb 29 -> Feb 28 of a common year) rather than rolling into the
+ * next month the way Date#setUTCMonth does - the window never stretches past
+ * what the policy says. Time of day is kept.
+ */
+export function commissionWindowEnd(firstPaidAt: Date): Date {
+  const y = firstPaidAt.getUTCFullYear();
+  const m = firstPaidAt.getUTCMonth() + AFFILIATE_POLICY.commission.months;
+  const targetYear = y + Math.floor(m / 12);
+  const targetMonth = m % 12;
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+  return new Date(
+    Date.UTC(
+      targetYear,
+      targetMonth,
+      Math.min(firstPaidAt.getUTCDate(), lastDay),
+      firstPaidAt.getUTCHours(),
+      firstPaidAt.getUTCMinutes(),
+      firstPaidAt.getUTCSeconds(),
+      firstPaidAt.getUTCMilliseconds(),
+    ),
+  );
+}
 
 /** Referral code shape: 9 random bytes -> 12 base64url chars (72 bits).
  *  Public by design - it is printed into share links - so it is an

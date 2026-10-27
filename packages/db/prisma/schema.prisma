@@ -5607,6 +5607,14 @@ model AffiliateAccount {
   promotionStyles String[]  @default([])
   stylesChosenAt  DateTime?
 
+  // v2 commission program: how this affiliate takes their commission -
+  // "credit" (ChairBack bill credit, 30%) or "cash" (20%), CHECK-pinned
+  // (AffiliateAccount_payoutPreference_check). Defaults to credit, which is
+  // what v1 paid. Read at EARN time and frozen onto each AffiliateCommission
+  // line, so changing it never rewrites what was already earned.
+  payoutPreference      String    @default("credit")
+  payoutPreferenceSetAt DateTime?
+
   // Snapshots of what this affiliate agreed to / was approved under.
   acceptedTermsVersion String
   policyVersion        Int
@@ -5805,6 +5813,64 @@ model AffiliateReward {
 
   @@index([status, holdEndsAt])
   @@index([affiliateAccountId, status])
+}
+
+// AFFILIATE COMMISSION LEDGER (v2 program, migration 20261077000000). One
+// line per referred-business BASE-PLAN INVOICE paid in that business's first
+// 12 months. NOTHING here moves money: payout (cash, Stripe Express) and bill
+// credit execution are later phases that read AVAILABLE lines and fill
+// payoutId. Default-deny like every affiliate table.
+//
+// SQL-only guarantees (Prisma cannot express them - see the migration):
+//   AffiliateCommission_kind_check            kind IN ('cash','credit')
+//   AffiliateCommission_status_check          HELD|AVAILABLE|REVIEW_REQUIRED|PAID|REVERSED
+//   AffiliateCommission_reversalReason_check  the ReversalReason set
+//   AffiliateCommission_amount_check          amountCents > 0, baseAmountCents > 0
+//   AffiliateCommission_rate_check            0 < rateBps <= 10000 (policy may change without a migration)
+//   AffiliateCommission_reversed_shape_check  REVERSED carries reversedAt + reversalReason
+//   AffiliateCommission_available_shape_check AVAILABLE/PAID carry availableAt
+//   AffiliateAccount_payoutPreference_check   payoutPreference IN ('credit','cash')
+model AffiliateCommission {
+  id                 String @id @default(cuid())
+  affiliateAccountId String
+  referredShopId     String
+  /// One commission per invoice, ever - a database constraint. Redelivered
+  /// events and second event ids for the same invoice land here and stop.
+  stripeInvoiceId    String @unique
+
+  /// The base-plan amount the business actually paid on this invoice (tax,
+  /// add-ons and discounts excluded), and the rate applied to it. Snapshots,
+  /// NEVER recomputed.
+  baseAmountCents Int
+  rateBps         Int
+  amountCents     Int
+  currency        String
+  /// cash | credit - the affiliate's preference AT EARN TIME, frozen.
+  kind            String
+
+  status String @default("HELD") // HELD|AVAILABLE|REVIEW_REQUIRED|PAID|REVERSED (CHECK-pinned)
+
+  /// The invoice's paid_at.
+  earnedAt    DateTime
+  /// HELD until this instant AND until the business has paid enough invoices.
+  holdEndsAt  DateTime
+  availableAt DateTime?
+  reversedAt  DateTime?
+  /// Fixed classification (the ReversalReason set), never prose. On a PAID
+  /// line it says why the clawback is due.
+  reversalReason String?
+  /// A refund/dispute/credit note that arrived AFTER the line was PAID. The
+  /// payout phase nets it from the next payout; nothing here touches money.
+  clawbackDueAt  DateTime?
+  /// Filled by the payout phase.
+  payoutId       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([affiliateAccountId, status])
+  @@index([status, holdEndsAt])
+  @@index([referredShopId])
 }
 
 // The affiliate credit outbox: turns an AVAILABLE reward into a Stripe

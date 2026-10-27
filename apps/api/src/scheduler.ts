@@ -27,6 +27,7 @@ import { runAiTrialReminders } from "./engines/aiTrialReminder.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
 import { expireStaleWalkIns } from "./engines/walkInExpiry.js";
 import { releaseAffiliateRewardHolds } from "./services/affiliateQualification.js";
+import { releaseAffiliateCommissionHolds } from "./services/affiliateCommission.js";
 import { sweepExpiredHolds } from "./engines/holdSweep.js";
 import { sweepExpiredPaymentHolds } from "./services/appointmentPaymentHold.js";
 import { sweepAbandonedTipIntents } from "./billing/tips.js";
@@ -435,6 +436,23 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       }
     },
     failMsg: "affiliate reward hold sweep failed",
+  },
+  // Affiliate COMMISSION holds (v2 ledger). Hourly at :43, beside the reward
+  // sweep. A HELD line becomes AVAILABLE once its 30-day hold has passed AND
+  // the referred business has paid its second base-plan invoice. DRY RUN while
+  // AFFILIATE_COMMISSIONS_ENABLED is off - it reports what it WOULD release
+  // and writes nothing. Moves no money and sends nothing, ever.
+  {
+    cronExpr: "43 * * * *",
+    name: "affiliate-commission-hold",
+    ttlMs: 5 * MINUTE,
+    run: async () => {
+      const result = await releaseAffiliateCommissionHolds();
+      if (result.due > 0) {
+        logger.info(result, "affiliate commission holds swept");
+      }
+    },
+    failMsg: "affiliate commission hold sweep failed",
   },
   // Credit execution: reserve AVAILABLE rewards, apply them to the affiliate's
   // Stripe balance exactly once, expire the stale ones. DRY RUN while
