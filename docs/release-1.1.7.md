@@ -73,6 +73,8 @@ signing* → Team **ZLP9T7HSYJ**. General shows **1.1.7 (54)**.
 - [ ] Cold start: the gold launch logo plays and goes away.
 - [ ] My ChairBack → an appointment → View details → **Add to Apple Wallet**.
 - [ ] My ChairBack → Rewards: **Your status** shows the tiers.
+- [ ] Barber moves a booking while the customer app is in the background ->
+      reopen -> new time shows without pull-to-refresh.
 - [ ] A shop with a dark page → Book: the bar at the top is dark.
 
 ## 5. Archive, upload, submit
