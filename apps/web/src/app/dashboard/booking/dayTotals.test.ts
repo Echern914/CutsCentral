@@ -28,10 +28,25 @@ describe("dayTotals — money", () => {
     const t = dayTotals([
       at("13:00", 30, { price: 40, status: "completed" }),
       at("14:00", 30, { price: 60, status: "upcoming" }),
-    ]);
+    ], Date.parse(`${DAY}T13:45:00.000Z`));
     expect(t.revenue).toBe(100);
     expect(t.doneRevenue).toBe(40);
     expect(t.toComeRevenue).toBe(60);
+  });
+
+  // The sweep now waits a day after the end before completing a booking (so a
+  // no-show can still be marked): an ended one is still "upcoming" until then.
+  it("🔴 a booking whose end has passed is done money, even before it is marked done", () => {
+    const rows = [
+      at("13:00", 30, { price: 40, status: "upcoming" }),
+      at("14:00", 30, { price: 60, status: "upcoming" }),
+    ];
+    const t = dayTotals(rows, Date.parse(`${DAY}T14:10:00.000Z`));
+    expect(t.revenue).toBe(100);
+    expect(t.doneRevenue).toBe(40);
+    expect(t.toComeRevenue).toBe(60);
+    // Still in the chair at 14:10: to come until its end.
+    expect(dayTotals(rows, Date.parse(`${DAY}T14:30:00.000Z`)).doneRevenue).toBe(100);
   });
 
   it("never counts canceled, and keeps pending out of the headline", () => {

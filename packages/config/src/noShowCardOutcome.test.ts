@@ -4,6 +4,9 @@ import {
   describeNoShowCardOutcome,
   describeNoShowChargeResult,
   noShowCardOutcome,
+  noShowWindowClosed,
+  noShowWindowEndedMessage,
+  NO_SHOW_WINDOW_MS,
   type CancellationTerms,
 } from "./shopPolicy.js";
 
@@ -169,5 +172,32 @@ describe("cardDeclineWords", () => {
     expect(cardDeclineWords("unknown")).toBe("the bank declined it");
     expect(cardDeclineWords(null)).toBe("the bank declined it");
     expect(cardDeclineWords("Your card number 4242 was declined.")).toBe("the bank declined it");
+  });
+});
+
+// Drick, 2026-10-27: a no-show could only be marked until 15 minutes after the
+// end. Eric chose a day.
+describe("the no-show window", () => {
+  const endsAt = new Date("2026-09-01T15:00:00.000Z");
+  it("is 24 hours after the END", () => {
+    expect(NO_SHOW_WINDOW_MS).toBe(24 * 60 * 60 * 1000);
+    expect(noShowWindowClosed(endsAt, new Date(endsAt.getTime() + 3 * 3_600_000))).toBe(false);
+    expect(noShowWindowClosed(endsAt, new Date(endsAt.getTime() + NO_SHOW_WINDOW_MS))).toBe(false);
+    expect(noShowWindowClosed(endsAt, new Date(endsAt.getTime() + NO_SHOW_WINDOW_MS + 1))).toBe(true);
+  });
+
+  it("says why, and names the card only when one was let go", () => {
+    expect(noShowWindowEndedMessage(true)).toBe(
+      "It's been more than 24 hours since this appointment ended, so it was marked done and the saved card was released.",
+    );
+    expect(noShowWindowEndedMessage(false)).toBe(
+      "It's been more than 24 hours since this appointment ended, so it was marked done.",
+    );
+  });
+
+  it("the correction's card line names the day, not the end time", () => {
+    const { text } = describeNoShowCardOutcome({ charge: false, reason: "visit_closed" });
+    expect(text).toContain("24 hours after it ends");
+    expect(text).not.toMatch(/before the visit's end time passes/);
   });
 });

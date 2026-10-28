@@ -8,9 +8,10 @@ import { isRecordedWalkIn } from "./walkInReceipt.js";
  * MARKING A COMPLETED VISIT A NO-SHOW (OR CANCELLED) AFTER THE FACT.
  *
  * A shop owner: an 8:00 booking whose client never came "shows Completed and I
- * can't remove him from my schedule". The 15-minute sweep
- * (promoteFulfilledAppointments) turns every BOOKED visit whose end has passed
- * into a COMPLETED one with a punch, and from then on neither No-show nor
+ * can't remove him from my schedule". The completion sweep
+ * (promoteFulfilledAppointments) turns every BOOKED visit a day past its end
+ * (NO_SHOW_WINDOW_MS - 15 minutes until 2026-10-27) into a COMPLETED one with
+ * a punch, and from then on neither No-show nor
  * Cancel was offered. This is the one rule for which completed visits may be
  * put right - read by POST /appointments/:id/correct-completed and by the
  * appointment detail (`correctable`), so the sheet's offer and the server's

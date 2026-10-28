@@ -9,7 +9,7 @@ import {
 } from "vitest";
 import request from "supertest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { NO_SHOW_WINDOW_MS, randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
 import { promoteFulfilledAppointments } from "../engines/appointmentPromotion.js";
 
@@ -532,7 +532,8 @@ describe("a COMPLETED native booking keeps its deposit on the sheet", () => {
       },
     });
 
-    await promoteFulfilledAppointments(new Date());
+    // A day on: the sweep leaves a booking alone for NO_SHOW_WINDOW_MS after it ends.
+    await promoteFulfilledAppointments(new Date(Date.now() + NO_SHOW_WINDOW_MS), { shopId });
     const promoted = await prisma.appointment.findUnique({
       where: { id: a.id },
       select: { status: true, visitId: true, visit: { select: { acuityAppointmentId: true } } },

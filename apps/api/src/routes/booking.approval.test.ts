@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
+import { NO_SHOW_WINDOW_MS, randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { __setMessageProviderForTests } from "../messaging/twilio.js";
 import type { SendMessageInput } from "../messaging/provider.js";
 import { promoteFulfilledAppointments } from "../engines/appointmentPromotion.js";
@@ -260,7 +260,8 @@ describe("request-before-booking", () => {
       where: { id: appt!.id },
       data: { startsAt: new Date(Date.now() - 2 * 60 * 60 * 1000), endsAt: new Date(Date.now() - 60 * 60 * 1000) },
     });
-    await promoteFulfilledAppointments(new Date());
+    // A day on, past the no-show window, so a BOOKED row WOULD be promoted.
+    await promoteFulfilledAppointments(new Date(Date.now() + NO_SHOW_WINDOW_MS), { shopId: appt!.shopId });
     const after = await prisma.appointment.findUnique({ where: { id: appt!.id }, select: { status: true, visitId: true } });
     expect(after?.status).toBe("PENDING"); // untouched
     expect(after?.visitId).toBeNull(); // no Visit created

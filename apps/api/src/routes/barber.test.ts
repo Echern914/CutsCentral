@@ -245,6 +245,13 @@ describe("barber home: their own chair", () => {
     // completed work in [monthAgo, now], so `todayAtUtc(8)` was in the FUTURE
     // whenever the suite ran between 00:00 and 08:00 UTC (i.e. every US
     // evening) and this counted 0.
+    //
+    // Counted against a baseline: rows earlier tests leave on this chair that
+    // have already ended count too (an ended booking counts the day it
+    // happened, settled or not - see the no-show-window test below).
+    const base = await request(app)
+      .get(`/api/barber/home?from=${encodeURIComponent(window().from)}&to=${encodeURIComponent(window().to)}`)
+      .set("Cookie", barberCookie);
     const mine = await makeAppointment(chairA, hoursFromNow(-2), "DoneMine");
     const theirs = await makeAppointment(chairB, hoursFromNow(-2), "DoneTheirs");
     await prisma.appointment.updateMany({
@@ -258,7 +265,28 @@ describe("barber home: their own chair", () => {
       .set("Cookie", barberCookie);
     expect(res.status).toBe(200);
     // Exactly one of the two completed cuts is theirs.
-    expect(res.body.counts.month).toBe(1);
+    expect(res.body.counts.month).toBe(base.body.counts.month + 1);
+  });
+
+  it("🔴 a cut that ended but is not settled yet (BOOKED, inside the no-show day) counts - a no-show does not", async () => {
+    const before = await request(app)
+      .get(`/api/barber/home?from=${encodeURIComponent(window().from)}&to=${encodeURIComponent(window().to)}`)
+      .set("Cookie", barberCookie);
+    const ended = await makeAppointment(chairA, hoursFromNow(-3), "EndedUnsettled");
+    const missed = await makeAppointment(chairA, hoursFromNow(-3), "MarkedNoShow");
+    await prisma.appointment.update({ where: { id: missed.id }, data: { status: "NO_SHOW" } });
+    // Still ahead: not a cut yet.
+    const ahead = await makeAppointment(chairA, hoursFromNow(2), "StillAhead");
+
+    const w = window();
+    const res = await request(app)
+      .get(`/api/barber/home?from=${encodeURIComponent(w.from)}&to=${encodeURIComponent(w.to)}`)
+      .set("Cookie", barberCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.counts.month).toBe(before.body.counts.month + 1);
+    expect(res.body.counts.week).toBe(before.body.counts.week + 1);
+
+    await prisma.appointment.deleteMany({ where: { id: { in: [ended.id, missed.id, ahead.id] } } });
   });
 });
 

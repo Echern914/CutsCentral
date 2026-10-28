@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma, runWithShop } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { NO_SHOW_WINDOW_MS, randomToken } from "@chairback/config";
 import {
   holdTableLock,
   raceBehindBarrier,
@@ -90,7 +90,8 @@ async function dueBooking() {
   const client = await prisma.client.create({
     data: { shopId, acuityClientKey: `apr-${randomToken(8)}`, magicToken: randomToken(), firstName: "Sample" },
   });
-  const endsAt = new Date(Date.now() - 3_600_000);
+  // Past the no-show window: the sweep only completes a booking a day after it ends.
+  const endsAt = new Date(Date.now() - NO_SHOW_WINDOW_MS - 3_600_000);
   const startsAt = new Date(endsAt.getTime() - 30 * 60_000);
   const appt = await prisma.appointment.create({
     data: {

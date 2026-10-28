@@ -33,8 +33,14 @@ export interface DayTotals {
  * computation. Two copies of this arithmetic would eventually disagree, and a
  * calendar showing two different numbers for the same day is worse than either
  * of them being wrong.
+ *
+ * 🔴 "Done" is by the CLOCK as well as the status: a booking whose end has
+ * passed is done money even while it is still BOOKED ("upcoming" here). The
+ * completion sweep used to mark it COMPLETED 15 minutes after the end; it now
+ * waits a day so a no-show can still be marked (NO_SHOW_WINDOW_MS), and
+ * without this the morning's cuts read as "to come" all afternoon.
  */
-export function dayTotals(rows: AgendaRow[]): DayTotals {
+export function dayTotals(rows: AgendaRow[], now: number = Date.now()): DayTotals {
   let revenue = 0;
   let doneRevenue = 0;
   let unpricedCount = 0;
@@ -62,7 +68,8 @@ export function dayTotals(rows: AgendaRow[]): DayTotals {
     if (r.status !== "upcoming" && r.status !== "completed") continue;
     if (r.price === null) unpricedCount++;
     revenue += r.price ?? 0;
-    if (r.status === "completed") doneRevenue += r.price ?? 0;
+    const ended = r.end ? Date.parse(r.end) <= now : false;
+    if (r.status === "completed" || ended) doneRevenue += r.price ?? 0;
   }
 
   return {

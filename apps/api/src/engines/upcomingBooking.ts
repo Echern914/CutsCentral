@@ -1,3 +1,4 @@
+import { NO_SHOW_WINDOW_MS } from "@chairback/config";
 import type { Prisma } from "@chairback/db";
 
 /**
@@ -29,8 +30,16 @@ export async function clientsWithUpcomingBooking(
       where: {
         shopId,
         clientId: { in: clientIds },
-        status: { in: ["BOOKED", "PENDING"] },
-        startsAt: { gt: now },
+        OR: [
+          { status: { in: ["BOOKED", "PENDING"] }, startsAt: { gt: now } },
+          // 🔴 A visit that ENDED but is not settled yet. The completion sweep
+          // waits a day after the end (NO_SHOW_WINDOW_MS) so a no-show can
+          // still be marked; until it runs there is no COMPLETED visit, so the
+          // client's last-visit date is the one BEFORE yesterday's cut and a
+          // "time for a cut" / win-back would go to someone just in the
+          // chair. Treat it as still on the books, as it was before the wait.
+          { status: "BOOKED", endsAt: { gt: new Date(now.getTime() - NO_SHOW_WINDOW_MS) } },
+        ],
       },
       select: { clientId: true },
       distinct: ["clientId"],

@@ -31,6 +31,11 @@ import {
   initialsOf,
 } from "../_components/appointmentCardStyles";
 import { resolveServiceColor } from "@chairback/config/serviceColor";
+import {
+  appointmentEnded,
+  CANCEL_PAST_END_COPY,
+  describeNoShowChargeResult,
+} from "@chairback/config/shopPolicy";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import {
   earliestWalkInBackdate,
@@ -1169,6 +1174,7 @@ const ACT_REFUSAL: Record<string, string> = {
   not_found: "That request is gone. It may have been approved or cancelled elsewhere.",
   party_changed: "That group request changed while you were looking. Refresh and try again.",
   not_started: "It hasn't started yet, so it can't be a no-show. Cancel it instead.",
+  not_booked: "This booking isn't booked anymore - it was finished, cancelled or already marked. Refresh to see it.",
 };
 
 function isoForDayHour(dayKey: string, hour: number, tz: string, minute = 0): string {
@@ -2570,6 +2576,11 @@ export function AppointmentBlock({
   // Two taps: the first arms it ("Confirm no-show"), the second marks it. A
   // stray tap on a busy card no longer ends a booking.
   const [confirmNoShow, setConfirmNoShow] = useState(false);
+  // Cancel on a booking that already ENDED asks first (cancelOrAsk below).
+  type CancelKind = "single" | "this" | "future" | "all";
+  const [cancelPastAsk, setCancelPastAsk] = useState<CancelKind | null>(null);
+  // A ref, not just `pending`: a double tap lands before the transition shows.
+  const cancelBusy = useRef(false);
   useEffect(() => {
     if (!confirmNoShow) return;
     const t = setTimeout(() => setConfirmNoShow(false), 5000);
@@ -2671,7 +2682,7 @@ export function AppointmentBlock({
   }
 
   function act(
-    fn: (id: string) => Promise<{ ok: boolean; error?: string; party?: number }>,
+    fn: (id: string) => Promise<{ ok: boolean; error?: string; message?: string; party?: number }>,
     label: string,
   ) {
     start(async () => {
@@ -2679,11 +2690,42 @@ export function AppointmentBlock({
       // A group request is answered as one: say that it was everyone.
       const said =
         res.party !== undefined && res.party > 1 ? `${label} the whole group (${res.party})` : label;
+      // The server's own sentence first: it knows WHY (Drick, 2026-10-27 - a
+      // no-show refused a day after the visit read "Couldn't update").
       toast(
-        res.ok ? said : (ACT_REFUSAL[res.error ?? ""] ?? "Couldn't update"),
+        res.ok ? said : (res.message ?? ACT_REFUSAL[res.error ?? ""] ?? "Couldn't update"),
         res.ok ? "success" : "error",
       );
       if (res.ok) onChanged();
+    });
+  }
+
+  /**
+   * Mark no-show from the card, and SAY what the kept card did - charged,
+   * declined, or why nothing was - instead of a bare "Marked no-show" whatever
+   * happened (the sheet already does; this card did not).
+   */
+  function markNoShow() {
+    start(async () => {
+      let res: Awaited<ReturnType<typeof noShowAppointmentAction>>;
+      try {
+        res = await noShowAppointmentAction(row.id);
+      } catch {
+        res = { ok: false };
+      }
+      if (!res.ok) {
+        toast(res.message ?? ACT_REFUSAL[res.error ?? ""] ?? "Couldn't update", "error");
+        // The row may have moved on under us (finished, cancelled): show it.
+        onChanged();
+        return;
+      }
+      if (res.card) {
+        const said = describeNoShowChargeResult(res.card, null);
+        toast(`Marked no-show. ${said.text}`, said.tone === "good" ? "success" : "info");
+      } else {
+        toast("Marked no-show", "success");
+      }
+      onChanged();
     });
   }
 
@@ -2697,6 +2739,41 @@ export function AppointmentBlock({
    * cancelled row gets Remove, not Undo, because "undo" on something you did
    * last Tuesday isn't an undo.
    */
+  // 🔴 CANCEL ON A BOOKING THAT ALREADY ENDED ASKS FIRST. The sweep now leaves
+  // a booking BOOKED for a day after its end (NO_SHOW_WINDOW_MS) so a no-show
+  // can still be marked - and Cancel sits right beside No-show on it. A barber
+  // cancel refunds any deposit and emails the client; a no-show does neither.
+  // So past the end, Cancel shows a confirm on the card offering Mark no-show
+  // and Cancel anyway. The server stays permissive. Before the end: one tap.
+
+  function runCancel(kind: CancelKind) {
+    if (kind === "single") cancelWithUndo();
+    else cancelScope(kind);
+  }
+
+  function cancelOrAsk(kind: CancelKind) {
+    if (appointmentEnded(row.end)) {
+      setSeriesMenu(false);
+      setConfirmNoShow(false);
+      setCancelPastAsk(kind);
+      return;
+    }
+    runCancel(kind);
+  }
+
+  function answerCancelPast(choice: "no_show" | "cancel") {
+    const kind = cancelPastAsk;
+    if (!kind || cancelBusy.current) return;
+    cancelBusy.current = true;
+    setCancelPastAsk(null);
+    try {
+      if (choice === "no_show") markNoShow();
+      else runCancel(kind);
+    } finally {
+      cancelBusy.current = false;
+    }
+  }
+
   function cancelWithUndo() {
     start(async () => {
       const res = await cancelAppointmentAction(row.id);
@@ -3175,7 +3252,7 @@ export function AppointmentBlock({
                   return;
                 }
                 setConfirmNoShow(false);
-                act(noShowAppointmentAction, "Marked no-show");
+                markNoShow();
               }}
               disabled={pending}
               data-testid="card-no-show"
@@ -3201,19 +3278,19 @@ export function AppointmentBlock({
               {seriesMenu && (
                 <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-lg border border-subtle bg-charcoal-900 shadow-lg">
                   <button
-                    onClick={() => cancelScope("this")}
+                    onClick={() => cancelOrAsk("this")}
                     className="block w-full px-3 py-2 text-left text-[11px] text-offwhite hover:bg-charcoal-700"
                   >
                     Just this one
                   </button>
                   <button
-                    onClick={() => cancelScope("future")}
+                    onClick={() => cancelOrAsk("future")}
                     className="block w-full px-3 py-2 text-left text-[11px] text-offwhite hover:bg-charcoal-700"
                   >
                     This &amp; all future
                   </button>
                   <button
-                    onClick={() => cancelScope("all")}
+                    onClick={() => cancelOrAsk("all")}
                     className="block w-full px-3 py-2 text-left text-[11px] text-danger-soft hover:bg-charcoal-700"
                   >
                     The whole series
@@ -3223,7 +3300,7 @@ export function AppointmentBlock({
             </div>
           ) : (
             <button
-              onClick={cancelWithUndo}
+              onClick={() => cancelOrAsk("single")}
               disabled={pending}
               className={cn(BTN_BASE, "border border-danger-soft/40 text-danger-soft hover:bg-danger-soft/10")}
             >
@@ -3241,6 +3318,40 @@ export function AppointmentBlock({
           >
             <PencilIcon />
             Edit
+          </button>
+        </div>
+      )}
+      {canAct && cancelPastAsk && (
+        <div
+          data-testid="card-cancel-past-confirm"
+          className="mt-2 flex flex-col gap-2 rounded-lg border border-danger-soft/40 bg-charcoal-900/60 p-3"
+        >
+          <p className="text-xs leading-relaxed text-offwhite">{CANCEL_PAST_END_COPY}</p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => answerCancelPast("no_show")}
+              disabled={pending}
+              className={cn(BTN_BASE, "border border-subtle text-offwhite hover:bg-charcoal-700")}
+            >
+              Mark no-show
+            </button>
+            <button
+              type="button"
+              onClick={() => answerCancelPast("cancel")}
+              disabled={pending}
+              className={cn(BTN_BASE, "border border-danger-soft/50 text-danger-soft hover:bg-danger-soft/10")}
+            >
+              Cancel anyway
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setCancelPastAsk(null)}
+            disabled={pending}
+            className="h-11 w-full rounded-lg text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:h-9"
+          >
+            Keep it
           </button>
         </div>
       )}

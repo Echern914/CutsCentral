@@ -67,7 +67,13 @@ import {
 } from "../engines/bookingWrite.js";
 import { findConflicts, recordConflicts } from "../engines/bookingConflict.js";
 import { sendToBarber } from "../services/barberNotify.js";
-import { apiEnv, walkInBackdateRefusal, type NoShowChargeResult } from "@chairback/config";
+import {
+  apiEnv,
+  noShowWindowClosed,
+  noShowWindowEndedMessage,
+  walkInBackdateRefusal,
+  type NoShowChargeResult,
+} from "@chairback/config";
 import { noShowChargeResult } from "../services/cardOnFileSettle.js";
 import {
   blockedTimeIsTheOnlyObstacle,
@@ -5255,13 +5261,30 @@ bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   // request can't be a no-show (decline it instead). Reject non-BOOKED.
   const appt = await forShop(shopId).appointment.findFirst({
     where: { id: req.params.id!, shopId },
-    select: { status: true, startsAt: true },
+    select: { status: true, startsAt: true, endsAt: true, completedByShop: true },
   });
   if (!appt) {
     res.status(404).json({ ok: false });
     return;
   }
   if (appt.status !== "BOOKED") {
+    // 🔴 SAY WHY when it is the no-show window. The sweep completes a booking
+    // a day after it ends (NO_SHOW_WINDOW_MS) and lets the kept card go; a
+    // bare "not_booked" reached the barber as "Couldn't update" (Drick,
+    // 2026-10-27). Only when the SWEEP closed it and the window has passed -
+    // a visit the shop finished itself is refused without that sentence.
+    if (appt.status === "COMPLETED" && !appt.completedByShop && noShowWindowClosed(appt.endsAt, new Date())) {
+      const card = await runWithShop(shopId, (tx) =>
+        tx.cardOnFile.findUnique({ where: { appointmentId: req.params.id! }, select: { status: true } }),
+      );
+      res.status(409).json({
+        ok: false,
+        error: "not_booked",
+        reason: "no_show_window_ended",
+        message: noShowWindowEndedMessage(card?.status === "released"),
+      });
+      return;
+    }
     res.status(409).json({ ok: false, error: "not_booked" });
     return;
   }
@@ -7772,9 +7795,10 @@ bookingDashboardRouter.post("/appointments/:id/remove-walk-in", async (req, res)
  *
  * A shop owner: an 8:00 booking whose client never came "shows Completed and I
  * can't remove him from my schedule. Should have option to put him as a no
- * show or canceled appt." The 15-minute sweep turns every BOOKED visit whose
- * end has passed into a COMPLETED visit with a punch; /no-show then refuses
- * (BOOKED only) and the sheet offered neither.
+ * show or canceled appt." The completion sweep turns every BOOKED visit a day
+ * past its end (NO_SHOW_WINDOW_MS; it was 15 minutes until 2026-10-27) into a
+ * COMPLETED visit with a punch; /no-show then refuses (BOOKED only) and the
+ * sheet offered neither.
  *
  * Who may: engines/visitCorrection.ts - a ChairBack booking, not a walk-in,
  * completed, ended within COMPLETED_VISIT_CORRECTION_DAYS, no money on it.

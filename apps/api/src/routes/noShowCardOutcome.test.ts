@@ -2,7 +2,7 @@ import request from "supertest";
 import type { Express } from "express";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken, __resetEnvCacheForTests } from "@chairback/config";
+import { NO_SHOW_WINDOW_MS, randomToken, __resetEnvCacheForTests } from "@chairback/config";
 import { __setSendEmailForTests } from "../messaging/email.js";
 
 /**
@@ -18,7 +18,7 @@ import { __setSendEmailForTests } from "../messaging/email.js";
  *   - 🔴 booked_before_fees: booked while fees were OFF, switched on since -
  *     never charged, and the mark proves it;
  *   - fees_off / no_fee_set / no_card / deposit_kept;
- *   - visit_closed: the 15-minute sweep completed it and let the card go;
+ *   - visit_closed: the sweep completed it (a day after it ended) and let the card go;
  *   - not offered at all before the start, or once it is paid.
  */
 
@@ -248,14 +248,14 @@ describe("noShowCard on the appointment detail", () => {
     const id = await book(3, 16);
     const { promoteFulfilledAppointments } = await import("../engines/appointmentPromotion.js");
     const { endsAt } = await prisma.appointment.findUniqueOrThrow({ where: { id }, select: { endsAt: true } });
-    await promoteFulfilledAppointments(new Date(endsAt.getTime() + 60_000), { shopId });
+    await promoteFulfilledAppointments(new Date(endsAt.getTime() + NO_SHOW_WINDOW_MS + 60_000), { shopId });
     // The release after completion is fire-and-forget.
     for (let i = 0; i < 20 && (await cardStatus(id)) !== "released"; i++) {
       await new Promise((r) => setTimeout(r, 50));
     }
     expect(await cardStatus(id)).toBe("released");
 
-    vi.useFakeTimers({ toFake: ["Date"], now: endsAt.getTime() + 3_600_000 });
+    vi.useFakeTimers({ toFake: ["Date"], now: endsAt.getTime() + NO_SHOW_WINDOW_MS + 3_600_000 });
     try {
       const d = await detail(id);
       expect(d.body.status).toBe("completed");

@@ -4,7 +4,7 @@ import {
   CANCELLATION_TERMS_SNAPSHOT_SELECT,
   termsForBooking,
 } from "../services/cancellationTerms.js";
-import { clientCancelKeptCents } from "@chairback/config";
+import { clientCancelKeptCents, NO_SHOW_WINDOW_MS } from "@chairback/config";
 import { prisma, runWithShop, type Prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { pokeAppointmentPass } from "../wallet/appointmentPass.js";
@@ -73,8 +73,8 @@ export async function promoteOneAppointmentInTx(
   now: Date,
   /**
    * `byShop`: someone at the shop finished this visit (Done, checkout, walk-in
-   * Complete) - false when the 15-minute sweep completed it on its own,
-   * which an unmarked no-show also does. Recorded as completedByShop; the tip
+   * Complete) - false when the sweep completed it on its own a day after it
+   * ended, which an unmarked no-show also does. Recorded as completedByShop; the tip
    * ask goes only to visits the shop finished.
    */
   opts: { byShop?: boolean } = {},
@@ -218,9 +218,32 @@ async function handPartyPunchToAnotherSeat(
   );
 }
 
+/** Appointment.bookedVia of a queue walk-in (engines/walkInStart.ts). */
+const WALK_IN_QUEUE_BOOKED_VIA = "walk_in_queue";
+
 /**
- * Scan for BOOKED appointments whose end time has passed and promote each into a
- * COMPLETED Visit + punch. Runs across all shops; idempotent (promoted rows flip
+ * Scan for BOOKED appointments that ended more than NO_SHOW_WINDOW_MS (a day)
+ * ago and promote each into a COMPLETED Visit + punch.
+ *
+ * 🔴 NOT AT THE END TIME. This used to complete everything whose end had
+ * passed, every 15 minutes: the visit and punch were credited and the kept
+ * card let go, and Mark no-show (BOOKED only) was refused from then on - so a
+ * client who never came earned a punch and their card could not be charged
+ * (Drick, 2026-10-27). A booking now stays BOOKED for a day after it ends so
+ * the barber can still mark it; Done and checkout complete it at once, as
+ * before, through promoteOneAppointmentInTx directly.
+ *
+ * 🔑 A visit that SHOWS it happened still completes at its end time, as it
+ * always did: paid at the chair (Checkout records the money but does not
+ * complete - only Done does), marked Arrived, or a queue walk-in (written when
+ * the client sat in the chair). None of those can be a no-show, and holding
+ * them BOOKED for a day would cost them what completion starts on time - the
+ * "Leave a tip" email (1-6h after the end, COMPLETED only), the tip card, the
+ * client's last-visit date that keeps nudges and win-backs away, and a queue
+ * walk-in's chair on the walk-in board. The same signs as tipEmails.ts
+ * finishedByShop. Only a booking with NO sign the client came waits the day.
+ *
+ * Runs across all shops; idempotent (promoted rows flip
  * out of the BOOKED filter, and the visit/earn upserts are keyed). Mirrors
  * promoteCompletedVisits, but scans Appointment instead of Visit - the two jobs
  * stay independent so the native and Acuity paths never interfere.
@@ -237,8 +260,18 @@ export async function promoteFulfilledAppointments(
     where: {
       ...(opts.shopId ? { shopId: opts.shopId } : {}),
       status: "BOOKED",
-      endsAt: { lt: now },
       canceledAt: null,
+      OR: [
+        { endsAt: { lt: new Date(now.getTime() - NO_SHOW_WINDOW_MS) } },
+        {
+          endsAt: { lt: now },
+          OR: [
+            { paidAt: { not: null } },
+            { checkInStatus: "arrived" },
+            { bookedVia: WALK_IN_QUEUE_BOOKED_VIA },
+          ],
+        },
+      ],
     },
     select: {
       id: true,
