@@ -531,7 +531,7 @@ const FAQ: readonly { q: string; a: string; hasPrices?: boolean }[] = [
   },
   {
     q: "How much does it cost?",
-    a: `Three plans. Starter ($${PLANS.starter.priceMonthlyUsd}/month) is your online booking page, calendar, client book, punch cards and email confirmations - no texts, no AI, and a preview of Insights. Premium ($${PLANS.pro.priceMonthlyUsd}/month, ${PLANS.pro.smsMonthlyQuota} texts included) adds the texting that brings clients back - rebooking nudges, win-backs, promo blasts, waitlist alerts - plus the full Insights picture and auto-sync with Acuity or Square. Premium AI ($${PLANS.pro_ai.priceMonthlyUsd}/month, ${PLANS.pro_ai.smsMonthlyQuota.toLocaleString()} texts included) adds an AI receptionist that answers client texts and books appointments 24/7. Every new shop gets a ${BILLING.trialDays}-day trial of the whole thing, and one rebooked regular typically covers the month.`,
+    a: `Three plans. Starter ($${PLANS.starter.priceMonthlyUsd}/month) is your online booking page, calendar, client book, punch cards and email confirmations - no texts, no AI, and a preview of Insights. Premium ($${PLANS.pro.priceMonthlyUsd}/month, ${PLANS.pro.emailMonthlyQuota.toLocaleString()} client emails a month) adds the texting that brings clients back - rebooking nudges, win-backs, promo blasts, waitlist alerts - plus the full Insights picture and auto-sync with Acuity or Square. Premium AI ($${PLANS.pro_ai.priceMonthlyUsd}/month, ${PLANS.pro_ai.emailMonthlyQuota.toLocaleString()} client emails a month) adds an AI receptionist that answers client texts and books appointments 24/7. Every new shop gets a ${BILLING.trialDays}-day trial of the whole thing, and one rebooked regular typically covers the month.`,
     hasPrices: true,
   },
   {

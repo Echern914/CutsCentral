@@ -87,7 +87,7 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
           );
         }
         setSelected(new Set());
-      } else if (r.error === "subscription_required") {
+      } else if (r.error === "subscription_required" || r.error === "premium_required") {
         toast(
           inApp
             ? "Texting is a Premium feature"

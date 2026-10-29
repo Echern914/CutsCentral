@@ -149,6 +149,29 @@ describe("comp access toggle", () => {
     expect(revoke.body.compAccess).toBe(false);
     const after = await request(app).get("/api/billing").set("Cookie", userCookie);
     expect(after.body.compAccess).toBe(false);
+
+    // The comp ENDING is recorded, so a lapse is worded "complimentary access
+    // has ended" rather than "trial ended" (lapseReasonFor).
+    const stamped = await prisma.shop.findUnique({
+      where: { id: targetShopId },
+      select: { compEndedAt: true },
+    });
+    expect(stamped!.compEndedAt).toBeInstanceOf(Date);
+
+    // Comping again clears it; un-comping again re-stamps.
+    await request(app)
+      .post(`/api/admin-portal/shops/${targetShopId}/comp`)
+      .set("Cookie", adminCookie)
+      .send({ compAccess: true });
+    const cleared = await prisma.shop.findUnique({
+      where: { id: targetShopId },
+      select: { compEndedAt: true },
+    });
+    expect(cleared!.compEndedAt).toBeNull();
+    await request(app)
+      .post(`/api/admin-portal/shops/${targetShopId}/comp`)
+      .set("Cookie", adminCookie)
+      .send({ compAccess: false });
   });
 
   it("compAccess unlocks access independent of Stripe (pure check)", async () => {

@@ -66,6 +66,49 @@ export function hasPremiumAccess(shop: PlanShop, opts: AccessOptions = {}): bool
   return isTrialing(shop, now);
 }
 
+/**
+ * WHY a shop without access is without it - so the dashboard can say the true
+ * thing instead of calling every lapse a "trial":
+ *
+ *   trial_ended        - never subscribed, and its signup trial ran out;
+ *   comp_ended         - an operator switched its complimentary access off
+ *                        (and it has not subscribed since);
+ *   subscription_ended - it paid once, and the subscription is canceled or
+ *                        unpaid;
+ *   no_plan            - none of the above on record (no trial date, never
+ *                        subscribed, never comped).
+ *
+ * null whenever the shop HAS access (trial, subscription, comp, billing off).
+ *
+ * A comp that ended is judged against the last subscription event by clock:
+ * comped -> uncomped -> subscribed -> canceled is a subscription that ended,
+ * while subscribed -> canceled -> comped -> uncomped is a comp that ended.
+ */
+export type LapseReason = "trial_ended" | "comp_ended" | "subscription_ended" | "no_plan";
+
+const NEVER_PAID_STATUSES = new Set(["none", "incomplete", "incomplete_expired"]);
+
+export interface LapseShop extends BillingShop {
+  compEndedAt: Date | null;
+  subscriptionEventCreated: number | null;
+}
+
+export function lapseReasonFor(shop: LapseShop, opts: AccessOptions = {}): LapseReason | null {
+  if (hasActiveAccess(shop, { now: opts.now, enabled: opts.enabled })) return null;
+  if (
+    shop.compEndedAt !== null &&
+    (shop.subscriptionEventCreated === null ||
+      shop.compEndedAt.getTime() >= shop.subscriptionEventCreated * 1000)
+  ) {
+    return "comp_ended";
+  }
+  // "incomplete" is a first payment that never went through: never paid, so
+  // nothing "ended" - it reads as the trial it still is on record.
+  if (!NEVER_PAID_STATUSES.has(shop.subscriptionStatus)) return "subscription_ended";
+  if (shop.trialEndsAt !== null) return "trial_ended";
+  return "no_plan";
+}
+
 export type InsightsScope = "full" | "peek";
 
 /**

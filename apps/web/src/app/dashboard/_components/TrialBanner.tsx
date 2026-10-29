@@ -1,13 +1,17 @@
 import Link from "next/link";
+import { PLANS } from "@chairback/config/constants";
 import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { ShowInNativeApp } from "@/components/ShowInNativeApp";
 import { getBillingSummary } from "@/lib/billing";
+import { START_PLAN_HREF, START_PLAN_LABEL, lapseCopy } from "@/lib/lapseCopy";
 
 /**
  * Slim banner under the dashboard nav. Silent while billing is disabled, the
- * shop is subscribed, or it's comped; counts down the trial; prompts upgrade
- * once the trial lapses. There is no free tier to fall back to: one plan, and
- * when it ends the shop stops working.
+ * shop is subscribed, or it's comped; counts down the trial; once access has
+ * lapsed it says WHY (trial over, comp switched off, plan ended - the API's
+ * `lapse`, worded in lib/lapseCopy.ts) and sends the owner straight to the
+ * plan cards on the billing page with "Start your plan". There is no free
+ * tier to fall back to: when access ends the shop stops working.
  *
  * THE 3.1.1 SPLIT LIVES HERE, not in the layout. The layout used to wrap this
  * whole component in HideInNativeApp, which was compliant but left a lapsed
@@ -37,27 +41,42 @@ export async function TrialBanner({
   const from = b.starter?.billingEnabled ? b.starter.priceMonthlyUsd : b.priceMonthlyUsd;
 
   if (!b.hasAccess) {
+    const { headline } = lapseCopy(b.lapse);
+    // Only the plans that can actually be bought right now: a tier whose
+    // Stripe price is not configured is "almost here" on the billing page.
+    const forSale = [
+      b.starter?.billingEnabled ? PLANS.starter.name : null,
+      PLANS.pro.name,
+      b.premiumAi?.billingEnabled ? PLANS.pro_ai.name : null,
+    ].filter((n): n is NonNullable<typeof n> => n !== null);
+    const choices =
+      forSale.length > 1
+        ? ` — ${forSale.slice(0, -1).join(", ")} or ${forSale[forSale.length - 1]}`
+        : "";
     return (
       <div className="mx-auto mt-3 w-full max-w-6xl px-4">
         <HideInNativeApp>
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-2.5 text-xs text-gold sm:text-sm">
             <span>
-              Your ChairBack trial has ended — bookings, texts and your calendar
-              are switched off. Everything you set up is still here. Pick a plan
-              (from ${from}/mo) to turn your shop back on.
+              {headline} — bookings and your calendar are switched off.
+              Everything you set up is still here. Start your plan
+              {` (from $${from}/mo${choices}) `}
+              to turn your shop back on.
             </span>
             <Link
-              href="/dashboard/billing"
+              href={START_PLAN_HREF}
               className="shrink-0 rounded-full bg-gold px-3.5 py-1.5 font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
             >
-              Upgrade to keep everything
+              {START_PLAN_LABEL}
             </Link>
           </div>
         </HideInNativeApp>
+        {/* In the app: what ended and what still works. No price, no CTA, no
+            billing link (App Store 3.1.1). */}
         <ShowInNativeApp>
           <div className="rounded-2xl border border-gold/30 bg-gold/10 px-4 py-2.5 text-xs text-gold sm:text-sm">
-            Your ChairBack plan has ended — bookings, texts and your calendar are
-            switched off. Your clients and history are all still here.
+            {headline} — bookings and your calendar are switched off. Your
+            clients and history are all still here.
           </div>
         </ShowInNativeApp>
       </div>

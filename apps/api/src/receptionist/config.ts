@@ -6,6 +6,7 @@ import {
   type BillingShop,
 } from "../billing/stripe.js";
 import { smsEnabled } from "../messaging/twilio.js";
+import { hasPremiumAccess, type PlanShop } from "../billing/entitlements.js";
 
 /**
  * The ONE place that decides whether the AI receptionist runs for a shop.
@@ -70,6 +71,26 @@ export function hasReceptionistEntitlement(
   if (shop.plan === "pro_ai") return true;
   if (aiTrialActive(shop, opts)) return true;
   return ACTIVE_STATUSES.has(shop.receptionistSubscriptionStatus);
+}
+
+/**
+ * The receptionist entitlement AND a plan it sits on top of.
+ *
+ * 🔴 The entitlement alone was a back door to the top tier. Its add-on and
+ * AI-trial branches never asked what the BASE plan was, so a Starter shop
+ * ($20, no texts, no AI) holding the $40 add-on - or a Premium shop that
+ * dropped to Starter mid-AI-trial - ran the receptionist for less than Premium
+ * AI costs. The receptionist is sold as part of Premium AI or on top of
+ * Premium, never on Starter. A comped receptionist (pilot) is an explicit
+ * operator grant and stands on its own.
+ */
+export function hasReceptionistPlan(
+  shop: ReceptionistEntitlementShop & PlanShop,
+  opts: { now?: Date; enabled?: boolean } = {},
+): boolean {
+  if (!hasReceptionistEntitlement(shop, opts)) return false;
+  if (shop.receptionistCompAccess) return true;
+  return hasPremiumAccess(shop, opts);
 }
 
 /** How long a Premium shop gets to try Premium AI, in days. */
@@ -162,6 +183,8 @@ export function receptionistSkipReason(
   if (shop.bookingMode !== "native") return "booking_mode_not_native";
   if (!hasActiveAccess(shop, { now: opts.now })) return "no_active_access";
   if (!hasReceptionistEntitlement(shop)) return "no_addon_entitlement";
+  // Entitled, but on a base plan without Premium (Starter): see hasReceptionistPlan.
+  if (!hasReceptionistPlan(shop, { now: opts.now })) return "premium_required";
   return null;
 }
 

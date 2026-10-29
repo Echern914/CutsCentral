@@ -44,9 +44,62 @@ describe("trial banner while setting up", () => {
     expect(screen.getByText(/Free trial: 10 days left/)).toBeTruthy();
   });
 
-  it("a lapsed trial is always said, setting up or not", async () => {
+  it("a lapsed shop is always told, setting up or not", async () => {
     summary.mockResolvedValue(trial(0, false));
     await show(true);
-    expect(screen.getByText(/Your ChairBack trial has ended/)).toBeTruthy();
+    // An older payload without `lapse`: the neutral wording, true of every case.
+    expect(screen.getByText(/Your ChairBack plan has ended/)).toBeTruthy();
+  });
+});
+
+/**
+ * Eric, 2026-10-28: when a trial ends or a comp is removed, the banner says
+ * so - the RIGHT one - and "Start your plan" goes straight to the plan cards.
+ */
+describe("the lapse banner says why, and where to start a plan", () => {
+  const lapsed = (lapse: string | undefined, extra: Record<string, unknown> = {}) => ({
+    ok: true,
+    data: {
+      billingEnabled: true,
+      subscribed: false,
+      compAccess: false,
+      hasAccess: false,
+      trialDaysLeft: 0,
+      priceMonthlyUsd: 34.99,
+      lapse,
+      ...extra,
+    },
+  });
+
+  it.each([
+    ["trial_ended", /Your free trial has ended/],
+    ["comp_ended", /Your complimentary ChairBack access has ended/],
+    ["subscription_ended", /Your ChairBack plan has ended/],
+    ["no_plan", /doesn't have a ChairBack plan yet/],
+  ])("%s", async (lapse, words) => {
+    summary.mockResolvedValue(lapsed(lapse));
+    await show(false);
+    expect(screen.getByText(words)).toBeTruthy();
+    // 🔴 An un-comped shop is never told its "trial" ended.
+    if (lapse !== "trial_ended") expect(screen.queryByText(/trial/i)).toBeNull();
+    const cta = screen.getByRole("link", { name: "Start your plan" });
+    expect(cta.getAttribute("href")).toBe("/dashboard/billing#plans");
+  });
+
+  it("names only the plans that are for sale, cheapest price first", async () => {
+    summary.mockResolvedValue(
+      lapsed("comp_ended", {
+        starter: { billingEnabled: true, priceMonthlyUsd: 20 },
+        premiumAi: { billingEnabled: true, priceMonthlyUsd: 74.99 },
+      }),
+    );
+    await show(false);
+    expect(screen.getByText(/from \$20\/mo — Starter, Premium or Premium AI/)).toBeTruthy();
+  });
+
+  it("with only Premium for sale, quotes Premium and names no tier list", async () => {
+    summary.mockResolvedValue(lapsed("trial_ended"));
+    await show(false);
+    expect(screen.getByText(/\(from \$34\.99\/mo\)/)).toBeTruthy();
   });
 });

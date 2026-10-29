@@ -82,7 +82,9 @@ export async function receptionistCheckoutAction(): Promise<{ error?: string }> 
     error:
       res.error === "already_subscribed" || res.error === "already_entitled"
         ? "You already have the AI receptionist."
-        : "Could not start checkout. Try again in a moment.",
+        : res.error === "premium_required"
+          ? "The AI receptionist add-on goes on top of Premium. Move up to Premium first."
+          : "Could not start checkout. Try again in a moment.",
   };
 }
 

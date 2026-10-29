@@ -5,6 +5,7 @@ import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { nudgeClientAction, type NudgeChannel } from "../../actions";
+import { PlanBadge } from "../../_components/PlanBadge";
 
 /** Say where it went - "sent" alone left the barber guessing whether a text
  *  went out while texting is off. */
@@ -27,6 +28,7 @@ export function RebookPanel({
   serviceLabel,
   overdue,
   canNudge,
+  premiumLocked = false,
 }: {
   clientId: string;
   /** Whole days since the last completed visit; null = no visits yet. */
@@ -36,6 +38,12 @@ export function RebookPanel({
   /** Past the client's expected rebook window -> the count renders in amber. */
   overdue: boolean;
   canNudge: boolean;
+  /**
+   * The shop's plan has no rebooking nudges (Starter, or lapsed): the API
+   * refuses them (402 premium_required / subscription_required), so the panel
+   * says so up front instead of offering a button that fails.
+   */
+  premiumLocked?: boolean;
 }) {
   const { toast } = useToast();
   // No "upgrade" steering inside the iOS app (Guideline 3.1.1).
@@ -62,6 +70,14 @@ export function RebookPanel({
           </p>
         </>
       )}
+      {premiumLocked ? (
+        // Badge + plain words only: no price, no link, so it is the same in
+        // the iOS app (3.1.1). The web billing link lives on the banner/page.
+        <div className="flex flex-col items-center gap-1.5">
+          <PlanBadge tier="pro" />
+          <p className="text-xs text-muted">Rebooking nudges are part of Premium.</p>
+        </div>
+      ) : (
       <button
         disabled={!canNudge || pending || nudged}
         onClick={() =>
@@ -72,11 +88,11 @@ export function RebookPanel({
               toast(NUDGE_SENT[r.channel ?? "sms"] ?? "Nudge sent", "success");
             } else if (r.error === "unreachable" || r.error === "cannot_nudge" || r.error === "quiet_hours")
               toast(r.reason ?? "Could not send nudge", "error");
-            else if (r.error === "subscription_required")
+            else if (r.error === "subscription_required" || r.error === "premium_required")
               toast(
                 inApp
-                  ? "Texting is a Premium feature"
-                  : "Texting is a Premium feature - upgrade from the Billing page",
+                  ? "Rebooking nudges are a Premium feature"
+                  : "Rebooking nudges are a Premium feature - upgrade from the Billing page",
                 "error",
               );
             else toast("Could not send nudge", "error");
@@ -88,6 +104,7 @@ export function RebookPanel({
       >
         {nudged ? "Nudge sent" : pending ? "…" : "Nudge now"}
       </button>
+      )}
     </div>
   );
 }

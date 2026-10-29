@@ -19,19 +19,21 @@ import {
   trialDaysLeft,
   type CheckoutTier,
 } from "../billing/stripe.js";
-import { planEntitlements } from "../billing/entitlements.js";
+import { lapseReasonFor, planEntitlements } from "../billing/entitlements.js";
 import { hasMcpEntitlement } from "../mcp/entitlement.js";
 import {
   monthEndUtc,
+  monthlyEmailQuotaFor,
   monthlySmsQuotaFor,
   monthlySmsUsed,
+  reservedMonthlyEmails,
 } from "../billing/quota.js";
 import {
   AI_TRIAL_DAYS,
   aiTrialActive,
   aiTrialAvailability,
   aiTrialDaysLeft,
-  hasReceptionistEntitlement,
+  hasReceptionistPlan,
 } from "../receptionist/config.js";
 
 export const billingRouter: Router = Router();
@@ -41,6 +43,7 @@ billingRouter.use(requireUser, requireShop, requireManager);
 billingRouter.get("/", async (req, res) => {
   const shop = req.shop!;
   const quota = monthlySmsQuotaFor(shop);
+  const emailQuota = monthlyEmailQuotaFor(shop);
   res.json({
     billingEnabled: billingEnabled(),
     planName: BILLING.planName,
@@ -55,17 +58,31 @@ billingRouter.get("/", async (req, res) => {
     trialEndsAt: shop.trialEndsAt?.toISOString() ?? null,
     trialDaysLeft: trialDaysLeft(shop),
     hasAccess: hasActiveAccess(shop),
+    // WHY a shop without access is without it (trial_ended | comp_ended |
+    // subscription_ended | no_plan), null while it has access. The banner and
+    // the billing page word the lapse from this, so an un-comped shop is never
+    // told its "trial has ended". Additive: the web tolerates its absence.
+    lapse: lapseReasonFor(shop),
     canManage: Boolean(shop.stripeCustomerId),
     // Monthly marketing-SMS usage vs the tier's included quota. quota=null =
-    // unlimited (billing off - JSON has no Infinity). Hard stop at the quota;
-    // the dashboard renders a meter + upgrade CTA.
+    // unlimited (billing off - JSON has no Infinity). Hard stop at the quota.
+    // Kept in the payload (and enforced) while texting is off platform-wide;
+    // the plan copy no longer advertises a text count.
     smsUsage: {
       used: await monthlySmsUsed(shop.id),
       quota: Number.isFinite(quota) ? quota : null,
       resetsAt: monthEndUtc().toISOString(),
     },
-    // Premium AI tier ($74.99/mo, receptionist + 2,500 texts/mo included).
-    // Dark until STRIPE_PREMIUM_AI_PRICE_ID is set.
+    // The broadcast-EMAIL allowance this month (reserved vs quota). Email is
+    // the outbound channel every plan has while texting is off, so this is
+    // the meter the billing page shows. quota=null = unlimited (billing off).
+    emailUsage: {
+      used: await reservedMonthlyEmails(shop.id),
+      quota: Number.isFinite(emailQuota) ? emailQuota : null,
+      resetsAt: monthEndUtc().toISOString(),
+    },
+    // Premium AI tier ($74.99/mo, receptionist included). Dark until
+    // STRIPE_PREMIUM_AI_PRICE_ID is set.
     premiumAi: {
       billingEnabled: premiumAiBillingEnabled(),
       priceMonthlyUsd: PLANS.pro_ai.priceMonthlyUsd,
@@ -82,7 +99,7 @@ billingRouter.get("/", async (req, res) => {
     // wall. See billing/entitlements.ts.
     entitlements: {
       ...planEntitlements(shop),
-      receptionist: hasReceptionistEntitlement(shop),
+      receptionist: hasReceptionistPlan(shop),
       connector: hasMcpEntitlement(shop),
     },
     // AI receptionist add-on ($40/mo). Dark until STRIPE_RECEPTIONIST_PRICE_ID
@@ -91,7 +108,7 @@ billingRouter.get("/", async (req, res) => {
       billingEnabled: receptionistBillingEnabled(),
       subscriptionStatus: shop.receptionistSubscriptionStatus,
       compAccess: shop.receptionistCompAccess,
-      entitled: hasReceptionistEntitlement(shop),
+      entitled: hasReceptionistPlan(shop),
       included: shop.plan === "pro_ai",
     },
     // The 14-day free run at Premium AI, offered once to a paying Premium
@@ -153,6 +170,19 @@ billingRouter.post("/receptionist/checkout", async (req, res) => {
   }
   if (ACTIVE_STATUSES.has(shop.receptionistSubscriptionStatus)) {
     res.status(409).json({ error: "already_subscribed" });
+    return;
+  }
+  // 🔴 The add-on goes on top of a PAID Premium plan, nothing less. Sold to a
+  // Starter shop it was the receptionist for $60 instead of Premium AI's
+  // $74.99; sold to a trial or lapsed shop it billed for a feature the base
+  // plan does not carry. The billing page only ever offers it to a Premium
+  // subscriber - this is the rule behind that.
+  if (
+    shop.plan !== "pro" ||
+    !shop.stripeSubscriptionId ||
+    !ACTIVE_STATUSES.has(shop.subscriptionStatus)
+  ) {
+    res.status(409).json({ error: "premium_required" });
     return;
   }
   const url = await createReceptionistCheckoutUrl(shop);

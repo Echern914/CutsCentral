@@ -20,6 +20,7 @@ import {
 } from "./BillingActions";
 import { ReceptionistControls } from "./ReceptionistControls";
 import { ownsReceptionist, planLabel } from "./planState";
+import { lapseCopy } from "@/lib/lapseCopy";
 
 // The /api/billing shape lives ONCE in lib/billing.ts (shared with the
 // layout's lock plumbing, TrialBanner, and the receptionist page).
@@ -46,6 +47,10 @@ const STARTER_FEATURES: TierFeature[] = [
   { lead: "Your own online booking page", detail: "add-ons, recurring, per-day pricing, request approval" },
   { lead: "Calendar + block-off time", detail: "your day, your hours, your days off" },
   { lead: "Email confirmations & reminders", detail: "with add-to-calendar and Apple Wallet" },
+  {
+    lead: `${PLANS.starter.emailMonthlyQuota.toLocaleString()} client emails a month`,
+    detail: "send to everyone, a rewards tier, or who had a service",
+  },
   { lead: "Digital punch cards", detail: "loyalty that runs itself, visit by visit" },
   { lead: "Branded rewards page + mini-site", detail: "your colors, your fonts, one shareable link" },
   { lead: "A client book that's YOURS", detail: "notes, history, CSV export — never locked in" },
@@ -55,14 +60,17 @@ const STARTER_FEATURES: TierFeature[] = [
 
 // Premium — the outbound layer that actually brings clients back. (Acuity/
 // Square visit SYNC is free - the paid part is what we DO with the synced
-// calendar: texts + the full analysis.)
+// calendar: nudges + the full analysis.)
+// 🔴 No included TEXT counts on any card: texting is off platform-wide
+// (Eric, 2026-10-28). The email allowance leads instead; the SMS quota stays
+// in PLANS and is still enforced, so the cap holds if texting comes back.
 // A function of the shop words rather than a module constant: one perk names
 // the workspace, and a module-level constant has no vocabulary to read.
 const premiumFeatures = (v: BusinessVocabulary): TierFeature[] => [
   { lead: "Everything in Starter" },
   {
-    lead: `${PLANS.pro.smsMonthlyQuota} texts a month included`,
-    detail: "confirmations, reminders, nudges, win-backs",
+    lead: `${PLANS.pro.emailMonthlyQuota.toLocaleString()} client emails a month`,
+    detail: `${PLANS.pro.emailMonthlyQuota / PLANS.starter.emailMonthlyQuota}× Starter, for broadcasts to your whole book`,
   },
   {
     lead: "The full Insights picture",
@@ -110,7 +118,7 @@ const PREMIUM_AI_FEATURES: TierFeature[] = [
     detail: "clients text YOUR shop's number, not a shared line — set up automatically",
   },
   {
-    lead: `${PLANS.pro_ai.smsMonthlyQuota.toLocaleString()} texts a month — 4× Premium`,
+    lead: `${PLANS.pro_ai.emailMonthlyQuota.toLocaleString()} client emails a month — ${PLANS.pro_ai.emailMonthlyQuota / PLANS.pro.emailMonthlyQuota}× Premium`,
   },
   { lead: "Everything in Premium" },
 ];
@@ -132,14 +140,19 @@ export default async function BillingPage({
 
   const currentPrice =
     b?.plan === "pro_ai" ? b.premiumAi.priceMonthlyUsd : b?.priceMonthlyUsd;
+  // The EMAIL allowance meter. It replaced the "Texts this month" meter when
+  // texting went off platform-wide: email is the outbound channel every plan
+  // has. `emailUsage` is absent on an older API payload - no meter then.
+  const email = b?.emailUsage;
   const usagePct =
-    b?.smsUsage.quota && b.smsUsage.quota > 0
-      ? Math.min(100, Math.round((b.smsUsage.used / b.smsUsage.quota) * 100))
+    email?.quota && email.quota > 0
+      ? Math.min(100, Math.round((email.used / email.quota) * 100))
       : 0;
-  const nearQuota = Boolean(
-    b?.smsUsage.quota && b.smsUsage.used >= b.smsUsage.quota * 0.8,
-  );
-  const showMeter = Boolean(b?.smsUsage.quota && b.hasAccess);
+  const nearQuota = Boolean(email?.quota && email.used >= email.quota * 0.8);
+  const showMeter = Boolean(email?.quota && b?.hasAccess);
+  // The next plan up with a bigger allowance, for the "running low" line.
+  const roomierPlan =
+    b?.plan === "starter" ? PLANS.pro : b?.plan === "pro_ai" ? null : PLANS.pro_ai;
 
   return (
     <main className="mx-auto w-full max-w-4xl px-5 py-10">
@@ -165,13 +178,16 @@ export default async function BillingPage({
           (App Store 3.1.1). In-app this page shows only price-free account
           status (current plan + text usage), never the paid tiers. */}
       <p className="mb-6 mt-1 text-sm text-muted">
-        <HideInNativeApp>Simple tiers, no per-text surprises. Cancel anytime.</HideInNativeApp>
-        <ShowInNativeApp>Your plan and text usage.</ShowInNativeApp>
+        <HideInNativeApp>Simple tiers, no surprises. Cancel anytime.</HideInNativeApp>
+        <ShowInNativeApp>Your plan and email usage.</ShowInNativeApp>
       </p>
 
       {searchParams?.checkout === "success" && (
         <div className="mb-5 rounded-2xl border border-emerald-soft/40 bg-emerald-soft/10 px-4 py-3 text-sm text-emerald-soft">
-          You&apos;re subscribed. Welcome aboard. Your nudges and promos are live.
+          {/* Plan-aware: a Starter shop bought no nudges or promos. */}
+          {b?.plan === "starter"
+            ? "You're subscribed. Welcome aboard. Your booking page is live."
+            : "You're subscribed. Welcome aboard. Your nudges and promos are live."}
         </div>
       )}
       {searchParams?.checkout === "canceled" && (
@@ -186,7 +202,7 @@ export default async function BillingPage({
               it bought Premium AI and to switch on a receptionist it lacks. */}
           {b?.plan === "pro_ai"
             ? `Upgraded to ${PLANS.pro_ai.name}. Turn on your receptionist below.`
-            : `Upgraded to ${PLANS.pro.name}. Your texts and promos are live.`}
+            : `Upgraded to ${PLANS.pro.name}. Your nudges, promos and full Insights are live.`}
         </div>
       )}
       {searchParams?.receptionist === "success" && (
@@ -216,13 +232,13 @@ export default async function BillingPage({
                     ? "Full access, on the house. No card needed, enjoy everything."
                     : b.subscribed
                       ? b.subscriptionStatus === "past_due"
-                        ? "Payment issue. Update your card to keep texts flowing."
+                        ? "Payment issue. Update your card to keep everything running."
                         : "Active. Thanks for building with us."
                       : !b.billingEnabled
                         ? "Early access: everything is free right now."
                         : b.hasAccess
                           ? `${b.trialDaysLeft} day${b.trialDaysLeft === 1 ? "" : "s"} of full Premium left. No card on file.`
-                          : "Your plan has ended — bookings and texts are off. Your clients and history are all still here."}
+                          : `${lapseCopy(b.lapse).status} Your clients and history are all still here.`}
                 </p>
               </div>
               {/* Price is hidden in-app: the App Store forbids showing prices
@@ -242,14 +258,14 @@ export default async function BillingPage({
               </HideInNativeApp>
             </div>
 
-            {/* Monthly text usage meter (fine to show natively - no price). */}
-            {showMeter && (
+            {/* Monthly client-email meter (fine to show natively - no price). */}
+            {showMeter && email && (
               <div className="mt-5 rounded-2xl border border-subtle bg-charcoal-800 px-4 py-3">
                 <div className="flex items-baseline justify-between text-sm">
-                  <span className="text-offwhite">Texts this month</span>
+                  <span className="text-offwhite">Client emails this month</span>
                   <span className={nearQuota ? "text-danger-soft" : "text-muted"}>
-                    {b.smsUsage.used.toLocaleString()} /{" "}
-                    {b.smsUsage.quota!.toLocaleString()}
+                    {email.used.toLocaleString()} /{" "}
+                    {email.quota!.toLocaleString()}
                   </span>
                 </div>
                 <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-charcoal-900">
@@ -266,18 +282,21 @@ export default async function BillingPage({
                 </div>
                 <p className="mt-2 text-xs text-muted">
                   Resets{" "}
-                  {new Date(b.smsUsage.resetsAt).toLocaleDateString("en-US", {
+                  {new Date(email.resetsAt).toLocaleDateString("en-US", {
                     month: "long",
                     day: "numeric",
                   })}
-                  . Booking confirmations, reminders about real appointments, and
-                  replies in live conversations never count.
+                  . Only emails you send to your clients count — booking
+                  confirmations and reminders never do.
                 </p>
-                {nearQuota && b.plan !== "pro_ai" && (
-                  <p className="mt-1 text-xs text-gold">
-                    Running low? Premium AI includes{" "}
-                    {PLANS.pro_ai.smsMonthlyQuota.toLocaleString()} texts a month.
-                  </p>
+                {/* An upsell names a plan: web only (3.1.1). */}
+                {nearQuota && roomierPlan && (
+                  <HideInNativeApp>
+                    <p className="mt-1 text-xs text-gold">
+                      Running low? {roomierPlan.name} includes{" "}
+                      {roomierPlan.emailMonthlyQuota.toLocaleString()} client emails a month.
+                    </p>
+                  </HideInNativeApp>
                 )}
               </div>
             )}
@@ -287,10 +306,14 @@ export default async function BillingPage({
               // and upgrade on the web.
               <HideInNativeApp>
                 <div className="mt-4 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-3 text-sm text-gold">
-                  Your ChairBack plan has ended, so the shop has stopped taking
+                  {lapseCopy(b.lapse).headline}, so the shop has stopped taking
                   bookings. Nothing has been deleted — your clients, punches and
                   history are waiting, and reading or exporting your client book
-                  still works. Subscribe to switch everything back on.
+                  still works.{" "}
+                  <a href="#plans" className="font-semibold underline underline-offset-2">
+                    Start your plan
+                  </a>{" "}
+                  — pick any plan below and checkout switches everything back on.
                 </div>
               </HideInNativeApp>
             )}
@@ -374,7 +397,8 @@ export default async function BillingPage({
               exactly the "access to subscription mechanisms" App Store 3.1.1
               forbids in-app. Barbers compare and pick plans on the web. */}
           <HideInNativeApp>
-          <div className="grid items-stretch gap-5 sm:grid-cols-3">
+          {/* #plans: where "Start your plan" (the lapse banner) lands. */}
+          <div id="plans" className="grid scroll-mt-24 items-stretch gap-5 sm:grid-cols-3">
             {/* Starter — the booking site and the everyday tools. No texts,
                 no AI, Insights as a preview. Dark until its Stripe price is
                 configured: the card still explains the tier, the button

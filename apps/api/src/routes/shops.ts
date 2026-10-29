@@ -77,7 +77,7 @@ import { kickReviewNotifications } from "../engines/reviewNotifyOutbox.js";
 import { trackBackgroundWork } from "../backgroundWork.js";
 import { leadLimiter, waitlistLimiter } from "../middleware/rateLimit.js";
 import {
-  hasReceptionistEntitlement,
+  hasReceptionistPlan,
   receptionistEnabledForShop,
 } from "../receptionist/config.js";
 import { logger } from "../logger.js";
@@ -1012,7 +1012,9 @@ shopsRouter.patch("/me", requireUser, requireShop, requireActiveAccess, async (r
   // and nothing ever answered a text - the worst kind of broken. Disabling
   // stays always allowed, and the helper returns true when billing is off
   // (dev/self-host), so this gate is inert outside real billing.
-  if (data.receptionistEnabled === true && !hasReceptionistEntitlement(req.shop!)) {
+  // The entitlement AND a base plan it may sit on (not Starter): see
+  // hasReceptionistPlan.
+  if (data.receptionistEnabled === true && !hasReceptionistPlan(req.shop!)) {
     res.status(409).json({ error: "receptionist_not_entitled" });
     return;
   }
@@ -1938,6 +1940,9 @@ function serializeShop(shop: {
   aiTrialEndsAt: Date | null;
   receptionistSubscriptionStatus: string;
   receptionistCompAccess: boolean;
+  subscriptionStatus: string;
+  trialEndsAt: Date | null;
+  compAccess: boolean;
   twilioNumber: string | null;
   tierPerks: unknown;
   tierThresholds: unknown;
@@ -2029,7 +2034,7 @@ function serializeShop(shop: {
     receptionistTone: shop.receptionistTone,
     receptionistTermsAcceptedAt: shop.receptionistTermsAcceptedAt?.toISOString() ?? null,
     // Entitlement summary for the settings UI (comp pilots or the $40/mo add-on).
-    receptionistEntitled: hasReceptionistEntitlement(shop),
+    receptionistEntitled: hasReceptionistPlan(shop),
     // The shop's own text line (null = shared platform number).
     twilioNumber: shop.twilioNumber,
   };

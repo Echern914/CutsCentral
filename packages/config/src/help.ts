@@ -99,8 +99,13 @@ const partnerReward = dollars(PARTNER_PROGRAM.rewardCents);
 const partnerCashouts = PARTNER_PROGRAM.cashoutAmountsCents.map(dollars).join(" or ");
 const proPrice = `$${PLANS.pro.priceMonthlyUsd}`;
 const proAiPrice = `$${PLANS.pro_ai.priceMonthlyUsd}`;
-const proTexts = PLANS.pro.smsMonthlyQuota.toLocaleString();
-const proAiTexts = PLANS.pro_ai.smsMonthlyQuota.toLocaleString();
+const starterPrice = `$${PLANS.starter.priceMonthlyUsd}`;
+// No plan advertises an included TEXT count while texting is off platform-wide
+// (Eric, 2026-10-28): the email allowance is what each plan leads with. The
+// SMS quota itself still lives in PLANS and is still enforced.
+const starterEmails = PLANS.starter.emailMonthlyQuota.toLocaleString();
+const proEmails = PLANS.pro.emailMonthlyQuota.toLocaleString();
+const proAiEmails = PLANS.pro_ai.emailMonthlyQuota.toLocaleString();
 
 export const HELP_ANSWERS: HelpAnswer[] = [
   /* ============================ Getting started ========================== */
@@ -437,7 +442,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "pricing",
     q: "How much does it cost?",
-    a: `ChairBack is one plan. Premium (${proPrice}/month, ${proTexts} texts included) adds the texting that brings clients back: rebooking nudges, promo blasts, and auto-sync with Acuity or Square. Premium AI (${proAiPrice}/month, ${proAiTexts} texts included) adds an AI receptionist that answers client texts and books appointments 24/7.\n\nEvery new shop gets a ${BILLING.trialDays}-day full Premium trial, and one rebooked regular typically covers the month.`,
+    a: `Three plans. Starter (${starterPrice}/month) is your booking page, calendar, client book, punch cards and email confirmations, with ${starterEmails} client emails a month. Premium (${proPrice}/month, ${proEmails} client emails a month) adds what brings clients back: rebooking nudges, win-backs, promo blasts, waitlist alerts, the full Insights picture and auto-sync with Acuity or Square. Premium AI (${proAiPrice}/month, ${proAiEmails} client emails a month) adds an AI receptionist that answers client texts and books appointments 24/7.\n\nEvery new shop gets a ${BILLING.trialDays}-day full Premium trial, then picks a plan on the Billing page. One rebooked regular typically covers the month.`,
     keywords: ["cost", "price", "pricing", "how much", "plan", "subscription", "fee", "monthly", "expensive"],
     // A bare "price"/"cost" collides with add-services ("change a price").
     // A prospect asking the bot what it costs is by far the commoner intent.
@@ -798,7 +803,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "how-many-texts",
     q: "How many texts do I get?",
-    a: `Premium includes ${proTexts} a month, Premium AI includes ${proAiTexts}. That covers rebooking nudges, win-backs, and promo blasts.\n\nIt's a hard stop at the quota — no surprise overage bills, ever. The dashboard shows a usage meter so you can see where you are.`,
+    a: `Plans don't include a set number of texts right now — your messages to clients go out by email and in the ChairBack app instead. Starter includes ${starterEmails} client emails a month, Premium ${proEmails} and Premium AI ${proAiEmails}.\n\nIt's a hard stop at the allowance — no surprise overage bills, ever. The Billing page shows a meter so you can see where you are.`,
     keywords: ["texts", "sms", "quota", "how many", "limit", "messages", "overage", "run out"],
     category: "texting",
     hidesInApp: true,

@@ -52,6 +52,7 @@ export function PricingSection() {
                 {[
                   "Your own online booking page + calendar",
                   "Email confirmations & reminders, add-to-calendar, Apple Wallet",
+                  `${PLANS.starter.emailMonthlyQuota.toLocaleString()} client emails a month`,
                   "Digital punch cards, rewards & your branded loyalty page",
                   "Client book, notes & CSV import/export",
                   "Your public mini-site on your own domain",
@@ -96,7 +97,9 @@ export function PricingSection() {
               </p>
               <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
                 {[
-                  `${PLANS.pro.smsMonthlyQuota} texts a month included`,
+                  // No included TEXT counts while texting is off (Eric,
+                  // 2026-10-28): the email allowance leads instead.
+                  `${PLANS.pro.emailMonthlyQuota.toLocaleString()} client emails a month`,
                   "Confirmation & reminder texts, on top of the emails",
                   "Smart rebooking texts, timed per client",
                   "Win-back texts that recover lapsed clients",
@@ -148,7 +151,7 @@ export function PricingSection() {
                   "AI receptionist answers client texts 24/7",
                   "Books, reschedules & cancels by text",
                   "Fills freed slots automatically when someone cancels",
-                  `${PLANS.pro_ai.smsMonthlyQuota.toLocaleString()} texts a month included`,
+                  `${PLANS.pro_ai.emailMonthlyQuota.toLocaleString()} client emails a month`,
                   "Everything in Premium",
                 ].map((t) => (
                   <li key={t} className="flex items-start gap-2.5">

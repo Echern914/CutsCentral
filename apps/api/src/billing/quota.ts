@@ -6,12 +6,14 @@ import {
   type BillingShop,
 } from "./stripe.js";
 import { hasPremiumAccess } from "./entitlements.js";
-import { hasReceptionistEntitlement } from "../receptionist/config.js";
+import { hasReceptionistPlan } from "../receptionist/config.js";
 
 /**
  * Per-tier MONTHLY SMS quota (on top of the per-shop DAILY dailySendCap).
- * Free 0 / Premium 600 / Premium AI 2,500 - hard stop at the quota, no metered
- * overage; the dashboard shows a usage meter + upgrade CTA instead.
+ * Free 0 / Starter 0 / Premium and Premium AI per PLANS.smsMonthlyQuota - hard
+ * stop at the quota, no metered overage. Enforced even while texting is off
+ * platform-wide, so the cap holds the day texting comes back; the plan copy
+ * no longer advertises a text count (texting is off).
  *
  * What counts: SENT SMS of the MARKETING kinds below, per UTC calendar month.
  * Transactional kinds never count and are never blocked:
@@ -80,7 +82,7 @@ export function monthlySmsQuotaFor(
   // Texts are a Premium feature: lapsed shops AND Starter shops get 0. A
   // Starter shop still inside its signup trial keeps the trial's quota.
   if (!hasPremiumAccess(shop, { now: opts.now, enabled })) return 0;
-  if (shop.plan === "pro_ai" || hasReceptionistEntitlement(shop)) {
+  if (shop.plan === "pro_ai" || hasReceptionistPlan(shop, { now: opts.now, enabled })) {
     return PLANS.pro_ai.smsMonthlyQuota;
   }
   return PLANS.pro.smsMonthlyQuota;
@@ -150,7 +152,9 @@ export function monthlyEmailQuotaFor(
   const plan = PLANS[shop.plan as keyof typeof PLANS] ?? PLANS.free;
   // Premium AI's allowance also covers a Premium shop carrying the
   // receptionist add-on - same price, same allowance, same rule as SMS.
-  if (shop.plan === "pro_ai" || hasReceptionistEntitlement(shop)) {
+  // 🔴 hasReceptionistPlan, not the bare entitlement: a Starter shop holding
+  // the add-on (or an AI trial it downgraded under) got Premium AI's 20,000.
+  if (shop.plan === "pro_ai" || hasReceptionistPlan(shop, { now: opts.now, enabled })) {
     return PLANS.pro_ai.emailMonthlyQuota;
   }
   // A trial or comped shop with plan "free" is marketed as full Premium.

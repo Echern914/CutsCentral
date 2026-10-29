@@ -7,6 +7,7 @@ import {
 } from "@chairback/config/constants";
 import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
+import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { Card } from "@/components/ui/Card";
 import { Avatar } from "@/components/ui/Avatar";
 import { InstagramHandle } from "@/components/InstagramHandle";
@@ -229,6 +230,9 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           // it couldn't (no app, and texting off or not allowed). Not for a
           // client blocked from booking: a nudge says "time to book".
           canNudge={!client.bookingBlockedAt}
+          // Starter or lapsed: nudges are Premium (the API refuses them).
+          // Memoized summary - the layout already fetched it this render.
+          premiumLocked={featureLocks(await getBillingSummary()).premium}
         />
       </header>
 
