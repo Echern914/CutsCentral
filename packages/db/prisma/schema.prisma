@@ -366,6 +366,11 @@ model Shop {
   // Premium regardless of Stripe - independent of trial/subscription, survives
   // Stripe going live, and is excluded from paying-revenue counts. Operator-only.
   compAccess           Boolean   @default(false)
+  // When an operator last switched compAccess OFF (null = never, or comped
+  // again since). The only record that a lapsed shop's free access was a comp
+  // rather than a trial, so the dashboard can tell it "your complimentary
+  // access has ended" instead of calling it a trial (routes/billing.ts lapse).
+  compEndedAt          DateTime?
   // Trial-expiry reminder emails: the highest stage already sent (0 = none,
   // 1 = "a week left", 2 = "ends tomorrow", 3 = "trial ended"). Monotonic - the
   // sweep only ever advances it (compare-and-set BEFORE sending), so each stage

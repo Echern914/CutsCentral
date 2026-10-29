@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { apiGet } from "@/lib/api";
+import { getBillingSummary } from "@/lib/billing";
+import { PlanBadge } from "../../_components/PlanBadge";
 import { Card } from "@/components/ui/Card";
 import { ReplyBox } from "./ReplyBox";
 import { LocalDate } from "@/components/ui/LocalDate";
@@ -46,6 +48,13 @@ export default async function ConversationPage({
   if (!res.data) notFound();
   const { conversation, messages } = res.data;
   const who = conversation.clientName ?? conversation.phone;
+  // Replying from here is part of the receptionist (Premium AI, the add-on, or
+  // a comped pilot); the API refuses anyone else (402 premium_ai_required).
+  // An old thread from an AI trial that ended stays readable - it is the
+  // shop's own history - but the box gives way to a plain note. Fetch failure
+  // or an older payload: show the box, the API is the gate.
+  const billing = (await getBillingSummary()).data;
+  const canReply = !billing || !billing.billingEnabled || billing.receptionist.entitled;
 
   return (
     <main className="mx-auto w-full max-w-2xl px-5 py-8">
@@ -70,7 +79,15 @@ export default async function ConversationPage({
         </div>
       </Card>
 
-      <ReplyBox conversationId={conversation.id} />
+      {canReply ? (
+        <ReplyBox conversationId={conversation.id} />
+      ) : (
+        // Badge + words only: no price or link, so it is the same in the app (3.1.1).
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-subtle bg-charcoal-800 px-4 py-3 text-sm text-muted">
+          <PlanBadge tier="pro_ai" />
+          <span>Replying from the inbox is part of Premium AI. This thread stays here to read.</span>
+        </div>
+      )}
     </main>
   );
 }

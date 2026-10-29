@@ -92,7 +92,7 @@ describe("the billing page", () => {
 
   it("🔴 a Starter -> Premium upgrade is told it got Premium, not Premium AI", async () => {
     await show(billing({ plan: "pro" }), { upgrade: "success" });
-    expect(screen.getByText("Upgraded to Premium. Your texts and promos are live.")).toBeTruthy();
+    expect(screen.getByText("Upgraded to Premium. Your nudges, promos and full Insights are live.")).toBeTruthy();
     expect(screen.queryByText(/Upgraded to Premium AI/)).toBeNull();
   });
 

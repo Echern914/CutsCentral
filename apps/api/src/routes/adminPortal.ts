@@ -358,7 +358,14 @@ adminPortalRouter.post("/shops/:shopId/comp", async (req, res) => {
   try {
     shop = await prisma.shop.update({
       where: { id: req.params.shopId },
-      data: { compAccess: parsed.data.compAccess },
+      // compEndedAt records the comp ENDING (and is cleared by a new comp), so
+      // a shop left without a plan is told its complimentary access ended -
+      // not that a trial it may never have had is over (lapseReasonFor).
+      data: {
+        compAccess: parsed.data.compAccess,
+        ...(before.compAccess && !parsed.data.compAccess ? { compEndedAt: new Date() } : {}),
+        ...(parsed.data.compAccess ? { compEndedAt: null } : {}),
+      },
       select: { id: true, compAccess: true },
     });
   } catch {

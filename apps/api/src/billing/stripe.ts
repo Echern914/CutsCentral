@@ -177,6 +177,32 @@ export function planForTierMetadata(tier: string | undefined): CheckoutTier {
 }
 
 /**
+ * Shop.plan for a subscription: the PRICE it actually bills, read off its
+ * items, and only when no item carries a price this process knows, the
+ * metadata.tier tag (then the legacy "pro" default).
+ *
+ * 🔴 The tag alone was a leak. metadata.tier is stamped at checkout and by
+ * our own in-place upgrade, but a plan change made in the Stripe Customer
+ * Portal (the documented way DOWN, "switch plans from Manage billing") swaps
+ * the price and leaves the tag alone - so a Premium AI shop that moved to the
+ * $20 Starter price kept plan "pro_ai", and with it the receptionist, its own
+ * number and every Premium feature, at Starter money. What the shop pays is
+ * what it gets.
+ */
+export function planForSubscription(sub: {
+  items?: { data?: { price?: { id?: string } | string | null }[] } | null;
+  metadata?: Record<string, string> | null;
+}): CheckoutTier {
+  for (const item of sub.items?.data ?? []) {
+    const priceId = typeof item.price === "string" ? item.price : item.price?.id;
+    if (!priceId) continue;
+    const tier = PAID_PLAN_KEYS.find((t) => priceIdForTier(t) === priceId);
+    if (tier) return tier;
+  }
+  return planForTierMetadata(sub.metadata?.tier);
+}
+
+/**
  * Which base plan this invoice billed, from its line items' price ids - or
  * null when it billed none (an add-on, a one-time charge, or a price this
  * process doesn't know). Reads both line shapes Stripe has shipped: `price`
@@ -578,8 +604,9 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
         });
         return;
       }
-      // Legacy subs (created before tiers) have no metadata.tier -> "pro".
-      const tier = planForTierMetadata(sub.metadata?.tier);
+      // The price the subscription bills decides the plan (a portal plan
+      // change keeps the old tag); legacy subs with neither -> "pro".
+      const tier = planForSubscription(sub);
       const { count } = await prisma.shop.updateMany({
         // metadata.shopId is authoritative; customer id covers subs created
         // outside checkout (e.g. from the Stripe dashboard).

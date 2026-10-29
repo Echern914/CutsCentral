@@ -994,7 +994,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     id: "billing",
     name: "Plan & billing",
     synonyms: ["subscription", "upgrade", "premium", "plan", "my plan", "quota", "texts left", "sms usage", "invoice", "cancel plan", "cancel subscription", "comped"],
-    description: "Your ChairBack plan, texting quota, and add-ons",
+    description: "Your ChairBack plan, email allowance, and add-ons",
     href: "/dashboard/billing",
     category: "money",
     minRole: "OWNER",

@@ -37,7 +37,9 @@ import { ensureReferralCode } from "../services/referral.js";
 import {
   requireActiveAccess,
   requireActiveAccessExcept,
+  requirePremiumAccess,
 } from "../middleware/billing.js";
+import { hasReceptionistPlan } from "../receptionist/config.js";
 import { isOwnDataRead } from "../middleware/wallExemptions.js";
 import { hasActiveAccess } from "../billing/stripe.js";
 import { hasPremiumAccess } from "../billing/entitlements.js";
@@ -421,7 +423,11 @@ dashboardRouter.get("/leaderboard", async (req, res) => {
 // could not deliver, texting is on and this client can be texted - the same
 // push-first order as the automatic sweep, so a barber's tap never pays for a
 // text the app already delivered. Tight per-user limit either way.
-dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async (req, res) => {
+// 🔴 requirePremiumAccess: a rebooking nudge is a Premium feature on every
+// channel. This route sends the APP push before it ever reaches the text
+// quota, so with only the wall in front of it a paid-up Starter shop was
+// nudging clients by push - the bulk action and the sweeps already refused it.
+dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, requirePremiumAccess, async (req, res) => {
   const shop = req.shop!;
   const db = forShop(shop.id);
   const client = await db.client.findFirst({ where: { id: req.params.clientId } });
@@ -518,7 +524,7 @@ dashboardRouter.post("/nudge/:clientId", smsLimiter, requireActiveAccess, async 
     res.status(402).json({
       error: "sms_quota_exhausted",
       message:
-        "You've used all of this month's included texts. Upgrade to Premium AI for 2,500 texts a month.",
+        "You've used all of this month's included texts. The count starts again next month.",
     });
     return;
   }
@@ -3428,7 +3434,10 @@ dashboardRouter.post("/winback-preview", smsLimiter, async (req, res) => {
 });
 
 // Run the real sweep now - texts every eligible client (respects daily cap).
-dashboardRouter.post("/sweep", smsLimiter, requireActiveAccess, async (req, res) => {
+// Premium only: the hourly sweep skips a Starter shop (engines/nudge.ts), and
+// this button must not be the way around that. The PREVIEW above stays open -
+// seeing who is overdue is the upsell.
+dashboardRouter.post("/sweep", smsLimiter, requireActiveAccess, requirePremiumAccess, async (req, res) => {
   const summary = await sweepShop(req.shop!, { dryRun: false });
   res.json(summary);
 });
@@ -3681,6 +3690,17 @@ dashboardRouter.post(
       return;
     }
     const shop = req.shop!;
+    // Replying from the AI inbox is part of the receptionist (Premium AI, the
+    // add-on on Premium, or a comped pilot). A shop without it - Starter, plain
+    // Premium, an AI trial that ended - keeps READING its old threads (its own
+    // data) but cannot text from here.
+    if (!hasReceptionistPlan(shop)) {
+      res.status(402).json({
+        error: "premium_ai_required",
+        message: "Replying from the inbox is part of Premium AI. Upgrade your plan to unlock it.",
+      });
+      return;
+    }
     const db = forShop(shop.id);
     const convo = await db.receptionistConversation.findFirst({
       where: { id: req.params.id },

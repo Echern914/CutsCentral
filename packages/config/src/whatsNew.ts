@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-28-plan-ended-wording",
+    date: "2026-10-28",
+    kind: "fix",
+    title: "Clearer notice when your plan ends",
+    body:
+      "If your plan ends, the note at the top now says exactly what ended - a free trial, complimentary access or a " +
+      "paid plan - instead of always calling it a trial. Your plan details now show the client emails included each month.",
+  },
+  {
     id: "2026-10-28-affiliates-get-paid",
     date: "2026-10-28",
     kind: "feature",

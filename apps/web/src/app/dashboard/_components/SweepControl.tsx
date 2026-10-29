@@ -57,7 +57,7 @@ export function SweepControl({
       setError(
         r.summary
           ? null
-          : r.error === "subscription_required"
+          : r.error === "subscription_required" || r.error === "premium_required"
             ? inApp
               ? "Texting is a Premium feature."
               : "Texting is a Premium feature - upgrade from the Billing page to send nudges."

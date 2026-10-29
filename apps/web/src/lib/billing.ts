@@ -2,6 +2,9 @@ import { cache } from "react";
 import { apiGet, type ApiResult } from "@/lib/api";
 import { NO_LOCKS, type FeatureLocks } from "@/lib/featureLocks";
 
+/** GET /api/billing `lapse` (apps/api billing/entitlements.ts lapseReasonFor). */
+export type LapseReason = "trial_ended" | "comp_ended" | "subscription_ended" | "no_plan";
+
 /**
  * The full GET /api/billing shape (apps/api/src/routes/billing.ts). ONE
  * declaration for the whole dashboard — TrialBanner, the billing page, the
@@ -20,8 +23,17 @@ export interface BillingSummary {
   trialEndsAt: string | null;
   trialDaysLeft: number | null;
   hasAccess: boolean;
+  /**
+   * WHY a shop without access is without it; null while it has access. The
+   * lapse banner and the billing page word themselves from this, so an
+   * un-comped shop is not told its "trial" ended. Optional: an older API
+   * payload has no such field, and readers fall back to neutral wording.
+   */
+  lapse?: LapseReason | null;
   canManage: boolean;
   smsUsage: { used: number; quota: number | null; resetsAt: string };
+  /** Broadcast-email allowance this month. Optional: absent on an older payload. */
+  emailUsage?: { used: number; quota: number | null; resetsAt: string };
   premiumAi: { billingEnabled: boolean; priceMonthlyUsd: number };
   /** The $20 Starter tier; dark (billingEnabled false) until its Stripe price is set. */
   starter: { billingEnabled: boolean; priceMonthlyUsd: number };
