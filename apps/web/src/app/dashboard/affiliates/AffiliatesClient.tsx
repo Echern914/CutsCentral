@@ -166,7 +166,7 @@ export function AffiliatesClient({
         <div className="mb-6" />
       ) : (
         <p className="mb-6 text-sm text-muted">
-          Bring a business onto ChairBack. For every one that pays for{" "}
+          Bring a business onto ChairBack, get paid. For every one that pays for{" "}
           {AFFILIATE_POLICY.qualification.qualifyingInvoices} months, you get a month off your
           plan. No cap.
         </p>
