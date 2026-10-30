@@ -372,6 +372,26 @@ describe("🔴 a card kept on file, before a late Cancel", () => {
     expect(cancelBookingAction).not.toHaveBeenCalled();
     expect(screen.getByRole("alertdialog")).toBeTruthy();
   });
+
+  it("🔴 the shop approves fees first: says it MAY charge, never that cancelling charges", async () => {
+    vi.useRealTimers();
+    cancelBookingAction.mockClear();
+    const from = new Date(Date.now() - 3_600_000).toISOString();
+    render(
+      <ManageClient
+        token="tok"
+        data={data({ lateCancelFee: { ...fee({ inside: true, from }), needsApproval: true } })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel appointment" }));
+    expect(cancelBookingAction).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        "It's within 24 hours of your appointment, so the shop may charge a $20 late-cancel fee to your card ending 4242. Cancel anyway?",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/cancelling now charges/)).toBeNull();
+  });
 });
 
 describe("🔴 a non-refundable deposit, before Cancel", () => {

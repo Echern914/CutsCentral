@@ -1,4 +1,5 @@
 import {
+  CARD_FEE_APPROVAL_DAYS,
   cardDeclineWords,
   cardOnFileFeeCents,
   type CancellationTerms,
@@ -12,7 +13,7 @@ import { agreedPriceCents } from "./appointmentPriceLedger.js";
 import { toCents as configToCents } from "../billing/payments.js";
 import { sendEmail } from "../messaging/email.js";
 import { buildCardChargedEmail } from "../messaging/templates.js";
-import { sendToBarber } from "./barberNotify.js";
+import { appointmentDeepLink, sendToBarber } from "./barberNotify.js";
 
 /**
  * What happens to a KEPT card when the appointment ends without being paid at
@@ -41,6 +42,8 @@ export type SettleResult =
   | { action: "setup_problem"; cents: number; reason: CardOnFileChargeReason }
   /** Stripe's answer never arrived; the reconciler will read it. */
   | { action: "pending"; cents: number; reason: CardOnFileChargeReason }
+  /** Waiting for the barber to Charge or Waive (Shop.cardFeeNeedsApproval); the card is kept. */
+  | { action: "held"; cents: number; reason: CardOnFileChargeReason }
   | { action: "released"; why: string }
   | { action: "none"; why?: "no_card" | "already" };
 
@@ -59,6 +62,9 @@ export function noShowChargeResult(result: SettleResult): NoShowChargeResult | n
       return { kind: "setup_problem", cents: result.cents };
     case "pending":
       return { kind: "pending", cents: result.cents };
+    case "held":
+      // Only a client's own cancel is held, and no barber waits on its answer.
+      return null;
     case "released":
       return { kind: "not_charged", why: result.why === "fees_off" ? "fees_off" : "no_fee_due" };
     case "none":
@@ -72,6 +78,13 @@ export async function settleCardOnFile(params: {
   outcome: "CANCELED" | "NO_SHOW";
   /** True only on customer-initiated cancels (manage page, receptionist). */
   applyPolicyFee: boolean;
+  /**
+   * The BARBER said yes to this fee: their own "Client cancelled - charge $X"
+   * tap. Only that path sets it. Without it, a shop that approves fees first
+   * (Shop.cardFeeNeedsApproval) holds a late-cancel fee for the barber
+   * instead of charging it.
+   */
+  barberApproved?: boolean;
   priceAtBooking: unknown;
   serviceName: string | null;
   startsAt: Date;
@@ -90,6 +103,7 @@ export async function settleCardOnFile(params: {
         name: true,
         timezone: true,
         ownerId: true,
+        cardFeeNeedsApproval: true,
       },
     });
     if (!shop) return { action: "none" };
@@ -119,6 +133,62 @@ export async function settleCardOnFile(params: {
       return { action: "released", why };
     }
 
+    // 🔴 THE BARBER APPROVES IT FIRST (Shop.cardFeeNeedsApproval). The CLIENT
+    // cancelled - nobody at the shop has said yes to this charge - so it waits
+    // on the appointment for Charge or Waive and the card is kept. The barber's
+    // own late-cancel tap says `barberApproved`; a no-show is only ever marked
+    // by the barber. Fail-safe: a new customer cancel path that forgets the
+    // flag holds the fee rather than charging it.
+    if (
+      params.outcome === "CANCELED" &&
+      params.applyPolicyFee &&
+      params.barberApproved !== true &&
+      shop.cardFeeNeedsApproval
+    ) {
+      const held = await holdCardFeeForApproval({
+        shopId: params.shopId,
+        appointmentId: params.appointmentId,
+        ownerId: shop.ownerId,
+        timezone: shop.timezone,
+        cents,
+        now: params.now,
+      });
+      return held ? { action: "held", cents, reason } : { action: "none", why: "already" };
+    }
+
+    return await chargeFeeAndTell({
+      shopId: params.shopId,
+      appointmentId: params.appointmentId,
+      shop,
+      cents,
+      reason,
+      serviceName: params.serviceName,
+      startsAt: params.startsAt,
+    });
+  } catch (err) {
+    logger.error({ err, appointmentId: params.appointmentId }, "settleCardOnFile failed");
+    return { action: "none" };
+  }
+}
+
+/**
+ * Charge a kept card a fee already decided on, and tell whoever has to know:
+ * the client when it went through, the barber when it did not. Shared by the
+ * settlement above and by the barber's Charge on a fee that waited for them
+ * (services/cardFeeApproval.ts), so an approved fee is taken and announced
+ * exactly as an immediate one is.
+ */
+export async function chargeFeeAndTell(params: {
+  shopId: string;
+  appointmentId: string;
+  shop: { name: string; timezone: string; ownerId: string };
+  cents: number;
+  reason: CardOnFileChargeReason;
+  serviceName: string | null;
+  startsAt: Date;
+}): Promise<SettleResult> {
+  const { shop, cents, reason } = params;
+  try {
     const what = params.serviceName ?? "your appointment";
     const charged = await chargeCardOnFile({
       shopId: params.shopId,
@@ -178,9 +248,71 @@ export async function settleCardOnFile(params: {
     // nothing_to_charge: unreachable past the cents check above.
     return { action: "none" };
   } catch (err) {
-    logger.error({ err, appointmentId: params.appointmentId }, "settleCardOnFile failed");
+    logger.error({ err, appointmentId: params.appointmentId }, "card on file: fee charge failed");
     return { action: "none" };
   }
+}
+
+/**
+ * Put a client's late-cancel fee in front of the barber instead of charging
+ * it (Shop.cardFeeNeedsApproval). Writes the figure onto the appointment - a
+ * compare-and-set on "nothing waiting, nothing waived", so a retried cancel
+ * never re-opens a fee the barber already decided - and tells the barber.
+ * The card is NOT released: it is what the fee will be charged to. False when
+ * a fee was already waiting or decided.
+ */
+export async function holdCardFeeForApproval(params: {
+  shopId: string;
+  appointmentId: string;
+  ownerId: string;
+  timezone: string;
+  cents: number;
+  now: Date;
+}): Promise<boolean> {
+  const held = await runWithShop(params.shopId, (tx) =>
+    tx.appointment.updateMany({
+      where: {
+        id: params.appointmentId,
+        shopId: params.shopId,
+        cardFeeAwaitingSince: null,
+        cardFeeWaivedAt: null,
+      },
+      data: { cardFeeAwaitingCents: params.cents, cardFeeAwaitingSince: params.now },
+    }),
+  );
+  if (held.count === 0) return false;
+  logger.info(
+    { shopId: params.shopId, appointmentId: params.appointmentId, cents: params.cents },
+    "card on file: late-cancel fee waiting for the barber",
+  );
+  const appt = await runWithShop(params.shopId, (tx) =>
+    tx.appointment.findFirst({
+      where: { id: params.appointmentId, shopId: params.shopId },
+      select: {
+        firstName: true,
+        lastName: true,
+        startsAt: true,
+        staff: { select: { userId: true } },
+      },
+    }),
+  );
+  const who = [appt?.firstName, appt?.lastName].filter(Boolean).join(" ") || "A client";
+  await sendToBarber({
+    shopId: params.shopId,
+    userId: appt?.staff?.userId ?? params.ownerId,
+    kind: "cancel",
+    message: {
+      title: `Charge ${who}'s late-cancel fee?`,
+      body: `${who} cancelled inside your cutoff. Nothing is charged until you say so: open it to charge the $${(params.cents / 100).toFixed(2)} fee or waive it. If you do neither in ${CARD_FEE_APPROVAL_DAYS} days, the card is let go.`,
+      tag: `cof-approve-${params.appointmentId}`,
+      ...(appt
+        ? { url: appointmentDeepLink(params.appointmentId, { startsAt: appt.startsAt, timezone: params.timezone }) }
+        : {}),
+    },
+  }).catch((err: unknown) => {
+    logger.warn({ err, appointmentId: params.appointmentId }, "card on file: approval alert failed");
+  });
+  return true;
 }
 
 /**

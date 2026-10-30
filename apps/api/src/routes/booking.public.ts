@@ -3509,6 +3509,11 @@ async function lateCancelCardFee(
   inside: boolean;
   windowHours: number;
   card: { brand: string | null; last4: string | null };
+  /**
+   * The shop approves fees first (Shop.cardFeeNeedsApproval): the page says
+   * the fee MAY be charged, since the barber can still waive it.
+   */
+  needsApproval: boolean;
 } | null> {
   // This booking's OWN card - the one the settlement charges (a later visit
   // of a series has none of its own and is never charged).
@@ -3532,12 +3537,17 @@ async function lateCancelCardFee(
     terms,
   });
   if (cents <= 0) return null;
+  const shop = await prisma.shop.findUnique({
+    where: { id: appt.shopId },
+    select: { cardFeeNeedsApproval: true },
+  });
   return {
     cents,
     from: from.toISOString(),
     inside,
     windowHours: terms.cancelWindowHours,
     card: { brand: card.brand, last4: card.last4 },
+    needsApproval: shop?.cardFeeNeedsApproval === true,
   };
 }
 

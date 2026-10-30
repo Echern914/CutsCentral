@@ -1161,3 +1161,18 @@ export function describeLateCancelChargeResult(
   }
   return describeNoShowChargeResult(result, last4);
 }
+
+/**
+ * 🔴 THE BARBER APPROVES IT FIRST (Shop.cardFeeNeedsApproval - Drick,
+ * 2026-10-30). A CLIENT's own late cancel (their link, the texting
+ * receptionist) charges nothing on the spot: the fee waits on the appointment
+ * for the barber to Charge or Waive. The card is kept while it waits, and let
+ * go - uncharged - once this long has passed with no decision.
+ */
+export const CARD_FEE_APPROVAL_DAYS = 7;
+export const CARD_FEE_APPROVAL_MS = CARD_FEE_APPROVAL_DAYS * 24 * 60 * 60 * 1000;
+
+/** When a fee waiting since `since` lapses uncharged. */
+export function cardFeeApprovalDeadline(since: Date | string): Date {
+  return new Date(new Date(since).getTime() + CARD_FEE_APPROVAL_MS);
+}

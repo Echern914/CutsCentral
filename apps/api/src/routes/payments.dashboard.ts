@@ -42,6 +42,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
       chargeCardOnFileFees: true,
       cardFeeFlatCents: true,
       requireCardToBook: true,
+      cardFeeNeedsApproval: true,
       tipPolicy: true,
       onlineTipsEnabled: true,
       payDirectEnabled: true,
@@ -84,6 +85,9 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
     cardFeeFlatCents: shop.cardFeeFlatCents,
     // Card on file: is a client who skips the card still booked? (false = yes)
     requireCardToBook: shop.requireCardToBook,
+    // Card on file: a client's own late cancel waits for the barber's Charge
+    // or Waive instead of charging on the spot (services/cardFeeApproval.ts).
+    cardFeeNeedsApproval: shop.cardFeeNeedsApproval,
     tipPolicy: shop.tipPolicy,
     // Clients may tip online after a finished visit (PATCH /tips below).
     onlineTipsEnabled: shop.onlineTipsEnabled,
@@ -190,6 +194,11 @@ const settingsSchema = z
     // Card on file: hold the time until a card is saved (true), or book the
     // client at Confirm and make the card step optional (false, the default).
     requireCardToBook: z.boolean().optional(),
+    // Card on file: hold a client's own late-cancel fee for the barber to
+    // Charge or Waive (true), or charge it on the spot (false, the default).
+    // Read when a client cancels, never snapshotted: it only ever decides
+    // whether the barber is asked first, not what the client agreed to.
+    cardFeeNeedsApproval: z.boolean().optional(),
     cancelWindowHours: z.number().int().min(0).max(720).optional(),
     cancelFeeBps: z.number().int().min(0).max(10000).optional(),
     // Deposit taken at booking, in CENTS. Floor of $1 so "deposit mode with a
@@ -246,6 +255,7 @@ paymentsDashboardRouter.patch("/settings", async (req, res) => {
       ...(d.chargeCardOnFileFees !== undefined ? { chargeCardOnFileFees: d.chargeCardOnFileFees } : {}),
       ...(d.cardFeeFlatCents !== undefined ? { cardFeeFlatCents: d.cardFeeFlatCents } : {}),
       ...(d.requireCardToBook !== undefined ? { requireCardToBook: d.requireCardToBook } : {}),
+      ...(d.cardFeeNeedsApproval !== undefined ? { cardFeeNeedsApproval: d.cardFeeNeedsApproval } : {}),
       ...(d.depositAmountCents !== undefined
         ? { depositAmountCents: d.depositAmountCents }
         : {}),

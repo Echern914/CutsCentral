@@ -2,6 +2,7 @@
 
 import { cap, useVocab } from "@/components/VocabProvider";
 import { APP_NAME } from "@chairback/config/constants";
+import { CARD_FEE_APPROVAL_DAYS } from "@chairback/config/shopPolicy";
 import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
@@ -88,6 +89,9 @@ export function PaymentsManager({
   // card_on_file: is the card a condition of the booking? Off (the default):
   // Confirm books them and the card step is optional.
   const [requireCard, setRequireCard] = useState(initial.requireCardToBook ?? false);
+  // card_on_file: a client's own late cancel waits for the barber's Charge or
+  // Waive instead of charging their card on the spot.
+  const [feeNeedsApproval, setFeeNeedsApproval] = useState(initial.cardFeeNeedsApproval ?? false);
   // Held as raw strings so the field can be empty while typing. A numeric state
   // defaulting to 0 rendered a literal "0" the barber couldn't delete (typing
   // "40" showed "040"); the string lets the input clear, and we coerce on save.
@@ -334,6 +338,7 @@ export function PaymentsManager({
           ? {
               chargeCardOnFileFees: chargeFees,
               requireCardToBook: requireCard,
+              cardFeeNeedsApproval: feeNeedsApproval,
               cardFeeFlatCents: flatFee ? Math.round(flatRaw * 100) : null,
             }
           : {}),
@@ -669,6 +674,26 @@ export function PaymentsManager({
                 </span>
               </span>
             </label>
+            {chargeFees && (
+              <label className="mt-3 ml-7 flex items-start gap-3" data-testid="fee-needs-approval">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4"
+                  checked={feeNeedsApproval}
+                  onChange={(e) => setFeeNeedsApproval(e.target.checked)}
+                  aria-label="Ask me before charging a late cancellation"
+                />
+                <span>
+                  <span className="block text-sm font-medium">Ask me before charging a late cancellation</span>
+                  <span className="mt-0.5 block text-[11px] text-muted">
+                    When a client cancels inside your cutoff themselves, nothing is charged until you
+                    approve it. You get an alert, and the appointment shows Charge and Waive. If you do
+                    neither in {CARD_FEE_APPROVAL_DAYS} days, the card is let go uncharged. No-shows
+                    and cancellations you record already ask you first.
+                  </span>
+                </span>
+              </label>
+            )}
             <label className="mt-3 flex items-start gap-3 border-t border-subtle pt-3">
               <input
                 type="checkbox"

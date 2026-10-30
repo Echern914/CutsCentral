@@ -23,6 +23,7 @@ import { KEPT_BY_A_NO_SHOW } from "../engines/appointmentPromotion.js";
 import { recordedTipRefusal } from "./booking.recordedTip.js";
 import {
   lateCancelCardOutcome,
+  cardFeeApprovalDeadline,
   noShowCardOutcome,
   type LateCancelCardOutcome,
   type NoShowCardOutcome,
@@ -315,6 +316,16 @@ export interface AppointmentDetail {
     /** When the charge was made (the Payment row's creation). */
     at: string;
   } | null;
+  /**
+   * A client's late-cancel fee WAITING FOR THE BARBER (Shop.cardFeeNeedsApproval):
+   * nothing is charged until they tap Charge, and Waive lets the card go. The
+   * figure is the one this booking's terms gave when the client cancelled.
+   * `lapsesAt` is when the card is let go undecided. Null when nothing waits.
+   * Optional = an older API.
+   */
+  cardFeeAwaiting?: { cents: number; last4: string | null; since: string; lapsesAt: string } | null;
+  /** The barber waived a waiting fee, or it lapsed undecided. Optional = an older API. */
+  cardFeeWaivedAt?: string | null;
   /** Where to go and change it, when another system owns the schedule. */
   externalManageUrl: string | null;
 }
@@ -822,6 +833,20 @@ export function registerAppointmentDetail(router: Router): void {
           at: feeRow.createdAt.toISOString(),
         }
       : null;
+    // A client's late-cancel fee waiting for the barber's Charge or Waive.
+    const feeWait = await prisma.appointment.findFirst({
+      where: { id: appt.id, shopId },
+      select: { cardFeeAwaitingCents: true, cardFeeAwaitingSince: true, cardFeeWaivedAt: true },
+    });
+    const cardFeeAwaiting: AppointmentDetail["cardFeeAwaiting"] =
+      feeWait?.cardFeeAwaitingCents != null && feeWait.cardFeeAwaitingSince
+        ? {
+            cents: feeWait.cardFeeAwaitingCents,
+            last4: appt.cardOnFile?.last4 ?? null,
+            since: feeWait.cardFeeAwaitingSince.toISOString(),
+            lapsesAt: cardFeeApprovalDeadline(feeWait.cardFeeAwaitingSince).toISOString(),
+          }
+        : null;
     const noShowFee =
       noShowCard?.charge === true ? { cents: noShowCard.cents, last4: noShowCard.last4 } : null;
     const history = await clientHistory(
@@ -906,6 +931,8 @@ export function registerAppointmentDetail(router: Router): void {
       noShowCard,
       lateCancelCard,
       cardFee,
+      cardFeeAwaiting,
+      cardFeeWaivedAt: feeWait?.cardFeeWaivedAt?.toISOString() ?? null,
     };
     res.json(detail);
   });

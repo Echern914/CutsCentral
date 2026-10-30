@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-30-approve-late-cancel-fee",
+    date: "2026-10-30",
+    kind: "feature",
+    title: "Approve a client's late-cancel fee before it's charged",
+    body:
+      "Payments now has Ask me before charging a late cancellation. With it on, a client who cancels inside your " +
+      "cutoff isn't charged: you get an alert, and the appointment shows Charge and Waive. Decide within 7 days, " +
+      "or the card is let go uncharged.",
+  },
+  {
     id: "2026-10-30-late-cancel-fee-on-payment-card",
     date: "2026-10-30",
     kind: "feature",
