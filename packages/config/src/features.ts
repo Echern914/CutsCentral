@@ -1242,6 +1242,14 @@ export interface NavContext {
   demo?: boolean;
   /** Inside the iOS/Android shell (App Store Guideline 3.1.1). */
   inApp?: boolean;
+  /**
+   * Inside the shell, the caller will OPEN a billing destination in Safari
+   * rather than navigate to it: an app build that announces `openWeb`, with
+   * NATIVE_EXTERNAL_BILLING_LINK on (web lib/useNativeBillingLink.ts). Only a
+   * surface that renders billing rows as that Safari action may pass it - the
+   * More sheet and the palette do. Anyone else keeps the 3.1.1 denial.
+   */
+  billingOnWeb?: boolean;
   /** Shop flags that are switched OFF. */
   flagsOff?: readonly FeatureFlag[];
 }
@@ -1282,8 +1290,9 @@ export function resolveFeature(id: string, ctx: NavContext = {}): NavResolution 
   }
 
   // 3.1.1 before plan: inside the shell a billing href must not be reachable
-  // AT ALL, including as the explanation for why something is locked.
-  if (ctx.inApp && isBillingHref(entry.href)) {
+  // AT ALL, including as the explanation for why something is locked. The one
+  // exception opens it in Safari instead (`billingOnWeb`), never the WebView.
+  if (ctx.inApp && isBillingHref(entry.href) && ctx.billingOnWeb !== true) {
     return { ok: false, reason: "in_app", entry };
   }
 

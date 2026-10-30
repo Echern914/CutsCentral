@@ -51,8 +51,7 @@ export function UpgradeOnWebLink({
     mode === "native" ? (
       <button type="button" onClick={openBillingInBrowser} className={NATIVE_BUTTON}>
         {NATIVE_BILLING_LABEL}
-        <span aria-hidden>↗</span>
-        <span className="sr-only"> (opens your browser)</span>
+        <OpensBrowserMark />
       </button>
     ) : (
       // "web", or not yet known: the browser experience, hidden from the app's
@@ -65,6 +64,19 @@ export function UpgradeOnWebLink({
     );
 
   return wrapClassName ? <p className={wrapClassName}>{inner}</p> : inner;
+}
+
+/**
+ * " ↗" for anything that leaves the app for Safari, with words for a screen
+ * reader. Shared with the More sheet and the palette's "Plan & billing ↗".
+ */
+export function OpensBrowserMark() {
+  return (
+    <>
+      <span aria-hidden> ↗</span>
+      <span className="sr-only"> (opens your browser)</span>
+    </>
+  );
 }
 
 /**
