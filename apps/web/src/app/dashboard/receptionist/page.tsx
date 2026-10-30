@@ -4,7 +4,7 @@ import { apiGet } from "@/lib/api";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { Card } from "@/components/ui/Card";
 import { CardHeader } from "@/components/ui/Card";
-import { HideInNativeApp } from "@/components/HideInNativeApp";
+import { UpgradeOnWebLink } from "@/components/UpgradeOnWebLink";
 import { ReceptionistControls } from "../billing/ReceptionistControls";
 import { UpgradeCallout } from "../_components/UpgradeCallout";
 
@@ -78,16 +78,12 @@ export default async function ReceptionistPage() {
               it is, this is where you turn it on and off and see the number
               clients text.
             </p>
-            {/* The upgrade path is a PURCHASE mechanism, so it is web-only
-                (Guideline 3.1.1). In the app this block simply ends here rather
-                than dangling a link the shell would have to intercept. */}
-            <HideInNativeApp>
-              <p className="mt-2">
-                <Link href="/dashboard/billing" className="text-gold hover:underline">
-                  See plans and add it &rarr;
-                </Link>
-              </p>
-            </HideInNativeApp>
+            {/* The upgrade path is a PURCHASE mechanism: a link on the web; in
+                the app a button that opens billing in Safari, never the
+                WebView (UpgradeOnWebLink), or nothing in an older build. */}
+            <UpgradeOnWebLink wrapClassName="mt-2" className="text-gold hover:underline">
+              See plans and add it &rarr;
+            </UpgradeOnWebLink>
           </div>
         )}
 

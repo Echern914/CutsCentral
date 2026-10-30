@@ -198,6 +198,25 @@ export function isBillingHref(href: string): boolean {
 }
 
 /**
+ * 🔴 THE KILL SWITCH for "Manage plan on getchairback.com ↗" inside the iOS
+ * app (web components/UpgradeOnWebLink.tsx).
+ *
+ * Since the April 30, 2025 US court injunction (Epic v. Apple), Guideline 3.1.1
+ * lets an app on the UNITED STATES storefront link out to buy on the web. The
+ * app is US-only, so where the app used to say only "plans live on the web",
+ * a barber now gets a button that opens billing in Safari - never inside the
+ * WebView, and with no price shown in the app.
+ *
+ * If App Review objects, set this to false and redeploy the WEB: every in-app
+ * surface goes back to its factual-only line at once, with no App Store build.
+ * On the web it changes nothing - the normal billing link always shows there.
+ *
+ * Note this is separate from `isBillingHref` above: the nav (More sheet,
+ * palette) still never routes the WebView itself onto the billing page.
+ */
+export const NATIVE_EXTERNAL_BILLING_LINK: boolean = true;
+
+/**
  * The booking page is one route with five tabs, so half the registry's
  * destinations are `?tab=` deep links. Pinned here and asserted in the tests
  * because a tab that does not exist silently lands the barber on the DEFAULT

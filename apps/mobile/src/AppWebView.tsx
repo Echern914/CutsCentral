@@ -14,7 +14,7 @@ import { WebView, type WebViewProps } from "react-native-webview";
 import * as WebBrowser from "expo-web-browser";
 import { setStatusBarStyle } from "expo-status-bar";
 import { API_ORIGIN, NEXT_UP_WIDGET_ENABLED, WEB_ORIGIN } from "@/src/config";
-import { parseOpenAuthRequest, resumeUrl } from "@/src/nativeBridge";
+import { nativeCapabilities, parseOpenAuthRequest, parseOpenWebRequest, resumeUrl } from "@/src/nativeBridge";
 import { FRAME, PAGE_BAR } from "@/src/frameColors";
 import { ALIVE_PING, ALIVE_PROBE_JS, ALIVE_TIMEOUT_MS, shouldProbeOnReturn, shouldReloadOnReturn } from "@/src/staleReturn";
 
@@ -143,14 +143,15 @@ true;
 // - nextUpWidget: ONLY in a build with the Lock Screen widget (its build flag),
 //   so the dashboard offers the widget's names switch only where a widget
 //   exists (web useAppHasNextUpWidget).
+// - openWeb (iOS): it opens billing in Safari on request (the "cb:open-web"
+//   message, nativeBridge.ts); without it the page shows no billing link at
+//   all, because an older build would load one INSIDE the WebView.
 const ANNOUNCE_CAPABILITIES = `
 (function () {
   try {
-    window.__cbNative = Object.assign(window.__cbNative || {}, ${JSON.stringify({
-      openAuth: true,
-      rewardsTab: true,
-      ...(NEXT_UP_WIDGET_ENABLED ? { nextUpWidget: true } : {}),
-    })});
+    window.__cbNative = Object.assign(window.__cbNative || {}, ${JSON.stringify(
+      nativeCapabilities({ platform: Platform.OS, nextUpWidget: NEXT_UP_WIDGET_ENABLED }),
+    )});
   } catch (e) {}
 })();
 true;
@@ -463,6 +464,13 @@ export function AppWebView({
           const openAuth = parseOpenAuthRequest(e.nativeEvent.data, { apiOrigin: API_ORIGIN });
           if (openAuth) {
             void runOpenAuth(openAuth);
+            return;
+          }
+          // Billing in SAFARI (Linking hands it to iOS), never in this
+          // WebView: the purchase happens in the browser (nativeBridge.ts).
+          const openWeb = parseOpenWebRequest(e.nativeEvent.data, { webOrigin: WEB_ORIGIN });
+          if (openWeb) {
+            Linking.openURL(openWeb).catch(() => {});
             return;
           }
           callerOnMessage?.(e);

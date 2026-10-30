@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { nudgeClientAction, type NudgeChannel } from "../../actions";
 import { PlanBadge } from "../../_components/PlanBadge";
+import { UpgradeOnWebLink } from "@/components/UpgradeOnWebLink";
 
 /** Say where it went - "sent" alone left the barber guessing whether a text
  *  went out while texting is off. */
@@ -71,11 +72,15 @@ export function RebookPanel({
         </>
       )}
       {premiumLocked ? (
-        // Badge + plain words only: no price, no link, so it is the same in
-        // the iOS app (3.1.1). The web billing link lives on the banner/page.
+        // Badge + plain words, no price. The way to billing is
+        // UpgradeOnWebLink: a link on the web, Safari from the app (never the
+        // WebView), nothing in an older app build (3.1.1).
         <div className="flex flex-col items-center gap-1.5">
           <PlanBadge tier="pro" />
           <p className="text-xs text-muted">Rebooking nudges are part of Premium.</p>
+          <UpgradeOnWebLink className="text-xs font-semibold text-gold hover:underline">
+            See plans &rarr;
+          </UpgradeOnWebLink>
         </div>
       ) : (
       <button

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { parseOpenAuthRequest, resumeUrl } from "./nativeBridge";
+import {
+  nativeCapabilities,
+  OPEN_WEB_MESSAGE,
+  parseOpenAuthRequest,
+  parseOpenWebRequest,
+  resumeUrl,
+} from "./nativeBridge";
 
 const origins = { apiOrigin: "https://api.getchairback.com" };
 const good = {
@@ -80,5 +86,71 @@ describe("resumeUrl", () => {
     expect(
       resumeUrl("https://getchairback.com", "/dashboard/payments", "chairback://x?connect=<script>"),
     ).toBe("https://getchairback.com/dashboard/payments?connect=cancelled");
+  });
+});
+
+/**
+ * "Manage plan on getchairback.com ↗": the page asks for billing in Safari.
+ * The page sends a PATH; the app builds the address on its own origin and
+ * honours listed paths only, so the message cannot become an open redirect.
+ */
+describe("parseOpenWebRequest", () => {
+  const web = { webOrigin: "https://getchairback.com" };
+  const ask = (m: unknown) => parseOpenWebRequest(JSON.stringify(m), web);
+
+  it("opens billing - with or without the plan cards anchor - on OUR origin", () => {
+    expect(ask({ type: OPEN_WEB_MESSAGE, path: "/dashboard/billing#plans" })).toBe(
+      "https://getchairback.com/dashboard/billing#plans",
+    );
+    expect(ask({ type: OPEN_WEB_MESSAGE, path: "/dashboard/billing" })).toBe(
+      "https://getchairback.com/dashboard/billing",
+    );
+  });
+
+  it("🔴 refuses any other path, any URL, and anything that could become a host", () => {
+    for (const path of [
+      "https://evil.example/dashboard/billing",
+      "//evil.example/dashboard/billing",
+      "/dashboard/billing/../../login",
+      "/dashboard/billing?x=1",
+      "/dashboard",
+      "/login",
+      "/dashboard/payments",
+      ".evil.example/dashboard/billing",
+      "",
+    ]) {
+      expect(ask({ type: OPEN_WEB_MESSAGE, path })).toBeNull();
+    }
+  });
+
+  it("ignores other messages, missing fields and non-JSON", () => {
+    expect(ask({ type: "cb:open-auth", path: "/dashboard/billing" })).toBeNull();
+    expect(ask({ type: OPEN_WEB_MESSAGE })).toBeNull();
+    expect(ask({ type: OPEN_WEB_MESSAGE, path: 42 })).toBeNull();
+    expect(parseOpenWebRequest("cb:ready", web)).toBeNull();
+    expect(parseOpenWebRequest("null", web)).toBeNull();
+  });
+
+  it("is the message the web sends (apps/web lib/useNativeBillingLink.ts)", () => {
+    expect(OPEN_WEB_MESSAGE).toBe("cb:open-web");
+  });
+});
+
+describe("nativeCapabilities", () => {
+  it("announces openWeb on iOS, where the US-storefront link-out applies", () => {
+    expect(nativeCapabilities({ platform: "ios", nextUpWidget: false })).toEqual({
+      openAuth: true,
+      rewardsTab: true,
+      openWeb: true,
+    });
+  });
+
+  it("🔴 never on Android: the page there keeps showing no billing link", () => {
+    expect(nativeCapabilities({ platform: "android", nextUpWidget: false }).openWeb).toBeUndefined();
+  });
+
+  it("keeps the widget flag tied to its build flag", () => {
+    expect(nativeCapabilities({ platform: "ios", nextUpWidget: true }).nextUpWidget).toBe(true);
+    expect(nativeCapabilities({ platform: "ios", nextUpWidget: false }).nextUpWidget).toBeUndefined();
   });
 });

@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/Card";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { ShowInNativeApp } from "@/components/ShowInNativeApp";
+import { UpgradeOnWebLink } from "@/components/UpgradeOnWebLink";
 import { TrackConversion } from "@/components/TrackConversion";
 import {
   CancelMembershipButton,
@@ -348,6 +349,11 @@ export default async function BillingPage({
                     <span className="text-offwhite">getchairback.com</span> in your
                     web browser.
                   </p>
+                  {/* The way there: a button that opens THIS page in Safari,
+                      where the plan cards are (never in the WebView, never a
+                      price here). Nothing in an older app build or with the
+                      kill switch off - the line above stands alone, as before. */}
+                  <UpgradeOnWebLink wrapClassName="mt-3">Manage your plan</UpgradeOnWebLink>
                   {/* Cancelling is NOT a purchase, so it belongs here as well as
                       on the web: 3.1.1 forbids in-app access to BUYING
                       mechanisms, and a barber must never have to hunt for the
