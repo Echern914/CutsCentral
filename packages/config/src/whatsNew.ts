@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-30-what-other-shops-use",
+    date: "2026-10-30",
+    kind: "feature",
+    title: "See which features other shops use",
+    body:
+      "Insights now shows what share of active ChairBack shops use each feature - online booking, rewards, " +
+      "deposits, the waitlist and more - next to whether you use it, with a link to turn it on. Totals only, " +
+      "rounded to 5%: no shop is ever named.",
+  },
+  {
     id: "2026-10-30-appointment-tip-row",
     date: "2026-10-30",
     kind: "feature",

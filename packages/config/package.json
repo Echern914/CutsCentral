@@ -38,6 +38,7 @@
     "./bookingRuleUnits": "./src/bookingRuleUnits.ts",
     "./tierPerks": "./src/tierPerks.ts",
     "./tierRules": "./src/tierRules.ts",
+    "./featureAdoption": "./src/featureAdoption.ts",
     "./affiliateProgram": "./src/affiliateProgram.ts",
     "./partnerProgram": "./src/partnerProgram.ts",
     "./supportCapabilities": "./src/supportCapabilities.ts",
