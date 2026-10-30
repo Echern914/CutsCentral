@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import type { BookingModeKey } from "@chairback/config/constants";
 import type { ServiceVisibility } from "@chairback/config/serviceVisibility";
-import type { NoShowCardOutcome, NoShowChargeResult } from "@chairback/config/shopPolicy";
+import type {
+  LateCancelCardOutcome,
+  NoShowCardOutcome,
+  NoShowChargeResult,
+} from "@chairback/config/shopPolicy";
 import { apiGet, apiSend, type ApiResult } from "@/lib/api";
 import { apiAnswered } from "@/lib/apiAnswered";
 import { refusedOnlyNewKeys } from "@/lib/apiCompat";
@@ -1716,6 +1720,24 @@ export async function cancelAppointmentAction(id: string): Promise<Result> {
 }
 
 /**
+ * Cancel a booking the CLIENT cancelled late (by text or call): the late-cancel
+ * fee on this booking's own terms is charged to the kept card, exactly as if
+ * they had cancelled from their link. `card` is what the card did.
+ */
+export async function lateCancelAppointmentAction(
+  id: string,
+): Promise<{ ok: boolean; error?: string; message?: string; card?: NoShowChargeResult | null }> {
+  const res = await apiSend<{ card?: NoShowChargeResult | null }>(
+    "POST",
+    `/api/booking/appointments/${encodeURIComponent(id)}/cancel`,
+    { lateCancelFee: true },
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed", message: res.message };
+  revalidatePath("/dashboard/booking");
+  return { ok: true, card: res.data?.card ?? null };
+}
+
+/**
  * Undo a cancel.
  *
  * Narrow by design (see the route): the server refuses anything already
@@ -2295,6 +2317,20 @@ export interface AppointmentDetail {
    * the fact). Optional = older API.
    */
   noShowCard?: NoShowCardOutcome | null;
+  /**
+   * What Cancel → "The client cancelled late" would charge the kept card now,
+   * or the one reason it would charge nothing. Upcoming native bookings only.
+   * Optional = older API.
+   */
+  lateCancelCard?: LateCancelCardOutcome | null;
+  /** Proof of a no-show / late-cancel fee taken from the card on file. */
+  cardFee?: {
+    cents: number;
+    state: "charged" | "pending" | "declined" | "not_charged" | "refunded";
+    reason: "no_show" | "late_cancel";
+    last4: string | null;
+    at: string;
+  } | null;
 }
 
 /**

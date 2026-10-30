@@ -4551,6 +4551,33 @@ export async function cancelAppointmentCore(req: DashboardWriteReq, res: Dashboa
     res.status(409).json({ error: "tip_paid" });
     return;
   }
+  // 🔴 "THE CLIENT CANCELLED LATE" - the barber recording a cancellation the
+  // client made by text or call (Drick, 2026-10-30: "asking clients to Zelle
+  // you for canceling is ass"). The same terms as the client's own late
+  // cancel from their link: applyPolicyFee runs THIS booking's window and fee
+  // through settleCardOnFile (and keeps the policy share of a deposit), so the
+  // barber never types an amount and nothing is charged outside the window or
+  // with fees off. Only from BOOKED, in the write itself, like a no-show.
+  if (req.body?.lateCancelFee === true) {
+    let card: NoShowChargeResult | null = null;
+    const ok = await cancelAppointment(req.shop!.id, req.params.id!, "CANCELED", new Date(), {
+      applyPolicyFee: true,
+      onlyFrom: ["BOOKED"],
+      onCardSettled: (settled) => {
+        card = noShowChargeResult(settled);
+      },
+    });
+    if (!ok) {
+      res.status(409).json({ ok: false, error: "not_booked" });
+      return;
+    }
+    logger.info(
+      { shopId: req.shop!.id, appointmentId: req.params.id, actorUserId: req.userId ?? null },
+      "cancel: recorded as the client's late cancel",
+    );
+    res.json({ ok: true, card });
+    return;
+  }
   const ok = await cancelAppointment(req.shop!.id, req.params.id!, "CANCELED");
   res.status(ok ? 200 : 404).json({ ok });
 }
