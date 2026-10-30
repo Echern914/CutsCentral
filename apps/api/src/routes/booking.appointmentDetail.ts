@@ -21,7 +21,12 @@ import { readPolicySnapshot } from "../engines/bookingPolicy.js";
 import { serviceCheckoutEnabled } from "./booking.checkout.js";
 import { KEPT_BY_A_NO_SHOW } from "../engines/appointmentPromotion.js";
 import { recordedTipRefusal } from "./booking.recordedTip.js";
-import { noShowCardOutcome, type NoShowCardOutcome } from "@chairback/config";
+import {
+  lateCancelCardOutcome,
+  noShowCardOutcome,
+  type LateCancelCardOutcome,
+  type NoShowCardOutcome,
+} from "@chairback/config";
 
 /**
  * ONE BOOKING, IN FULL — the read behind the appointment sheet.
@@ -285,8 +290,46 @@ export interface AppointmentDetail {
    * Null when no no-show can be marked. Optional = an older API.
    */
   noShowCard?: NoShowCardOutcome | null;
+  /**
+   * What Cancel → "The client cancelled late" would do to the card right now:
+   * a charge with its figure (cardOnFileFeeFor, reason late_cancel, on THIS
+   * booking's terms) or the one reason nothing would be. Present only on an
+   * upcoming native booking. Optional = an older API.
+   */
+  lateCancelCard?: LateCancelCardOutcome | null;
+  /**
+   * PROOF of a no-show / late-cancel fee taken from the card on file: its own
+   * `fee` Payment row, kept after the sheet's moment-of-charge line is gone.
+   * Null when no fee was ever tried. Optional = an older API.
+   */
+  cardFee?: {
+    cents: number;
+    /**
+     * charged | pending (Stripe has not answered) | declined (the bank refused
+     * the card) | not_charged (Stripe refused the request - a setup problem,
+     * not the card) | refunded
+     */
+    state: "charged" | "pending" | "declined" | "not_charged" | "refunded";
+    reason: "no_show" | "late_cancel";
+    last4: string | null;
+    /** When the charge was made (the Payment row's creation). */
+    at: string;
+  } | null;
   /** Where to go and change it, when another system owns the schedule. */
   externalManageUrl: string | null;
+}
+
+/** A fee Payment row's status as the sheet states it. */
+function cardFeeState(
+  status: string,
+  cardStatus: string | null,
+): "charged" | "pending" | "declined" | "not_charged" | "refunded" {
+  if (status === "succeeded" || status === "partially_refunded") return "charged";
+  if (status === "refunded") return "refunded";
+  // A bank decline marks the CARD failed too; a Stripe setup problem fails the
+  // payment but puts the card back to saved (billing/cardOnFile.ts).
+  if (status === "failed" || status === "canceled") return cardStatus === "failed" ? "declined" : "not_charged";
+  return "pending";
 }
 
 /** Each platform's own appointment list — where a synced booking is managed. */
@@ -728,6 +771,57 @@ export function registerAppointmentDetail(router: Router): void {
             });
           })()
         : null;
+    // What recording the CLIENT's late cancel would charge - the same fee
+    // function settleCardOnFile charges with, on this booking's own terms.
+    const lateCancelCard =
+      !external && appt.status === "BOOKED"
+        ? await (async () => {
+            const snap = await prisma.appointment.findFirst({
+              where: { id: appt.id, shopId },
+              select: { priceAtBooking: true, startsAt: true, ...CANCELLATION_TERMS_SNAPSHOT_SELECT },
+            });
+            if (!snap) return null;
+            const terms = await termsForBooking(shopId, snap);
+            const now = new Date();
+            const feeCents = await cardOnFileFeeFor({
+              shopId,
+              appointmentId: appt.id,
+              priceAtBooking: snap.priceAtBooking,
+              startsAt: snap.startsAt,
+              now,
+              reason: "late_cancel",
+              terms,
+            });
+            const shopNow = await prisma.shop.findUnique({
+              where: { id: shopId },
+              select: { chargeCardOnFileFees: true },
+            });
+            return lateCancelCardOutcome({
+              cardStatus: appt.cardOnFile?.status ?? null,
+              last4: appt.cardOnFile?.last4 ?? null,
+              feeCents,
+              terms,
+              shopFeesOnNow: shopNow?.chargeCardOnFileFees === true,
+              startsAt: snap.startsAt,
+              now,
+            });
+          })()
+        : null;
+    // The fee itself, once one was tried: the newest `fee` Payment row.
+    const feeRow = await prisma.payment.findFirst({
+      where: { appointmentId: appt.id, shopId, purpose: "fee" },
+      orderBy: { createdAt: "desc" },
+      select: { status: true, amount: true, capturedAmount: true, refundedAmount: true, createdAt: true },
+    });
+    const cardFee: AppointmentDetail["cardFee"] = feeRow
+      ? {
+          cents: feeRow.capturedAmount ?? feeRow.amount,
+          state: cardFeeState(feeRow.status, appt.cardOnFile?.status ?? null),
+          reason: appt.status === "NO_SHOW" ? "no_show" : "late_cancel",
+          last4: appt.cardOnFile?.last4 ?? null,
+          at: feeRow.createdAt.toISOString(),
+        }
+      : null;
     const noShowFee =
       noShowCard?.charge === true ? { cents: noShowCard.cents, last4: noShowCard.last4 } : null;
     const history = await clientHistory(
@@ -810,6 +904,8 @@ export function registerAppointmentDetail(router: Router): void {
       undoNoShow,
       noShowFee,
       noShowCard,
+      lateCancelCard,
+      cardFee,
     };
     res.json(detail);
   });

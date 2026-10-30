@@ -984,3 +984,180 @@ export function describeNoShowChargeResult(
       }
   }
 }
+
+/**
+ * A LATE CANCEL THE SHOP RECORDS: the client cancelled by text or call inside
+ * the cancellation window, and the barber cancels the booking for them.
+ *
+ * Drick, 2026-10-30: "I need the charging cancellation fee... asking clients
+ * to Zelle you for canceling is ass." Until now only a client's OWN cancel
+ * (their link, the receptionist) could charge the fee; a barber's Cancel always
+ * let the card go. This is the barber saying "it's on them", the same way Mark
+ * no-show does - and the fee is still THIS booking's terms through
+ * cardOnFileFeeCents (window, rate or flat fee), never a figure the barber
+ * types.
+ *
+ * What the sheet says BEFORE the barber confirms: a charge with its figure, or
+ * the ONE reason nothing would be charged.
+ */
+export type LateCancelNoChargeReason =
+  /** Fees were off for this booking, and are still off at the shop. */
+  | "fees_off"
+  /** Fees are on at the shop now, but were off when this was booked. */
+  | "booked_before_fees"
+  /** Fees on for this booking, but no amount (no % and no flat fee). */
+  | "no_fee_set"
+  /** Fees on and set, but no cancellation window: only a no-show is charged. */
+  | "no_window"
+  /** It is earlier than this booking's cancellation window: a free cancel. */
+  | "outside_window"
+  /** Fees on and set, but the booking has no price: the fee is $0. */
+  | "no_price"
+  /** No card was ever saved on this booking. */
+  | "no_card"
+  /** A card was saved and has already been let go. */
+  | "card_released"
+  /** A charge was already tried on this card and the bank declined it. */
+  | "already_declined"
+  /** A charge on this card is still waiting on Stripe's answer. */
+  | "charge_in_progress";
+
+export type LateCancelCardOutcome =
+  | { charge: true; cents: number; last4: string | null }
+  | { charge: false; reason: LateCancelNoChargeReason; windowHours: number };
+
+export function lateCancelCardOutcome(input: {
+  /** CardOnFile.status on this booking, or null when there is no row. */
+  cardStatus: string | null;
+  last4: string | null;
+  /** What settleCardOnFile would charge for a late cancel NOW (cardOnFileFeeFor). */
+  feeCents: number;
+  /** THIS booking's terms (termsForBooking), never the shop's today. */
+  terms: CancellationTerms;
+  /** The shop's switch today - only to tell "turn it on" from "booked before". */
+  shopFeesOnNow: boolean;
+  startsAt: Date;
+  now: Date;
+}): LateCancelCardOutcome {
+  if (input.cardStatus === "saved" && input.feeCents > 0) {
+    return { charge: true, cents: input.feeCents, last4: input.last4 };
+  }
+  const windowHours = input.terms.cancelWindowHours;
+  const why = (reason: LateCancelNoChargeReason): LateCancelCardOutcome => ({
+    charge: false,
+    reason,
+    windowHours,
+  });
+  if (!input.terms.chargeCardOnFileFees) {
+    return why(input.shopFeesOnNow ? "booked_before_fees" : "fees_off");
+  }
+  if (!cardFeeConfigured(input.terms)) return why("no_fee_set");
+  if (windowHours <= 0) return why("no_window");
+  if (input.now.getTime() < input.startsAt.getTime() - windowHours * 3_600_000) return why("outside_window");
+  if (input.feeCents <= 0) return why("no_price");
+  if (input.cardStatus === "failed") return why("already_declined");
+  if (input.cardStatus === "charging") return why("charge_in_progress");
+  if (input.cardStatus !== "saved" && input.cardStatus !== "released" && input.cardStatus !== "charged") {
+    return why("no_card");
+  }
+  return why("card_released");
+}
+
+/**
+ * Whether the barber's Cancel stops to ask before cancelling: always when a
+ * fee is due, and also when card fees are on for this booking but nothing can
+ * be charged - so the barber reads WHY rather than assuming it charged. Only
+ * a booking with no card fees at all ("fees_off") keeps Cancel a single tap.
+ */
+export function lateCancelAsksFirst(outcome: LateCancelCardOutcome | null | undefined): boolean {
+  if (!outcome) return false;
+  return outcome.charge || outcome.reason !== "fees_off";
+}
+
+/** The outcome above in the barber's words, plus whether to offer the fee setting. */
+export function describeLateCancelCardOutcome(outcome: LateCancelCardOutcome): {
+  text: string;
+  settingsLink: boolean;
+} {
+  if (outcome.charge) {
+    const card = outcome.last4 ? `the card ending ${outcome.last4}` : "the card saved on this booking";
+    return { text: `Charges a ${dollarsFromCents(outcome.cents)} late-cancel fee to ${card}.`, settingsLink: false };
+  }
+  const hours = `${outcome.windowHours} hour${outcome.windowHours === 1 ? "" : "s"}`;
+  switch (outcome.reason) {
+    case "fees_off":
+      return {
+        text: "No fee can be charged: card fees for late cancels are off, and were off when this was booked. Turning them on covers bookings made after that.",
+        settingsLink: true,
+      };
+    case "booked_before_fees":
+      return {
+        text: "No fee can be charged: this was booked before you turned on card fees, so its terms don't allow one.",
+        settingsLink: false,
+      };
+    case "no_fee_set":
+      return {
+        text: "No fee can be charged: card fees are on, but no fee amount was set when this was booked.",
+        settingsLink: true,
+      };
+    case "no_window":
+      return {
+        text: "No fee can be charged: no cancellation window was set when this was booked, so only a no-show is charged.",
+        settingsLink: true,
+      };
+    case "outside_window":
+      return {
+        text: `No fee can be charged yet: it's more than ${hours} before the appointment, so cancelling is free under this booking's terms.`,
+        settingsLink: false,
+      };
+    case "no_price":
+      return { text: "No fee can be charged: this booking has no price, so the fee comes to $0.", settingsLink: false };
+    case "no_card":
+      return { text: "No fee can be charged: no card was saved on this booking.", settingsLink: false };
+    case "card_released":
+      return {
+        text: "No fee can be charged: the card saved on this booking has already been let go.",
+        settingsLink: false,
+      };
+    case "already_declined":
+      return {
+        text: "No fee can be charged: a charge was already tried on this card and the bank declined it.",
+        settingsLink: false,
+      };
+    case "charge_in_progress":
+      return {
+        text: "No fee can be charged: a charge on this card is still waiting on Stripe's answer.",
+        settingsLink: false,
+      };
+  }
+}
+
+/**
+ * What the card actually did once the late cancel was recorded - the same
+ * settleCardOnFile result a no-show reports, in late-cancel words.
+ */
+export function describeLateCancelChargeResult(
+  result: NoShowChargeResult,
+  last4: string | null,
+): { text: string; tone: "good" | "warn" | "muted" } {
+  if (result.kind === "charged") {
+    const card = last4 ? `the card ending ${last4}` : "the saved card";
+    return { text: `Charged a ${dollarsFromCents(result.cents)} late-cancel fee to ${card}.`, tone: "good" };
+  }
+  if (result.kind === "not_charged") {
+    switch (result.why) {
+      case "fees_off":
+        return { text: "Nothing was charged: card fees were off for this booking.", tone: "muted" };
+      case "no_fee_due":
+        return {
+          text: "Nothing was charged: under this booking's terms no late-cancel fee was due.",
+          tone: "muted",
+        };
+      case "no_card":
+        return { text: "Nothing was charged: no card was saved on this booking.", tone: "muted" };
+      case "already":
+        return { text: "Nothing more was charged: this card was already charged or tried.", tone: "muted" };
+    }
+  }
+  return describeNoShowChargeResult(result, last4);
+}

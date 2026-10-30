@@ -7,8 +7,12 @@ import { cn } from "@/lib/cn";
 import {
   appointmentEnded,
   CANCEL_PAST_END_COPY,
+  describeLateCancelCardOutcome,
+  describeLateCancelChargeResult,
   describeNoShowCardOutcome,
   describeNoShowChargeResult,
+  lateCancelAsksFirst,
+  type LateCancelCardOutcome,
   type NoShowCardOutcome,
   type NoShowChargeResult,
 } from "@chairback/config/shopPolicy";
@@ -49,6 +53,7 @@ import {
   getAppointmentDetailAction,
   markArrivedAction,
   noShowAppointmentAction,
+  lateCancelAppointmentAction,
   recordTipAction,
   undoNoShowAction,
   removeWalkInAction,
@@ -490,7 +495,71 @@ export function AppointmentSheet({
       setCancelPastAsk(true);
       return;
     }
+    // Card fees on for this booking: a fee due asks WHO cancelled; no fee
+    // possible says why first. With fees off, Cancel stays one tap.
+    if (lateCancelAsksFirst(detail?.lateCancelCard)) {
+      setNoShowAsk(null);
+      setConfirmRemove(false);
+      setConfirmCorrect(null);
+      setMarkedCard(null);
+      setLateCancelError(null);
+      setLateCancelAsk(true);
+      return;
+    }
     act(cancelAppointmentAction, "Canceled", true);
+  }
+
+  //  ── Cancel, when the CLIENT cancelled late ──
+  // Drick, 2026-10-30: "I need the charging cancellation fee... asking clients
+  // to Zelle you for canceling is ass." A client who cancels by text never
+  // touches their link, so the barber records it: the fee on this booking's
+  // own terms goes on the kept card, and the footer says what the card did.
+  const [lateCancelAsk, setLateCancelAsk] = useState(false);
+  const [lateCancelError, setLateCancelError] = useState<string | null>(null);
+  const [lateCancelBusy, setLateCancelBusy] = useState(false);
+  // A ref as well: a double tap lands before the state above re-renders.
+  const lateCancelBusyRef = useRef(false);
+  useEffect(() => {
+    if (rawView !== "detail") setLateCancelAsk(false);
+  }, [rawView]);
+
+  function confirmLateCancel() {
+    if (lateCancelBusyRef.current) return;
+    lateCancelBusyRef.current = true;
+    setLateCancelBusy(true);
+    setLateCancelError(null);
+    const promised = detail?.lateCancelCard;
+    void (async () => {
+      try {
+        let res: Awaited<ReturnType<typeof lateCancelAppointmentAction>>;
+        try {
+          res = await lateCancelAppointmentAction(row.id);
+        } catch {
+          res = { ok: false };
+        }
+        if (!res.ok) {
+          setLateCancelError(res.message ?? "That didn't go through. Nothing changed, so try again.");
+          load();
+          return;
+        }
+        setLateCancelAsk(false);
+        onChanged();
+        if (res.card) {
+          setMarkedCard({
+            kind: "late_cancel",
+            result: res.card,
+            last4: promised?.charge ? promised.last4 : null,
+          });
+          load();
+        } else {
+          toast("Canceled", "success");
+          onClose();
+        }
+      } finally {
+        lateCancelBusyRef.current = false;
+        setLateCancelBusy(false);
+      }
+    })();
   }
 
   //  ── No-show: marked, and taken back ──
@@ -508,9 +577,12 @@ export function AppointmentSheet({
   // What the kept card did once the no-show was marked, said in the footer
   // (a toast draws beneath this sheet on a phone). Drick, 2026-10-22: the
   // screen said "Marked no-show" whether the card was charged or not.
-  const [markedCard, setMarkedCard] = useState<{ result: NoShowChargeResult; last4: string | null } | null>(
-    null,
-  );
+  const [markedCard, setMarkedCard] = useState<{
+    result: NoShowChargeResult;
+    last4: string | null;
+    /** Which close this was: a no-show, or the client's late cancel. */
+    kind: "no_show" | "late_cancel";
+  } | null>(null);
   useEffect(() => {
     if (rawView !== "detail") {
       setNoShowAsk(null);
@@ -556,6 +628,7 @@ export function AppointmentSheet({
             // The card line before Confirm named its last four; keep them.
             const promised = detail?.noShowCard;
             setMarkedCard({
+              kind: "no_show",
               result: res.card,
               last4: detail?.noShowFee?.last4 ?? (promised?.charge ? promised.last4 : null),
             });
@@ -708,6 +781,21 @@ export function AppointmentSheet({
           />
         </div>
       )
+    ) : lateCancelAsk && detail?.lateCancelCard && lateCancelAsksFirst(detail.lateCancelCard) ? (
+      <LateCancelFooter
+        outcome={detail.lateCancelCard}
+        error={lateCancelError}
+        busy={lateCancelBusy || pending}
+        onLateCancel={confirmLateCancel}
+        onCancelNoFee={() => {
+          setLateCancelAsk(false);
+          act(cancelAppointmentAction, "Canceled", true);
+        }}
+        onKeep={() => {
+          setLateCancelAsk(false);
+          setLateCancelError(null);
+        }}
+      />
     ) : cancelPastAsk && detail ? (
       <CancelPastFooter
         busy={noShowBusy || pending}
@@ -739,6 +827,7 @@ export function AppointmentSheet({
       <UndoneNoShowFooter notes={undoneNotes} onDone={() => setUndoneNotes(null)} />
     ) : markedCard ? (
       <MarkedNoShowFooter
+        kind={markedCard.kind}
         result={markedCard.result}
         last4={markedCard.last4}
         onDone={() => setMarkedCard(null)}
@@ -2154,6 +2243,10 @@ function PaymentCard({
               value={money(0)}
             />
           )}
+          {/* PROOF of a fee taken from the card on file, kept after the
+              moment-of-charge footer is gone: what, how much, which card,
+              when, and whether Stripe actually took it. */}
+          {detail.cardFee && <CardFeeLine fee={detail.cardFee} timezone={detail.timezone} />}
           {p.refundedCents > 0 && (
             <Line label="Refunded" value={`−${money(p.refundedCents)}`} tone="bad" />
           )}
@@ -3160,6 +3253,100 @@ function RemoveWalkInFooter({
  * in the server's own words.
  */
 /**
+ * Cancel, when card fees are on for this booking. With a fee due: did the
+ * CLIENT cancel? "Yes" charges the fee on this booking's own terms; "No" is
+ * the ordinary shop cancel, which never charges and refunds any deposit in
+ * full. With no fee possible, it says why before cancelling, so a barber
+ * expecting a charge is never left guessing.
+ */
+function LateCancelFooter({
+  outcome,
+  error,
+  busy,
+  onLateCancel,
+  onCancelNoFee,
+  onKeep,
+}: {
+  outcome: LateCancelCardOutcome;
+  error: string | null;
+  busy: boolean;
+  onLateCancel: () => void;
+  onCancelNoFee: () => void;
+  onKeep: () => void;
+}) {
+  if (!outcome.charge) {
+    const said = describeLateCancelCardOutcome(outcome);
+    return (
+      <div className="flex w-full flex-col gap-2" data-testid="late-cancel-no-fee">
+        <p className="text-sm font-medium text-offwhite">Cancel with no fee?</p>
+        <p className="text-xs leading-relaxed text-muted">{said.text}</p>
+        {said.settingsLink && <FeeSettingsLink />}
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onCancelNoFee}
+            disabled={busy}
+            className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+          >
+            Cancel appointment
+          </button>
+          <button
+            type="button"
+            onClick={onKeep}
+            disabled={busy}
+            className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+          >
+            Keep it
+          </button>
+        </div>
+      </div>
+    );
+  }
+  const fee = outcome.cents % 100 === 0 ? `$${outcome.cents / 100}` : `$${(outcome.cents / 100).toFixed(2)}`;
+  return (
+    <div className="flex w-full flex-col gap-2" data-testid="late-cancel-confirm">
+      <p className="text-sm font-medium text-offwhite">Did the client cancel?</p>
+      <p className="text-xs leading-relaxed text-muted">
+        {describeLateCancelCardOutcome(outcome).text} It&apos;s inside your cancellation window, so the client agreed
+        to this fee when they booked, and they get an email receipt. If you&apos;re the one cancelling, cancel with no
+        fee.
+      </p>
+      {error && (
+        <p role="alert" data-testid="late-cancel-error" className="text-sm text-danger-soft">
+          {error}
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={onLateCancel}
+        disabled={busy}
+        className="flex h-11 w-full items-center justify-center rounded-xl border border-danger-soft/50 px-4 text-sm font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50"
+      >
+        {busy ? "Charging…" : `Client cancelled · charge ${fee}`}
+      </button>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={onCancelNoFee}
+          disabled={busy}
+          className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+        >
+          Cancel, no fee
+        </button>
+        <button
+          type="button"
+          onClick={onKeep}
+          disabled={busy}
+          className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+        >
+          Keep it
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Cancel on an appointment that already ENDED: asked in the footer, with the
  * no-show beside it. Before the end, Cancel is one tap as it always was.
  */
@@ -3441,19 +3628,25 @@ function UndoneNoShowFooter({ notes, onDone }: { notes: string[]; onDone: () => 
  * ChairBack's side, or nothing - and waits for Done.
  */
 function MarkedNoShowFooter({
+  kind,
   result,
   last4,
   onDone,
 }: {
+  kind: "no_show" | "late_cancel";
   result: NoShowChargeResult;
   last4: string | null;
   onDone: () => void;
 }) {
-  const said = describeNoShowChargeResult(result, last4);
+  const said =
+    kind === "late_cancel" ? describeLateCancelChargeResult(result, last4) : describeNoShowChargeResult(result, last4);
   return (
-    <div className="flex w-full flex-col gap-2" data-testid="no-show-marked">
+    <div
+      className="flex w-full flex-col gap-2"
+      data-testid={kind === "late_cancel" ? "late-cancel-done" : "no-show-marked"}
+    >
       <p role="status" className="text-sm font-medium text-offwhite">
-        Marked no-show.
+        {kind === "late_cancel" ? "Cancelled as a late cancel." : "Marked no-show."}
       </p>
       <p
         className={cn(
@@ -3702,6 +3895,55 @@ function CardSkeleton({ title, rows }: { title: string; rows: number }) {
       </div>
       <span className="sr-only">Loading…</span>
     </Panel>
+  );
+}
+
+/**
+ * A no-show / late-cancel fee on the card on file, as the barber's proof:
+ * "Late-cancel fee · card ending 4242 · Oct 30, 2:15 PM   $15.00 charged".
+ * Only "charged" means Stripe took the money.
+ */
+function CardFeeLine({
+  fee,
+  timezone,
+}: {
+  fee: NonNullable<AppointmentDetail["cardFee"]>;
+  timezone: string;
+}) {
+  let when = "";
+  try {
+    when = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(fee.at));
+  } catch {
+    when = "";
+  }
+  const label = [
+    fee.reason === "no_show" ? "No-show fee" : "Late-cancel fee",
+    fee.last4 ? `card ending ${fee.last4}` : null,
+    when || null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const amount = money(fee.cents);
+  const value =
+    fee.state === "charged"
+      ? `${amount} charged`
+      : fee.state === "pending"
+        ? `${amount} · waiting on Stripe`
+        : fee.state === "declined"
+          ? `${amount} declined`
+          : fee.state === "refunded"
+            ? `${amount} refunded`
+            : `${amount} not charged`;
+  return (
+    <div data-testid="card-fee-line">
+      <Line label={label} value={value} tone={fee.state === "charged" ? "good" : fee.state === "pending" ? undefined : "bad"} />
+    </div>
   );
 }
 
