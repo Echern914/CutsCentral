@@ -498,15 +498,23 @@ export function AppointmentSheet({
     // Card fees on for this booking: a fee due asks WHO cancelled; no fee
     // possible says why first. With fees off, Cancel stays one tap.
     if (lateCancelAsksFirst(detail?.lateCancelCard)) {
-      setNoShowAsk(null);
-      setConfirmRemove(false);
-      setConfirmCorrect(null);
-      setMarkedCard(null);
-      setLateCancelError(null);
-      setLateCancelAsk(true);
+      openLateCancelAsk();
       return;
     }
     act(cancelAppointmentAction, "Canceled", true);
+  }
+
+  // The same ask, from Cancel in the menu or from "Charge late-cancel fee" on
+  // the Payment card - where a barber coming from Acuity looks for a charge.
+  function openLateCancelAsk() {
+    setMenu(null);
+    setSavedNotice(null);
+    setNoShowAsk(null);
+    setConfirmRemove(false);
+    setConfirmCorrect(null);
+    setMarkedCard(null);
+    setLateCancelError(null);
+    setLateCancelAsk(true);
   }
 
   //  ── Cancel, when the CLIENT cancelled late ──
@@ -957,6 +965,9 @@ export function AppointmentSheet({
           onEdit={() => setView("edit")}
           onEditSeries={() => setView("series")}
           onCheckout={() => setView(newCheckout ? "pay" : "charges")}
+          onChargeLateCancel={
+            detail?.lateCancelCard?.charge && !appointmentEnded(detail.endsAt) ? openLateCancelAsk : undefined
+          }
           onBookAgain={
             canBookAgain && detail?.clientId
               ? () => {
@@ -1023,6 +1034,7 @@ function DetailView({
   onEdit,
   onEditSeries,
   onCheckout,
+  onChargeLateCancel,
   onBookAgain,
   onAct,
   onRemoveWalkIn,
@@ -1051,6 +1063,8 @@ function DetailView({
   onEdit: () => void;
   onEditSeries: () => void;
   onCheckout: () => void;
+  /** Ask "did the client cancel?" with the fee; absent when no fee is due. */
+  onChargeLateCancel?: () => void;
   /** Start this client's next visit; absent where Book again isn't offered. */
   onBookAgain?: () => void;
   onAct: (
@@ -1124,6 +1138,7 @@ function DetailView({
             loadError={loadError}
             canCheckout={canCheckout}
             onCheckout={onCheckout}
+            onChargeLateCancel={onChargeLateCancel}
           />
           {/* What a cancelled or no-show booking kept from its booking
               payment. NOT behind the checkout flag: every deposit-mode shop
@@ -2124,11 +2139,13 @@ function PaymentCard({
   loadError,
   canCheckout,
   onCheckout,
+  onChargeLateCancel,
 }: {
   detail: AppointmentDetail | null;
   loadError: boolean;
   canCheckout: boolean;
   onCheckout: () => void;
+  onChargeLateCancel?: () => void;
 }) {
   const vocab = useVocab();
   if (loadError) return null;
@@ -2306,6 +2323,30 @@ function PaymentCard({
             <Line label="No card on file" value="Skipped at booking" />
           )}
         </dl>
+      )}
+
+      {/* 🔴 THE LATE-CANCEL FEE, WHERE A BARBER LOOKS FOR A CHARGE. A client
+          who cancels by text never touches their link; the barber charges the
+          fee here, on this booking's own terms (never a typed amount). It only
+          opens the ask in the footer - nothing is charged on this tap. */}
+      {onChargeLateCancel && detail.lateCancelCard?.charge && (
+        <div className="mt-3.5 flex flex-col gap-1.5 border-t border-subtle pt-3.5">
+          <button
+            type="button"
+            onClick={onChargeLateCancel}
+            data-testid="charge-late-cancel"
+            className="flex h-11 w-full items-center justify-center rounded-xl border border-danger-soft/50 px-5 text-sm font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
+          >
+            {`Charge late-cancel fee · ${money(detail.lateCancelCard.cents)}`}
+          </button>
+          <p className="px-1 text-[11px] leading-relaxed text-muted">
+            Client cancelled inside your window?{" "}
+            {detail.lateCancelCard.last4
+              ? `Charges the card ending ${detail.lateCancelCard.last4}`
+              : "Charges the card they saved"}{" "}
+            and cancels the appointment.
+          </p>
+        </div>
       )}
 
       {(canCheckout || p.receiptUrl) && (
