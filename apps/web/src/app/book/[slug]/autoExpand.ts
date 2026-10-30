@@ -11,9 +11,10 @@
  * after-hours specials, so the page read as completely empty.
  *
  * Two cases open a group, both meaning "there is nothing to scan past":
- *   1. It is the ONLY thing on the page. /day already omits groups with no
- *      openings, so a single returned group with no loose services below it
- *      means the customer's only possible next tap is that card.
+ *   1. It is the ONLY thing on the page. /day's `bundles` hold only groups
+ *      with openings (groups with none arrive separately, as `closedGroups`,
+ *      and are never passed here), so a single bundle with no loose services
+ *      below it means the customer's only possible next tap is that card.
  *   2. The whole day is sparse. Hiding four chips behind an accordion buys no
  *      scannability and costs the booking.
  *

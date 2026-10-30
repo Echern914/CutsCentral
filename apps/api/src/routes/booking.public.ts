@@ -1002,7 +1002,7 @@ bookingPublicRouter.get("/:slug/day", bookingReadLimiter, async (req, res) => {
   // Outside the bookable window: an empty (not error) day, so the calendar can
   // page freely without special-casing.
   if (dayEnd.getTime() <= now.getTime() || dayStart.getTime() > horizon.getTime()) {
-    res.json({ timezone: shop.timezone, date: parsed.data.date, bundles: [], ungrouped: [] });
+    res.json({ timezone: shop.timezone, date: parsed.data.date, bundles: [], closedGroups: [], ungrouped: [] });
     return;
   }
   // Cache AFTER the horizon check: out-of-window days are cheap empties, and
@@ -1033,7 +1033,7 @@ async function computeDayBody(
   dayEnd: Date,
   now: Date,
 ): Promise<unknown> {
-  const [services, links, groups, rawTargeted] = await Promise.all([
+  const [services, links, groups, rawTargeted, activeStaff] = await Promise.all([
     prisma.service.findMany({
       where: { shopId: shop.id, ...PUBLIC_SERVICE },
       // The barber's menu order (Services tab). Each bundle re-sorts its own
@@ -1091,6 +1091,14 @@ async function computeDayBody(
         price: true,
       },
     }),
+    // Who is still working here: decides whether a service is offered at all,
+    // which is what keeps a CLOSED group (below) on the page. The same rule the
+    // menu applies (GET /:slug's `bookableServices`): a service no active
+    // staff offers can never be booked, so it is not shown even as closed.
+    prisma.staff.findMany({
+      where: { shopId: shop.id, active: true },
+      select: { id: true },
+    }),
   ]);
 
   // Blocked time wins: a special chip must not render on a span the barber has
@@ -1116,6 +1124,43 @@ async function computeDayBody(
   }
   const midDay = new Date((dayStart.getTime() + dayEnd.getTime()) / 2);
 
+  /**
+   * A service's card for THIS day: its name, photo, blurb and the day-level
+   * price/duration, with no times attached. Shared by the open card (dayFor
+   * adds the chips) and the closed one, so the two can never disagree on what
+   * a service costs on a given day.
+   */
+  function dayCard(service: (typeof services)[number]) {
+    // Day-level price/duration resolve the WEEKDAY layer only (timeWindows:
+    // null): time-of-day windows are slot-scoped, and midday falling inside a
+    // window (a lunch special) must not relabel the whole day's card.
+    const durationMin = effectiveDurationAt(service.durationMin, {
+      at: midDay,
+      timezone: shop!.timezone,
+      weekdayOverrides: service.durationOverrides,
+      timeWindows: null,
+    });
+    const price = effectivePriceAt(
+      service.price === null ? null : Number(service.price),
+      {
+        at: midDay,
+        timezone: shop!.timezone,
+        weekdayOverrides: service.priceOverrides,
+        dateOverrides: service.dateOverrides,
+        timeWindows: null,
+      },
+    );
+    return {
+      id: service.id,
+      name: service.name,
+      description: service.description,
+      imageUrl: service.imageUrl,
+      color: service.color,
+      durationMin,
+      price,
+    };
+  }
+
   async function dayFor(service: (typeof services)[number]) {
     const staffIds = staffByService.get(service.id) ?? [];
     const merged = new Map<string, string[]>();
@@ -1133,25 +1178,9 @@ async function computeDayBody(
         merged.set(key, [...(merged.get(key) ?? []), staffId]);
       }
     }
-    // Day-level price/duration resolve the WEEKDAY layer only (timeWindows:
-    // null): time-of-day windows are slot-scoped, and midday falling inside a
-    // window (a lunch special) must not relabel the whole day's card.
-    const dayDuration = effectiveDurationAt(service.durationMin, {
-      at: midDay,
-      timezone: shop!.timezone,
-      weekdayOverrides: service.durationOverrides,
-      timeWindows: null,
-    });
-    const dayPrice = effectivePriceAt(
-      service.price === null ? null : Number(service.price),
-      {
-        at: midDay,
-        timezone: shop!.timezone,
-        weekdayOverrides: service.priceOverrides,
-      dateOverrides: service.dateOverrides,
-        timeWindows: null,
-      },
-    );
+    const card = dayCard(service);
+    const dayDuration = card.durationMin;
+    const dayPrice = card.price;
     const out: DaySlotOut[] = [...merged.entries()]
       .map(([startsAt, ids]): DaySlotOut => {
         const slot: DaySlotOut = { startsAt, staffIds: ids };
@@ -1192,39 +1221,77 @@ async function computeDayBody(
     }
     out.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
     if (out.length === 0) return null;
-    return {
-      id: service.id,
-      name: service.name,
-      description: service.description,
-      imageUrl: service.imageUrl,
-      color: service.color,
-      durationMin: dayDuration,
-      price: dayPrice,
-      slots: out,
-    };
+    return { ...card, slots: out };
   }
 
   const dayServices = (
     await mapWithLimit(services, DAY_FANOUT_LIMIT, (s) => dayFor(s))
   ).filter((s): s is NonNullable<typeof s> => s !== null);
   const byId = new Map(dayServices.map((s) => [s.id, s]));
-  const bundles = groups
+
+  // A service someone still working here offers: bookable on SOME day, even if
+  // not this one. Only these may stand in a closed group.
+  const activeStaffIds = new Set(activeStaff.map((s) => s.id));
+  const offered = (serviceId: string) =>
+    (staffByService.get(serviceId) ?? []).some((id) => activeStaffIds.has(id));
+
+  // Every group with its public members, in the barber's group order.
+  // `position` is that order, so the page can interleave open and closed groups
+  // exactly as the barber arranged them.
+  const groupRows = groups.map((g, position) => ({
+    id: g.id,
+    name: g.name,
+    position,
+    // In the group's saved order (a stable sort, so ties keep menu order) -
+    // the same rule the service-first menu applies on the page.
+    members: services
+      .filter((s) => s.serviceGroupId === g.id)
+      .sort((a, b) => a.groupSortOrder - b.groupSortOrder),
+  }));
+
+  // OPEN groups ("bundles"): the members with real times this day, unchanged
+  // from before - a member with nothing open stays off the open card. NOT
+  // filtered by `offered`: a published special can sell a member no staff link
+  // covers, and filtering here would drop it out of its group into "More
+  // services".
+  const bundles = groupRows
     .map((g) => ({
       id: g.id,
       name: g.name,
-      // In the group's saved order (a stable sort, so ties keep menu order) -
-      // the same rule the service-first menu applies on the page.
-      services: services
-        .filter((s) => s.serviceGroupId === g.id)
-        .sort((a, b) => a.groupSortOrder - b.groupSortOrder)
+      position: g.position,
+      services: g.members
         .map((s) => byId.get(s.id))
         .filter((s): s is NonNullable<typeof s> => Boolean(s)),
     }))
     .filter((g) => g.services.length > 0);
+
+  // CLOSED groups: no member has a time this day. These used to be dropped,
+  // so a group whose services keep narrow hours (a new-client offer, say)
+  // vanished from the page on every day it was shut - a barber saw one of his
+  // two groups disappear and read it as the second group replacing the first.
+  // Now the card stays, saying there are no times. A separate key rather than
+  // zero-slot entries in `bundles`: a page built before this change reads
+  // "bundles empty" as "nothing bookable today" (its booked-out screen and its
+  // auto-hop past a dead landing day), and ignores a key it does not know.
+  // Only members someone still offers are listed; a group with none is not
+  // bookable on ANY day and stays off the page, as before.
+  const openGroupIds = new Set(bundles.map((b) => b.id));
+  const closedGroups = groupRows
+    .filter((g) => !openGroupIds.has(g.id))
+    .map((g) => ({
+      id: g.id,
+      name: g.name,
+      position: g.position,
+      services: g.members
+        .filter((s) => offered(s.id))
+        .map((s) => ({ ...dayCard(s), slots: [] as DaySlotOut[] })),
+    }))
+    .filter((g) => g.services.length > 0);
+
   const groupedIds = new Set(bundles.flatMap((b) => b.services.map((s) => s.id)));
   const ungrouped = dayServices.filter((s) => !groupedIds.has(s.id));
 
-  const dayBody = { timezone: shop.timezone, date, bundles, ungrouped };
+  const dayBody = { timezone: shop.timezone, date, bundles, closedGroups, ungrouped };
   return dayBody;
 }
 

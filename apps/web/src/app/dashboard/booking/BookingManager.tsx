@@ -4027,6 +4027,13 @@ function ServiceGroupItem({
     }
   }, [group, lastSaved]);
   const current = lastSaved ?? group;
+  // Members the barber has hidden (the eye icon). The booking page never lists
+  // them, so a group of 6 with one hidden reads "5 services" to a client - and
+  // a barber comparing the two saw a count that didn't add up. Say why here.
+  const hiddenCount = current.serviceIds.filter((id) => {
+    const s = services.find((x) => x.id === id);
+    return s !== undefined && isHiddenService(s);
+  }).length;
   // No ★ here any more: a group no longer carries hours, so there is nothing
   // about a group that can be "off regular hours". The star lives on the
   // SERVICE rows, which is where the windows are now set.
@@ -4042,7 +4049,8 @@ function ServiceGroupItem({
           {current.name}{" "}
           <span className="text-xs text-muted">
             · {current.serviceIds.length} service
-            {current.serviceIds.length === 1 ? "" : "s"} ·{" "}
+            {current.serviceIds.length === 1 ? "" : "s"}
+            {hiddenCount > 0 ? ` (${hiddenCount} hidden)` : ""} ·{" "}
             {limitsSummary(current.maxConcurrent)}
           </span>
         </span>

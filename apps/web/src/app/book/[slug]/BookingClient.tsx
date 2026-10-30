@@ -91,6 +91,7 @@ import {
   type DeviceSavedCard,
 } from "./savedCardDevice";
 import { groupsToAutoExpand } from "./autoExpand";
+import { dayHasTimes, dayMenuGroups } from "./dayMenu";
 import { revealElement } from "./reveal";
 import { ClientNoteBlock } from "../ClientNoteBlock";
 import { formatCents, formatPrice } from "@/lib/serviceFields";
@@ -1006,8 +1007,9 @@ export function BookingClient({
       // hopped — if someone taps a specific date they get an honest answer for
       // that date.
       if (res.ok && res.data) {
-        const empty =
-          res.data.bundles.length === 0 && res.data.ungrouped.length === 0;
+        // Counted in times, not cards: a closed group is on the page but makes
+        // nothing bookable, so it must not stop the hop.
+        const empty = !dayHasTimes(res.data);
         if (empty && autoPickedDay.current === day) {
           markDayEmpty(day);
           const next =
@@ -1074,14 +1076,27 @@ export function BookingClient({
     });
   }
 
-  // The selected day's menu: every bundle/service the API returned as having an
-  // opening that day (it already omits the rest). Each service carries its own
+  // The selected day's menu. GROUPS: every group the barber made that has a
+  // service clients can book, open or not - one with no times this day is a
+  // card saying so, never a missing card (see ./dayMenu). LOOSE services: only
+  // those with an opening that day, as before. Each service carries its own
   // bookable time chips, which is where the customer picks a time — there is no
   // separate time rail to reconcile with.
   const visibleDay = useMemo(() => {
     if (!dayData) return null;
-    return { bundles: dayData.bundles, ungrouped: dayData.ungrouped };
+    return { groups: dayMenuGroups(dayData), ungrouped: dayData.ungrouped };
   }, [dayData]);
+  // Which services have their photo + description folded open ("More
+  // details"). Rows are compact by default - name, price, length, times - so
+  // a long menu doesn't scroll for ever.
+  const [openDetails, setOpenDetails] = useState<Set<string>>(new Set());
+  const toggleDetails = (id: string) =>
+    setOpenDetails((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   // AUTO-EXPAND on a quiet day. Groups collapse by default so a long menu stays
   // scannable, but on a day whose only availability is one or two specials the
@@ -1090,7 +1105,8 @@ export function BookingClient({
   //
   // Keyed on dayData, so it runs once per loaded day and never fights a manual
   // collapse on the day you are already looking at. Additive (never closes a
-  // card the customer opened).
+  // card the customer opened). Only OPEN groups (`bundles`) are considered: a
+  // closed group has no times to reveal, so opening it by itself helps nobody.
   useEffect(() => {
     if (!dayData) return;
     const open = groupsToAutoExpand(dayData.bundles, dayData.ungrouped);
@@ -1102,16 +1118,26 @@ export function BookingClient({
       return next;
     });
   }, [dayData]);
-  /** The selected day loaded and has nothing bookable on it. */
-  const dayEmpty =
-    visibleDay !== null &&
-    visibleDay.bundles.length === 0 &&
-    visibleDay.ungrouped.length === 0;
+  /**
+   * The selected day loaded and has nothing bookable on it. Counted in TIMES:
+   * closed group cards still show on such a day, and must not hide the
+   * booked-out screen (next available day, waitlist).
+   */
+  const dayEmpty = dayData !== null && !dayHasTimes(dayData);
 
-  /** One service's row in the day view: name + that-day price + time chips. */
+  /**
+   * One service's row in the day view: name, that-day price and length, and
+   * its time chips. COMPACT: the photo and description fold behind "More
+   * details" (a barber: "condense the boxes smaller to just Name Of Service and
+   * if they wanna see the details they just press on More details"). A service
+   * with no times this day (inside a closed group) says so in place of chips.
+   */
   function dayServiceRow(svc: DayService) {
     const stripe = serviceColorHex(svc.color);
     const chips = svc.slots;
+    const hasDetails = Boolean(svc.imageUrl || svc.description);
+    const detailsOpen = openDetails.has(svc.id);
+    const detailsId = `svc-details-${svc.id}`;
     return (
       <div
         key={svc.id}
@@ -1128,16 +1154,25 @@ export function BookingClient({
               <span className="shrink-0 text-sm text-muted">{formatPrice(svc.price)}</span>
             )}
           </span>
-          <span className="mt-0.5 block text-xs text-muted">{svc.durationMin} min</span>
-          {/* The photo and blurb the barber wrote in the service editor. Both
-              have shipped in this payload since the day-first layout landed and
-              neither has ever been rendered: the only markup that read them sat
-              inside a `{!dayFirst && ...}` branch, and dayFirst is hardcoded
-              true. The editor promises three times over that this is "what the
-              customer sees when they pick this service" - so it now is.
+          <span className="mt-0.5 flex items-baseline justify-between gap-3">
+            <span className="text-xs text-muted">{svc.durationMin} min</span>
+            {hasDetails && (
+              <button
+                type="button"
+                onClick={() => toggleDetails(svc.id)}
+                aria-expanded={detailsOpen}
+                aria-controls={detailsId}
+                className="-my-1 shrink-0 rounded py-1 text-xs font-medium text-muted underline-offset-2 transition-colors hover:text-offwhite hover:underline"
+              >
+                {detailsOpen ? "Hide details" : "More details"}
+              </button>
+            )}
+          </span>
+          {/* The photo and blurb the barber wrote in the service editor, folded
+              behind "More details" so the default row stays one glance tall.
               whitespace-pre-line preserves the "INCLUDES:" lists barbers type. */}
-          {(svc.imageUrl || svc.description) && (
-            <div className="mt-2 flex items-start gap-3">
+          {hasDetails && detailsOpen && (
+            <div id={detailsId} className="mt-2 flex items-start gap-3">
               {svc.imageUrl && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
@@ -1153,6 +1188,10 @@ export function BookingClient({
               )}
             </div>
           )}
+          {chips.length === 0 && (
+            <p className="mt-2 text-xs text-muted">No times this day</p>
+          )}
+          {chips.length > 0 && (
           <div className="mt-2.5 flex flex-wrap gap-2">
             {chips.map((s) => {
               // Compound key incl. the targeted id (same as the service-first
@@ -1210,7 +1249,95 @@ export function BookingClient({
               );
             })}
           </div>
+          )}
         </div>
+      </div>
+    );
+  }
+
+  /**
+   * The booked-out screen for a day with no times at all (`dayEmpty`). Shown
+   * only once availability is known either way - see the loading branch in
+   * the services step. Showing a dead end before the sweep lands is what made
+   * this screen look final when it wasn't.
+   */
+  function renderDayEmpty() {
+    return (
+      <div className="flex flex-col gap-3">
+        {/* Honest booked-out state (Drick: "it should show on a day
+            that is booked out completely that there is no available
+            times"). Today reads differently from a future date, and
+            the two ways forward are right here: the next day with a
+            real opening, and the waitlist (a cancellation or a
+            squeeze-in the barber publishes reopens the day on its
+            own — squeeze-ins count as openings upstream). */}
+        <p className="text-sm text-muted" role="status">
+          {(() => {
+            const shopToday = new Intl.DateTimeFormat("en-CA", {
+              timeZone: tz,
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+            }).format(new Date());
+            if (dayDate === shopToday)
+              return "No available times left today.";
+            return bookedOutDays.has(dayDate ?? "")
+              ? "This day is fully booked."
+              : "Nothing open this day — try another date.";
+          })()}
+        </p>
+        {(() => {
+          // Fall back to the heuristic calendar when the open-days
+          // scan is missing: losing it used to remove the only way
+          // forward from this screen, leaving the waitlist as the
+          // sole option on a shop that was open the very next day.
+          // Days already proven empty are skipped either way.
+          const pool = openDaySet
+            ? [...openDaySet].sort()
+            : [...calendarDays].sort();
+          const nextOpen = pool.find(
+            (d) => d > (dayDate ?? "") && !emptyDaysRef.current.has(d),
+          );
+          if (!nextOpen) return null;
+          return (
+            <button
+              type="button"
+              onClick={() => {
+                // Stays eligible for the auto-hop: this button is the
+                // page's own suggestion, not the customer naming a
+                // date, so if it also turns out empty we keep going
+                // rather than dead-ending a second time.
+                autoPickedDay.current = nextOpen;
+                pendingSoonest.current = null;
+                pickDay(nextOpen);
+              }}
+              className="w-full rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-colors"
+              style={{ borderColor: accent, color: accentInk }}
+            >
+              Next available: {dateFmt.format(new Date(`${nextOpen}T12:00:00Z`))} →
+            </button>
+          );
+        })()}
+        {data.shop.waitlistEnabled &&
+          (waitlistMode === "slot" ? (
+            <WaitlistForm
+              slug={data.shop.slug}
+              shopName={data.shop.name}
+              accent={accent}
+              onDone={() => setWaitlistMode(null)}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setWaitlistMode("slot")}
+              className="w-full rounded-xl border py-3 text-center text-sm font-semibold transition-colors"
+              style={{ borderColor: accent, color: accentInk }}
+            >
+              {/* "get notified", not "get texted": customer SMS stays
+                  off until 10DLC clears — openings notify by email. */}
+              Join the waitlist — get notified if a time opens up
+            </button>
+          ))}
       </div>
     );
   }
@@ -2917,13 +3044,23 @@ export function BookingClient({
           )}
           {!dayLoading && dayData && visibleDay && (
             <div className="flex flex-col gap-5">
+              {/* The booked-out screen leads on a day with no times at all -
+                  the group cards below it (all closed) are context, the next
+                  open day and the waitlist are the way forward. */}
+              {dayEmpty && openInfo !== null && renderDayEmpty()}
+
               {/* Services, grouped into the barber's collapsible group cards.
-                  Filtered to those bookable at the chosen time (when set). */}
-              {visibleDay.bundles.map((b) => {
+                  EVERY group shows, open or not: a group with no times this
+                  day says so rather than vanishing. Held back while the
+                  "Checking…" line is up on an empty day, so a day still being
+                  read never looks like a finished answer. */}
+              {!(dayEmpty && openInfo === null) &&
+                visibleDay.groups.map((b) => {
                 const open = expandedGroups.has(b.id);
                 return (
                   <div
                     key={b.id}
+                    data-testid="day-group"
                     className="overflow-hidden rounded-xl border border-offwhite/12"
                   >
                     <button
@@ -2934,11 +3071,12 @@ export function BookingClient({
                       aria-expanded={open}
                       className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.03]"
                     >
-                      <span className="flex items-baseline gap-2">
+                      <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
                         <span className="text-sm font-semibold">{b.name}</span>
                         <span className="text-xs text-muted">
-                          {b.services.length}{" "}
-                          {b.services.length === 1 ? "service" : "services"}
+                          {b.closed
+                            ? "No times this day"
+                            : `${b.services.length} ${b.services.length === 1 ? "service" : "services"}`}
                         </span>
                       </span>
                       <span
@@ -2959,7 +3097,7 @@ export function BookingClient({
               })}
               {visibleDay.ungrouped.length > 0 && (
                 <div>
-                  {visibleDay.bundles.length > 0 && (
+                  {visibleDay.groups.length > 0 && (
                     <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
                       More services
                     </h3>
@@ -2967,90 +3105,6 @@ export function BookingClient({
                   <div className="flex flex-col gap-3">
                     {visibleDay.ungrouped.map((svc) => dayServiceRow(svc))}
                   </div>
-                </div>
-              )}
-
-              {visibleDay.bundles.length === 0 &&
-                visibleDay.ungrouped.length === 0 &&
-                // Only once availability is known either way — see the loading
-                // branch above. Showing a dead end before the sweep lands is
-                // what made this screen look final when it wasn't.
-                openInfo !== null && (
-                <div className="flex flex-col gap-3">
-                  {/* Honest booked-out state (Drick: "it should show on a day
-                      that is booked out completely that there is no available
-                      times"). Today reads differently from a future date, and
-                      the two ways forward are right here: the next day with a
-                      real opening, and the waitlist (a cancellation or a
-                      squeeze-in the barber publishes reopens the day on its
-                      own — squeeze-ins count as openings upstream). */}
-                  <p className="text-sm text-muted" role="status">
-                    {(() => {
-                      const shopToday = new Intl.DateTimeFormat("en-CA", {
-                        timeZone: tz,
-                        year: "numeric",
-                        month: "2-digit",
-                        day: "2-digit",
-                      }).format(new Date());
-                      if (dayDate === shopToday)
-                        return "No available times left today.";
-                      return bookedOutDays.has(dayDate ?? "")
-                        ? "This day is fully booked."
-                        : "Nothing open this day — try another date.";
-                    })()}
-                  </p>
-                  {(() => {
-                    // Fall back to the heuristic calendar when the open-days
-                    // scan is missing: losing it used to remove the only way
-                    // forward from this screen, leaving the waitlist as the
-                    // sole option on a shop that was open the very next day.
-                    // Days already proven empty are skipped either way.
-                    const pool = openDaySet
-                      ? [...openDaySet].sort()
-                      : [...calendarDays].sort();
-                    const nextOpen = pool.find(
-                      (d) => d > (dayDate ?? "") && !emptyDaysRef.current.has(d),
-                    );
-                    if (!nextOpen) return null;
-                    return (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          // Stays eligible for the auto-hop: this button is the
-                          // page's own suggestion, not the customer naming a
-                          // date, so if it also turns out empty we keep going
-                          // rather than dead-ending a second time.
-                          autoPickedDay.current = nextOpen;
-                          pendingSoonest.current = null;
-                          pickDay(nextOpen);
-                        }}
-                        className="w-full rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-colors"
-                        style={{ borderColor: accent, color: accentInk }}
-                      >
-                        Next available: {dateFmt.format(new Date(`${nextOpen}T12:00:00Z`))} →
-                      </button>
-                    );
-                  })()}
-                  {data.shop.waitlistEnabled &&
-                    (waitlistMode === "slot" ? (
-                      <WaitlistForm
-                        slug={data.shop.slug}
-                        shopName={data.shop.name}
-                        accent={accent}
-                        onDone={() => setWaitlistMode(null)}
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setWaitlistMode("slot")}
-                        className="w-full rounded-xl border py-3 text-center text-sm font-semibold transition-colors"
-                        style={{ borderColor: accent, color: accentInk }}
-                      >
-                        {/* "get notified", not "get texted": customer SMS stays
-                            off until 10DLC clears — openings notify by email. */}
-                        Join the waitlist — get notified if a time opens up
-                      </button>
-                    ))}
                 </div>
               )}
             </div>

@@ -113,11 +113,26 @@ export interface DayService {
   }[];
 }
 
+/** A service group on the day view. `position` = the barber's group order. */
+export interface DayGroup {
+  id: string;
+  name: string;
+  /** Absent from an API older than closed groups - keep its order then. */
+  position?: number;
+  services: DayService[];
+}
+
 export interface DayBundlesResult {
   timezone: string;
   date: string;
   // Only bundles/services with at least one opening that day.
-  bundles: { id: string; name: string; services: DayService[] }[];
+  bundles: DayGroup[];
+  /**
+   * Groups with NO opening this day, each member with `slots: []`, so a
+   * group never vanishes from the page on a day it is shut. Optional: an API
+   * deployed before this field reads as "no closed groups".
+   */
+  closedGroups?: DayGroup[];
   ungrouped: DayService[];
 }
 
