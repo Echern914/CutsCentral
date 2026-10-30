@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-30-appointment-tip-row",
+    date: "2026-10-30",
+    kind: "feature",
+    title: "A Tip line on every appointment",
+    body:
+      "Open an appointment and you'll see a Tip line under the price, with every tip from that visit. Tap Add to " +
+      "record a tip you were handed in cash or sent in another app - nothing is charged to a card. Tips never " +
+      "count as sales.",
+  },
+  {
     id: "2026-10-29-service-groups-always-show",
     date: "2026-10-29",
     kind: "fix",

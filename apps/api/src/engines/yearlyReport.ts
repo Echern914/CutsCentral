@@ -540,9 +540,11 @@ export const UNAVAILABLE_METRICS: UnavailableMetric[] = [
     // Tips handed over at the chair are already inside "collected" (the
     // checkout amount is what the client paid). Tips left online after a
     // visit are recorded on the appointment, but - Eric, 2026-10-05 - kept
-    // out of revenue, so they are not in this report either.
+    // out of revenue, so they are not in this report either. Nor are tips
+    // the shop records on the appointment's Tip row (Appointment.recordedTip*):
+    // a record of money handed over, never revenue.
     reason:
-      "Tips paid at the chair are inside what you collected. Tips clients leave online after a visit are not included in this report.",
+      "Tips added to a checkout amount are inside what you collected. Tips you record on an appointment's Tip row, and tips clients leave online, are not included in this report.",
   },
   {
     key: "cardVsCash",

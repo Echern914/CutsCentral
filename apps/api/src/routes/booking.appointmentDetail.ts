@@ -3,6 +3,7 @@ import parsePhoneNumberFromString from "libphonenumber-js";
 import { forShop, prisma, type Prisma } from "@chairback/db";
 import {
   appointmentPaymentSnapshot,
+  appointmentTipSnapshot,
   SERVICE_PAYMENT_PURPOSES,
   stripeCollectedCents,
   type AppointmentPaymentSnapshot,
@@ -19,6 +20,7 @@ import { snapshotOf } from "../engines/addOns.js";
 import { readPolicySnapshot } from "../engines/bookingPolicy.js";
 import { serviceCheckoutEnabled } from "./booking.checkout.js";
 import { KEPT_BY_A_NO_SHOW } from "../engines/appointmentPromotion.js";
+import { recordedTipRefusal } from "./booking.recordedTip.js";
 import { noShowCardOutcome, type NoShowCardOutcome } from "@chairback/config";
 
 /**
@@ -215,6 +217,21 @@ export interface AppointmentDetail {
     /** Stripe is still settling it (a bank debit). */
     processing: boolean;
   } | null;
+  /**
+   * THE TIP ROW: every tip this visit has collected - the online tip above
+   * (what Stripe settled, net of refunds) plus one the shop recorded by hand
+   * (cash, another app) - added by engines/appointmentPayment.ts
+   * appointmentTipSnapshot and nowhere else. Never part of `payment`.
+   */
+  tips: {
+    totalCents: number;
+    onlineCents: number;
+    recordedCents: number;
+    /** "cash" | "other"; null when no tip was recorded by hand. */
+    recordedMethod: string | null;
+    /** Whether POST /recorded-tip would accept a tip here (its own rule). */
+    recordable: boolean;
+  };
   /**
    * When the barber closed the chair moment (`Appointment.paidAt`). Null = the
    * cut has never been checked out, which is the ONLY state in which "Start
@@ -541,6 +558,8 @@ export function registerAppointmentDetail(router: Router): void {
         paidMethod: true,
         paidAt: true,
         completedAt: true,
+        recordedTipCents: true,
+        recordedTipMethod: true,
         cardOnFile: { select: { brand: true, last4: true, status: true } },
         service: { select: { name: true } },
         staff: { select: { name: true } },
@@ -580,6 +599,8 @@ export function registerAppointmentDetail(router: Router): void {
       paidMethod: string | null;
       paidAt: Date | null;
       completedAt: Date | null;
+      recordedTipCents: number | null;
+      recordedTipMethod: string | null;
       cardOnFile: { brand: string | null; last4: string | null; status: string } | null;
       service: { name: string } | null;
       staff: { name: string } | null;
@@ -768,6 +789,16 @@ export function registerAppointmentDetail(router: Router): void {
             processing: tipRow.status === "processing",
           }
         : null,
+      tips: {
+        ...appointmentTipSnapshot({
+          online: tipRow,
+          recorded:
+            appt.recordedTipCents !== null && appt.recordedTipMethod !== null
+              ? { cents: appt.recordedTipCents, method: appt.recordedTipMethod }
+              : null,
+        }),
+        recordable: recordedTipRefusal(appt) === null,
+      },
       checkedOutAt: appt.paidAt ? appt.paidAt.toISOString() : null,
       serviceCheckoutEnabled: serviceCheckoutEnabled(shopId),
       editable,
@@ -898,6 +929,8 @@ export function registerAppointmentDetail(router: Router): void {
       }),
       keptDeposit: null,
       tip: null,
+      // A synced booking's tips live where it was booked; nothing to record here.
+      tips: { ...appointmentTipSnapshot({ online: null, recorded: null }), recordable: false },
       checkedOutAt: null,
       serviceCheckoutEnabled: serviceCheckoutEnabled(shopId),
       editable: false,

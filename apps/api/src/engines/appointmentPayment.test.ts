@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   appointmentPaymentSnapshot,
+  appointmentTipSnapshot,
   stripeAuthorizedCents,
   stripeCollectedCents,
   type PaymentRowFacts,
@@ -274,5 +275,38 @@ describe("🔴 several payment rows are ALL counted (deposit + checkout balance)
     expect(s.onlineCents).toBe(1500);
     expect(s.refundedCents).toBe(500);
     expect(s.authorizedCents).toBe(1500);
+  });
+});
+
+describe("a visit's tips - online and recorded, added in one place", () => {
+  it("no tip of either kind is zero, with no method", () => {
+    expect(appointmentTipSnapshot({ online: null, recorded: null })).toEqual({
+      totalCents: 0,
+      onlineCents: 0,
+      recordedCents: 0,
+      recordedMethod: null,
+    });
+  });
+
+  it("a recorded cash tip counts as given", () => {
+    const s = appointmentTipSnapshot({ online: null, recorded: { cents: 1000, method: "cash" } });
+    expect(s).toEqual({ totalCents: 1000, onlineCents: 0, recordedCents: 1000, recordedMethod: "cash" });
+  });
+
+  it("an online tip counts what Stripe settled, net of refunds; one still processing is not collected", () => {
+    expect(appointmentTipSnapshot({ online: pay({ amount: 800 }), recorded: null }).totalCents).toBe(800);
+    expect(
+      appointmentTipSnapshot({ online: pay({ amount: 800, status: "partially_refunded", refundedAmount: 300 }), recorded: null })
+        .onlineCents,
+    ).toBe(500);
+    expect(appointmentTipSnapshot({ online: pay({ amount: 800, status: "processing" }), recorded: null }).totalCents).toBe(0);
+  });
+
+  it("both kinds add, and neither touches the visit's own payment figures", () => {
+    const s = appointmentTipSnapshot({ online: pay({ amount: 800 }), recorded: { cents: 500, method: "other" } });
+    expect(s.totalCents).toBe(1300);
+    expect(s.onlineCents).toBe(800);
+    expect(s.recordedCents).toBe(500);
+    expect(s.recordedMethod).toBe("other");
   });
 });

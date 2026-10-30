@@ -299,3 +299,49 @@ export function appointmentPaymentSnapshot(
     cardOnFile,
   };
 }
+
+/**
+ * THE VISIT'S TIPS, ADDED IN ONE PLACE. Two kinds can exist and they never
+ * overlap, so they simply add - the same shape as the service money above:
+ *
+ *   - ONLINE: a `tip` Payment row the client paid by card after the visit.
+ *     Counted by `stripeCollectedCents`, the one rule for what Stripe has
+ *     settled: a tip still processing is not collected yet, and a refund
+ *     comes off it.
+ *   - RECORDED: a tip the shop typed on the sheet's Tip row
+ *     (`Appointment.recordedTipCents`), handed over in cash or through another
+ *     app. ChairBack never touched that money, so it is the shop's word, kept
+ *     as given.
+ *
+ * 🔴 NEVER SERVICE MONEY, NEVER REVENUE. Nothing here feeds
+ * `appointmentPaymentSnapshot`, the checkout balance or readChairEvents: a tip
+ * is the client's extra on top of the price (Eric, 2026-10-05).
+ */
+export interface AppointmentTipInput {
+  /** The visit's live `tip` Payment row, or null when the client left none online. */
+  online: PaymentRowFacts | null;
+  /** The tip the shop recorded by hand, or null when none was recorded. */
+  recorded: { cents: number; method: string } | null;
+}
+
+export interface AppointmentTipSnapshot {
+  /** Every tip the visit has collected, online and recorded, in cents. */
+  totalCents: number;
+  /** The online half: what Stripe settled, net of refunds. */
+  onlineCents: number;
+  /** The recorded half, exactly as the shop typed it. */
+  recordedCents: number;
+  /** "cash" | "other" - how the recorded tip arrived; null when none was. */
+  recordedMethod: string | null;
+}
+
+export function appointmentTipSnapshot(input: AppointmentTipInput): AppointmentTipSnapshot {
+  const onlineCents = stripeCollectedCents(input.online);
+  const recordedCents = input.recorded ? Math.max(0, input.recorded.cents) : 0;
+  return {
+    totalCents: onlineCents + recordedCents,
+    onlineCents,
+    recordedCents,
+    recordedMethod: input.recorded ? input.recorded.method : null,
+  };
+}

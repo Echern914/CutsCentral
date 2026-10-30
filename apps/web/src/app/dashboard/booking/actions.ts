@@ -1559,6 +1559,28 @@ export async function cancelCheckoutAttemptAction(
  * only once the booking has been checked out — before that, checkout owns the
  * chair figure. Dollars with at most two decimals; the API refuses more.
  */
+/**
+ * The Tip row: record a tip the shop received in cash or through another app.
+ * A record only - the server never charges a card for it. `expectedCents` is
+ * the recorded tip the sheet was showing (null = none), so an edit made from a
+ * stale figure is refused instead of overwriting another device's. Null
+ * `amountCents` takes a recorded tip off.
+ */
+export async function recordTipAction(
+  appointmentId: string,
+  input:
+    | { amountCents: number; method: "cash" | "other"; expectedCents: number | null }
+    | { amountCents: null; expectedCents: number },
+): Promise<Result> {
+  return done(
+    await apiSend(
+      "POST",
+      `/api/booking/appointments/${encodeURIComponent(appointmentId)}/recorded-tip`,
+      input,
+    ),
+  );
+}
+
 export async function updateAppointmentPriceAction(
   appointmentId: string,
   input: { amount: number; collected?: number },
@@ -2218,6 +2240,21 @@ export interface AppointmentDetail {
     refundableCents: number;
     processing: boolean;
   } | null;
+  /**
+   * THE TIP ROW: every tip this visit collected - the online tip (what Stripe
+   * settled) plus one the shop recorded by hand - added by the server's one
+   * formula. Never part of `payment`. Absent from an API that predates it, in
+   * which case the row is not shown.
+   */
+  tips?: {
+    totalCents: number;
+    onlineCents: number;
+    recordedCents: number;
+    /** "cash" | "other"; null when none was recorded by hand. */
+    recordedMethod: string | null;
+    /** Whether the server would accept a recorded tip here. */
+    recordable: boolean;
+  };
   /**
    * When the barber closed the chair moment. Null = never checked out, which
    * is the ONLY state in which "Start checkout" is a real action - the endpoint

@@ -85,6 +85,37 @@ export function formatTipCents(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
+/**
+ * A TIP THE SHOP RECORDED BY HAND - cash, or money sent through another app -
+ * typed on the appointment sheet's Tip row. A record, never a charge: no card
+ * is touched, so there is no card fee to protect against and the floor is one
+ * cent. The ceiling is wider than an online tip's because a tip handed over in
+ * person is not a typed custom amount on a phone; past $500 it is far more
+ * likely a misplaced decimal. CHECK-pinned in SQL to the same range.
+ */
+export const RECORDED_TIP_MIN_CENTS = 1;
+export const RECORDED_TIP_MAX_CENTS = 50_000;
+
+/** How a recorded tip arrived. A card tip is never recorded - Stripe holds it. */
+export const RECORDED_TIP_METHODS = ["cash", "other"] as const;
+export type RecordedTipMethod = (typeof RECORDED_TIP_METHODS)[number];
+
+/** The words each method is shown in, on the sheet and in its editor. */
+export const RECORDED_TIP_METHOD_LABEL: Record<RecordedTipMethod, string> = {
+  cash: "Cash",
+  other: "Other app",
+};
+
+/** A recorded tip amount the server will keep: whole cents, $0.01 to $500. */
+export function recordedTipAllowed(cents: unknown): cents is number {
+  return (
+    typeof cents === "number" &&
+    Number.isInteger(cents) &&
+    cents >= RECORDED_TIP_MIN_CENTS &&
+    cents <= RECORDED_TIP_MAX_CENTS
+  );
+}
+
 /** Dollars typed by a client ("8", "8.5", "$8.50") to whole cents, or null. */
 export function tipDollarsToCents(input: string): number | null {
   const trimmed = input.trim().replace(/^\$/, "");
