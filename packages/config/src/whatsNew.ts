@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-29-service-groups-always-show",
+    date: "2026-10-29",
+    kind: "fix",
+    title: "Service groups always show on your booking page",
+    body:
+      "Your service groups now show on your booking page every day, even when none of their services has times - " +
+      "the group says No times this day. Services list just the name, price and times; clients tap More details " +
+      "for the photo and description.",
+  },
+  {
     id: "2026-10-28-plan-ended-wording",
     date: "2026-10-28",
     kind: "fix",
