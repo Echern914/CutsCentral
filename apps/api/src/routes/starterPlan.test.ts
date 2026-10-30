@@ -144,6 +144,28 @@ describe("a Starter subscription", () => {
       expect(put.body.error).toBe("premium_required");
     });
 
+    it("gets the Stats strip's headline cards only: this period vs the last, no history, no goals", async () => {
+      const res = await request(app).get("/api/insights/stats?grain=week").set("Cookie", cookie);
+      expect(res.status).toBe(200);
+      expect(res.body.scope).toBe("peek");
+      // Two periods (last + this), never the 10-week history.
+      expect(res.body.periods).toHaveLength(2);
+      const byKey = new Map<string, { locked: boolean; values: unknown[] }>(
+        (res.body.metrics as { key: string; locked: boolean; values: unknown[] }[]).map((m) => [m.key, m]),
+      );
+      for (const key of ["bookings", "revenue", "avgTicket"]) {
+        expect(byKey.get(key)?.locked, key).toBe(false);
+        expect(byKey.get(key)?.values, key).toHaveLength(2);
+      }
+      for (const key of ["hoursBooked", "newClients", "noShows"]) {
+        expect(byKey.get(key)?.locked, key).toBe(true);
+        expect(byKey.get(key)?.values, key).toEqual([]);
+      }
+      // Goals are Premium: no suggestion, and no lever promised.
+      expect(res.body.suggestions).toEqual([]);
+      expect(res.body.levers).toBeNull();
+    });
+
     it("cannot start the AI trial: Premium first", async () => {
       const res = await request(app).post("/api/billing/ai-trial").set("Cookie", cookie);
       expect(res.status).toBe(409);

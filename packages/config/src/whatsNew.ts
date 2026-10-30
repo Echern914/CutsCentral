@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-30-insights-stats-first",
+    date: "2026-10-30",
+    kind: "feature",
+    title: "Insights opens with your numbers, by day, week or month",
+    body:
+      "Insights now starts with Stats: bookings, revenue, avg ticket, hours booked, new clients and no-shows, with a " +
+      "small bar for each recent day, week or month - tap one for its number. Under it, a suggested goal from your " +
+      "own recent average that you can use in one tap.",
+  },
+  {
     id: "2026-10-30-what-other-shops-use",
     date: "2026-10-30",
     kind: "feature",

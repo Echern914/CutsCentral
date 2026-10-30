@@ -39,8 +39,11 @@ export const PERIODS = {
 >;
 
 export type PeriodKey = keyof typeof PERIODS;
-/** A resolved window is either one of the presets or an explicit date range. */
-export type WindowKey = PeriodKey | "custom";
+/**
+ * A resolved window is one of the presets, an explicit date range, or a
+ * caller-chosen run of whole buckets ending today (resolveTrailingWindow).
+ */
+export type WindowKey = PeriodKey | "custom" | "trailing";
 export const PERIOD_KEYS = Object.keys(PERIODS) as PeriodKey[];
 export const DEFAULT_PERIOD: PeriodKey = "30d";
 
@@ -213,6 +216,50 @@ export function resolvePeriodWindow(
   // that isn't offered gets the default count rather than NaN windows.
   const count = BUCKET_COUNTS[key][bucket] ?? spec.count;
   const today = shopLocalDay(now, timezone);
+  const buckets = trailingBuckets(today, bucket, count);
+
+  return {
+    key,
+    bucket,
+    label: spec.label,
+    // The noun IS the bucket ("Cuts per day/week/month"), so a re-bucketed
+    // view retitles itself and the label can't drift from the bars.
+    noun: bucket,
+    windowStart: buckets[0]!.start,
+    today,
+    buckets,
+    bucketOptions: Object.keys(BUCKET_COUNTS[key]) as Bucket[],
+  };
+}
+
+/**
+ * The last `count` whole buckets ending with the one containing `now` - the
+ * same clean day / Monday / 1st-of-month edges as the presets, for a caller
+ * that picks the bar size and count itself (the Stats strip: 14 days, 10
+ * weeks, 12 months). `bucketIndexFor` treats it exactly like a preset.
+ */
+export function resolveTrailingWindow(
+  now: Date,
+  timezone: string,
+  bucket: Bucket,
+  count: number,
+): ResolvedPeriod {
+  const today = shopLocalDay(now, timezone);
+  const buckets = trailingBuckets(today, bucket, Math.max(1, Math.floor(count)));
+  return {
+    key: "trailing",
+    bucket,
+    label: `Last ${buckets.length} ${bucket}s`,
+    noun: bucket,
+    windowStart: buckets[0]!.start,
+    today,
+    buckets,
+    bucketOptions: [bucket],
+  };
+}
+
+/** `count` buckets ending with the one that contains `today` (a shop-local day marker). */
+function trailingBuckets(today: Date, bucket: Bucket, count: number): PeriodBucket[] {
   const buckets: PeriodBucket[] = [];
 
   if (bucket === "day") {
@@ -256,19 +303,7 @@ export function resolvePeriodWindow(
       });
     }
   }
-
-  return {
-    key,
-    bucket,
-    label: spec.label,
-    // The noun IS the bucket ("Cuts per day/week/month"), so a re-bucketed
-    // view retitles itself and the label can't drift from the bars.
-    noun: bucket,
-    windowStart: buckets[0]!.start,
-    today,
-    buckets,
-    bucketOptions: Object.keys(BUCKET_COUNTS[key]) as Bucket[],
-  };
+  return buckets;
 }
 
 /**
@@ -516,7 +551,7 @@ const COLLECTED_STATUSES = new Set(["succeeded", "partially_refunded", "refunded
  * `requires_capture`, `canceled`, `failed` or `disputed` is not in
  * COLLECTED_STATUSES and earns 0 until its webhook says otherwise.
  */
-function collectedCents(p: {
+export function collectedCents(p: {
   status: string;
   amount: number;
   capturedAmount: number | null;

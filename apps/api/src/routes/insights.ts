@@ -30,6 +30,13 @@ import {
   type ResolvedPeriod,
 } from "../engines/insightsWindow.js";
 import { expenseSummaryForWindow } from "../engines/shopExpenses.js";
+import { readStats } from "../engines/insightsStats.js";
+import {
+  STATS_GRAINS,
+  STATS_GRAIN_KEYS,
+  STATS_METRICS,
+  resolveStatsGrain,
+} from "@chairback/config/insightsStats";
 import { insightsExpensesRouter } from "./insightsExpenses.js";
 import { featureAdoptionRouter } from "./featureAdoption.js";
 
@@ -393,6 +400,69 @@ insightsRouter.get("/", async (req, res) => {
     // definition) minus the expenses entered. May be negative, and is shown
     // as such. In cents, so it carries the revenue's cents too.
     takeHomeCents: Math.round(totalRevenue * 100) - expenses.totalCents,
+  });
+});
+
+//  Stats: the numbers-first strip at the top of the page
+
+/**
+ * GET /api/insights/stats?grain=day|week|month
+ *
+ * Every card's series for ONE grain in one round trip - Bookings, Revenue, Avg
+ * ticket, Online tips, Hours booked, New clients, No-shows - over a bounded
+ * run of periods (14 days, 10 weeks or 12 months; the request picks the grain,
+ * never the count), plus a suggested week and month goal for revenue and
+ * visits. See engines/insightsStats.ts for what each number counts.
+ *
+ * Starter (the "peek" scope) keeps the three headline cards - the numbers its
+ * peek always showed - as this period vs the last, with no history behind
+ * them; the rest come back `locked` and empty, and no suggestion is sent (goals
+ * are Premium). The redaction is HERE, not in the page.
+ */
+insightsRouter.get("/stats", async (req, res) => {
+  const shop = req.shop!;
+  const now = new Date();
+  const grain = resolveStatsGrain(req.query.grain);
+  const scope = insightsScopeFor(shop);
+  const full = scope === "full";
+  const stats = await runWithShop(shop.id, (tx) => readStats(tx, shop, grain, now));
+
+  // The peek compares this period with the last one; history is Premium.
+  const keep = full ? stats.period.buckets.length : 2;
+  const buckets = stats.period.buckets.slice(-keep);
+  // Online tips is a card only where it can be a real number: a shop that has
+  // never offered online tipping would show a $0 that reads as "nobody tips".
+  const metrics = STATS_METRICS.filter((m) => m.key !== "tips" || stats.tipsTracked).map((m) => {
+    const locked = !full && !m.headline;
+    return {
+      key: m.key,
+      locked,
+      values: locked ? [] : stats.series[m.key].slice(-keep),
+      // The previous period up to the same point the current one has reached:
+      // what the up/down arrow compares against (the bar shows the whole one).
+      previousToDate: locked ? null : stats.previousToDate[m.key],
+    };
+  });
+
+  res.json({
+    grain,
+    scope,
+    grains: STATS_GRAIN_KEYS.map((g) => ({ key: g, label: STATS_GRAINS[g].label })),
+    windowStart: buckets[0]!.start.toISOString().slice(0, 10),
+    windowEnd: stats.period.today.toISOString().slice(0, 10),
+    // Oldest first; the LAST one is the period in progress.
+    periods: buckets.map((b) => ({ key: b.key, label: b.label, fullLabel: b.fullLabel })),
+    metrics,
+    suggestions: full ? stats.suggestions : [],
+    // Which growth levers are running, so a suggestion can say what helps and
+    // link to switching on what is off. Premium only, like the suggestions.
+    levers: full
+      ? {
+          rewards: shop.rewardsEnabled,
+          rebookPush: shop.rebookPushEnabled,
+          autoFill: shop.autoFillEnabled,
+        }
+      : null,
   });
 });
 

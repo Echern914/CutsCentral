@@ -15,6 +15,9 @@ import { PeriodControl } from "./PeriodControl";
 import { YearlyReport } from "./YearlyReport";
 import { UpgradeCallout } from "../_components/UpgradeCallout";
 import { ExpensesCard, fmtCents } from "./ExpensesCard";
+import { StatsSection } from "./StatsSection";
+import { GoalSuggestions } from "./GoalSuggestions";
+import type { StatsGrain } from "@chairback/config/insightsStats";
 import type {
   Bucket,
   CustomRange,
@@ -26,6 +29,7 @@ import type {
   PeriodKey,
   PlannerData,
   ServiceGoalRow,
+  StatsData,
   UtilizationData,
 } from "./page";
 import {
@@ -35,6 +39,7 @@ import {
   insightsAction,
   saveChairTimeGoalAction,
   saveGoalAction,
+  statsAction,
   utilizationAction,
 } from "./actions";
 
@@ -65,11 +70,14 @@ function cap(s: string): string {
 export function InsightsClient({
   initial,
   initialGoalData = null,
+  initialStats = null,
   rewardsEnabled = true,
   serviceNoun = "visit",
 }: {
   initial: InsightsData;
   initialGoalData?: GoalResponse | null;
+  /** The Stats strip's first paint (Week). Null = it failed to load. */
+  initialStats?: StatsData | null;
   rewardsEnabled?: boolean;
   /** The shop's singular visit-noun ("cut"/"twist"), resolved by the API. */
   serviceNoun?: string;
@@ -100,6 +108,34 @@ export function InsightsClient({
   const peek = data.scope === "peek";
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
+
+  // The Stats strip has its OWN Day / Week / Month switch: it answers "how am
+  // I doing, period by period", which is a different question from the date
+  // range the cards further down are measured over.
+  const [stats, setStats] = useState<StatsData | null>(initialStats);
+  const [grain, setGrain] = useState<StatsGrain>(initialStats?.grain ?? "week");
+  const [statsPending, setStatsPending] = useState(false);
+  const [statsFailed, setStatsFailed] = useState(false);
+  useEffect(() => {
+    // Nothing to switch from when the first paint failed (no strip renders).
+    if (!stats || stats.grain === grain) return;
+    let cancelled = false;
+    setStatsPending(true);
+    setStatsFailed(false);
+    void statsAction(grain)
+      .catch(() => null)
+      .then((d) => {
+        if (cancelled) return;
+        if (d) setStats(d);
+        else setStatsFailed(true);
+        setStatsPending(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [grain, stats]);
+  // Goals exist per week and per month; the Day view suggests a weekly one.
+  const suggestPeriod = grain === "month" ? "month" : "week";
 
   // Shared by both PeriodControl instances (page top + the Chair time chip) so
   // there is exactly ONE applied window however it was chosen.
@@ -156,6 +192,51 @@ export function InsightsClient({
       animate="show"
       className="flex flex-col gap-6"
     >
+      {/* The numbers first. Shop owners said they were not setting goals
+          because they could not see their numbers - so the numbers lead, and
+          the goals sit right under them. */}
+      {stats && (
+        <motion.div variants={fadeUp}>
+          <StatsSection
+            stats={stats}
+            grain={grain}
+            pending={statsPending}
+            failed={statsFailed}
+            onGrain={setGrain}
+            serviceNoun={serviceNoun}
+          />
+        </motion.div>
+      )}
+
+      {/* Where you can go: a suggested goal from those numbers, then the goals
+          themselves - one target per metric AND period, each kept separately. */}
+      {!peek && (
+        <motion.section variants={fadeUp} aria-labelledby="where-heading" className="flex flex-col gap-3">
+          <h2 id="where-heading" className="font-display text-xl tracking-tight">
+            Where you can go
+          </h2>
+          {stats && stats.scope === "full" && (
+            <GoalSuggestions
+              suggestions={stats.suggestions}
+              period={suggestPeriod}
+              goals={goalData?.goals ?? null}
+              levers={stats.levers}
+              serviceNoun={serviceNoun}
+              onSaved={refreshGoals}
+            />
+          )}
+          <GoalsCard
+            goals={goalData?.goals ?? null}
+            planner={goalData?.planner ?? null}
+            onRefresh={refreshGoals}
+            serviceNoun={serviceNoun}
+          />
+        </motion.section>
+      )}
+
+      <motion.h2 variants={fadeUp} className="-mb-3 font-display text-xl tracking-tight">
+        The detail
+      </motion.h2>
       {/* The one range control for the whole tab, and the report that steps
           OUTSIDE it. The yearly report deliberately ignores the period picker:
           it answers a calendar-year question ("2026", "2025"), which is the
@@ -188,18 +269,6 @@ export function InsightsClient({
         {/* The yearly report and goals are analysis: Premium, not the peek. */}
         {!peek && <YearlyReport />}
       </motion.div>
-
-      {/* Goals — one target per metric AND period, each kept separately. */}
-      {!peek && (
-        <motion.div variants={fadeUp}>
-          <GoalsCard
-            goals={goalData?.goals ?? null}
-            planner={goalData?.planner ?? null}
-            onRefresh={refreshGoals}
-            serviceNoun={serviceNoun}
-          />
-        </motion.div>
-      )}
 
       {/* Headline numbers for the window */}
       <motion.div
