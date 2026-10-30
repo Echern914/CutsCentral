@@ -5756,6 +5756,16 @@ model AffiliateAccount {
   payoutPreference      String    @default("credit")
   payoutPreferenceSetAt DateTime?
 
+  // v3 (2026-10-30): how this affiliate is rewarded - "dollar_credit" ($10
+  // per business on its first paid invoice, then $5 per later paid month) or
+  // "month_off" (the v1 program). CHECK-pinned
+  // (AffiliateAccount_rewardStyle_check). New accounts default to dollar
+  // credit; accounts that existed before v3 were backfilled to month_off -
+  // the terms they accepted. Read at EARN time: changing it only affects
+  // rewards earned afterwards.
+  rewardStyle      String    @default("dollar_credit")
+  rewardStyleSetAt DateTime?
+
   // Snapshots of what this affiliate agreed to / was approved under.
   acceptedTermsVersion String
   policyVersion        Int
@@ -5916,20 +5926,31 @@ model AffiliateQualifyingInvoice {
   @@index([referredShopId, paidAt])
 }
 
-// The immutable reward ledger. One reward per referred shop, ever.
+// The immutable reward ledger.
 //
 // PR 3 only ever creates rewards in PENDING and moves them to AVAILABLE (or
 // REVERSED / REVIEW_REQUIRED). Nothing here talks to Stripe: RESERVED and
 // APPLIED belong to the credit-execution phase, and a reversal is a status
 // transition plus an audit event, never a card charge.
+//
+// v3 (migration 20261086000000): dollar credits live here too, one row per
+// paid invoice. SQL-only guarantees (Prisma cannot express them):
+//   AffiliateReward_bringOn_referredShopId_key  UNIQUE (referredShopId)
+//       WHERE rewardType IN ('subscription_credit','signup_credit') - one
+//       bring-on reward per referred shop, ever (a month off OR $10, once)
+//   AffiliateReward_dollar_invoice_check  a dollar credit names its invoice
 model AffiliateReward {
   id                 String @id @default(cuid())
   affiliateAccountId String
-  /// One qualification reward per referred shop - a database constraint.
-  referredShopId     String @unique
-  attributionId      String @unique
+  /// One BRING-ON reward per referred shop (partial unique index, see above);
+  /// monthly dollar credits are many per shop.
+  referredShopId     String
+  attributionId      String
+  /// The Stripe invoice that earned a dollar credit. UNIQUE: one credit per
+  /// invoice, ever. NULL on a month off (earned by two invoices, not one).
+  stripeInvoiceId    String? @unique
 
-  rewardType String // subscription_credit (CHECK-pinned)
+  rewardType String // subscription_credit | signup_credit | monthly_credit (CHECK-pinned)
   /// Money snapshot taken at qualification and NEVER recomputed.
   amountCents Int
   currency    String
@@ -5954,6 +5975,8 @@ model AffiliateReward {
 
   @@index([status, holdEndsAt])
   @@index([affiliateAccountId, status])
+  @@index([referredShopId])
+  @@index([attributionId])
 }
 
 // AFFILIATE COMMISSION LEDGER (v2 program, migration 20261077000000). One

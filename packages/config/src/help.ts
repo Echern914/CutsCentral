@@ -27,6 +27,7 @@
 
 import { BILLING, DEFAULTS, PLANS } from "./constants.js";
 import { PARTNER_PROGRAM } from "./partnerProgram.js";
+import { AFFILIATE_POLICY, formatCreditUsd } from "./affiliateProgram.js";
 
 export type HelpCategoryId =
   | "start"
@@ -97,6 +98,8 @@ export interface HelpAnswer {
 const dollars = (cents: number) => `$${cents / 100}`;
 const partnerReward = dollars(PARTNER_PROGRAM.rewardCents);
 const partnerCashouts = PARTNER_PROGRAM.cashoutAmountsCents.map(dollars).join(" or ");
+const affiliateSignup = formatCreditUsd(AFFILIATE_POLICY.dollarCredit.signupCents);
+const affiliateMonthly = formatCreditUsd(AFFILIATE_POLICY.dollarCredit.monthlyCents);
 const proPrice = `$${PLANS.pro.priceMonthlyUsd}`;
 const proAiPrice = `$${PLANS.pro_ai.priceMonthlyUsd}`;
 const starterPrice = `$${PLANS.starter.priceMonthlyUsd}`;
@@ -777,6 +780,19 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     category: "clients",
     hidesInApp: true,
     action: { label: "Open referrals", featureId: "referrals" },
+  },
+  {
+    // The AFFILIATE program (affiliateProgram.ts): rewards are ChairBack
+    // account credit, never cash. Amounts are read from AFFILIATE_POLICY, and
+    // the entry hides in the app because it quotes them (Guideline 3.1.1).
+    // Multi-word keywords only: "credit" alone belongs to billing questions.
+    id: "affiliate-credit",
+    q: "What do I earn as a ChairBack affiliate?",
+    a: `Account credit on your own ChairBack bill: ${affiliateSignup} when a business you brought on pays its first month, then ${affiliateMonthly} for every month it keeps paying. Each credit waits out a ${AFFILIATE_POLICY.qualification.holdDaysAfterSecond}-day hold, and a refunded or disputed payment takes its credit back.\n\nIt's credit only, never cash, and it doesn't expire. If you'd rather have a month off your plan per business, you can switch on your Affiliates page; the switch only changes what you earn from then on.`,
+    keywords: ["affiliate program", "affiliate credit", "affiliate reward", "affiliate rewards", "bring a business", "account credit affiliate"],
+    category: "account",
+    hidesInApp: true,
+    action: { label: "Open affiliates", featureId: "affiliates" },
   },
   {
     id: "own-my-list",

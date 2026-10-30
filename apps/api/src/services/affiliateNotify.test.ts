@@ -8,6 +8,7 @@ import {
 } from "@chairback/config";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 import { runEmailOutbox } from "../engines/emailOutbox.js";
+import { buildAffiliateEmail } from "../messaging/affiliateEmails.js";
 import { approveApplication, rejectApplication } from "./affiliate.js";
 import { affiliateEmailKey, enqueueAffiliateEmail } from "./affiliateNotify.js";
 
@@ -126,7 +127,11 @@ describe("approval", () => {
     expect(mine[0]!.subject).toMatch(/affiliate link is ready/i);
     expect(mine[0]!.text).toContain("/join?ref=");
     expect(mine[0]!.text).toMatch(/say you're a ChairBack affiliate/i);
-    expect(mine[0]!.text).not.toMatch(/\$\s?\d/);
+    // A new affiliate is on dollar credit: the email states the terms, as
+    // credit and never cash. (Email is not the iOS app; amounts are fine.)
+    expect(mine[0]!.text).toContain("$10 in ChairBack account credit");
+    expect(mine[0]!.text).toContain("$5 for every month");
+    expect(mine[0]!.text).toMatch(/never cash, no cash value, not transferable/);
 
     const after = await runAsOwner((tx) => tx.emailIntent.findUnique({ where: { idempotencyKey: key } }));
     expect(after?.status).toBe("SENT");
@@ -306,5 +311,48 @@ describe("rewards", () => {
     const row = await runAsOwner((tx) => tx.emailIntent.findUnique({ where: { idempotencyKey: key } }));
     expect(row?.status).toBe("SUPPRESSED");
     expect(affiliateSends().filter((s) => s.idempotencyKey === key)).toHaveLength(0);
+  });
+});
+
+describe("the words: a month off vs account credit", () => {
+  const base = { shopName: "S", label: "Business ••••1027", holdDays: 14 } as const;
+
+  it("a dollar credit is named in dollars, as account credit, never cash", () => {
+    const q = buildAffiliateEmail("affiliate_reward_qualified", {
+      ...base,
+      rewardType: "signup_credit",
+      amountCents: 1000,
+      holdEndsAt: new Date(Date.UTC(2026, 2, 16)),
+    });
+    expect(q.subject).toBe("$10 in credit is on the way");
+    expect(q.text).toContain("You've earned $10 in account credit");
+    expect(q.text).toContain("never cash");
+
+    const ready = buildAffiliateEmail("affiliate_reward_available", {
+      ...base,
+      rewardType: "monthly_credit",
+      amountCents: 500,
+    });
+    expect(ready.text).toContain("The $5 in account credit");
+    expect(ready.text).toContain("it doesn't expire");
+
+    const back = buildAffiliateEmail("affiliate_reward_reversed", {
+      ...base,
+      rewardType: "signup_credit",
+      amountCents: 1000,
+      reversalMessage: "refunded",
+    });
+    expect(back.subject).toBe("Some account credit was taken back");
+  });
+
+  it("a month off keeps its v1 words and no dollar figure", () => {
+    for (const kind of ["affiliate_reward_qualified", "affiliate_reward_available", "affiliate_reward_reversed"] as const) {
+      const e = buildAffiliateEmail(kind, { ...base, rewardType: "subscription_credit" });
+      expect(e.subject).toMatch(/month off/i);
+      expect(e.text).not.toMatch(/\$\s?\d/);
+    }
+    const approved = buildAffiliateEmail("affiliate_approved", { ...base, code: "abc", rewardStyle: "month_off" });
+    expect(approved.text).toContain("earns you a month off your plan");
+    expect(approved.text).not.toMatch(/\$\s?\d/);
   });
 });

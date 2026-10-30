@@ -40,6 +40,14 @@ export async function setAffiliateStylesAction(styles: string[]): Promise<Action
   return res.ok ? { ok: true } : failed(res);
 }
 
+/** Choose how future rewards are paid: account credit or a month off per
+ *  business. Forward only - the API freezes each reward's type when it is
+ *  earned, so nothing already earned changes. */
+export async function setAffiliateRewardStyleAction(style: string): Promise<ActionResult> {
+  const res = await apiSend("PUT", "/api/affiliate/reward-style", { style });
+  return res.ok ? { ok: true } : failed(res);
+}
+
 /** The affiliate link as a QR - the same server-side renderer as the
  *  booking QR (high error correction; it ends up on flyers). */
 export async function getAffiliateQrAction(

@@ -16,6 +16,11 @@ import { raceBehindRowLock } from "../testing/raceBarrier.js";
 /**
  * Qualification: two cleared base-subscription invoices, a hold, one reward.
  *
+ * This is the MONTH-OFF style (v1), and every account here is created with
+ * rewardStyle "month_off" - the behaviour these tests pin is the one that
+ * style must keep exactly. The dollar-credit style has its own suite
+ * (affiliateDollarCredit.test.ts).
+ *
  * The properties worth the most here are the ones about Stripe's own
  * behaviour: it redelivers events for days, out of order, and sometimes emits
  * more than one event about the same invoice. So the counting key is the
@@ -105,6 +110,7 @@ async function scenario(
           : {}),
         acceptedTermsVersion: AFFILIATE_TERMS_VERSION,
         policyVersion: 1,
+        rewardStyle: "month_off",
       },
     });
     const now = new Date();
@@ -154,9 +160,12 @@ function invoicePaid(opts: {
   };
 }
 
+/** The business's month-off reward (at most one - a partial unique index). */
 function rewardFor(referredShopId: string) {
   return runAsOwner((tx) =>
-    tx.affiliateReward.findUnique({ where: { referredShopId } }),
+    tx.affiliateReward.findFirst({
+      where: { referredShopId, rewardType: "subscription_credit" },
+    }),
   );
 }
 
@@ -250,7 +259,7 @@ describe("qualification: the two-invoice rule", () => {
     // READ the attribution and then INSERT elsewhere, so holding any row lets
     // both run straight through (measured - the barrier version reported both
     // racers finishing early). What actually stops a second reward is the
-    // unique index on referredShopId, so that is what gets asserted, directly
+    // partial unique index (one bring-on reward per shop), so that is what gets asserted, directly
     // and deterministically.
     await Promise.all([
       applyAffiliateStripeEvent(invoicePaid({ customerId: s.customerId })),

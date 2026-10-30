@@ -212,12 +212,15 @@ afterAll(async () => {
 const overview = (cookie: string) => request(app).get("/api/affiliate/overview").set("Cookie", cookie);
 const putStyles = (cookie: string, body: object) =>
   request(app).put("/api/affiliate/styles").set("Cookie", cookie).send(body);
+const putRewardStyle = (cookie: string, body: object) =>
+  request(app).put("/api/affiliate/reward-style").set("Cookie", cookie).send(body);
 
 describe("dark launch", () => {
   it("404s the new routes before auth while the program flag is off", async () => {
     programReset();
     expect((await overview(A.cookie)).status).toBe(404);
     expect((await putStyles(A.cookie, { styles: ["short_video"] })).status).toBe(404);
+    expect((await putRewardStyle(A.cookie, { style: "month_off" })).status).toBe(404);
   });
 });
 
@@ -362,5 +365,129 @@ describe("PUT /api/affiliate/styles", () => {
         }),
       );
     }
+  });
+});
+
+describe("PUT /api/affiliate/reward-style + the credit totals", () => {
+  it("a new account defaults to dollar credit, and the overview carries the credit totals and the policy", async () => {
+    programOn();
+    const res = await overview(B.cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.account.rewardStyle).toBe("dollar_credit");
+    expect(res.body.account.rewardStyleSetAt).toBeNull();
+    expect(res.body.credit).toEqual({
+      earnedCents: 0,
+      inHoldCents: 0,
+      readyCents: 0,
+      appliedCents: 0,
+      underReviewCents: 0,
+      reversedCents: 0,
+    });
+    expect(res.body.policy.dollarCredit).toEqual({
+      signupCents: 1000,
+      monthlyCents: 500,
+      expires: false,
+    });
+  });
+
+  it("refuses anything but the two styles", async () => {
+    programOn();
+    expect((await putRewardStyle(B.cookie, { style: "cash" })).status).toBe(400);
+    expect((await putRewardStyle(B.cookie, {})).status).toBe(400);
+    expect((await putRewardStyle(B.cookie, { style: "month_off", extra: 1 })).status).toBe(400);
+  });
+
+  it("stores the choice, stamps when, and audits it as the applicant with the style code", async () => {
+    programOn();
+    const res = await putRewardStyle(B.cookie, { style: "month_off" });
+    expect(res.status).toBe(200);
+    expect(res.body.account.rewardStyle).toBe("month_off");
+    expect(typeof res.body.account.rewardStyleSetAt).toBe("string");
+    expect((await overview(B.cookie)).body.account.rewardStyle).toBe("month_off");
+
+    const events = await runAsOwner((tx) =>
+      tx.affiliateAuditEvent.findMany({
+        where: { shopId: B.shopId, type: "account.reward_style_set" },
+        select: { actorType: true, actorUserId: true, metadata: true },
+      }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ actorType: "applicant", actorUserId: B.userId });
+    expect(events[0]!.metadata).toEqual({ source: "dashboard", rewardStyle: "month_off" });
+
+    const back = await putRewardStyle(B.cookie, { style: "dollar_credit" });
+    expect(back.body.account.rewardStyle).toBe("dollar_credit");
+  });
+
+  it("is not_active without an account", async () => {
+    programOn();
+    const C = await newShop("AffE");
+    const none = await putRewardStyle(C.cookie, { style: "month_off" });
+    expect(none.status).toBe(409);
+    expect(none.body.error).toBe("not_active");
+  });
+
+  it("counts dollar credit by state, and a referral shows the credit it has earned", async () => {
+    programOn();
+    const r4 = await referredShop("four");
+    const accountB = await runAsOwner((tx) =>
+      tx.affiliateAccount.findUniqueOrThrow({ where: { shopId: B.shopId }, select: { id: true } }),
+    );
+    const now = new Date();
+    await runAsOwner(async (tx) => {
+      const att = await tx.affiliateReferralAttribution.create({
+        data: {
+          affiliateAccountId: accountB.id,
+          referredShopId: r4.id,
+          codeUsed: "x",
+          source: "link",
+          state: "ATTRIBUTED",
+          capturedAt: now,
+          lockedAt: now,
+          claimExpiresAt: new Date(now.getTime() + 86_400_000),
+        },
+        select: { id: true },
+      });
+      const row = (rewardType: string, status: string, cents: number) => ({
+        affiliateAccountId: accountB.id,
+        referredShopId: r4.id,
+        attributionId: att.id,
+        stripeInvoiceId: `in_${randomToken(8)}`,
+        rewardType,
+        amountCents: cents,
+        currency: "usd",
+        basisPlan: "pro",
+        status,
+        qualifiedAt: now,
+        holdEndsAt: now,
+        ...(status === "REVERSED"
+          ? { reversedAt: now, reversalReason: "invoice_refunded" }
+          : {}),
+      });
+      await tx.affiliateReward.createMany({
+        data: [
+          row("signup_credit", "APPLIED", 1000),
+          row("monthly_credit", "AVAILABLE", 500),
+          row("monthly_credit", "PENDING", 500),
+          row("monthly_credit", "REVERSED", 500),
+        ],
+      });
+    });
+    const res = await overview(B.cookie);
+    expect(res.body.credit).toEqual({
+      earnedCents: 2000,
+      inHoldCents: 500,
+      readyCents: 500,
+      appliedCents: 1000,
+      underReviewCents: 0,
+      reversedCents: 500,
+    });
+    // Dollar credit is not months.
+    expect(res.body.months.earned + res.body.months.onTheWay).toBe(0);
+    const ref = (res.body.referrals as { label: string; rewardType: string | null; creditCents: number; stage: string }[]).find(
+      (r) => r.label === `Business ••••${r4.id.slice(-4)}`,
+    );
+    expect(ref).toMatchObject({ rewardType: "signup_credit", creditCents: 2000, stage: "applied" });
+    expect(JSON.stringify(res.body)).not.toContain(r4.name);
   });
 });

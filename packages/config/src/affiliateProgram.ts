@@ -17,16 +17,21 @@
  */
 
 /** The affiliate terms document version an applicant accepts. Never edit the
- *  terms text in place - add a version, exactly like the SMS consent rule. */
-export const AFFILIATE_TERMS_VERSION = "v1";
+ *  terms text in place - add a version, exactly like the SMS consent rule.
+ *  v2 (2026-10-30): dollar account credit ($10 + $5 a month) as the default
+ *  reward, a month off per business as the alternative, credit only. */
+export const AFFILIATE_TERMS_VERSION = "v2";
 
 /** Bump when any business rule below changes.
  *  v2 (2026-10): the commission program - a percentage of every base-plan
- *  invoice in a referred business's first 12 months, cash or bill credit -
- *  replaces the one-free-month reward for NEW qualifications. Accounts keep
- *  the version they were approved under; rewards already earned under v1 are
- *  honoured unchanged. */
-export const AFFILIATE_POLICY_VERSION = 2;
+ *  invoice in a referred business's first 12 months, cash or bill credit.
+ *  Built as a ledger, never switched on, and RETIRED by v3 before it paid
+ *  anyone.
+ *  v3 (2026-10-30, owner decision): ACCOUNT CREDIT IN DOLLARS, never cash -
+ *  `dollarCredit` below. The affiliate picks a reward style; a month off per
+ *  business (the v1 program) stays as the alternative. Accounts keep the
+ *  version they were approved under; rewards already earned keep their style. */
+export const AFFILIATE_POLICY_VERSION = 3;
 
 export const AFFILIATE_POLICY = {
   version: AFFILIATE_POLICY_VERSION,
@@ -62,7 +67,34 @@ export const AFFILIATE_POLICY = {
     perReferredShop: 1,
   },
   /**
-   * v2: the commission program (owner decision, 2026-10). For every base-plan
+   * v3: ACCOUNT CREDIT IN DOLLARS (owner decision, 2026-10-30) - the default
+   * reward style. Never cash, never transferable: it only ever lowers the
+   * affiliate's own ChairBack bill, through the same Stripe customer-balance
+   * credit the month-off reward uses.
+   *
+   *  - `signupCents` once per referred business, earned by that business's
+   *    FIRST paid, non-zero, base-plan invoice - never at bare signup, so a
+   *    throwaway account on a free trial earns nothing.
+   *  - `monthlyCents` for EVERY later paid base-plan invoice, for as long as
+   *    the business keeps paying. No cap, no end date; it stops when they do.
+   *  - Each credit is tied to the one Stripe invoice that earned it (a unique
+   *    key), waits out the same hold as a month off
+   *    (`qualification.holdDaysAfterSecond`), and is reversed if THAT invoice
+   *    is refunded, disputed or credited back before the credit is applied.
+   *  - Dollar credit does NOT expire (`expires: false`); unused credit carries
+   *    forward on the affiliate's Stripe balance. Credit earned while the
+   *    affiliate has no active plan waits until they pay again.
+   */
+  dollarCredit: {
+    signupCents: 1000,
+    monthlyCents: 500,
+    currency: "usd",
+    expires: false,
+  },
+  /**
+   * v2: the commission program (owner decision, 2026-10). RETIRED by v3
+   * before it ever paid anyone - nothing earns commission lines any more; the
+   * numbers stay so lines that may exist still read correctly. For every base-plan
    * invoice a referred business pays during its first `months` months -
    * counted from that business's FIRST paid base-plan invoice - the affiliate
    * earns a share of the base-plan amount actually paid (never tax, add-ons,
@@ -105,6 +137,132 @@ export const AFFILIATE_POLICY = {
 } as const;
 
 export type AffiliatePolicy = typeof AFFILIATE_POLICY;
+
+/**
+ * How an affiliate is rewarded - ONE choice per affiliate account, changeable
+ * at any time, and read when each reward is EARNED: changing it only affects
+ * rewards earned afterwards. Mirrors AffiliateAccount_rewardStyle_check.
+ *
+ *  - `dollar_credit` (the default for new affiliates): $10 account credit per
+ *    business on its first paid invoice, then $5 for every later paid month.
+ *  - `month_off`: the v1 program - one month of the affiliate's own plan per
+ *    business that has paid twice.
+ */
+export const AFFILIATE_REWARD_STYLES = ["dollar_credit", "month_off"] as const;
+export type AffiliateRewardStyle = (typeof AFFILIATE_REWARD_STYLES)[number];
+export const DEFAULT_AFFILIATE_REWARD_STYLE: AffiliateRewardStyle = "dollar_credit";
+
+export function isAffiliateRewardStyle(v: unknown): v is AffiliateRewardStyle {
+  return typeof v === "string" && (AFFILIATE_REWARD_STYLES as readonly string[]).includes(v);
+}
+
+/**
+ * What a reward row IS. Mirrors AffiliateReward_rewardType_check.
+ *  - `subscription_credit`: a month off (v1 / month_off style).
+ *  - `signup_credit`: the one-time dollar credit for bringing a business on.
+ *  - `monthly_credit`: the dollar credit for each later paid month.
+ *
+ * A referred business earns exactly ONE "bring-on" reward ever - a month off
+ * OR the sign-up credit, whichever style its affiliate had when it became due
+ * (a partial unique index, not a check).
+ */
+export const AFFILIATE_REWARD_TYPES = [
+  "subscription_credit",
+  "signup_credit",
+  "monthly_credit",
+] as const;
+export type AffiliateRewardType = (typeof AFFILIATE_REWARD_TYPES)[number];
+export const AFFILIATE_BRING_ON_REWARD_TYPES = ["subscription_credit", "signup_credit"] as const;
+export const AFFILIATE_DOLLAR_REWARD_TYPES = ["signup_credit", "monthly_credit"] as const;
+
+export function isDollarRewardType(t: string | null | undefined): boolean {
+  return t === "signup_credit" || t === "monthly_credit";
+}
+
+/** The credit, in cents, for a dollar reward type. */
+export function dollarCreditCents(type: "signup_credit" | "monthly_credit"): number {
+  return type === "signup_credit"
+    ? AFFILIATE_POLICY.dollarCredit.signupCents
+    : AFFILIATE_POLICY.dollarCredit.monthlyCents;
+}
+
+/** "$10", "$5", "$12.50" - whole dollars print without cents. */
+export function formatCreditUsd(cents: number): string {
+  const safe = Number.isFinite(cents) ? Math.max(0, Math.round(cents)) : 0;
+  const dollars = Math.floor(safe / 100);
+  const rest = safe % 100;
+  const whole = dollars.toLocaleString("en-US");
+  return rest === 0 ? `$${whole}` : `$${whole}.${String(rest).padStart(2, "0")}`;
+}
+
+/**
+ * The style's name WITH its dollar amounts. 🔴 Web only: these carry prices,
+ * which the iOS app shell must never show (App Store Guideline 3.1.1). Inside
+ * the app use AFFILIATE_REWARD_STYLE_NEUTRAL_LABELS.
+ */
+export const AFFILIATE_REWARD_STYLE_LABELS: Record<AffiliateRewardStyle, string> = {
+  dollar_credit: `Account credit (${formatCreditUsd(AFFILIATE_POLICY.dollarCredit.signupCents)} + ${formatCreditUsd(AFFILIATE_POLICY.dollarCredit.monthlyCents)}/month)`,
+  month_off: "A month off per business",
+};
+
+/** The same styles with no amounts - safe inside the app. */
+export const AFFILIATE_REWARD_STYLE_NEUTRAL_LABELS: Record<AffiliateRewardStyle, string> = {
+  dollar_credit: "Account credit",
+  month_off: "A month off per business",
+};
+
+/** Dollar credit in each state, in cents. Counted from the reward ledger. */
+export interface AffiliateCreditTotals {
+  /** Everything earned and not taken back: in the hold + ready + applied. */
+  earnedCents: number;
+  /** Earned, waiting out the hold. */
+  inHoldCents: number;
+  /** Past the hold, or being put on a bill right now. */
+  readyCents: number;
+  /** Already taken off a ChairBack bill. */
+  appliedCents: number;
+  underReviewCents: number;
+  reversedCents: number;
+}
+
+export function affiliateCreditTotals(
+  rewards: ReadonlyArray<{ status: string; rewardType?: string | null; amountCents: number }>,
+): AffiliateCreditTotals {
+  const t: AffiliateCreditTotals = {
+    earnedCents: 0,
+    inHoldCents: 0,
+    readyCents: 0,
+    appliedCents: 0,
+    underReviewCents: 0,
+    reversedCents: 0,
+  };
+  for (const r of rewards) {
+    if (!isDollarRewardType(r.rewardType)) continue;
+    const c = r.amountCents;
+    switch (r.status) {
+      case "PENDING":
+        t.inHoldCents += c;
+        break;
+      case "AVAILABLE":
+      case "RESERVED":
+        t.readyCents += c;
+        break;
+      case "APPLIED":
+        t.appliedCents += c;
+        break;
+      case "REVIEW_REQUIRED":
+        t.underReviewCents += c;
+        break;
+      case "REVERSED":
+        t.reversedCents += c;
+        break;
+      default:
+        break;
+    }
+  }
+  t.earnedCents = t.inHoldCents + t.readyCents + t.appliedCents;
+  return t;
+}
 
 /** How an affiliate takes their commission. Mirrors
  *  AffiliateAccount_payoutPreference_check and AffiliateCommission_kind_check.
@@ -295,7 +453,7 @@ export const AFFILIATE_SUSPENSION_PUBLIC_COPY: Record<AffiliateSuspensionReason,
   other: "Your affiliate link is paused. Your history is kept.",
 };
 
-/** Why a month was taken back (mirrors the qualification engine's reasons). */
+/** Why a reward was taken back (mirrors the qualification engine's reasons). */
 export const AFFILIATE_REVERSAL_REASONS = [
   "invoice_refunded",
   "payment_disputed",
@@ -305,9 +463,9 @@ export const AFFILIATE_REVERSAL_REASONS = [
 export type AffiliateReversalReason = (typeof AFFILIATE_REVERSAL_REASONS)[number];
 
 export const AFFILIATE_REVERSAL_PUBLIC_COPY: Record<AffiliateReversalReason, string> = {
-  invoice_refunded: "Their payment was refunded, so this month was taken back.",
-  payment_disputed: "Their payment was disputed, so this month was taken back.",
-  credit_note: "Their invoice was credited back, so this month was taken back.",
+  invoice_refunded: "Their payment was refunded, so this reward was taken back.",
+  payment_disputed: "Their payment was disputed, so this reward was taken back.",
+  credit_note: "Their invoice was credited back, so this reward was taken back.",
   admin_adjustment: "Adjusted after a review.",
 };
 
@@ -357,7 +515,10 @@ export function affiliateStage(input: {
   return "signed_up";
 }
 
-/** Months off, counted from the reward ledger. One reward = one month. */
+/** Months off, counted from the reward ledger. One month-off reward = one
+ *  month; dollar credits (signup_credit / monthly_credit) are not months and
+ *  are counted by affiliateCreditTotals instead. A row with no rewardType is
+ *  read as a month (every reward written before v3 was one). */
 export interface AffiliateMonths {
   earned: number;
   onTheWay: number;
@@ -366,9 +527,12 @@ export interface AffiliateMonths {
   expired: number;
 }
 
-export function affiliateMonths(rewards: ReadonlyArray<{ status: string }>): AffiliateMonths {
+export function affiliateMonths(
+  rewards: ReadonlyArray<{ status: string; rewardType?: string | null }>,
+): AffiliateMonths {
   const m: AffiliateMonths = { earned: 0, onTheWay: 0, underReview: 0, reversed: 0, expired: 0 };
   for (const r of rewards) {
+    if (isDollarRewardType(r.rewardType)) continue;
     switch (r.status) {
       case "APPLIED":
         m.earned += 1;

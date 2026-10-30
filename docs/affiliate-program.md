@@ -13,6 +13,60 @@ businesses, and an application-gated **Partner Program** for approved external
 partners later. Version 1 is subscription-credit only — no cash, no Stripe
 Connect payouts, no tax-document collection, no multi-level referrals.
 
+## v3 (2026-10-30): dollar account credit, by default
+
+The owner's 2026-10-30 decision. `AFFILIATE_POLICY_VERSION = 3`, terms
+`v2`. Everything below still sits behind the same flags; nothing pays until
+`AFFILIATE_QUALIFICATION_ENABLED` and `AFFILIATE_CREDIT_EXECUTION_ENABLED` are
+both on.
+
+- **Reward style, one per account** (`AffiliateAccount.rewardStyle`):
+  `dollar_credit` (the default for every new account) or `month_off` (the v1
+  rule below). Accounts that existed before the migration were backfilled to
+  `month_off`, so nobody's deal changed under them. Switching
+  (`PUT /api/affiliate/reward-style`, audited as `account.reward_style_set`)
+  is **forward only**: the style is read when a reward is EARNED and frozen
+  on it as `AffiliateReward.rewardType`.
+- **Dollar credit** (`AFFILIATE_POLICY.dollarCredit`): `signupCents` (1000)
+  as a `signup_credit` on the referred business's first paid, non-zero,
+  base-plan invoice; `monthlyCents` (500) as a `monthly_credit` on every later
+  one, indefinitely, stopping when it stops paying. Bare sign-up, a trial, a
+  zero-amount invoice and an add-on-only invoice earn nothing.
+- **Idempotent per invoice.** Every dollar credit carries its
+  `stripeInvoiceId` under a UNIQUE index (`AffiliateReward_stripeInvoiceId_key`);
+  the bring-on reward (one `subscription_credit` OR one `signup_credit`) stays
+  one-per-referred-shop under the partial unique
+  `AffiliateReward_bringOn_referredShopId_key`. Writes are
+  `createMany({ skipDuplicates })`, so a replay, a second event id for the same
+  invoice, or two different invoices racing all land exactly one row each.
+  Out-of-order delivery: the first invoice RECORDED earns the sign-up credit;
+  the total is the same either way.
+- **Hold and expiry.** Each credit is PENDING for the same 14-day hold, then
+  AVAILABLE with `expiresAt = null` (dollar credit never expires;
+  `dollarCredit.expires = false`). A month off still expires after 12 months.
+- **Reversal.** A refund, dispute or credit note on the invoice that earned a
+  credit reverses that credit (CAS from PENDING / AVAILABLE / REVIEW_REQUIRED
+  to REVERSED). A reversed sign-up credit is not re-earned; later paid months
+  still earn the monthly credit. A credit already RESERVED or APPLIED is not
+  clawed back (no automatic offset is built; the terms reserve the right).
+- **Execution.** The existing `AffiliateCreditOperation` path, unchanged in
+  shape: one operation per reward, `customers.createBalanceTransaction` for
+  exactly `-amountCents`, idempotency key `affiliate-reward:<rewardId>`. For a
+  dollar credit the amount is the reward's own cents (no subscription price
+  lookup). An affiliate with no active paid subscription is DEFERRED; the
+  credit accrues and lands once they pay.
+- **The commission ledger is retired for earning.** The qualification path no
+  longer calls `earnCommissionForInvoice`, so `AFFILIATE_COMMISSIONS_ENABLED`
+  earns nothing now; a refund still reverses any commission line that exists.
+- **iOS (App Store Guideline 3.1.1).** Dollar figures are web-only: every
+  amount on `/dashboard/affiliates` and `/affiliate-terms` renders inside
+  `HideInNativeApp`, the app gets neutral words via `ShowInNativeApp`, and the
+  reward-style chooser (its labels carry amounts) is web-only.
+  `AFFILIATE_REWARD_STYLE_NEUTRAL_LABELS` is the in-app vocabulary. Emails do
+  carry the amounts (email is not the app).
+
+The v1 contract below is still exactly the `month_off` style.
+
 ## The business contract (locked)
 
 Encoded as one versioned object in `packages/config/src/affiliateProgram.ts`
@@ -52,7 +106,7 @@ constants:
 | `AFFILIATE_PROGRAM_ENABLED` | master: off ⇒ every affiliate surface 404s before auth, indistinguishable from unmounted |
 | `AFFILIATE_PUBLIC_APPLICATIONS_ENABLED` | the application door only (status stays readable) |
 | `AFFILIATE_QUALIFICATION_ENABLED` | the qualification consumer and the reward-hold sweep (read from phase 3; both inert while it is false) |
-| `AFFILIATE_CREDIT_EXECUTION_ENABLED` | credit-execution outbox (declared; nothing reads it yet) |
+| `AFFILIATE_CREDIT_EXECUTION_ENABLED` | the credit-execution job (Stripe customer-balance credit); off = dry run |
 
 Deploying this phase's migration changes nothing user-visible: no UI, no
 attribution capture, no qualification, no Stripe mutation, no email, no SMS.

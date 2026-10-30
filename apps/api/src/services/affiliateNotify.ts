@@ -137,6 +137,11 @@ interface Resolved {
   holdEndsAt?: Date | null;
   expiresAt?: Date | null;
   reversalMessage?: string;
+  /** The reward row's type: which copy an email about it uses. */
+  rewardType?: string;
+  amountCents?: number;
+  /** The affiliate's current reward style (the approval email). */
+  rewardStyle?: string;
 }
 
 /**
@@ -181,10 +186,10 @@ export async function deliverAffiliateIntent(params: {
         if (app.status !== "APPROVED") return null;
         const account = await tx.affiliateAccount.findUnique({
           where: { applicationId: parsed.id },
-          select: { code: true },
+          select: { code: true, rewardStyle: true },
         });
         if (!account) return null;
-        return { ...base, code: account.code };
+        return { ...base, code: account.code, rewardStyle: account.rewardStyle };
       }
       if (app.status !== "REJECTED") return null;
       const reason = (app.decisionReason ?? "other") as AffiliateDecisionReason;
@@ -205,6 +210,8 @@ export async function deliverAffiliateIntent(params: {
         expiresAt: true,
         reversalReason: true,
         affiliateAccountId: true,
+        rewardType: true,
+        amountCents: true,
       },
     });
     if (!reward) return null;
@@ -219,6 +226,8 @@ export async function deliverAffiliateIntent(params: {
       label: maskBusinessLabel(reward.referredShopId),
       holdEndsAt: reward.holdEndsAt,
       expiresAt: reward.expiresAt,
+      rewardType: reward.rewardType,
+      amountCents: reward.amountCents,
       reversalMessage:
         AFFILIATE_REVERSAL_PUBLIC_COPY[reward.reversalReason as AffiliateReversalReason] ??
         AFFILIATE_REVERSAL_PUBLIC_COPY.admin_adjustment,
@@ -278,6 +287,9 @@ export async function deliverAffiliateIntent(params: {
     holdEndsAt: resolved.holdEndsAt ?? null,
     expiresAt: resolved.expiresAt ?? null,
     reversalMessage: resolved.reversalMessage,
+    rewardType: resolved.rewardType,
+    amountCents: resolved.amountCents,
+    rewardStyle: resolved.rewardStyle,
     holdDays: AFFILIATE_POLICY.qualification.holdDaysAfterSecond,
   });
 

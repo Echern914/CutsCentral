@@ -1,12 +1,15 @@
 import { Prisma, runAsOwner } from "@chairback/db";
-import { AFFILIATE_POLICY, PLANS, apiEnv } from "@chairback/config";
+import {
+  AFFILIATE_BRING_ON_REWARD_TYPES,
+  AFFILIATE_POLICY,
+  PLANS,
+  apiEnv,
+  dollarCreditCents,
+  isDollarRewardType,
+} from "@chairback/config";
 import { logger } from "../logger.js";
 import { recordAffiliateEvent } from "./affiliateAudit.js";
-import {
-  commissionsEnabled,
-  earnCommissionForInvoice,
-  reverseCommissionForInvoice,
-} from "./affiliateCommission.js";
+import { reverseCommissionForInvoice } from "./affiliateCommission.js";
 import { enqueueAffiliateEmail } from "./affiliateNotify.js";
 
 /**
@@ -24,13 +27,22 @@ import { enqueueAffiliateEmail } from "./affiliateNotify.js";
  * exactly, including their own replay behaviour.
  *
  * THE RULES (from AFFILIATE_POLICY, not invented here)
- *  - Two successful, non-zero, BASE-SUBSCRIPTION invoices qualify a referral.
+ *  - Only successful, non-zero, BASE-SUBSCRIPTION invoices count. A free
+ *    trial pays nothing, so a bare signup never earns anything.
  *  - Distinct INVOICES, never webhook deliveries: Stripe redelivers for days
  *    and out of order, so the invoice id is the counting key.
- *  - A 14-day hold follows the second one; only then is a reward available.
- *  - One reward per referred shop, ever - a unique index, not a check.
- *  - Past the rolling-year threshold a reward is HELD for review, never
- *    silently discarded.
+ *  - The affiliate's REWARD STYLE when an invoice is paid decides what it
+ *    earns, and is frozen onto the reward (a later switch never rewrites it):
+ *      dollar_credit  every paid invoice earns one credit row, keyed by the
+ *                     invoice id (UNIQUE). The business's first one earns
+ *                     dollarCredit.signupCents, every later one
+ *                     dollarCredit.monthlyCents, for as long as it pays.
+ *      month_off      two paid invoices qualify ONE month off (v1, unchanged).
+ *  - Every reward waits out the same 14-day hold before it is available.
+ *  - One BRING-ON reward per referred shop, ever (the month off or the
+ *    sign-up credit) - a partial unique index, not a check.
+ *  - Past the rolling-year threshold a bring-on reward is HELD for review,
+ *    never silently discarded.
  */
 
 /** Stripe event shapes we read. Kept structural: the SDK's types differ by
@@ -233,38 +245,206 @@ async function qualifyFromInvoice(
     skipDuplicates: true,
   });
 
-  // v2 COMMISSION LEDGER. Dark unless AFFILIATE_COMMISSIONS_ENABLED; with it
-  // off this block is skipped and everything below is exactly the v1 path.
-  const commissionsOn = commissionsEnabled();
-  if (commissionsOn) {
-    // Commission is on what the business actually PAID for the base plan:
-    // never more than the invoice's amount paid net of tax, so a coupon or a
-    // customer-balance credit cannot earn a commission on money never paid.
-    const taxCents = typeof invoice.tax === "number" ? invoice.tax : 0;
-    await earnCommissionForInvoice(tx, {
-      stripeInvoiceId: invoiceId,
+  // 🔴 The v2 COMMISSION LEDGER (a percentage of each invoice) no longer
+  // earns: the owner's 2026-10-30 decision replaced it with dollar ACCOUNT
+  // CREDIT before it was ever switched on. Its reversal path below still
+  // runs, so any line that exists is still taken back on a refund.
+
+  const account = await tx.affiliateAccount.findUnique({
+    where: { id: attribution.affiliateAccountId },
+    select: {
+      id: true,
+      status: true,
+      shopId: true,
+      rewardStyle: true,
+      shop: { select: { plan: true } },
+    },
+  });
+  if (!account) return;
+
+  if (account.rewardStyle === "dollar_credit") {
+    await earnDollarCredit(tx, {
+      invoiceId,
       referredShopId: referredShop.id,
-      affiliateAccountId: attribution.affiliateAccountId,
-      basisCents: Math.min(baseCents, amountPaid - taxCents),
-      currency: typeof invoice.currency === "string" ? invoice.currency : "usd",
-      paidAt,
+      attributionId: attribution.id,
+      account,
+      now: nowDate,
     });
-    // The commission REPLACES the one-free-month reward for new
-    // qualifications. Rewards already created are untouched (their sweep,
-    // reversal and credit execution carry on exactly as before).
     return;
   }
+
+  await qualifyMonthOff(tx, {
+    referredShopId: referredShop.id,
+    attributionId: attribution.id,
+    account,
+    now: nowDate,
+  });
+}
+
+interface EarningAccount {
+  id: string;
+  status: string;
+  shopId: string;
+  shop: { plan: string };
+}
+
+/** Bring-on rewards this account earned in the last 365 days. Monthly
+ *  credits never count: one business paying for a year is not twelve
+ *  businesses. */
+async function bringOnRewardsThisYear(
+  tx: Prisma.TransactionClient,
+  accountId: string,
+  now: Date,
+): Promise<number> {
+  return tx.affiliateReward.count({
+    where: {
+      affiliateAccountId: accountId,
+      rewardType: { in: [...AFFILIATE_BRING_ON_REWARD_TYPES] },
+      qualifiedAt: { gte: new Date(now.getTime() - 365 * 86_400_000) },
+    },
+  });
+}
+
+function holdEnd(now: Date): Date {
+  return new Date(
+    now.getTime() + AFFILIATE_POLICY.qualification.holdDaysAfterSecond * 86_400_000,
+  );
+}
+
+/**
+ * DOLLAR CREDIT: this paid invoice earns exactly one credit row.
+ *
+ * Which one? If the business has no bring-on reward yet, this invoice brings
+ * it on (signup_credit); otherwise it is another paid month
+ * (monthly_credit). Two unique indexes make that safe under Stripe's
+ * redeliveries and reorderings, with no lock:
+ *
+ *  - stripeInvoiceId UNIQUE: the same invoice never earns twice, however many
+ *    event ids describe it.
+ *  - one bring-on per referred shop (partial UNIQUE): when two DIFFERENT
+ *    invoices race to be the first, one wins the sign-up credit and the
+ *    loser's insert is a no-op - so it is written again as a monthly credit,
+ *    unless its own invoice already earned (the redelivery case).
+ *
+ * The sign-up credit goes to the first invoice ChairBack RECORDS. Delivered
+ * out of order, a business's second invoice may carry it and its first the
+ * monthly credit: the total is identical, and each credit still answers for
+ * its own invoice on a refund.
+ */
+async function earnDollarCredit(
+  tx: Prisma.TransactionClient,
+  input: {
+    invoiceId: string;
+    referredShopId: string;
+    attributionId: string;
+    account: EarningAccount;
+    now: Date;
+  },
+): Promise<void> {
+  const { account, now } = input;
+  const suspended = account.status !== "ACTIVE";
+
+  const insert = async (
+    rewardType: "signup_credit" | "monthly_credit",
+  ): Promise<boolean> => {
+    // The rolling-year volume rule watches bring-ons only.
+    const overThreshold =
+      rewardType === "signup_credit" &&
+      (await bringOnRewardsThisYear(tx, account.id, now)) >=
+        AFFILIATE_POLICY.review.rollingYearQualifiedThreshold;
+    const needsReview = suspended || overThreshold;
+    const amountCents = dollarCreditCents(rewardType);
+    const { count } = await tx.affiliateReward.createMany({
+      data: [
+        {
+          affiliateAccountId: account.id,
+          referredShopId: input.referredShopId,
+          attributionId: input.attributionId,
+          stripeInvoiceId: input.invoiceId,
+          rewardType,
+          amountCents,
+          currency: AFFILIATE_POLICY.dollarCredit.currency,
+          // Informational only: a dollar credit is never sized by a plan.
+          basisPlan: account.shop.plan,
+          status: needsReview ? "REVIEW_REQUIRED" : "PENDING",
+          reviewReason: overThreshold ? "rolling_year_threshold" : null,
+          qualifiedAt: now,
+          holdEndsAt: holdEnd(now),
+        },
+      ],
+      // createMany + skipDuplicates (ON CONFLICT DO NOTHING) rather than
+      // create + catch: a P2002 caught in JavaScript does not un-abort the
+      // surrounding Postgres transaction. count === 0 IS "a unique key said no".
+      skipDuplicates: true,
+    });
+    if (count === 0) return false;
+
+    const created = await tx.affiliateReward.findUnique({
+      where: { stripeInvoiceId: input.invoiceId },
+      select: { id: true },
+    });
+    await recordAffiliateEvent(tx, {
+      shopId: input.referredShopId,
+      accountId: account.id,
+      type: needsReview ? "reward.review_flagged" : "reward.qualified",
+      actor: { type: "system" },
+      metadata: {
+        toStatus: needsReview ? "REVIEW_REQUIRED" : "PENDING",
+        rewardType,
+        amountCents,
+      },
+    });
+    // One email when a business is brought on. The monthly credits show on
+    // the dashboard rather than landing in the inbox every month.
+    if (created && rewardType === "signup_credit") {
+      await enqueueAffiliateEmail(tx, {
+        kind: "affiliate_reward_qualified",
+        affiliateShopId: account.shopId,
+        subjectId: created.id,
+      });
+    }
+    return true;
+  };
+
+  const broughtOn = await tx.affiliateReward.findFirst({
+    where: {
+      referredShopId: input.referredShopId,
+      rewardType: { in: [...AFFILIATE_BRING_ON_REWARD_TYPES] },
+    },
+    select: { id: true },
+  });
+  if (!broughtOn && (await insert("signup_credit"))) return;
+
+  // Either the business was already brought on, or another invoice won the
+  // race to bring it on, or this very invoice already earned (a redelivery
+  // under a different event id). Only the last one earns nothing more.
+  const own = await tx.affiliateReward.findUnique({
+    where: { stripeInvoiceId: input.invoiceId },
+    select: { id: true },
+  });
+  if (own) return;
+  await insert("monthly_credit");
+}
+
+/** MONTH OFF (v1, unchanged): two paid invoices qualify one month off. */
+async function qualifyMonthOff(
+  tx: Prisma.TransactionClient,
+  input: {
+    referredShopId: string;
+    attributionId: string;
+    account: EarningAccount;
+    now: Date;
+  },
+): Promise<void> {
+  const { account } = input;
+  const nowDate = input.now;
+  const referredShop = { id: input.referredShopId };
+  const attribution = { id: input.attributionId };
 
   const qualifying = await tx.affiliateQualifyingInvoice.count({
     where: { referredShopId: referredShop.id },
   });
   if (qualifying < AFFILIATE_POLICY.qualification.qualifyingInvoices) return;
-
-  const account = await tx.affiliateAccount.findUnique({
-    where: { id: attribution.affiliateAccountId },
-    select: { id: true, status: true, shopId: true, shop: { select: { plan: true } } },
-  });
-  if (!account) return;
 
   const amount = rewardAmountCents(account.shop.plan);
   // A referrer on no paid plan has no "one month of their own subscription"
@@ -272,10 +452,7 @@ async function qualifyFromInvoice(
   const held = amount === null;
 
   // Rolling-year volume: above the threshold a reward waits for a human.
-  const yearAgo = new Date(nowDate.getTime() - 365 * 86_400_000);
-  const recent = await tx.affiliateReward.count({
-    where: { affiliateAccountId: account.id, qualifiedAt: { gte: yearAgo } },
-  });
+  const recent = await bringOnRewardsThisYear(tx, account.id, nowDate);
   const overThreshold =
     recent >= AFFILIATE_POLICY.review.rollingYearQualifiedThreshold;
 
@@ -295,15 +472,14 @@ async function qualifyFromInvoice(
         status: needsReview ? "REVIEW_REQUIRED" : "PENDING",
         reviewReason: overThreshold ? "rolling_year_threshold" : null,
         qualifiedAt: nowDate,
-        holdEndsAt: new Date(
-          nowDate.getTime() +
-            AFFILIATE_POLICY.qualification.holdDaysAfterSecond * 86_400_000,
-        ),
+        holdEndsAt: holdEnd(nowDate),
       },
     ],
-    // One reward per referred shop, ever. Two invoice events arriving together
-    // both reach here; the unique index decides, and the loser is a no-op
-    // rather than an exception that would abort this transaction.
+    // One bring-on reward per referred shop, ever. Two invoice events
+    // arriving together both reach here; the partial unique index decides,
+    // and the loser is a no-op rather than an exception that would abort
+    // this transaction. A business already brought on with the sign-up
+    // credit (before its affiliate switched styles) earns no month on top.
     skipDuplicates: true,
   });
   if (count === 0) return;
@@ -319,9 +495,12 @@ async function qualifyFromInvoice(
     },
   });
   // "A month off is on the way" - createMany returns no id, so read the one
-  // row the unique index guarantees. Same transaction as the reward.
-  const created = await tx.affiliateReward.findUnique({
-    where: { referredShopId: referredShop.id },
+  // month-off row the partial unique index guarantees. Same transaction.
+  const created = await tx.affiliateReward.findFirst({
+    where: {
+      referredShopId: referredShop.id,
+      rewardType: AFFILIATE_POLICY.reward.kind,
+    },
     select: { id: true },
   });
   if (created) {
@@ -370,33 +549,51 @@ async function reverseFromEvent(
   // before.
   await reverseCommissionForInvoice(tx, invoiceId, reason, new Date(nowMs ?? Date.now()));
 
-  // Only a reward we have not yet handed over can be reversed this way. The
-  // CAS is the guard: if it is already APPLIED or REVERSED, count is 0.
-  const { count } = await tx.affiliateReward.updateMany({
+  // Which rewards this money stood behind:
+  //  - a DOLLAR credit answers for exactly its own invoice (stripeInvoiceId);
+  //  - a MONTH OFF answers for the business's qualifying invoices as a whole,
+  //    exactly as v1 did - any one of them refunded takes the month back.
+  const candidates = await tx.affiliateReward.findMany({
     where: {
-      referredShopId: qualifying.referredShopId,
-      status: { in: ["PENDING", "AVAILABLE", "REVIEW_REQUIRED"] },
+      OR: [
+        { stripeInvoiceId: invoiceId },
+        {
+          referredShopId: qualifying.referredShopId,
+          rewardType: AFFILIATE_POLICY.reward.kind,
+        },
+      ],
     },
-    data: {
-      status: "REVERSED",
-      reversedAt: new Date(nowMs ?? Date.now()),
-      reversalReason: reason,
-    },
+    select: { id: true, affiliateAccountId: true, rewardType: true },
   });
-  if (count === 0) return;
 
-  const reward = await tx.affiliateReward.findUnique({
-    where: { referredShopId: qualifying.referredShopId },
-    select: { id: true, affiliateAccountId: true },
-  });
-  await recordAffiliateEvent(tx, {
-    shopId: qualifying.referredShopId,
-    accountId: reward?.affiliateAccountId ?? null,
-    type: "reward.reversed",
-    actor: { type: "system" },
-    metadata: { toStatus: "REVERSED", reversalReason: reason },
-  });
-  if (reward) {
+  for (const reward of candidates) {
+    // Only a reward we have not yet handed over can be reversed this way. The
+    // CAS is the guard: if it is already RESERVED, APPLIED or REVERSED, count
+    // is 0.
+    const { count } = await tx.affiliateReward.updateMany({
+      where: {
+        id: reward.id,
+        status: { in: ["PENDING", "AVAILABLE", "REVIEW_REQUIRED"] },
+      },
+      data: {
+        status: "REVERSED",
+        reversedAt: new Date(nowMs ?? Date.now()),
+        reversalReason: reason,
+      },
+    });
+    if (count === 0) continue;
+
+    await recordAffiliateEvent(tx, {
+      shopId: qualifying.referredShopId,
+      accountId: reward.affiliateAccountId,
+      type: "reward.reversed",
+      actor: { type: "system" },
+      metadata: {
+        toStatus: "REVERSED",
+        reversalReason: reason,
+        rewardType: reward.rewardType,
+      },
+    });
     await enqueueAffiliateEmail(tx, {
       kind: "affiliate_reward_reversed",
       affiliateAccountId: reward.affiliateAccountId,
@@ -423,18 +620,29 @@ export async function releaseAffiliateRewardHolds(opts?: {
   return runAsOwner(async (tx) => {
     const due = await tx.affiliateReward.findMany({
       where: { status: "PENDING", holdEndsAt: { lte: now } },
-      select: { id: true, referredShopId: true, affiliateAccountId: true },
+      select: {
+        id: true,
+        referredShopId: true,
+        affiliateAccountId: true,
+        rewardType: true,
+      },
       take: 200,
     });
     if (dryRun || due.length === 0) {
       return { due: due.length, released: 0, dryRun };
     }
-    const expiresAt = new Date(now);
-    expiresAt.setUTCMonth(
-      expiresAt.getUTCMonth() + AFFILIATE_POLICY.reward.expiryMonthsAfterAvailable,
+    const monthOffExpiresAt = new Date(now);
+    monthOffExpiresAt.setUTCMonth(
+      monthOffExpiresAt.getUTCMonth() + AFFILIATE_POLICY.reward.expiryMonthsAfterAvailable,
     );
     let released = 0;
     for (const reward of due) {
+      // A month off keeps v1's expiry clock. Dollar credit never expires
+      // (AFFILIATE_POLICY.dollarCredit.expires is false): it waits, however
+      // long, for the affiliate to have a paid plan to land on.
+      const dollar = isDollarRewardType(reward.rewardType);
+      const expiresAt =
+        dollar && !AFFILIATE_POLICY.dollarCredit.expires ? null : monthOffExpiresAt;
       // CAS per reward: a second worker finds count 0 and moves on.
       const { count } = await tx.affiliateReward.updateMany({
         where: { id: reward.id, status: "PENDING" },
@@ -447,13 +655,21 @@ export async function releaseAffiliateRewardHolds(opts?: {
         accountId: reward.affiliateAccountId,
         type: "reward.available",
         actor: { type: "system" },
-        metadata: { fromStatus: "PENDING", toStatus: "AVAILABLE" },
+        metadata: {
+          fromStatus: "PENDING",
+          toStatus: "AVAILABLE",
+          rewardType: reward.rewardType,
+        },
       });
-      await enqueueAffiliateEmail(tx, {
-        kind: "affiliate_reward_available",
-        affiliateAccountId: reward.affiliateAccountId,
-        subjectId: reward.id,
-      });
+      // A monthly credit clearing its hold is routine; only a bring-on
+      // reward is worth an email.
+      if (reward.rewardType !== "monthly_credit") {
+        await enqueueAffiliateEmail(tx, {
+          kind: "affiliate_reward_available",
+          affiliateAccountId: reward.affiliateAccountId,
+          subjectId: reward.id,
+        });
+      }
     }
     return { due: due.length, released, dryRun };
   });

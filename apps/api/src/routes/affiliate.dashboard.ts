@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   AFFILIATE_PROMOTION_CHANNELS,
   AFFILIATE_PROMOTION_STYLES,
+  AFFILIATE_REWARD_STYLES,
   AFFILIATE_TERMS_VERSION,
   apiEnv,
 } from "@chairback/config";
@@ -10,7 +11,11 @@ import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireOwner } from "../auth/roles.js";
 import { affiliateApplyLimiter } from "../middleware/rateLimit.js";
 import { getAffiliateStatus, submitApplication } from "../services/affiliate.js";
-import { getAffiliateOverview, setAffiliateStyles } from "../services/affiliateOverview.js";
+import {
+  getAffiliateOverview,
+  setAffiliateRewardStyle,
+  setAffiliateStyles,
+} from "../services/affiliateOverview.js";
 
 /**
  * The Affiliate Program's OWNER surface: apply, and read your own standing.
@@ -111,6 +116,29 @@ affiliateDashboardRouter.put("/styles", async (req, res) => {
     shopId: req.shop!.id,
     userId: req.userId!,
     styles: [...new Set(parsed.data.styles)],
+  });
+  if (!result.ok) {
+    res.status(409).json({ error: result.error });
+    return;
+  }
+  res.json({ account: result.account });
+});
+
+/** Choose how FUTURE rewards are paid: dollar account credit or a month off.
+ *  Forward only - every reward already earned keeps the style it was earned
+ *  under. ACTIVE accounts only, same as /styles. */
+const rewardStyleSchema = z.object({ style: z.enum(AFFILIATE_REWARD_STYLES) }).strict();
+
+affiliateDashboardRouter.put("/reward-style", async (req, res) => {
+  const parsed = rewardStyleSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const result = await setAffiliateRewardStyle({
+    shopId: req.shop!.id,
+    userId: req.userId!,
+    style: parsed.data.style,
   });
   if (!result.ok) {
     res.status(409).json({ error: result.error });
