@@ -11,7 +11,6 @@ import {
 import {
   DAY_MS,
   bucketIndexFor,
-  collectedCents,
   localMidnightInstant,
   readChairEvents,
   resolveTrailingWindow,
@@ -19,6 +18,11 @@ import {
   type ChairEvent,
   type ResolvedPeriod,
 } from "./insightsWindow.js";
+import {
+  appointmentTipSnapshot,
+  stripeCollectedCents,
+  type PaymentRowFacts,
+} from "./appointmentPayment.js";
 
 /**
  * THE STATS STRIP: every card's series for one grain, in one read.
@@ -27,7 +31,8 @@ import {
  * no-shows all come off `readChairEvents` - the same stream every other card
  * on Insights reads, synced Acuity/Square visits included. The only two reads
  * this adds are facts that stream does not carry:
- *   - online TIPS (a `tip` Payment row - deliberately kept out of revenue), and
+ *   - TIPS (an online `tip` Payment row plus a recorded cash / other-app tip,
+ *     added by appointmentTipSnapshot - deliberately kept out of revenue), and
  *   - each client's FIRST-EVER booking, for "new clients" (the same two
  *     groupBys GET /api/insights already runs).
  *
@@ -57,7 +62,7 @@ export interface StatsTip {
  *   revenue     ChairEvent.earnedCents - the one revenue rule (no-show fees in)
  *   avgTicket   mean ticket over priced visits that happened, null with none -
  *               the same rule as the page's Avg ticket tile
- *   tips        collected online tips net of refunds, by the visit's day
+ *   tips        online tips net of refunds + recorded tips, by the visit's day
  *   hoursBooked minutes in the chair, no-shows included (Chair time's rule)
  *   newClients  clients whose first-ever booking falls in the period
  *   noShows     chairs held for someone who never came
@@ -171,29 +176,46 @@ export async function readStats(
 
   const { events } = await readChairEvents(shop.id, from, to, { tx });
 
-  // Online tips, by the visit they were left on. Collected statuses only, net
-  // of refunds - the same arithmetic revenue uses for a payment row.
-  // TODO(#720): once Appointment.recordedTipCents (cash / other-app tips) is on
-  // main, add it here - read it through appointmentTipSnapshot in
-  // engines/appointmentPayment.ts rather than summing it a second way, rename
-  // the card from "Online tips" to "Tips", and let a recorded tip also make
-  // tipsTracked true. Tips stay OUT of revenue either way.
-  const tipRows = await tx.payment.findMany({
+  // Tips, by the visit they were left on: the online tip (what Stripe settled,
+  // net of refunds) plus a cash / other-app tip the shop recorded on the
+  // sheet's Tip row. Both go through appointmentTipSnapshot - the one place a
+  // visit's tips are added - so this card and the sheet can never disagree.
+  // Tips stay OUT of revenue.
+  const tipAppts = await tx.appointment.findMany({
     where: {
       shopId: shop.id,
-      purpose: "tip",
-      appointment: { startsAt: { gte: from, lt: to } },
+      startsAt: { gte: from, lt: to },
+      OR: [{ recordedTipCents: { not: null } }, { payments: { some: { purpose: "tip" } } }],
     },
     select: {
-      status: true,
-      amount: true,
-      capturedAmount: true,
-      refundedAmount: true,
-      appointment: { select: { startsAt: true } },
+      startsAt: true,
+      recordedTipCents: true,
+      recordedTipMethod: true,
+      payments: {
+        where: { purpose: "tip" },
+        select: { status: true, amount: true, capturedAmount: true, refundedAmount: true },
+      },
     },
   });
-  const tips: StatsTip[] = tipRows
-    .map((p) => ({ start: p.appointment.startsAt, cents: collectedCents(p) }))
+  // At most one LIVE tip per visit (Payment_appointmentId_tip_live_key); a
+  // failed attempt beside it collects nothing, so the live one is the one
+  // that collected the most.
+  const liveTip = (rows: PaymentRowFacts[]) =>
+    rows.reduce<PaymentRowFacts | null>(
+      (best, p) => (best === null || stripeCollectedCents(p) > stripeCollectedCents(best) ? p : best),
+      null,
+    );
+  const tips: StatsTip[] = tipAppts
+    .map((a) => ({
+      start: a.startsAt,
+      cents: appointmentTipSnapshot({
+        online: liveTip(a.payments),
+        recorded:
+          a.recordedTipCents !== null && a.recordedTipMethod !== null
+            ? { cents: a.recordedTipCents, method: a.recordedTipMethod }
+            : null,
+      }).totalCents,
+    }))
     .filter((t) => t.cents > 0);
 
   // First-ever booking for each client seen in the DISPLAYED window, across

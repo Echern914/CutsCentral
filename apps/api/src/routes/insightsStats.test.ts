@@ -282,4 +282,62 @@ describe("GET /api/insights/stats", () => {
     expect(s.metrics.map((m) => m.key)).not.toContain("tips");
     expect(series(s, "bookings").every((v) => v === 0)).toBe(true);
   });
+
+  it("counts a cash tip recorded on the sheet with the online one - and never as revenue", async () => {
+    // Its own shop: online tipping never switched on, so only a RECORDED tip
+    // can make the card appear.
+    const c = await signup();
+    const me = await request(app).get("/api/shops/me").set("Cookie", c);
+    const tipShop = me.body.id as string;
+    const tipStaff = (await prisma.staff.create({ data: { shopId: tipShop, name: "Ty" }, select: { id: true } })).id;
+    const tipService = (
+      await prisma.service.create({
+        data: { shopId: tipShop, name: "Fade", durationMin: 45, price: 40 },
+        select: { id: true },
+      })
+    ).id;
+    const visit = (startsAt: string, recordedTipCents: number | null) => {
+      const start = new Date(startsAt);
+      return prisma.appointment.create({
+        data: {
+          shopId: tipShop,
+          staffId: tipStaff,
+          serviceId: tipService,
+          firstName: "Reg",
+          status: "COMPLETED",
+          startsAt: start,
+          endsAt: new Date(start.getTime() + 45 * 60_000),
+          priceAtBooking: 40,
+          manageToken: randomToken(),
+          ...(recordedTipCents === null
+            ? {}
+            : { recordedTipCents, recordedTipMethod: "cash", recordedTipAt: start }),
+        },
+        select: { id: true },
+      });
+    };
+    // Monday: $5 cash. Tuesday: $8 online AND $2 cash on the same visit.
+    await visit("2026-06-15T15:00:00.000Z", 500);
+    const both = await visit("2026-06-16T15:00:00.000Z", 200);
+    await prisma.payment.create({
+      data: {
+        shopId: tipShop,
+        appointmentId: both.id,
+        purpose: "tip",
+        stripePaymentIntentId: `pi_stats_${randomToken(10)}`,
+        stripeConnectAccountId: "acct_stats_test",
+        mode: "ahead",
+        amount: 800,
+        status: "succeeded",
+      },
+    });
+
+    const s = await getStats(c, "?grain=day");
+    expect(s.metrics.map((m) => m.key)).toContain("tips");
+    expect(series(s, "tips")[indexOf(s, "2026-06-15")]).toBe(500);
+    expect(series(s, "tips")[indexOf(s, "2026-06-16")]).toBe(1000);
+    // Revenue is the two $40 prices, untouched by either kind of tip.
+    expect(series(s, "revenue")[indexOf(s, "2026-06-15")]).toBe(4000);
+    expect(series(s, "revenue")[indexOf(s, "2026-06-16")]).toBe(4000);
+  });
 });

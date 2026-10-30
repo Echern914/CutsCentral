@@ -409,7 +409,7 @@ insightsRouter.get("/", async (req, res) => {
  * GET /api/insights/stats?grain=day|week|month
  *
  * Every card's series for ONE grain in one round trip - Bookings, Revenue, Avg
- * ticket, Online tips, Hours booked, New clients, No-shows - over a bounded
+ * ticket, Tips, Hours booked, New clients, No-shows - over a bounded
  * run of periods (14 days, 10 weeks or 12 months; the request picks the grain,
  * never the count), plus a suggested week and month goal for revenue and
  * visits. See engines/insightsStats.ts for what each number counts.
@@ -430,8 +430,9 @@ insightsRouter.get("/stats", async (req, res) => {
   // The peek compares this period with the last one; history is Premium.
   const keep = full ? stats.period.buckets.length : 2;
   const buckets = stats.period.buckets.slice(-keep);
-  // Online tips is a card only where it can be a real number: a shop that has
-  // never offered online tipping would show a $0 that reads as "nobody tips".
+  // Tips is a card only where it can be a real number: a shop that has never
+  // offered online tipping or recorded a tip would show a $0 that reads as
+  // "nobody tips".
   const metrics = STATS_METRICS.filter((m) => m.key !== "tips" || stats.tipsTracked).map((m) => {
     const locked = !full && !m.headline;
     return {

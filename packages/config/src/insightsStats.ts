@@ -101,11 +101,11 @@ export const STATS_METRICS: readonly StatsMetricSpec[] = [
   },
   {
     key: "tips",
-    label: "Online tips",
+    label: "Tips",
     unit: "cents",
     headline: false,
     higherIsBetter: true,
-    hint: "Tips clients left online after a visit. Tips handed over at the chair aren't recorded here.",
+    hint: "Tips clients left online after a visit, plus cash or other-app tips you added on the appointment's Tip line. Never counted as revenue.",
   },
   {
     key: "hoursBooked",
