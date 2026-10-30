@@ -75,6 +75,7 @@ import {
   type NoShowChargeResult,
 } from "@chairback/config";
 import { noShowChargeResult } from "../services/cardOnFileSettle.js";
+import { decideCardFee } from "../services/cardFeeApproval.js";
 import {
   blockedTimeIsTheOnlyObstacle,
   blockSentence,
@@ -4562,6 +4563,8 @@ export async function cancelAppointmentCore(req: DashboardWriteReq, res: Dashboa
     let card: NoShowChargeResult | null = null;
     const ok = await cancelAppointment(req.shop!.id, req.params.id!, "CANCELED", new Date(), {
       applyPolicyFee: true,
+      // The barber is the one asking for the fee: never held for approval.
+      barberApprovedFee: true,
       onlyFrom: ["BOOKED"],
       onCardSettled: (settled) => {
         card = noShowChargeResult(settled);
@@ -4764,6 +4767,11 @@ bookingDashboardRouter.post("/appointments/:id/restore", async (req, res) => {
           // appointment: the stamp is what makes the send at-most-once, so an
           // undo has to give it back.
           cancellationEmailSentAt: null,
+          // A late-cancel fee waiting for the barber belongs to the cancel
+          // being undone: the booking stands again, so there is nothing to
+          // charge. The card it was waiting on was never let go.
+          cardFeeAwaitingCents: null,
+          cardFeeAwaitingSince: null,
         },
       });
       // The capacity-1 claim, the same CAS every booking of a special makes:
@@ -5286,6 +5294,37 @@ registerTipRefund(bookingDashboardRouter);
 // The Tip row: record a tip received in cash or through another app. A record,
 // never a charge (booking.recordedTip.ts).
 registerRecordedTip(bookingDashboardRouter);
+
+/**
+ * POST /appointments/:id/card-fee {decision: "charge" | "waive"} - the
+ * barber's answer to a client's late-cancel fee that waited for them
+ * (Shop.cardFeeNeedsApproval, services/cardFeeApproval.ts). Charge takes the
+ * figure written when the client cancelled - nothing is typed here - and
+ * answers with what happened to the card, the no-show route's shape. 409 when
+ * nothing is waiting (already decided, or lapsed).
+ */
+const cardFeeDecisionSchema = z.object({ decision: z.enum(["charge", "waive"]) }).strict();
+bookingDashboardRouter.post("/appointments/:id/card-fee", async (req, res) => {
+  const parsed = cardFeeDecisionSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const result = await decideCardFee({
+    shopId: req.shop!.id,
+    appointmentId: req.params.id!,
+    decision: parsed.data.decision,
+  });
+  if (!result.ok) {
+    res.status(409).json(result);
+    return;
+  }
+  logger.info(
+    { shopId: req.shop!.id, appointmentId: req.params.id, actorUserId: req.userId ?? null, decision: result.decision },
+    "card fee: the barber decided a waiting late-cancel fee",
+  );
+  res.json(result);
+});
 
 bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   const shopId = req.shop!.id;

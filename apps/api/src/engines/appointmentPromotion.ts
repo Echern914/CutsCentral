@@ -393,8 +393,14 @@ export async function cancelAppointment(
   //   keeps it, exactly as an ordinary no-show does (only CANCELED refunds,
   //   below, and refuseIfMoney skips that anyway). It is left untouched. Any
   //   other live payment or a kept card still refuses.
+  // barberApprovedFee: with applyPolicyFee, the BARBER recorded the client's
+  //   late cancel and said yes to its fee (POST /appointments/:id/cancel
+  //   {lateCancelFee}). Every other applyPolicyFee caller is the client's own
+  //   cancel, whose fee waits for the barber at a shop that approves fees
+  //   first (Shop.cardFeeNeedsApproval - services/cardOnFileSettle.ts).
   opts: {
     applyPolicyFee?: boolean;
+    barberApprovedFee?: boolean;
     suppressSlotOpened?: boolean;
     initiator?: "customer" | "barber";
     onlyFrom?: Array<"PENDING" | "BOOKED" | "COMPLETED" | "NO_SHOW">;
@@ -674,6 +680,7 @@ export async function cancelAppointment(
       appointmentId,
       outcome,
       applyPolicyFee: Boolean(opts.applyPolicyFee),
+      barberApproved: opts.barberApprovedFee === true,
       priceAtBooking: result.priceAtBooking,
       serviceName: result.serviceName,
       startsAt: result.startsAt,

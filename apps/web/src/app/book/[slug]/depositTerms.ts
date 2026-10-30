@@ -56,9 +56,17 @@ export function lateCancelChargeQuestion(fee: {
   cents: number;
   windowHours: number;
   card: { last4: string | null };
+  /**
+   * The shop approves fees first: the fee MAY be charged, never "charges" -
+   * the shop can still waive it. Optional = an older API (charged at once).
+   */
+  needsApproval?: boolean;
 }): string {
   const dollars = fee.cents % 100 === 0 ? String(fee.cents / 100) : (fee.cents / 100).toFixed(2);
   const card = fee.card.last4 ? `your card ending ${fee.card.last4}` : "the card you saved";
   const within = fee.windowHours === 1 ? "1 hour" : `${fee.windowHours} hours`;
+  if (fee.needsApproval) {
+    return `It's within ${within} of your appointment, so the shop may charge a $${dollars} late-cancel fee to ${card}. Cancel anyway?`;
+  }
   return `It's within ${within} of your appointment, so cancelling now charges $${dollars} to ${card}. Cancel anyway?`;
 }

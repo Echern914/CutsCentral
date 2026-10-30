@@ -132,6 +132,8 @@ export interface ManageData {
     inside: boolean;
     windowHours: number;
     card: { brand: string | null; last4: string | null };
+    /** The shop approves fees first: "may charge". Optional = an older API. */
+    needsApproval?: boolean;
   } | null;
   /**
    * A tip after the visit (the API's services/tips.ts TipView). Null or

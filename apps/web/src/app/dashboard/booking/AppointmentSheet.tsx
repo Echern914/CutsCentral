@@ -6,6 +6,7 @@ import Link from "next/link";
 import { cn } from "@/lib/cn";
 import {
   appointmentEnded,
+  CARD_FEE_APPROVAL_DAYS,
   CANCEL_PAST_END_COPY,
   describeLateCancelCardOutcome,
   describeLateCancelChargeResult,
@@ -54,6 +55,7 @@ import {
   markArrivedAction,
   noShowAppointmentAction,
   lateCancelAppointmentAction,
+  decideCardFeeAction,
   recordTipAction,
   undoNoShowAction,
   removeWalkInAction,
@@ -570,6 +572,50 @@ export function AppointmentSheet({
     })();
   }
 
+  //  ── A client's late-cancel fee waiting for the barber ──
+  // Shop.cardFeeNeedsApproval: nothing was charged when the client cancelled.
+  // Charge takes the figure fixed at the cancel; Waive lets the card go. ONE
+  // request at a time (a ref, not `pending` - a double tap must not send two).
+  const [feeDecisionBusy, setFeeDecisionBusy] = useState(false);
+  const feeDecisionBusyRef = useRef(false);
+  const [feeDecisionError, setFeeDecisionError] = useState<string | null>(null);
+  function decideWaitingFee(decision: "charge" | "waive") {
+    if (feeDecisionBusyRef.current) return;
+    feeDecisionBusyRef.current = true;
+    setFeeDecisionBusy(true);
+    setFeeDecisionError(null);
+    const waiting = detail?.cardFeeAwaiting ?? null;
+    void (async () => {
+      try {
+        let res: Awaited<ReturnType<typeof decideCardFeeAction>>;
+        try {
+          res = await decideCardFeeAction(row.id, decision);
+        } catch {
+          res = { ok: false };
+        }
+        if (!res.ok) {
+          setFeeDecisionError(
+            res.error === "lapsed"
+              ? `More than ${CARD_FEE_APPROVAL_DAYS} days went by, so the card was let go. Nothing was charged.`
+              : res.error === "nothing_waiting"
+                ? "This fee was already charged or waived."
+                : "That didn't go through. Nothing changed, so try again.",
+          );
+          load();
+          return;
+        }
+        onChanged();
+        if (decision === "charge" && res.card) {
+          setMarkedCard({ kind: "approved_fee", result: res.card, last4: waiting?.last4 ?? null });
+        }
+        load();
+      } finally {
+        feeDecisionBusyRef.current = false;
+        setFeeDecisionBusy(false);
+      }
+    })();
+  }
+
   //  ── No-show: marked, and taken back ──
   // Both ask first, in the footer (a toast draws beneath this dialog and is
   // invisible on a phone), send ONE request (their own busy flag - a
@@ -588,8 +634,11 @@ export function AppointmentSheet({
   const [markedCard, setMarkedCard] = useState<{
     result: NoShowChargeResult;
     last4: string | null;
-    /** Which close this was: a no-show, or the client's late cancel. */
-    kind: "no_show" | "late_cancel";
+    /**
+     * Which close this was: a no-show, the client's late cancel, or a fee
+     * that waited for the barber's approval and was just charged.
+     */
+    kind: "no_show" | "late_cancel" | "approved_fee";
   } | null>(null);
   useEffect(() => {
     if (rawView !== "detail") {
@@ -968,6 +1017,13 @@ export function AppointmentSheet({
           onChargeLateCancel={
             detail?.lateCancelCard?.charge && !appointmentEnded(detail.endsAt) ? openLateCancelAsk : undefined
           }
+          feeDecision={
+            detail?.cardFeeAwaiting
+              ? { onDecide: decideWaitingFee, busy: feeDecisionBusy, error: feeDecisionError }
+              : feeDecisionError
+                ? { onDecide: decideWaitingFee, busy: false, error: feeDecisionError }
+                : undefined
+          }
           onBookAgain={
             canBookAgain && detail?.clientId
               ? () => {
@@ -1035,6 +1091,7 @@ function DetailView({
   onEditSeries,
   onCheckout,
   onChargeLateCancel,
+  feeDecision,
   onBookAgain,
   onAct,
   onRemoveWalkIn,
@@ -1065,6 +1122,8 @@ function DetailView({
   onCheckout: () => void;
   /** Ask "did the client cancel?" with the fee; absent when no fee is due. */
   onChargeLateCancel?: () => void;
+  /** Charge or Waive a client's late-cancel fee that waited for approval. */
+  feeDecision?: FeeDecisionProps;
   /** Start this client's next visit; absent where Book again isn't offered. */
   onBookAgain?: () => void;
   onAct: (
@@ -1139,6 +1198,7 @@ function DetailView({
             canCheckout={canCheckout}
             onCheckout={onCheckout}
             onChargeLateCancel={onChargeLateCancel}
+            feeDecision={feeDecision}
           />
           {/* What a cancelled or no-show booking kept from its booking
               payment. NOT behind the checkout flag: every deposit-mode shop
@@ -2140,12 +2200,14 @@ function PaymentCard({
   canCheckout,
   onCheckout,
   onChargeLateCancel,
+  feeDecision,
 }: {
   detail: AppointmentDetail | null;
   loadError: boolean;
   canCheckout: boolean;
   onCheckout: () => void;
   onChargeLateCancel?: () => void;
+  feeDecision?: FeeDecisionProps;
 }) {
   const vocab = useVocab();
   if (loadError) return null;
@@ -2264,6 +2326,12 @@ function PaymentCard({
               moment-of-charge footer is gone: what, how much, which card,
               when, and whether Stripe actually took it. */}
           {detail.cardFee && <CardFeeLine fee={detail.cardFee} timezone={detail.timezone} />}
+          {/* A fee that waited for approval and was waived (or lapsed). */}
+          {!detail.cardFee && detail.cardFeeWaivedAt && (
+            <div data-testid="card-fee-waived">
+              <Line label="Late-cancel fee" value="Waived · not charged" />
+            </div>
+          )}
           {p.refundedCents > 0 && (
             <Line label="Refunded" value={`−${money(p.refundedCents)}`} tone="bad" />
           )}
@@ -2323,6 +2391,17 @@ function PaymentCard({
             <Line label="No card on file" value="Skipped at booking" />
           )}
         </dl>
+      )}
+
+      {/* 🔴 THE CLIENT CANCELLED, AND THE FEE WAITS FOR A YES. Nothing was
+          charged when they cancelled (Shop.cardFeeNeedsApproval): this is the
+          question, with the figure and the card, and both answers. */}
+      {feeDecision && (detail.cardFeeAwaiting || feeDecision.error) && (
+        <CardFeeApproval
+          waiting={detail.cardFeeAwaiting ?? null}
+          timezone={detail.timezone}
+          {...feeDecision}
+        />
       )}
 
       {/* 🔴 THE LATE-CANCEL FEE, WHERE A BARBER LOOKS FOR A CHARGE. A client
@@ -3674,20 +3753,26 @@ function MarkedNoShowFooter({
   last4,
   onDone,
 }: {
-  kind: "no_show" | "late_cancel";
+  kind: "no_show" | "late_cancel" | "approved_fee";
   result: NoShowChargeResult;
   last4: string | null;
   onDone: () => void;
 }) {
   const said =
-    kind === "late_cancel" ? describeLateCancelChargeResult(result, last4) : describeNoShowChargeResult(result, last4);
+    kind !== "no_show" ? describeLateCancelChargeResult(result, last4) : describeNoShowChargeResult(result, last4);
   return (
     <div
       className="flex w-full flex-col gap-2"
-      data-testid={kind === "late_cancel" ? "late-cancel-done" : "no-show-marked"}
+      data-testid={
+        kind === "late_cancel" ? "late-cancel-done" : kind === "approved_fee" ? "card-fee-decided" : "no-show-marked"
+      }
     >
       <p role="status" className="text-sm font-medium text-offwhite">
-        {kind === "late_cancel" ? "Cancelled as a late cancel." : "Marked no-show."}
+        {kind === "late_cancel"
+          ? "Cancelled as a late cancel."
+          : kind === "approved_fee"
+            ? "Late-cancel fee approved."
+            : "Marked no-show."}
       </p>
       <p
         className={cn(
@@ -3936,6 +4021,88 @@ function CardSkeleton({ title, rows }: { title: string; rows: number }) {
       </div>
       <span className="sr-only">Loading…</span>
     </Panel>
+  );
+}
+
+type FeeDecisionProps = {
+  onDecide: (decision: "charge" | "waive") => void;
+  busy: boolean;
+  error: string | null;
+};
+
+/**
+ * "Charge $25 or waive it?" - a client's late-cancel fee waiting for the
+ * barber (Shop.cardFeeNeedsApproval). The figure is the server's, fixed when
+ * the client cancelled; nothing here types or recomputes it. Its outcome is
+ * said in the footer (a toast is invisible under this dialog on a phone).
+ */
+function CardFeeApproval({
+  waiting,
+  timezone,
+  onDecide,
+  busy,
+  error,
+}: {
+  waiting: NonNullable<AppointmentDetail["cardFeeAwaiting"]> | null;
+  timezone: string;
+} & FeeDecisionProps) {
+  let lapses = "";
+  if (waiting) {
+    try {
+      lapses = new Intl.DateTimeFormat("en-US", {
+        timeZone: timezone,
+        month: "short",
+        day: "numeric",
+      }).format(new Date(waiting.lapsesAt));
+    } catch {
+      lapses = "";
+    }
+  }
+  return (
+    <div
+      className="mt-3.5 flex flex-col gap-2 border-t border-subtle pt-3.5"
+      data-testid="card-fee-approval"
+    >
+      {waiting && (
+        <>
+          <p className="text-sm font-medium text-offwhite">
+            {`Charge the ${money(waiting.cents)} late-cancel fee?`}
+          </p>
+          <p className="text-xs leading-relaxed text-muted">
+            The client cancelled inside your cutoff. Nothing has been charged.{" "}
+            {waiting.last4 ? `Charge goes on the card ending ${waiting.last4}.` : "Charge goes on the card they saved."}
+            {lapses ? ` If you don't decide by ${lapses}, the card is let go uncharged.` : ""}
+          </p>
+        </>
+      )}
+      {error && (
+        <p role="alert" data-testid="card-fee-approval-error" className="text-sm text-danger-soft">
+          {error}
+        </p>
+      )}
+      {waiting && (
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => onDecide("waive")}
+            disabled={busy}
+            data-testid="card-fee-waive"
+            className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl border border-subtle px-4 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+          >
+            Waive it
+          </button>
+          <button
+            type="button"
+            onClick={() => onDecide("charge")}
+            disabled={busy}
+            data-testid="card-fee-charge"
+            className="flex h-11 min-w-0 flex-1 shrink-0 items-center justify-center rounded-xl border border-danger-soft/50 px-4 text-sm font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50"
+          >
+            {busy ? "Saving…" : `Charge ${money(waiting.cents)}`}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

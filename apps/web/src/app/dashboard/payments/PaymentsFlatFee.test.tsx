@@ -119,3 +119,35 @@ describe("card on file: a flat no-show fee", () => {
     expect(save.mock.calls[0]![0]).not.toHaveProperty("cardFeeFlatCents");
   });
 });
+
+describe("🔴 card on file: ask me before charging a late cancellation (Drick, 2026-10-30)", () => {
+  const approval = () => screen.queryByLabelText("Ask me before charging a late cancellation") as HTMLInputElement | null;
+
+  it("is offered only while fees are on, and says nothing is charged until approved", () => {
+    render(<PaymentsManager initial={status()} apiBase="http://api.test" />);
+    expect(approval()).toBeTruthy();
+    expect(screen.getByTestId("fee-needs-approval").textContent).toContain(
+      "nothing is charged until you approve it",
+    );
+    fireEvent.click(screen.getByLabelText("Charge the card on file for no-shows and late cancellations"));
+    expect(approval()).toBeNull();
+  });
+
+  it("ticking it saves cardFeeNeedsApproval: true", async () => {
+    render(<PaymentsManager initial={status()} apiBase="http://api.test" />);
+    expect(approval()!.checked).toBe(false);
+    fireEvent.click(approval()!);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toMatchObject({ chargeCardOnFileFees: true, cardFeeNeedsApproval: true });
+  });
+
+  it("a saved yes reloads ticked, and unticking saves false", async () => {
+    render(<PaymentsManager initial={status({ cardFeeNeedsApproval: true })} apiBase="http://api.test" />);
+    expect(approval()!.checked).toBe(true);
+    fireEvent.click(approval()!);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toMatchObject({ cardFeeNeedsApproval: false });
+  });
+});

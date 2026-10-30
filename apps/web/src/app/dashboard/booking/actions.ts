@@ -1738,6 +1738,25 @@ export async function lateCancelAppointmentAction(
 }
 
 /**
+ * The barber's answer to a client's late-cancel fee that waited for them:
+ * charge the figure fixed when the client cancelled, or waive it (the card is
+ * let go). `card` is what happened to the card on a Charge.
+ */
+export async function decideCardFeeAction(
+  id: string,
+  decision: "charge" | "waive",
+): Promise<{ ok: boolean; error?: string; message?: string; card?: NoShowChargeResult | null }> {
+  const res = await apiSend<{ card?: NoShowChargeResult | null }>(
+    "POST",
+    `/api/booking/appointments/${encodeURIComponent(id)}/card-fee`,
+    { decision },
+  );
+  if (!res.ok) return { ok: false, error: res.error ?? "failed", message: res.message };
+  revalidatePath("/dashboard/booking");
+  return { ok: true, card: res.data?.card ?? null };
+}
+
+/**
  * Undo a cancel.
  *
  * Narrow by design (see the route): the server refuses anything already
@@ -2331,6 +2350,14 @@ export interface AppointmentDetail {
     last4: string | null;
     at: string;
   } | null;
+  /**
+   * The client cancelled inside the cutoff and the shop approves fees first:
+   * the fee waits for Charge or Waive. Nothing is charged until Charge.
+   * `lapsesAt` = when the card is let go undecided. Optional = older API.
+   */
+  cardFeeAwaiting?: { cents: number; last4: string | null; since: string; lapsesAt: string } | null;
+  /** A waiting fee the barber waived, or that lapsed undecided. Optional = older API. */
+  cardFeeWaivedAt?: string | null;
 }
 
 /**

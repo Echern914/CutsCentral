@@ -31,6 +31,7 @@ import { releaseAffiliateCommissionHolds } from "./services/affiliateCommission.
 import { sweepExpiredHolds } from "./engines/holdSweep.js";
 import { sweepExpiredPaymentHolds } from "./services/appointmentPaymentHold.js";
 import { sweepAbandonedTipIntents } from "./billing/tips.js";
+import { sweepLapsedCardFees } from "./services/cardFeeApproval.js";
 import { expireDueOffers } from "./engines/waitlistOffer.js";
 import { resendUnnotifiedOpenings } from "./engines/tierOpenings.js";
 import { advanceAutoFill } from "./engines/autoFill.js";
@@ -402,6 +403,9 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
         sweepExpiredPaymentHolds(),
         // Tip attempts nobody finished (billing/tips.ts) - same cadence, same lease.
         sweepAbandonedTipIntents(),
+        // Late-cancel fees the barber never charged or waived in time
+        // (services/cardFeeApproval.ts) - their cards are let go.
+        sweepLapsedCardFees(),
       ]);
       for (const r of results) {
         if (r.status === "rejected") logger.error({ err: r.reason }, "hold sweep half failed");

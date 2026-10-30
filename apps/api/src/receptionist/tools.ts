@@ -1680,7 +1680,7 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
   // have paid on the website and be cancelling by text.
   const shop = await prisma.shop.findUnique({
     where: { id: ctx.shopId },
-    select: { timezone: true },
+    select: { timezone: true, cardFeeNeedsApproval: true },
   });
   // 🔴 THIS BOOKING'S cancellation terms - its own snapshot, the terms the
   // engine settles by - never the shop's settings today.
@@ -1716,6 +1716,10 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
   // settles with (services/cardOnFileSettle.ts cardOnFileFeeFor), agreed price
   // and all, so what this tool tells the client is exactly what their card is
   // about to be charged.
+  // A card fee at a shop that approves fees first is NOT charged by this
+  // cancel: it waits for the barber (services/cardFeeApproval.ts), who may
+  // waive it. The client must hear "may", never "was charged".
+  let cardFeeWaitsForShop = false;
   if (feeCents === 0 && terms.chargeCardOnFileFees) {
     const kept = await prisma.cardOnFile.findUnique({
       where: { appointmentId: appt.id },
@@ -1731,6 +1735,7 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
         reason: "late_cancel",
         terms,
       });
+      cardFeeWaitsForShop = feeCents > 0 && shop?.cardFeeNeedsApproval === true;
     }
   }
 
@@ -1750,7 +1755,9 @@ async function cancelTool(ctx: ToolContext, rawInput: unknown): Promise<ToolExec
     fee_cents: feeCents,
     fee_note:
       feeCents > 0
-        ? nonRefundable
+        ? cardFeeWaitsForShop
+          ? `inside the cancellation window - the shop MAY charge a $${(feeCents / 100).toFixed(2)} late-cancel fee to the card on file; the shop decides, and nothing has been charged yet. Tell them plainly; never say it was charged or that it will be`
+          : nonRefundable
           ? `the deposit is non-refundable - the $${(feeCents / 100).toFixed(2)} they paid at booking stays with the shop; tell them plainly`
           : `inside the cancellation window - $${(feeCents / 100).toFixed(2)} of what they paid stays with the shop; tell them plainly`
         : "no fee - nothing kept",

@@ -56,6 +56,8 @@ export async function savePaymentSettingsAction(input: {
   cardFeeFlatCents?: number | null;
   /** card_on_file: hold the time until a card is saved (true), or book them anyway (false). */
   requireCardToBook?: boolean;
+  /** card_on_file: a client's own late cancel waits for the barber's Charge or Waive. */
+  cardFeeNeedsApproval?: boolean;
   cancelWindowHours?: number;
   cancelFeeBps?: number;
   /** Deposit taken at booking, in CENTS (deposit mode only). */
@@ -133,6 +135,11 @@ export interface PaymentStatus {
    * default) = yes. Optional = an older API.
    */
   requireCardToBook?: boolean;
+  /**
+   * card_on_file: does a client's own late cancel wait for the barber to
+   * Charge or Waive? false (the default) = charged at once. Optional = an older API.
+   */
+  cardFeeNeedsApproval?: boolean;
   /** null = the barber has not said, and the booking page then says nothing. */
   tipPolicy: "included" | "not_included" | null;
   /** Clients may tip online after a finished visit. Optional = an older API. */

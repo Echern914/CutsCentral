@@ -685,6 +685,13 @@ model Shop {
   // client who leaves it is still booked, never silently released. ON: the
   // time is held while they save a card, and released if they don't.
   requireCardToBook Boolean @default(false)
+  // Card on file: does a CLIENT's own late cancel (their link, the texting
+  // receptionist) wait for the barber before the fee is charged? OFF (the
+  // default): charged on the spot, as always. ON: the fee waits on the
+  // appointment (Appointment.cardFeeAwaitingCents) for Charge or Waive, and
+  // the card is let go if neither happens in time. The barber's own taps
+  // (Mark no-show, "Client cancelled - charge $X") already ask first.
+  cardFeeNeedsApproval Boolean @default(false)
   // Card on file: the no-show / late-cancel fee as a FLAT amount in cents,
   // instead of cancelFeeBps of the price. Null (the default) = the percentage,
   // as always. Capped at the booked price when charged (config/shopPolicy.ts
@@ -3674,6 +3681,15 @@ model Appointment {
   // Shop.cardFeeFlatCents as it stood at creation. NULL with the three above
   // set = the booking was made on the percentage. Never set without them.
   cardFeeFlatCentsAtBooking  Int?
+  // A late-cancel fee WAITING FOR THE BARBER (Shop.cardFeeNeedsApproval): the
+  // figure this booking's terms gave when the client cancelled, and when. The
+  // card stays kept while it waits. Cleared when the barber charges or waives
+  // it, or when it lapses (services/cardFeeApproval.ts). CHECK-pinned
+  // all-or-nothing.
+  cardFeeAwaitingCents       Int?
+  cardFeeAwaitingSince       DateTime?
+  // The waiting fee was waived by the barber, or lapsed undecided.
+  cardFeeWaivedAt            DateTime?
   // Snapshot of the add-ons chosen at booking: [{name, durationMin, price}].
   // endsAt already includes their duration and priceAtBooking already includes
   // their price; this JSON preserves the itemized list for display even if an
