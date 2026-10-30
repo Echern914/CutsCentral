@@ -34,5 +34,6 @@ export * from "./checkoutConsent.js";
 export * from "./walkInBackdate.js";
 export * from "./rebook.js";
 export * from "./tips.js";
+export * from "./insightsStats.js";
 export * from "./legal.js";
 export * from "./featureAdoption.js";

@@ -60,6 +60,7 @@
     "./openSlots": "./src/openSlots.ts",
     "./specialDay": "./src/specialDay.ts",
     "./expenseSchedule": "./src/expenseSchedule.ts",
+    "./insightsStats": "./src/insightsStats.ts",
     "./fillCancellations": "./src/fillCancellations.ts",
     "./legal": "./src/legal.ts"
   },

@@ -7,6 +7,11 @@ import { DemoTour } from "@/components/tour/DemoTour";
 import { InsightsClient } from "./InsightsClient";
 import { Suspense } from "react";
 import { FeatureAdoptionSection } from "./FeatureAdoptionSection";
+import type {
+  GoalSuggestion,
+  StatsGrain,
+  StatsMetricKey,
+} from "@chairback/config/insightsStats";
 
 export const metadata: Metadata = { title: "Insights" };
 
@@ -91,6 +96,33 @@ export interface InsightsData extends PeriodMeta {
   };
   /** ESTIMATE: revenue (cents) minus `expenses.totalCents`. May be negative. */
   takeHomeCents?: number;
+}
+
+/**
+ * The Stats strip (GET /api/insights/stats): every card's series for ONE grain,
+ * oldest period first, the LAST being the one in progress. A Starter shop gets
+ * the headline cards for this period and the last only; the rest come back
+ * `locked` with no values, and no suggestions or levers.
+ */
+export interface StatsData {
+  grain: StatsGrain;
+  scope: "full" | "peek";
+  grains: { key: StatsGrain; label: string }[];
+  windowStart: string;
+  windowEnd: string;
+  periods: { key: string; label: string; fullLabel: string }[];
+  metrics: {
+    key: StatsMetricKey;
+    locked: boolean;
+    values: (number | null)[];
+    /**
+     * The previous period counted only up to the point the current one has
+     * reached - what the arrow compares against. Absent = compare whole periods.
+     */
+    previousToDate?: number | null;
+  }[];
+  suggestions: GoalSuggestion[];
+  levers: { rewards: boolean; rebookPush: boolean; autoFill: boolean } | null;
 }
 
 /**
@@ -198,9 +230,10 @@ export interface GoalResponse {
 
 export default async function InsightsPage() {
   const vocab = await getVocabulary();
-  const [res, goalRes, me] = await Promise.all([
+  const [res, goalRes, statsRes, me] = await Promise.all([
     apiGet<InsightsData>(`/api/insights?period=${DEFAULT_PERIOD}`),
     apiGet<GoalResponse>("/api/insights/goal"),
+    apiGet<StatsData>("/api/insights/stats?grain=week"),
     getMe(),
   ]);
   if (!res.ok || !res.data) {
@@ -224,6 +257,7 @@ export default async function InsightsPage() {
         <InsightsClient
           initial={res.data}
           initialGoalData={goalRes.ok ? (goalRes.data ?? null) : null}
+          initialStats={statsRes.ok ? (statsRes.data ?? null) : null}
           rewardsEnabled={me.data?.rewardsEnabled ?? true}
           serviceNoun={me.data?.serviceNoun ?? "visit"}
         />

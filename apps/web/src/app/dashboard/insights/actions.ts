@@ -10,8 +10,10 @@ import type {
   GoalResponse,
   InsightsData,
   PeriodKey,
+  StatsData,
   UtilizationData,
 } from "./page";
+import type { StatsGrain } from "@chairback/config/insightsStats";
 
 /** Re-fetch the page's numbers for another period (mirrors trendsAction). */
 export async function insightsAction(
@@ -25,6 +27,12 @@ export async function insightsAction(
     ...(period === "custom" && range ? { from: range.from, to: range.to } : {}),
   });
   const res = await apiGet<InsightsData>(`/api/insights?${params}`);
+  return res.ok ? (res.data ?? null) : null;
+}
+
+/** The Stats strip for one grain: every card's series in one round trip. */
+export async function statsAction(grain: StatsGrain): Promise<StatsData | null> {
+  const res = await apiGet<StatsData>(`/api/insights/stats?grain=${encodeURIComponent(grain)}`);
   return res.ok ? (res.data ?? null) : null;
 }
 
