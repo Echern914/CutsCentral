@@ -35,3 +35,4 @@ export * from "./walkInBackdate.js";
 export * from "./rebook.js";
 export * from "./tips.js";
 export * from "./legal.js";
+export * from "./featureAdoption.js";

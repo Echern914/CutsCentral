@@ -5,6 +5,8 @@ import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { InsightsClient } from "./InsightsClient";
+import { Suspense } from "react";
+import { FeatureAdoptionSection } from "./FeatureAdoptionSection";
 
 export const metadata: Metadata = { title: "Insights" };
 
@@ -226,6 +228,10 @@ export default async function InsightsPage() {
           serviceNoun={me.data?.serviceNoun ?? "visit"}
         />
       </div>
+      {/* "What other shops use" - platform totals, self-contained, streams in. */}
+      <Suspense fallback={null}>
+        <FeatureAdoptionSection />
+      </Suspense>
     </main>
   );
 }

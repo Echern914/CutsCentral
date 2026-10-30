@@ -31,6 +31,7 @@ import {
 } from "../engines/insightsWindow.js";
 import { expenseSummaryForWindow } from "../engines/shopExpenses.js";
 import { insightsExpensesRouter } from "./insightsExpenses.js";
+import { featureAdoptionRouter } from "./featureAdoption.js";
 
 /**
  * Shop insights: the barber's own analytics page.
@@ -67,6 +68,8 @@ insightsRouter.use(requireUser, requireShop, requireManager, requireActiveAccess
 // The barber's own expenses (rent paid, products, supplies, other) - behind the
 // same OWNER/MANAGER + active-access gate as everything above.
 insightsRouter.use("/expenses", insightsExpensesRouter);
+// "What other shops use": platform totals only (routes/featureAdoption.ts).
+insightsRouter.use("/feature-adoption", featureAdoptionRouter);
 
 /** Every response echoes the window it measured, so no label can drift from it. */
 function periodMeta(p: ResolvedPeriod) {
