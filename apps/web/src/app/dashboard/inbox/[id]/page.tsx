@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { apiGet } from "@/lib/api";
 import { getBillingSummary } from "@/lib/billing";
 import { PlanBadge } from "../../_components/PlanBadge";
+import { UpgradeOnWebLink } from "@/components/UpgradeOnWebLink";
 import { Card } from "@/components/ui/Card";
 import { ReplyBox } from "./ReplyBox";
 import { LocalDate } from "@/components/ui/LocalDate";
@@ -82,10 +83,12 @@ export default async function ConversationPage({
       {canReply ? (
         <ReplyBox conversationId={conversation.id} />
       ) : (
-        // Badge + words only: no price or link, so it is the same in the app (3.1.1).
+        // Badge + words, no price. The way to billing is UpgradeOnWebLink: a
+        // link on the web, Safari from the app, nothing in an older app build.
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-subtle bg-charcoal-800 px-4 py-3 text-sm text-muted">
           <PlanBadge tier="pro_ai" />
           <span>Replying from the inbox is part of Premium AI. This thread stays here to read.</span>
+          <UpgradeOnWebLink>See plans &rarr;</UpgradeOnWebLink>
         </div>
       )}
     </main>

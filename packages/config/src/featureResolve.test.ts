@@ -87,6 +87,16 @@ describe("resolveFeature — the navigation gate", () => {
     expect(resolveFeature("billing").ok).toBe(true);
   });
 
+  // "Plan & billing ↗": a surface that opens billing in SAFARI (an app build
+  // with openWeb, kill switch on) may list it. Only an explicit opt-in.
+  it("billingOnWeb lets a Safari-opening surface list billing in the shell", () => {
+    expect(resolveFeature("billing", { inApp: true, billingOnWeb: true }).ok).toBe(true);
+    expect(resolveFeature("billing", { inApp: true, billingOnWeb: false }).ok).toBe(false);
+    expect(visibleFeatures({ inApp: true, billingOnWeb: true }).map((f) => f.id)).toContain("billing");
+    // Every other rule still applies: an employee never sees it.
+    expect(resolveFeature("billing", { inApp: true, billingOnWeb: true, role: "BARBER" }).ok).toBe(false);
+  });
+
   it("a flag that is off removes the destination entirely", () => {
     expect(resolveFeature("loyalty-tiers").ok).toBe(true);
     const r = resolveFeature("loyalty-tiers", { flagsOff: ["rewardsEnabled"] });

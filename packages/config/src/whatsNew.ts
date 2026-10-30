@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-30-manage-plan-from-app",
+    date: "2026-10-30",
+    kind: "feature",
+    title: "Change your plan from the app",
+    body:
+      "In the iPhone app, Manage plan on getchairback.com opens your billing page in Safari, where you can start or " +
+      "change your plan. You'll need the latest version of the app.",
+  },
+  {
     id: "2026-10-30-insights-stats-first",
     date: "2026-10-30",
     kind: "feature",

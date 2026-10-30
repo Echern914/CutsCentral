@@ -54,6 +54,59 @@ export function parseOpenAuthRequest(
 }
 
 /**
+ * "cb:open-web": open one of OUR web pages in the SYSTEM BROWSER (Safari),
+ * never in the WebView. Today that is billing only - "Manage plan on
+ * getchairback.com ↗" (web components/UpgradeOnWebLink.tsx).
+ *
+ * WHY SAFARI. Guideline 3.1.1 lets an app on the US storefront link out to buy
+ * on the web (the 2025 Epic v. Apple injunction), but the buying has to happen
+ * in the browser: billing loaded inside this WebView would be an in-app
+ * purchase flow that is not Apple's. Linking.openURL hands the address to iOS,
+ * which opens Safari.
+ *
+ * 🔴 THE PAGE SENDS A PATH, NOT A URL, and only a listed path is honoured. The
+ * address is built here on our own origin, so a message can never send a
+ * barber to another site, or to another page of ours, by way of this door.
+ */
+export const OPEN_WEB_MESSAGE = "cb:open-web";
+
+const OPEN_WEB_PATHS = new Set(["/dashboard/billing", "/dashboard/billing#plans"]);
+
+export function parseOpenWebRequest(raw: string, origins: { webOrigin: string }): string | null {
+  let msg: unknown;
+  try {
+    msg = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!msg || typeof msg !== "object") return null;
+  const { type, path } = msg as Record<string, unknown>;
+  if (type !== OPEN_WEB_MESSAGE || typeof path !== "string") return null;
+  if (!OPEN_WEB_PATHS.has(path)) return null;
+  return `${origins.webOrigin}${path}`;
+}
+
+/**
+ * What this build tells our pages it can do (AppWebView's
+ * ANNOUNCE_CAPABILITIES -> `window.__cbNative`). A page that sees the bridge
+ * but not a flag knows it is inside an older build and keeps its fallback.
+ *
+ * `openWeb` is iOS-only on purpose: the US-storefront allowance it relies on
+ * is Apple's, and Google Play's billing rules are a separate question.
+ */
+export function nativeCapabilities(opts: {
+  platform: string;
+  nextUpWidget: boolean;
+}): Record<string, true> {
+  return {
+    openAuth: true,
+    rewardsTab: true,
+    ...(opts.platform === "ios" ? { openWeb: true as const } : {}),
+    ...(opts.nextUpWidget ? { nextUpWidget: true as const } : {}),
+  };
+}
+
+/**
  * Where the WebView goes when the sheet closes: the resume path plus the
  * outcome the callback put on the return URL (?connect=linked|already|…).
  * No result URL (the barber dismissed the sheet) reads as "cancelled", so the

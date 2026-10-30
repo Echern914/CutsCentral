@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { createPortal } from "react-dom";
 import {
   FEATURE_CATEGORIES,
+  isBillingHref,
   resolveHref,
   searchableFeatures,
   visibleFeatures,
@@ -15,6 +16,8 @@ import {
 } from "@chairback/config/features";
 import { searchFeatures } from "@chairback/config/helpMatch";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
+import { openBillingInBrowser, useNativeBillingLink } from "@/lib/useNativeBillingLink";
+import { OpensBrowserMark } from "@/components/UpgradeOnWebLink";
 import { lockedTier, type FeatureLocks } from "@/lib/featureLocks";
 import { recentFeatureIds, rememberFeature } from "@/lib/recentFeatures";
 import { PlanBadge } from "./PlanBadge";
@@ -60,13 +63,16 @@ export function MoreSheet({
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
-  // Inside the iOS app, drop anything pointing at /dashboard/billing. That is
-  // BOTH "Plan & billing" and "AI receptionist" — they share the href — and
-  // both would be a back door onto Stripe checkout, which the App Store
-  // forbids in-app (Guideline 3.1.1). Same rule as FeatureSearch; keep them in
-  // sync. `null` (pre-hydration) shows everything, but the sheet only opens on
-  // a tap, long after the check resolves.
+  // Inside the iOS app, drop anything pointing at /dashboard/billing: a
+  // navigation there would be a back door onto Stripe checkout INSIDE the app
+  // (Guideline 3.1.1). Same rule as FeatureSearch; keep them in sync. `null`
+  // (pre-hydration) shows everything, but the sheet only opens on a tap, long
+  // after the check resolves.
   const inApp = useIsNativeApp();
+  // The one exception: an app build that can open Safari (kill switch on)
+  // lists "Plan & billing ↗", and the row OPENS SAFARI rather than navigating
+  // (FeatureLink below). Older builds and the kill switch keep the drop.
+  const billingOnWeb = useNativeBillingLink() === "native";
   // One question to the registry replaces three local rules: the 3.1.1 billing
   // filter, the rewards-off route-prefix test (now a declared `flag` on the
   // entries themselves, not a guess from the href), and the role gate.
@@ -77,9 +83,10 @@ export function MoreSheet({
     () => ({
       role,
       inApp: inApp === true,
+      billingOnWeb,
       flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
     }),
-    [role, inApp, rewardsEnabled, affiliateProgramEnabled],
+    [role, inApp, billingOnWeb, rewardsEnabled, affiliateProgramEnabled],
   );
   const visible = useMemo(() => visibleFeatures(ctx), [ctx]);
   // The search box types against the wider index: the directory hides the
@@ -204,6 +211,7 @@ export function MoreSheet({
                       tag={categoryName(f)}
                       current={isCurrentPage(f, pathname)}
                       onNavigate={onClose}
+                      opensBrowser={billingOnWeb && isBillingHref(f.href)}
                       lockedAs={lockedTier(f.tier, locks)}
                     />
                   </li>
@@ -224,6 +232,7 @@ export function MoreSheet({
                         tag={categoryName(f)}
                         current={isCurrentPage(f, pathname)}
                         onNavigate={onClose}
+                        opensBrowser={billingOnWeb && isBillingHref(f.href)}
                         lockedAs={lockedTier(f.tier, locks)}
                       />
                     </li>
@@ -247,6 +256,7 @@ export function MoreSheet({
                           feature={f}
                           current={isCurrentPage(f, pathname)}
                           onNavigate={onClose}
+                          opensBrowser={billingOnWeb && isBillingHref(f.href)}
                           lockedAs={lockedTier(f.tier, locks)}
                         />
                       </li>
@@ -328,6 +338,7 @@ function FeatureLink({
   current = false,
   onNavigate,
   lockedAs,
+  opensBrowser = false,
 }: {
   feature: FeatureIndexEntry;
   /** Where this lives, when the row is shown away from its shelf. */
@@ -337,7 +348,48 @@ function FeatureLink({
   onNavigate: () => void;
   /** Plan diamond to show when the shop's plan doesn't include this feature. */
   lockedAs: "pro" | "pro_ai" | null;
+  /**
+   * "Plan & billing ↗" in an app build that can open Safari: the row asks the
+   * app to open billing THERE and the WebView stays put. Never a <Link>, which
+   * the WebView would follow onto the billing page.
+   */
+  opensBrowser?: boolean;
 }) {
+  const className = `block w-full rounded-2xl border px-3.5 py-3 text-left transition-colors duration-150 ease-out hover:bg-charcoal-700 ${
+    current ? "border-gold/40 bg-gold/5" : "border-subtle"
+  }`;
+  const body = (
+    <>
+      <span className="flex items-center gap-2">
+        <span className="min-w-0 truncate text-sm font-medium">
+          {feature.name}
+          {opensBrowser && <OpensBrowserMark />}
+        </span>
+        {lockedAs && <PlanBadge tier={lockedAs} />}
+        {(current || tag) && (
+          <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.14em] text-muted">
+            {current ? "You're here" : tag}
+          </span>
+        )}
+      </span>
+      <span className="mt-0.5 block text-xs text-muted">{feature.description}</span>
+    </>
+  );
+  if (opensBrowser) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          rememberFeature(feature.id);
+          onNavigate();
+          openBillingInBrowser();
+        }}
+        className={className}
+      >
+        {body}
+      </button>
+    );
+  }
   return (
     // A locked row still NAVIGATES — the feature's own page explains the lock
     // and (on the web) carries the upgrade link. A dead row would just read
@@ -349,20 +401,9 @@ function FeatureLink({
         rememberFeature(feature.id);
         onNavigate();
       }}
-      className={`block rounded-2xl border px-3.5 py-3 transition-colors duration-150 ease-out hover:bg-charcoal-700 ${
-        current ? "border-gold/40 bg-gold/5" : "border-subtle"
-      }`}
+      className={className}
     >
-      <span className="flex items-center gap-2">
-        <span className="min-w-0 truncate text-sm font-medium">{feature.name}</span>
-        {lockedAs && <PlanBadge tier={lockedAs} />}
-        {(current || tag) && (
-          <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.14em] text-muted">
-            {current ? "You're here" : tag}
-          </span>
-        )}
-      </span>
-      <span className="mt-0.5 block text-xs text-muted">{feature.description}</span>
+      {body}
     </Link>
   );
 }

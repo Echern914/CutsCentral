@@ -28,6 +28,19 @@ describe("apple-app-site-association", () => {
     expect(paths).toContain(`${MOBILE_APP.authCallbackPath}*`);
   });
 
+  it("🔴 never claims the dashboard, or billing would open back in the app", async () => {
+    // "Manage plan on getchairback.com" (UpgradeOnWebLink) asks the app to
+    // open /dashboard/billing in Safari, because buying must happen in the
+    // browser. A claimed path is a universal link: iOS would route that tap
+    // straight back into the app instead of Safari.
+    const body = await (await GET()).json();
+    const paths: string[] = body.applinks.details[0].paths;
+    for (const p of paths) {
+      const prefix = p.replace(/\*.*$/, "");
+      expect("/dashboard/billing".startsWith(prefix) || p === "*").toBe(false);
+    }
+  });
+
   it("🔴 is served as application/json with a 200 and no redirect", async () => {
     // Apple rejects the AASA on any redirect or wrong content-type, and it
     // does so without telling anyone: universal links simply stop working.

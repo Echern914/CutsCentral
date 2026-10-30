@@ -47,7 +47,7 @@ describe("FeatureAdoptionCard", () => {
 
     expect(within(row("waitlist")).getByText("Premium")).toBeTruthy();
     const upgrade = await within(row("waitlist")).findByRole("link", { name: /Upgrade/ });
-    expect(upgrade.getAttribute("href")).toBe("/dashboard/billing");
+    expect(upgrade.getAttribute("href")).toBe("/dashboard/billing#plans");
   });
 
   it("draws nothing when there are no rows (below the privacy floor)", () => {

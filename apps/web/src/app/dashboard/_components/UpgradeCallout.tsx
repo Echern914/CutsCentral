@@ -1,16 +1,15 @@
-import Link from "next/link";
-import { HideInNativeApp } from "@/components/HideInNativeApp";
+import { UpgradeOnWebLink } from "@/components/UpgradeOnWebLink";
 import { PlanBadge } from "./PlanBadge";
 
 /**
  * The explanation band on a locked feature's own page: diamond + plan name,
- * the honest one-liner about what's paused (children), and — ON THE WEB ONLY —
- * the steering link to billing. Inside the native app the band simply ends
- * after the explanation: App Store 3.1.1 forbids prices, upgrade CTAs, and
- * links landing on the billing page, and that stripping lives HERE so no
- * call site can forget it. No price is quoted on the web either — the billing
- * page owns prices, and one price-free component can't drift out of
- * compliance when it's reused.
+ * the honest one-liner about what's paused (children), and the way to billing
+ * through UpgradeOnWebLink - a link on the web; in the app, a button that opens
+ * billing in SAFARI (never in the WebView), or nothing in an older build or
+ * with the kill switch off. That split lives in the one component so no call
+ * site can forget it. No price is quoted anywhere here — the billing page owns
+ * prices, and one price-free component can't drift out of compliance when
+ * it's reused.
  *
  * Styling matches the house upsell band (TrialBanner / the billing callout):
  * gold border on gold tint.
@@ -28,16 +27,7 @@ export function UpgradeCallout({
         <PlanBadge tier={tier} />
         <span className="text-offwhite">{children}</span>
       </div>
-      <HideInNativeApp>
-        <p className="mt-2">
-          <Link
-            href="/dashboard/billing"
-            className="font-semibold text-gold hover:underline"
-          >
-            Upgrade to unlock &rarr;
-          </Link>
-        </p>
-      </HideInNativeApp>
+      <UpgradeOnWebLink wrapClassName="mt-2">Upgrade to unlock &rarr;</UpgradeOnWebLink>
     </div>
   );
 }

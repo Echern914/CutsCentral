@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
   FEATURE_CATEGORIES,
+  isBillingHref,
   resolveHref,
   searchableFeatures,
   type FeatureIndexEntry,
@@ -13,6 +14,8 @@ import {
 } from "@chairback/config/features";
 import { searchFeatures } from "@chairback/config/helpMatch";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
+import { openBillingInBrowser, useNativeBillingLink } from "@/lib/useNativeBillingLink";
+import { OpensBrowserMark } from "@/components/UpgradeOnWebLink";
 import { recentFeatureIds, rememberFeature } from "@/lib/recentFeatures";
 import { lockedTier, type FeatureLocks } from "@/lib/featureLocks";
 import { PlanBadge } from "./PlanBadge";
@@ -48,6 +51,10 @@ export function FeatureSearch({
   // `null` (pre-hydration) reads as the browser, but the palette only opens on
   // a tap, by which point the check has resolved.
   const inApp = useIsNativeApp();
+  // The one exception: an app build that can open Safari (kill switch on)
+  // lists "Plan & billing ↗", and choosing it opens billing THERE - `go` below
+  // never router.pushes a billing href inside the app.
+  const billingOnWeb = useNativeBillingLink() === "native";
   // `searchableFeatures`, not `visibleFeatures`: the palette also types
   // against the unlisted-but-searchable entries (Contact support), which have
   // no shelf in the More directory but must not dead-end here.
@@ -56,9 +63,10 @@ export function FeatureSearch({
       searchableFeatures({
         role,
         inApp: inApp === true,
+        billingOnWeb,
         flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
       }),
-    [inApp, role, rewardsEnabled, affiliateProgramEnabled],
+    [inApp, billingOnWeb, role, rewardsEnabled, affiliateProgramEnabled],
   );
   // Where a query that matches nothing is handed off to. The assistant reads
   // the same registry PLUS the help corpus, so it can answer the "how do I…"
@@ -157,9 +165,14 @@ export function FeatureSearch({
     (feature: FeatureIndexEntry | null, href: string) => {
       if (feature) rememberFeature(feature.id);
       setOpen(false);
+      // In the app, billing opens in Safari and the WebView stays put.
+      if (billingOnWeb && isBillingHref(href)) {
+        openBillingInBrowser();
+        return;
+      }
       router.push(href);
     },
-    [router],
+    [router, billingOnWeb],
   );
 
   function onInputKey(e: React.KeyboardEvent) {
@@ -310,6 +323,7 @@ export function FeatureSearch({
                   tag={!query.trim() && recents.includes(f) ? "Recent" : categoryName(f)}
                   onHover={() => setCursor(i)}
                   onOpen={() => go(f, f.href)}
+                  opensBrowser={billingOnWeb && isBillingHref(f.href)}
                   onDemo={f.tourStepId ? () => go(null, `/demo?step=${f.tourStepId}`) : undefined}
                   lockedAs={lockedTier(f.tier, locks)}
                 />
@@ -337,8 +351,11 @@ function Row({
   onOpen,
   onDemo,
   lockedAs,
+  opensBrowser = false,
 }: {
   feature: FeatureIndexEntry;
+  /** Opens in Safari, not here (Plan & billing in the app): marked ↗. */
+  opensBrowser?: boolean;
   index: number;
   active: boolean;
   /** "Recent", or the More-sheet shelf - so a hit says WHERE it lives, too. */
@@ -367,7 +384,10 @@ function Row({
           className="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left"
         >
           <p className="flex items-center gap-2 text-sm font-medium text-offwhite">
-            <span className="min-w-0 truncate">{feature.name}</span>
+            <span className="min-w-0 truncate">
+              {feature.name}
+              {opensBrowser && <OpensBrowserMark />}
+            </span>
             {lockedAs && <PlanBadge tier={lockedAs} />}
             {tag && (
               <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.14em] text-muted">
