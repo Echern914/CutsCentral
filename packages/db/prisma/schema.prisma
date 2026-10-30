@@ -3747,6 +3747,18 @@ model Appointment {
   // no-show also does. The tip ask goes only to visits the shop finished
   // (this, paidAt, arrived, or a started walk-in: tipEmails.finishedByShop).
   completedByShop       Boolean  @default(false)
+  // A TIP THE SHOP RECORDED BY HAND: money the client handed over outside
+  // ChairBack's card flow (cash, or another app), typed on the appointment
+  // sheet's Tip row (POST /appointments/:id/recorded-tip). A RECORD, never a
+  // charge: nothing here ever reaches Stripe. Integer cents, CHECK-pinned to
+  // [1, 50000] with a method of 'cash' | 'other', all four set together or
+  // all NULL. Never revenue and never money toward the service - the online
+  // tip (a `tip` Payment row) is the other half, and the two add up in
+  // engines/appointmentPayment.ts appointmentTipSnapshot.
+  recordedTipCents      Int?
+  recordedTipMethod     String?
+  recordedTipAt         DateTime?
+  recordedTipByUserId   String?
   // BARBER-side "your next client" reminder (engines/barberReminders.ts). Its
   // own stamp because it is a different recipient on a different lead time -
   // the client tiers above must never suppress the barber's heads-up.

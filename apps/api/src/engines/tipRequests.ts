@@ -87,6 +87,10 @@ export async function runTipRequestSweep(
       // A tip already given (or under way) is nothing to ask for. An attempt
       // they opened and left is not that: the card is still on offer.
       payments: { none: givenTipWhere() },
+      // Nor a visit the shop already recorded a tip on - cash at the chair, or
+      // another app (the sheet's Tip row). Asking that client to tip again
+      // online is asking twice.
+      recordedTipCents: null,
     },
     orderBy: { endsAt: "asc" },
     take: opts.take ?? 200,

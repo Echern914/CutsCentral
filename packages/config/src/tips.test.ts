@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  RECORDED_TIP_MAX_CENTS,
+  RECORDED_TIP_MIN_CENTS,
   TIP_MAX_CENTS,
   TIP_MIN_CENTS,
   formatTipCents,
+  recordedTipAllowed,
   tipAmountAllowed,
   tipDollarsToCents,
   tipFeeCents,
@@ -62,5 +65,17 @@ describe("tip amounts", () => {
       expect(tipDollarsToCents(bad), bad).toBeNull();
     }
     expect(formatTipCents(1205)).toBe("$12.05");
+  });
+});
+
+describe("a tip the shop records by hand", () => {
+  it("one cent to $500 in whole cents, nothing else", () => {
+    expect(recordedTipAllowed(RECORDED_TIP_MIN_CENTS)).toBe(true);
+    expect(recordedTipAllowed(1)).toBe(true);
+    expect(recordedTipAllowed(RECORDED_TIP_MAX_CENTS)).toBe(true);
+    expect(RECORDED_TIP_MAX_CENTS).toBe(50_000);
+    for (const bad of [0, -100, RECORDED_TIP_MAX_CENTS + 1, 12.5, NaN, Infinity, "500", null, undefined]) {
+      expect(recordedTipAllowed(bad), String(bad)).toBe(false);
+    }
   });
 });

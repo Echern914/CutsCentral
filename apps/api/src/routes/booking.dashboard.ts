@@ -89,6 +89,7 @@ import { registerBlockRoutes } from "./booking.blocks.js";
 import { registerSpecialDayRoutes } from "./booking.specialDays.js";
 import { deleteOpeningsKeepingSpecialDaysClosed, SPECIAL_DAY_PATTERN, specialDayRuleIds } from "../engines/specialDay.js";
 import { registerAppointmentDetail } from "./booking.appointmentDetail.js";
+import { registerRecordedTip } from "./booking.recordedTip.js";
 import { registerUnfinishedBookings } from "./booking.unfinished.js";
 import { registerDepositRefund, registerTipRefund } from "./booking.depositRefund.js";
 import { stripeCollectedCents, TAKINGS_PAYMENT_PURPOSES } from "../engines/appointmentPayment.js";
@@ -5254,6 +5255,10 @@ registerDepositRefund(bookingDashboardRouter);
 
 // "Refund tip": give back a tip the client left online after the visit.
 registerTipRefund(bookingDashboardRouter);
+
+// The Tip row: record a tip received in cash or through another app. A record,
+// never a charge (booking.recordedTip.ts).
+registerRecordedTip(bookingDashboardRouter);
 
 bookingDashboardRouter.post("/appointments/:id/no-show", async (req, res) => {
   const shopId = req.shop!.id;

@@ -316,6 +316,14 @@ describe("who is asked", () => {
         await tipRow(id, "processing");
         return id;
       }],
+      ["tipped in cash, recorded by the shop", async () => {
+        const id = await seedVisit();
+        await prisma.appointment.update({
+          where: { id },
+          data: { recordedTipCents: 500, recordedTipMethod: "cash", recordedTipAt: NOW },
+        });
+        return id;
+      }],
       ["ended more than 6 hours ago (the floor)", () => seedVisit({ endedMinAgo: 7 * 60 })],
     ];
     for (const [label, make, after] of cases) {

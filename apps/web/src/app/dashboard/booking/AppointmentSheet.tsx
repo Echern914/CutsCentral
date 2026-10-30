@@ -12,6 +12,14 @@ import {
   type NoShowCardOutcome,
   type NoShowChargeResult,
 } from "@chairback/config/shopPolicy";
+import {
+  RECORDED_TIP_MAX_CENTS,
+  RECORDED_TIP_METHOD_LABEL,
+  formatTipCents,
+  recordedTipAllowed,
+  tipDollarsToCents,
+  type RecordedTipMethod,
+} from "@chairback/config/tips";
 import { copyText, mailtoUri, smsUri, telUri } from "@/lib/contactUri";
 import { parsePrice } from "@/lib/serviceFields";
 import { Dialog } from "@/components/ui/Dialog";
@@ -41,6 +49,7 @@ import {
   getAppointmentDetailAction,
   markArrivedAction,
   noShowAppointmentAction,
+  recordTipAction,
   undoNoShowAction,
   removeWalkInAction,
   type AppointmentDetail,
@@ -886,6 +895,13 @@ export function AppointmentSheet({
             onChanged();
             load();
           }}
+          onTipSaved={(message) => {
+            // In the footer, not a toast: a toast draws beneath this sheet
+            // and is invisible on a phone.
+            setSavedNotice({ message, tone: "success" });
+            onChanged();
+            load();
+          }}
           showRefunds={newCheckout}
           onDepositRefunded={(message) => {
             setSavedNotice({ message, tone: "success" });
@@ -925,6 +941,7 @@ function DetailView({
   onNoShow,
   onCancel,
   onPriceSaved,
+  onTipSaved,
   showRefunds,
   onDepositRefunded,
 }: {
@@ -962,6 +979,8 @@ function DetailView({
   onCancel: () => void;
   /** The price changed on the server: re-read the booking and the agenda. */
   onPriceSaved: () => void;
+  /** A tip was recorded, changed or taken off: say so in the footer, then re-read. */
+  onTipSaved: (message: string) => void;
   /** The new checkout is live for this shop, so its card payments can be refunded here. */
   showRefunds: boolean;
   /** Money went back to a customer: say so in the footer, then re-read. */
@@ -977,6 +996,8 @@ function DetailView({
         durMin={durMin}
         toast={toast}
         onPriceSaved={onPriceSaved}
+        onTipSaved={onTipSaved}
+        onTipStale={onRetry}
       />
 
       <ActionRow
@@ -1198,6 +1219,8 @@ function Hero({
   durMin,
   toast,
   onPriceSaved,
+  onTipSaved,
+  onTipStale,
 }: {
   row: AgendaRow;
   detail: AppointmentDetail | null;
@@ -1206,9 +1229,16 @@ function Hero({
   durMin: number | null;
   toast: Toast;
   onPriceSaved: () => void;
+  onTipSaved: (message: string) => void;
+  onTipStale: () => void;
 }) {
   const vocab = useVocab();
   const priceEdit = usePriceEdit({ row, detail, toast, onSaved: onPriceSaved });
+  const tipEdit = useTipEdit({ row, detail, onSaved: onTipSaved, onStale: onTipStale });
+  // The Tip row: only for a ChairBack booking whose read carries it (an older
+  // API omits `tips`, and a synced booking's tips live where it was booked).
+  const tips =
+    detail?.source === "appointment" && detail.origin === "chairback" ? (detail.tips ?? null) : null;
   const pill = appointmentStatusPill({
     status: row.status,
     checkInStatus: row.checkInStatus,
@@ -1363,8 +1393,36 @@ function Hero({
             </button>
           )}
         </Fact>
+        {tips && (
+          <Fact icon={<TipIcon />} label="Tip">
+            {tips.totalCents > 0 ? (
+              <>
+                <span className="tabular-nums" data-qa="tip-total">
+                  {formatTipCents(tips.totalCents)}
+                </span>
+                <span className="text-muted"> · {tipSourceLabel(tips)}</span>
+              </>
+            ) : (
+              <span className="text-muted" data-qa="tip-total">
+                None yet
+              </span>
+            )}
+            {tipEdit.allowed && !tipEdit.open && (
+              <button
+                type="button"
+                onClick={tipEdit.begin}
+                data-qa="tip-edit"
+                aria-label={tips.recordedCents > 0 ? "Edit recorded tip" : "Add a tip you received"}
+                className="ml-2 inline-flex h-11 items-center rounded-md px-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 sm:h-7"
+              >
+                {tips.recordedCents > 0 ? "Edit" : "Add"}
+              </button>
+            )}
+          </Fact>
+        )}
       </dl>
       {priceEdit.open && <PriceEditor state={priceEdit} />}
+      {tipEdit.open && <TipEditor state={tipEdit} />}
     </section>
   );
 }
@@ -1575,6 +1633,260 @@ function PriceEditor({ state }: { state: PriceEditState }) {
           className="h-11 rounded-lg bg-gold px-3 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold/90 disabled:opacity-60 sm:h-9"
         >
           {state.pending ? "Saving…" : "Save price"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Where the visit's tips came from, in a word or two: "Cash", "paid online",
+ * "online + cash". The amounts themselves are the server's (detail `tips`).
+ */
+function tipSourceLabel(tips: NonNullable<AppointmentDetail["tips"]>): string {
+  const recorded =
+    tips.recordedCents > 0 && tips.recordedMethod
+      ? (RECORDED_TIP_METHOD_LABEL[tips.recordedMethod as RecordedTipMethod] ?? "Recorded")
+      : null;
+  if (tips.onlineCents > 0 && recorded) return `online + ${recorded.toLowerCase()}`;
+  if (tips.onlineCents > 0) return "paid online";
+  return recorded ?? "";
+}
+
+/**
+ * THE TIP ROW'S EDITOR: record a tip the barber was HANDED - cash at the chair,
+ * or money sent through another app. A record only: nothing here, or in the
+ * route behind it, charges a card. A card tip is the client's own, from their
+ * appointment page, and arrives on its own.
+ *
+ * 🔴 ONE REQUEST PER TAP. `busy` is a ref, set before the first await and read
+ * before anything else, so a second tap - or Enter pressed while the first
+ * save is in flight - sends nothing. `saving` only draws "Saving…": React's
+ * transition `pending` does not stay on across an awaited call, so it guards
+ * nothing. The server is idempotent too (the same request twice records once),
+ * but the sheet does not lean on it.
+ *
+ * The outcome goes to the sheet's footer (onSaved); a refusal stays inline,
+ * here. Never a toast - one drawn from inside a dialog is invisible on a phone.
+ */
+type TipEditState = {
+  allowed: boolean;
+  open: boolean;
+  amount: string;
+  method: RecordedTipMethod;
+  /** The recorded tip the sheet is showing, in cents; 0 = none recorded. */
+  recordedCents: number;
+  error: string | null;
+  saving: boolean;
+  begin: () => void;
+  cancel: () => void;
+  setAmount: (v: string) => void;
+  setMethod: (m: RecordedTipMethod) => void;
+  save: () => void;
+  remove: () => void;
+};
+
+function tipRefusalCopy(error: string | undefined): string {
+  switch (error) {
+    case "stale_tip":
+      return "This tip was changed on another device. The sheet now shows the latest - check it and save again.";
+    case "not_tippable":
+      return "This booking can't take a tip - it was cancelled or marked a no-show.";
+    case "external":
+      return "This booking's tips live where it was booked.";
+    case "forbidden_role":
+      return "Only an owner or manager can record tips.";
+    case "invalid_input":
+      return `Enter a tip from $0.01 to ${formatTipCents(RECORDED_TIP_MAX_CENTS)}.`;
+    default:
+      return "Couldn't save the tip. Nothing was charged - try again.";
+  }
+}
+
+function useTipEdit({
+  row,
+  detail,
+  onSaved,
+  onStale,
+}: {
+  row: AgendaRow;
+  detail: AppointmentDetail | null;
+  onSaved: (message: string) => void;
+  onStale: () => void;
+}): TipEditState {
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState<RecordedTipMethod>("cash");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const busy = useRef(false);
+
+  const tips = detail?.source === "appointment" ? (detail.tips ?? null) : null;
+  const allowed = tips !== null && tips.recordable;
+  const recordedCents = tips?.recordedCents ?? 0;
+
+  function begin() {
+    setAmount(recordedCents > 0 ? (recordedCents / 100).toFixed(2) : "");
+    setMethod(tips?.recordedMethod === "other" ? "other" : "cash");
+    setError(null);
+    setOpen(true);
+  }
+  function cancel() {
+    if (busy.current) return;
+    setOpen(false);
+    setError(null);
+  }
+
+  async function send(input: Parameters<typeof recordTipAction>[1], success: string): Promise<void> {
+    busy.current = true;
+    setSaving(true);
+    setError(null);
+    try {
+      let res: Awaited<ReturnType<typeof recordTipAction>>;
+      try {
+        res = await recordTipAction(row.id, input);
+      } catch {
+        setError("No answer - check your connection and try again. Nothing was charged.");
+        return;
+      }
+      if (!res.ok) {
+        setError(tipRefusalCopy(res.error));
+        if (res.error === "stale_tip") onStale();
+        return;
+      }
+      setOpen(false);
+      onSaved(success);
+    } finally {
+      busy.current = false;
+      setSaving(false);
+    }
+  }
+
+  function save() {
+    if (busy.current) return;
+    const cents = tipDollarsToCents(amount);
+    if (cents === null || !recordedTipAllowed(cents)) {
+      setError(`Enter a tip from $0.01 to ${formatTipCents(RECORDED_TIP_MAX_CENTS)}, like 10 or 7.50.`);
+      return;
+    }
+    void send(
+      { amountCents: cents, method, expectedCents: recordedCents > 0 ? recordedCents : null },
+      `Tip recorded: ${formatTipCents(cents)} · ${RECORDED_TIP_METHOD_LABEL[method]}. No card was charged.`,
+    );
+  }
+
+  function remove() {
+    if (busy.current || recordedCents <= 0) return;
+    void send({ amountCents: null, expectedCents: recordedCents }, "Recorded tip removed.");
+  }
+
+  return {
+    allowed,
+    open,
+    amount,
+    method,
+    recordedCents,
+    error,
+    saving,
+    begin,
+    cancel,
+    setAmount: (v) => {
+      setAmount(v);
+      setError(null);
+    },
+    setMethod,
+    save,
+    remove,
+  };
+}
+
+function TipEditor({ state }: { state: TipEditState }) {
+  // Escape cancels THIS, not the whole sheet (Dialog listens for Escape too).
+  function onKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      state.save();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      state.cancel();
+    }
+  }
+  return (
+    <div className="relative border-t border-subtle px-4 py-3 sm:px-6" data-qa="tip-editor">
+      <p className="text-xs text-muted">
+        Record a tip you were handed in cash or sent in another app. Nothing is charged to a card.
+      </p>
+      <div className="mt-2 grid gap-3 sm:grid-cols-2">
+        <label className="flex min-w-0 flex-col gap-1 text-xs text-muted">
+          Tip
+          <input
+            autoFocus
+            inputMode="decimal"
+            value={state.amount}
+            onChange={(e) => state.setAmount(e.target.value)}
+            onKeyDown={onKey}
+            aria-label="Tip in dollars"
+            placeholder="10.00"
+            className={cn(INPUT, "tabular-nums")}
+          />
+        </label>
+        <div className="flex min-w-0 flex-col gap-1 text-xs text-muted">
+          <span id="tip-method-label">Received as</span>
+          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-labelledby="tip-method-label">
+            {(["cash", "other"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={state.method === m}
+                onClick={() => state.setMethod(m)}
+                className={cn(
+                  "h-11 rounded-lg border px-3 text-sm transition-colors duration-150 ease-out sm:h-9",
+                  state.method === m
+                    ? "border-gold bg-gold/10 text-offwhite"
+                    : "border-subtle text-muted hover:bg-charcoal-700 hover:text-offwhite",
+                )}
+              >
+                {RECORDED_TIP_METHOD_LABEL[m]}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      {state.error && (
+        <p role="alert" className="mt-1.5 text-xs text-danger-soft">
+          {state.error}
+        </p>
+      )}
+      <div className="mt-2.5 flex flex-wrap justify-end gap-2">
+        {state.recordedCents > 0 && (
+          <button
+            type="button"
+            onClick={state.remove}
+            disabled={state.saving}
+            data-qa="tip-remove"
+            className="mr-auto h-11 rounded-lg px-3 text-sm text-danger-soft transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-60 sm:h-9"
+          >
+            Remove tip
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={state.cancel}
+          disabled={state.saving}
+          className="h-11 rounded-lg border border-subtle px-3 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite sm:h-9"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={state.save}
+          disabled={state.saving}
+          data-qa="tip-save"
+          className="h-11 rounded-lg bg-gold px-3 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold/90 disabled:opacity-60 sm:h-9"
+        >
+          {state.saving ? "Saving…" : "Save tip"}
         </button>
       </div>
     </div>
@@ -3531,6 +3843,11 @@ const CashIcon = () => (
   <Svg>
     <rect x="2.5" y="6" width="19" height="12" rx="2" />
     <circle cx="12" cy="12" r="2.5" />
+  </Svg>
+);
+const TipIcon = () => (
+  <Svg>
+    <path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" />
   </Svg>
 );
 const GlobeIcon = () => (
