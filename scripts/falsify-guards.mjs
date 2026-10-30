@@ -43,7 +43,11 @@ const WAVES = {
       "PlatformOperation_one_active_per_kind",
       "AffiliateApplication_one_pending_per_shop",
       "AffiliateReferralAttribution_referredShopId_key",
-      "AffiliateReward_referredShopId_key",
+      // One BRING-ON reward per referred shop (a month off or the sign-up
+      // credit), and one dollar credit per invoice (migration 20261086000000;
+      // affiliateQualification.test.ts + affiliateDollarCredit.test.ts).
+      "AffiliateReward_bringOn_referredShopId_key",
+      "AffiliateReward_stripeInvoiceId_key",
       "StripeWebhookEvent_eventId_key",
       "AffiliateQualifyingInvoice_stripeInvoiceId_key",
       // One commission line per invoice (affiliateCommission.test.ts).

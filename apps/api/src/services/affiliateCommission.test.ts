@@ -10,6 +10,8 @@ import {
 } from "@chairback/config";
 import { applyAffiliateStripeEvent } from "./affiliateQualification.js";
 import {
+  commissionsEnabled,
+  earnCommissionForInvoice,
   getAffiliateEarnings,
   releaseAffiliateCommissionHolds,
 } from "./affiliateCommission.js";
@@ -19,6 +21,15 @@ import { holdTableLock, raceBehindBarrier } from "../testing/raceBarrier.js";
  * The v2 commission LEDGER: one line per paid base-plan invoice in a referred
  * business's first 12 months, held 30 days, released only after the business
  * has paid twice. Nothing here moves money - every assertion is about rows.
+ *
+ * 🔴 RETIRED FOR EARNING (2026-10-30). The owner replaced percentage
+ * commissions with dollar ACCOUNT CREDIT (affiliateQualification.ts,
+ * AFFILIATE_POLICY.dollarCredit) before the ledger was ever switched on, so
+ * the Stripe webhook no longer writes commission lines - the first test pins
+ * that. The ledger's own rules (one line per invoice, the window, the hold,
+ * reversal and clawback) are still exercised here by calling
+ * earnCommissionForInvoice directly, because its reversal path, sweep and
+ * read model still run against any line that exists.
  *
  * Same Stripe realities as the qualification suite: events are redelivered,
  * reordered, and sometimes two event ids describe one invoice. The INVOICE is
@@ -166,7 +177,41 @@ function invoiceIdOf(event: ReturnType<typeof invoicePaid>): string {
   return (event.data.object as { id: string }).id;
 }
 
-/** Deliver an invoice.paid and return its invoice id. */
+/**
+ * Earn a commission line for an invoice exactly as the retired webhook branch
+ * did: only for an invoice the qualification path accepted (it records an
+ * AffiliateQualifyingInvoice row - which it refuses for flags off, add-on-only
+ * and zero-paid invoices), on the base amount actually paid net of tax.
+ */
+async function earnLikeTheRetiredBranch(event: ReturnType<typeof invoicePaid>, s: Scenario) {
+  if (!commissionsEnabled()) return;
+  const inv = event.data.object as {
+    id: string;
+    amount_paid: number;
+    tax: number;
+    status_transitions: { paid_at: number };
+    lines: { data: { amount: number; price: { id: string } }[] };
+  };
+  const recorded = await runAsOwner((tx) =>
+    tx.affiliateQualifyingInvoice.findUnique({ where: { stripeInvoiceId: inv.id } }),
+  );
+  if (!recorded) return;
+  const base = inv.lines.data
+    .filter((l) => l.price.id === BASE_PRICE)
+    .reduce((n, l) => n + l.amount, 0);
+  await runAsOwner((tx) =>
+    earnCommissionForInvoice(tx, {
+      stripeInvoiceId: inv.id,
+      referredShopId: s.referredShopId,
+      affiliateAccountId: s.accountId,
+      basisCents: Math.min(base, inv.amount_paid - inv.tax),
+      currency: "usd",
+      paidAt: new Date(inv.status_transitions.paid_at * 1000),
+    }),
+  );
+}
+
+/** Deliver an invoice.paid, earn its line, and return its invoice id. */
 async function pay(
   s: Scenario,
   paidAtMs: number,
@@ -174,6 +219,7 @@ async function pay(
 ): Promise<string> {
   const event = invoicePaid({ customerId: s.customerId, paidAtMs, ...over });
   await applyAffiliateStripeEvent(event, paidAtMs);
+  await earnLikeTheRetiredBranch(event, s);
   return invoiceIdOf(event);
 }
 
@@ -256,18 +302,24 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe("commissions: dark by default", () => {
-  it("🔴 with AFFILIATE_COMMISSIONS_ENABLED off: no commission rows, and the v1 one-month reward is still created", async () => {
-    flags({ commissions: false });
-    const s = await scenario("off");
-    await pay(s, T0);
-    await pay(s, T0 + 31 * DAY);
+describe("commissions: retired for earning", () => {
+  it("🔴 even with AFFILIATE_COMMISSIONS_ENABLED on, a paid invoice writes NO commission line - it earns dollar credit instead", async () => {
+    flags({ commissions: true });
+    const s = await scenario("retired");
+    await applyAffiliateStripeEvent(invoicePaid({ customerId: s.customerId, paidAtMs: T0 }), T0);
+    await applyAffiliateStripeEvent(
+      invoicePaid({ customerId: s.customerId, paidAtMs: T0 + 31 * DAY }),
+      T0 + 31 * DAY,
+    );
 
     expect(await linesFor(s.referredShopId)).toHaveLength(0);
-    const reward = await runAsOwner((tx) =>
-      tx.affiliateReward.findUnique({ where: { referredShopId: s.referredShopId } }),
+    const rewards = await runAsOwner((tx) =>
+      tx.affiliateReward.findMany({
+        where: { referredShopId: s.referredShopId },
+        orderBy: { qualifiedAt: "asc" },
+      }),
     );
-    expect(reward?.status).toBe("PENDING");
+    expect(rewards.map((r) => r.rewardType)).toEqual(["signup_credit", "monthly_credit"]);
   });
 
   it("with the qualification flags off, the commission flag alone earns nothing", async () => {
@@ -279,7 +331,7 @@ describe("commissions: dark by default", () => {
 });
 
 describe("commissions: earning", () => {
-  it("one HELD line per distinct base invoice, held 30 days from paid_at; the one-month reward is NOT created", async () => {
+  it("one HELD line per distinct base invoice, held 30 days from paid_at", async () => {
     const s = await scenario("earn");
     const a = await pay(s, T0);
     const b = await pay(s, T0 + 31 * DAY);
@@ -294,12 +346,6 @@ describe("commissions: earning", () => {
       expect(l.availableAt).toBeNull();
     }
     expect(lines[0]!.earnedAt.getTime()).toBe(T0);
-
-    // The commission replaces the v1 reward for new qualifications.
-    const reward = await runAsOwner((tx) =>
-      tx.affiliateReward.findUnique({ where: { referredShopId: s.referredShopId } }),
-    );
-    expect(reward).toBeNull();
     expect(await eventsOf(s.referredShopId, "commission.earned")).toHaveLength(3);
   });
 
@@ -307,11 +353,12 @@ describe("commissions: earning", () => {
     const s = await scenario("replay");
     const first = invoicePaid({ customerId: s.customerId, paidAtMs: T0 });
     await applyAffiliateStripeEvent(first, T0);
+    await earnLikeTheRetiredBranch(first, s);
     await applyAffiliateStripeEvent(first, T0);
-    await applyAffiliateStripeEvent(
-      invoicePaid({ customerId: s.customerId, paidAtMs: T0, invoiceId: invoiceIdOf(first) }),
-      T0,
-    );
+    await earnLikeTheRetiredBranch(first, s);
+    const again = invoicePaid({ customerId: s.customerId, paidAtMs: T0, invoiceId: invoiceIdOf(first) });
+    await applyAffiliateStripeEvent(again, T0);
+    await earnLikeTheRetiredBranch(again, s);
     expect(await linesFor(s.referredShopId)).toHaveLength(1);
     expect(await eventsOf(s.referredShopId, "commission.earned")).toHaveLength(1);
   });
@@ -340,25 +387,30 @@ describe("commissions: earning", () => {
     expect(await linesFor(s.referredShopId)).toHaveLength(1);
   });
 
-  it("🔴 two CONCURRENT deliveries of the same invoice (two event ids) create one line", async () => {
+  it("🔴 two CONCURRENT earns for the same invoice create one line", async () => {
     const s = await scenario("race");
     const invoiceId = `in_${randomToken(8)}`;
-    // Hold the ledger table: both deliveries must get as far as the commission
-    // write (or queue behind the other's uncommitted invoice row) and STOP.
-    // Only then is the one-line-per-invoice guard actually contended.
+    // The qualification path records the invoice first (as it did when it
+    // called the ledger); then two earns race on the ledger itself.
+    await applyAffiliateStripeEvent(
+      invoicePaid({ customerId: s.customerId, paidAtMs: T0, invoiceId }),
+      T0,
+    );
+    const earn = () =>
+      runAsOwner((tx) =>
+        earnCommissionForInvoice(tx, {
+          stripeInvoiceId: invoiceId,
+          referredShopId: s.referredShopId,
+          affiliateAccountId: s.accountId,
+          basisCents: 3499,
+          currency: "usd",
+          paidAt: new Date(T0),
+        }),
+      );
+    // Hold the ledger table: both earns must get as far as the commission
+    // write and STOP. Only then is the one-line-per-invoice guard contended.
     const barrier = await holdTableLock("AffiliateCommission");
-    const { settledEarly } = await raceBehindBarrier(barrier, [
-      () =>
-        applyAffiliateStripeEvent(
-          invoicePaid({ customerId: s.customerId, paidAtMs: T0, invoiceId }),
-          T0,
-        ),
-      () =>
-        applyAffiliateStripeEvent(
-          invoicePaid({ customerId: s.customerId, paidAtMs: T0, invoiceId }),
-          T0,
-        ),
-    ]);
+    const { settledEarly } = await raceBehindBarrier(barrier, [earn, earn]);
     expect(settledEarly).toBe(0);
     expect(await linesFor(s.referredShopId)).toHaveLength(1);
     expect(await eventsOf(s.referredShopId, "commission.earned")).toHaveLength(1);

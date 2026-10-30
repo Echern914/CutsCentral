@@ -38,6 +38,8 @@ export type AffiliateEventType =
   | "account.reactivated"
   /** The affiliate chose (or changed) how they promote. */
   | "account.styles_set"
+  /** The affiliate chose (or changed) how they are rewarded. Forward only. */
+  | "account.reward_style_set"
   // ---- attribution phase ----
   | "attribution.locked"
   | "attribution.corrected"
@@ -88,6 +90,10 @@ export const AFFILIATE_AUDIT_METADATA_KEYS = [
   "rejectionReason",
   "reversalReason",
   "basisPlan",
+  // dollar credit (migration 20261086000000): the frozen reward type and the
+  // affiliate's chosen style - fixed codes only.
+  "rewardType",
+  "rewardStyle",
   // commission lines: the frozen kind ("cash" | "credit"), rate and amount -
   // numbers and fixed codes, never prose.
   "commissionKind",

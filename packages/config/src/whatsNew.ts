@@ -36,6 +36,17 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-30-affiliate-account-credit",
+    date: "2026-10-30",
+    kind: "feature",
+    title: "Affiliates: earn account credit on your own plan",
+    // No amounts here: this list shows inside the iOS app (Guideline 3.1.1).
+    body:
+      "Affiliates now earn ChairBack account credit: a sign-up credit when a business you brought on pays " +
+      "its first month, then more for every month it keeps paying. Rather have a month off per business? " +
+      "Choose it on your Affiliates page. It's credit, never cash.",
+  },
+  {
     id: "2026-10-30-manage-plan-from-app",
     date: "2026-10-30",
     kind: "feature",

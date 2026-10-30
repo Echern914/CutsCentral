@@ -4,14 +4,18 @@ import {
   AFFILIATE_REVERSAL_PUBLIC_COPY,
   AFFILIATE_SUSPENSION_PUBLIC_COPY,
   AFFILIATE_TERMS_VERSION,
+  affiliateCreditTotals,
   affiliateMonths,
   affiliateStage,
   apiEnv,
+  isDollarRewardType,
   maskBusinessLabel,
+  type AffiliateCreditTotals,
   type AffiliateMonths,
   type AffiliatePromotionStyle,
   type AffiliateReferralStage,
   type AffiliateReversalReason,
+  type AffiliateRewardStyle,
   type AffiliateSuspensionReason,
 } from "@chairback/config";
 import { recordAffiliateEvent } from "./affiliateAudit.js";
@@ -42,11 +46,21 @@ export interface OverviewReferral {
   reversedAt: string | null;
   /** Derived from the fixed reversal code. Null unless reversed. */
   reversalMessage: string | null;
+  /** The bring-on reward's type (a month off, or the sign-up credit), or
+   *  null before one exists. */
+  rewardType: string | null;
+  /** Dollar credit this business has earned (not reversed), in cents. */
+  creditCents: number;
 }
 
 export interface OverviewReward {
   id: string;
   label: string;
+  /** subscription_credit (a month off) | signup_credit | monthly_credit. */
+  rewardType: string;
+  /** For a dollar credit, its cents. For a month off, the plan-price
+   *  snapshot (the applied amount may be lower). */
+  amountCents: number;
   status: string;
   qualifiedAt: string;
   holdEndsAt: string;
@@ -66,8 +80,13 @@ export interface OwnerAffiliateOverview {
     stylesChosenAt: string | null;
     /** Derived from the fixed suspension code. Null while ACTIVE. */
     suspensionMessage: string | null;
+    /** How this affiliate is rewarded for what they earn from now on. */
+    rewardStyle: AffiliateRewardStyle;
+    rewardStyleSetAt: string | null;
   };
   months: AffiliateMonths;
+  /** Dollar credit, in cents (signup_credit + monthly_credit only). */
+  credit: AffiliateCreditTotals;
   clicks: { last7Days: number; last30Days: number; allTime: number };
   referrals: OverviewReferral[];
   rewards: OverviewReward[];
@@ -76,6 +95,7 @@ export interface OwnerAffiliateOverview {
     qualifyingInvoices: number;
     holdDays: number;
     expiryMonths: number;
+    dollarCredit: { signupCents: number; monthlyCents: number; expires: boolean };
   };
 }
 
@@ -112,6 +132,8 @@ export async function getAffiliateOverview(
         suspensionReason: true,
         promotionStyles: true,
         stylesChosenAt: true,
+        rewardStyle: true,
+        rewardStyleSetAt: true,
       },
     });
     if (!account) return null;
@@ -131,6 +153,8 @@ export async function getAffiliateOverview(
         select: {
           id: true,
           referredShopId: true,
+          rewardType: true,
+          amountCents: true,
           status: true,
           qualifiedAt: true,
           holdEndsAt: true,
@@ -158,7 +182,22 @@ export async function getAffiliateOverview(
     const invoicesByShop = new Map(
       invoiceGroups.map((g) => [g.referredShopId, g._count._all] as const),
     );
-    const rewardByShop = new Map(rewards.map((r) => [r.referredShopId, r] as const));
+    // The referral's stage follows its ONE bring-on reward (a month off or the
+    // sign-up credit). Monthly credits are counted in creditCents instead.
+    const rewardByShop = new Map(
+      rewards
+        .filter((r) => r.rewardType !== "monthly_credit")
+        .map((r) => [r.referredShopId, r] as const),
+    );
+    const creditByShop = new Map<string, number>();
+    for (const r of rewards) {
+      if (!isDollarRewardType(r.rewardType)) continue;
+      if (r.status === "REVERSED" || r.status === "EXPIRED") continue;
+      creditByShop.set(
+        r.referredShopId,
+        (creditByShop.get(r.referredShopId) ?? 0) + r.amountCents,
+      );
+    }
 
     const referrals: OverviewReferral[] = attributions.map((a) => {
       const reward = rewardByShop.get(a.referredShopId) ?? null;
@@ -174,6 +213,8 @@ export async function getAffiliateOverview(
         expiresAt: iso(reward?.expiresAt),
         reversedAt: iso(reward?.reversedAt),
         reversalMessage: reversalMessage(reward?.reversalReason ?? null),
+        rewardType: reward?.rewardType ?? null,
+        creditCents: creditByShop.get(a.referredShopId) ?? 0,
       };
     });
 
@@ -200,13 +241,18 @@ export async function getAffiliateOverview(
                 account.suspensionReason as AffiliateSuspensionReason
               ] ?? AFFILIATE_SUSPENSION_PUBLIC_COPY.other)
             : null,
+        rewardStyle: account.rewardStyle as AffiliateRewardStyle,
+        rewardStyleSetAt: iso(account.rewardStyleSetAt),
       },
       months: affiliateMonths(rewards),
+      credit: affiliateCreditTotals(rewards),
       clicks,
       referrals,
       rewards: rewards.map((r) => ({
         id: r.id,
         label: maskBusinessLabel(r.referredShopId),
+        rewardType: r.rewardType,
+        amountCents: r.amountCents,
         status: r.status,
         qualifiedAt: r.qualifiedAt.toISOString(),
         holdEndsAt: r.holdEndsAt.toISOString(),
@@ -220,6 +266,11 @@ export async function getAffiliateOverview(
         qualifyingInvoices: AFFILIATE_POLICY.qualification.qualifyingInvoices,
         holdDays: AFFILIATE_POLICY.qualification.holdDaysAfterSecond,
         expiryMonths: AFFILIATE_POLICY.reward.expiryMonthsAfterAvailable,
+        dollarCredit: {
+          signupCents: AFFILIATE_POLICY.dollarCredit.signupCents,
+          monthlyCents: AFFILIATE_POLICY.dollarCredit.monthlyCents,
+          expires: AFFILIATE_POLICY.dollarCredit.expires,
+        },
       },
     };
   });
@@ -272,10 +323,55 @@ export async function setAffiliateStyles(params: {
   });
 }
 
+export type SetRewardStyleResult =
+  | { ok: true; account: { rewardStyle: AffiliateRewardStyle; rewardStyleSetAt: string } }
+  | { ok: false; error: "not_active" };
+
+/**
+ * Choose how future rewards are paid. FORWARD ONLY: the style is read when a
+ * reward is EARNED and frozen onto it as its rewardType, so nothing already
+ * earned changes. Same CAS on {shopId, ACTIVE} as setAffiliateStyles.
+ */
+export async function setAffiliateRewardStyle(params: {
+  shopId: string;
+  userId: string;
+  style: AffiliateRewardStyle;
+  now?: Date;
+}): Promise<SetRewardStyleResult> {
+  const now = params.now ?? new Date();
+  return runAsOwner(async (tx) => {
+    const { count } = await tx.affiliateAccount.updateMany({
+      where: { shopId: params.shopId, status: "ACTIVE" },
+      data: { rewardStyle: params.style, rewardStyleSetAt: now },
+    });
+    if (count === 0) return { ok: false as const, error: "not_active" as const };
+    const account = await tx.affiliateAccount.findUniqueOrThrow({
+      where: { shopId: params.shopId },
+      select: { id: true, rewardStyle: true, rewardStyleSetAt: true },
+    });
+    await recordAffiliateEvent(tx, {
+      shopId: params.shopId,
+      accountId: account.id,
+      type: "account.reward_style_set",
+      actor: { type: "applicant", userId: params.userId },
+      metadata: { source: "dashboard", rewardStyle: account.rewardStyle },
+    });
+    return {
+      ok: true as const,
+      account: {
+        rewardStyle: account.rewardStyle as AffiliateRewardStyle,
+        rewardStyleSetAt: account.rewardStyleSetAt!.toISOString(),
+      },
+    };
+  });
+}
+
 //  Operator side
 
 export interface AdminRewardRow {
   id: string;
+  rewardType: string;
+  stripeInvoiceId: string | null;
   status: string;
   amountCents: number;
   currency: string;
@@ -319,6 +415,8 @@ export async function listRewardsForAdmin(params: {
     const referredName = new Map(referred.map((s) => [s.id, s.name] as const));
     return rows.map((r) => ({
       id: r.id,
+      rewardType: r.rewardType,
+      stripeInvoiceId: r.stripeInvoiceId,
       status: r.status,
       amountCents: r.amountCents,
       currency: r.currency,
@@ -344,8 +442,9 @@ export type RewardActionResult =
 
 /**
  * Release a reward the rolling-year rule held back: REVIEW_REQUIRED ->
- * AVAILABLE, starting the same 12-month expiry the hold sweep starts. Only
- * that one FROM state - a PENDING reward is the sweep's to release, on time.
+ * AVAILABLE, starting the same 12-month expiry the hold sweep starts for a
+ * month off (dollar credit has none). Only that one FROM state - a PENDING
+ * reward is the sweep's to release, on time.
  */
 export async function releaseReviewedReward(params: {
   rewardId: string;
@@ -353,16 +452,20 @@ export async function releaseReviewedReward(params: {
   now?: Date;
 }): Promise<RewardActionResult> {
   const now = params.now ?? new Date();
-  const expiresAt = new Date(now);
-  expiresAt.setUTCMonth(
-    expiresAt.getUTCMonth() + AFFILIATE_POLICY.reward.expiryMonthsAfterAvailable,
+  const monthOffExpiresAt = new Date(now);
+  monthOffExpiresAt.setUTCMonth(
+    monthOffExpiresAt.getUTCMonth() + AFFILIATE_POLICY.reward.expiryMonthsAfterAvailable,
   );
   return runAsOwner(async (tx) => {
     const reward = await tx.affiliateReward.findUnique({
       where: { id: params.rewardId },
-      select: { id: true, referredShopId: true, affiliateAccountId: true },
+      select: { id: true, referredShopId: true, affiliateAccountId: true, rewardType: true },
     });
     if (!reward) return { ok: false as const, error: "not_found" as const };
+    const expiresAt =
+      isDollarRewardType(reward.rewardType) && !AFFILIATE_POLICY.dollarCredit.expires
+        ? null
+        : monthOffExpiresAt;
     const { count } = await tx.affiliateReward.updateMany({
       where: { id: reward.id, status: "REVIEW_REQUIRED" },
       data: { status: "AVAILABLE", availableAt: now, expiresAt, reviewReason: null },
@@ -386,7 +489,7 @@ export async function releaseReviewedReward(params: {
         id: reward.id,
         status: "AVAILABLE",
         availableAt: now.toISOString(),
-        expiresAt: expiresAt.toISOString(),
+        expiresAt: iso(expiresAt),
       },
     };
   });

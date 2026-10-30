@@ -1049,12 +1049,14 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
       "affiliate program",
       "refer and earn",
       "months off",
+      "affiliate credit",
       "affiliate link",
       "partner",
       "promote",
       "bring a business",
     ],
-    description: "Bring businesses onto ChairBack and get months off your plan",
+    // No amounts: this line shows inside the iOS app (Guideline 3.1.1).
+    description: "Bring businesses onto ChairBack and earn credit on your own plan",
     href: "/dashboard/affiliates",
     // Same shelf as referrals: the owner's own plan, never a client-facing thing.
     category: "account",

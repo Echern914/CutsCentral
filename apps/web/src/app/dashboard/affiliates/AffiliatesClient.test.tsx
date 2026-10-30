@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AFFILIATE_POLICY } from "@chairback/config/affiliateProgram";
 import {
   AffiliatesClient,
+  disclosureFor,
   earningsSoFar,
   milestoneLabels,
   nextMonthProgress,
@@ -11,6 +12,7 @@ import {
 import {
   applyAffiliateAction,
   getAffiliateQrAction,
+  setAffiliateRewardStyleAction,
   setAffiliateStylesAction,
 } from "./actions";
 import type { AffiliateOverview, AffiliateStatus } from "./page";
@@ -18,6 +20,7 @@ import type { AffiliateOverview, AffiliateStatus } from "./page";
 vi.mock("./actions", () => ({
   applyAffiliateAction: vi.fn(async () => ({ ok: true })),
   setAffiliateStylesAction: vi.fn(async () => ({ ok: true })),
+  setAffiliateRewardStyleAction: vi.fn(async () => ({ ok: true })),
   getAffiliateQrAction: vi.fn(async () => ({ ok: true, qr: { svg: "<svg/>", png: "data:image/png;base64,x", url: "" } })),
 }));
 const refresh = vi.fn();
@@ -34,10 +37,21 @@ vi.mock("@/components/ui/Toast", () => ({ useToast: () => ({ toast }) }));
 const mockApply = vi.mocked(applyAffiliateAction);
 const mockStyles = vi.mocked(setAffiliateStylesAction);
 const mockQr = vi.mocked(getAffiliateQrAction);
+const mockRewardStyle = vi.mocked(setAffiliateRewardStyleAction);
+
+/** The text the native app can show: everything outside the web-only
+ *  `data-native-hide` wrappers (HideInNativeApp), which the app hides from
+ *  its first paint and unmounts once it knows it is the app. The rendered
+ *  native mode itself is tested in AffiliatesClient.native.test.tsx. */
+function appVisibleText(container: HTMLElement): string {
+  const clone = container.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll("[data-native-hide]").forEach((el) => el.remove());
+  return clone.textContent ?? "";
+}
 
 function status(over: Partial<AffiliateStatus> = {}): AffiliateStatus {
   return {
-    termsVersion: "v1",
+    termsVersion: "v2",
     applicationsOpen: true,
     application: null,
     account: null,
@@ -45,9 +59,18 @@ function status(over: Partial<AffiliateStatus> = {}): AffiliateStatus {
   };
 }
 
+const NO_CREDIT: AffiliateOverview["credit"] = {
+  earnedCents: 0,
+  inHoldCents: 0,
+  readyCents: 0,
+  appliedCents: 0,
+  underReviewCents: 0,
+  reversedCents: 0,
+};
+
 function overview(over: Partial<AffiliateOverview> = {}): AffiliateOverview {
   return {
-    termsVersion: "v1",
+    termsVersion: "v2",
     account: {
       code: "abcDEF123456",
       status: "ACTIVE",
@@ -55,8 +78,13 @@ function overview(over: Partial<AffiliateOverview> = {}): AffiliateOverview {
       promotionStyles: ["short_video", "in_the_chair"],
       stylesChosenAt: "2026-08-02T00:00:00.000Z",
       suspensionMessage: null,
+      // The month-off style: these tests pin the v1 words. Account credit
+      // (the default for new affiliates) has its own describe below.
+      rewardStyle: "month_off",
+      rewardStyleSetAt: null,
     },
     months: { earned: 2, onTheWay: 1, underReview: 0, reversed: 0, expired: 0 },
+    credit: NO_CREDIT,
     clicks: { last7Days: 3, last30Days: 8, allTime: 15 },
     referrals: [
       {
@@ -70,6 +98,8 @@ function overview(over: Partial<AffiliateOverview> = {}): AffiliateOverview {
         expiresAt: null,
         reversedAt: null,
         reversalMessage: null,
+        rewardType: "subscription_credit",
+        creditCents: 0,
       },
       {
         id: "a2",
@@ -81,13 +111,17 @@ function overview(over: Partial<AffiliateOverview> = {}): AffiliateOverview {
         availableAt: null,
         expiresAt: null,
         reversedAt: "2026-08-20T00:00:00.000Z",
-        reversalMessage: "Their payment was refunded, so this month was taken back.",
+        reversalMessage: "Their payment was refunded, so this reward was taken back.",
+        rewardType: "subscription_credit",
+        creditCents: 0,
       },
     ],
     rewards: [
       {
         id: "r1",
         label: "Business ••••1027",
+        rewardType: "subscription_credit",
+        amountCents: 3499,
         status: "PENDING",
         qualifiedAt: "2026-09-06T00:00:00.000Z",
         holdEndsAt: "2026-09-20T00:00:00.000Z",
@@ -104,6 +138,11 @@ function overview(over: Partial<AffiliateOverview> = {}): AffiliateOverview {
       qualifyingInvoices: AFFILIATE_POLICY.qualification.qualifyingInvoices,
       holdDays: AFFILIATE_POLICY.qualification.holdDaysAfterSecond,
       expiryMonths: AFFILIATE_POLICY.reward.expiryMonthsAfterAvailable,
+      dollarCredit: {
+        signupCents: AFFILIATE_POLICY.dollarCredit.signupCents,
+        monthlyCents: AFFILIATE_POLICY.dollarCredit.monthlyCents,
+        expires: AFFILIATE_POLICY.dollarCredit.expires,
+      },
     },
     ...over,
   };
@@ -115,6 +154,7 @@ beforeEach(() => {
   mockApply.mockClear();
   mockStyles.mockClear();
   mockQr.mockClear();
+  mockRewardStyle.mockClear();
   refresh.mockClear();
   toast.mockClear();
 });
@@ -272,11 +312,13 @@ describe("dashboard", () => {
     expect(screen.getByText(/Opened 3 times this week/)).toBeTruthy();
   });
 
-  it("🔴 never renders a dollar amount (App Store 3.1.1) and never a plan name", () => {
+  it("🔴 a month-off dashboard has no dollar amount the app could show (App Store 3.1.1), and never a plan name", () => {
     const { container } = render(
       <AffiliatesClient status={active} overview={overview()} appBase={APP} shopName="Fade Lab" />,
     );
-    expect(container.textContent).not.toMatch(/\$\s?\d/);
+    expect(appVisibleText(container)).not.toMatch(/\$/);
+    // On the web the one figure is the reward-style chooser's label.
+    expect(screen.getByRole("button", { name: "Account credit ($10 + $5/month)" })).toBeTruthy();
     expect(container.textContent).not.toMatch(/\bpro_ai\b|\bPro AI\b|\$34|\$74/);
   });
 
@@ -325,6 +367,8 @@ describe("what you earn, and the bar toward the next month off", () => {
       expiresAt: null,
       reversedAt: null,
       reversalMessage: null,
+      rewardType: null,
+      creditCents: 0,
       ...over,
     };
   }
@@ -350,7 +394,7 @@ describe("what you earn, and the bar toward the next month off", () => {
     expect(terms).toContain(`${AFFILIATE_POLICY.qualification.holdDaysAfterSecond}-day hold`);
     expect(terms).toMatch(/no cap/);
     expect(terms).toMatch(/never cash/);
-    expect(container.textContent).not.toMatch(/\$\s?\d/);
+    expect(appVisibleText(container)).not.toMatch(/\$/);
   });
 
   it("an empty bar at 0 for a referral that has not started, and for nobody at all", () => {
@@ -415,6 +459,8 @@ describe("what you earn, and the bar toward the next month off", () => {
             {
               id: "r9",
               label: "Business ••••3333",
+              rewardType: "subscription_credit",
+              amountCents: 3499,
               status: "AVAILABLE",
               qualifiedAt: "2026-09-10T00:00:00.000Z",
               holdEndsAt: "2026-09-24T00:00:00.000Z",
@@ -494,5 +540,187 @@ describe("toolkit", () => {
       expect(card.text.includes(link) || /link in (my )?bio|text you my link/i.test(card.text)).toBe(true);
       expect(card.text).not.toMatch(/\$\s?\d/);
     }
+  });
+
+  it("the disclosure names the affiliate's own kind of reward, never an amount", () => {
+    const link = "https://getchairback.com/join?ref=abc";
+    for (const style of ["short_video", "in_the_chair", "text_dm", "other"] as const) {
+      const credit = toolkitFor(style, { link, shopName: "Fade Lab", rewardStyle: "dollar_credit" });
+      expect(credit.text).toMatch(/account credit on my plan/);
+      expect(credit.text).not.toMatch(/month off|\$/);
+      const months = toolkitFor(style, { link, shopName: "Fade Lab", rewardStyle: "month_off" });
+      expect(months.text).toMatch(/a month off my plan/);
+    }
+    // A new affiliate's default is account credit.
+    expect(toolkitFor("other", { link, shopName: "Fade Lab" }).text).toBe(
+      `${link}\n${disclosureFor("dollar_credit")}`,
+    );
+  });
+});
+
+describe("account credit (the default reward style)", () => {
+  const active = status({
+    account: { code: "abcDEF123456", status: "ACTIVE", createdAt: "2026-08-01T00:00:00.000Z" },
+  });
+  const SIGNUP = AFFILIATE_POLICY.dollarCredit.signupCents;
+  const MONTHLY = AFFILIATE_POLICY.dollarCredit.monthlyCents;
+
+  function creditOverview(over: Partial<AffiliateOverview> = {}): AffiliateOverview {
+    const base = overview();
+    return {
+      ...base,
+      account: { ...base.account, rewardStyle: "dollar_credit" },
+      months: { earned: 0, onTheWay: 0, underReview: 0, reversed: 0, expired: 0 },
+      credit: {
+        earnedCents: SIGNUP + 2 * MONTHLY,
+        inHoldCents: MONTHLY,
+        readyCents: MONTHLY,
+        appliedCents: SIGNUP,
+        underReviewCents: 0,
+        reversedCents: 0,
+      },
+      referrals: [
+        {
+          ...base.referrals[0]!,
+          label: "Business ••••4410",
+          stage: "applied",
+          qualifyingInvoices: 3,
+          rewardType: "signup_credit",
+          creditCents: SIGNUP + 2 * MONTHLY,
+        },
+      ],
+      rewards: [
+        { ...base.rewards[0]!, id: "c1", label: "Business ••••4410", rewardType: "signup_credit", amountCents: SIGNUP, status: "APPLIED" },
+        { ...base.rewards[0]!, id: "c2", label: "Business ••••4410", rewardType: "monthly_credit", amountCents: MONTHLY, status: "AVAILABLE" },
+        { ...base.rewards[0]!, id: "c3", label: "Business ••••4410", rewardType: "monthly_credit", amountCents: MONTHLY, status: "PENDING" },
+      ],
+      ...over,
+    };
+  }
+
+  it("sign-up: the intro and the pitch give the amounts on the web, and offer a month off instead", () => {
+    render(<AffiliatesClient status={status()} overview={null} appBase={APP} shopName="Fade Lab" />);
+    const intro = screen.getByTestId("affiliate-intro").textContent ?? "";
+    expect(intro).toContain("$10 when it pays its first month, then $5 for every month it keeps paying");
+    const pitch = screen.getByTestId("pitch-earn").textContent ?? "";
+    expect(pitch).toContain("$10 in account credit is yours after a 14-day hold, then $5 more");
+    expect(screen.getByText(/Prefer a month off per business\?/)).toBeTruthy();
+    expect(screen.getByText(/never cash, no cash value, not transferable/)).toBeTruthy();
+  });
+
+  it("dashboard: the credit promise, the totals in dollars, and per-reward rows", () => {
+    render(<AffiliatesClient status={active} overview={creditOverview()} appBase={APP} shopName="Fade Lab" />);
+    expect(screen.getByRole("heading", { name: "Account credit on your ChairBack plan" })).toBeTruthy();
+    const terms = screen.getByTestId("earn-terms").textContent ?? "";
+    expect(terms).toContain("$10 when a business that signed up through your link pays its first month, then $5");
+    expect(terms).toMatch(/14-day hold/);
+    expect(terms).toMatch(/no expiry, never cash/);
+    // No "next month off" bar for a credit affiliate.
+    expect(screen.queryByRole("progressbar")).toBeNull();
+
+    expect(screen.getByText("earned so far").previousSibling?.textContent).toBe("$20");
+    expect(screen.getByText("applied to your bill").previousSibling?.textContent).toBe("$10");
+    expect(screen.getByText("ready to use").previousSibling?.textContent).toBe("$5");
+    expect(screen.getByText("waiting out the hold").previousSibling?.textContent).toBe("$5");
+
+    expect(screen.getByText("Credit applied")).toBeTruthy();
+    expect(screen.getByText(/\$20 credit earned/)).toBeTruthy();
+    expect(screen.getByText("Your rewards")).toBeTruthy();
+    expect(screen.getByText(/\$10 credit/, { selector: "span" })).toBeTruthy();
+    expect(screen.getAllByText(/\$5 credit/, { selector: "span" })).toHaveLength(2);
+    expect(screen.getByText("Comes off your next ChairBack bill")).toBeTruthy();
+    expect(screen.getByText("How your credit works")).toBeTruthy();
+    expect(screen.getByTestId("how-it-works").textContent).toMatch(
+      /refunded or disputed before the credit is applied/,
+    );
+  });
+
+  it("🔴 every dollar figure sits inside a web-only wrapper the app never shows", () => {
+    const { container } = render(
+      <AffiliatesClient status={active} overview={creditOverview()} appBase={APP} shopName="Fade Lab" />,
+    );
+    expect(container.textContent).toMatch(/\$10/); // the web does show them
+    expect(appVisibleText(container)).not.toMatch(/\$/);
+  });
+
+  it("a month-off affiliate with credit from before still sees it, and months from before show under credit", () => {
+    const { unmount } = render(
+      <AffiliatesClient
+        status={active}
+        overview={creditOverview({ account: { ...overview().account, rewardStyle: "month_off" } })}
+        appBase={APP}
+        shopName="Fade Lab"
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "A month off your ChairBack plan" })).toBeTruthy();
+    expect(screen.getByText("earned so far").previousSibling?.textContent).toBe("$20");
+    unmount();
+
+    render(
+      <AffiliatesClient
+        status={active}
+        overview={creditOverview({
+          months: { earned: 1, onTheWay: 0, underReview: 0, reversed: 0, expired: 0 },
+          rewards: [{ ...overview().rewards[0]!, status: "APPLIED" }],
+        })}
+        appBase={APP}
+        shopName="Fade Lab"
+      />,
+    );
+    expect(screen.getByText("Months off from before")).toBeTruthy();
+    expect(screen.getByText("month off so far").previousSibling?.textContent).toBe("1");
+  });
+});
+
+describe("the reward-style chooser", () => {
+  const active = status({
+    account: { code: "abcDEF123456", status: "ACTIVE", createdAt: "2026-08-01T00:00:00.000Z" },
+  });
+  const credit = (): AffiliateOverview => ({
+    ...overview(),
+    account: { ...overview().account, rewardStyle: "dollar_credit" },
+  });
+
+  it("shows both styles, marks the current one, and saves a switch forward-only", async () => {
+    render(<AffiliatesClient status={active} overview={credit()} appBase={APP} shopName="Fade Lab" />);
+    const dollars = screen.getByRole("button", { name: "Account credit ($10 + $5/month)" });
+    const months = screen.getByRole("button", { name: "A month off per business" });
+    expect(dollars.getAttribute("aria-pressed")).toBe("true");
+    expect(months.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByText(/anything you.ve already earned keeps the reward it was earned under/)).toBeTruthy();
+    // Nothing to save until it changes.
+    expect(screen.queryByRole("button", { name: "Save reward style" })).toBeNull();
+
+    fireEvent.click(months);
+    expect(months.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Save reward style" }));
+    await waitFor(() => expect(mockRewardStyle).toHaveBeenCalledWith("month_off"));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    expect(screen.getByRole("status").textContent).toMatch(/rewards you earn from now on/);
+  });
+
+  it("a paused account can't switch, and a 409 says why", async () => {
+    const { unmount } = render(
+      <AffiliatesClient
+        status={active}
+        overview={{
+          ...credit(),
+          account: { ...credit().account, status: "SUSPENDED", suspensionMessage: "Paused." },
+        }}
+        appBase={APP}
+        shopName="Fade Lab"
+      />,
+    );
+    expect(
+      (screen.getByRole("button", { name: "A month off per business" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    unmount();
+
+    mockRewardStyle.mockResolvedValueOnce({ ok: false, error: "not_active", status: 409 });
+    render(<AffiliatesClient status={active} overview={credit()} appBase={APP} shopName="Fade Lab" />);
+    fireEvent.click(screen.getByRole("button", { name: "A month off per business" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save reward style" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/paused/));
+    expect(refresh).not.toHaveBeenCalled();
   });
 });

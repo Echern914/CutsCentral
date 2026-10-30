@@ -1,4 +1,9 @@
-import { AFFILIATE_POLICY, apiEnv, randomToken } from "@chairback/config";
+import {
+  AFFILIATE_POLICY,
+  apiEnv,
+  isDollarRewardType,
+  randomToken,
+} from "@chairback/config";
 import { Prisma, prisma, runAsOwner } from "@chairback/db";
 import { stripeClient } from "../billing/stripe.js";
 import { logger } from "../logger.js";
@@ -28,15 +33,20 @@ import { recordAffiliateEvent } from "../services/affiliateAudit.js";
  * (the email outbox's write-ahead rule, for the same reason: a crash after
  * acceptance leaves no other trace).
  *
- * 🔴 NEVER MORE THAN A REAL MONTH. The reward snapshotted the plan's LIST
- * price at qualification. A referrer on a discounted subscription must not be
- * credited more than they pay, so the applied amount is the smaller of the
- * snapshot and the subscription's current unit_amount, read from Stripe at
- * execution and recorded on the operation.
+ * 🔴 A MONTH OFF IS NEVER MORE THAN A REAL MONTH. That reward snapshotted the
+ * plan's LIST price at qualification. A referrer on a discounted subscription
+ * must not be credited more than they pay, so the applied amount is the
+ * smaller of the snapshot and the subscription's current unit_amount, read
+ * from Stripe at execution and recorded on the operation.
+ *
+ * 🔴 A DOLLAR CREDIT IS EXACTLY ITS CENTS. signup_credit / monthly_credit
+ * (AFFILIATE_POLICY.dollarCredit) apply the reward's own amountCents, no more
+ * and no less, under the same idempotency key.
  *
  * A shop that is not paying (no subscription, or one that is not active) is
  * not refused - there is nothing to apply a credit to yet - so the operation
- * is deferred a day at a time until they subscribe or the reward expires.
+ * is deferred a day at a time until they subscribe (or, for a month off, the
+ * reward expires; dollar credit has no expiry, so it simply waits).
  *
  * Dark until AFFILIATE_CREDIT_EXECUTION_ENABLED: the job reports what it
  * WOULD do and writes nothing.
@@ -260,7 +270,13 @@ export async function deliverCredit(params: {
   const reward = await runAsOwner((tx) =>
     tx.affiliateReward.findUnique({
       where: { id: op.rewardId },
-      select: { status: true, referredShopId: true, affiliateAccountId: true, basisPlan: true },
+      select: {
+        status: true,
+        referredShopId: true,
+        affiliateAccountId: true,
+        basisPlan: true,
+        rewardType: true,
+      },
     }),
   );
   if (!reward || reward.status !== "RESERVED") {
@@ -308,25 +324,35 @@ export async function deliverCredit(params: {
     return "deferred";
   }
 
-  // Reconcile against the REAL subscription: never more than a real month.
-  let unitAmount: number | null = null;
-  try {
-    const sub = await stripeClient().subscriptions.retrieve(shop.stripeSubscriptionId!);
-    const unit = sub.items.data[0]?.price?.unit_amount;
-    unitAmount = typeof unit === "number" && unit > 0 ? unit : null;
-  } catch (err) {
-    const c = classifyStripeError(err);
-    await release(op.id, `subscription_${c.classification}`, new Date(now.getTime() + backoffFor(op.attempts)), { ambiguous: false });
-    return "retry";
+  // A DOLLAR credit is a fixed number of cents, decided when it was earned:
+  // exactly that is applied, with no reference to the plan's price (the
+  // balance carries forward if it is larger than one bill).
+  const dollar = isDollarRewardType(reward.rewardType);
+  let appliedCents: number;
+  if (dollar) {
+    appliedCents = op.amountCents;
+  } else {
+    // A MONTH OFF reconciles against the REAL subscription: never more than
+    // a real month.
+    let unitAmount: number | null = null;
+    try {
+      const sub = await stripeClient().subscriptions.retrieve(shop.stripeSubscriptionId!);
+      const unit = sub.items.data[0]?.price?.unit_amount;
+      unitAmount = typeof unit === "number" && unit > 0 ? unit : null;
+    } catch (err) {
+      const c = classifyStripeError(err);
+      await release(op.id, `subscription_${c.classification}`, new Date(now.getTime() + backoffFor(op.attempts)), { ambiguous: false });
+      return "retry";
+    }
+    if (unitAmount === null) {
+      // Tiered / metered pricing has no unit_amount. Nothing was applied;
+      // this needs a person, not a retry loop.
+      await settle(op.id, "FAILED", "no_unit_amount");
+      logger.error({ operationId: op.id, rewardId: op.rewardId }, "affiliate credit failed - subscription has no usable unit_amount");
+      return "failed";
+    }
+    appliedCents = Math.min(op.amountCents, unitAmount);
   }
-  if (unitAmount === null) {
-    // Tiered / metered pricing has no unit_amount. Nothing was applied;
-    // this needs a person, not a retry loop.
-    await settle(op.id, "FAILED", "no_unit_amount");
-    logger.error({ operationId: op.id, rewardId: op.rewardId }, "affiliate credit failed - subscription has no usable unit_amount");
-    return "failed";
-  }
-  const appliedCents = Math.min(op.amountCents, unitAmount);
 
   const attemptNo = await reserveAttempt(op.id, params.claimToken, now);
   if (attemptNo === null) return classifyRefusedReservation(op.id, params.claimToken);
@@ -338,7 +364,9 @@ export async function deliverCredit(params: {
       {
         amount: -appliedCents,
         currency: op.currency,
-        description: "ChairBack affiliate reward - one month off",
+        description: dollar
+          ? "ChairBack affiliate account credit"
+          : "ChairBack affiliate reward - one month off",
         metadata: { affiliateRewardId: op.rewardId, affiliateOperationId: op.id },
       },
       { idempotencyKey: `affiliate-reward:${op.rewardId}` },

@@ -3,6 +3,10 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
+import type {
+  AffiliateCreditTotals,
+  AffiliateRewardStyle,
+} from "@chairback/config/affiliateProgram";
 import { AffiliatesClient } from "./AffiliatesClient";
 
 export const metadata: Metadata = { title: "Affiliates" };
@@ -45,8 +49,13 @@ export interface AffiliateOverview {
     promotionStyles: string[];
     stylesChosenAt: string | null;
     suspensionMessage: string | null;
+    /** How rewards earned FROM NOW ON are paid. */
+    rewardStyle: AffiliateRewardStyle;
+    rewardStyleSetAt: string | null;
   };
   months: { earned: number; onTheWay: number; underReview: number; reversed: number; expired: number };
+  /** Dollar account credit, in cents (signup_credit + monthly_credit only). */
+  credit: AffiliateCreditTotals;
   clicks: { last7Days: number; last30Days: number; allTime: number };
   referrals: {
     id: string;
@@ -60,10 +69,17 @@ export interface AffiliateOverview {
     expiresAt: string | null;
     reversedAt: string | null;
     reversalMessage: string | null;
+    /** The bring-on reward's type, or null before one exists. */
+    rewardType: string | null;
+    /** Dollar credit this business has earned so far (not taken back). */
+    creditCents: number;
   }[];
   rewards: {
     id: string;
     label: string;
+    /** subscription_credit (a month off) | signup_credit | monthly_credit. */
+    rewardType: string;
+    amountCents: number;
     status: string;
     qualifiedAt: string;
     holdEndsAt: string;
@@ -77,6 +93,7 @@ export interface AffiliateOverview {
     qualifyingInvoices: number;
     holdDays: number;
     expiryMonths: number;
+    dollarCredit: { signupCents: number; monthlyCents: number; expires: boolean };
   };
 }
 
