@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-30-insights-tips-include-cash",
+    date: "2026-10-30",
+    kind: "feature",
+    title: "Insights tips now include the cash tips you add",
+    body:
+      "The Tips card in Insights Stats now adds the cash and other-app tips you put on an appointment's Tip line " +
+      "to the tips clients left online. Tips still never count as revenue.",
+  },
+  {
     id: "2026-10-30-charge-late-cancel-fee",
     date: "2026-10-30",
     kind: "feature",
