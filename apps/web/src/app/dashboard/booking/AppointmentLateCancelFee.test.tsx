@@ -274,3 +274,33 @@ describe("the lasting proof on the Payment card", () => {
     expect(line.textContent).toContain("waiting on Stripe");
   });
 });
+
+describe("Charge late-cancel fee on the Payment card (where Acuity had checkout)", () => {
+  it("🔴 the button opens the same ask, charges nothing on its own, then the real charge", async () => {
+    await openSheet(detail());
+    const button = await screen.findByTestId("charge-late-cancel");
+    expect(button.textContent).toBe("Charge late-cancel fee · $20.00");
+    expect(screen.getByText(/Charges the card ending 4242/)).toBeTruthy();
+    fireEvent.click(button);
+    expect(lateCancel).not.toHaveBeenCalled();
+    const box = await screen.findByTestId("late-cancel-confirm");
+    fireEvent.click(within(box).getByRole("button", { name: "Client cancelled · charge $20" }));
+    await waitFor(() => expect(lateCancel).toHaveBeenCalledWith("appt1"));
+    expect(cancel).not.toHaveBeenCalled();
+    expect((await screen.findByTestId("late-cancel-done")).textContent).toContain(
+      "Charged a $20 late-cancel fee to the card ending 4242.",
+    );
+  });
+
+  it("not offered when no fee can be charged", async () => {
+    await openSheet(detail({ lateCancelCard: { charge: false, reason: "outside_window", windowHours: 24 } }));
+    await screen.findByText("Ticket total");
+    expect(screen.queryByTestId("charge-late-cancel")).toBeNull();
+  });
+
+  it("not offered once the appointment has ended (that is a no-show)", async () => {
+    await openSheet(detail({ startsAt: iso(-90), endsAt: iso(-60) }));
+    await screen.findByText("Ticket total");
+    expect(screen.queryByTestId("charge-late-cancel")).toBeNull();
+  });
+});
