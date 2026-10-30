@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { FeatureAdoptionRow } from "@chairback/config/featureAdoption";
 import { Card, CardHeader } from "@/components/ui/Card";
-import { HideInNativeApp } from "@/components/HideInNativeApp";
+import { UpgradeOnWebLink } from "@/components/UpgradeOnWebLink";
 import { PlanBadge } from "../_components/PlanBadge";
 
 /**
@@ -63,11 +63,8 @@ function AdoptionAction({ row }: { row: FeatureAdoptionRow }) {
   return (
     <>
       <PlanBadge tier="pro" />
-      <HideInNativeApp>
-        <Link href="/dashboard/billing" className="font-semibold text-gold hover:underline">
-          Upgrade &rarr;
-        </Link>
-      </HideInNativeApp>
+      {/* A link on the web; Safari from the app (never a price in the app). */}
+      <UpgradeOnWebLink>Upgrade &rarr;</UpgradeOnWebLink>
     </>
   );
 }
