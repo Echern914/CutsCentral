@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-10-31-connect-own-stripe-in-app",
+    date: "2026-10-31",
+    kind: "fix",
+    title: "Connecting your own Stripe account works in the app",
+    body:
+      "In the iPhone app, Payments → connect your existing Stripe account could stop on a blank page saying " +
+      "\"Invalid redirect URI\". That's fixed: you sign in to Stripe, pick your account, and come straight back.",
+  },
+  {
     id: "2026-10-30-approve-late-cancel-fee",
     date: "2026-10-30",
     kind: "feature",

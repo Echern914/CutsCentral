@@ -162,7 +162,7 @@ export function connectRedirectUri(): string {
  * is what the Express door is for.
  */
 export function buildConnectAuthorizeUrl(state: string, email?: string | null): string {
-  return stripeClient().oauth.authorizeUrl({
+  return strictUrl(stripeClient().oauth.authorizeUrl({
     client_id: apiEnv().STRIPE_CONNECT_CLIENT_ID,
     response_type: "code",
     scope: CONNECT_SCOPE,
@@ -172,7 +172,22 @@ export function buildConnectAuthorizeUrl(state: string, email?: string | null): 
     // Prefill only. Stripe ignores an invalid value rather than erroring, and the
     // barber can still pick any account they control.
     ...(email ? { stripe_user: { email } } : {}),
-  });
+  }));
+}
+
+/**
+ * 🔴 PERCENT-ENCODE THE SQUARE BRACKETS, or the app's sign-in sheet breaks it.
+ *
+ * Stripe's library writes the email prefill as a raw `stripe_user[email]=`.
+ * Safari tolerates the brackets; iOS's authentication sheet (the in-app
+ * "Connect my Stripe" door) does not. It treats the whole link as invalid and
+ * percent-encodes ALL of it again, so the already-encoded redirect_uri reaches
+ * Stripe as the literal `https%3A%2F%2Fapi...` - "Invalid redirect URI" on a
+ * blank page, for every barber with an email on file (2026-10-31). Encoded,
+ * the brackets are legal and Stripe reads `stripe_user[email]` exactly as before.
+ */
+export function strictUrl(url: string): string {
+  return url.replace(/\[/g, "%5B").replace(/\]/g, "%5D");
 }
 
 /**
