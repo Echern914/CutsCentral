@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import Stripe from "stripe";
 import {
   canReplaceConnectedAccount,
   createConnectState,
   verifyConnectState,
   standardConnectEnabled,
+  strictUrl,
 } from "./connectOauth.js";
 
 /**
@@ -117,6 +119,57 @@ describe("canReplaceConnectedAccount", () => {
   it("a Standard account is never replaced by another, finished or not", () => {
     expect(canReplaceConnectedAccount({ type: "standard", chargesEnabled: false })).toBe(false);
     expect(canReplaceConnectedAccount({ type: "standard", chargesEnabled: true })).toBe(false);
+  });
+});
+
+/**
+ * 🔴 THE IN-APP "CONNECT MY STRIPE" LINK MUST SURVIVE iOS's SIGN-IN SHEET.
+ *
+ * 2026-10-31: a barber connecting from the app got "Invalid redirect URI
+ * 'https%3A%2F%2Fapi...'" - the redirect address encoded TWICE. Stripe's
+ * library writes the email prefill with raw brackets, iOS's auth sheet then
+ * re-encodes the whole link, and Stripe sees an address nobody registered.
+ * Built here with the real library, exactly as buildConnectAuthorizeUrl calls it.
+ */
+describe("the authorize link (strictUrl)", () => {
+  const REDIRECT = "https://api.example.test/api/payments/connect/oauth/callback";
+  const raw = new Stripe("sk_test_unused").oauth.authorizeUrl({
+    client_id: "ca_test",
+    response_type: "code",
+    scope: "read_write",
+    redirect_uri: REDIRECT,
+    stripe_landing: "login",
+    state: "a.b-c_d",
+    stripe_user: { email: "barber@example.test" },
+  });
+
+  it("the library really does emit raw brackets (the reason this exists)", () => {
+    expect(raw).toContain("stripe_user[email]=");
+  });
+
+  it("🔴 has no raw bracket left, so iOS has nothing to re-encode", () => {
+    const url = strictUrl(raw);
+    expect(url).not.toMatch(/[[\]]/);
+    // Only characters legal anywhere in a query (RFC 3986), so iOS keeps it as-is.
+    expect(url).toMatch(/^[A-Za-z0-9\-._~:/?#@!$&'()*+,;=%]+$/);
+  });
+
+  it("Stripe still reads the same redirect, email and state", () => {
+    const q = new URL(strictUrl(raw)).searchParams;
+    expect(q.get("redirect_uri")).toBe(REDIRECT);
+    expect(q.get("stripe_user[email]")).toBe("barber@example.test");
+    expect(q.get("state")).toBe("a.b-c_d");
+    expect(q.get("client_id")).toBe("ca_test");
+  });
+
+  it("a link without an email is unchanged", () => {
+    const plain = new Stripe("sk_test_unused").oauth.authorizeUrl({
+      client_id: "ca_test",
+      response_type: "code",
+      scope: "read_write",
+      redirect_uri: REDIRECT,
+    });
+    expect(strictUrl(plain)).toBe(plain);
   });
 });
 
