@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-01-manage-plan-signed-in",
+    date: "2026-11-01",
+    kind: "fix",
+    title: "Manage plan opens already signed in",
+    body:
+      "Tapping Manage plan on getchairback.com in the app now opens Safari already signed in to your account, in " +
+      "the shop you were looking at, so you go straight to your plan. You no longer have to sign in again, which " +
+      "wasn't possible if you use Sign in with Apple.",
+  },
+  {
     id: "2026-11-01-manage-plan-from-the-app",
     date: "2026-11-01",
     kind: "fix",

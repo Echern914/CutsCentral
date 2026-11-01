@@ -167,7 +167,7 @@ export function FeatureSearch({
       setOpen(false);
       // In the app, billing opens in Safari and the WebView stays put.
       if (billingOnWeb && isBillingHref(href)) {
-        openBillingInBrowser();
+        void openBillingInBrowser();
         return;
       }
       router.push(href);

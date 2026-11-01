@@ -13,6 +13,7 @@ import { authRouter } from "./routes/auth.js";
 import { passwordResetRouter } from "./routes/passwordReset.js";
 import { authMobileRouter } from "./routes/authMobile.js";
 import { authAppleRouter } from "./routes/authApple.js";
+import { authBillingHandoffRouter } from "./routes/authBillingHandoff.js";
 import { emailChangeRouter } from "./routes/emailChange.js";
 import { healthRouter } from "./routes/health.js";
 import { publicPageRouter, shopsRouter } from "./routes/shops.js";
@@ -171,6 +172,8 @@ export function createApp(): Express {
   app.use("/api/auth", authMobileRouter);
   // Sign in with Apple on the web. Dark until the Apple env vars are set.
   app.use("/api/auth", authAppleRouter);
+  // The iOS app's billing button: opens Safari already signed in.
+  app.use("/api/auth", authBillingHandoffRouter);
   // Change-login-email: same composition pattern (verify-the-new-inbox flow).
   app.use("/api/auth", emailChangeRouter);
   app.use("/api/shops", shopsRouter);

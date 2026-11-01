@@ -200,3 +200,19 @@ describe("the iOS app's way out to billing: /pricing?start=plan", () => {
     }
   });
 });
+
+describe("the iOS app's way out to billing, signed in: /pricing?start=plan&h=<code>", () => {
+  it("🔴 in Safari, a code goes to the signed-in landing, intact", () => {
+    const res = middleware(request("https://getchairback.com/pricing?start=plan&h=abc.d%2Be"));
+    expect(res.status).toBe(307);
+    const to = new URL(res.headers.get("location")!);
+    expect(to.pathname).toBe("/auth/billing/landing");
+    expect(to.searchParams.get("code")).toBe("abc.d+e");
+    expect(to.searchParams.get("start")).toBeNull();
+  });
+
+  it("an empty code is the same as none: straight to the plan cards", () => {
+    const res = middleware(request("https://getchairback.com/pricing?start=plan&h="));
+    expect(res.headers.get("location")).toBe("https://getchairback.com/dashboard/billing#plans");
+  });
+});

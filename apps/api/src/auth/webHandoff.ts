@@ -40,12 +40,15 @@ export function createWebHandoffCode(
   userId: string,
   purpose: string,
   nowSeconds: number,
+  /** The shop the session was acting in, for a handoff that must land there too. */
+  shopId?: string,
 ): string {
   const payload = {
     userId,
     purpose,
     nonce: randomBytes(12).toString("base64url"),
     exp: nowSeconds + HANDOFF_TTL_SECONDS,
+    ...(shopId ? { shopId } : {}),
   };
   const b64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   return `${b64}.${sign(b64)}`;
@@ -61,6 +64,15 @@ export function verifyWebHandoffCode(
   purpose: string,
   nowSeconds: number,
 ): string | null {
+  return verifyWebHandoff(code, purpose, nowSeconds)?.userId ?? null;
+}
+
+/** verifyWebHandoffCode, plus the shop the code was minted in (null if none). */
+export function verifyWebHandoff(
+  code: string | undefined,
+  purpose: string,
+  nowSeconds: number,
+): { userId: string; shopId: string | null } | null {
   if (!code) return null;
   const dot = code.indexOf(".");
   if (dot <= 0) return null;
@@ -74,6 +86,7 @@ export function verifyWebHandoffCode(
       purpose?: string;
       nonce?: string;
       exp?: number;
+      shopId?: string;
     };
     if (payload.purpose !== purpose) return null;
     if (typeof payload.exp !== "number" || payload.exp <= nowSeconds) return null;
@@ -81,7 +94,10 @@ export function verifyWebHandoffCode(
       return null;
     }
     if (!consumeNonce(payload.nonce, payload.exp, nowSeconds)) return null;
-    return payload.userId;
+    return {
+      userId: payload.userId,
+      shopId: typeof payload.shopId === "string" ? payload.shopId : null,
+    };
   } catch {
     return null;
   }

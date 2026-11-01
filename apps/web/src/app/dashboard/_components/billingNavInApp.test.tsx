@@ -1,15 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 /**
  * "Plan & billing" in the More sheet and the Ctrl-K palette, inside the app.
  *
- *  - an app build that can open Safari (openWeb), kill switch on: the entry
- *    is there as "Plan & billing ↗", and choosing it asks the app to open
- *    billing in Safari - the WebView itself never moves (no <a>, no
+ *  - any app build, kill switch on: the entry is there as "Plan & billing ↗",
+ *    and choosing it opens billing in Safari, signed in, through /pricing
+ *    (lib/useNativeBillingLink.ts) - never billing in the WebView (no <a>, no
  *    router.push), because buying inside the WebView is what 3.1.1 forbids;
- *  - an older build: the same entry, which reaches Safari through /pricing
- *    (lib/useNativeBillingLink.ts) instead of a message;
  *  - the kill switch off: the entry is not there at all.
  *
  * No useIsNativeApp mock here on purpose: the real hooks read the same
@@ -31,8 +29,14 @@ vi.mock("@chairback/config/features", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/billingHandoffAction", () => ({ startBillingHandoffAction: async () => "CODE.sig" }));
+
 const { MoreSheet } = await import("./MoreSheet");
 const { FeatureSearch } = await import("./FeatureSearch");
+const { billingBrowser } = await import("@/lib/useNativeBillingLink");
+
+/** Safari, signed in (lib/useNativeBillingLink.ts billingSafariPath). */
+const SIGNED_IN = "/pricing?start=plan&h=CODE.sig";
 
 type W = { ReactNativeWebView?: { postMessage: (d: string) => void }; __cbNative?: Record<string, unknown> };
 const w = window as unknown as W;
@@ -46,10 +50,12 @@ function app(capabilities: Record<string, unknown>) {
 const CAPABLE = { openAuth: true, rewardsTab: true, openWeb: true };
 const TODAYS_BUILD = { openAuth: true, rewardsTab: true };
 
+let go: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   push.mockReset();
   localStorage.clear();
   killSwitch.on = true;
+  go = vi.spyOn(billingBrowser, "go").mockImplementation(() => {});
 });
 afterEach(() => {
   cleanup();
@@ -70,13 +76,13 @@ function palette(query: string) {
 }
 
 const billingAnchors = () => document.querySelectorAll('a[href^="/dashboard/billing"]');
-const sent = (postMessage: ReturnType<typeof vi.fn>) =>
-  postMessage.mock.calls.map((c) => JSON.parse(c[0] as string));
 
-describe("the More sheet in an app build that can open Safari", () => {
-  it("🔴 Plan & billing ↗ opens billing in Safari and the WebView stays put", () => {
-    const postMessage = app(CAPABLE);
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+describe("the More sheet in the app", () => {
+  it.each([
+    ["the build on phones today", TODAYS_BUILD],
+    ["a newer build with openWeb", CAPABLE],
+  ])("🔴 %s: Plan & billing ↗ opens billing in Safari, signed in, through /pricing", async (_l, caps) => {
+    const postMessage = app(caps);
     const { onClose } = moreSheet();
 
     const row = screen.getByRole("button", { name: /Plan & billing.*opens your browser/ });
@@ -84,21 +90,7 @@ describe("the More sheet in an app build that can open Safari", () => {
     expect(billingAnchors()).toHaveLength(0);
 
     fireEvent.click(row);
-    expect(sent(postMessage)).toEqual([{ type: "cb:open-web", path: "/dashboard/billing#plans" }]);
-    expect(onClose).toHaveBeenCalled();
-    expect(errors.mock.calls.flat().join(" ")).not.toMatch(/navigation/i);
-  });
-});
-
-describe("the More sheet in an OLDER build (the one on phones today)", () => {
-  it("🔴 Plan & billing ↗ is there too, and never messages a shell that can't hear it", () => {
-    const postMessage = app(TODAYS_BUILD);
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const { onClose } = moreSheet();
-    const row = screen.getByRole("button", { name: /Plan & billing.*opens your browser/ });
-    expect(billingAnchors()).toHaveLength(0);
-    fireEvent.click(row);
-    // It navigates to /pricing, which that build hands to Safari.
+    await waitFor(() => expect(go).toHaveBeenCalledWith(SIGNED_IN));
     expect(postMessage).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });
@@ -128,22 +120,22 @@ describe("the More sheet, unchanged", () => {
 });
 
 describe("the palette in an app build that can open Safari", () => {
-  it("🔴 choosing Plan & billing ↗ opens Safari and never router.pushes", () => {
-    const postMessage = app(CAPABLE);
+  it("🔴 choosing Plan & billing ↗ opens Safari signed in and never router.pushes", async () => {
+    app(CAPABLE);
     palette("billing");
     const row = screen.getAllByRole("option").find((o) => within(o).queryByText(/Plan & billing/));
     expect(row).toBeTruthy();
     expect(row!.textContent).toContain("↗");
     fireEvent.click(within(row!).getAllByRole("button")[0]!);
-    expect(sent(postMessage)).toEqual([{ type: "cb:open-web", path: "/dashboard/billing#plans" }]);
+    await waitFor(() => expect(go).toHaveBeenCalledWith(SIGNED_IN));
     expect(push).not.toHaveBeenCalled();
   });
 
-  it("Enter on it does the same", () => {
-    const postMessage = app(CAPABLE);
+  it("Enter on it does the same", async () => {
+    app(CAPABLE);
     palette("plan & billing");
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Search features" }), { key: "Enter" });
-    expect(sent(postMessage)).toEqual([{ type: "cb:open-web", path: "/dashboard/billing#plans" }]);
+    await waitFor(() => expect(go).toHaveBeenCalledWith(SIGNED_IN));
     expect(push).not.toHaveBeenCalled();
   });
 
@@ -157,13 +149,13 @@ describe("the palette in an app build that can open Safari", () => {
 });
 
 describe("the palette in an OLDER build", () => {
-  it("offers Plan & billing ↗ and never router.pushes to it", () => {
+  it("offers Plan & billing ↗, opens Safari signed in, and never router.pushes to it", async () => {
     const postMessage = app(TODAYS_BUILD);
-    vi.spyOn(console, "error").mockImplementation(() => {});
     palette("billing");
     const row = screen.getAllByRole("option").find((o) => within(o).queryByText(/Plan & billing/));
     expect(row!.textContent).toContain("↗");
     fireEvent.click(within(row!).getAllByRole("button")[0]!);
+    await waitFor(() => expect(go).toHaveBeenCalledWith(SIGNED_IN));
     expect(postMessage).not.toHaveBeenCalled();
     expect(push).not.toHaveBeenCalled();
   });

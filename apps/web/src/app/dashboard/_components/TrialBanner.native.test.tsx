@@ -1,13 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 /**
- * Inside the iOS app a lapsed shop is told WHAT ended - the right one - and
- * never a price. Whether there is also a way to billing depends on the build:
- *  - one that can open Safari (`__cbNative.openWeb`): "Manage plan on
- *    getchairback.com ↗", which asks the app to open billing there;
- *  - an older one: nothing else, exactly as before - it would load any
- *    billing link inside the WebView.
+ * Inside the iOS app a lapsed shop is told WHAT ended - the right one - never
+ * a price, and gets "Manage plan on getchairback.com ↗" in every build, which
+ * opens billing in Safari signed in (lib/useNativeBillingLink.ts).
  * Never an <a>: a link would navigate the WebView itself.
  */
 const summary = vi.hoisted(() => vi.fn());
@@ -21,12 +18,20 @@ vi.mock("@/components/ShowInNativeApp", () => ({
   ShowInNativeApp: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+vi.mock("@/lib/billingHandoffAction", () => ({ startBillingHandoffAction: async () => "CODE.sig" }));
+
 const { TrialBanner } = await import("./TrialBanner");
+const { billingBrowser } = await import("@/lib/useNativeBillingLink");
 
 type W = { ReactNativeWebView?: { postMessage: (d: string) => void }; __cbNative?: Record<string, unknown> };
 const w = window as unknown as W;
 
-beforeEach(() => summary.mockReset());
+let go: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  summary.mockReset();
+  go?.mockRestore();
+  go = vi.spyOn(billingBrowser, "go").mockImplementation(() => {});
+});
 afterEach(() => {
   cleanup();
   delete w.ReactNativeWebView;
@@ -80,8 +85,10 @@ describe("the lapse banner in an OLDER app build (no openWeb - the build on phon
     expect(screen.getByText(words)).toBeTruthy();
     expect(container.querySelector("a")).toBeNull();
     expect(container.textContent).not.toMatch(/\$|\/mo/);
-    expect(screen.getByRole("button", { name: /Manage plan on getchairback\.com/ })).toBeTruthy();
-    // The older shell can't hear the message; the button navigates instead.
+    // One tap: Safari, through /pricing, SIGNED IN (an Apple-ID barber has no
+    // way to sign in on the website).
+    fireEvent.click(screen.getByRole("button", { name: /Manage plan on getchairback\.com/ }));
+    await waitFor(() => expect(go).toHaveBeenCalledWith("/pricing?start=plan&h=CODE.sig"));
     expect(postMessage).not.toHaveBeenCalled();
   });
 
@@ -107,10 +114,8 @@ describe("in an app build that can open Safari", () => {
     expect(container.querySelector("a")).toBeNull();
     expect(container.textContent).not.toMatch(/\$|\/mo/);
     fireEvent.click(screen.getByRole("button", { name: /Manage plan on getchairback\.com/ }));
-    expect(JSON.parse(postMessage.mock.calls[0]![0] as string)).toEqual({
-      type: "cb:open-web",
-      path: "/dashboard/billing#plans",
-    });
+    await waitFor(() => expect(go).toHaveBeenCalledWith("/pricing?start=plan&h=CODE.sig"));
+    expect(postMessage).not.toHaveBeenCalled();
   });
 
   it("a trialing shop sees its days left without the price, beside the same button", async () => {

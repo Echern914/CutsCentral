@@ -1,24 +1,28 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { IfNativeBillingLink, NATIVE_BILLING_LABEL, UpgradeOnWebLink } from "./UpgradeOnWebLink";
-import {
-  billingLinkMode,
-  billingRequest,
-  OLDER_BUILD_BILLING_PATH,
-  OPEN_WEB_MESSAGE,
-} from "@/lib/useNativeBillingLink";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+
+const handoff = vi.hoisted(() => ({ code: "CODE.sig" as string | null, calls: 0 }));
+vi.mock("@/lib/billingHandoffAction", () => ({
+  startBillingHandoffAction: async () => {
+    handoff.calls += 1;
+    return handoff.code;
+  },
+}));
+
+const { IfNativeBillingLink, NATIVE_BILLING_LABEL, UpgradeOnWebLink } = await import("./UpgradeOnWebLink");
+const { billingBrowser, billingLinkMode, billingSafariPath } = await import("@/lib/useNativeBillingLink");
 
 /**
  * "Since we can't upgrade plans on the phone, it should bring you to a link
- * that takes you to billing" (Eric, 2026-10-30).
+ * that takes you to billing" (Eric, 2026-10-30) - and, once that link asked an
+ * Apple-ID barber to sign in with something the website doesn't offer, it has
+ * to arrive SIGNED IN (2026-11-01).
  *
  *  - web: an ordinary link to the plan cards;
- *  - an app build that can open Safari: a button that ASKS THE APP to open
- *    billing there, and never navigates the WebView itself (buying inside the
- *    WebView is exactly what 3.1.1 forbids);
- *  - an older app build: the same button, which navigates to /pricing - the
- *    one page those builds already send to Safari - never to billing itself,
- *    which they would load inside the WebView.
+ *  - in the app, every build: a button that fetches a one-time code and goes to
+ *    /pricing?start=plan&h=<code> - the one page every build since July sends
+ *    to Safari - never to billing itself, which an older build would load
+ *    inside the WebView (buying inside the app is what 3.1.1 forbids).
  */
 
 type W = { ReactNativeWebView?: { postMessage: (d: string) => void }; __cbNative?: Record<string, unknown> };
@@ -30,6 +34,13 @@ function inApp(capabilities: Record<string, unknown> | undefined) {
   if (capabilities) w.__cbNative = capabilities;
   return postMessage;
 }
+
+let go: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  handoff.code = "CODE.sig";
+  handoff.calls = 0;
+  go = vi.spyOn(billingBrowser, "go").mockImplementation(() => {});
+});
 
 afterEach(() => {
   cleanup();
@@ -52,76 +63,60 @@ describe("UpgradeOnWebLink on the web", () => {
   });
 });
 
-describe("UpgradeOnWebLink in an app build that can open Safari", () => {
-  it("🔴 asks the app to open billing in the browser, and never navigates the WebView", () => {
-    const postMessage = inApp({ openAuth: true, rewardsTab: true, openWeb: true });
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const before = window.location.href;
-    const { container } = render(<UpgradeOnWebLink>Start your plan</UpgradeOnWebLink>);
+describe("UpgradeOnWebLink in the app", () => {
+  it.each([
+    ["App Store 1.1.7 (54) - no openWeb", { openAuth: true, rewardsTab: true }],
+    ["no capabilities at all", undefined],
+    ["a newer build with openWeb", { openAuth: true, rewardsTab: true, openWeb: true }],
+  ])("🔴 %s: the button opens Safari SIGNED IN, through /pricing, never billing in the WebView", async (_l, caps) => {
+    const postMessage = inApp(caps);
+    const { container } = render(<UpgradeOnWebLink wrapClassName="mt-2">Start your plan</UpgradeOnWebLink>);
 
-    // No link the WebView could follow, anywhere.
+    // No link the WebView could follow, anywhere, and no amount, ever.
     expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).not.toMatch(/\$|\/mo/);
     const button = screen.getByRole("button", { name: new RegExp(NATIVE_BILLING_LABEL) });
     expect(button.textContent).toContain("getchairback.com");
-    // No amount in the app, ever.
-    expect(container.textContent).not.toMatch(/\$|\/mo/);
+    expect(container.querySelector("p.mt-2 button")).not.toBeNull();
 
     fireEvent.click(button);
-    expect(postMessage).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(postMessage.mock.calls[0]![0] as string)).toEqual({
-      type: OPEN_WEB_MESSAGE,
-      path: "/dashboard/billing#plans",
-    });
-    // The page stayed put: jsdom reports any attempted navigation on the
-    // console ("Not implemented: navigation").
-    expect(window.location.href).toBe(before);
-    expect(errors.mock.calls.flat().join(" ")).not.toMatch(/navigation/i);
-  });
-
-  it("puts the result in the call site's paragraph", () => {
-    inApp({ openWeb: true });
-    const { container } = render(<UpgradeOnWebLink wrapClassName="mt-2">Upgrade</UpgradeOnWebLink>);
-    expect(container.querySelector("p.mt-2 button")).not.toBeNull();
-  });
-});
-
-describe("UpgradeOnWebLink in an OLDER app build (the one on phones today)", () => {
-  // "There needs to be a little button that takes you straight to billing...
-  // the link should take you to the url in safari to pay" (Eric, 2026-11-01):
-  // a barber whose trial ended had no way to pay from the app.
-  it.each([
-    ["no capabilities at all", undefined],
-    ["App Store 1.1.7 (54): openAuth + rewardsTab, no openWeb", { openAuth: true, rewardsTab: true }],
-  ])("%s: the same button, and it never messages a shell that can't hear it", (_label, caps) => {
-    const postMessage = inApp(caps);
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const { container } = render(<UpgradeOnWebLink wrapClassName="mt-2">Start your plan</UpgradeOnWebLink>);
-    expect(container.querySelector("a")).toBeNull();
-    expect(container.textContent).not.toMatch(/\$|\/mo/);
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(NATIVE_BILLING_LABEL) }));
+    await waitFor(() => expect(go).toHaveBeenCalledTimes(1));
+    expect(go).toHaveBeenCalledWith("/pricing?start=plan&h=CODE.sig");
     expect(postMessage).not.toHaveBeenCalled();
   });
-});
 
-describe("billingRequest: how each build reaches Safari", () => {
-  const bridge = { postMessage: () => {} };
-
-  it("a build that can open a page itself gets the message", () => {
-    expect(billingRequest({ ReactNativeWebView: bridge, __cbNative: { openWeb: true } })).toEqual({
-      kind: "message",
-      data: JSON.stringify({ type: OPEN_WEB_MESSAGE, path: "/dashboard/billing#plans" }),
-    });
+  it("no code to be had: Safari still opens, and asks for a sign-in as before", async () => {
+    inApp({ openAuth: true });
+    handoff.code = null;
+    render(<UpgradeOnWebLink>Start your plan</UpgradeOnWebLink>);
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(NATIVE_BILLING_LABEL) }));
+    await waitFor(() => expect(go).toHaveBeenCalledWith("/pricing?start=plan"));
   });
 
-  it("🔴 an older build goes to /pricing - the one page it already sends to Safari - never billing itself", () => {
-    for (const w of [{ ReactNativeWebView: bridge, __cbNative: { openAuth: true } }, { ReactNativeWebView: bridge }, { ReactNativeWebView: {}, __cbNative: { openWeb: true } }]) {
-      const req = billingRequest(w);
-      expect(req).toEqual({ kind: "navigate", href: OLDER_BUILD_BILLING_PATH });
+  it("a double tap opens Safari once", async () => {
+    inApp({ openAuth: true });
+    render(<UpgradeOnWebLink>Start your plan</UpgradeOnWebLink>);
+    const button = screen.getByRole("button", { name: new RegExp(NATIVE_BILLING_LABEL) });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(go).toHaveBeenCalled());
+    expect(go).toHaveBeenCalledTimes(1);
+    expect(handoff.calls).toBe(1);
+  });
+});
+
+describe("billingSafariPath", () => {
+  it("🔴 is /pricing - the page every app build sends to Safari - never billing or login", () => {
+    for (const code of ["a.b", null]) {
+      const path = billingSafariPath(code);
+      // The shell's rule (AppWebView OPEN_EXTERNALLY_PATHS) matches the PATH
+      // alone; /dashboard would be an in-app purchase, /login signs the app out.
+      expect(path.replace(/[?#].*$/, "")).toBe("/pricing");
     }
-    const path = OLDER_BUILD_BILLING_PATH.replace(/[?#].*$/, "");
-    // The older shell's rule (AppWebView OPEN_EXTERNALLY_PATHS) matches the PATH
-    // alone; neither /dashboard (in-app purchase) nor /login (signs the app out).
-    expect(path).toBe("/pricing");
+  });
+
+  it("carries the code, encoded", () => {
+    expect(billingSafariPath("x+y/z.sig")).toBe("/pricing?start=plan&h=x%2By%2Fz.sig");
   });
 });
 
@@ -131,14 +126,8 @@ describe("IfNativeBillingLink: its line only where the app button shows", () => 
     expect(screen.queryByText("trial line")).toBeNull();
   });
 
-  it("in an older build too - its button reaches Safari through /pricing", () => {
+  it("in any app build", () => {
     inApp({ openAuth: true, rewardsTab: true });
-    render(<IfNativeBillingLink>trial line</IfNativeBillingLink>);
-    expect(screen.getByText("trial line")).toBeTruthy();
-  });
-
-  it("in a build that can open Safari", () => {
-    inApp({ openWeb: true });
     render(<IfNativeBillingLink>trial line</IfNativeBillingLink>);
     expect(screen.getByText("trial line")).toBeTruthy();
   });
@@ -149,11 +138,8 @@ describe("billingLinkMode", () => {
   it("decides from the bridge and the kill switch; every build gets the button", () => {
     expect(billingLinkMode({}, true)).toBe("web");
     expect(billingLinkMode({}, false)).toBe("web");
-    expect(billingLinkMode({ ReactNativeWebView: bridge, __cbNative: { openWeb: true } }, true)).toBe("native");
-    expect(billingLinkMode({ ReactNativeWebView: bridge, __cbNative: {} }, true)).toBe("native");
     expect(billingLinkMode({ ReactNativeWebView: bridge }, true)).toBe("native");
     // The kill switch still takes it out of every build.
-    expect(billingLinkMode({ ReactNativeWebView: bridge, __cbNative: { openWeb: true } }, false)).toBe("none");
     expect(billingLinkMode({ ReactNativeWebView: bridge }, false)).toBe("none");
   });
 });

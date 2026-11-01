@@ -49,8 +49,11 @@ export const ATTRIBUTION_COOKIE = "cb_attn";
 // are not signed in to.
 const GATED_PREFIXES = ["/dashboard", "/onboarding", "/admin", "/mcp"];
 
-/** `/pricing?start=plan` - lib/useNativeBillingLink.ts OLDER_BUILD_BILLING_PATH. */
+/** `/pricing?start=plan&h=<code>` - lib/useNativeBillingLink.ts billingSafariPath. */
 const START_PLAN_PRICING_PARAM = "start";
+const BILLING_HANDOFF_PARAM = "h";
+/** Where a billing handoff code is redeemed (app/auth/billing/landing). */
+export const BILLING_LANDING_PATH = "/auth/billing/landing";
 
 /** Internal routes a shop's domain is rewritten to - never addresses in their own right. */
 const INTERNAL_PREFIXES = [CUSTOM_DOMAIN_PREFIX, RESOLVER_PREFIX];
@@ -77,14 +80,23 @@ export function middleware(req: NextRequest) {
     return new NextResponse("Not found", { status: 404 });
   }
 
-  // The iOS app's way out to billing: an older build sends /pricing to Safari
+  // The iOS app's way out to billing: the app sends /pricing to Safari
   // (lib/useNativeBillingLink.ts), and HERE, in Safari, it becomes the plan
-  // cards. Signed out, the gate then asks for a sign-in and comes back.
+  // cards - through the signed-in landing when it carries a handoff code, and
+  // straight there otherwise (the gate then asks for a sign-in and comes back).
   if (pathname === "/pricing" && searchParams.get(START_PLAN_PRICING_PARAM) === "plan") {
     const url = req.nextUrl.clone();
-    url.pathname = "/dashboard/billing";
-    url.search = "";
-    url.hash = "plans";
+    const code = searchParams.get(BILLING_HANDOFF_PARAM);
+    url.hash = "";
+    if (code) {
+      url.pathname = BILLING_LANDING_PATH;
+      url.search = "";
+      url.searchParams.set("code", code);
+    } else {
+      url.pathname = "/dashboard/billing";
+      url.search = "";
+      url.hash = "plans";
+    }
     return NextResponse.redirect(url);
   }
 
