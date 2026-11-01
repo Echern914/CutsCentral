@@ -382,7 +382,7 @@ function FeatureLink({
         onClick={() => {
           rememberFeature(feature.id);
           onNavigate();
-          openBillingInBrowser();
+          void openBillingInBrowser();
         }}
         className={className}
       >

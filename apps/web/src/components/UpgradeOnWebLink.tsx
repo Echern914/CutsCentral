@@ -19,9 +19,9 @@ const NATIVE_BUTTON =
  *  - On the web: an ordinary link to the plan cards on the billing page, with
  *    whatever words and look the call site gives it.
  *  - In the iOS app, every build: "Manage plan on getchairback.com ↗", a
- *    button that gets billing open in SAFARI - by asking a newer build, or
- *    through the /pricing address an older build already sends there
- *    (lib/useNativeBillingLink.ts). It never loads billing in the WebView -
+ *    button that opens billing in SAFARI, already signed in, through the
+ *    /pricing address every build sends there (lib/useNativeBillingLink.ts).
+ *    It never loads billing in the WebView -
  *    buying happens in the browser, which is what Guideline 3.1.1 allows on
  *    the US storefront since the 2025 Epic v. Apple injunction. No amount is
  *    ever shown in the app.

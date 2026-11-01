@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
+import { ACTIVE_SHOP_COOKIE_NAME, SESSION_COOKIE_NAME } from "@chairback/config/constants";
 import { API_BASE, clientIpHeaders } from "@/lib/api";
 import { AUTH_COOKIE_OPTIONS, AUTH_NEXT_COOKIE, readAuthNext } from "@/lib/authNext";
 import { sessionCookieDomain } from "@/lib/sessionCookieDomain";
@@ -27,10 +27,17 @@ const SESSION_COOKIE_OPTIONS = {
 
 export async function completeOauthLanding(
   req: NextRequest,
-  options: { exchangePath: string; failureError: string },
+  options: {
+    exchangePath: string;
+    /** Where a failed exchange goes. Default: /login with `failureError`. */
+    failureError?: string;
+    failurePath?: string;
+    /** A fixed destination instead of the remembered one (the billing handoff). */
+    landing?: string;
+  },
 ): Promise<NextResponse> {
   const fail = NextResponse.redirect(
-    new URL(`/login?error=${options.failureError}`, req.url),
+    new URL(options.failurePath ?? `/login?error=${options.failureError ?? "failed"}`, req.url),
   );
 
   const code = req.nextUrl.searchParams.get("code");
@@ -46,7 +53,7 @@ export async function completeOauthLanding(
   });
   if (!res.ok) return fail;
 
-  const { token } = (await res.json()) as { token?: string };
+  const { token, shopId } = (await res.json()) as { token?: string; shopId?: string | null };
   if (!token) return fail;
 
   // Where they were going before the provider round trip. A brand-new account
@@ -54,7 +61,7 @@ export async function completeOauthLanding(
   // INVITED barber goes back to their invitation instead, which is the whole
   // reason this is read here rather than hardcoded.
   // No deep link: a shop still setting up resumes setup (/onboarding/resume).
-  const next = readAuthNext("/onboarding/resume");
+  const next = options.landing ?? readAuthNext("/onboarding/resume");
   const redirect = NextResponse.redirect(new URL(next, req.url));
   redirect.cookies.set(SESSION_COOKIE_NAME, token, SESSION_COOKIE_OPTIONS);
   // Domain-wide copy so browser navigations to api.<apex> (the Acuity OAuth
@@ -65,6 +72,13 @@ export async function completeOauthLanding(
       ...SESSION_COOKIE_OPTIONS,
       domain,
     });
+  }
+  // The shop the session was acting in (the billing handoff carries it, so a
+  // barber on a team lands in the shop the app was showing). Only a hint: the
+  // API re-checks it against ownership or a seat on every request.
+  if (typeof shopId === "string" && shopId) {
+    redirect.cookies.set(ACTIVE_SHOP_COOKIE_NAME, shopId, SESSION_COOKIE_OPTIONS);
+    if (domain) redirect.cookies.set(ACTIVE_SHOP_COOKIE_NAME, shopId, { ...SESSION_COOKIE_OPTIONS, domain });
   }
   // One trip only: the destination is spent now, and leaving it set would send
   // the NEXT sign-in on this browser somewhere the person didn't ask to go.

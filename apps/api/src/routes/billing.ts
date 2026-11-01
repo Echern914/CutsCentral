@@ -4,6 +4,9 @@ import { prisma } from "@chairback/db";
 import { BILLING, PLANS } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
+import { createWebHandoffCode } from "../auth/webHandoff.js";
+import { authLimiter } from "../middleware/rateLimit.js";
+import { BILLING_HANDOFF_PURPOSE } from "./authBillingHandoff.js";
 import {
   ACTIVE_STATUSES,
   billingEnabled,
@@ -292,6 +295,26 @@ billingRouter.post("/upgrade", async (req, res) => {
     return;
   }
   res.json({ ok: true });
+});
+
+/**
+ * The iOS app's "Manage plan on getchairback.com": a one-time code that opens
+ * billing in Safari ALREADY SIGNED IN, in the shop the app is showing
+ * (routes/authBillingHandoff.ts redeems it). Without it Safari asked them to
+ * sign in, and the website has no Apple sign-in - so a barber whose account is
+ * an Apple ID could not get to their plan at all (2026-11-01).
+ *
+ * Owners and managers only (this router's guard), the same people who can see
+ * billing. Signed, 60 seconds, single use (auth/webHandoff.ts).
+ */
+billingRouter.post("/handoff", authLimiter, (req, res) => {
+  const code = createWebHandoffCode(
+    req.userId!,
+    BILLING_HANDOFF_PURPOSE,
+    Math.floor(Date.now() / 1000),
+    req.shop!.id,
+  );
+  res.json({ code });
 });
 
 // Open the hosted Customer Portal (card, invoices, cancel) -> { url }.

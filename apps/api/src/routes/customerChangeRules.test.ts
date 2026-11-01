@@ -370,6 +370,11 @@ describe("manage link: a shop that takes no reschedules online", () => {
 
 describe("🔴 across the 2026-11-01 DST change (America/New_York), the cutoff is absolute hours", () => {
   it("24 hours before 10:00 EST Sunday is 11:00 EDT Saturday - exactly then is allowed, a second later is not", async () => {
+    // Pinned to a fixed PAST instant before anything is booked: on the real
+    // clock this went red the morning of 2026-11-01, once 10:00 EST had passed
+    // and the visit no longer had a cutoff to show.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-30T12:00:00.000Z"));
     const N = await makeShop("Eastern Cuts", "America/New_York");
     await setRules(N, { cancelCutoffHours: 24, rescheduleCutoffHours: 24 });
     // Sun 2026-11-01 10:00 EST = 15:00Z (clocks went back at 06:00Z).
@@ -383,7 +388,6 @@ describe("🔴 across the 2026-11-01 DST change (America/New_York), the cutoff i
     expect(page.body.cancel.closesAt).toBe("2026-10-31T15:00:00.000Z");
     expect(page.body.reschedule.closesAt).toBe("2026-10-31T15:00:00.000Z");
 
-    vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-31T15:00:00.000Z"));
     expect((await cancel(first.token)).status).toBe(200);
     vi.setSystemTime(new Date("2026-10-31T15:30:01.000Z"));
