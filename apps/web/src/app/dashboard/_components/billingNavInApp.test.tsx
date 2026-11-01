@@ -8,8 +8,9 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
  *    is there as "Plan & billing ↗", and choosing it asks the app to open
  *    billing in Safari - the WebView itself never moves (no <a>, no
  *    router.push), because buying inside the WebView is what 3.1.1 forbids;
- *  - an older build, or the kill switch off: exactly as before - the entry is
- *    not there at all.
+ *  - an older build: the same entry, which reaches Safari through /pricing
+ *    (lib/useNativeBillingLink.ts) instead of a message;
+ *  - the kill switch off: the entry is not there at all.
  *
  * No useIsNativeApp mock here on purpose: the real hooks read the same
  * window.ReactNativeWebView / __cbNative the app injects.
@@ -89,12 +90,29 @@ describe("the More sheet in an app build that can open Safari", () => {
   });
 });
 
+describe("the More sheet in an OLDER build (the one on phones today)", () => {
+  it("🔴 Plan & billing ↗ is there too, and never messages a shell that can't hear it", () => {
+    const postMessage = app(TODAYS_BUILD);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { onClose } = moreSheet();
+    const row = screen.getByRole("button", { name: /Plan & billing.*opens your browser/ });
+    expect(billingAnchors()).toHaveLength(0);
+    fireEvent.click(row);
+    // It navigates to /pricing, which that build hands to Safari.
+    expect(postMessage).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+});
+
 describe("the More sheet, unchanged", () => {
   it.each([
-    ["an older app build", () => app(TODAYS_BUILD)],
-    ["the kill switch off", () => {
+    ["the kill switch off (newer build)", () => {
       killSwitch.on = false;
       app(CAPABLE);
+    }],
+    ["the kill switch off (older build)", () => {
+      killSwitch.on = false;
+      app(TODAYS_BUILD);
     }],
   ])("%s: no Plan & billing at all, and no billing link", (_label, setup) => {
     setup();
@@ -138,12 +156,28 @@ describe("the palette in an app build that can open Safari", () => {
   });
 });
 
+describe("the palette in an OLDER build", () => {
+  it("offers Plan & billing ↗ and never router.pushes to it", () => {
+    const postMessage = app(TODAYS_BUILD);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    palette("billing");
+    const row = screen.getAllByRole("option").find((o) => within(o).queryByText(/Plan & billing/));
+    expect(row!.textContent).toContain("↗");
+    fireEvent.click(within(row!).getAllByRole("button")[0]!);
+    expect(postMessage).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+  });
+});
+
 describe("the palette, unchanged", () => {
   it.each([
-    ["an older app build", () => app(TODAYS_BUILD)],
-    ["the kill switch off", () => {
+    ["the kill switch off (newer build)", () => {
       killSwitch.on = false;
       app(CAPABLE);
+    }],
+    ["the kill switch off (older build)", () => {
+      killSwitch.on = false;
+      app(TODAYS_BUILD);
     }],
   ])("%s: billing is not offered", (_label, setup) => {
     setup();

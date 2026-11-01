@@ -8,7 +8,7 @@ import { NATIVE_BILLING_LABEL } from "@/components/UpgradeOnWebLink";
  * stay, a feature the plan lacks shows its plan name, and never a price.
  *  - a build that can open Safari: "Manage plan on getchairback.com ↗", a
  *    button, never a link the WebView could follow;
- *  - an older build: no upgrade and no billing link at all.
+ *  - an older build: the same button; it reaches Safari through /pricing.
  */
 vi.mock("next/link", () => ({
   default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,
@@ -45,14 +45,16 @@ describe("FeatureAdoptionCard in the native app", () => {
     expect(container.querySelector('a[href*="billing"]')).toBeNull();
   });
 
-  it("an older build: no Upgrade link and no billing link", () => {
-    w.ReactNativeWebView = { postMessage: vi.fn() };
+  it("an older build: the same Safari button (it goes through /pricing) - never a link or a price", () => {
+    const postMessage = vi.fn();
+    w.ReactNativeWebView = { postMessage };
     w.__cbNative = { openAuth: true, rewardsTab: true };
     const { container } = render(<FeatureAdoptionCard features={ROWS} />);
     expect(screen.getByText("60% of shops")).toBeTruthy();
-    expect(screen.getAllByText("Premium")).toHaveLength(2);
-    expect(container.textContent).not.toMatch(/Upgrade|Manage plan|\$/);
+    const waitlist = container.querySelector('[data-feature="waitlist"]') as HTMLElement;
+    expect(within(waitlist).getByRole("button", { name: new RegExp(NATIVE_BILLING_LABEL) })).toBeTruthy();
+    expect(container.textContent).not.toMatch(/Upgrade|\$/);
     expect(container.querySelector('a[href*="billing"]')).toBeNull();
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(postMessage).not.toHaveBeenCalled();
   });
 });

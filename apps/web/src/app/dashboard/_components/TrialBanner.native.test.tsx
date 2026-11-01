@@ -64,27 +64,35 @@ function trialing(daysLeft: number) {
   });
 }
 
-describe("the lapse banner in an OLDER app build (no openWeb)", () => {
+describe("the lapse banner in an OLDER app build (no openWeb - the build on phones today)", () => {
+  // A barber whose trial ended saw "bookings are switched off" and NO way to
+  // pay (2026-11-01). The button now reaches Safari through /pricing.
   it.each([
     ["trial_ended", /Your free trial has ended/],
     ["comp_ended", /Your complimentary ChairBack access has ended/],
     ["subscription_ended", /Your ChairBack plan has ended/],
-  ])("%s: the words, no price, no CTA, no link", async (lapse, words) => {
-    w.ReactNativeWebView = { postMessage: vi.fn() };
+  ])("🔴 %s: the words AND the button to billing in Safari - never a link or a price", async (lapse, words) => {
+    const postMessage = vi.fn();
+    w.ReactNativeWebView = { postMessage };
     w.__cbNative = { openAuth: true, rewardsTab: true };
     lapsed(lapse);
     const { container } = render(await TrialBanner({}));
     expect(screen.getByText(words)).toBeTruthy();
-    expect(container.querySelector("a, button")).toBeNull();
-    expect(container.textContent).not.toMatch(/\$|Start your plan|Billing|getchairback/);
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).not.toMatch(/\$|\/mo/);
+    expect(screen.getByRole("button", { name: /Manage plan on getchairback\.com/ })).toBeTruthy();
+    // The older shell can't hear the message; the button navigates instead.
+    expect(postMessage).not.toHaveBeenCalled();
   });
 
-  it("the trial countdown stays out (its web version quotes a price)", async () => {
+  it("a trialing shop sees its days left without the price, beside the same button", async () => {
     w.ReactNativeWebView = { postMessage: vi.fn() };
     w.__cbNative = { openAuth: true, rewardsTab: true };
     trialing(5);
     const { container } = render(await TrialBanner({}));
-    expect(container.textContent).toBe("");
+    expect(container.textContent).toMatch(/Free trial: 5 days left\./);
+    expect(container.textContent).not.toMatch(/\$|\/mo/);
+    expect(screen.getByRole("button", { name: /Manage plan on getchairback\.com/ })).toBeTruthy();
   });
 });
 

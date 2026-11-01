@@ -178,3 +178,25 @@ describe("the platform's own hosts, unchanged", () => {
     }
   });
 });
+
+describe("the iOS app's way out to billing: /pricing?start=plan", () => {
+  it("🔴 in Safari, becomes the plan cards on the billing page", () => {
+    const res = middleware(request("https://getchairback.com/pricing?start=plan", { cookie: "cb_session=x" }));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe("https://getchairback.com/dashboard/billing#plans");
+  });
+
+  it("signed out, the billing page then asks for a sign-in and comes back to it", () => {
+    const res = middleware(request("https://getchairback.com/dashboard/billing"));
+    const to = new URL(res.headers.get("location")!);
+    expect(to.pathname).toBe("/login");
+    expect(to.searchParams.get("next")).toBe("/dashboard/billing");
+  });
+
+  it("plain /pricing is still the pricing page", () => {
+    for (const url of ["https://getchairback.com/pricing", "https://getchairback.com/pricing?start=other"]) {
+      const res = middleware(request(url));
+      expect(res.headers.get("location"), url).toBeNull();
+    }
+  });
+});

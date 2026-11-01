@@ -18,14 +18,14 @@ const NATIVE_BUTTON =
  *
  *  - On the web: an ordinary link to the plan cards on the billing page, with
  *    whatever words and look the call site gives it.
- *  - In the iOS app (a build that can open Safari): "Manage plan on
- *    getchairback.com ↗", a button that asks the app to open billing in SAFARI.
- *    It never navigates the WebView itself - buying happens in the browser,
- *    which is what Guideline 3.1.1 allows on the US storefront since the 2025
- *    Epic v. Apple injunction. No amount is ever shown in the app.
- *  - In an older app build, or with NATIVE_EXTERNAL_BILLING_LINK off: nothing,
- *    which is what the app showed before (lib/useNativeBillingLink.ts says why
- *    an older build cannot be trusted with a plain link).
+ *  - In the iOS app, every build: "Manage plan on getchairback.com ↗", a
+ *    button that gets billing open in SAFARI - by asking a newer build, or
+ *    through the /pricing address an older build already sends there
+ *    (lib/useNativeBillingLink.ts). It never loads billing in the WebView -
+ *    buying happens in the browser, which is what Guideline 3.1.1 allows on
+ *    the US storefront since the 2025 Epic v. Apple injunction. No amount is
+ *    ever shown in the app.
+ *  - With NATIVE_EXTERNAL_BILLING_LINK off: nothing in the app.
  *
  * Before hydration the web link renders inside `data-native-hide`, which the
  * app hides from the very first paint, so the app never flashes it.
@@ -80,8 +80,8 @@ export function OpensBrowserMark() {
 }
 
 /**
- * Children only where the app button above will actually show - an app build
- * that can open Safari, with the kill switch on. For an in-app line that only
+ * Children only where the app button above will actually show - in the app,
+ * with the kill switch on. For an in-app line that only
  * makes sense next to that button (the trial countdown, which the app otherwise
  * leaves out because the web version quotes a price).
  */
