@@ -49,6 +49,9 @@ export const ATTRIBUTION_COOKIE = "cb_attn";
 // are not signed in to.
 const GATED_PREFIXES = ["/dashboard", "/onboarding", "/admin", "/mcp"];
 
+/** `/pricing?start=plan` - lib/useNativeBillingLink.ts OLDER_BUILD_BILLING_PATH. */
+const START_PLAN_PRICING_PARAM = "start";
+
 /** Internal routes a shop's domain is rewritten to - never addresses in their own right. */
 const INTERNAL_PREFIXES = [CUSTOM_DOMAIN_PREFIX, RESOLVER_PREFIX];
 
@@ -72,6 +75,17 @@ export function middleware(req: NextRequest) {
   // platform itself.
   if (INTERNAL_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     return new NextResponse("Not found", { status: 404 });
+  }
+
+  // The iOS app's way out to billing: an older build sends /pricing to Safari
+  // (lib/useNativeBillingLink.ts), and HERE, in Safari, it becomes the plan
+  // cards. Signed out, the gate then asks for a sign-in and comes back.
+  if (pathname === "/pricing" && searchParams.get(START_PLAN_PRICING_PARAM) === "plan") {
+    const url = req.nextUrl.clone();
+    url.pathname = "/dashboard/billing";
+    url.search = "";
+    url.hash = "plans";
+    return NextResponse.redirect(url);
   }
 
   const res = gateResponse(req, pathname);

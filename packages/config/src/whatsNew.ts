@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-01-manage-plan-from-the-app",
+    date: "2026-11-01",
+    kind: "fix",
+    title: "Get to your plan straight from the app",
+    body:
+      "When your trial or plan has ended, the notice at the top of the app now has a Manage plan on getchairback.com " +
+      "button. It opens your plan in Safari, where you can start it and turn your shop back on. The same button is in " +
+      "More → Plan & billing.",
+  },
+  {
     id: "2026-10-31-connect-own-stripe-in-app",
     date: "2026-10-31",
     kind: "fix",
