@@ -3,8 +3,6 @@ import {
   AFFILIATE_BRING_ON_REWARD_TYPES,
   AFFILIATE_POLICY,
   AFFILIATE_REWARD_STYLES,
-  AFFILIATE_REWARD_STYLE_LABELS,
-  AFFILIATE_REWARD_STYLE_NEUTRAL_LABELS,
   DEFAULT_AFFILIATE_REWARD_STYLE,
   affiliateCreditTotals,
   affiliateMonths,
@@ -43,20 +41,13 @@ describe("AFFILIATE_POLICY.dollarCredit", () => {
 });
 
 describe("reward styles", () => {
-  it("new affiliates default to dollar credit; month off is the alternative", () => {
-    expect(AFFILIATE_REWARD_STYLES).toEqual(["dollar_credit", "month_off"]);
+  it("🔴 every affiliate gets paid in dollars; a month off is no longer a style anyone can pick (2026-11-02)", () => {
+    expect(AFFILIATE_REWARD_STYLES).toEqual(["dollar_credit"]);
     expect(DEFAULT_AFFILIATE_REWARD_STYLE).toBe("dollar_credit");
-    expect(isAffiliateRewardStyle("month_off")).toBe(true);
+    expect(isAffiliateRewardStyle("dollar_credit")).toBe(true);
+    expect(isAffiliateRewardStyle("month_off")).toBe(false);
     expect(isAffiliateRewardStyle("cash")).toBe(false);
     expect(isAffiliateRewardStyle(undefined)).toBe(false);
-  });
-
-  it("the web label carries the amounts; the in-app label never shows a dollar figure", () => {
-    expect(AFFILIATE_REWARD_STYLE_LABELS.dollar_credit).toBe("Account credit ($10 + $5/month)");
-    expect(AFFILIATE_REWARD_STYLE_LABELS.month_off).toBe("A month off per business");
-    for (const style of AFFILIATE_REWARD_STYLES) {
-      expect(AFFILIATE_REWARD_STYLE_NEUTRAL_LABELS[style]).not.toMatch(/\$|\d/);
-    }
   });
 
   it("a business is brought on by exactly one reward type per style; monthly credit is not one", () => {

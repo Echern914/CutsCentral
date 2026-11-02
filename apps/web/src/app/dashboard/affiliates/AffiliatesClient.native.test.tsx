@@ -4,14 +4,15 @@ import { AFFILIATE_POLICY } from "@chairback/config/affiliateProgram";
 import type { AffiliateOverview, AffiliateStatus } from "./page";
 
 /**
- * The Affiliates tab as the iOS app renders it (App Store Guideline 3.1.1):
- * account credit is described in words, never in dollars, and the reward-style
- * chooser - whose labels carry the amounts - is replaced by a sentence.
+ * The Affiliates tab as the iOS app renders it. What an affiliate gets paid
+ * is not something anyone buys in the app, so the dollar amounts show there
+ * exactly as on the web (the owner, 2026-11-02, replacing the earlier
+ * web-only rule). The web-only wrappers are mocked to render nothing, so an
+ * amount that slips back inside one fails here.
  */
 vi.mock("./actions", () => ({
   applyAffiliateAction: vi.fn(async () => ({ ok: true })),
   setAffiliateStylesAction: vi.fn(async () => ({ ok: true })),
-  setAffiliateRewardStyleAction: vi.fn(async () => ({ ok: true })),
   getAffiliateQrAction: vi.fn(async () => ({ ok: false, error: "x" })),
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -27,15 +28,16 @@ const { AffiliatesClient } = await import("./AffiliatesClient");
 const APP = "https://getchairback.com";
 const SIGNUP = AFFILIATE_POLICY.dollarCredit.signupCents;
 const MONTHLY = AFFILIATE_POLICY.dollarCredit.monthlyCents;
+const usd = (cents: number) => `$${cents / 100}`;
 
 const active: AffiliateStatus = {
-  termsVersion: "v2",
+  termsVersion: "v3",
   applicationsOpen: true,
   application: null,
   account: { code: "abcDEF123456", status: "ACTIVE", createdAt: "2026-08-01T00:00:00.000Z" },
 };
 
-function creditOverview(rewardStyle: "dollar_credit" | "month_off"): AffiliateOverview {
+function creditOverview(): AffiliateOverview {
   const reward = {
     label: "Business ••••4410",
     qualifiedAt: "2026-09-06T00:00:00.000Z",
@@ -46,7 +48,7 @@ function creditOverview(rewardStyle: "dollar_credit" | "month_off"): AffiliateOv
     reversalMessage: null,
   };
   return {
-    termsVersion: "v2",
+    termsVersion: "v3",
     account: {
       code: "abcDEF123456",
       status: "ACTIVE",
@@ -54,17 +56,17 @@ function creditOverview(rewardStyle: "dollar_credit" | "month_off"): AffiliateOv
       promotionStyles: ["short_video", "text_dm"],
       stylesChosenAt: "2026-08-02T00:00:00.000Z",
       suspensionMessage: null,
-      rewardStyle,
+      rewardStyle: "dollar_credit",
       rewardStyleSetAt: null,
     },
-    months: { earned: 1, onTheWay: 0, underReview: 0, reversed: 0, expired: 0 },
+    months: { earned: 0, onTheWay: 0, underReview: 0, reversed: 0, expired: 0 },
     credit: {
       earnedCents: SIGNUP + MONTHLY,
       inHoldCents: MONTHLY,
       readyCents: 0,
       appliedCents: SIGNUP,
       underReviewCents: 0,
-      reversedCents: MONTHLY,
+      reversedCents: 0,
     },
     clicks: { last7Days: 1, last30Days: 2, allTime: 3 },
     referrals: [
@@ -86,7 +88,6 @@ function creditOverview(rewardStyle: "dollar_credit" | "month_off"): AffiliateOv
     rewards: [
       { ...reward, id: "c1", rewardType: "signup_credit", amountCents: SIGNUP, status: "APPLIED" },
       { ...reward, id: "c2", rewardType: "monthly_credit", amountCents: MONTHLY, status: "PENDING" },
-      { ...reward, id: "m1", rewardType: "subscription_credit", amountCents: 3499, status: "APPLIED" },
     ],
     policy: {
       attributionWindowDays: AFFILIATE_POLICY.attribution.windowDays,
@@ -99,8 +100,8 @@ function creditOverview(rewardStyle: "dollar_credit" | "month_off"): AffiliateOv
 }
 
 describe("the Affiliates tab inside the native app", () => {
-  it("sign-up: credit in words, no dollar figure, no purchase button", () => {
-    const { container } = render(
+  it("sign-up: says get paid, with the amounts, and no purchase button", () => {
+    render(
       <AffiliatesClient
         status={{ ...active, account: null }}
         overview={null}
@@ -108,44 +109,27 @@ describe("the Affiliates tab inside the native app", () => {
         shopName="Fade Lab"
       />,
     );
-    expect(screen.getByTestId("affiliate-intro").textContent).toMatch(
-      /earn credit on your own plan when it pays/,
+    expect(screen.getByTestId("affiliate-intro").textContent).toContain(
+      `Get paid through the ChairBack affiliate program: ${usd(SIGNUP)}`,
     );
-    expect(screen.getByTestId("pitch-earn").textContent).toMatch(/account credit is yours after/);
-    expect(container.textContent).not.toMatch(/\$/);
+    expect(screen.getByTestId("pitch-earn").textContent).toContain(
+      `You get paid: ${usd(SIGNUP)} when they pay their first month, then ${usd(MONTHLY)}`,
+    );
     expect(screen.queryByRole("button", { name: /subscribe|upgrade|buy/i })).toBeNull();
   });
 
-  it.each(["dollar_credit", "month_off"] as const)(
-    "%s dashboard: no dollar figure anywhere, no chooser, a neutral sentence instead",
-    (style) => {
-      const { container } = render(
-        <AffiliatesClient status={active} overview={creditOverview(style)} appBase={APP} shopName="Fade Lab" />,
-      );
-      expect(container.textContent).not.toMatch(/\$/);
-      // The chooser's buttons (labels with amounts) are web-only.
-      expect(screen.queryByRole("button", { name: /Account credit/ })).toBeNull();
-      expect(screen.queryByRole("button", { name: /A month off per business/ })).toBeNull();
-      expect(screen.getByTestId("reward-style-app").textContent).toMatch(
-        style === "dollar_credit" ? /^Account credit\. You can change this/ : /^A month off per business\./,
-      );
-      // Credit is a count of businesses, never an amount.
-      expect(screen.getByTestId("credit-totals-app").textContent).toMatch(
-        /1 business is earning you credit/,
-      );
-      expect(screen.queryByTestId("credit-totals")).toBeNull();
-    },
-  );
-
-  it("dollar credit: the promise and the rows say what kind of credit, not how much", () => {
-    render(
-      <AffiliatesClient status={active} overview={creditOverview("dollar_credit")} appBase={APP} shopName="Fade Lab" />,
+  it("dashboard: the promise, the totals and every row show their dollars in the app", () => {
+    const { container } = render(
+      <AffiliatesClient status={active} overview={creditOverview()} appBase={APP} shopName="Fade Lab" />,
     );
-    expect(screen.getByTestId("earn-terms").textContent).toMatch(
-      /^Credit when a business that signed up through your link pays its first month/,
+    expect(screen.getByTestId("earn-terms").textContent).toContain(
+      `${usd(SIGNUP)} when a business that signed up through your link pays its first month`,
     );
-    expect(screen.getByText(/Account credit · Business/)).toBeTruthy();
-    expect(screen.getByText(/Monthly credit · Business/)).toBeTruthy();
-    expect(screen.getByTestId("how-it-works").textContent).toMatch(/earns you credit when it pays/);
+    expect(screen.getByTestId("credit-totals")).toBeTruthy();
+    expect(screen.getByText("earned so far").previousSibling?.textContent).toBe(usd(SIGNUP + MONTHLY));
+    expect(screen.getByText(`${usd(SIGNUP)} · Business ••••4410`)).toBeTruthy();
+    expect(screen.getByText(`${usd(MONTHLY)} · Business ••••4410`)).toBeTruthy();
+    expect(screen.getByTestId("how-it-works").textContent).toContain(`You get ${usd(SIGNUP)}`);
+    expect(container.textContent).not.toMatch(/month off|months off/i);
   });
 });

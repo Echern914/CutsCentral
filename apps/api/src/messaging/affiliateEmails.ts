@@ -8,12 +8,12 @@ import type { AffiliateEmailKind } from "../services/affiliateNotify.js";
  * start before opening the app.
  *
  * Two kinds of reward, two sets of words, chosen by the reward's own type
- * (never the affiliate's current style - a reward keeps the style it was
- * earned under):
- *  - a MONTH OFF (subscription_credit): months, never dollars, as in v1;
- *  - ACCOUNT CREDIT (signup_credit / monthly_credit): dollar amounts are fine
- *    here - email is not the iOS app, which never shows them (Guideline
- *    3.1.1) - and always "credit on your ChairBack bill", never cash.
+ * (a reward keeps the words it was earned under):
+ *  - DOLLARS (signup_credit / monthly_credit), what every affiliate earns
+ *    since 2026-11-02: "you get paid", in dollars, paid for now as credit on
+ *    their ChairBack bill (cash payouts are the planned next step);
+ *  - a MONTH OFF (subscription_credit), earned before then: months, never
+ *    dollars, as in v1.
  *
  * A REFERRED business is only ever named by its masked label; this module
  * never receives anything else about it.
@@ -32,8 +32,6 @@ export interface AffiliateEmailContext {
   /** The reward row's type. Absent = a month off (every v1 reward). */
   rewardType?: string;
   amountCents?: number;
-  /** The affiliate's reward style (approval email only). */
-  rewardStyle?: string;
   holdDays: number;
 }
 
@@ -78,8 +76,10 @@ function shell(params: { heading: string; lines: string[]; cta: { label: string;
 }
 
 /** The credit-only small print every dollar-credit email carries. */
+// No "never cash": paying affiliates out in cash is the planned next step
+// (the owner, 2026-11-02). Today it is credit, and the footer says so.
 const CREDIT_FOOTER =
-  "Affiliate rewards are ChairBack account credit only: never cash, no cash value, not transferable. Credit is taken back if the payment behind it is refunded or disputed.";
+  "For now, the ChairBack affiliate program pays you as credit on your own ChairBack bill. It isn't transferable, and it's taken back if the payment behind it is refunded or disputed.";
 
 function isDollar(rewardType: string | undefined): boolean {
   return rewardType === "signup_credit" || rewardType === "monthly_credit";
@@ -104,25 +104,21 @@ export function buildAffiliateEmail(kind: AffiliateEmailKind, ctx: AffiliateEmai
 
   switch (kind) {
     case "affiliate_approved": {
-      const howYouEarn =
-        ctx.rewardStyle === "month_off"
-          ? "Every business that signs up through your link and pays for two months earns you a month off your plan."
-          : `Every business that signs up through your link earns you ${signup} in ChairBack account credit when it pays its first month, then ${monthly} for every month it keeps paying. Credit comes off your own ChairBack bill.`;
       const lines = [
         `${ctx.shopName}, you're in. Your affiliate link is ready:`,
         link ?? dashboard,
         "Next, open your Affiliates tab, choose how you'll get the word out, and pick up ready-made copy for each style.",
-        howYouEarn,
+        `You get paid through the ChairBack affiliate program: ${signup} when a business that signs up through your link pays its first month, then ${monthly} for every month it keeps paying.`,
         disclosure,
       ];
       return {
         subject: "You're in: your ChairBack affiliate link is ready",
-        text: (ctx.rewardStyle === "month_off" ? lines : [...lines, CREDIT_FOOTER]).join("\n\n"),
+        text: [...lines, CREDIT_FOOTER].join("\n\n"),
         html: shell({
           heading: "You're in",
           lines,
           cta: { label: "Open my Affiliates tab", url: dashboard },
-          footer: ctx.rewardStyle === "month_off" ? undefined : CREDIT_FOOTER,
+          footer: CREDIT_FOOTER,
         }),
       };
     }
@@ -147,10 +143,10 @@ export function buildAffiliateEmail(kind: AffiliateEmailKind, ctx: AffiliateEmai
         const amount = creditAmount(ctx);
         const lines = [
           `${ctx.label ?? "A business you brought on"} has paid for ChairBack.`,
-          `You've earned ${amount} in account credit. It's in the ${ctx.holdDays}-day hold and will be ready around ${fmtDate(ctx.holdEndsAt)}.`,
+          `You've earned ${amount}. It's in the ${ctx.holdDays}-day hold and will be ready around ${fmtDate(ctx.holdEndsAt)}.`,
           `Every month it keeps paying adds ${monthly} more.`,
         ];
-        const heading = `${amount} in credit is on the way`;
+        const heading = `${amount} is on the way`;
         return {
           subject: heading,
           text: [...lines, CREDIT_FOOTER].join("\n\n"),
@@ -172,10 +168,10 @@ export function buildAffiliateEmail(kind: AffiliateEmailKind, ctx: AffiliateEmai
       if (isDollar(ctx.rewardType)) {
         const amount = creditAmount(ctx);
         const lines = [
-          `The ${amount} in account credit from ${ctx.label ?? "a business you brought on"} is ready.`,
+          `The ${amount} from ${ctx.label ?? "a business you brought on"} is ready.`,
           "It comes off your next ChairBack bill automatically - nothing to do. If you're not on a paid plan right now, it waits for you; it doesn't expire.",
         ];
-        const heading = "Your account credit is ready";
+        const heading = `Your ${amount} is ready`;
         return {
           subject: heading,
           text: [...lines, CREDIT_FOOTER].join("\n\n"),
@@ -198,11 +194,11 @@ export function buildAffiliateEmail(kind: AffiliateEmailKind, ctx: AffiliateEmai
       if (isDollar(ctx.rewardType)) {
         const amount = creditAmount(ctx);
         const lines = [
-          `About the ${amount} in account credit from ${ctx.label ?? "a business you brought on"}:`,
+          `About the ${amount} from ${ctx.label ?? "a business you brought on"}:`,
           ctx.reversalMessage ?? "Adjusted after a review.",
           "Your history is kept, and your link keeps working.",
         ];
-        const heading = "Some account credit was taken back";
+        const heading = `${amount} was taken back`;
         return {
           subject: heading,
           text: lines.join("\n\n"),

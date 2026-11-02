@@ -390,20 +390,22 @@ describe("PUT /api/affiliate/reward-style + the credit totals", () => {
     });
   });
 
-  it("refuses anything but the two styles", async () => {
+  it("🔴 refuses a month off (retired 2026-11-02), and anything else but dollar credit", async () => {
     programOn();
+    expect((await putRewardStyle(B.cookie, { style: "month_off" })).status).toBe(400);
     expect((await putRewardStyle(B.cookie, { style: "cash" })).status).toBe(400);
     expect((await putRewardStyle(B.cookie, {})).status).toBe(400);
-    expect((await putRewardStyle(B.cookie, { style: "month_off", extra: 1 })).status).toBe(400);
+    expect((await putRewardStyle(B.cookie, { style: "dollar_credit", extra: 1 })).status).toBe(400);
+    expect((await overview(B.cookie)).body.account.rewardStyle).toBe("dollar_credit");
   });
 
-  it("stores the choice, stamps when, and audits it as the applicant with the style code", async () => {
+  it("stores the style, stamps when, and audits it as the applicant with the style code", async () => {
     programOn();
-    const res = await putRewardStyle(B.cookie, { style: "month_off" });
+    const res = await putRewardStyle(B.cookie, { style: "dollar_credit" });
     expect(res.status).toBe(200);
-    expect(res.body.account.rewardStyle).toBe("month_off");
+    expect(res.body.account.rewardStyle).toBe("dollar_credit");
     expect(typeof res.body.account.rewardStyleSetAt).toBe("string");
-    expect((await overview(B.cookie)).body.account.rewardStyle).toBe("month_off");
+    expect((await overview(B.cookie)).body.account.rewardStyle).toBe("dollar_credit");
 
     const events = await runAsOwner((tx) =>
       tx.affiliateAuditEvent.findMany({
@@ -413,16 +415,13 @@ describe("PUT /api/affiliate/reward-style + the credit totals", () => {
     );
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ actorType: "applicant", actorUserId: B.userId });
-    expect(events[0]!.metadata).toEqual({ source: "dashboard", rewardStyle: "month_off" });
-
-    const back = await putRewardStyle(B.cookie, { style: "dollar_credit" });
-    expect(back.body.account.rewardStyle).toBe("dollar_credit");
+    expect(events[0]!.metadata).toEqual({ source: "dashboard", rewardStyle: "dollar_credit" });
   });
 
   it("is not_active without an account", async () => {
     programOn();
     const C = await newShop("AffE");
-    const none = await putRewardStyle(C.cookie, { style: "month_off" });
+    const none = await putRewardStyle(C.cookie, { style: "dollar_credit" });
     expect(none.status).toBe(409);
     expect(none.body.error).toBe("not_active");
   });

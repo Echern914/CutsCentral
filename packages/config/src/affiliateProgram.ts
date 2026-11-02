@@ -19,8 +19,11 @@
 /** The affiliate terms document version an applicant accepts. Never edit the
  *  terms text in place - add a version, exactly like the SMS consent rule.
  *  v2 (2026-10-30): dollar account credit ($10 + $5 a month) as the default
- *  reward, a month off per business as the alternative, credit only. */
-export const AFFILIATE_TERMS_VERSION = "v2";
+ *  reward, a month off per business as the alternative, credit only.
+ *  v3 (2026-11-02): $10 + $5 a month is THE reward - the month-off choice is
+ *  gone. Months off earned before v3 are still honoured. The v2 text stays
+ *  readable at /affiliate-terms/v2. */
+export const AFFILIATE_TERMS_VERSION = "v3";
 
 /** Bump when any business rule below changes.
  *  v2 (2026-10): the commission program - a percentage of every base-plan
@@ -30,8 +33,11 @@ export const AFFILIATE_TERMS_VERSION = "v2";
  *  v3 (2026-10-30, owner decision): ACCOUNT CREDIT IN DOLLARS, never cash -
  *  `dollarCredit` below. The affiliate picks a reward style; a month off per
  *  business (the v1 program) stays as the alternative. Accounts keep the
- *  version they were approved under; rewards already earned keep their style. */
-export const AFFILIATE_POLICY_VERSION = 3;
+ *  version they were approved under; rewards already earned keep their style.
+ *  v4 (2026-11-02, owner decision): "Stop saying they get a month off. They
+ *  get paid." Dollar credit is the ONLY reward style; every month-off account
+ *  moved to it (migration 088). Cash payouts are the planned next step. */
+export const AFFILIATE_POLICY_VERSION = 4;
 
 export const AFFILIATE_POLICY = {
   version: AFFILIATE_POLICY_VERSION,
@@ -139,16 +145,18 @@ export const AFFILIATE_POLICY = {
 export type AffiliatePolicy = typeof AFFILIATE_POLICY;
 
 /**
- * How an affiliate is rewarded - ONE choice per affiliate account, changeable
- * at any time, and read when each reward is EARNED: changing it only affects
- * rewards earned afterwards. Mirrors AffiliateAccount_rewardStyle_check.
+ * How an affiliate is rewarded, read when each reward is EARNED. Mirrors
+ * AffiliateAccount_rewardStyle_check.
  *
- *  - `dollar_credit` (the default for new affiliates): $10 account credit per
- *    business on its first paid invoice, then $5 for every later paid month.
- *  - `month_off`: the v1 program - one month of the affiliate's own plan per
- *    business that has paid twice.
+ *  - `dollar_credit`: $10 per business on its first paid invoice, then $5 for
+ *    every later paid month.
+ *
+ * 🔴 ONE STYLE SINCE v4. `month_off` (the v1 program: a month of the
+ * affiliate's own plan per business that paid twice) was retired on
+ * 2026-11-02 and the database now refuses it. A month off already EARNED is an
+ * AffiliateReward of type `subscription_credit` and is still honoured.
  */
-export const AFFILIATE_REWARD_STYLES = ["dollar_credit", "month_off"] as const;
+export const AFFILIATE_REWARD_STYLES = ["dollar_credit"] as const;
 export type AffiliateRewardStyle = (typeof AFFILIATE_REWARD_STYLES)[number];
 export const DEFAULT_AFFILIATE_REWARD_STYLE: AffiliateRewardStyle = "dollar_credit";
 
@@ -194,22 +202,6 @@ export function formatCreditUsd(cents: number): string {
   const whole = dollars.toLocaleString("en-US");
   return rest === 0 ? `$${whole}` : `$${whole}.${String(rest).padStart(2, "0")}`;
 }
-
-/**
- * The style's name WITH its dollar amounts. 🔴 Web only: these carry prices,
- * which the iOS app shell must never show (App Store Guideline 3.1.1). Inside
- * the app use AFFILIATE_REWARD_STYLE_NEUTRAL_LABELS.
- */
-export const AFFILIATE_REWARD_STYLE_LABELS: Record<AffiliateRewardStyle, string> = {
-  dollar_credit: `Account credit (${formatCreditUsd(AFFILIATE_POLICY.dollarCredit.signupCents)} + ${formatCreditUsd(AFFILIATE_POLICY.dollarCredit.monthlyCents)}/month)`,
-  month_off: "A month off per business",
-};
-
-/** The same styles with no amounts - safe inside the app. */
-export const AFFILIATE_REWARD_STYLE_NEUTRAL_LABELS: Record<AffiliateRewardStyle, string> = {
-  dollar_credit: "Account credit",
-  month_off: "A month off per business",
-};
 
 /** Dollar credit in each state, in cents. Counted from the reward ledger. */
 export interface AffiliateCreditTotals {

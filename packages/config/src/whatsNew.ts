@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-02-affiliates-get-paid",
+    date: "2026-11-02",
+    kind: "feature",
+    title: "Affiliates: get paid $10 + $5 a month",
+    body:
+      "Get paid through the ChairBack affiliate program: $10 when a business you bring on pays its first month, " +
+      "then $5 for every month it keeps paying. Every affiliate earns this now, and the amounts show in the app " +
+      "too. For now it's paid as credit on your own ChairBack bill.",
+  },
+  {
     id: "2026-11-01-manage-plan-signed-in",
     date: "2026-11-01",
     kind: "fix",

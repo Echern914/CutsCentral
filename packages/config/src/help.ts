@@ -782,16 +782,15 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open referrals", featureId: "referrals" },
   },
   {
-    // The AFFILIATE program (affiliateProgram.ts): rewards are ChairBack
-    // account credit, never cash. Amounts are read from AFFILIATE_POLICY, and
-    // the entry hides in the app because it quotes them (Guideline 3.1.1).
+    // The AFFILIATE program (affiliateProgram.ts). Amounts are read from
+    // AFFILIATE_POLICY. Shown in the app too: since 2026-11-02 the owner shows
+    // affiliate earnings everywhere (they are not a purchase).
     // Multi-word keywords only: "credit" alone belongs to billing questions.
     id: "affiliate-credit",
     q: "What do I earn as a ChairBack affiliate?",
-    a: `Account credit on your own ChairBack bill: ${affiliateSignup} when a business you brought on pays its first month, then ${affiliateMonthly} for every month it keeps paying. Each credit waits out a ${AFFILIATE_POLICY.qualification.holdDaysAfterSecond}-day hold, and a refunded or disputed payment takes its credit back.\n\nIt's credit only, never cash, and it doesn't expire. If you'd rather have a month off your plan per business, you can switch on your Affiliates page; the switch only changes what you earn from then on.`,
+    a: `You get paid through the ChairBack affiliate program: ${affiliateSignup} when a business you brought on pays its first month, then ${affiliateMonthly} for every month it keeps paying. No cap on businesses.\n\nFor now it's paid as credit on your own ChairBack bill. Each payment waits out a ${AFFILIATE_POLICY.qualification.holdDaysAfterSecond}-day hold, then comes off what you owe. It doesn't expire, and a refunded or disputed payment takes its credit back.`,
     keywords: ["affiliate program", "affiliate credit", "affiliate reward", "affiliate rewards", "bring a business", "account credit affiliate"],
     category: "account",
-    hidesInApp: true,
     action: { label: "Open affiliates", featureId: "affiliates" },
   },
   {

@@ -562,7 +562,9 @@ describe("dollar credit: the hold and no expiry", () => {
   });
 });
 
-describe("reward style: one choice, forward only", () => {
+// Nobody can choose a month off any more, but the engine still honours an
+// account that is on it, so its path stays pinned here.
+describe("reward style: the retired month off, and the move to dollars", () => {
   it("the month-off style keeps v1 exactly: nothing on the first invoice, one month off on the second, nothing after", async () => {
     const a = await affiliate("monthoff", { style: "month_off" });
     const b = await bringOn(a, "monthoff");
@@ -575,46 +577,45 @@ describe("reward style: one choice, forward only", () => {
     expect(rows[0]).toMatchObject({ rewardType: "subscription_credit", stripeInvoiceId: null });
   });
 
-  it("🔴 switching style changes only what is earned AFTERWARDS; earned rewards keep their style", async () => {
-    const a = await affiliate("switch");
-    const first = await bringOn(a, "switch1");
-    const jan = await pays(first, T0);
-    expect((await rewardForInvoice(jan))!.rewardType).toBe("signup_credit");
+  it("🔴 moving a month-off affiliate to dollars (2026-11-02) changes only what is earned AFTERWARDS", async () => {
+    const a = await affiliate("moved", { style: "month_off" });
+    // One business already earned its month off; another is halfway there.
+    const done = await bringOn(a, "moved1");
+    await pays(done, T0);
+    await pays(done, T0 + 30 * DAY);
+    const halfway = await bringOn(a, "moved2");
+    await pays(halfway, T0 + 30 * DAY);
+    expect((await rewardsOf(done.referredShopId)).map((r) => r.rewardType)).toEqual([
+      "subscription_credit",
+    ]);
+    expect(await rewardsOf(halfway.referredShopId)).toHaveLength(0);
 
-    const switched = await setAffiliateRewardStyle({
+    // The same write the migration makes for every month-off account.
+    const moved = await setAffiliateRewardStyle({
       shopId: a.affiliateShopId,
       userId: a.ownerUserId,
-      style: "month_off",
+      style: "dollar_credit",
     });
-    expect(switched.ok).toBe(true);
+    expect(moved.ok).toBe(true);
 
-    // The credit already earned is untouched.
-    expect(await rewardForInvoice(jan)).toMatchObject({
+    // The month off already earned is untouched, and its business now earns
+    // the monthly amount - not a second bring-on reward on top of the month.
+    const doneNext = await pays(done, T0 + 60 * DAY);
+    expect(await rewardForInvoice(doneNext)).toMatchObject({
+      rewardType: "monthly_credit",
+      amountCents: MONTHLY,
+    });
+    expect((await rewardsOf(done.referredShopId)).map((r) => r.rewardType).sort()).toEqual([
+      "monthly_credit",
+      "subscription_credit",
+    ]);
+    // The business halfway down the old road earns the sign-up amount on its
+    // next payment: nothing it paid before is lost.
+    const halfwayNext = await pays(halfway, T0 + 60 * DAY);
+    expect(await rewardForInvoice(halfwayNext)).toMatchObject({
       rewardType: "signup_credit",
       amountCents: SIGNUP,
-      status: "PENDING",
     });
-    // The business already brought on earns no month off on top, and no more
-    // monthly credit now the style is month off.
-    await pays(first, T0 + 30 * DAY);
-    expect((await rewardsOf(first.referredShopId)).map((r) => r.rewardType)).toEqual([
-      "signup_credit",
-    ]);
-    // A business brought on after the switch earns a month off.
-    const second = await bringOn(a, "switch2");
-    await pays(second, T0 + 30 * DAY);
-    await pays(second, T0 + 60 * DAY);
-    expect((await rewardsOf(second.referredShopId)).map((r) => r.rewardType)).toEqual([
-      "subscription_credit",
-    ]);
-
-    // And back again: future invoices earn dollar credit once more.
-    await setAffiliateRewardStyle({ shopId: a.affiliateShopId, userId: a.ownerUserId, style: "dollar_credit" });
-    const mar = await pays(first, T0 + 60 * DAY);
-    expect(await rewardForInvoice(mar)).toMatchObject({ rewardType: "monthly_credit", amountCents: MONTHLY });
-    expect((await rewardsOf(second.referredShopId)).map((r) => r.rewardType)).toEqual([
-      "subscription_credit",
-    ]);
   });
 });
 
