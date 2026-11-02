@@ -124,9 +124,10 @@ affiliateDashboardRouter.put("/styles", async (req, res) => {
   res.json({ account: result.account });
 });
 
-/** Choose how FUTURE rewards are paid: dollar account credit or a month off.
- *  Forward only - every reward already earned keeps the style it was earned
- *  under. ACTIVE accounts only, same as /styles. */
+/** The reward style. Since policy v4 (2026-11-02) the only style is dollar
+ *  credit, so a month off - or anything else - is a 400; the web no longer
+ *  calls this, and it stays so a stale client gets a clear refusal. ACTIVE
+ *  accounts only, same as /styles. */
 const rewardStyleSchema = z.object({ style: z.enum(AFFILIATE_REWARD_STYLES) }).strict();
 
 affiliateDashboardRouter.put("/reward-style", async (req, res) => {

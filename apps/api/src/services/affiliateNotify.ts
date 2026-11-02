@@ -140,8 +140,6 @@ interface Resolved {
   /** The reward row's type: which copy an email about it uses. */
   rewardType?: string;
   amountCents?: number;
-  /** The affiliate's current reward style (the approval email). */
-  rewardStyle?: string;
 }
 
 /**
@@ -186,10 +184,10 @@ export async function deliverAffiliateIntent(params: {
         if (app.status !== "APPROVED") return null;
         const account = await tx.affiliateAccount.findUnique({
           where: { applicationId: parsed.id },
-          select: { code: true, rewardStyle: true },
+          select: { code: true },
         });
         if (!account) return null;
-        return { ...base, code: account.code, rewardStyle: account.rewardStyle };
+        return { ...base, code: account.code };
       }
       if (app.status !== "REJECTED") return null;
       const reason = (app.decisionReason ?? "other") as AffiliateDecisionReason;
@@ -289,7 +287,6 @@ export async function deliverAffiliateIntent(params: {
     reversalMessage: resolved.reversalMessage,
     rewardType: resolved.rewardType,
     amountCents: resolved.amountCents,
-    rewardStyle: resolved.rewardStyle,
     holdDays: AFFILIATE_POLICY.qualification.holdDaysAfterSecond,
   });
 

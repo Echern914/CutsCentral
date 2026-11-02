@@ -108,7 +108,8 @@ const EXPECTED_2: [string, string][] = [
   // was one letter short of "Affiliates". Equality is on tokens now.
   ["affiliate", "Affiliates"],
   ["afiliate", "Affiliates"], // typo, on purpose
-  ["months off", "Affiliates"],
+  ["get paid", "Affiliates"],
+  ["affiliate program", "Affiliates"],
   ["refer", "Refer a barber"],
   ["referral link", "Refer a barber"],
   // The verb wrapper is dropped when a noun remains: "change tier" used to

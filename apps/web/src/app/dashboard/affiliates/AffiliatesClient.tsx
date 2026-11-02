@@ -10,59 +10,35 @@ import {
   AFFILIATE_PROMOTION_CHANNELS,
   AFFILIATE_PROMOTION_STYLES,
   AFFILIATE_PROMOTION_STYLE_LABELS,
-  AFFILIATE_REWARD_STYLES,
-  AFFILIATE_REWARD_STYLE_LABELS,
-  AFFILIATE_REWARD_STYLE_NEUTRAL_LABELS,
-  DEFAULT_AFFILIATE_REWARD_STYLE,
   formatCreditUsd,
   isDollarRewardType,
   type AffiliatePromotionStyle,
-  type AffiliateRewardStyle,
 } from "@chairback/config/affiliateProgram";
-import { HideInNativeApp } from "@/components/HideInNativeApp";
-import { ShowInNativeApp } from "@/components/ShowInNativeApp";
 import { Card } from "@/components/ui/Card";
 import { cap, useVocab } from "@/components/VocabProvider";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
-import {
-  applyAffiliateAction,
-  getAffiliateQrAction,
-  setAffiliateRewardStyleAction,
-  setAffiliateStylesAction,
-} from "./actions";
+import { applyAffiliateAction, getAffiliateQrAction, setAffiliateStylesAction } from "./actions";
 import type { AffiliateOverview, AffiliateStatus, ReferralStage } from "./page";
 
 /**
  * The Affiliates tab: sign up -> waiting -> choose styles -> dashboard.
  *
- * TWO REWARD STYLES (the owner's 2026-10-30 decision). New affiliates earn
- * ACCOUNT CREDIT - a set amount when a business they brought on pays its
- * first month, and a smaller amount for every month after - and can choose
- * A MONTH OFF per business instead. Either way it is credit on their own
- * ChairBack bill, never cash.
+ * ONE REWARD, IN DOLLARS (the owner, 2026-11-02: "Stop saying they get a month
+ * off. They get paid."). An affiliate gets paid a set amount when a business
+ * they brought on pays its first month, and a smaller amount for every month
+ * it keeps paying. For now it is paid as credit on their own ChairBack bill;
+ * cash payouts are the planned next step, so nothing here says "never cash".
+ * The month-off style is retired. A month off already EARNED under it still
+ * shows, as history, wherever one exists.
  *
- * 🔴 DOLLAR FIGURES ARE WEB-ONLY (App Store Guideline 3.1.1, which rejected a
- * build over in-app pricing UI). Every amount on this tab renders inside
- * HideInNativeApp - hidden from the WebView's first paint, unmounted once the
- * app is confirmed - and the app gets a neutral sentence via ShowInNativeApp
- * instead. The reward-style chooser (whose labels carry amounts) is web-only
- * too. Month-off copy never had a dollar figure and still doesn't. Tests
- * render this tab as the app does and assert no "$" survives.
+ * The amounts show in the iOS app as well as on the web: what an affiliate
+ * earns is not something anyone buys in the app (the owner's call, replacing
+ * the earlier web-only rule).
  *
  * WHO THEY BROUGHT ON is masked by the API ("Business ••••1027"); this file
  * never sees a referred business's name and has nothing to leak.
  */
-
-/** The web gets `web`; the native app gets `app` (see the 3.1.1 note above). */
-function WebOrApp({ web, app }: { web: React.ReactNode; app: React.ReactNode }) {
-  return (
-    <>
-      <HideInNativeApp>{web}</HideInNativeApp>
-      <ShowInNativeApp>{app}</ShowInNativeApp>
-    </>
-  );
-}
 
 const usd = formatCreditUsd;
 const SIGNUP_USD = usd(AFFILIATE_POLICY.dollarCredit.signupCents);
@@ -97,44 +73,23 @@ const CHANNEL_LABELS: Record<(typeof AFFILIATE_PROMOTION_CHANNELS)[number], stri
   other: "Other",
 };
 
+/** A business earning dollars: it pays you on its first payment, so the road
+ *  is signed up, paid, hold, paid to you. (`month_off` is the API's name for
+ *  "past the hold, ready" - a stage, not the retired reward style.) */
 const STAGE_COPY: Record<ReferralStage, string> = {
   signed_up: "Signed up",
-  first_payment: "1 of 2 payments",
-  second_payment: "2 of 2 payments",
+  first_payment: "Paid",
+  second_payment: "Paid",
   hold: "In the hold",
-  month_off: "Month off ready",
-  applied: "Applied to your bill",
+  month_off: "Ready",
+  applied: "Paid to your bill",
   reversed: "Taken back",
   expired: "Expired",
   under_review: "Under review",
 };
 
-/** Index on the five-step road; null = a terminal badge instead. */
+/** Index on the four-step road; null = a terminal badge instead. */
 const STAGE_STEP: Record<ReferralStage, number | null> = {
-  signed_up: 0,
-  first_payment: 1,
-  second_payment: 2,
-  hold: 3,
-  month_off: 4,
-  applied: 4,
-  reversed: null,
-  expired: null,
-  under_review: null,
-};
-
-const STEPS = ["Signed up", "1st payment", "2nd payment", "Hold", "Month off"];
-
-/** A business earning ACCOUNT CREDIT: its credit is earned on the first
- *  payment, so there is no "2 of 2" road - signed up, paid, hold, credit. */
-const CREDIT_STAGE_COPY: Record<ReferralStage, string> = {
-  ...STAGE_COPY,
-  first_payment: "Paid",
-  second_payment: "Paid",
-  month_off: "Credit ready",
-  applied: "Credit applied",
-};
-
-const CREDIT_STAGE_STEP: Record<ReferralStage, number | null> = {
   signed_up: 0,
   first_payment: 1,
   second_payment: 1,
@@ -146,17 +101,30 @@ const CREDIT_STAGE_STEP: Record<ReferralStage, number | null> = {
   under_review: null,
 };
 
-const CREDIT_STEPS = ["Signed up", "Paid", "Hold", "Credit"];
+const STEPS = ["Signed up", "Paid", "Hold", "Paid to you"];
 
-/** Which words a referral row speaks: its bring-on reward's own type once it
- *  has one (a reward keeps the style it was earned under), else the account's
- *  current style. */
-function referralEarnsCredit(
-  r: { rewardType?: string | null },
-  style: AffiliateRewardStyle,
-): boolean {
-  if (r.rewardType) return isDollarRewardType(r.rewardType);
-  return style === "dollar_credit";
+/** A business whose bring-on reward was a month off, earned before the style
+ *  was retired: it keeps the words it was earned under. */
+const EARNED_MONTH_STAGE_COPY: Record<ReferralStage, string> = {
+  ...STAGE_COPY,
+  first_payment: "1 of 2 payments",
+  second_payment: "2 of 2 payments",
+  month_off: "Month off ready",
+  applied: "Applied to your bill",
+};
+
+const EARNED_MONTH_STAGE_STEP: Record<ReferralStage, number | null> = {
+  ...STAGE_STEP,
+  second_payment: 2,
+  hold: 3,
+  month_off: 4,
+  applied: 4,
+};
+
+const EARNED_MONTH_STEPS = ["Signed up", "1st payment", "2nd payment", "Hold", "Month off"];
+
+function earnedAMonthOff(r: { rewardType?: string | null }): boolean {
+  return !!r.rewardType && !isDollarRewardType(r.rewardType);
 }
 
 const REWARD_STATUS_COPY: Record<string, string> = {
@@ -169,13 +137,13 @@ const REWARD_STATUS_COPY: Record<string, string> = {
   REVIEW_REQUIRED: "Under review",
 };
 
-/** The FTC line every toolkit asset carries. No amounts: it says what kind
- *  of reward, which is what the disclosure needs. */
-export function disclosureFor(style: AffiliateRewardStyle): string {
-  return style === "month_off"
-    ? "I'm a ChairBack affiliate and get a month off my plan when a shop signs up through my link."
-    : "I'm a ChairBack affiliate and get account credit on my plan when a business signs up through my link.";
-}
+/** The FTC line every toolkit asset carries. No amounts: it says there is a
+ *  paid connection, which is what the disclosure needs. */
+export const DISCLOSURE =
+  "I'm a ChairBack affiliate and get paid when a business signs up through my link.";
+
+const IN_PERSON_DISCLOSURE =
+  "Full disclosure: I'm a ChairBack affiliate, so I get paid when someone signs up through it.";
 
 function fmtDate(iso: string | null): string {
   if (!iso) return "";
@@ -222,9 +190,6 @@ export function AffiliatesClient({
   const [editingStyles, setEditingStyles] = useState(false);
   const screen: Screen =
     base === "rejected" && reapply ? "signup" : base === "dashboard" && editingStyles ? "styles" : base;
-  // Before an account exists the affiliate would get the default style.
-  const rewardStyle: AffiliateRewardStyle =
-    overview?.account.rewardStyle ?? DEFAULT_AFFILIATE_REWARD_STYLE;
 
   return (
     <main className="mx-auto w-full max-w-2xl px-5 py-8">
@@ -241,22 +206,12 @@ export function AffiliatesClient({
         <div className="mb-6" />
       ) : (
         <p className="mb-6 text-sm text-muted" data-testid="affiliate-intro">
-          {rewardStyle === "month_off" ? (
-            <>
-              Bring a business onto ChairBack, earn time off your plan. For every one that pays
-              for {AFFILIATE_POLICY.qualification.qualifyingInvoices} months, you get a month off
-              your plan. No cap.
-            </>
-          ) : (
-            <WebOrApp
-              web={`Bring a business onto ChairBack, earn credit on your own plan: ${SIGNUP_USD} when it pays its first month, then ${MONTHLY_USD} for every month it keeps paying. No cap.`}
-              app="Bring a business onto ChairBack, earn credit on your own plan when it pays, and more for every month it keeps paying. No cap."
-            />
-          )}
+          Get paid through the ChairBack affiliate program: {SIGNUP_USD} when a business you bring
+          on pays its first month, then {MONTHLY_USD} for every month it keeps paying. No cap.
         </p>
       )}
 
-      {screen === "signup" && <SignUp status={status} rewardStyle={rewardStyle} />}
+      {screen === "signup" && <SignUp status={status} />}
       {screen === "waiting" && <Waiting status={status} />}
       {screen === "rejected" && <Rejected status={status} onReapply={() => setReapply(true)} />}
       {screen === "styles" && overview && (
@@ -285,44 +240,9 @@ export function AffiliatesClient({
 
 //  Screen 1: sign up
 
-function Pitch({ rewardStyle }: { rewardStyle: AffiliateRewardStyle }) {
+function Pitch() {
   const p = AFFILIATE_POLICY;
-  if (rewardStyle !== "month_off") {
-    const hold = p.qualification.holdDaysAfterSecond;
-    return (
-      <Card className="px-5 py-5">
-        <h2 className="font-display text-lg">How it works</h2>
-        <ol className="mt-3 space-y-2 text-sm text-offwhite">
-          <li>
-            <span className="mr-2 text-gold">1</span>Share your link with a business that
-            should be on ChairBack.
-          </li>
-          <li>
-            <span className="mr-2 text-gold">2</span>They sign up through it and start
-            using ChairBack.
-          </li>
-          <li data-testid="pitch-earn">
-            <span className="mr-2 text-gold">3</span>
-            <WebOrApp
-              web={`When they pay their first month, ${SIGNUP_USD} in account credit is yours after a ${hold}-day hold, then ${MONTHLY_USD} more for every month they keep paying. It comes off your own ChairBack bill.`}
-              app={`When they pay their first month, account credit is yours after a ${hold}-day hold, and more for every month they keep paying. It comes off your own ChairBack bill.`}
-            />
-          </li>
-        </ol>
-        <p className="mt-4 text-xs leading-relaxed text-muted">
-          No cap on businesses. Your link counts for {p.attribution.windowDays} days after someone
-          opens it. Credit doesn&rsquo;t expire, and it&rsquo;s taken back if the payment behind
-          it is refunded or disputed. Account credit only: never cash, no cash value, not
-          transferable. Prefer a month off per business? You can choose that once you&rsquo;re
-          in. Full rules:{" "}
-          <Link href="/affiliate-terms" className="underline">
-            affiliate terms
-          </Link>
-          .
-        </p>
-      </Card>
-    );
-  }
+  const hold = p.qualification.holdDaysAfterSecond;
   return (
     <Card className="px-5 py-5">
       <h2 className="font-display text-lg">How it works</h2>
@@ -335,18 +255,17 @@ function Pitch({ rewardStyle }: { rewardStyle: AffiliateRewardStyle }) {
           <span className="mr-2 text-gold">2</span>They sign up through it and start
           using ChairBack.
         </li>
-        <li>
-          <span className="mr-2 text-gold">3</span>After their{" "}
-          {p.qualification.qualifyingInvoices === 2 ? "second" : `${p.qualification.qualifyingInvoices}th`}{" "}
-          paid month, and a {p.qualification.holdDaysAfterSecond}-day hold, a month off
-          lands on your plan.
+        <li data-testid="pitch-earn">
+          <span className="mr-2 text-gold">3</span>You get paid: {SIGNUP_USD} when they pay
+          their first month, then {MONTHLY_USD} for every month they keep paying. Each payment
+          is yours after a {hold}-day hold.
         </li>
       </ol>
       <p className="mt-4 text-xs leading-relaxed text-muted">
-        One month per business, no cap on businesses. Your link counts for{" "}
-        {p.attribution.windowDays} days after someone opens it. A month off expires{" "}
-        {p.reward.expiryMonthsAfterAvailable} months after it&rsquo;s ready if unused. Credits
-        are never cash. Full rules:{" "}
+        No cap on businesses. Your link counts for {p.attribution.windowDays} days after someone
+        opens it. For now you&rsquo;re paid as credit on your own ChairBack bill. It doesn&rsquo;t
+        expire, and it&rsquo;s taken back if the payment behind it is refunded or disputed. Full
+        rules:{" "}
         <Link href="/affiliate-terms" className="underline">
           affiliate terms
         </Link>
@@ -356,13 +275,7 @@ function Pitch({ rewardStyle }: { rewardStyle: AffiliateRewardStyle }) {
   );
 }
 
-function SignUp({
-  status,
-  rewardStyle,
-}: {
-  status: AffiliateStatus;
-  rewardStyle: AffiliateRewardStyle;
-}) {
+function SignUp({ status }: { status: AffiliateStatus }) {
   const vocab = useVocab();
   const router = useRouter();
   const [channels, setChannels] = useState<string[]>([]);
@@ -416,7 +329,7 @@ function SignUp({
 
   return (
     <>
-      <Pitch rewardStyle={rewardStyle} />
+      <Pitch />
       {!status.applicationsOpen ? (
         <Card className="mt-6 px-5 py-6 text-center">
           <h2 className="font-display text-lg">Sign-ups are closed right now</h2>
@@ -641,121 +554,6 @@ function Stat({ value, label, muted = false }: { value: number; label: string; m
   );
 }
 
-/**
- * The milestones on the road to one month off, from the program's own policy
- * (the API echoes AFFILIATE_POLICY in `overview.policy`): signed up, each
- * qualifying payment, then the month itself once the hold is over.
- */
-export function milestoneLabels(qualifyingInvoices: number): string[] {
-  return [
-    "Signed up",
-    ...Array.from({ length: qualifyingInvoices }, (_, i) => `Payment ${i + 1}`),
-    "Month off",
-  ];
-}
-
-type Referral = AffiliateOverview["referrals"][number];
-
-const IN_PROGRESS: ReadonlySet<ReferralStage> = new Set([
-  "signed_up",
-  "first_payment",
-  "second_payment",
-  "hold",
-]);
-
-/** How many milestones one referral has reached, out of `q + 2`. */
-function milestonesReached(r: Referral, q: number): number {
-  switch (r.stage) {
-    case "signed_up":
-      return 1;
-    case "first_payment":
-    case "second_payment":
-      return 1 + Math.min(Math.max(r.qualifyingInvoices, 1), q);
-    case "hold":
-      return 1 + q;
-    case "month_off":
-    case "applied":
-      return q + 2;
-    default:
-      return 0;
-  }
-}
-
-export interface NextMonthProgress {
-  state: "empty" | "in_progress" | "ready";
-  value: number;
-  max: number;
-  /** One sentence: the visible caption AND the bar's aria-valuetext. */
-  text: string;
-  /** Businesses still on the road besides the one the bar shows. */
-  othersOnTheWay: number;
-}
-
-/**
- * The bar toward the affiliate's NEXT month off: the business furthest along
- * the road (ties go to the one that signed up first). Nothing on the road but
- * a month waiting = a full bar. Nothing at all = an empty bar with a nudge.
- * Reads only what the overview already returns.
- */
-export function nextMonthProgress(
-  overview: Pick<AffiliateOverview, "referrals" | "policy">,
-): NextMonthProgress {
-  const q = overview.policy.qualifyingInvoices;
-  const max = q + 2;
-  const onTheRoad = overview.referrals
-    .filter((r) => IN_PROGRESS.has(r.stage))
-    .sort(
-      (a, b) =>
-        milestonesReached(b, q) - milestonesReached(a, q) ||
-        a.signedUpAt.localeCompare(b.signedUpAt),
-    );
-
-  const lead = onTheRoad[0];
-  if (lead) {
-    const paid = Math.min(lead.qualifyingInvoices, q);
-    let where: string;
-    if (lead.stage === "signed_up") {
-      where = "signed up, waiting on their first payment";
-    } else if (lead.stage === "hold") {
-      where = `paid ${q} of ${q}, now in the ${overview.policy.holdDays}-day hold`;
-      if (lead.holdEndsAt) where += `, ready ${fmtDate(lead.holdEndsAt)}`;
-    } else {
-      where = `${paid} of ${q} payments made`;
-    }
-    return {
-      state: "in_progress",
-      value: milestonesReached(lead, q),
-      max,
-      text: `${lead.label}: ${where}`,
-      othersOnTheWay: onTheRoad.length - 1,
-    };
-  }
-
-  const ready = overview.referrals
-    .filter((r) => r.stage === "month_off")
-    .sort((a, b) => (b.availableAt ?? "").localeCompare(a.availableAt ?? ""))[0];
-  if (ready) {
-    return {
-      state: "ready",
-      value: max,
-      max,
-      text: `${ready.label}: your month off is ready and goes on a ChairBack bill automatically`,
-      othersOnTheWay: 0,
-    };
-  }
-
-  return {
-    state: "empty",
-    value: 0,
-    max,
-    text:
-      overview.referrals.length === 0
-        ? "Nobody on the way yet. Share your link: the first business that signs up starts this bar."
-        : "Nobody on the way right now. Share your link to start your next month off.",
-    othersOnTheWay: 0,
-  };
-}
-
 export interface EarningsSoFar {
   /** Every month that is yours or about to be: used + ready + inHold. */
   total: number;
@@ -778,57 +576,6 @@ export function earningsSoFar(
   const ready = count("AVAILABLE", "RESERVED");
   const inHold = count("PENDING");
   return { total: used + ready + inHold, used, ready, inHold, underReview: overview.months.underReview };
-}
-
-function NextMonthBar({ progress, q }: { progress: NextMonthProgress; q: number }) {
-  const pct = progress.max > 0 ? Math.round((progress.value / progress.max) * 100) : 0;
-  const labels = milestoneLabels(q);
-  return (
-    <div className="min-w-0">
-      <div
-        role="progressbar"
-        aria-label="Progress to your next month off"
-        aria-valuemin={0}
-        aria-valuemax={progress.max}
-        aria-valuenow={progress.value}
-        aria-valuetext={progress.text}
-        className="h-3 w-full overflow-hidden rounded-full bg-offwhite/10"
-      >
-        <div
-          className="h-full rounded-full bg-gold transition-[width] duration-500 ease-out"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <ol
-        aria-hidden="true"
-        className="mt-1.5 grid gap-1 text-[10px] text-muted"
-        style={{ gridTemplateColumns: `repeat(${labels.length}, minmax(0, 1fr))` }}
-      >
-        {labels.map((label, i) => (
-          <li
-            key={label}
-            className={cn(
-              "min-w-0 truncate",
-              i === 0 ? "text-left" : i === labels.length - 1 ? "text-right" : "text-center",
-              i < progress.value && "text-offwhite",
-            )}
-          >
-            {label}
-          </li>
-        ))}
-      </ol>
-      <p className="mt-2 min-w-0 break-words text-sm text-offwhite" data-testid="next-month-caption">
-        {progress.text}
-      </p>
-      {progress.othersOnTheWay > 0 && (
-        <p className="mt-0.5 text-xs text-muted">
-          {progress.othersOnTheWay === 1
-            ? "1 more business is on the way too."
-            : `${progress.othersOnTheWay} more businesses are on the way too.`}
-        </p>
-      )}
-    </div>
-  );
 }
 
 function MonthsStats({
@@ -872,18 +619,9 @@ function MoneyStat({ cents, label, muted = false }: { cents: number; label: stri
   );
 }
 
-/**
- * Account credit earned, in dollars - on the WEB only. Inside the app the
- * same card says how many businesses are earning credit (a count, never an
- * amount) and where to see the figures.
- */
-function CreditTotals({
-  credit,
-  referrals,
-}: {
-  credit: AffiliateOverview["credit"] | undefined;
-  referrals: AffiliateOverview["referrals"];
-}) {
+/** What the affiliate has been paid, in dollars - the same on the web and in
+ *  the app. */
+function PaidTotals({ credit }: { credit: AffiliateOverview["credit"] | undefined }) {
   const c = credit ?? {
     earnedCents: 0,
     inHoldCents: 0,
@@ -892,127 +630,20 @@ function CreditTotals({
     underReviewCents: 0,
     reversedCents: 0,
   };
-  const earning = referrals.filter((r) => (r.creditCents ?? 0) > 0).length;
   return (
     <>
-      <p className="mt-5 text-[10px] uppercase tracking-wide text-muted">
-        Your account credit
-      </p>
-      <HideInNativeApp>
-        <div className="mt-2 flex flex-wrap items-end gap-x-8 gap-y-3" data-testid="credit-totals">
-          <MoneyStat cents={c.earnedCents} label="earned so far" />
-          <MoneyStat cents={c.appliedCents} label="applied to your bill" muted />
-          <MoneyStat cents={c.readyCents} label="ready to use" muted />
-          <MoneyStat cents={c.inHoldCents} label="waiting out the hold" muted />
-          {c.underReviewCents > 0 && (
-            <MoneyStat cents={c.underReviewCents} label="under review" muted />
-          )}
-        </div>
-        {c.reversedCents > 0 && (
-          <p className="mt-3 text-xs text-muted">{usd(c.reversedCents)} taken back</p>
-        )}
-      </HideInNativeApp>
-      <ShowInNativeApp>
-        <p className="mt-2 text-sm text-offwhite" data-testid="credit-totals-app">
-          {earning === 1
-            ? "1 business is earning you credit."
-            : `${earning} businesses are earning you credit.`}{" "}
-          <span className="text-muted">
-            Sign in to ChairBack on the web to see your credit totals.
-          </span>
-        </p>
-      </ShowInNativeApp>
+      <p className="mt-5 text-[10px] uppercase tracking-wide text-muted">What you&rsquo;ve made</p>
+      <div className="mt-2 flex flex-wrap items-end gap-x-8 gap-y-3" data-testid="credit-totals">
+        <MoneyStat cents={c.earnedCents} label="earned so far" />
+        <MoneyStat cents={c.appliedCents} label="paid to your bill" muted />
+        <MoneyStat cents={c.readyCents} label="ready" muted />
+        <MoneyStat cents={c.inHoldCents} label="waiting out the hold" muted />
+        {c.underReviewCents > 0 && <MoneyStat cents={c.underReviewCents} label="under review" muted />}
+      </div>
+      {c.reversedCents > 0 && (
+        <p className="mt-3 text-xs text-muted">{usd(c.reversedCents)} taken back</p>
+      )}
     </>
-  );
-}
-
-/**
- * Account credit or a month off per business: one choice per account,
- * FORWARD ONLY (the API stamps each reward's type when it is earned).
- * Web-only - the labels carry dollar amounts - and the app says where to
- * change it instead.
- */
-export function RewardStyleChooser({
-  current,
-  canChange,
-}: {
-  current: AffiliateRewardStyle;
-  canChange: boolean;
-}) {
-  const router = useRouter();
-  const [chosen, setChosen] = useState<AffiliateRewardStyle>(current);
-  const [pending, setPending] = useState(false);
-  const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
-  useEffect(() => setChosen(current), [current]);
-
-  async function save() {
-    if (chosen === current) return;
-    setMessage(null);
-    setPending(true);
-    const res = await setAffiliateRewardStyleAction(chosen);
-    setPending(false);
-    if (!res.ok) {
-      setMessage({
-        kind: "error",
-        text:
-          res.status === 409
-            ? "Your affiliate link is paused, so this can't change right now."
-            : "Couldn't save that. Try again.",
-      });
-      return;
-    }
-    setMessage({ kind: "ok", text: "Saved. It applies to rewards you earn from now on." });
-    router.refresh();
-  }
-
-  return (
-    <Card className="mt-6 px-5 py-5">
-      <h2 className="font-display text-lg">How you&rsquo;re rewarded</h2>
-      <HideInNativeApp>
-        <p className="mt-1 text-sm text-muted">
-          Pick one. A change counts from now on: anything you&rsquo;ve already earned keeps the
-          reward it was earned under.
-        </p>
-        <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Reward style">
-          {AFFILIATE_REWARD_STYLES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              aria-pressed={chosen === s}
-              disabled={!canChange || pending}
-              className={chip(chosen === s)}
-              onClick={() => {
-                setMessage(null);
-                setChosen(s);
-              }}
-            >
-              {AFFILIATE_REWARD_STYLE_LABELS[s]}
-            </button>
-          ))}
-        </div>
-        {chosen !== current && (
-          <div className="mt-4">
-            <button type="button" className={PRIMARY} disabled={pending || !canChange} onClick={save}>
-              {pending ? "Saving…" : "Save reward style"}
-            </button>
-          </div>
-        )}
-        {message && (
-          <p
-            role={message.kind === "error" ? "alert" : "status"}
-            className={cn("mt-3 text-xs", message.kind === "error" ? "text-danger-soft" : "text-muted")}
-          >
-            {message.text}
-          </p>
-        )}
-      </HideInNativeApp>
-      <ShowInNativeApp>
-        <p className="mt-1 text-sm text-muted" data-testid="reward-style-app">
-          {AFFILIATE_REWARD_STYLE_NEUTRAL_LABELS[current]}. You can change this from ChairBack on
-          the web.
-        </p>
-      </ShowInNativeApp>
-    </Card>
   );
 }
 
@@ -1070,20 +701,15 @@ function Dashboard({
     else toast("Couldn't build the QR code", "error");
   }
 
-  const m = overview.months;
-  const q = overview.policy.qualifyingInvoices;
-  const progress = nextMonthProgress(overview);
   const earned = earningsSoFar(overview);
   const styles = overview.account.promotionStyles as AffiliatePromotionStyle[];
-  const rewardStyle: AffiliateRewardStyle =
-    overview.account.rewardStyle ?? DEFAULT_AFFILIATE_REWARD_STYLE;
-  const credit = overview.credit;
   const hasMonthRewards = overview.rewards.some((r) => !isDollarRewardType(r.rewardType));
-  const hasCredit = (credit?.earnedCents ?? 0) + (credit?.reversedCents ?? 0) > 0;
+  const signupUsd = usd(overview.policy.dollarCredit.signupCents);
+  const monthlyUsd = usd(overview.policy.dollarCredit.monthlyCents);
   const vocab = useVocab();
   const toolkit = useMemo(
-    () => styles.map((s) => toolkitFor(s, { link, shopName, vocab, rewardStyle })),
-    [styles, link, shopName, vocab, rewardStyle],
+    () => styles.map((s) => toolkitFor(s, { link, shopName, vocab })),
+    [styles, link, shopName, vocab],
   );
 
   return (
@@ -1097,62 +723,29 @@ function Dashboard({
         </div>
       )}
 
-      {rewardStyle === "dollar_credit" ? (
-        <Card className="px-5 py-5">
-          <p className="text-[10px] uppercase tracking-wide text-muted">
-            For every business you bring in
-          </p>
-          <h2 className="mt-1 font-display text-2xl leading-tight text-offwhite">
-            Account credit on your ChairBack plan
-          </h2>
-          <p className="mt-2 text-sm leading-relaxed text-muted" data-testid="earn-terms">
-            <WebOrApp
-              web={`${usd(overview.policy.dollarCredit.signupCents)} when a business that signed up through your link pays its first month, then ${usd(overview.policy.dollarCredit.monthlyCents)} for every month it keeps paying.`}
-              app="Credit when a business that signed up through your link pays its first month, and more for every month it keeps paying."
-            />{" "}
-            Each credit waits out a {overview.policy.holdDays}-day hold, then comes off your own
-            ChairBack bill. No cap, no expiry, never cash.
-          </p>
-          <CreditTotals credit={credit} referrals={overview.referrals} />
-          {hasMonthRewards && (
-            <>
-              <p className="mt-5 text-[10px] uppercase tracking-wide text-muted">
-                Months off from before
-              </p>
-              <MonthsStats earned={earned} months={m} />
-            </>
-          )}
-        </Card>
-      ) : (
-        <Card className="px-5 py-5">
-          <p className="text-[10px] uppercase tracking-wide text-muted">
-            For every business you bring in
-          </p>
-          <h2 className="mt-1 font-display text-2xl leading-tight text-offwhite">
-            A month off your ChairBack plan
-          </h2>
-          <p className="mt-2 text-sm leading-relaxed text-muted" data-testid="earn-terms">
-            When a business that signed up through your link has paid for {q} months, and a{" "}
-            {overview.policy.holdDays}-day hold has passed, a month off your own plan is yours. One
-            for each business, no cap on how many. It&rsquo;s credit on your bill, never cash.
-          </p>
-
-          <p className="mt-5 text-[10px] uppercase tracking-wide text-muted">Your next month off</p>
-          <div className="mt-2">
-            <NextMonthBar progress={progress} q={q} />
-          </div>
-
-          <p className="mt-5 text-[10px] uppercase tracking-wide text-muted">What you&rsquo;ve made</p>
-          <MonthsStats earned={earned} months={m} />
-          {/* Credit earned before a switch to months keeps showing (web only). */}
-          {hasCredit && <CreditTotals credit={credit} referrals={overview.referrals} />}
-        </Card>
-      )}
-
-      <RewardStyleChooser
-        current={rewardStyle}
-        canChange={overview.account.status === "ACTIVE"}
-      />
+      <Card className="px-5 py-5">
+        <p className="text-[10px] uppercase tracking-wide text-muted">
+          For every business you bring in
+        </p>
+        <h2 className="mt-1 font-display text-2xl leading-tight text-offwhite">
+          Get paid through the ChairBack affiliate program
+        </h2>
+        <p className="mt-2 text-sm leading-relaxed text-muted" data-testid="earn-terms">
+          {signupUsd} when a business that signed up through your link pays its first month, then{" "}
+          {monthlyUsd} for every month it keeps paying. No cap. Each payment waits out a{" "}
+          {overview.policy.holdDays}-day hold, then it&rsquo;s yours. For now you&rsquo;re paid as
+          credit on your own ChairBack bill.
+        </p>
+        <PaidTotals credit={overview.credit} />
+        {hasMonthRewards && (
+          <>
+            <p className="mt-5 text-[10px] uppercase tracking-wide text-muted">
+              Months off from before
+            </p>
+            <MonthsStats earned={earned} months={overview.months} />
+          </>
+        )}
+      </Card>
 
       <Card className="mt-6 px-5 py-5">
         <p className="text-[10px] uppercase tracking-wide text-muted">Your link</p>
@@ -1166,7 +759,7 @@ function Dashboard({
           month · {overview.clicks.allTime} all time
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
-          <button type="button" onClick={() => share(toolkitFor("text_dm", { link, shopName, vocab, rewardStyle }).text)} className={PRIMARY}>
+          <button type="button" onClick={() => share(toolkitFor("text_dm", { link, shopName, vocab }).text)} className={PRIMARY}>
             Share
           </button>
           <button type="button" onClick={() => copy(link, "Link")} className={SECONDARY}>
@@ -1229,9 +822,9 @@ function Dashboard({
         ) : (
           <ul className="divide-y divide-[rgba(245,245,244,0.08)]">
             {overview.referrals.map((r) => {
-              const isCredit = referralEarnsCredit(r, rewardStyle);
-              const step = (isCredit ? CREDIT_STAGE_STEP : STAGE_STEP)[r.stage];
-              const steps = isCredit ? CREDIT_STEPS : STEPS;
+              const legacy = earnedAMonthOff(r);
+              const step = (legacy ? EARNED_MONTH_STAGE_STEP : STAGE_STEP)[r.stage];
+              const steps = legacy ? EARNED_MONTH_STEPS : STEPS;
               return (
                 <li key={r.id} className="px-5 py-3.5">
                   <div className="flex items-center justify-between gap-3">
@@ -1242,7 +835,7 @@ function Dashboard({
                         step === null ? "bg-offwhite/5 text-muted" : "bg-gold/15 text-gold",
                       )}
                     >
-                      {(isCredit ? CREDIT_STAGE_COPY : STAGE_COPY)[r.stage]}
+                      {(legacy ? EARNED_MONTH_STAGE_COPY : STAGE_COPY)[r.stage]}
                     </span>
                   </div>
                   <p className="mt-0.5 text-xs text-muted">
@@ -1250,9 +843,7 @@ function Dashboard({
                     {r.stage === "hold" && r.holdEndsAt && ` · ready ${fmtDate(r.holdEndsAt)}`}
                     {r.stage === "month_off" && r.expiresAt && ` · use by ${fmtDate(r.expiresAt)}`}
                     {r.reversalMessage && ` · ${r.reversalMessage}`}
-                    {(r.creditCents ?? 0) > 0 && (
-                      <HideInNativeApp>{` · ${usd(r.creditCents)} credit earned`}</HideInNativeApp>
-                    )}
+                    {(r.creditCents ?? 0) > 0 && ` · ${usd(r.creditCents)} earned`}
                   </p>
                   {step !== null && (
                     <ol className="mt-2 flex gap-1" aria-label="Progress">
@@ -1278,22 +869,16 @@ function Dashboard({
       {overview.rewards.length > 0 && (
         <Card className="mt-6 overflow-hidden">
           <div className="border-b border-subtle px-5 py-4">
-            <h2 className="font-display text-lg">{hasMonthRewards && !hasCredit ? "Your months" : "Your rewards"}</h2>
+            <h2 className="font-display text-lg">Your payments</h2>
           </div>
           <ul className="divide-y divide-[rgba(245,245,244,0.08)]">
             {overview.rewards.map((r) => {
               const dollars = isDollarRewardType(r.rewardType);
-              const kind = r.rewardType === "monthly_credit" ? "Monthly credit" : "Account credit";
               return (
                 <li key={r.id} className="flex items-center justify-between gap-3 px-5 py-3.5">
                   <div className="min-w-0">
                     <p className="truncate text-sm text-offwhite">
-                      {dollars ? (
-                        <WebOrApp web={`${usd(r.amountCents)} credit`} app={kind} />
-                      ) : (
-                        "1 month"
-                      )}{" "}
-                      · {r.label}
+                      {dollars ? usd(r.amountCents) : "1 month off"} · {r.label}
                     </p>
                     <p className="mt-0.5 text-xs text-muted">
                       {r.status === "PENDING" && `Ready ${fmtDate(r.holdEndsAt)}`}
@@ -1312,63 +897,34 @@ function Dashboard({
             })}
           </ul>
           <p className="px-5 py-3 text-xs text-muted">
-            Rewards are applied to a future ChairBack invoice automatically. If you&rsquo;re not on
-            a paid plan, they wait until you are.
+            For now each payment comes off a future ChairBack bill automatically. If you&rsquo;re
+            not on a paid plan, it waits until you are.
           </p>
         </Card>
       )}
 
-      {rewardStyle === "dollar_credit" ? (
-        <details className="mt-6 rounded-xl border border-subtle px-5 py-4 text-sm">
-          <summary className="cursor-pointer font-medium text-offwhite">How your credit works</summary>
-          <ul className="mt-3 space-y-2 text-muted" data-testid="how-it-works">
-            <li>
-              A business counts as yours if it signs up within{" "}
-              {overview.policy.attributionWindowDays} days of opening your link.
-            </li>
-            <li>
-              <WebOrApp
-                web={`It earns you ${usd(overview.policy.dollarCredit.signupCents)} when it pays its first month, then ${usd(overview.policy.dollarCredit.monthlyCents)} for every later month it pays, for as long as it keeps paying.`}
-                app="It earns you credit when it pays its first month, then more for every later month it pays, for as long as it keeps paying."
-              />{" "}
-              Signing up alone, or a free trial, earns nothing.
-            </li>
-            <li>
-              Each credit waits out a {overview.policy.holdDays}-day hold, then comes off your own
-              ChairBack bill. Credit doesn&rsquo;t expire; if you&rsquo;re not on a paid plan, it
-              waits until you are.
-            </li>
-            <li>
-              If the payment behind a credit is refunded or disputed before the credit is applied,
-              it&rsquo;s taken back.
-            </li>
-            <li>
-              Account credit only: never cash, no cash value, not transferable. We never text
-              anyone on your behalf.
-            </li>
-          </ul>
-          <p className="mt-3 text-xs text-muted">
-            <Link href="/affiliate-terms" className="underline">
-              Affiliate terms
-            </Link>{" "}
-            · version {overview.termsVersion}
-          </p>
-        </details>
-      ) : (
       <details className="mt-6 rounded-xl border border-subtle px-5 py-4 text-sm">
-        <summary className="cursor-pointer font-medium text-offwhite">How the months work</summary>
+        <summary className="cursor-pointer font-medium text-offwhite">How you get paid</summary>
         <ul className="mt-3 space-y-2 text-muted" data-testid="how-it-works">
           <li>
-            A business counts as yours if it signs up within {overview.policy.attributionWindowDays}{" "}
-            days of opening your link.
+            A business counts as yours if it signs up within{" "}
+            {overview.policy.attributionWindowDays} days of opening your link.
           </li>
           <li>
-            It qualifies after {overview.policy.qualifyingInvoices} paid months, then a{" "}
-            {overview.policy.holdDays}-day hold.
+            You get {signupUsd} when it pays its first month, then {monthlyUsd} for every later
+            month it pays, for as long as it keeps paying. Signing up alone, or a free trial, earns
+            nothing.
           </li>
-          <li>One month per business. A month expires {overview.policy.expiryMonths} months after it&rsquo;s ready.</li>
-          <li>If their payment is refunded or disputed before your month is applied, it&rsquo;s taken back.</li>
-          <li>Never cash, never transferable. We never text anyone on your behalf.</li>
+          <li>
+            Each payment waits out a {overview.policy.holdDays}-day hold. For now it&rsquo;s paid as
+            credit on your own ChairBack bill; it doesn&rsquo;t expire, and if you&rsquo;re not on a
+            paid plan it waits until you are.
+          </li>
+          <li>
+            If the payment behind it is refunded or disputed before it&rsquo;s paid to you,
+            it&rsquo;s taken back.
+          </li>
+          <li>Not transferable. We never text anyone on your behalf.</li>
         </ul>
         <p className="mt-3 text-xs text-muted">
           <Link href="/affiliate-terms" className="underline">
@@ -1377,7 +933,6 @@ function Dashboard({
           · version {overview.termsVersion}
         </p>
       </details>
-      )}
     </>
   );
 }
@@ -1407,16 +962,10 @@ const NEUTRAL_TOOLKIT_VOCAB: ToolkitVocab = {
 
 export function toolkitFor(
   style: AffiliatePromotionStyle,
-  ctx: { link: string; shopName: string; vocab?: ToolkitVocab; rewardStyle?: AffiliateRewardStyle },
+  ctx: { link: string; shopName: string; vocab?: ToolkitVocab },
 ): ToolkitCard {
   const { link } = ctx;
   const v = ctx.vocab ?? NEUTRAL_TOOLKIT_VOCAB;
-  const rewardStyle = ctx.rewardStyle ?? DEFAULT_AFFILIATE_REWARD_STYLE;
-  const DISCLOSURE = disclosureFor(rewardStyle);
-  const inPersonDisclosure =
-    rewardStyle === "month_off"
-      ? "Full disclosure: I'm a ChairBack affiliate, so I get a month off my plan when someone signs up through it."
-      : "Full disclosure: I'm a ChairBack affiliate, so I get account credit on my plan when someone signs up through it.";
   switch (style) {
     case "short_video":
       return {
@@ -1447,7 +996,7 @@ export function toolkitFor(
         text:
           "You run your own book? I use ChairBack for mine. Booking, reminders, rewards, the lot. " +
           "I'll text you my link after this, it gets you set up. " +
-          inPersonDisclosure,
+          IN_PERSON_DISCLOSURE,
       };
     case "text_dm":
       return {

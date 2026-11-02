@@ -5772,13 +5772,12 @@ model AffiliateAccount {
   payoutPreference      String    @default("credit")
   payoutPreferenceSetAt DateTime?
 
-  // v3 (2026-10-30): how this affiliate is rewarded - "dollar_credit" ($10
-  // per business on its first paid invoice, then $5 per later paid month) or
-  // "month_off" (the v1 program). CHECK-pinned
-  // (AffiliateAccount_rewardStyle_check). New accounts default to dollar
-  // credit; accounts that existed before v3 were backfilled to month_off -
-  // the terms they accepted. Read at EARN time: changing it only affects
-  // rewards earned afterwards.
+  // How this affiliate is rewarded. Since v4 (2026-11-02) the only style is
+  // "dollar_credit" ($10 per business on its first paid invoice, then $5 per
+  // later paid month): "month_off" (the v1 program) was retired and every
+  // account on it moved over. The CHECK (AffiliateAccount_rewardStyle_check)
+  // still allows it for the engine's legacy path; the API refuses to set it.
+  // Read at EARN time: a reward already earned keeps its type.
   rewardStyle      String    @default("dollar_credit")
   rewardStyleSetAt DateTime?
 
