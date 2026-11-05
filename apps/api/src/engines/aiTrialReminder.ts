@@ -3,7 +3,7 @@ import { APP_NAME, PLANS, apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
 import { billingEnabled } from "../billing/stripe.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
-import { trialStageAt, type TrialReminderStage } from "./trialReminder.js";
+import { trialStageAt, type TrialLadderStage } from "./trialReminder.js";
 
 /**
  * The 14-day Premium AI trial's three emails.
@@ -25,7 +25,7 @@ import { trialStageAt, type TrialReminderStage } from "./trialReminder.js";
 
 export interface AiTrialReminderSummary {
   shopId: string;
-  stage: TrialReminderStage;
+  stage: TrialLadderStage;
   ownerEmail: string;
 }
 
@@ -43,7 +43,7 @@ const friendlyDate = (d: Date) =>
   new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric" }).format(d);
 
 function buildEmail(
-  stage: TrialReminderStage,
+  stage: TrialLadderStage,
   shop: ReminderShop,
   now: Date,
 ): { subject: string; text: string } {

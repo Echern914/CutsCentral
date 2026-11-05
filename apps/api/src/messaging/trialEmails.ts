@@ -195,6 +195,65 @@ export function buildTrialEmail(stage: TrialEmailStage, ctx: TrialEmailContext):
 }
 
 /**
+ * The two follow-ups to a shop still locked 3 days (stage 4) and 10 days
+ * (stage 5) after it locked. They go to shops whose TRIAL ended and to shops
+ * whose COMP was switched off alike, so they never say "trial" and never give
+ * a date: the shop already got the email that explained why it paused.
+ * A plain nudge, no offer.
+ */
+export function buildLockedFollowUpEmail(
+  stage: 4 | 5,
+  ctx: { shopName: string; ownerName: string; plans: TrialPlanLine[] },
+): EmailCopy {
+  const billingUrl = `${apiEnv().APP_BASE_URL}/dashboard/billing`;
+  const cheapest = ctx.plans[0];
+  const from = cheapest ? ` from ${money(cheapest.priceMonthlyUsd)}/mo` : "";
+  const stays = `${WHAT_STAYS.charAt(0).toUpperCase()}${WHAT_STAYS.slice(1)}`;
+  const copy =
+    stage === 4
+      ? {
+          subject: `Your ${ctx.shopName} booking page is still paused`,
+          heading: "Your booking page is still paused",
+          lines: [
+            `Anyone who tries to book ${ctx.shopName} online right now can't: ${WHAT_PAUSES} are paused until you pick a plan.`,
+            `${stays} are all still here.`,
+            `Choose a plan${from} and it all comes back on in about a minute.`,
+          ],
+          cta: "Turn my booking page back on",
+        }
+      : {
+          subject: `${ctx.shopName} is still paused on ${APP_NAME}`,
+          heading: "Pick up right where you left off",
+          lines: [
+            `${ctx.shopName} has been paused for a while now.`,
+            `${stays} are still saved, exactly as you left them.`,
+            `Choose a plan${from} and ${WHAT_PAUSES} come straight back.`,
+          ],
+          cta: "Choose a plan",
+        };
+  return {
+    subject: copy.subject,
+    text: [
+      `Hi ${ctx.ownerName},`,
+      "",
+      ...copy.lines,
+      "",
+      ...(ctx.plans.length > 0 ? ["Plans:", ...planLinesText(ctx.plans), ""] : []),
+      `${copy.cta}: ${billingUrl}`,
+      "",
+      `— ${APP_NAME}`,
+    ].join("\n"),
+    html: shell({
+      heading: copy.heading,
+      paragraphs: copy.lines,
+      plans: ctx.plans,
+      cta: { label: copy.cta, url: billingUrl },
+      closing: "You can still sign in any time to read or export your client book.",
+    }),
+  };
+}
+
+/**
  * The operator switched a shop's complimentary access OFF and that left it with
  * no plan (no subscription, trial over). Same promise as the trial-ended email
  * - what paused, that nothing is lost, how to pick a plan - but it must not

@@ -3,7 +3,12 @@ import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { billingEnabled, hasActiveAccess, priceIdForTier } from "../billing/stripe.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
-import { buildCompEndedEmail, buildTrialEmail, type TrialPlanLine } from "../messaging/trialEmails.js";
+import {
+  buildCompEndedEmail,
+  buildLockedFollowUpEmail,
+  buildTrialEmail,
+  type TrialPlanLine,
+} from "../messaging/trialEmails.js";
 
 /**
  * Trial-expiry reminder emails. A daily sweep that walks shops still on their
@@ -12,6 +17,11 @@ import { buildCompEndedEmail, buildTrialEmail, type TrialPlanLine } from "../mes
  * conversion nudge Stripe can't send for us - the shop has no Stripe
  * subscription yet (plan stays "free" until Checkout), so nobody else knows
  * their trial is ending.
+ *
+ * Then two follow-ups to a shop that is still locked: 3 and 10 days after it
+ * locked (its trial ended, or its comp was switched off). A plain nudge, no
+ * offer (the owner's call, 2026-11-05). A shop locked more than
+ * FOLLOW_UP_MAX_DAYS ago is left alone.
  *
  * DARK BY DEFAULT, twice over: the sweep is a logged no-op unless BOTH
  * billingEnabled() (Stripe env set - without enforcement an "expiring trial"
@@ -34,8 +44,22 @@ import { buildCompEndedEmail, buildTrialEmail, type TrialPlanLine } from "../mes
 
 const MS_PER_DAY = 86_400_000;
 
-/** Reminder stages, keyed by Shop.trialReminderStage. 0 = nothing sent yet. */
-export type TrialReminderStage = 1 | 2 | 3;
+/**
+ * Reminder stages, keyed by Shop.trialReminderStage. 0 = nothing sent yet.
+ * 1-3 are the trial ladder; 4 and 5 are the follow-ups to a shop that is
+ * still locked 3 and 10 days after it locked (see followUpStageAt).
+ */
+export type TrialReminderStage = TrialLadderStage | 4 | 5;
+/** The countdown stages only. The AI-receptionist trial reuses this ladder. */
+export type TrialLadderStage = 1 | 2 | 3;
+
+/** Days after a shop locks that each follow-up goes out. */
+export const FOLLOW_UP_DAYS = { 4: 3, 5: 10 } as const;
+/**
+ * A shop that locked longer ago than this gets no follow-up. Without a cap the
+ * first deploy would email every shop that lapsed months ago, cold.
+ */
+export const FOLLOW_UP_MAX_DAYS = 90;
 
 export interface TrialReminderSummary {
   shopId: string;
@@ -61,11 +85,35 @@ export interface TrialReminderOptions {
  *  2 = ends within a day, 1 = ends within a week.
  * Checked strictly in that order so exactly one stage matches.
  */
-export function trialStageAt(trialEndsAt: Date, now: Date): TrialReminderStage | 0 {
+export function trialStageAt(trialEndsAt: Date, now: Date): TrialLadderStage | 0 {
   const msLeft = trialEndsAt.getTime() - now.getTime();
   if (msLeft <= 0) return 3;
   if (msLeft <= MS_PER_DAY) return 2;
   if (msLeft <= 7 * MS_PER_DAY) return 1;
+  return 0;
+}
+
+/**
+ * When a shop's free access stopped: the later of its trial end and the moment
+ * an operator switched its comp off. A shop uncomped long after its trial
+ * ended locked on the uncomp day, not the trial day. Null = it never locked.
+ */
+export function lockedSince(shop: { trialEndsAt: Date | null; compEndedAt: Date | null }): Date | null {
+  const times = [shop.trialEndsAt, shop.compEndedAt].filter((d): d is Date => d !== null);
+  if (times.length === 0) return null;
+  return new Date(Math.max(...times.map((d) => d.getTime())));
+}
+
+/**
+ * The follow-up the clock says a locked shop is due: 5 once it has been
+ * locked 10 days, 4 once it has been locked 3, else 0. Past
+ * FOLLOW_UP_MAX_DAYS it is 0 again: nothing for a shop that lapsed long ago.
+ */
+export function followUpStageAt(locked: Date, now: Date): 4 | 5 | 0 {
+  const msLocked = now.getTime() - locked.getTime();
+  if (msLocked > FOLLOW_UP_MAX_DAYS * MS_PER_DAY) return 0;
+  if (msLocked >= FOLLOW_UP_DAYS[5] * MS_PER_DAY) return 5;
+  if (msLocked >= FOLLOW_UP_DAYS[4] * MS_PER_DAY) return 4;
   return 0;
 }
 
@@ -99,6 +147,32 @@ export function purchasablePlans(
 }
 
 /**
+ * The one email a shop is due right now, before comparing it with what was
+ * already sent.
+ *
+ * The trial ladder (1-3) comes first: a shop whose "trial ended" email has not
+ * gone out gets that, never a follow-up in its place.
+ *
+ * The follow-ups (4, 5) need no access check of their own, and an extra one
+ * would be dead code (removing it changed no test, which is how this was
+ * found):
+ *  - a shop that picked a plan or was comped again is not in the query;
+ *  - a shop with trial time left has lockedSince() in the FUTURE, which
+ *    followUpStageAt() reads as 0. That also covers "not yet told its trial
+ *    ended": any trial still running is caught by the line above first.
+ */
+function dueStage(
+  shop: { trialEndsAt: Date | null; compEndedAt: Date | null; trialReminderStage: number },
+  now: Date,
+): TrialReminderStage | 0 {
+  const trialStage = shop.trialEndsAt ? trialStageAt(shop.trialEndsAt, now) : 0;
+  if (trialStage > shop.trialReminderStage) return trialStage;
+
+  const locked = lockedSince(shop);
+  return locked ? followUpStageAt(locked, now) : 0;
+}
+
+/**
  * Daily sweep. Returns a summary per shop that was advanced (for the scheduler
  * log + tests); skipped/no-op shops don't appear.
  */
@@ -120,22 +194,24 @@ export async function runTrialReminders(
 
   const plans = purchasablePlans({ billingOn: opts.billingOn });
 
-  // Only shops that can actually lapse: on a real trial (trialEndsAt set),
-  // never subscribed ("none" - any Stripe status past that means they've been
-  // through Checkout and Stripe owns their dunning emails), not comped, and not
-  // already through every stage. hasActiveAccess() intentionally NOT used here:
-  // stage 1/2 fire while access is still active - that's the whole point.
+  // Only shops that can actually lapse: on a real trial (trialEndsAt set) or
+  // uncomped (compEndedAt set), never subscribed ("none" - any Stripe status
+  // past that means they've been through Checkout and Stripe owns their
+  // dunning emails), not comped, and not already through every stage.
+  // hasActiveAccess() is intentionally NOT used here: stage 1/2 fire while
+  // access is still active - that's the whole point.
   const shops = await prisma.shop.findMany({
     where: {
       compAccess: false,
       subscriptionStatus: "none",
-      trialEndsAt: { not: null },
-      trialReminderStage: { lt: 3 },
+      OR: [{ trialEndsAt: { not: null } }, { compEndedAt: { not: null } }],
+      trialReminderStage: { lt: 5 },
     },
     select: {
       id: true,
       name: true,
       trialEndsAt: true,
+      compEndedAt: true,
       trialReminderStage: true,
       owner: { select: { email: true, name: true } },
     },
@@ -144,9 +220,9 @@ export async function runTrialReminders(
   const summaries: TrialReminderSummary[] = [];
   for (const shop of shops) {
     try {
-      const stage = trialStageAt(shop.trialEndsAt!, now);
+      const stage = dueStage(shop, now);
       // Monotonic: nothing new to say. The explicit 0-check also narrows the
-      // type (stage 0 = trial not near expiry, never has an email).
+      // type (stage 0 = nothing due, never has an email).
       if (stage === 0 || stage <= shop.trialReminderStage) continue;
 
       // Compare-and-set the stage BEFORE sending: if another pass (or a lease
@@ -159,13 +235,16 @@ export async function runTrialReminders(
       });
       if (count === 0) continue;
 
-      const { subject, text, html } = buildTrialEmail(stage, {
-        shopName: shop.name,
-        ownerName: shop.owner.name,
-        trialEndsAt: shop.trialEndsAt!,
-        now,
-        plans,
-      });
+      const { subject, text, html } =
+        stage === 4 || stage === 5
+          ? buildLockedFollowUpEmail(stage, { shopName: shop.name, ownerName: shop.owner.name, plans })
+          : buildTrialEmail(stage, {
+              shopName: shop.name,
+              ownerName: shop.owner.name,
+              trialEndsAt: shop.trialEndsAt!,
+              now,
+              plans,
+            });
       await sendEmail({
         to: shop.owner.email,
         subject,
