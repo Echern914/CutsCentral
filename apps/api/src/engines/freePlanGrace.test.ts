@@ -109,7 +109,7 @@ describe("who gets the grace window", () => {
   });
 
   it("🔑 resets the reminder stage, or they are warned by NOTHING", async () => {
-    // runTrialReminders filters trialReminderStage < 3. Every shop in this
+    // runTrialReminders only sends a trial stage above the recorded one. Every shop in this
     // population is already sitting at 3, so without the reset the grace
     // window passes in total silence and the wall is a surprise.
     expect((await reload("lapsedFree")).trialReminderStage).toBe(0);

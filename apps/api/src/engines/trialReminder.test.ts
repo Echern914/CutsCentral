@@ -2,7 +2,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { randomToken } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
-import { notifyCompEnded, runTrialReminders, trialStageAt } from "./trialReminder.js";
+import {
+  FOLLOW_UP_MAX_DAYS,
+  followUpStageAt,
+  lockedSince,
+  notifyCompEnded,
+  runTrialReminders,
+  trialStageAt,
+} from "./trialReminder.js";
 
 /**
  * Trial-expiry reminder sweep: the week/tomorrow/ended stage ladder, monotonic
@@ -61,8 +68,12 @@ beforeAll(async () => {
   userId = user.id;
 });
 
-afterEach(() => {
+afterEach(async () => {
   sent = [];
+  // Each test starts with no shops of ours: a shop left locked by one test
+  // would otherwise be due a follow-up in the next test's sweep.
+  await prisma.shop.deleteMany({ where: { id: { in: shopIds } } });
+  shopIds.length = 0;
 });
 
 afterAll(async () => {
@@ -136,7 +147,7 @@ describe("runTrialReminders", () => {
     expect(mine()[2]!.subject).toContain("trial has ended");
     expect(mine()[2]!.text).toContain("paused");
 
-    // Terminal: stage 3 shops leave the sweep entirely.
+    // Nothing more until the first follow-up is due, 3 days after it locked.
     expect(await runFiltered(after)).toEqual([]);
     expect(mine().length).toBe(3);
 
@@ -245,13 +256,125 @@ describe("runTrialReminders", () => {
 });
 
 /**
+ * Follow-ups to a shop that is STILL locked: 3 days and 10 days after it
+ * locked, one email each, only after the email that said why it paused, and
+ * never to a shop that has access again.
+ */
+describe("locked-shop follow-ups", () => {
+  const daysAgo = (n: number) => new Date(NOW.getTime() - n * MS_PER_DAY);
+  const daysOn = (n: number) => new Date(NOW.getTime() + n * MS_PER_DAY);
+  const aboutShop = (id: string) =>
+    mine().filter((e) => (e.meta as { shopId?: string } | undefined)?.shopId === id);
+
+  it("followUpStageAt: 4 from day 3, 5 from day 10, nothing past the cap", () => {
+    expect(followUpStageAt(NOW, NOW)).toBe(0);
+    expect(followUpStageAt(daysAgo(2.9), NOW)).toBe(0);
+    expect(followUpStageAt(daysAgo(3), NOW)).toBe(4);
+    expect(followUpStageAt(daysAgo(9.9), NOW)).toBe(4);
+    expect(followUpStageAt(daysAgo(10), NOW)).toBe(5);
+    expect(followUpStageAt(daysAgo(FOLLOW_UP_MAX_DAYS), NOW)).toBe(5);
+    expect(followUpStageAt(daysAgo(FOLLOW_UP_MAX_DAYS + 1), NOW)).toBe(0);
+  });
+
+  it("lockedSince is the LATER of the trial end and the uncomp", () => {
+    expect(lockedSince({ trialEndsAt: daysAgo(60), compEndedAt: daysAgo(4) })).toEqual(daysAgo(4));
+    expect(lockedSince({ trialEndsAt: daysAgo(4), compEndedAt: daysAgo(60) })).toEqual(daysAgo(4));
+    expect(lockedSince({ trialEndsAt: null, compEndedAt: daysAgo(4) })).toEqual(daysAgo(4));
+    expect(lockedSince({ trialEndsAt: null, compEndedAt: null })).toBeNull();
+  });
+
+  it("a locked shop gets day 3 then day 10, once each, then nothing ever again", async () => {
+    // Trial ended today and the ended email went out (stage 3).
+    const shop = await makeShop({ trialEndsAt: NOW, trialReminderStage: 3 });
+
+    expect(await runFiltered(daysOn(2))).toEqual([]);
+
+    expect(await runFiltered(daysOn(3))).toEqual([{ shopId: shop.id, stage: 4, ownerEmail }]);
+    expect(await runFiltered(daysOn(3))).toEqual([]);
+    const day3 = aboutShop(shop.id)[0]!;
+    expect(day3.subject).toBe("Your Trial Shop booking page is still paused");
+    expect(day3.html).toContain("Turn my booking page back on");
+    expect(day3.text).toContain("$34.99/mo");
+    expect(day3.text).toContain("/dashboard/billing");
+    expect(day3.stream).toBe("lifecycle");
+    expect(day3.idempotencyKey).toBe(`trial-reminder:${shop.id}:4`);
+
+    expect(await runFiltered(daysOn(9))).toEqual([]);
+    expect(await runFiltered(daysOn(10))).toEqual([{ shopId: shop.id, stage: 5, ownerEmail }]);
+    const day10 = aboutShop(shop.id)[1]!;
+    expect(day10.subject).toBe("Trial Shop is still paused on ChairBack");
+    expect(day10.idempotencyKey).toBe(`trial-reminder:${shop.id}:5`);
+
+    expect(await runFiltered(daysOn(30))).toEqual([]);
+    expect(aboutShop(shop.id)).toHaveLength(2);
+    expect((await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } })).trialReminderStage).toBe(5);
+  });
+
+  it("the follow-ups never say 'trial': they also go to shops that were comped", async () => {
+    // Not the suite's default "Trial Shop" name, or the shop's own name matches.
+    const shop = await makeShop({ name: "Fade Room", trialEndsAt: daysAgo(12), trialReminderStage: 3 });
+    await runFiltered(NOW);
+    const [email] = aboutShop(shop.id);
+    // The shared template's leading HTML comment is never shown to anyone, and
+    // the suite's owner is literally named "Trial Owner".
+    const shown = (email!.subject + email!.text + (email!.html ?? "").replace(/<!--[\s\S]*?-->/g, "")).replaceAll(
+      "Trial Owner",
+      "",
+    );
+    expect(shown).not.toMatch(/trial/i);
+  });
+
+  it("a shop found already 20 days locked gets ONE follow-up (the day-10 one), not two", async () => {
+    const shop = await makeShop({ trialEndsAt: daysAgo(20), trialReminderStage: 3 });
+    expect(await runFiltered(NOW)).toEqual([{ shopId: shop.id, stage: 5, ownerEmail }]);
+    expect(aboutShop(shop.id)).toHaveLength(1);
+  });
+
+  it("a shop never told its trial ended gets THAT email first, not a follow-up", async () => {
+    const shop = await makeShop({ trialEndsAt: daysAgo(20), trialReminderStage: 1 });
+    expect(await runFiltered(NOW)).toEqual([{ shopId: shop.id, stage: 3, ownerEmail }]);
+    expect(aboutShop(shop.id)[0]!.subject).toContain("trial has ended");
+    // The day-10 follow-up comes on the next sweep: it has been locked 20 days.
+    expect(await runFiltered(daysOn(1))).toEqual([{ shopId: shop.id, stage: 5, ownerEmail }]);
+  });
+
+  it("an uncomped shop counts from the UNCOMP, not from a trial that ended long before", async () => {
+    // Trial ended 60 days ago, comp switched off 4 days ago: day-3 follow-up, not day-10.
+    const shop = await makeShop({ trialEndsAt: daysAgo(60), compEndedAt: daysAgo(4), trialReminderStage: 3 });
+    expect(await runFiltered(NOW)).toEqual([{ shopId: shop.id, stage: 4, ownerEmail }]);
+  });
+
+  it("an uncomped shop with no trial date still gets the follow-ups", async () => {
+    // Nothing else will ever email it: it has no trial ladder.
+    const shop = await makeShop({ trialEndsAt: null, compEndedAt: daysAgo(4) });
+    expect(await runFiltered(NOW)).toEqual([{ shopId: shop.id, stage: 4, ownerEmail }]);
+  });
+
+  it.each([
+    ["picked a plan", { subscriptionStatus: "active" }],
+    ["was comped again", { compAccess: true }],
+    ["had its trial extended", { trialEndsAt: daysOn(5) }],
+    ["locked longer ago than the cap", { trialEndsAt: daysAgo(FOLLOW_UP_MAX_DAYS + 5) }],
+  ])("a shop that %s gets no follow-up", async (_why, data) => {
+    await makeShop({ trialEndsAt: daysAgo(5), trialReminderStage: 3, ...data });
+    expect(await runFiltered(NOW)).toEqual([]);
+    expect(mine()).toHaveLength(0);
+  });
+});
+
+/**
  * 🔴 COMP SWITCHED OFF: the owner hears it the moment it leaves them with no
  * plan - and hears it ONCE, in the right words (never "your trial ended" for a
  * shop that was comped).
  */
 describe("notifyCompEnded", () => {
   it("no subscription and no trial left: emails the owner to choose a plan, and closes the trial ladder", async () => {
-    const shop = await makeShop({ compAccess: false, trialEndsAt: new Date(NOW.getTime() - 30 * MS_PER_DAY) });
+    // compEndedAt as the admin route stamps it, just before it calls notifyCompEnded.
+    const shop = await makeShop({
+      compAccess: false,
+      compEndedAt: NOW,
+      trialEndsAt: new Date(NOW.getTime() - 30 * MS_PER_DAY),
+    });
     expect(await notifyCompEnded(shop.id, NOW, { billingOn: true })).toBe("sent");
     const emails = mine();
     expect(emails).toHaveLength(1);
