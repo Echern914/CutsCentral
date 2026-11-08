@@ -758,3 +758,18 @@ describe("findHelp - teams, booth rent, no-shows and booking rules", () => {
     expect(a("booth-rent")).toMatch(/doesn't collect the rent/);
   });
 });
+
+/**
+ * Drick, 2026-11-07: a new targeted slot would not save, and the Assistant
+ * answered "publish button not working" with the rewards-link entry.
+ */
+describe("a targeted slot that won't publish", () => {
+  it("gets the publish answer, without taking the questions around it", () => {
+    expectAnswer("publish button not working", "targeted-slot-wont-publish");
+    expectAnswer("my target slots wont save", "targeted-slot-wont-publish");
+    expectAnswer("slots stuck on loading", "targeted-slot-wont-publish");
+    expectAnswer("how do I add a targeted slot", "targeted-slots");
+    expectAnswer("my targeted slots are not showing on my booking page", "slot-not-showing");
+    expectAnswer("I added a time to my service but it is not popping up on my site", "slot-not-showing");
+  });
+});

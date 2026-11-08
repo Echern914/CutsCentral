@@ -320,6 +320,24 @@ export const HELP_ANSWERS: HelpAnswer[] = [
     action: { label: "Open services", featureId: "targeted-slots" },
   },
   {
+    id: "targeted-slot-wont-publish",
+    // Drick, 2026-11-07: a new slot "not letting me fix it", "not popping up on
+    // site". The list sat on Loading and Publish was locked behind it, and the
+    // Assistant answered "publish button not working" with the rewards link.
+    // 🔴 No primaryFor: "save" and "button" are generic and would take every
+    // other won't-save question. The slot phrases carry it.
+    q: "Publish slot won't work — what do I do?",
+    a: "Fill in the form and tap Publish slot. You don't have to wait for your slot list underneath to load; when it saves you'll see “Slot published” and it's on your booking page right away.\n\nIf it says “Couldn't publish”, tap Publish slot again. If the list says it couldn't load, tap Try again; your slots are still live for clients while it does. If the page says ChairBack was updated, tap Reload first.\n\nPublished but clients still can't see it? Check the time is ahead of your minimum notice, and that nothing else (a booking, blocked time, or an Acuity or Square appointment) sits on it.",
+    keywords: [
+      // Not "targeted slot" or "publish slot" alone: those took "how do I add
+      // a targeted slot" from the entry that explains what they are.
+      "wont publish", "cant publish", "publish button", "slot wont save",
+      "slots wont save", "slot not saving", "stuck loading", "loading forever",
+    ],
+    category: "booking",
+    action: { label: "Open services", featureId: "targeted-slots" },
+  },
+  {
     id: "reminders",
     q: "Do clients get reminders?",
     a: "Automatically. A confirmation email when they book online, then a reminder email about a day before. If they use the ChairBack app they also get a push a day before and 2 hours before. You don't do anything.\n\nA booking you make yourself (by phone, at the chair, off the waitlist) sends them the same confirmation email, and a push if they use the app. To skip it, untick Send them a confirmation in New appointment. A time that has already passed never sends one.\n\nReminders are the single biggest thing you can do about no-shows.",
@@ -1292,7 +1310,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     keywords: [
       "not showing", "missing slot", "no times", "cant book", "no availability",
       "doesnt show", "wont show", "empty calendar", "no slots", "why cant",
-      "disappeared", "not bookable",
+      "disappeared", "not bookable", "not popping up", "added a time",
     ],
     category: "booking",
     action: { label: "Open services", featureId: "services" },
