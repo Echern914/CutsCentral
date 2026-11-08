@@ -2381,6 +2381,15 @@ function TargetedSlotsManager({
   const [editMinutes, setEditMinutes] = useState(30);
   const [editPrice, setEditPrice] = useState("");
   const [pending, start] = useTransition();
+  // 🔴 READING THE LIST NEVER LOCKS PUBLISH. One shared transition meant the
+  // Publish button sat disabled for as long as the list was loading, and the
+  // list once loaded for minutes - Drick (2026-11-07) could not add a 7pm slot
+  // at all. Publishing needs nothing from the list, so only the buttons ON the
+  // list (which act on rows that may be about to change) wait for it. A plain
+  // flag, not a second transition: the suite's React 18 drops a transition's
+  // pending at its first await, so only a flag is the same in tests and prod.
+  const [loading, setLoading] = useState(false);
+  const listBusy = pending || loading;
   // The edit form is the publish form at the top of the card, often a long
   // scroll above the series' own Edit button - on a phone the tap looked dead.
   const editBannerRef = useRef<HTMLDivElement | null>(null);
@@ -2389,8 +2398,8 @@ function TargetedSlotsManager({
   }, [editingRule]);
 
   function refresh() {
-    start(async () => {
-      const res = await loadAction(listTargetedSlotsAction);
+    setLoading(true);
+    void loadAction(listTargetedSlotsAction).then((res) => {
       if (res.ok && res.value.ok && res.value.slots) {
         setSlots(res.value.slots);
         setRules(res.value.rules ?? []);
@@ -2399,6 +2408,7 @@ function TargetedSlotsManager({
       } else {
         setLoadFailure(res.ok ? "failed" : res.failure);
       }
+      setLoading(false);
     });
   }
   // First load on mount (no server plumbing needed for a settings subsection).
@@ -3032,7 +3042,7 @@ function TargetedSlotsManager({
           <span className="text-xs text-gold">{selected.size} selected</span>
           <button
             onClick={removeSelected}
-            disabled={pending}
+            disabled={listBusy}
             className="text-xs font-semibold text-danger-soft hover:underline disabled:opacity-50"
           >
             Remove selected
@@ -3114,14 +3124,14 @@ function TargetedSlotsManager({
                     <>
                       <button
                         onClick={() => beginEditRule(rule)}
-                        disabled={pending}
+                        disabled={listBusy}
                         className="text-xs text-gold hover:underline disabled:opacity-50"
                       >
                         Edit
                       </button>
                       <button
                         onClick={() => duplicateRule(rule)}
-                        disabled={pending}
+                        disabled={listBusy}
                         aria-label={`Duplicate ${rule.label?.trim() || "series"}`}
                         className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
                       >
@@ -3131,7 +3141,7 @@ function TargetedSlotsManager({
                   )}
                   <button
                     onClick={() => removeRule(rule)}
-                    disabled={pending}
+                    disabled={listBusy}
                     className="text-xs text-danger-soft hover:underline disabled:opacity-50"
                   >
                     {rule.indefinite ? "Turn off" : "Remove series"}
@@ -3243,7 +3253,7 @@ function TargetedSlotsManager({
               </button>
               <button
                 onClick={() => duplicateSlot(t)}
-                disabled={pending}
+                disabled={listBusy}
                 aria-label={`Duplicate ${t.label?.trim() || "slot"}`}
                 className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
               >
@@ -3251,7 +3261,7 @@ function TargetedSlotsManager({
               </button>
               <button
                 onClick={() => remove(t.id)}
-                disabled={pending}
+                disabled={listBusy}
                 className="text-xs text-danger-soft hover:underline disabled:opacity-50"
               >
                 Remove
@@ -3295,7 +3305,7 @@ function TargetedSlotsManager({
             />
             <button
               onClick={() => saveSlotEdit(t.id)}
-              disabled={pending}
+              disabled={listBusy}
               className="rounded-lg bg-gold px-3 py-1 text-xs font-semibold text-charcoal-900 disabled:opacity-50"
             >
               Save

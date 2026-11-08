@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-07-publish-slot-while-loading",
+    date: "2026-11-07",
+    kind: "fix",
+    title: "Publish a targeted slot without waiting",
+    body:
+      "The Publish button on Targeted slots no longer waits for your slot list to load, so you can add a new slot " +
+      "right away. And if the list ever takes too long, it now says it couldn't load and gives you Try again, " +
+      "instead of saying Loading forever.",
+  },
+  {
     id: "2026-11-02-affiliates-get-paid",
     date: "2026-11-02",
     kind: "feature",

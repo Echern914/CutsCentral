@@ -22,6 +22,16 @@ describe("loadAction", () => {
     });
   });
 
+  it("🔴 a load that never answers fails at the deadline instead of loading forever", async () => {
+    const never = () => new Promise<{ ok: true }>(() => {});
+    expect(await loadAction(never, 20)).toEqual({ ok: false, failure: "failed" });
+  });
+
+  it("an answer inside the deadline is not cut off", async () => {
+    const slow = () => new Promise<{ ok: true }>((r) => setTimeout(() => r({ ok: true }), 5));
+    expect(await loadAction(slow, 200)).toEqual({ ok: true, value: { ok: true } });
+  });
+
   it("a throw in Next's own missing-action wording is a stale deployment", async () => {
     const err = new Error(
       'Failed to find Server Action "abc123". This request might be from an older or newer deployment.',

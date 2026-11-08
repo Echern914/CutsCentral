@@ -114,6 +114,16 @@ describe("Targeted slots card", () => {
     expect(screen.queryByText("Loading your targeted slots…")).toBeNull();
   });
 
+  it("🔴 Publish stays usable while the list is still loading", async () => {
+    // Drick, 2026-11-07: the list sat on "Loading..." for minutes and the
+    // Publish button was disabled the whole time, so a 7pm slot never saved.
+    a.listTargetedSlotsAction.mockReturnValue(new Promise(() => {}));
+    renderTab();
+    expect(await screen.findByText("Loading your targeted slots…")).toBeTruthy();
+    const publish = screen.getByRole("button", { name: "Publish slot" }) as HTMLButtonElement;
+    expect(publish.disabled).toBe(false);
+  });
+
   it("🔴 a failed read says so and reassures; Try again reads again and shows the list", async () => {
     a.listTargetedSlotsAction.mockResolvedValueOnce({ ok: false });
     renderTab();

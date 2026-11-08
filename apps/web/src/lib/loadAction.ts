@@ -47,12 +47,33 @@ export function isStaleDeploymentError(err: unknown): boolean {
   return err instanceof Error && STALE_DEPLOYMENT.test(err.message);
 }
 
-export async function loadAction<T>(call: () => Promise<T>): Promise<Loaded<Exclude<T, undefined>>> {
+/**
+ * 🔴 A LOAD THAT NEVER ANSWERS IS A FAILURE. The API call inside an action
+ * gives up at 12s, but the action itself can wait far longer: Next runs a
+ * page's server actions one at a time, so one stuck call holds every later
+ * one. Drick's Targeted slots card (2026-11-07) sat on "Loading your targeted
+ * slots..." for minutes, and the card's Publish button was disabled for as
+ * long. Past this deadline the card says it couldn't load and offers Try again.
+ */
+export const LOAD_DEADLINE_MS = 20_000;
+
+export async function loadAction<T>(
+  call: () => Promise<T>,
+  deadlineMs: number = LOAD_DEADLINE_MS,
+): Promise<Loaded<Exclude<T, undefined>>> {
   let value: T;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    value = await call();
+    value = await Promise.race([
+      call(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("load_deadline")), deadlineMs);
+      }),
+    ]);
   } catch (err) {
     return { ok: false, failure: isStaleDeploymentError(err) ? "stale" : "failed" };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   if (value === undefined) return { ok: false, failure: "stale" };
   return { ok: true, value: value as Exclude<T, undefined> };
