@@ -1,15 +1,15 @@
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { createApp } from "../app.js";
-import { __setMessageProviderForTests } from "../messaging/twilio.js";
+import { __setMessageProviderForTests, smsEnabled } from "../messaging/twilio.js";
+import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 import type { SendMessageInput } from "../messaging/provider.js";
 import { logger } from "../logger.js";
 import {
-  phoneDigest,
-  recoverySmsBody,
-  RECOVERY_NUDGE_BODY,
+  recoveryEmail,
+  recoveryPairDigest,
   RECOVERY_PURPOSE,
 } from "../services/rewardsRecovery.js";
 import {
@@ -19,13 +19,13 @@ import {
 } from "../services/recoverySmsBudget.js";
 
 /**
- * Rewards recovery from the OUTSIDE: constancy, the SMS cost boundary, and
- * the legacy mobile route - which now shares ONE challenge engine with the
- * new one, so switching doors buys no extra allowance.
+ * Rewards recovery from the OUTSIDE: constancy, the email it sends, and the
+ * legacy mobile route - which shares ONE challenge engine with the new one, so
+ * switching doors buys no extra allowance.
  *
  * Sends are FIRE-AND-FORGET (the response leaves before any provider work on
- * every path), so SMS assertions go through `settle()` - a bounded poll, not a
- * sleep-and-hope.
+ * every path), so email assertions go through `settle()` - a bounded poll, not
+ * a sleep-and-hope.
  */
 
 const app = createApp();
@@ -33,7 +33,8 @@ const emails: string[] = [];
 let shopA: string;
 let shopB: string;
 let ownerCookieA: string;
-let sent: SendMessageInput[] = [];
+let mail: SendEmailInput[] = [];
+let texts: SendMessageInput[] = [];
 let phoneSeq = 0;
 
 /** Distinct prefix so PII sweeps of shared stores stay scoped to this suite. */
@@ -41,6 +42,8 @@ function freshPhone(): string {
   phoneSeq += 1;
   return `+1212555${String(8000 + phoneSeq).padStart(4, "0")}`;
 }
+
+const emailOf = (phone: string) => `cust${phone.slice(1)}@test.local`;
 
 /** Bounded wait for the fire-and-forget pipeline - never a bare sleep. */
 async function settle(pred: () => boolean | Promise<boolean>): Promise<void> {
@@ -51,10 +54,12 @@ async function settle(pred: () => boolean | Promise<boolean>): Promise<void> {
   throw new Error("settle: condition never became true");
 }
 
-function codeFor(phone: string): string {
-  const body = [...sent].reverse().find((s) => s.to === phone)?.body ?? "";
-  const m = /(\d{6})/.exec(body);
-  expect(m, "no code SMS").toBeTruthy();
+const mailTo = (to: string) => mail.filter((m) => m.to === to);
+
+function codeFor(to: string): string {
+  const subject = [...mail].reverse().find((m) => m.to === to)?.subject ?? "";
+  const m = /(\d{6})/.exec(subject);
+  expect(m, "no code email").toBeTruthy();
   return m![1]!;
 }
 
@@ -74,7 +79,7 @@ async function makeShopOwner(label: string, shopName: string) {
   return { cookie, shopId: shop.body.id as string };
 }
 
-/** A TEXTABLE client - the only kind a recovery SMS may be sent for. */
+/** A client with an address on file, textable for the manager resend's sake. */
 async function makeClient(shopId: string, phone: string, over: Record<string, unknown> = {}) {
   return prisma.client.create({
     data: {
@@ -82,6 +87,7 @@ async function makeClient(shopId: string, phone: string, over: Record<string, un
       acuityClientKey: `${phone}-${randomToken(4)}`,
       firstName: "Cust",
       phone,
+      email: emailOf(phone),
       magicToken: randomToken(),
       smsConsentAt: new Date(),
       optedOut: false,
@@ -91,13 +97,19 @@ async function makeClient(shopId: string, phone: string, over: Record<string, un
   });
 }
 
+const recordEmail = async (input: SendEmailInput) => {
+  mail.push(input);
+  return { id: `TEST${mail.length}`, status: "sent" as const };
+};
+
 beforeAll(async () => {
   process.env.DRY_RUN = "true";
+  __setSendEmailForTests(recordEmail);
   __setMessageProviderForTests({
     channel: "SMS",
     send: async (input) => {
-      sent.push(input);
-      return { sid: `TEST${sent.length}`, status: "sent" };
+      texts.push(input);
+      return { sid: `TEST${texts.length}`, status: "sent" };
     },
   });
   const a = await makeShopOwner("rrec-a", "Alpha Fades");
@@ -107,17 +119,22 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
-  sent = [];
+  mail = [];
+  texts = [];
+  __setSendEmailForTests(recordEmail);
   await prisma.phoneRecoveryCode.deleteMany({});
   await prisma.nudge.deleteMany({ where: { shopId: { in: [shopA, shopB] } } });
   await prisma.client.deleteMany({ where: { shopId: { in: [shopA, shopB] } } });
   // The platform budget windows would otherwise accumulate across tests.
-  await prisma.rateLimitCounter.deleteMany({ where: { key: { startsWith: "recSms:" } } });
+  await prisma.rateLimitCounter.deleteMany({
+    where: { OR: [{ key: { startsWith: "recSms:" } }, { key: { startsWith: "recEmail:" } }] },
+  });
   delete process.env.RECOVERY_SMS_HOURLY_CAP;
 });
 
 afterAll(async () => {
   __setMessageProviderForTests(undefined);
+  __setSendEmailForTests(undefined);
   for (const email of emails) {
     const user = await prisma.user.findUnique({ where: { email } });
     if (user) {
@@ -128,8 +145,8 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe("constancy and the zero-cost floor", () => {
-  it("🔴 an UNKNOWN but valid E.164 causes ZERO provider calls - and the same ok", async () => {
+describe("constancy and the zero-send floor", () => {
+  it("🔴 an UNKNOWN but valid E.164 sends NOTHING - and the same ok", async () => {
     const known = freshPhone();
     const unknown = freshPhone();
     await makeClient(shopA, known);
@@ -139,40 +156,39 @@ describe("constancy and the zero-cost floor", () => {
     expect(rKnown.body).toEqual({ ok: true });
     expect(rUnknown.body).toEqual(rKnown.body);
 
-    await settle(() => sent.some((s) => s.to === known));
-    expect(sent.filter((s) => s.to === unknown)).toHaveLength(0);
+    await settle(() => mailTo(emailOf(known)).length > 0);
+    expect(mail).toHaveLength(1);
     // No row, no spendable anything.
-    expect(
-      await prisma.phoneRecoveryCode.count({ where: { phoneHash: phoneDigest(unknown) } }),
-    ).toBe(0);
+    expect(await prisma.phoneRecoveryCode.count({})).toBe(1);
   });
 
-  it("🔴 an all-opted-out phone is byte-identical too, and costs nothing", async () => {
-    const stopped = freshPhone();
-    await makeClient(shopA, stopped, { optedOut: true, optOutSource: "sms_stop" });
-    const r = await post("/api/rewards-recovery/challenge", { phone: stopped });
+  it("🔴 a number with no email on file is byte-identical too, and sends nothing", async () => {
+    const noEmail = freshPhone();
+    await makeClient(shopA, noEmail, { email: null });
+    const r = await post("/api/rewards-recovery/challenge", { phone: noEmail });
     expect(r.body).toEqual({ ok: true });
     await new Promise((res) => setTimeout(res, 50)); // give a wrong send time to appear
-    expect(sent.filter((s) => s.to === stopped)).toHaveLength(0);
+    expect(mail).toHaveLength(0);
+    expect(await prisma.phoneRecoveryCode.count({})).toBe(0);
   });
 
-  it("🔴 a MULTI-SHOP phone gets exactly ONE SMS, naming no shop", async () => {
+  it("🔴 a MULTI-SHOP number with one address gets exactly ONE email, naming no shop", async () => {
     const multi = freshPhone();
     await makeClient(shopA, multi);
     await makeClient(shopB, multi);
     await post("/api/rewards-recovery/challenge", { phone: multi });
-    await settle(() => sent.some((s) => s.to === multi));
-    const mine = sent.filter((s) => s.to === multi);
+    await settle(() => mailTo(emailOf(multi)).length > 0);
+    const mine = mailTo(emailOf(multi));
     expect(mine).toHaveLength(1);
-    expect(mine[0]!.body).not.toMatch(/Alpha|Bravo/);
+    expect(mine[0]!.text + mine[0]!.subject + mine[0]!.html).not.toMatch(/Alpha|Bravo/);
   });
 
   it("verify failures are one body for wrong, replayed and never-issued", async () => {
     const phone = freshPhone();
     await makeClient(shopA, phone);
     await post("/api/rewards-recovery/challenge", { phone });
-    await settle(() => sent.some((s) => s.to === phone));
-    const code = codeFor(phone);
+    await settle(() => mailTo(emailOf(phone)).length > 0);
+    const code = codeFor(emailOf(phone));
     const wrongCode = code === "000000" ? "000001" : "000000";
 
     const wrong = await post("/api/rewards-recovery/verify", { phone, code: wrongCode });
@@ -203,40 +219,79 @@ describe("constancy and the zero-cost floor", () => {
   });
 });
 
-describe("the one-segment production SMS", () => {
-  // GSM-7 basic character set (3GPP TS 23.038). Anything outside it - or in
-  // the extension table - would shrink or split the segment.
-  const GSM7 =
-    "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?" +
-    "¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
+describe("🔴 it works with texting OFF, which is the whole reason it is email", () => {
+  it("🔴 SMS_ENABLED=false: a customer gets the code and reaches their rewards, and no text is sent", async () => {
+    const before = process.env.SMS_ENABLED;
+    process.env.SMS_ENABLED = "false";
+    __resetEnvCacheForTests();
+    try {
+      expect(smsEnabled()).toBe(false);
+      const phone = freshPhone();
+      const client = await makeClient(shopA, phone);
+      await post("/api/rewards-recovery/challenge", { phone });
+      await settle(() => mailTo(emailOf(phone)).length > 0);
 
-  it("🔴 is exactly one GSM-7 segment, with the door and nothing person-shaped", () => {
-    const body = recoverySmsBody("123456");
-    for (const ch of body) {
-      expect(GSM7.includes(ch), `not GSM-7: ${JSON.stringify(ch)}`).toBe(true);
+      const v = await post("/api/rewards-recovery/verify", { phone, code: codeFor(emailOf(phone)) });
+      expect(v.body.verified).toBe(true);
+      const chooser = await post("/api/rewards-recovery/shops", { proof: v.body.proof });
+      expect(chooser.body.shops.map((s: { name: string }) => s.name)).toEqual(["Alpha Fades"]);
+      const sel = await post("/api/rewards-recovery/select", {
+        proof: v.body.proof,
+        selectionId: chooser.body.shops[0].selectionId,
+      });
+      expect(sel.body.url).toContain(`/r/${client.magicToken}/rewards`);
+      expect(texts).toHaveLength(0);
+    } finally {
+      if (before === undefined) delete process.env.SMS_ENABLED;
+      else process.env.SMS_ENABLED = before;
+      __resetEnvCacheForTests();
     }
-    expect(body.length).toBeLessThanOrEqual(160); // one segment
-    expect(body).toContain("/my-rewards");
-    expect(body).toContain("123456");
-    expect(body).toContain("Expires in 5 minutes");
-    expect(body).toMatch(/STOP/);
-    // Nothing that identifies anyone or anything: no shop, no name, no token,
-    // no phone, and no credential riding the URL.
-    expect(body).not.toMatch(/Alpha|Bravo|Cust/);
-    expect(body).not.toMatch(/\/r\//);
-    expect(body).not.toMatch(/\+1\d{10}/);
-    expect(body).not.toMatch(/my-rewards[/?#]\S/); // the URL carries NOTHING
+  });
+
+  it("🔴 a client who replied STOP to texts still gets back to their rewards by email", async () => {
+    const phone = freshPhone();
+    await makeClient(shopA, phone, { optedOut: true, optOutSource: "sms_stop", smsConsentAt: null });
+    await post("/api/rewards-recovery/challenge", { phone });
+    await settle(() => mailTo(emailOf(phone)).length > 0);
+    expect(texts).toHaveLength(0);
   });
 });
 
-describe("one complete recovery costs exactly one SMS", () => {
+describe("the email", () => {
+  it("🔴 has the code and the door, and nothing person-shaped", () => {
+    const { subject, text, html } = recoveryEmail("123456");
+    expect(subject).toContain("123456");
+    for (const body of [text, html]) {
+      expect(body).toContain("/my-rewards");
+      expect(body).toContain("123456");
+      expect(body).toContain("expires in 5 minutes");
+      // Nothing that identifies anyone or anything: no shop, no name, no token,
+      // no phone, and no credential riding the URL.
+      expect(body).not.toMatch(/Alpha|Bravo|Cust/);
+      expect(body).not.toMatch(/\/r\//);
+      expect(body).not.toMatch(/\+1\d{10}/);
+    }
+    expect(text).not.toMatch(/my-rewards[/?#]\S/); // the URL carries NOTHING
+    expect(html).not.toMatch(/my-rewards[/?#]/);
+  });
+
+  it("is sent to the address on file, tagged so a bounce can be read later, carrying no id", async () => {
+    const phone = freshPhone();
+    await makeClient(shopA, phone);
+    await post("/api/rewards-recovery/challenge", { phone });
+    await settle(() => mailTo(emailOf(phone)).length > 0);
+    expect(mailTo(emailOf(phone))[0]!.meta).toEqual({ kind: "rewards_recovery" });
+  });
+});
+
+describe("one complete recovery costs exactly one email", () => {
   it("🔴 the NEW flow: challenge -> verify -> chooser -> select, one send total", async () => {
     const phone = freshPhone();
     const a = await makeClient(shopA, phone);
     const b = await makeClient(shopB, phone);
     await post("/api/rewards-recovery/challenge", { phone });
-    await settle(() => sent.some((s) => s.to === phone));
-    const v = await post("/api/rewards-recovery/verify", { phone, code: codeFor(phone) });
+    await settle(() => mailTo(emailOf(phone)).length > 0);
+    const v = await post("/api/rewards-recovery/verify", { phone, code: codeFor(emailOf(phone)) });
     const proof = v.body.proof as string;
     const chooser = await post("/api/rewards-recovery/shops", { proof });
     expect(chooser.body.shops).toHaveLength(2);
@@ -244,13 +299,14 @@ describe("one complete recovery costs exactly one SMS", () => {
     expect(flat).not.toContain(a.magicToken);
     expect(flat).not.toContain(shopA);
     expect(flat).not.toContain(phone);
+    expect(flat).not.toContain(emailOf(phone));
     const bravo = chooser.body.shops.find((s: { name: string }) => s.name === "Bravo Fades");
     const sel = await post("/api/rewards-recovery/select", {
       proof,
       selectionId: bravo.selectionId,
     });
     expect(sel.body.url).toContain(`/r/${b.magicToken}/rewards`);
-    expect(sent.filter((s) => s.to === phone)).toHaveLength(1);
+    expect(mailTo(emailOf(phone))).toHaveLength(1);
   });
 
   it("🔴 the LEGACY journey: one POST, ONE message carrying code + door, verified through the chooser", async () => {
@@ -258,23 +314,23 @@ describe("one complete recovery costs exactly one SMS", () => {
     await makeClient(shopA, phone);
     const res = await post("/api/rewards/resolve-by-phone", { phone });
     expect(res.body).toEqual({ ok: true });
-    await settle(() => sent.some((s) => s.to === phone));
+    await settle(() => mailTo(emailOf(phone)).length > 0);
 
-    const mine = sent.filter((s) => s.to === phone);
+    const mine = mailTo(emailOf(phone));
     expect(mine).toHaveLength(1);
     // The ONE message: the code AND the door, no shop, no rewards link.
-    expect(mine[0]!.body).toContain("/my-rewards");
-    expect(mine[0]!.body).toMatch(/\d{6}/);
-    expect(mine[0]!.body).not.toMatch(/Alpha/);
-    expect(mine[0]!.body).not.toContain("/r/");
+    expect(mine[0]!.text).toContain("/my-rewards");
+    expect(mine[0]!.text).toMatch(/\d{6}/);
+    expect(mine[0]!.text).not.toMatch(/Alpha/);
+    expect(mine[0]!.text).not.toContain("/r/");
 
-    // The customer enters the phone and THAT code - no second SMS anywhere.
-    const v = await post("/api/rewards-recovery/verify", { phone, code: codeFor(phone) });
+    // The customer enters the phone and THAT code - no second send anywhere.
+    const v = await post("/api/rewards-recovery/verify", { phone, code: codeFor(emailOf(phone)) });
     expect(v.body.verified).toBe(true);
     const chooser = await post("/api/rewards-recovery/shops", { proof: v.body.proof });
     expect(chooser.status).toBe(200);
     expect(chooser.body.shops.map((s: { name: string }) => s.name)).toEqual(["Alpha Fades"]);
-    expect(sent.filter((s) => s.to === phone)).toHaveLength(1);
+    expect(mailTo(emailOf(phone))).toHaveLength(1);
   });
 
   it("🔴 legacy known/unknown answer byte-identically", async () => {
@@ -285,52 +341,50 @@ describe("one complete recovery costs exactly one SMS", () => {
     expect(r1.status).toBe(r2.status);
     expect(r1.body).toEqual(r2.body);
   });
-
-  it("audits the send on the OLDEST textable row, never the most recently active", async () => {
-    const phone = freshPhone();
-    const a = await makeClient(shopA, phone, { createdAt: new Date(Date.now() - 86_400_000) });
-    await makeClient(shopB, phone, { lastVisitAt: new Date() });
-    await post("/api/rewards/resolve-by-phone", { phone });
-    await settle(async () => (await prisma.nudge.count({ where: { clientId: a.id } })) > 0);
-    const nudge = await prisma.nudge.findFirst({ where: { clientId: a.id } });
-    expect(nudge!.shopId).toBe(shopA);
-  });
 });
 
-describe("one shared allowance across every door", () => {
+describe("one shared allowance across every self-serve door", () => {
   it("🔴 alternating legacy and new draws ONE cooldown budget - not two", async () => {
     const phone = freshPhone();
     await makeClient(shopA, phone);
     await post("/api/rewards/resolve-by-phone", { phone });
-    await settle(() => sent.some((s) => s.to === phone));
-    // Same phone, other door, inside the cooldown: nothing.
+    await settle(() => mailTo(emailOf(phone)).length > 0);
+    // Same number, other door, inside the cooldown: nothing.
     await post("/api/rewards-recovery/challenge", { phone });
     await post("/api/rewards/resolve-by-phone", { phone });
     await post("/api/rewards-recovery/challenge", { phone });
     await new Promise((r) => setTimeout(r, 100));
-    expect(sent.filter((s) => s.to === phone)).toHaveLength(1);
+    expect(mailTo(emailOf(phone))).toHaveLength(1);
   });
+});
 
-  it("🔴 the MANAGER resend and self-serve share bounded totals, alternated across every entry point", async () => {
+describe("the manager's text is its own door now", () => {
+  it("🔴 a recovery email leaves no text trail, so it never blocks the manager's resend", async () => {
     const phone = freshPhone();
     const client = await makeClient(shopA, phone);
-    // Self-serve first (any device, any entry point - same routes).
     await post("/api/rewards-recovery/challenge", { phone });
-    await settle(() => sent.some((s) => s.to === phone));
-    expect(sent.filter((s) => s.to === phone)).toHaveLength(1);
+    await settle(() => mailTo(emailOf(phone)).length > 0);
+    expect(await prisma.nudge.count({ where: { clientId: client.id } })).toBe(0);
 
-    // Manager resend inside the 5-minute nudge-trail window: refused - the
-    // recovery SMS audited onto the same loyalty trail, so the trails are one.
     const resend = await request(app)
       .post(`/api/dashboard/clients/${client.id}/rewards-link`)
       .set("Cookie", ownerCookieA);
-    expect(resend.status).toBe(429);
+    expect(resend.status).toBe(200);
+    expect(texts.filter((t) => t.to === phone)).toHaveLength(1);
+  });
 
-    // Both self-serve doors inside the 60s cooldown: nothing.
-    await post("/api/rewards/resolve-by-phone", { phone });
+  it("🔴 a recovery email spends none of the SMS budget, and its own ledger counts it", async () => {
+    const phone = freshPhone();
+    await makeClient(shopA, phone);
     await post("/api/rewards-recovery/challenge", { phone });
-    await new Promise((r) => setTimeout(r, 100));
-    expect(sent.filter((s) => s.to === phone)).toHaveLength(1);
+    await settle(() => mailTo(emailOf(phone)).length > 0);
+    expect(
+      await prisma.rateLimitCounter.count({ where: { key: { startsWith: "recSms:" } } }),
+    ).toBe(0);
+    const hour = await prisma.rateLimitCounter.findFirst({
+      where: { key: { startsWith: "recEmail:budget:h:" } },
+    });
+    expect(hour!.hits).toBe(1);
   });
 
   it("🔴 the manager door has a DAILY ceiling on top of the 5-minute cooldown", async () => {
@@ -356,40 +410,33 @@ describe("one shared allowance across every door", () => {
       .set("Cookie", ownerCookieA);
     expect(res.status).toBe(429);
     expect(res.body.error).toBe("too_many_today");
-    expect(sent.filter((s) => s.to === phone)).toHaveLength(0);
+    expect(texts.filter((t) => t.to === phone)).toHaveLength(0);
   });
 });
 
 describe("provider failure discipline", () => {
   const HOSTILE = {
-    phone: "+19995550000",
     otp: "SECRET_OTP_999111",
-    auth: "Authorization: Bearer SK_hostile_cred",
-    sid: "twilio_sid_ACdeadbeef",
+    auth: "Authorization: Bearer re_hostile_cred",
+    id: "resend_msg_deadbeef",
   };
 
-  it("🔴 a hostile provider error reaches NO log line, and the Nudge carries only a fixed classification", async () => {
+  it("🔴 a hostile provider error reaches NO log line", async () => {
     const phone = freshPhone();
     await makeClient(shopA, phone);
     const warnSpy = vi.spyOn(logger, "warn");
     const errorSpy = vi.spyOn(logger, "error");
     const infoSpy = vi.spyOn(logger, "info");
-    __setMessageProviderForTests({
-      channel: "SMS",
-      send: async () => {
-        throw new Error(
-          `provider exploded for ${HOSTILE.phone} otp=${HOSTILE.otp} body="ChairBack code" ${HOSTILE.auth} ${HOSTILE.sid}`,
-        );
-      },
+    __setSendEmailForTests(async (input) => {
+      throw new Error(
+        `provider exploded for ${input.to} ${phone} otp=${HOSTILE.otp} body="${input.text}" ${HOSTILE.auth} ${HOSTILE.id}`,
+      );
     });
     try {
       await post("/api/rewards-recovery/challenge", { phone });
-      await settle(async () => {
-        const n = await prisma.nudge.findFirst({ where: { shopId: shopA, status: "FAILED" } });
-        return Boolean(n);
-      });
-      const nudge = await prisma.nudge.findFirst({ where: { shopId: shopA, status: "FAILED" } });
-      expect(nudge!.failedReason).toBe("send_failed");
+      await settle(() =>
+        warnSpy.mock.calls.some((c) => c[0] === "rewards recovery: challenge send failed"),
+      );
 
       const everything = JSON.stringify([
         warnSpy.mock.calls,
@@ -399,19 +446,13 @@ describe("provider failure discipline", () => {
       for (const fragment of Object.values(HOSTILE)) {
         expect(everything).not.toContain(fragment);
       }
-      // And no raw destination phone either.
+      // And no raw destination either.
       expect(everything).not.toContain(phone);
+      expect(everything).not.toContain(emailOf(phone));
     } finally {
       warnSpy.mockRestore();
       errorSpy.mockRestore();
       infoSpy.mockRestore();
-      __setMessageProviderForTests({
-        channel: "SMS",
-        send: async (input) => {
-          sent.push(input);
-          return { sid: `TEST${sent.length}`, status: "sent" };
-        },
-      });
     }
   });
 
@@ -419,39 +460,41 @@ describe("provider failure discipline", () => {
     const phone = freshPhone();
     await makeClient(shopA, phone);
     let calls = 0;
-    __setMessageProviderForTests({
-      channel: "SMS",
-      send: async () => {
-        calls += 1;
-        throw new Error("ETIMEDOUT");
-      },
+    __setSendEmailForTests(async () => {
+      calls += 1;
+      throw new Error("ETIMEDOUT");
     });
-    try {
-      await post("/api/rewards-recovery/challenge", { phone });
-      await settle(async () =>
-        Boolean(await prisma.nudge.findFirst({ where: { shopId: shopA, status: "FAILED" } })),
-      );
-      expect(calls).toBe(1); // exactly one dispatch, no retry
-      // The allowance was spent: the row's send counter advanced anyway.
-      const row = await prisma.phoneRecoveryCode.findFirst({
-        where: { phoneHash: phoneDigest(phone), purpose: RECOVERY_PURPOSE },
-      });
-      expect(row!.sendCount).toBe(1);
-    } finally {
-      __setMessageProviderForTests({
-        channel: "SMS",
-        send: async (input) => {
-          sent.push(input);
-          return { sid: `TEST${sent.length}`, status: "sent" };
-        },
-      });
-    }
+    await post("/api/rewards-recovery/challenge", { phone });
+    await settle(() => calls > 0);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls).toBe(1); // exactly one dispatch, no retry
+    // The allowance was spent: the row's send counter advanced anyway.
+    const row = await prisma.phoneRecoveryCode.findFirst({
+      where: { phoneHash: recoveryPairDigest(phone, emailOf(phone)), purpose: RECOVERY_PURPOSE },
+    });
+    expect(row!.sendCount).toBe(1);
+  });
+
+  it("🔴 a dispatch that never returns still answers, with the allowance consumed", async () => {
+    const phone = freshPhone();
+    await makeClient(shopA, phone);
+    // The process "dies mid-dispatch": the promise simply never settles.
+    __setSendEmailForTests(() => new Promise(() => {}));
+    const res = await post("/api/rewards-recovery/challenge", { phone });
+    expect(res.body).toEqual({ ok: true });
+    const row = await prisma.phoneRecoveryCode.findFirst({
+      where: { phoneHash: recoveryPairDigest(phone, emailOf(phone)), purpose: RECOVERY_PURPOSE },
+    });
+    expect(row!.sendCount).toBe(1); // allowance consumed, never refunded
+    const budget = await prisma.rateLimitCounter.findFirst({
+      where: { key: { startsWith: "recEmail:budget:h:" } },
+    });
+    expect(budget!.hits).toBeGreaterThanOrEqual(1);
   });
 });
 
-describe("segments are the budget unit", () => {
-  it("🔴 both production bodies are exactly ONE billable GSM-7 segment", () => {
-    expect(billableSegments(recoverySmsBody("123456"))).toBe(1);
+describe("the manager's text is still budgeted in segments", () => {
+  it("🔴 its production body is exactly ONE billable GSM-7 segment", () => {
     const managerBody = `Your ChairBack rewards link: https://getchairback.com/r/${"x".repeat(43)}/rewards Reply STOP to opt out.`;
     expect(billableSegments(managerBody)).toBe(1);
   });
@@ -461,32 +504,6 @@ describe("segments are the budget unit", () => {
     expect(billableSegments("a".repeat(161))).toBe(2); // concatenated GSM-7
     expect(billableSegments("😀" + "a".repeat(69))).toBe(2); // UCS-2, 71 units
     expect(billableSegments("{}".repeat(41))).toBe(2); // extension chars cost 2 septets
-  });
-
-  it("🔴 SELF-SERVICE and the MANAGER RESEND draw the same platform segment budget", async () => {
-    process.env.RECOVERY_SMS_HOURLY_CAP = "2";
-    // Unit 1: self-service.
-    const phone = freshPhone();
-    await makeClient(shopA, phone);
-    await post("/api/rewards-recovery/challenge", { phone });
-    await settle(() => sent.some((s) => s.to === phone));
-    // Unit 2: manager resend for a DIFFERENT client.
-    const phone2 = freshPhone();
-    const client2 = await makeClient(shopA, phone2);
-    const resend = await request(app)
-      .post(`/api/dashboard/clients/${client2.id}/rewards-link`)
-      .set("Cookie", ownerCookieA);
-    expect(resend.status).toBe(200);
-    // The budget is now exhausted for BOTH doors.
-    const phone3 = freshPhone();
-    const client3 = await makeClient(shopA, phone3);
-    await post("/api/rewards-recovery/challenge", { phone: phone3 });
-    const managerRefused = await request(app)
-      .post(`/api/dashboard/clients/${client3.id}/rewards-link`)
-      .set("Cookie", ownerCookieA);
-    expect(managerRefused.status).toBe(502); // refused BEFORE dispatch
-    await new Promise((r) => setTimeout(r, 100));
-    expect(sent.filter((s) => s.to === phone3)).toHaveLength(0);
   });
 
   it("🔴 a reservation cannot PARTIALLY fit past the cap", async () => {
@@ -504,116 +521,60 @@ describe("segments are the budget unit", () => {
   });
 });
 
-describe("write-ahead is genuinely write-ahead", () => {
-  it("🔴 the redacted PENDING Nudge exists BEFORE the HTTP response completes", async () => {
-    const phone = freshPhone();
-    const client = await makeClient(shopA, phone);
-    await post("/api/rewards-recovery/challenge", { phone });
-    // No settle, no polling: the row committed with the challenge itself.
-    const nudge = await prisma.nudge.findFirst({ where: { clientId: client.id } });
-    expect(nudge).not.toBeNull();
-    expect(nudge!.body).toBe(RECOVERY_NUDGE_BODY);
-  });
-
-  it("🔴 a dispatch that never returns leaves PENDING + a consumed allowance", async () => {
-    const phone = freshPhone();
-    const client = await makeClient(shopA, phone);
-    __setMessageProviderForTests({
-      channel: "SMS",
-      // The process "dies mid-dispatch": the promise simply never settles.
-      send: () => new Promise(() => {}),
-    });
-    try {
-      await post("/api/rewards-recovery/challenge", { phone });
-      const nudge = await prisma.nudge.findFirst({ where: { clientId: client.id } });
-      expect(nudge!.status).toBe("PENDING"); // the honest record: we may have paid
-      const row = await prisma.phoneRecoveryCode.findFirst({
-        where: { phoneHash: phoneDigest(phone), purpose: RECOVERY_PURPOSE },
-      });
-      expect(row!.sendCount).toBe(1); // allowance consumed, never refunded
-      const budget = await prisma.rateLimitCounter.findFirst({
-        where: { key: { startsWith: "recSms:budget:h:" } },
-      });
-      expect(budget!.hits).toBeGreaterThanOrEqual(1);
-    } finally {
-      __setMessageProviderForTests({
-        channel: "SMS",
-        send: async (input) => {
-          sent.push(input);
-          return { sid: `TEST${sent.length}`, status: "sent" };
-        },
-      });
-    }
-  });
-});
-
 describe("no credential ever reaches an audit row", () => {
-  it("🔴 recovery and manager Nudges carry no OTP, magic token, phone or outbound body", async () => {
+  it("🔴 a manager Nudge carries no magic token, phone or outbound body", async () => {
     const phone = freshPhone();
     const client = await makeClient(shopA, phone);
-    await post("/api/rewards-recovery/challenge", { phone });
-    await settle(() => sent.some((s) => s.to === phone));
-    const code = codeFor(phone);
-    // Manager resend for a second client (first is inside its cooldown).
-    const phone2 = freshPhone();
-    const client2 = await makeClient(shopA, phone2);
     await request(app)
-      .post(`/api/dashboard/clients/${client2.id}/rewards-link`)
+      .post(`/api/dashboard/clients/${client.id}/rewards-link`)
       .set("Cookie", ownerCookieA);
 
-    const nudges = await prisma.nudge.findMany({
-      where: { clientId: { in: [client.id, client2.id] } },
-    });
-    expect(nudges.length).toBeGreaterThanOrEqual(2);
+    const nudges = await prisma.nudge.findMany({ where: { clientId: client.id } });
+    expect(nudges.length).toBeGreaterThanOrEqual(1);
     const flat = JSON.stringify(nudges.map((n) => [n.body, n.failedReason]));
-    expect(flat).not.toContain(code);
     expect(flat).not.toContain(client.magicToken);
-    expect(flat).not.toContain(client2.magicToken);
     expect(flat).not.toMatch(/\+1212555/);
-    for (const sms of sent) {
+    for (const sms of texts) {
       expect(flat).not.toContain(sms.body); // no stored outbound body, period
     }
   });
 });
 
 describe("admin cost summary", () => {
-  it("counts BOTH doors' rewards-access sends", async () => {
+  it("counts the manager door's sends", async () => {
     const phone = freshPhone();
-    await makeClient(shopA, phone);
-    await post("/api/rewards-recovery/challenge", { phone });
-    await settle(() => sent.some((s) => s.to === phone));
-    const phone2 = freshPhone();
-    const client2 = await makeClient(shopA, phone2);
+    const client = await makeClient(shopA, phone);
     await request(app)
-      .post(`/api/dashboard/clients/${client2.id}/rewards-link`)
+      .post(`/api/dashboard/clients/${client.id}/rewards-link`)
       .set("Cookie", ownerCookieA);
     // Metrics are fire-and-forget: settle on the counter itself.
     await settle(async () => {
       const c = await readRecoverySmsCosts(new Date());
-      return c.currentHour.attempt! >= 2 && c.currentHour.segments! >= 2;
+      return c.currentHour.attempt! >= 1 && c.currentHour.segments! >= 1;
     });
     const costs = await readRecoverySmsCosts(new Date());
-    expect(costs.currentHour.attempt).toBeGreaterThanOrEqual(2);
+    expect(costs.currentHour.attempt).toBeGreaterThanOrEqual(1);
     expect(costs.caps.hourly).toBeGreaterThan(0);
   });
 });
 
 describe("nothing leaks into shared stores", () => {
-  it("🔴 no raw phone in the recovery store, metric keys or budget keys", async () => {
+  it("🔴 no raw phone or address in the recovery store or budget keys", async () => {
     const phone = freshPhone();
     await makeClient(shopA, phone);
     await post("/api/rewards-recovery/challenge", { phone });
-    await settle(() => sent.some((s) => s.to === phone));
+    await settle(() => mailTo(emailOf(phone)).length > 0);
     const rows = await prisma.phoneRecoveryCode.findMany({});
     expect(JSON.stringify(rows)).not.toMatch(/\+1212555/);
-    // Metric/budget keys are pure timestamps - never a phone, hash or IP.
+    expect(JSON.stringify(rows)).not.toContain(emailOf(phone));
+    // Budget keys are pure timestamps - never a phone, address, hash or IP.
     const counters = await prisma.rateLimitCounter.findMany({
-      where: { key: { startsWith: "recSms:" } },
+      where: { key: { startsWith: "recEmail:" } },
       select: { key: true },
     });
     expect(counters.length).toBeGreaterThan(0);
     for (const c of counters) {
-      expect(c.key).toMatch(/^recSms:(budget|m):[a-z_]*:?[hd]:\d+$/);
+      expect(c.key).toMatch(/^recEmail:budget:[hd]:\d+$/);
     }
   });
 });

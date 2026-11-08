@@ -1502,7 +1502,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "rewards-link-broken",
     q: "A client's rewards link stopped working",
-    a: "Their punches are fine — the link is just a door, and the punches live on their profile.\n\nSend them to the \"Find my rewards\" page. They put in the mobile number you have for them, we text a 6-digit code, and they're back in. It's on your booking page, and a dead link now offers it automatically.\n\nA link stops working for one of two reasons: someone replaced it (the \"New link\" button on their profile kills every old one, which is exactly what you want if a link leaked), or the number moved to a different profile.\n\nIf they can't get the code, check the number on their profile is the one they're texting from.",
+    a: "Their punches are fine — the link is just a door, and the punches live on their profile.\n\nSend them to the \"Find my rewards\" page. They put in the mobile number you have for them, we email a 6-digit code to the address on their profile, and they're back in. It's on your booking page and your sign-in page, and a dead link now offers it automatically.\n\nA link stops working for one of two reasons: someone replaced it (the \"New link\" button on their profile kills every old one, which is exactly what you want if a link leaked), or the number moved to a different profile.\n\nIf they can't get the code, check their profile has both the number they typed and an email they can read.",
     keywords: [
       "link not working", "rewards link broken", "link expired", "link doesnt work",
       "lost link", "lost rewards", "cant open rewards", "rewards link dead",
@@ -1516,7 +1516,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "recover-rewards",
     q: "How does a client get their rewards back if they lost the link?",
-    a: "They verify their phone. On the \"Find my rewards\" page they enter their mobile number, we text a 6-digit code that lasts five minutes, and once it checks out they pick their business and land straight on their punch card.\n\nThe number has to be one you already have on their profile and they must not have texted STOP. Nothing is revealed before they verify — the page looks identical whether or not that number is on file, which is deliberate: it stops anyone fishing for whether someone is a client here.\n\nIf their number changed, update it on their profile first and then send them through.",
+    a: "They verify with a code. On the \"Find my rewards\" page they enter their mobile number, we email a 6-digit code that lasts five minutes, and once it checks out they pick their business and land straight on their punch card.\n\nTheir profile has to have both that number and an email address, and the code goes to that email. Nothing is revealed before they verify — the page looks identical whether or not that number is on file, which is deliberate: it stops anyone fishing for whether someone is a client here.\n\nIf their number or email changed, update it on their profile first and then send them through.",
     keywords: [
       "recover", "recovery", "find my rewards", "get rewards back", "verify phone",
       "forgot link", "restore rewards", "lost punches", "cant find rewards",

@@ -41,10 +41,10 @@ export function billableSegments(body: string): number {
 
 /**
  * The platform circuit breaker on REWARDS-ACCESS SMS spend, plus its cost
- * metrics. "Rewards-access" on purpose: this ledger covers the self-service
- * recovery challenge (both entry points) and the manager rewards-link resend,
- * and nothing else - waitlist, receptionist, booking-alert and campaign SMS
- * have their own budgets elsewhere.
+ * metrics. "Rewards-access" on purpose: this ledger covers the manager
+ * rewards-link resend and nothing else - waitlist, receptionist, booking-alert
+ * and campaign SMS have their own budgets elsewhere, and self-service recovery
+ * sends email on its own ledger, through takeWindowedBudget below.
  *
  * Everything here rides `rate_limit_counter` - the EXISTING atomic Postgres
  * rate infrastructure (#197) - because in-memory counters fragment across
@@ -269,8 +269,8 @@ export interface RecoverySmsCostSummary {
   trailing30Days: Record<string, number>;
 }
 
-/** The admin read: rewards-access SMS counters only (self-service recovery +
- * manager resend), in billable segments where the metric is spend-shaped.
+/** The admin read: rewards-access SMS counters only (the manager resend; earlier
+ * rows also hold self-service texts), in billable segments where spend-shaped.
  * Nothing customer-shaped exists in the store this reads. */
 export async function readRecoverySmsCosts(now: Date): Promise<RecoverySmsCostSummary> {
   const metrics: RecoverySmsMetric[] = [

@@ -67,7 +67,7 @@ describe("My rewards", () => {
     rec.recoveryChallengeAction.mockResolvedValue({ ok: true, status: 200, data: { ok: true }, error: null });
     render(<MyRewardsClient />);
     fireEvent.change(screen.getByPlaceholderText(/555/), { target: { value: "3025550199" } });
-    fireEvent.click(screen.getByText(/text me a code/i));
+    fireEvent.click(screen.getByText(/email me a code/i));
     fireEvent.click(await screen.findByRole("button", { name: "Use a different number" }));
     expect(screen.getByPlaceholderText(/555/)).toBeTruthy();
   });

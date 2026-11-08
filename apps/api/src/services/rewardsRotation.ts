@@ -20,8 +20,8 @@ import {
  *
  * What a rotation breaks, and why that's now survivable:
  * - Old texted links land on the /r dead-link page, which offers the
- *   phone-recovery door (/my-rewards, #340 + #342). The verified phone is
- *   the identity; the link was always just the shortcut.
+ *   recovery door (/my-rewards, #340 + #342). The number and the proven email
+ *   are the identity; the link was always just the shortcut.
  * - The Apple Wallet pass QR embeds the rewards URL, so rotation POKES the
  *   pass: registered devices re-fetch and get the current token baked in.
  *   Un-poked or offline passes scan to the dead-link page - same door.

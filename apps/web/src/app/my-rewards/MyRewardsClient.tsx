@@ -13,10 +13,10 @@ import {
 /**
  * The recovery flow, four screens: phone -> code -> choose your shop -> open.
  *
- * Copy discipline mirrors the API's constancy contract: the phone step always
- * says "if that number's on file we texted a code" - this page never knows,
+ * Copy discipline mirrors the API's constancy contract: the code step always
+ * says "if that number's on file we emailed a code" - this page never knows,
  * and never implies, whether the number exists. The only branch a viewer can
- * observe happens AFTER they proved they hold the phone.
+ * observe happens AFTER they proved they read the inbox the shop has on file.
  */
 
 type Step = "phone" | "code" | "choose" | "opening";
@@ -121,8 +121,8 @@ export function MyRewardsClient() {
       {step === "phone" && (
         <>
           <p className="text-center text-muted">
-            Enter the mobile number your shop has for you and we&apos;ll text you a
-            verification code.
+            Enter the mobile number your shop has for you. We&apos;ll email a code to
+            the address they have on file.
           </p>
           <input
             className={INPUT}
@@ -139,7 +139,7 @@ export function MyRewardsClient() {
             disabled={phone.trim().replace(/\D/g, "").length < 10 || pending}
             onClick={() => void sendCode()}
           >
-            {pending ? "One sec…" : "Text me a code"}
+            {pending ? "One sec…" : "Email me a code"}
           </button>
         </>
       )}
@@ -147,8 +147,8 @@ export function MyRewardsClient() {
       {step === "code" && (
         <>
           <p className="text-center text-muted">
-            If that number&apos;s on file, we just texted a 6-digit code. It expires in
-            5 minutes.
+            If that number&apos;s on file, we just sent a 6-digit code to the email your
+            shop has for you. It expires in 5 minutes.
           </p>
           <input
             className={`${INPUT} text-center tracking-[0.4em]`}
@@ -179,13 +179,19 @@ export function MyRewardsClient() {
           <button type="button" className={GHOST} disabled={pending} onClick={startOver}>
             Use a different number
           </button>
+          {/* Said to everyone, so it reveals nothing: no email on file looks the
+              same as a slow inbox, and either way the shop is the way in. */}
+          <p className="text-center text-sm text-muted">
+            Nothing after a minute? Check your spam folder, or ask your shop to send you your
+            personal rewards link.
+          </p>
         </>
       )}
 
       {step === "choose" &&
         (shops.length === 0 ? (
-          // Verified, and no shop knows this number. The one honest empty state
-          // in the flow - the viewer has proven they ARE the phone's owner.
+          // Verified, and no shop holds this number with this email any more. The
+          // one honest empty state in the flow - the viewer has proven the inbox.
           <>
             <p className="text-center text-muted">
               We couldn&apos;t find rewards for this number. If your shop uses
@@ -197,13 +203,13 @@ export function MyRewardsClient() {
           </>
         ) : (
           <>
-            <p className="text-center text-muted">Choose your shop:</p>
+            <p className="text-center text-muted">These are the shops you&apos;re connected to:</p>
             <ul className="flex flex-col gap-3">
               {shops.map((s, i) =>
-                // 🔴 A SHOP WHERE MORE THAN ONE PERSON HAS THIS NUMBER IS NOT A
-                // BUTTON. Verifying the phone proves they hold it, not which of
-                // those people they are - so nothing is opened, and the way in
-                // is the shop sending them their own link.
+                // 🔴 A SHOP WHERE MORE THAN ONE PERSON HAS THIS NUMBER AND EMAIL
+                // IS NOT A BUTTON. The code proves they read that inbox, not
+                // which of those people they are - so nothing is opened, and the
+                // way in is the shop sending them their own link.
                 s.ambiguous || !s.selectionId ? (
                   <li
                     key={`ambiguous-${i}`}
@@ -216,9 +222,9 @@ export function MyRewardsClient() {
                     <span className="min-w-0">
                       <span className="block truncate font-semibold text-offwhite">{s.name}</span>
                       <span className="block text-sm text-muted">
-                        More than one person at {s.name} uses this number, so we can&apos;t tell
-                        which profile is yours. Ask {s.name} to send you your personal rewards
-                        link.
+                        More than one person at {s.name} uses this number and email, so we
+                        can&apos;t tell which profile is yours. Ask {s.name} to send you your
+                        personal rewards link.
                       </span>
                     </span>
                   </li>
@@ -234,12 +240,13 @@ export function MyRewardsClient() {
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={s.logoUrl} alt="" className="h-10 w-10 rounded-full object-cover" />
                       ) : null}
-                      <span className="min-w-0">
+                      <span className="min-w-0 flex-1">
                         <span className="block truncate font-semibold text-offwhite">{s.name}</span>
                         <span className="block truncate text-sm text-muted">
                           {[s.city, s.region].filter(Boolean).join(", ") || s.industry}
                         </span>
                       </span>
+                      <span className="shrink-0 text-sm font-semibold text-gold">Connect</span>
                     </button>
                   </li>
                 ),

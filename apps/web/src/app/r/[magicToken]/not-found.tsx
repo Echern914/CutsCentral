@@ -9,7 +9,7 @@ import { NativeReadySignal } from "@/components/NativeReadySignal";
  * lands here is holding a dead credential, and (once link rotation ships)
  * every ROTATED link in an old text lands exactly here. So it must not be a
  * dead end that says "ask your shop" - the customer can re-earn their link
- * themselves at /my-rewards with the phone number they already own.
+ * themselves at /my-rewards with their number and the email their shop has.
  */
 export default function RewardsNotFound() {
   return (
@@ -21,8 +21,8 @@ export default function RewardsNotFound() {
         <h1 className="font-display text-2xl">Link not found</h1>
         <p className="mt-2 text-sm text-muted">
           This rewards link isn&apos;t valid anymore - but your rewards
-          aren&apos;t lost. Verify your phone number and we&apos;ll take you
-          right back to them.
+          aren&apos;t lost. Enter your number, we&apos;ll email you a code, and
+          we&apos;ll take you right back to them.
         </p>
         <Link
           href="/my-rewards"
@@ -31,7 +31,7 @@ export default function RewardsNotFound() {
           Find my rewards
         </Link>
         <p className="mt-3 text-xs text-muted">
-          Or ask your shop to text you a fresh link.
+          Or ask your shop to send you a fresh link.
         </p>
       </Card>
     </main>

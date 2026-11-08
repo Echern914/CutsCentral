@@ -242,7 +242,7 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     mcpTool: null,
     readOnly: true,
     confirmationRequired: false,
-    safeFallback: "Verify your phone at the rewards recovery page.",
+    safeFallback: "Get a code by email at the rewards recovery page.",
     neverExpose: ["that any OTHER shop exists for this phone", "magic tokens"],
   },
   {
@@ -257,7 +257,7 @@ export const SUPPORT_CAPABILITIES: readonly SupportCapability[] = [
     mcpTool: null,
     readOnly: true,
     confirmationRequired: false,
-    safeFallback: "Verify your phone at the rewards recovery page.",
+    safeFallback: "Get a code by email at the rewards recovery page.",
     neverExpose: ["cross-shop rewards existence"],
   },
   {
