@@ -588,7 +588,8 @@ function csvCell(value: string | number | null): string {
 /**
  * Accounts and their counts. Ids, codes and numbers only - no shop names, no
  * owner emails - so the file can be handed around without becoming a PII
- * incident. A test greps the output for both.
+ * incident. A test greps the output for both. The short code stays out for the
+ * same reason: its letters come from the business name.
  */
 export async function exportAffiliatesCsv(): Promise<string> {
   return runAsOwner(async (tx) => {
@@ -598,7 +599,6 @@ export async function exportAffiliatesCsv(): Promise<string> {
         id: true,
         shopId: true,
         code: true,
-        shortCode: true,
         status: true,
         createdAt: true,
         promotionStyles: true,
@@ -630,7 +630,6 @@ export async function exportAffiliatesCsv(): Promise<string> {
       "accountId",
       "shopId",
       "code",
-      "shortCode",
       "status",
       "createdAt",
       "styles",
@@ -648,7 +647,6 @@ export async function exportAffiliatesCsv(): Promise<string> {
           a.id,
           a.shopId,
           a.code,
-          a.shortCode,
           a.status,
           a.createdAt.toISOString(),
           a.promotionStyles.join("|"),
