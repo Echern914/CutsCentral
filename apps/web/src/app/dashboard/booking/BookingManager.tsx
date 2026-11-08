@@ -17,6 +17,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { FormError } from "@/components/ui/FormError";
 import { LoadFailed } from "@/components/ui/LoadFailed";
 import { loadAction, type LoadFailure } from "@/lib/loadAction";
+import { targetedSlotHoursConflicts } from "./targetedSlotHoursConflicts";
 import { NumberField } from "@/components/ui/NumberField";
 import { useToast } from "@/components/ui/Toast";
 import { BookingQuestionsCard } from "./BookingQuestionsCard";
@@ -1826,6 +1827,19 @@ export function ServiceEditForm({
   }, []);
   const [pending, start] = useTransition();
 
+  // The targeted slots that could hide a window set below. Only ever adds a
+  // warning, so a failed read just leaves the warning out.
+  const [targetedSlots, setTargetedSlots] = useState<TargetedSlotRow[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void loadAction(listTargetedSlotsAction).then((res) => {
+      if (!cancelled && res.ok && res.value.ok && res.value.slots) setTargetedSlots(res.value.slots);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Windows that reach outside the bookable hours, spelled per day. Bounds
   // (earliest open / latest close across the offering barbers) rather than
   // exact span coverage: the failure that burns people is "I set 9 PM but my
@@ -1866,6 +1880,51 @@ export function ServiceEditForm({
       }
     });
   }
+
+  // Times a saved window will never show because a targeted slot holds them
+  // (targetedSlotHoursConflicts.ts). A day with a time window that changes the
+  // length or opens hours is left out: the plain arithmetic isn't true there.
+  const offeringStaff =
+    service.offeredByAll || (service.staffIds ?? []).length === 0
+      ? activeStaff.map((s) => s.id)
+      : (service.staffIds ?? []);
+  const slotWindowsByDay: Record<number, { startMin: number; endMin: number }[]> = {};
+  hoursRows.forEach((row, wd) => {
+    if (row.mode !== "custom") return;
+    const reshaped = timeRows.some(
+      (r) =>
+        (r.durationMin.trim() !== "" || r.opensHours) && (r.days.length === 0 || r.days.includes(wd)),
+    );
+    if (reshaped) return;
+    slotWindowsByDay[wd] = row.windows.map((w) => ({
+      startMin: hhmmToMinutes(w.start),
+      endMin: hhmmToMinutes(w.end),
+    }));
+  });
+  const slotConflicts = targetedSlotHoursConflicts({
+    windowsByDay: slotWindowsByDay,
+    durationFor: (wd) => Number(dayDurations[wd]) || Number(duration),
+    slots: targetedSlots,
+    serviceId: service.id,
+    staffIds: offeringStaff,
+    timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+  }).map((c) => {
+    const who =
+      offeringStaff.length > 1 ? ` for ${staff.find((s) => s.id === c.staffId)?.name ?? vocab.providerNoun}` : "";
+    const name = c.slotLabel ? ` “${c.slotLabel}”` : "";
+    const next = new Date(`${c.nextDate}T12:00:00Z`).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    });
+    return {
+      key: `${c.staffId}-${c.weekday}-${c.lostStartMin}`,
+      text:
+        `${WEEKDAYS[c.weekday]}: ${fmtClock(c.lostStartMin)} won't show${who}. Your ${fmtClock(c.slotStartMin)} ` +
+        `targeted slot${name} is in the way (next on ${next}). Remove that targeted slot, or publish ` +
+        `${fmtClock(c.lostStartMin)} as its own shorter targeted slot.`,
+    };
+  });
 
   // "Copy hours from" donors: other active services that actually configured
   // hours (an all-open donor would just wipe the rows to defaults).
@@ -2246,6 +2305,19 @@ export function ServiceEditForm({
             </div>
           )}
         </CollapsibleHours>
+
+        {/* Outside the fold: the hours section opens closed, and this explains
+            why a time saved correctly is still missing from the booking page. */}
+        {slotConflicts.length > 0 && (
+          <div
+            role="status"
+            className="flex flex-col gap-1 rounded-xl border border-warning-soft/40 bg-warning-soft/10 px-3 py-2 text-[11px] leading-relaxed text-warning-soft"
+          >
+            {slotConflicts.map((c) => (
+              <p key={c.key}>{c.text}</p>
+            ))}
+          </div>
+        )}
 
         {/* "Daily target" USED TO SIT HERE, one field below the daily LIMIT.
             Two boxes that looked alike, both a number of cuts a day, and only
