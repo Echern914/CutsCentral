@@ -36,6 +36,24 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-08-service-hours-targeted-slot-warning",
+    date: "2026-11-08",
+    kind: "fix",
+    title: "See when a targeted slot hides a service's time",
+    body:
+      "A targeted slot holds its time against every service. So when you edit a service, it now tells you if one " +
+      "of your targeted slots is keeping a time you set off your booking page, and how to open it back up.",
+  },
+  {
+    id: "2026-11-08-group-booking-link-higher",
+    date: "2026-11-08",
+    kind: "fix",
+    title: "Booking for 2 or 3 people is easier to find",
+    body:
+      "The “Booking for 2 or 3 people?” link on your booking page moved from the very bottom to right above your " +
+      "services, so someone booking for their kids sees it before they start booking one at a time.",
+  },
+  {
     id: "2026-11-07-publish-slot-while-loading",
     date: "2026-11-07",
     kind: "fix",

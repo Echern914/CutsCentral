@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
-import Link from "next/link";
 import { APP_NAME } from "@chairback/config/constants";
 import { BOOKING_HANDOFF_PARAM, bookingHandoffFrom } from "@chairback/config/bookingHandoff";
 import type { BusinessVocabulary } from "@chairback/config/businessTypes";
@@ -390,23 +389,6 @@ export default async function BookPage({
         customerHandoff={bookingHandoffFrom(searchParams?.cb_me)}
       />
       <div className="mx-auto w-full max-w-2xl px-4 pb-8">
-        {/* 🔴 THE ONLY CHANGE THIS FEATURE MAKES TO THE SINGLE BOOKING PAGE:
-            one link. The flow above is untouched - not wrapped, not refactored,
-            not given a second mode - so the path every ordinary customer takes
-            is exactly what it was.
-
-            Hidden when the shop collects at booking, because the API refuses a
-            group outright for those shops; offering the link would walk someone
-            into a refusal. `payment.collects` is the same public signal the
-            single page already uses to describe what Confirm will do. */}
-        {!data.shop.payment?.collects && (
-          <Link
-            href={`/book/${params.slug}/group`}
-            className="mb-4 block text-center text-sm text-muted underline transition-colors hover:text-offwhite"
-          >
-            Booking for 2 or 3 people?
-          </Link>
-        )}
         {/* The booking chat's door: only while it is switched on. It books
             for someone the shop already knows, and moves or cancels their own
             bookings; anything that takes payment hands back to this page.
@@ -414,8 +396,8 @@ export default async function BookPage({
             🔴 A PLAIN <a>, NOT next/link. A client-router navigation tapped
             while this page's openings are still loading can wait behind that
             request and never happen (the release browser journey: 4 of 5 runs
-            stalled on an immediate tap; this page's own group link does it
-            too). A full page load to the chat has no such queue. */}
+            stalled on an immediate tap). A full page load to the chat has no
+            such queue. */}
         {chatOn && (
           <a
             href={`/book/${params.slug}/assistant`}

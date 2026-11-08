@@ -3012,6 +3012,26 @@ export function BookingClient({
           Tapping a service's time chip books it. */}
       {dayFirst && (
         <Section title="2 · Choose a service" tour="services" innerRef={servicesSectionRef}>
+          {/* ABOVE THE SERVICES, not under the whole flow: a parent booking three
+              sons never scrolled that far and booked them one at a time (a
+              barber's report, 2026-11-08).
+
+              🔴 A PLAIN <a>, NOT next/link, for the same reason as the chat door
+              in page.tsx: tapped while the openings load, a client-router
+              navigation can wait behind that request and never happen, and this
+              is now on screen during exactly that load.
+
+              Hidden when the shop collects at booking, because the API refuses
+              a group outright for those shops; offering the link would walk
+              someone into a refusal. */}
+          {!data.shop.payment?.collects && (
+            <a
+              href={`/book/${data.shop.slug}/group`}
+              className="mb-3 inline-block text-sm text-offwhite underline transition-colors hover:text-gold"
+            >
+              Booking for 2 or 3 people?
+            </a>
+          )}
           {(dayLoading ||
             (!dayData && !dayError && calendarDays.size > 0) ||
             // Availability still in flight. /day answers in ~1s while the

@@ -42,6 +42,7 @@ vi.mock("@/components/VocabProvider", () => ({
 }));
 
 const { ServiceEditForm, ServicesTab, serviceSaveRefusal } = await import("./BookingManager");
+const actions = await import("./actions");
 const { useJustSaved } = await import("./justSaved");
 
 const staff: StaffRow[] = [
@@ -73,6 +74,43 @@ function service(over: Partial<ServiceRow> = {}): ServiceRow {
     ...over,
   };
 }
+
+describe("🔴 the editor says when a targeted slot hides a time", () => {
+  // Monday, 7:00-8:30 PM, 90 minutes long.
+  const eveningWindow = { hoursWindows: { "1": [{ s: 1140, e: 1230 }] }, durationMin: 90 };
+  // Monday 2099-06-15, 8:00 PM in the shop's timezone (UTC here).
+  const slot = {
+    id: "ts1",
+    staffId: "st1",
+    serviceId: "other",
+    label: "After Hours",
+    startsAt: "2099-06-15T20:00:00.000Z",
+    durationMin: 30,
+    active: true,
+    booked: false,
+  };
+
+  it("names the time, the slot and the way out, without opening the hours section", async () => {
+    vi.mocked(actions.listTargetedSlotsAction).mockResolvedValueOnce({ ok: true, slots: [slot] } as never);
+    render(<ServiceEditForm service={service(eveningWindow)} services={[]} staff={staff} groupName={null} timezone="UTC" toast={vi.fn()} onClose={vi.fn()} onSaved={vi.fn()} />);
+    const warning = await screen.findByText(/won't show/);
+    expect(warning.textContent).toContain("7:00 PM");
+    expect(warning.textContent).toContain("8:00 PM");
+    expect(warning.textContent).toContain("After Hours");
+    expect(warning.textContent).toContain("Jun 15");
+  });
+
+  it("stays quiet when the slot is paused", async () => {
+    const list = vi.mocked(actions.listTargetedSlotsAction);
+    list.mockResolvedValueOnce({ ok: true, slots: [{ ...slot, active: false }] } as never);
+    render(<ServiceEditForm service={service(eveningWindow)} services={[]} staff={staff} groupName={null} timezone="UTC" toast={vi.fn()} onClose={vi.fn()} onSaved={vi.fn()} />);
+    await waitFor(() => expect(list).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/won't show/)).toBeNull();
+  });
+});
 
 function openEditor(row = service()) {
   const toast = vi.fn();
