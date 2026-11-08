@@ -202,20 +202,21 @@ describe("New appointment, back to back with a 5 minute buffer", () => {
 
 describe("the edit sheet, moving a booking", () => {
   it("🔴 into the buffer: asked, no tag, and it clears a tag from a real double before", async () => {
+    await book({ startsAt: at(9, 12, 15).toISOString(), firstName: "Straddled" });
     await book({ startsAt: at(9, 10).toISOString(), firstName: "Stays" });
     const moving = await book({ startsAt: at(9, 14).toISOString(), firstName: "Moves" });
     const patch = (body: Record<string, unknown>) =>
       request(app).patch(`/api/booking/appointments/${moving.body.id}`).set("Cookie", cookie).send(body);
 
     // A real double first, so the row carries the tag.
-    const onTop = await patch({ startsAt: at(9, 10, 15).toISOString() });
+    const onTop = await patch({ startsAt: at(9, 12).toISOString() });
     expect(onTop.body.bufferOnly).toBeUndefined();
-    const forced = await patch({ startsAt: at(9, 10, 15).toISOString(), overlapConfirmation: onTop.body.confirmation });
+    const forced = await patch({ startsAt: at(9, 12).toISOString(), overlapConfirmation: onTop.body.confirmation });
     expect(forced.status).toBe(200);
     let row = await prisma.appointment.findUniqueOrThrow({ where: { id: moving.body.id } });
     expect(row.overlapForcedAt).not.toBeNull();
 
-    // Then just after it: only the buffer.
+    // Then right after another one: only the buffer.
     const next = await patch({ startsAt: at(9, 10, 30).toISOString() });
     expect(next.status).toBe(409);
     expect(next.body.bufferOnly).toBe(true);
