@@ -110,6 +110,7 @@ export function Tap({
   disabled,
   dimWhenDisabled = true,
   testID,
+  expanded,
 }: {
   onPress?: () => void;
   children: ReactNode;
@@ -122,6 +123,8 @@ export function Tap({
   /** False when the caller draws its own disabled look. */
   dimWhenDisabled?: boolean;
   testID?: string;
+  /** For a drop-down: VoiceOver says whether it is open. Leave out for anything else. */
+  expanded?: boolean;
 }) {
   return (
     <Pressable
@@ -131,7 +134,7 @@ export function Tap({
       accessibilityRole={accessibilityRole}
       accessibilityLabel={accessibilityLabel}
       accessibilityHint={accessibilityHint}
-      accessibilityState={{ disabled: Boolean(disabled) }}
+      accessibilityState={{ disabled: Boolean(disabled), ...(expanded === undefined ? {} : { expanded }) }}
       style={({ pressed }) => [
         style,
         pressed && (pressedStyle ?? styles.pressed),

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { LayoutAnimation, StyleSheet, View } from "react-native";
 import { color, radius, space, statusColor, TOUCH } from "./theme";
 import {
   calendarBlock,
@@ -24,10 +24,23 @@ import {
   timerNote,
   timerView,
 } from "./rewardsTab";
-import { Cancel, Details, MapPin, Reschedule } from "./icons";
+import { Cancel, ChevronRight, Details, MapPin, Reschedule } from "./icons";
+import { groupIntoParties, partyCount, partyNames, partySummary, seatTitle, sharedStatus } from "./party";
 import { TierLadder } from "./status";
 import { tierProgressLine } from "./tierStatus";
-import { Avatar, Button, Group, ProgressBar, Row, Separator, StatusLabel, Tap, Txt, useLargeText } from "./ui";
+import {
+  Avatar,
+  Button,
+  Group,
+  ProgressBar,
+  Row,
+  Separator,
+  StatusLabel,
+  Tap,
+  Txt,
+  useLargeText,
+  useReducedMotion,
+} from "./ui";
 import type {
   AmbiguousShop,
   Appointment,
@@ -140,6 +153,231 @@ export function NextAppointmentCard({
           </Txt>
         ) : null}
       </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// A party: appointments booked together, such as a parent's two or three kids
+// ---------------------------------------------------------------------------
+
+/** Open or closed, with a short slide unless the person asked for less motion. */
+function useDropDown(): [boolean, () => void] {
+  const reduced = useReducedMotion();
+  const [open, setOpen] = useState(false);
+  return [
+    open,
+    () => {
+      if (!reduced) LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setOpen((o) => !o);
+    },
+  ];
+}
+
+/** Points down when closed and up when open. */
+function DropDownChevron({ open }: { open: boolean }) {
+  return (
+    <View style={{ transform: [{ rotate: open ? "-90deg" : "90deg" }] }} accessible={false}>
+      <ChevronRight size={16} color={color.textTertiary} />
+    </View>
+  );
+}
+
+/** Each person in the drop-down. Tapping one opens that appointment, to move or cancel just them. */
+function PartyMembers({ members, onOpen }: { members: Appointment[]; onOpen: (a: Appointment) => void }) {
+  return (
+    <View style={styles.partyMembers}>
+      {members.map((m) => (
+        <Tap
+          key={m.id}
+          onPress={() => onOpen(m)}
+          accessibilityLabel={`${seatTitle(m)}. ${spokenWhen(m.startsAt, m.timezone)}. ${m.statusLabel}`}
+          accessibilityHint="Opens this appointment, where you can move or cancel it"
+          pressedStyle={styles.rowPressed}
+          style={styles.partyMember}
+        >
+          <View style={styles.flex}>
+            <Txt variant="body" numberOfLines={2}>
+              {m.personName ?? m.serviceName ?? "Appointment"}
+            </Txt>
+            <Txt variant="subhead" tone="secondary" numberOfLines={2}>
+              {[m.personName ? m.serviceName : null, timeRange(m.startsAt, m.endsAt, m.timezone)].filter(Boolean).join(" · ")}
+            </Txt>
+            <View style={styles.historyStatus}>
+              <StatusLabel status={m.status} label={m.statusLabel} />
+            </View>
+          </View>
+          <ChevronRight size={16} color={color.textTertiary} />
+        </Tap>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * The home card when the next appointment is a party: one card that says how
+ * many and when, with a drop-down of who.
+ *
+ * No Reschedule or Cancel here, and no "View details": each would act on one kid
+ * from a card about all of them. Those live on each person's own screen.
+ */
+export function NextPartyCard({
+  members,
+  now = new Date(),
+  onOpen,
+  onDirections,
+}: {
+  members: Appointment[];
+  now?: Date;
+  onOpen: (a: Appointment) => void;
+  onDirections?: () => void;
+}) {
+  const [open, toggle] = useDropDown();
+  const first = members[0]!;
+  const summary = partySummary(members, now);
+  const names = partyNames(members);
+  const shared = sharedStatus(members);
+  const who = first.providerName ? `with ${first.providerName}` : null;
+  const place = [first.shop.city, first.shop.region].filter(Boolean).join(", ");
+  const spoken = ["Next appointments", summary, names, who, `at ${first.shop.name}`, shared?.statusLabel, shared?.statusDetail]
+    .filter(Boolean)
+    .join(". ");
+
+  return (
+    <View style={styles.card}>
+      <Tap
+        onPress={toggle}
+        expanded={open}
+        accessibilityLabel={spoken}
+        accessibilityHint={open ? "Hides each appointment" : "Shows each appointment"}
+        pressedStyle={styles.cardPressed}
+      >
+        <View style={styles.cardTop}>
+          <View style={styles.who}>
+            <Avatar uri={first.providerImageUrl ?? first.shop.logoUrl} name={first.providerName ?? first.shop.name} size={48} />
+            <View style={styles.whoText}>
+              <Txt variant="headline" numberOfLines={2}>
+                {first.shop.name}
+              </Txt>
+              <Txt variant="subhead" tone="secondary" numberOfLines={2}>
+                {[who, place].filter(Boolean).join(" · ") || " "}
+              </Txt>
+            </View>
+          </View>
+
+          <Txt variant="title3" style={styles.day}>
+            {summary}
+          </Txt>
+          {names ? (
+            <Txt variant="body" tone="secondary" style={styles.partyNames}>
+              {names}
+            </Txt>
+          ) : null}
+          {shared ? (
+            <View style={styles.statusRow}>
+              <StatusLabel status={shared.status} label={shared.statusLabel} />
+            </View>
+          ) : null}
+          {shared?.statusDetail ? (
+            <Txt variant="footnote" tone="secondary" style={styles.detailLine}>
+              {shared.statusDetail}
+            </Txt>
+          ) : null}
+          <View style={styles.partyToggle}>
+            <Txt variant="subheadStrong" tone="gold">
+              {open ? "Hide appointments" : "See each appointment"}
+            </Txt>
+            <DropDownChevron open={open} />
+          </View>
+        </View>
+      </Tap>
+
+      {open ? <PartyMembers members={members} onOpen={onOpen} /> : null}
+
+      {onDirections ? (
+        <View style={styles.cardActions}>
+          <View style={styles.tiles}>
+            <ActionTile label="Directions" onPress={onDirections} icon={<MapPin color={color.text} />} hint="Opens Maps" />
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/** A party in a list: one row with a drop-down of who. */
+function PartyHistoryRow({
+  members,
+  onOpen,
+  onBookAgain,
+}: {
+  members: Appointment[];
+  onOpen: (a: Appointment) => void;
+  onBookAgain?: () => void;
+}) {
+  const [open, toggle] = useDropDown();
+  const large = useLargeText();
+  const first = members[0]!;
+  const cal = calendarBlock(first.startsAt, first.timezone);
+  const count = partyCount(members);
+  const names = partyNames(members);
+  const shared = sharedStatus(members);
+  const spoken = [spokenWhen(first.startsAt, first.timezone), count, names, `at ${first.shop.name}`, shared?.statusLabel]
+    .filter(Boolean)
+    .join(". ");
+
+  return (
+    <View>
+      <View style={large ? styles.historyStack : styles.historyRow}>
+        <Tap
+          onPress={toggle}
+          expanded={open}
+          accessibilityLabel={spoken}
+          accessibilityHint={open ? "Hides each appointment" : "Shows each appointment"}
+          pressedStyle={styles.rowPressed}
+          style={styles.historyMain}
+        >
+          <View style={styles.cal} accessible={false}>
+            <Txt variant="captionStrong" tone="gold" allowFontScaling={false}>
+              {cal.month}
+            </Txt>
+            <Txt variant="title3" allowFontScaling={false}>
+              {cal.day}
+            </Txt>
+          </View>
+          <View style={styles.flex}>
+            <Txt variant="body" numberOfLines={2}>
+              {`${count} · ${timeLabel(first.startsAt, first.timezone)}`}
+            </Txt>
+            <Txt variant="subhead" tone="secondary" numberOfLines={2}>
+              {first.shop.name}
+            </Txt>
+            {names ? (
+              <Txt variant="subhead" tone="secondary" numberOfLines={2}>
+                {names}
+              </Txt>
+            ) : null}
+            {shared ? (
+              <View style={styles.historyStatus}>
+                <StatusLabel status={shared.status} label={shared.statusLabel} />
+              </View>
+            ) : null}
+          </View>
+          <DropDownChevron open={open} />
+        </Tap>
+        {onBookAgain ? (
+          <Tap
+            onPress={onBookAgain}
+            accessibilityLabel={`Book again at ${first.shop.name}`}
+            style={large ? styles.againBelow : styles.again}
+          >
+            <Txt variant="subheadStrong" tone="gold">
+              Book again
+            </Txt>
+          </Tap>
+        ) : null}
+      </View>
+      {open ? <PartyMembers members={members} onOpen={onOpen} /> : null}
     </View>
   );
 }
@@ -717,7 +955,8 @@ export function HistoryRow({
   onBookAgain?: () => void;
 }) {
   const cal = calendarBlock(appt.startsAt, appt.timezone);
-  const title = appt.serviceName ?? "Appointment";
+  // One kid's row on its own, such as the one whose visit was cancelled, still says whose it is.
+  const title = seatTitle(appt);
   // At large text sizes "Book again" moves under the row instead of stealing
   // the width the service and shop names need.
   const large = useLargeText();
@@ -776,10 +1015,14 @@ export function HistoryGroup({
 }) {
   return (
     <Group>
-      {items.map((a, i) => (
-        <View key={a.id}>
+      {groupIntoParties(items).map((entry, i) => (
+        <View key={entry.kind === "one" ? entry.appt.id : entry.key}>
           {i > 0 ? <Separator inset={space.s2 + 44 + 12} /> : null}
-          <HistoryRow appt={a} onPress={() => onOpen(a)} onBookAgain={() => onBookAgain(a)} />
+          {entry.kind === "one" ? (
+            <HistoryRow appt={entry.appt} onPress={() => onOpen(entry.appt)} onBookAgain={() => onBookAgain(entry.appt)} />
+          ) : (
+            <PartyHistoryRow members={entry.members} onOpen={onOpen} onBookAgain={() => onBookAgain(entry.members[0]!)} />
+          )}
         </View>
       ))}
     </Group>
@@ -802,6 +1045,26 @@ const styles = StyleSheet.create({
   day: { marginTop: space.s3 - 4 },
   service: { marginTop: space.s1 + 4 },
   statusRow: { marginTop: space.s1 + 2, flexDirection: "row" },
+  partyNames: { marginTop: space.half },
+  partyToggle: {
+    marginTop: space.s1 + 4,
+    minHeight: TOUCH - 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s1,
+  },
+  partyMembers: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: color.hairlineStrong,
+  },
+  partyMember: {
+    minHeight: TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s1,
+    paddingVertical: space.s1 + 2,
+    paddingHorizontal: space.s2 + 4,
+  },
   detailLine: { marginTop: space.half },
   cardActions: {
     paddingHorizontal: space.s2 + 4,

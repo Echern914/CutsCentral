@@ -153,6 +153,10 @@ export interface RewardsData {
     timezone: string;
     address: string | null;
     mapsUrl: string | null;
+    party?: {
+      manageToken: string;
+      members: { firstName: string; serviceName: string | null; startsAt: string }[];
+    } | null;
   } | null;
   rebook: {
     state: "booked" | "counting" | "overdue" | "none";

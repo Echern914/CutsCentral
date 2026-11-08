@@ -34,6 +34,10 @@ export interface Appointment {
   shop: ShopRef;
   canManage: boolean;
   manageNote: string | null;
+  /** Rows sharing this were booked together. Optional: an older API omits it (= each stands alone). */
+  partyKey?: string | null;
+  /** Who this seat is for, inside a party. Optional, as above. */
+  personName?: string | null;
 }
 
 export interface AppointmentDetail extends Appointment {
@@ -91,6 +95,8 @@ export interface Home {
   vocabulary: { providerNounPlural: string; serviceNoun: string };
   /** Full detail - carries the address the card's Directions action needs. */
   next: AppointmentDetail | null;
+  /** Everyone still upcoming in `next`'s party, `next` included. Optional: an older API omits it. */
+  nextParty?: Appointment[];
   upcomingCount: number;
   shops: Shop[];
   rewards: RewardSummary[];

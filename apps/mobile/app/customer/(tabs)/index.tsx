@@ -12,6 +12,7 @@ import {
   ConnectProfileList,
   HistoryGroup,
   NextAppointmentCard,
+  NextPartyCard,
   NoUpcomingCard,
   RewardSummaryList,
   SavedShopList,
@@ -99,7 +100,10 @@ function HomeBody({ data, onChanged }: { data: Home; onChanged: () => void }) {
   const router = useRouter();
   const savedActions = useSavedShopActions();
   const next = data.next;
-  const moreUpcoming = data.upcomingCount - (next ? 1 : 0);
+  // Optional for the same reason as the lists below. Everyone on the party card
+  // is already on screen, so "more upcoming" counts only what the card doesn't show.
+  const party = next ? (data.nextParty ?? []) : [];
+  const moreUpcoming = data.upcomingCount - (party.length >= 2 ? party.length : next ? 1 : 0);
   // An app build can outlive the API build that answers it (there is no
   // over-the-air channel): a missing list is an empty one, never a crash.
   const ambiguous = data.ambiguous ?? [];
@@ -107,7 +111,13 @@ function HomeBody({ data, onChanged }: { data: Home; onChanged: () => void }) {
 
   return (
     <View>
-      {next ? (
+      {next && party.length >= 2 ? (
+        <NextPartyCard
+          members={party}
+          onOpen={(a) => openAppointment(router, a.id)}
+          onDirections={next.address ? () => openDirections(next.address!) : undefined}
+        />
+      ) : next ? (
         <NextAppointmentCard
           appt={next}
           onDetails={() => openAppointment(router, next.id)}

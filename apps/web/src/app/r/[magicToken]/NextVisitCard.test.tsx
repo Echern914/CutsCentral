@@ -33,6 +33,56 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+describe("NextVisitCard with a party", () => {
+  const party: NextVisit["party"] = {
+    manageToken: "group_tok",
+    members: [
+      { firstName: "Mia", serviceName: "Kids cut", startsAt: "2026-09-11T15:00:00Z" },
+      { firstName: "Leo", serviceName: "Kids cut", startsAt: "2026-09-11T15:30:00Z" },
+      { firstName: "Sam", serviceName: "Fade", startsAt: "2026-09-11T16:00:00Z" },
+    ],
+  };
+
+  it("says how many and when, and names everyone before anything is opened", async () => {
+    render(<NextVisitCard visit={{ ...visit, party }} theme={theme} />);
+    await act(async () => {});
+    expect(screen.getByText(/^3 appointments · Friday, September 11/)).toBeTruthy();
+    expect(screen.getByText("Mia, Leo and Sam")).toBeTruthy();
+    expect(screen.getByLabelText("Your next appointments")).toBeTruthy();
+  });
+
+  it("lists each person's service and time on the shop's clock, in a drop-down", async () => {
+    const { container } = render(<NextVisitCard visit={{ ...visit, party }} theme={theme} />);
+    await act(async () => {});
+    const details = container.querySelector("details");
+    expect(details).toBeTruthy();
+    expect(details!.open).toBe(false);
+    const rows = [...details!.querySelectorAll("li")].map((li) => li.textContent);
+    expect(rows).toEqual(["MiaKids cut11:00 AM", "LeoKids cut11:30 AM", "SamFade12:00 PM"]);
+  });
+
+  it("🔴 manages the whole party, not just the first kid", () => {
+    render(<NextVisitCard visit={{ ...visit, party }} theme={theme} />);
+    expect(screen.getByRole("link", { name: "Manage appointments" }).getAttribute("href")).toBe("/book/group/group_tok");
+    expect(screen.queryByRole("link", { name: "Manage appointment" })).toBeNull();
+  });
+
+  it("names the service once per person, not one kid's service for all of them", async () => {
+    render(<NextVisitCard visit={{ ...visit, party }} theme={theme} />);
+    await act(async () => {});
+    expect(screen.getByText("with Dre")).toBeTruthy();
+    expect(screen.queryByText("Haircut · with Dre")).toBeNull();
+  });
+
+  it("stays the ordinary card with no party, and for an API that sends none", async () => {
+    render(<NextVisitCard visit={{ ...visit, party: null }} theme={theme} />);
+    await act(async () => {});
+    expect(screen.getByText("Haircut · with Dre")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Manage appointment" })).toBeTruthy();
+    expect(screen.getByLabelText("Your next appointment")).toBeTruthy();
+  });
+});
+
 describe("NextVisitCard", () => {
   it("says how long until, in calendar days, once mounted", async () => {
     render(<NextVisitCard visit={visit} theme={theme} />);

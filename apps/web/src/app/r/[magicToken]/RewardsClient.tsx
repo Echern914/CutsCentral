@@ -286,7 +286,8 @@ export function RewardsClient({
                 <AddToWallet
                   href={`/book/manage/${nextVisit.manageToken}/wallet-pass`}
                   available={data.wallet?.appointment ?? false}
-                  label="Add this appointment to Apple Wallet"
+                  // The pass is for one seat, so a party's card says which.
+                  label={nextVisit.party ? "Add the first appointment to Apple Wallet" : "Add this appointment to Apple Wallet"}
                   // Enables the in-app native path; ignored in Safari.
                   manageToken={nextVisit.manageToken}
                 />
