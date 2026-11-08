@@ -432,9 +432,12 @@ describe("one confirmation for the whole run", () => {
     expect(res.status).toBe(201);
     expect(await intents(res.body.groupId)).toBe(1);
 
-    // The app notice goes after the answer: wait for it, or a second email it
-    // sent would land after this test had counted.
+    // The app notice goes after the answer, and it is only that: the one email
+    // is the outbox's, so a failed send retries. (If it did send, the stamp would
+    // hold the outbox back: still one email, but no retry if that one failed.)
     await settleBackgroundWork();
+    expect(sentEmails.filter((e) => e.to === "casey.run@example.com")).toHaveLength(0);
+
     await runEmailOutbox({ shopId });
     const mine = sentEmails.filter((e) => e.to === "casey.run@example.com");
     expect(mine).toHaveLength(1);
