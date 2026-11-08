@@ -168,7 +168,7 @@ export function ShopForm({
               ))}
             </select>
             {/* Optional referral code, from a partner ("ERIC C") or an affiliate
-                ("SNOW482"). A code that can't be used is explained right here and
+                ("FADEL482"). A code that can't be used is explained right here and
                 nothing is created until it is fixed or cleared. */}
             {codeOpen ? (
               <>

@@ -261,8 +261,8 @@ describe("one referral program per business, whichever program the typed code be
 
 describe("the short code", () => {
   it("🔴 approval mints letters from the name plus three digits", async () => {
-    const { account } = await newAffiliate("mint", "Snow's Fades & Co");
-    expect(account.shortCode).toMatch(/^SNOWS\d{3}$/);
+    const { account } = await newAffiliate("mint", "Joe's Fades & Co");
+    expect(account.shortCode).toMatch(/^JOESF\d{3}$/);
   });
 
   it("a name without enough letters still gets a usable code", async () => {

@@ -35,7 +35,7 @@ describe("how did you hear about us", () => {
 
 describe("the affiliate short code's shape", () => {
   it("takes up to five letters of the name, or SHOP when there are too few", () => {
-    expect(affiliateShortCodePrefix("Snow's Fades")).toBe("SNOWS");
+    expect(affiliateShortCodePrefix("Joe's Fades")).toBe("JOESF");
     expect(affiliateShortCodePrefix("Ace")).toBe("ACE");
     expect(affiliateShortCodePrefix("A1")).toBe("SHOP");
     expect(affiliateShortCodePrefix("理髪店")).toBe("SHOP");
@@ -46,6 +46,6 @@ describe("the affiliate short code's shape", () => {
   });
 
   it("ignores spaces and case, the way people say a code", () => {
-    expect(shortAffiliateCodeKey(" snow 482 ")).toBe("SNOW482");
+    expect(shortAffiliateCodeKey(" fadel 482 ")).toBe("FADEL482");
   });
 });

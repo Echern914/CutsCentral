@@ -39,7 +39,7 @@ export function ReferralCodeForm() {
             autoComplete="off"
             autoCapitalize="none"
             spellCheck={false}
-            placeholder="e.g. SNOW482"
+            placeholder="e.g. FADEL482"
             className={`${field} font-mono`}
             aria-describedby="code-hint"
           />

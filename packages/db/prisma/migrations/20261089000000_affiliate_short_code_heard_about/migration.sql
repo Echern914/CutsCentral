@@ -4,7 +4,7 @@
       NULL means not asked, which is every shop made before this. Not defaulted
       to 'other', because that would read as an answer nobody gave.
 
-   2. AffiliateAccount.shortCode: a code a person can say out loud ("SNOW482").
+   2. AffiliateAccount.shortCode: a code a person can say out loud ("FADEL482").
       The 12-character `code` stays exactly as it is, because it is printed into
       links and QR codes that are already out in the world. Nullable on purpose:
       a row with no short code still works through its long code, and an account

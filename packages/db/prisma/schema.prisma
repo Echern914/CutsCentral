@@ -5756,7 +5756,7 @@ model AffiliateAccount {
   code String @unique
 
   // The same affiliate, in a form a person can say out loud: up to five letters
-  // of the business name plus three digits ("SNOW482"). `code` stays because
+  // of the business name plus three digits ("FADEL482"). `code` stays because
   // it is already printed into links and QR codes. Null falls back to `code`.
   shortCode String? @unique
 

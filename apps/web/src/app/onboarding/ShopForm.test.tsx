@@ -113,9 +113,9 @@ describe("setup step 1", () => {
     it("🔴 changing the answer afterwards doesn't throw away a code they typed", () => {
       render(<ShopForm smsAttested initialType="" />);
       fireEvent.change(question(), { target: { value: "another_barber" } });
-      fireEvent.change(screen.getByLabelText("Referral code (optional)"), { target: { value: "SNOW482" } });
+      fireEvent.change(screen.getByLabelText("Referral code (optional)"), { target: { value: "FADEL482" } });
       fireEvent.change(question(), { target: { value: "google" } });
-      expect((screen.getByLabelText("Referral code (optional)") as HTMLInputElement).value).toBe("SNOW482");
+      expect((screen.getByLabelText("Referral code (optional)") as HTMLInputElement).value).toBe("FADEL482");
     });
   });
 });
