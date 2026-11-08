@@ -401,16 +401,25 @@ describe("what the admin page reads", () => {
     const { owner, account } = await newAffiliate("count-aff");
     await setUpShop(await signup("count-a"), { partnerCode: account.shortCode });
     await setUpShop(await signup("count-b"), { partnerCode: account.code });
-    // A durable rejection for the same affiliate: an expired link.
-    const expired = createAffiliateClaim({
+    // A durable rejection that NAMES this affiliate: their link, used after they
+    // were suspended. An expired link wouldn't test this, because its row has no
+    // affiliate on it.
+    const claim = createAffiliateClaim({
       code: account.code,
       source: "link",
       secret: process.env.SESSION_SECRET!,
-      nowSeconds: Math.floor(Date.now() / 1000) - 3600,
-      ttlSeconds: 60,
+      nowSeconds: Math.floor(Date.now() / 1000),
     });
-    const rejected = await setUpShop(await signup("count-c"), {}, expired);
-    expect((await attributionFor(rejected.body.id as string))?.state).toBe("REJECTED");
+    await runAsOwner((tx) =>
+      tx.affiliateAccount.update({
+        where: { id: account.id },
+        data: { status: "SUSPENDED", suspendedAt: new Date(), suspensionReason: "suspected_abuse" },
+      }),
+    );
+    const rejected = await setUpShop(await signup("count-c"), {}, claim);
+    const rejection = await attributionFor(rejected.body.id as string);
+    expect(rejection?.state).toBe("REJECTED");
+    expect(rejection?.affiliateAccountId).toBe(account.id);
 
     const res = await request(app).get("/api/admin-portal/affiliate/accounts").set("Cookie", admin.cookie);
     expect(res.status).toBe(200);
