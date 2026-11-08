@@ -149,3 +149,31 @@ describe("accounts and rewards", () => {
     expect(screen.getByText(/1 sign-ups waiting/)).toBeTruthy();
   });
 });
+
+describe("accounts table", () => {
+  function renderAccount(over: Partial<AdminAccount>) {
+    render(
+      <AffiliatesSection
+        applications={[]}
+        accounts={[{ ...account, ...over }]}
+        rewards={[]}
+        liability={null}
+        flags={flags}
+      />,
+    );
+    return screen.getByRole("row", { name: /Fade Lab/ }).textContent ?? "";
+  }
+
+  it("🔴 shows how many businesses each affiliate brought on, by their short code", () => {
+    const row = renderAccount({ shortCode: "FADEL482", referrals: 7 });
+    expect(row).toContain("FADEL482");
+    expect(row).toContain("7");
+    expect(row).not.toContain("abcDEF123456");
+  });
+
+  it("an API older than this page still renders: the long code, and no made-up count", () => {
+    const row = renderAccount({});
+    expect(row).toContain("abcDEF123456");
+    expect(row).toContain("-");
+  });
+});

@@ -806,7 +806,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     // Multi-word keywords only: "credit" alone belongs to billing questions.
     id: "affiliate-credit",
     q: "What do I earn as a ChairBack affiliate?",
-    a: `You get paid through the ChairBack affiliate program: ${affiliateSignup} when a business you brought on pays its first month, then ${affiliateMonthly} for every month it keeps paying. No cap on businesses.\n\nFor now it's paid as credit on your own ChairBack bill. Each payment waits out a ${AFFILIATE_POLICY.qualification.holdDaysAfterSecond}-day hold, then comes off what you owe. It doesn't expire, and a refunded or disputed payment takes its credit back.`,
+    a: `You get paid through the ChairBack affiliate program: ${affiliateSignup} when a business you brought on pays its first month, then ${affiliateMonthly} for every month it keeps paying. No cap on businesses.\n\nFor now it's paid as credit on your own ChairBack bill. Each payment waits out a ${AFFILIATE_POLICY.qualification.holdDaysAfterSecond}-day hold, then comes off what you owe. It doesn't expire, and a refunded or disputed payment takes its credit back.\n\nYour short code is on your Affiliates page. A new owner types it when they set up their business, and the signup counts as yours.`,
     keywords: ["affiliate program", "affiliate credit", "affiliate reward", "affiliate rewards", "bring a business", "account credit affiliate"],
     category: "account",
     action: { label: "Open affiliates", featureId: "affiliates" },

@@ -44,8 +44,9 @@ import { previewLoyaltyTiers, recomputeLoyaltyTiers } from "../engines/loyaltyTi
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager, requireOwner } from "../auth/roles.js";
 import { linkReferralOnShopCreate } from "../services/referral.js";
-import { recordPartnerReferralInTx, resolvePartnerCode } from "../services/partnerProgram.js";
-import { AFFILIATE_CLAIM_COOKIE, checkTellApart, tellApartRefusal } from "@chairback/config";
+import { recordPartnerReferralInTx } from "../services/partnerProgram.js";
+import { resolveTypedReferralCode } from "../services/typedReferralCode.js";
+import { AFFILIATE_CLAIM_COOKIE, HEARD_ABOUT_IDS, checkTellApart, tellApartRefusal } from "@chairback/config";
 import { messageBookingUrl, showsRequestForm } from "@chairback/config/bookingLinks";
 import {
   BOOKING_CHECKLIST_LINE_MAX,
@@ -244,9 +245,12 @@ const createShopSchema = z
     // signup form, so onboarding (shop creation) is where those users first
     // affirm it. Must be literally true. (Form-signup users already attested.)
     smsAttested: z.literal(true),
-    // Optional partner code ("ERIC C") typed at signup. Checked before the
-    // business exists; see services/partnerProgram.ts.
+    // Optional referral code typed at signup, from any of the three programs.
+    // Checked before the business exists; see services/typedReferralCode.ts.
     partnerCode: z.string().max(64).optional(),
+    // "How did you hear about us?" Optional here so an older page can still
+    // create a business; the form itself requires an answer.
+    heardAbout: z.enum(HEARD_ABOUT_IDS).optional(),
   })
   .strict();
 
@@ -293,6 +297,7 @@ const updateShopSchema = createShopSchema
     rewardThreshold: true,
     rewardLabel: true,
     partnerCode: true,
+    heardAbout: true,
     smsAttested: true,
     industry: true,
   })
@@ -570,20 +575,20 @@ shopsRouter.post("/", requireUser, async (req, res) => {
   const industryKey = shopData.industry ?? "other";
   const type = businessType(industryKey);
   const slug = await availableSlug(parsed.data.name);
-  // A partner code is checked BEFORE the business exists, so a typo is an
-  // answer the form can show rather than a business created without it.
-  const partner = partnerCode?.trim()
-    ? await resolvePartnerCode(partnerCode, req.userId!)
+  // A typed code is checked BEFORE the business exists, so a typo is an answer
+  // the form can show rather than a business created without it.
+  const typed = partnerCode?.trim()
+    ? await resolveTypedReferralCode(partnerCode, req.userId!)
     : null;
-  if (partner && !partner.ok) {
-    res.status(400).json({ error: partner.error });
+  if (typed && !typed.ok) {
+    res.status(400).json({ error: typed.error });
     return;
   }
   // 🔴 ONE referral program per business. A code the owner typed is the most
-  // deliberate signal there is, so a partner code wins: the affiliate cookie
-  // and the legacy share link are not applied on top of it (each would pay
-  // someone else for the same signup).
-  const claimToken = partner
+  // deliberate signal there is, so it wins whichever program it belongs to: the
+  // affiliate cookie and the legacy share link are not applied on top of it (each
+  // would pay someone else for the same signup).
+  const claimToken = typed
     ? undefined
     : (req.cookies as Record<string, string> | undefined)?.[AFFILIATE_CLAIM_COOKIE];
 
@@ -662,6 +667,7 @@ shopsRouter.post("/", requireUser, async (req, res) => {
     const attribution = await planAttribution({
       tx,
       claimToken,
+      typedCode: typed?.ok && typed.kind === "affiliate" ? typed.code : undefined,
       ownerId: req.userId!,
     });
     if (attribution) {
@@ -669,11 +675,11 @@ shopsRouter.post("/", requireUser, async (req, res) => {
     }
     // Partner attribution: the LAST statement, as recordPartnerReferralInTx
     // requires.
-    if (partner?.ok) {
+    if (typed?.ok && typed.kind === "partner") {
       await recordPartnerReferralInTx(tx, {
-        partnerId: partner.partnerId,
+        partnerId: typed.partnerId,
         referredShopId: created.id,
-        codeUsed: partner.codeUsed,
+        codeUsed: typed.codeUsed,
       });
     }
     return { created } as const;
@@ -694,13 +700,15 @@ shopsRouter.post("/", requireUser, async (req, res) => {
     where: { id: req.userId! },
     select: { referralCode: true },
   });
-  const referred = partner
-    ? false
-    : await linkReferralOnShopCreate({
-        shopId: shop.id,
-        ownerId: req.userId!,
-        code: owner?.referralCode,
-      });
+  const referred =
+    typed?.ok && typed.kind !== "legacy"
+      ? false
+      : await linkReferralOnShopCreate({
+          shopId: shop.id,
+          ownerId: req.userId!,
+          // A legacy code they typed beats one they arrived with.
+          code: typed?.ok ? typed.code : owner?.referralCode,
+        });
   // Re-read only when a referral actually landed, so the response carries the
   // extended trialEndsAt instead of the pre-referral value.
   const fresh = referred

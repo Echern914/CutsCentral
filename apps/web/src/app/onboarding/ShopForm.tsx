@@ -8,6 +8,7 @@ import {
   SELECTABLE_BUSINESS_TYPE_IDS,
   type BusinessTypeId,
 } from "@chairback/config/businessTypes";
+import { HEARD_ABOUT_IDS, heardAboutLabel } from "@chairback/config/heardAbout";
 import { createShopAction } from "./actions";
 import { saveThemeAction } from "../dashboard/actions";
 import { ThemePicker } from "@/components/ThemePicker";
@@ -71,6 +72,7 @@ export function ShopForm({
   const [timezone, setTimezone] = useState("America/New_York");
   const [detected, setDetected] = useState<string | null>(null);
   const [showCode, setShowCode] = useState(false);
+  const [heardAbout, setHeardAbout] = useState("");
 
   useEffect(() => {
     try {
@@ -86,6 +88,8 @@ export function ShopForm({
 
   const zones = detected && !US_ZONES.some(([z]) => z === detected) ? [[detected, detected.replace(/_/g, " ")] as [string, string], ...US_ZONES] : US_ZONES;
   const codeOpen = showCode || state.field === "partnerCode";
+  // The answer speaks their trade once they've said what it is.
+  const providerNoun = industry ? BUSINESS_TYPES[industry].vocabulary.providerNoun : undefined;
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5">
@@ -141,9 +145,31 @@ export function ShopForm({
                 ))}
               </select>
             </label>
-            {/* Optional partner code ("ERIC C"). Case and spaces don't matter; a
-                code that can't be used is explained right here and nothing is
-                created until it is fixed or cleared. */}
+            <select
+              name="heardAbout"
+              aria-label="How did you hear about us?"
+              value={heardAbout}
+              onChange={(e) => {
+                setHeardAbout(e.target.value);
+                // Opens and stays open: changing the answer must not throw away
+                // a code they already typed.
+                if (e.target.value === "another_barber") setShowCode(true);
+              }}
+              required
+              className={field}
+            >
+              <option value="" disabled>
+                How did you hear about us?
+              </option>
+              {HEARD_ABOUT_IDS.map((id) => (
+                <option key={id} value={id}>
+                  {heardAboutLabel(id, providerNoun)}
+                </option>
+              ))}
+            </select>
+            {/* Optional referral code, from a partner ("ERIC C") or an affiliate
+                ("SNOW482"). A code that can't be used is explained right here and
+                nothing is created until it is fixed or cleared. */}
             {codeOpen ? (
               <>
                 <input

@@ -21,6 +21,7 @@ import {
 } from "./AffiliatesSection";
 import { PartnersSection, type AdminPartners } from "./PartnersSection";
 import { AwardsSection, type AdminAwards } from "./AwardsSection";
+import { SignupSourcesSection, type SignupSources } from "./SignupSourcesSection";
 import { AdminTwoStepGate } from "./AdminTwoStepGate";
 import { AdminAuthenticatorCard } from "./AdminAuthenticatorCard";
 
@@ -86,7 +87,7 @@ export default async function AdminPage() {
     );
   }
 
-  const [metricsRes, shopsRes, analyticsRes, preflightRes, textingRes, noticesRes, affApps, affAccounts, affRewards, affLiability, affFlags, affCredits, partnersRes, awardsRes] =
+  const [metricsRes, shopsRes, analyticsRes, preflightRes, textingRes, noticesRes, affApps, affAccounts, affRewards, affLiability, affFlags, affCredits, partnersRes, awardsRes, sourcesRes] =
     await Promise.all([
       apiGet<Metrics>("/api/admin-portal/metrics"),
       apiGet<{ shops: AdminShop[] }>("/api/admin-portal/shops"),
@@ -104,6 +105,7 @@ export default async function AdminPage() {
       apiGet<{ credits: AdminCredit[] }>("/api/admin-portal/affiliate/credits"),
       apiGet<AdminPartners>("/api/admin-portal/partners"),
       apiGet<AdminAwards>("/api/admin-portal/awards"),
+      apiGet<SignupSources>("/api/admin-portal/signup-sources"),
     ]);
   if (metricsRes.status === 404 || metricsRes.status === 401) redirect("/dashboard");
   const m = metricsRes.data;
@@ -160,6 +162,8 @@ export default async function AdminPage() {
         {preflight && <PreflightSection p={preflight} />}
 
         {analytics && <AnalyticsSection a={analytics} />}
+
+        {sourcesRes.data && <SignupSourcesSection data={sourcesRes.data} />}
 
         {affiliateProgramLive && (
           <AffiliatesSection

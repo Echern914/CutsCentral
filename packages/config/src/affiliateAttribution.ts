@@ -95,6 +95,25 @@ export function normalizeAffiliateCode(raw: unknown): string | null {
 }
 
 /**
+ * The form of a short code as stored: no spaces, upper case. A short code is
+ * read aloud, so unlike the long code its case means nothing.
+ */
+export function shortAffiliateCodeKey(raw: string): string {
+  return raw.replace(/\s+/g, "").toUpperCase();
+}
+
+/**
+ * The letters of a short code: up to five from the business name, or SHOP when
+ * the name has fewer than three (a name in another alphabet, say). With three
+ * digits on the end that always satisfies CODE_SHAPE. The migration's backfill
+ * mints the same shape.
+ */
+export function affiliateShortCodePrefix(shopName: string): string {
+  const letters = shopName.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 5);
+  return letters.length >= 3 ? letters : "SHOP";
+}
+
+/**
  * Mint a signed claim. `nowSeconds` is passed in rather than read from the
  * clock so tests can pin it and so the caller decides the instant that lands
  * in `capturedAt`.

@@ -74,6 +74,8 @@ export interface OwnerAffiliateOverview {
   termsVersion: string;
   account: {
     code: string;
+    /** The one to say out loud. Null on an account that couldn't be given one. */
+    shortCode: string | null;
     status: string;
     createdAt: string;
     promotionStyles: AffiliatePromotionStyle[];
@@ -127,6 +129,7 @@ export async function getAffiliateOverview(
       select: {
         id: true,
         code: true,
+        shortCode: true,
         status: true,
         createdAt: true,
         suspensionReason: true,
@@ -231,6 +234,7 @@ export async function getAffiliateOverview(
       termsVersion: AFFILIATE_TERMS_VERSION,
       account: {
         code: account.code,
+        shortCode: account.shortCode,
         status: account.status,
         createdAt: account.createdAt.toISOString(),
         promotionStyles: account.promotionStyles as AffiliatePromotionStyle[],
@@ -594,6 +598,7 @@ export async function exportAffiliatesCsv(): Promise<string> {
         id: true,
         shopId: true,
         code: true,
+        shortCode: true,
         status: true,
         createdAt: true,
         promotionStyles: true,
@@ -625,6 +630,7 @@ export async function exportAffiliatesCsv(): Promise<string> {
       "accountId",
       "shopId",
       "code",
+      "shortCode",
       "status",
       "createdAt",
       "styles",
@@ -642,6 +648,7 @@ export async function exportAffiliatesCsv(): Promise<string> {
           a.id,
           a.shopId,
           a.code,
+          a.shortCode,
           a.status,
           a.createdAt.toISOString(),
           a.promotionStyles.join("|"),

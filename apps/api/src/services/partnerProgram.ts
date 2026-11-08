@@ -437,6 +437,12 @@ export async function createPartner(params: {
   });
   if (!user) return { ok: false, error: "no_such_user" };
   const userId = user.id;
+  // A partner code wins when one is typed at signup, so taking an affiliate's
+  // short code would quietly send their signups to this partner.
+  const affiliate = await runAsOwner((tx) =>
+    tx.affiliateAccount.findUnique({ where: { shortCode: codeKey }, select: { id: true } }),
+  );
+  if (affiliate) return { ok: false, error: "code_taken" };
   try {
     const partner = await runAsOwner((tx) =>
       tx.partner.create({

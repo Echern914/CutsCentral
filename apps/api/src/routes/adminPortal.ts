@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { apiEnv, BILLING, PLANS } from "@chairback/config";
+import { apiEnv, BILLING, HEARD_ABOUT_IDS, PLANS } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { requireAdmin } from "../middleware/admin.js";
@@ -158,6 +158,35 @@ adminPortalRouter.get("/shops", async (req, res) => {
       visitCount: s._count.visits,
       createdAt: s.createdAt.toISOString(),
     })),
+  });
+});
+
+/** The recent column on the "How did you hear about us?" chart. */
+const SIGNUP_SOURCE_DAYS = 30;
+
+// "How did you hear about us?" counted across every business, all time and
+// recently. Every answer is always listed, so a zero reads as nobody picking it.
+// No answer is its own number: it is every business from before the question.
+adminPortalRouter.get("/signup-sources", async (_req, res) => {
+  const since = new Date(Date.now() - SIGNUP_SOURCE_DAYS * MS_PER_DAY);
+  const [allTime, recent] = await Promise.all([
+    prisma.shop.groupBy({ by: ["heardAbout"], _count: { _all: true } }),
+    prisma.shop.groupBy({
+      by: ["heardAbout"],
+      where: { createdAt: { gte: since } },
+      _count: { _all: true },
+    }),
+  ]);
+  const count = (rows: typeof allTime, id: string | null): number =>
+    rows.find((r) => r.heardAbout === id)?._count._all ?? 0;
+  res.json({
+    days: SIGNUP_SOURCE_DAYS,
+    answers: HEARD_ABOUT_IDS.map((id) => ({
+      id,
+      total: count(allTime, id),
+      recent: count(recent, id),
+    })),
+    noAnswer: { total: count(allTime, null), recent: count(recent, null) },
   });
 });
 

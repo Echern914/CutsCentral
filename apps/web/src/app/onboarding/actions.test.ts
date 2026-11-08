@@ -47,6 +47,28 @@ beforeEach(() => {
   redirect.mockReset();
 });
 
+describe("how did you hear about us", () => {
+  it("🔴 the answer goes to the API", async () => {
+    apiSend.mockResolvedValue(created);
+    const f = form();
+    f.set("heardAbout", "tiktok");
+    await createShopAction({}, f);
+    expect(apiSend.mock.calls[0]![2]).toMatchObject({ heardAbout: "tiktok" });
+  });
+
+  it("a page from before the question, or a tampered answer, still creates the business with none", async () => {
+    apiSend.mockResolvedValue(created);
+    await createShopAction({}, form());
+    expect(apiSend.mock.calls[0]![2]).not.toHaveProperty("heardAbout");
+
+    apiSend.mockClear();
+    const f = form();
+    f.set("heardAbout", "billboard");
+    await createShopAction({}, f);
+    expect(apiSend.mock.calls[0]![2]).not.toHaveProperty("heardAbout");
+  });
+});
+
 describe("creating a business from a team link", () => {
   it("🔴 sends the join request as soon as the business exists", async () => {
     cookieStore.set("cb_team_link", "cmteamshop0001");

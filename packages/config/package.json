@@ -41,6 +41,7 @@
     "./featureAdoption": "./src/featureAdoption.ts",
     "./affiliateProgram": "./src/affiliateProgram.ts",
     "./partnerProgram": "./src/partnerProgram.ts",
+    "./heardAbout": "./src/heardAbout.ts",
     "./supportCapabilities": "./src/supportCapabilities.ts",
     "./supportEngine": "./src/supportEngine.ts",
     "./checkoutConsent": "./src/checkoutConsent.ts",
