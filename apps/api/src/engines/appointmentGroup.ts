@@ -51,8 +51,7 @@ export const MAX_GROUP_ATTENDEES = 3;
  * only on the outside, and one confirmation. It differs from a party in who
  * sits in the chair: one client, so one reminder too.
  */
-export const MIN_DASH_RUN = 2;
-export const MAX_DASH_RUN = 10;
+export { MAX_DASH_RUN, MIN_DASH_RUN } from "@chairback/config";
 
 /** A group's idempotency key says it is a run. A public party's never starts so. */
 const DASH_RUN_KEY_PREFIX = "dash-run:";

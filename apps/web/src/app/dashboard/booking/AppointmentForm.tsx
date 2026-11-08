@@ -7,9 +7,11 @@ import { Dialog } from "@/components/ui/Dialog";
 import { chip, Field, FormFooter, Group, INPUT } from "./formkit";
 import { zonedWallTimeToUtc } from "@chairback/config/time";
 import { addOnOffersService } from "@chairback/config/addOns";
+import { MAX_DASH_RUN } from "@chairback/config/constants";
 import type { AddOnRow, ServiceRow, StaffRow } from "./page";
 import {
   createAppointmentAction,
+  createAppointmentRunAction,
   getDashSlotsAction,
   getDaySpecialsAction,
   searchClientsAction,
@@ -64,6 +66,13 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  * sends the confirmation email a self-booked client gets, plus an app push,
  * for a time still to come (never one already past - the box gives way to a
  * line saying so). Unticked sends `notifyClient: false` and nothing goes out.
+ *
+ * BACK TO BACK. "It takes me a minute to add 3 services back to back", from a
+ * live shop. The `- 1 +` under the service books that many in one go, end to
+ * end: all of them or none, with one confirmation and one reminder. The times
+ * listed are the ones the whole run fits from. A special, an add-on, an offer,
+ * a typed price and a repeat are each for one visit, so raising the count
+ * clears them and those cards say why.
  */
 /**
  * "Book again", opened from an appointment's Full details: who and what carry
@@ -195,6 +204,10 @@ export function AppointmentForm({
   // Ticked add-ons, in the order ticked. Cleared whenever the service changes
   // (add-ons belong to a service) and when a special is picked.
   const [addOnIds, setAddOnIds] = useState<string[]>([]);
+  // The `- 1 +`: how many of the service, back to back. Not on Book again (the
+  // next visit is one visit) or the waitlist (one person asked for one time).
+  const [runCount, setRunCount] = useState(1);
+  const running = runCount > 1;
 
   const [clientId, setClientId] = useState<string | null>(rebook?.clientId ?? null);
   const [clientLabel, setClientLabel] = useState<string>(rebook?.clientLabel ?? "");
@@ -263,7 +276,7 @@ export function AppointmentForm({
   useEffect(() => {
     acceptedOverlap.current = null;
     setOverlapConflict(null);
-  }, [startsAt, serviceId, staffId, customTime, addOnKey]);
+  }, [startsAt, serviceId, staffId, customTime, addOnKey, runCount]);
   // "Pick a time." is answered the moment one is picked - left up, it reads
   // as if the time just tapped were refused.
   useEffect(() => {
@@ -338,12 +351,9 @@ export function AppointmentForm({
     if (!serviceId || !staffId || customTime) return;
     let live = true;
     setLoadingSlots(true);
-    getDashSlotsAction(
-      staffId,
-      serviceId,
-      windowFrom,
-      windowTo,
-      addOnKey ? addOnKey.split(",") : [],
+    (runCount > 1
+      ? getDashSlotsAction(staffId, serviceId, windowFrom, windowTo, [], runCount)
+      : getDashSlotsAction(staffId, serviceId, windowFrom, windowTo, addOnKey ? addOnKey.split(",") : [])
     ).then((res) => {
       // A newer pick (service, provider, add-ons) raced this answer - ticking
       // two add-ons quickly must never leave the one-add-on list on screen.
@@ -354,7 +364,15 @@ export function AppointmentForm({
     return () => {
       live = false;
     };
-  }, [serviceId, staffId, customTime, windowFrom, windowTo, onDay, addOnKey]);
+  }, [serviceId, staffId, customTime, windowFrom, windowTo, onDay, addOnKey, runCount]);
+
+  // A time picked for one that the run no longer fits from is off the list. Left
+  // as the pick, Schedule would send a time the screen shows nothing for. A
+  // TAPPED hour stays: it has its own card, and Schedule books it as tapped.
+  useEffect(() => {
+    if (!running || customTime || loadingSlots || !startsAt || (tapped && startsAt === prefillISO)) return;
+    if (!slots.some((s) => s.startsAt === startsAt)) setStartsAt("");
+  }, [running, customTime, loadingSlots, slots, startsAt, tapped, prefillISO]);
 
   // Load the DAY's specials: this provider's, or every provider's while none is
   // picked. Independent of the service - that is the whole point.
@@ -376,7 +394,7 @@ export function AppointmentForm({
    * a special the form is no longer showing as chosen.
    */
   const special =
-    !customTime && targetedSlotId
+    !customTime && !running && targetedSlotId
       ? (specials.find(
           (t) =>
             t.id === targetedSlotId &&
@@ -394,7 +412,7 @@ export function AppointmentForm({
   const serviceAddOns = selectedService
     ? addOns.filter((a) => a.active && addOnOffersService(a, selectedService.id))
     : [];
-  const chosenAddOns = special ? [] : serviceAddOns.filter((a) => addOnIds.includes(a.id));
+  const chosenAddOns = special || running ? [] : serviceAddOns.filter((a) => addOnIds.includes(a.id));
   // The same sums the API books: minutes onto the service's length, and a price
   // only when there is one to add (a priceless service with free add-ons stays
   // priceless). The service's base figures, as its row above shows them.
@@ -404,7 +422,7 @@ export function AppointmentForm({
   // Custom time's typed price, read by the same parser the Services tab uses.
   // Outside Custom time nothing typed counts: an open time books at the menu
   // price, a special at its own.
-  const typedPrice = customTime ? parsePrice(priceText) : null;
+  const typedPrice = customTime && !running ? parsePrice(priceText) : null;
   const customPrice = typedPrice?.ok ? typedPrice.value : null;
   const basePrice = customPrice ?? selectedService?.price ?? null;
   const totalPrice = basePrice == null && addOnPrice === 0 ? null : (basePrice ?? 0) + addOnPrice;
@@ -417,7 +435,7 @@ export function AppointmentForm({
   const [offer, setOffer] = useState<Extract<OfferQuote, { ok: true }> | null>(null);
   const [offerNote, setOfferNote] = useState<string | null>(null);
   const [checkingOffer, setCheckingOffer] = useState(false);
-  const offerVisitKey = JSON.stringify([serviceId, staffId, startsAt, clientId, addOnIds, customPrice, targetedSlotId, repeat]);
+  const offerVisitKey = JSON.stringify([serviceId, staffId, startsAt, clientId, addOnIds, customPrice, targetedSlotId, repeat, runCount]);
   useEffect(() => {
     setOffer(null);
   }, [offerVisitKey]);
@@ -468,6 +486,25 @@ export function AppointmentForm({
     setTargetedSlotId(null);
   }
 
+  /**
+   * The `- 1 +`. Above 1, what is priced for one visit goes, so nothing the
+   * screen stops showing can ride along.
+   */
+  function changeRunCount(by: 1 | -1) {
+    // From the current count, not this render's: taps quicker than a render
+    // each count.
+    setRunCount((n) => Math.min(MAX_DASH_RUN, Math.max(1, n + by)));
+    if (by > 0) {
+      setAddOnIds([]);
+      setRepeat(false);
+      setTargetedSlotId(null);
+      setPriceText("");
+      setOffer(null);
+      setOfferText("");
+      setOfferNote(null);
+    }
+  }
+
   function toggleAddOn(id: string) {
     const on = addOnIds.includes(id);
     setAddOnIds(on ? addOnIds.filter((x) => x !== id) : [...addOnIds, id]);
@@ -485,8 +522,9 @@ export function AppointmentForm({
     setStartsAt(t.startsAt);
     setTargetedSlotId(t.id);
     setRepeat(false);
-    // Its own length and price: nothing to add to.
+    // Its own length and price: nothing to add to, and one time to fill.
     setAddOnIds([]);
+    setRunCount(1);
   }
 
   /** Switching service or provider forgets a special not offered under the new one. */
@@ -585,7 +623,7 @@ export function AppointmentForm({
     };
     // A special is one physical time: it never repeats (the server refuses the
     // combination too). Nor does a visit with add-ons.
-    const recurrence = repeat && !special && chosenAddOns.length === 0
+    const recurrence = repeat && !special && !running && chosenAddOns.length === 0
       ? {
           interval: everyWeeks,
           ...(endMode === "count" ? { count } : { until: untilISO() }),
@@ -622,7 +660,7 @@ export function AppointmentForm({
       // details, so a different offer on a retry counts as a change.
       ...(offer ? { offerCode: offer.code } : {}),
     };
-    const fingerprint = JSON.stringify(details);
+    const fingerprint = JSON.stringify(running ? { ...details, runCount } : details);
 
     start(async () => {
       let res: Awaited<ReturnType<typeof createAppointmentAction>>;
@@ -631,18 +669,35 @@ export function AppointmentForm({
       const changedSinceUnanswered =
         unansweredAttempt.current !== null && unansweredAttempt.current !== fingerprint;
       try {
-        res = await createAppointmentAction({
-          ...details,
-          // A retry of THIS submission (a lost answer) gets the booking it made,
-          // not a second one. A series answers per visit, so it sends none.
-          // 🔴 Kept even when the barber changed something while the outcome
-          // was unknown: a NEW id could book a second appointment beside one
-          // the first copy already made. With the same id the server either
-          // books the new details (the first copy never landed), refuses
-          // naming what was booked, or answers with the first copy's booking -
-          // which is reported as exactly that, below.
-          operationId: recurrence ? undefined : operationId.current,
-        });
+        res = running
+          ? await createAppointmentRunAction({
+              staffId,
+              serviceId,
+              startsAt,
+              count: runCount,
+              clientId: details.clientId,
+              firstName: details.firstName,
+              phone: details.phone,
+              email: details.email,
+              note: details.note,
+              ...(notify ? {} : { notifyClient: false as const }),
+              customTime: sendCustomTime,
+              externalBlockConfirmation,
+              overlapConfirmation,
+              operationId: operationId.current,
+            })
+          : await createAppointmentAction({
+              ...details,
+              // A retry of THIS submission (a lost answer) gets the booking it made,
+              // not a second one. A series answers per visit, so it sends none.
+              // 🔴 Kept even when the barber changed something while the outcome
+              // was unknown: a NEW id could book a second appointment beside one
+              // the first copy already made. With the same id the server either
+              // books the new details (the first copy never landed), refuses
+              // naming what was booked, or answers with the first copy's booking -
+              // which is reported as exactly that, below.
+              operationId: recurrence ? undefined : operationId.current,
+            });
       } catch {
         // 🔴 The PHONE lost the answer (no signal, the app backgrounded) - the
         // server may well have booked it. Same as no answer from the API: keep
@@ -738,9 +793,11 @@ export function AppointmentForm({
                     ? "That time is already booked."
                     : "That time was just taken. Pick another, or use Custom time to force it."
                 : res.error === "invalid_slot"
-                  ? chosenAddOns.length > 0
-                    ? "That time is too short with the add-ons. Pick another, or use Custom time to force it."
-                    : "That time isn't available. Use Custom time to force it."
+                  ? running
+                    ? `${runCount === 2 ? "Both" : `All ${runCount}`} don't fit from that time. Pick another, or use Custom time to force it.`
+                    : chosenAddOns.length > 0
+                      ? "That time is too short with the add-ons. Pick another, or use Custom time to force it."
+                      : "That time isn't available. Use Custom time to force it."
                   : res.error === "invalid_add_on"
                     ? "An add-on you ticked isn't offered with this service any more. Close this and open it again to see the current list."
                     : res.error === "replay_not_booked"
@@ -766,6 +823,24 @@ export function AppointmentForm({
             : `Booked ${booked} appointments`,
           "success",
         );
+      } else if (res.run) {
+        // The SAVED span - a retry's answer is the run as it was made.
+        const span =
+          res.startsAt && res.endsAt
+            ? `${timeFmt.format(new Date(res.startsAt))} - ${timeFmt.format(new Date(res.endsAt))}`
+            : "";
+        if (res.mirror === "failed") {
+          toast(`Booked ${res.run.count} - but Acuity didn't block those times. Block them in Acuity so they can't be sold.`, "error");
+        } else if (res.mirror === "unknown") {
+          toast(`Booked ${res.run.count} back to back - still confirming the times on Acuity.`, "success");
+        } else {
+          toast(
+            res.forced
+              ? `Booked ${res.run.count} back to back, over the other appointment`
+              : `Booked ${res.run.count} back to back${span ? `: ${span}` : ""}`,
+            "success",
+          );
+        }
       } else if (res.forced && res.mirror === "failed") {
         // Booked, and Acuity turned the block down and the undo could not run:
         // the one outcome that needs him to act, so it says what to do.
@@ -782,6 +857,19 @@ export function AppointmentForm({
       onCreated(res.id && !res.series ? { id: res.id, startsAt: res.startsAt ?? startsAt } : undefined);
     });
   }
+
+  // The run's span on screen: the listed time's own end when it is one, since a
+  // service's length can change by the hour. Custom time goes by the menu length.
+  const runSpan = (() => {
+    if (!running || !selectedService || !startsAt) return null;
+    const listed = customTime ? undefined : slots.find((s) => s.startsAt === startsAt);
+    // Off the list and not forced: nothing picked yet, whatever the form holds.
+    if (!customTime && !listed && !(offerTapped && startsAt === prefillISO)) return null;
+    const endsAt = listed
+      ? new Date(listed.endsAt)
+      : new Date(new Date(startsAt).getTime() + selectedService.durationMin * runCount * 60_000);
+    return `${timeFmt.format(new Date(startsAt))} - ${timeFmt.format(endsAt)}`;
+  })();
 
   return (
     <Dialog
@@ -865,7 +953,9 @@ export function AppointmentForm({
                 ? "Nothing was booked."
                 : overlapConflict.bufferOnly
                   ? "Nobody shares the chair, so it isn't marked Double-booked. It just takes up your buffer. A special listed here comes off sale."
-                  : "Both stay on your calendar, and this one is marked Double-booked. A special listed here comes off sale so nobody can book on top of this."
+                  : running
+                    ? "Everything stays on your calendar, and the ones that share the time are marked Double-booked. A special listed here comes off sale so nobody can book on top of this."
+                    : "Both stay on your calendar, and this one is marked Double-booked. A special listed here comes off sale so nobody can book on top of this."
             }
             onConfirm={() => submit({ overlap: overlapConflict.confirmation })}
             onDismiss={() => setOverlapConflict(null)}
@@ -904,13 +994,61 @@ export function AppointmentForm({
               <p className="text-sm text-muted">Add a service first (Services tab).</p>
             )}
           </div>
+          {selectedService && !rebook && !waitlist && (
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <div
+                data-qa="run-stepper"
+                className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-subtle px-4 py-1.5 text-sm"
+              >
+                <span className="min-w-0 text-offwhite">How many back to back</span>
+                <div role="group" aria-label="How many back to back" className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    aria-label="One fewer"
+                    disabled={runCount <= 1 || pending}
+                    onClick={() => changeRunCount(-1)}
+                    className="flex h-11 w-11 items-center justify-center rounded-lg border border-subtle text-lg text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700/40 disabled:opacity-40"
+                  >
+                    −
+                  </button>
+                  <span aria-live="polite" className="w-8 text-center font-semibold tabular-nums text-offwhite">
+                    {runCount}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="One more"
+                    disabled={runCount >= MAX_DASH_RUN || pending}
+                    onClick={() => changeRunCount(1)}
+                    className="flex h-11 w-11 items-center justify-center rounded-lg border border-subtle text-lg text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700/40 disabled:opacity-40"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              {running && (
+                <div data-qa="run-summary" className="min-w-0 rounded-xl border border-gold/30 bg-gold/5 px-4 py-2.5 text-sm">
+                  <p className="[overflow-wrap:anywhere] font-medium text-offwhite">
+                    {runCount} × {selectedService.name}
+                    {runSpan ? ` · ${runSpan}` : ` · ${selectedService.durationMin * runCount} min`}
+                  </p>
+                  <p className="text-xs text-muted">
+                    Your buffer, if you have one, goes after the last one. Later times stay open.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </Group>
 
         {/* The picked service's add-ons, unticked until he ticks them. Only
             when it has any - a service without add-ons shows no card at all. */}
         {selectedService && serviceAddOns.length > 0 && (
           <Group title="Add-ons">
-            {special ? (
+            {running ? (
+              <p className="text-xs text-muted">
+                Add-ons are for a single visit. Set the count back to 1 to add one.
+              </p>
+            ) : special ? (
               <p className="text-xs text-muted">
                 A special has its own length and price, so add-ons don&apos;t apply.
               </p>
@@ -1069,30 +1207,33 @@ export function AppointmentForm({
                 and be asked before it&apos;s booked.
               </p>
               {/* His price for a time he forced - an after-hours rate, say.
-                  Blank books at the service's own price, as before. */}
-              <Field
-                label="Price"
-                hint={
-                  selectedService?.price != null
-                    ? `Leave blank for the regular ${formatSpecialPrice(selectedService.price)}. Type your after-hours price to charge that instead.`
-                    : "Leave blank for no price, or type what to charge for this visit."
-                }
-              >
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  aria-label="Price"
-                  className={INPUT}
-                  placeholder={
-                    selectedService?.price != null ? selectedService.price.toFixed(2) : "0.00"
+                  Blank books at the service's own price, as before. For one
+                  visit, so a back-to-back run books at the menu price. */}
+              {!running && (
+                <Field
+                  label="Price"
+                  hint={
+                    selectedService?.price != null
+                      ? `Leave blank for the regular ${formatSpecialPrice(selectedService.price)}. Type your after-hours price to charge that instead.`
+                      : "Leave blank for no price, or type what to charge for this visit."
                   }
-                  value={priceText}
-                  onChange={(e) => {
-                    setPriceText(e.target.value);
-                    setError(null);
-                  }}
-                />
-              </Field>
+                >
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    aria-label="Price"
+                    className={INPUT}
+                    placeholder={
+                      selectedService?.price != null ? selectedService.price.toFixed(2) : "0.00"
+                    }
+                    value={priceText}
+                    onChange={(e) => {
+                      setPriceText(e.target.value);
+                      setError(null);
+                    }}
+                  />
+                </Field>
+              )}
             </div>
           ) : (
             <div className="flex min-w-0 flex-col gap-3">
@@ -1173,7 +1314,11 @@ export function AppointmentForm({
               ) : (
                 <p className="text-xs text-muted">
                   {specials.length > 0 ? "No other open times this day" : "No open times this day"}
-                  {chosenAddOns.length > 0 ? " long enough with the add-ons." : "."}{" "}
+                  {running
+                    ? ` long enough for ${runCount === 2 ? "both" : `all ${runCount}`}.`
+                    : chosenAddOns.length > 0
+                      ? " long enough with the add-ons."
+                      : "."}{" "}
                   Use Custom time to force one.
                 </p>
               )}
@@ -1320,7 +1465,12 @@ export function AppointmentForm({
           )}
         </Group>
 
-        {offersEnabled && (
+        {offersEnabled && running && (
+          <Group title="Offer">
+            <p className="text-xs text-muted">Offers are for a single visit. Set the count back to 1 to use one.</p>
+          </Group>
+        )}
+        {offersEnabled && !running && (
           <Group title="Offer">
             <div className="flex min-w-0 gap-2">
               <input
@@ -1374,7 +1524,11 @@ export function AppointmentForm({
         </Group>
 
         <Group title="Repeat">
-          {special ? (
+          {running ? (
+            <p className="text-xs text-muted">
+              These all book for this one day. Set the count back to 1 to repeat a visit.
+            </p>
+          ) : special ? (
             <p className="text-xs text-muted">
               A special is a one-off time, so it doesn&apos;t repeat.
             </p>
@@ -1404,7 +1558,7 @@ export function AppointmentForm({
             </div>
           )}
 
-          {repeat && (
+          {repeat && !running && (
             <div className="flex flex-col gap-3 rounded-xl border border-subtle bg-charcoal-900/50 p-3">
               <RepeatNumber
                 label="Repeat every how many weeks"

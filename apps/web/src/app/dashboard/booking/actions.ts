@@ -518,6 +518,8 @@ export async function getDashSlotsAction(
   from: string,
   to: string,
   addOnIds: string[] = [],
+  /** New appointment's `- 1 +`: only times the whole run fits from. */
+  run?: number,
 ): Promise<{
   ok: boolean;
   slots?: DashSlot[];
@@ -531,6 +533,7 @@ export async function getDashSlotsAction(
     from,
     to,
     ...(addOnIds.length > 0 ? { addOnIds: addOnIds.join(",") } : {}),
+    ...(run ? { run: String(run) } : {}),
   }).toString();
   const res = await apiGet<{
     timezone: string;
@@ -721,6 +724,8 @@ export type CreateApptResult = Result & {
    * their confirmation, "none" when it can't (no email on file, email off).
    */
   clientConfirmation?: "email" | "none";
+  /** A back-to-back run: how many were booked. `id` is the first, `endsAt` the end of the last. */
+  run?: { count: number };
 };
 
 export async function createAppointmentAction(
@@ -776,6 +781,65 @@ export async function createAppointmentAction(
     series: res.data?.series,
     ...(res.data?.forced ? { forced: true, mirror: res.data.mirror } : {}),
     ...(res.data?.clientConfirmation ? { clientConfirmation: res.data.clientConfirmation } : {}),
+  };
+}
+
+/**
+ * New appointment's `- 1 +`: this many of one service, back to back, booked as
+ * one. All of them land or none do. Answers as a single booking does, so the
+ * form handles a refusal the same way.
+ */
+export async function createAppointmentRunAction(input: {
+  staffId: string;
+  serviceId: string;
+  startsAt: string;
+  count: number;
+  clientId?: string;
+  firstName?: string;
+  phone?: string;
+  email?: string;
+  note?: string;
+  notifyClient?: false;
+  customTime?: boolean;
+  externalBlockConfirmation?: string;
+  overlapConfirmation?: string;
+  operationId: string;
+}): Promise<CreateApptResult> {
+  const res = await apiSend<{
+    id?: string;
+    startsAt?: string;
+    endsAt?: string;
+    replayed?: boolean;
+    forced?: boolean;
+    mirror?: string;
+    run?: { count: number };
+  }>("POST", "/api/booking/appointments/run", input);
+  if (res.ok) revalidatePath("/dashboard/booking");
+  if (!res.ok) {
+    const booked = readSavedBooking(res.booked);
+    return {
+      ok: false,
+      answered: apiAnswered(res.status),
+      error: res.error ?? "failed",
+      ...(booked ? { booked } : {}),
+      ...(res.reason ? { reason: res.reason } : {}),
+      ...(res.confirmation ? { confirmation: res.confirmation } : {}),
+      ...(res.code ? { code: res.code } : {}),
+      ...(res.conflicts ? { conflicts: res.conflicts } : {}),
+      ...(res.bufferOnly ? { bufferOnly: true } : {}),
+      ...(res.message ? { message: res.message } : {}),
+    };
+  }
+  return {
+    ok: true,
+    answered: true,
+    ...(res.data?.id ? { id: res.data.id } : {}),
+    ...(res.data?.startsAt ? { startsAt: res.data.startsAt } : {}),
+    ...(res.data?.endsAt ? { endsAt: res.data.endsAt } : {}),
+    ...(res.data?.replayed ? { replayed: true } : {}),
+    ...(res.data?.forced ? { forced: true } : {}),
+    ...(res.data?.mirror ? { mirror: res.data.mirror } : {}),
+    ...(res.data?.run ? { run: res.data.run } : {}),
   };
 }
 

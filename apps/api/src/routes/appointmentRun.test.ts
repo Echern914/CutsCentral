@@ -122,7 +122,7 @@ afterAll(async () => {
   if (ORIGINAL_SMS_ENABLED === undefined) delete process.env.SMS_ENABLED;
   else process.env.SMS_ENABLED = ORIGINAL_SMS_ENABLED;
   __resetEnvCacheForTests();
-  __setSendEmailForTests(null);
+  __setSendEmailForTests(undefined);
   for (const email of accounts) {
     const user = await prisma.user.findUnique({ where: { email } });
     if (user) {
