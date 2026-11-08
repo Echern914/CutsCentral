@@ -557,8 +557,14 @@ describe("🔴 the 30-day window, counted in the SHOP's calendar days", () => {
 
   it("OVER 30 days back is refused - 31, 45 and 365 days - and nothing is written", async () => {
     const before = await receipts(N);
+    // Counted back from the shop-local edge, not as days * 24h from now: across
+    // a DST change one of those days is 25 hours, and between 11pm and midnight
+    // Eastern "31 x 24h ago" landed inside day 30 and was (rightly) recorded.
+    const earliest = earliestWalkInBackdate(new Date(), "America/New_York");
     for (const days of [31, 45, 365]) {
-      const res = await walkIn(N, { occurredAt: new Date(Date.now() - days * 24 * 60 * MIN).toISOString() });
+      const res = await walkIn(N, {
+        occurredAt: new Date(earliest.getTime() - (days - 30) * 24 * 60 * MIN).toISOString(),
+      });
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("occurred_at_too_old");
     }
