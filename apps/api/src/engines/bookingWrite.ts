@@ -99,6 +99,27 @@ export interface OverlapRows {
   targetedIds: string[];
 }
 
+/** A span an overlap row really occupies, WITHOUT the turnover buffer. */
+export interface OccupiedSpan {
+  startsAt: Date;
+  endsAt: Date;
+}
+
+/**
+ * 🔴 THE BUFFER ASKS; ONLY REAL TIME DOUBLE-BOOKS.
+ *
+ * The guard pads a write by the shop's turnover buffer, so a booking that starts
+ * the minute another ends is "in the way" and gets the question. That question
+ * stays: the barber keeps a buffer on purpose, and is entitled to be told. But
+ * saying yes to it puts two people in the chair at no moment, so it is not a
+ * double-booking, and the Double-booked tag on it was a false alarm. The second
+ * half of that is this test: half-open, like the grid, so touching ends are not
+ * an overlap.
+ */
+export function occupiesSameTime(span: OccupiedSpan, others: readonly OccupiedSpan[]): boolean {
+  return others.some((o) => o.startsAt < span.endsAt && o.endsAt > span.startsAt);
+}
+
 /**
  * The write overlaps another booking, a synced visit or an unbooked special.
  *
@@ -110,11 +131,14 @@ export interface OverlapRows {
 export class OverlapError extends SlotTakenError {
   readonly rows: OverlapRows;
   readonly confirmation: string;
-  constructor(rows: OverlapRows) {
+  /** Nothing is really in the way: only the turnover buffer next to it is. */
+  readonly bufferOnly: boolean;
+  constructor(rows: OverlapRows, bufferOnly = false) {
     super();
     this.name = "OverlapError";
     this.rows = rows;
     this.confirmation = overlapConfirmation(rows);
+    this.bufferOnly = bufferOnly;
   }
 }
 
@@ -309,10 +333,14 @@ export interface SlotGuardResult {
   /**
    * The bookings, synced visits and specials this write was CONFIRMED over
    * (`overlapConfirmation` matched them). Absent when nothing was in the way.
-   * Present means the caller is writing a deliberate double and must record
-   * it as one.
+   * Present does NOT by itself mean a double: see `overlapsCrossedSpans`.
    */
   overlapsCrossed?: OverlapRows;
+  /**
+   * Where those rows really sit, buffer not included. A caller records a double
+   * only for a span `occupiesSameTime` says truly lands on one of these.
+   */
+  overlapsCrossedSpans?: OccupiedSpan[];
 }
 
 export async function lockStaffAndAssertSlotFree(
@@ -641,8 +669,10 @@ export async function lockStaffAndAssertSlotFree(
   // holdExpiresAt comes back so a LIVE hold can be told apart from a booking:
   // occupyingSql has already dropped expired ones, so any non-null value here
   // is a customer still holding the time (see HeldSlotError).
-  const overlap = await tx.$queryRaw<{ id: string; holdExpiresAt: Date | null }[]>(
-    Prisma.sql`SELECT id, "holdExpiresAt" FROM "Appointment"
+  const overlap = await tx.$queryRaw<
+    { id: string; holdExpiresAt: Date | null; startsAt: Date; endsAt: Date }[]
+  >(
+    Prisma.sql`SELECT id, "holdExpiresAt", "startsAt", "endsAt" FROM "Appointment"
                WHERE "staffId" = ${opts.staffId}
                  ${statusFragment}
                  ${excludeFragment}
@@ -657,6 +687,9 @@ export async function lockStaffAndAssertSlotFree(
     visitIds: [],
     targetedIds: [],
   };
+  // Where each of those really sits. Not part of the confirmation's digest, which
+  // stays ids only: this says what KIND of crossing it is, not which rows.
+  const occupied: OccupiedSpan[] = overlap.map((o) => ({ startsAt: o.startsAt, endsAt: o.endsAt }));
 
   // Targeted slots: an ACTIVE, UNBOOKED barber-published slot owns its span
   // (buffer-padded like an appointment) so a NORMAL booking can't be laid over
@@ -674,8 +707,10 @@ export async function lockStaffAndAssertSlotFree(
   // blocks every later claim, so two simultaneous claims still resolve to
   // exactly one winner - capacity never came from this check.
   if (!opts.targetedSlotIdToIgnore) {
-    const targetedOverlap = await tx.$queryRaw<{ id: string }[]>(
-      Prisma.sql`SELECT id FROM "TargetedSlot"
+    const targetedOverlap = await tx.$queryRaw<
+      { id: string; startsAt: Date; durationMin: number }[]
+    >(
+      Prisma.sql`SELECT id, "startsAt", "durationMin" FROM "TargetedSlot"
                  WHERE "staffId" = ${opts.staffId}
                    AND "active" = true
                    AND "bookedAppointmentId" IS NULL
@@ -683,6 +718,12 @@ export async function lockStaffAndAssertSlotFree(
                    AND ("startsAt" + "durationMin" * interval '1 minute') > ${overlapStart.toISOString()}::timestamp`,
     );
     overlapping.targetedIds = targetedOverlap.map((t) => t.id);
+    for (const t of targetedOverlap) {
+      occupied.push({
+        startsAt: t.startsAt,
+        endsAt: new Date(t.startsAt.getTime() + t.durationMin * 60_000),
+      });
+    }
   }
 
   // Waitlist holds: a LIVE offer (OFFERED and unexpired) owns its span on this
@@ -794,8 +835,8 @@ export async function lockStaffAndAssertSlotFree(
   // promoted from a NATIVE appointment are excluded: their Appointment row
   // (checked above) is authoritative, so the time is never counted twice.
   // Mirrors the read-side subtraction in slots.ts.
-  const visitOverlap = await tx.$queryRaw<{ id: string }[]>(
-    Prisma.sql`SELECT v.id FROM "Visit" v
+  const visitOverlap = await tx.$queryRaw<{ id: string; scheduledAt: Date; endAt: Date }[]>(
+    Prisma.sql`SELECT v.id, v."scheduledAt", v."endAt" FROM "Visit" v
                WHERE v."shopId" = ${opts.shopId}
                  AND v."status" IN ('SCHEDULED', 'RESCHEDULED')
                  AND v."endAt" IS NOT NULL
@@ -804,6 +845,7 @@ export async function lockStaffAndAssertSlotFree(
                  AND v."endAt" > ${overlapStart.toISOString()}::timestamp`,
   );
   overlapping.visitIds = visitOverlap.map((v) => v.id);
+  for (const v of visitOverlap) occupied.push({ startsAt: v.scheduledAt, endsAt: v.endAt });
 
   // THE one decision on bookings, visits and specials in the way. No
   // confirmation (every customer-driven write, and the barber's first try) is
@@ -823,7 +865,10 @@ export async function lockStaffAndAssertSlotFree(
     if (holds.length > 0) throw new HeldSlotError(holds);
     const given = opts.overlapConfirmation?.trim() || null;
     if (given === null || given !== overlapConfirmation(overlapping)) {
-      throw new OverlapError(overlapping);
+      throw new OverlapError(
+        overlapping,
+        !occupiesSameTime({ startsAt: opts.startsAt, endsAt: opts.endsAt }, occupied),
+      );
     }
     overlapsCrossed = overlapping;
     if (overlapping.targetedIds.length > 0) {
@@ -886,7 +931,11 @@ export async function lockStaffAndAssertSlotFree(
     data: { status: "CANCELED", canceledAt: now },
   });
 
-  return { externalBlocksCrossed, overlapsCrossed };
+  return {
+    externalBlocksCrossed,
+    overlapsCrossed,
+    ...(overlapsCrossed ? { overlapsCrossedSpans: occupied } : {}),
+  };
 }
 
 /** Everything `lockStaffAndAssertSlotFree` takes. */

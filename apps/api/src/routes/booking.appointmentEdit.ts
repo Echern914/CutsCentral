@@ -8,6 +8,7 @@ import {
   ExternalBlockError,
   HeldSlotError,
   lockStaffAndAssertSlotFree,
+  occupiesSameTime,
   OverlapError,
   SlotTakenError,
 } from "../engines/bookingWrite.js";
@@ -626,7 +627,8 @@ export function registerAppointmentEdit(
             // Taking his own special must not be vetoed by that special.
             ...(claimId ? { targetedSlotIdToIgnore: claimId } : {}),
           });
-          forcedOverlap = guard.overlapsCrossed !== undefined;
+          // Into the buffer only is not a double: no tag (bookingWrite.ts).
+          forcedOverlap = occupiesSameTime({ startsAt, endsAt }, guard.overlapsCrossedSpans ?? []);
           await recordExternalBlockOverrides(tx, {
             shopId,
             appointmentId: appt.id,
@@ -781,11 +783,12 @@ export function registerAppointmentEdit(
       // Over another booking, a synced visit or his own special: named, with
       // the confirmation that lets him move it there anyway.
       if (err instanceof OverlapError) {
-        const described = await describeOverlap(shopId, err.rows, shop.timezone);
+        const described = await describeOverlap(shopId, err.rows, shop.timezone, err.bufferOnly);
         res.status(409).json({
           error: "slot_taken",
           code: "OVERLAP",
           confirmable: true,
+          ...(err.bufferOnly ? { bufferOnly: true } : {}),
           reason: described.reason,
           conflicts: described.lines,
           message: described.question,

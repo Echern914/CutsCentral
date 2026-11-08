@@ -62,6 +62,7 @@ import {
   HeldSlotError,
   lockStaffAndAssertSlotFree,
   lockStaffCalendar,
+  occupiesSameTime,
   OverlapError,
   SlotTakenError,
 } from "../engines/bookingWrite.js";
@@ -3898,6 +3899,9 @@ export async function createAppointmentCore(req: DashboardWriteReq, res: Dashboa
         // (HeldSlotError), and requireManager on this router is the seat rule.
         overlapConfirmation: d.overlapConfirmation ?? null,
       });
+      // A yes to "this runs into your buffer" is no double: nobody shares the
+      // chair, so no tag and no fail-closed undo. It books like any other.
+      const trueDouble = occupiesSameTime({ startsAt, endsAt }, guard.overlapsCrossedSpans ?? []);
 
       // Resolve the client: an existing one, or create inline from the name.
       let clientId = d.clientId ?? null;
@@ -3995,7 +3999,7 @@ export async function createAppointmentCore(req: DashboardWriteReq, res: Dashboa
           ...cancellationTermsSnapshot(shop),
           ...(d.operationId ? { operationId: d.operationId } : {}),
           // A deliberate double is recorded as one: who confirmed it, and when.
-          ...(guard.overlapsCrossed
+          ...(trueDouble
             ? { overlapForcedAt: now, overlapForcedByUserId: req.userId ?? null }
             : {}),
         },
@@ -4109,9 +4113,10 @@ export async function createAppointmentCore(req: DashboardWriteReq, res: Dashboa
       });
       // Booked over a conflict: the specials that came off sale for it, kept
       // so an undo (below) can put them back. Null on every normal booking.
-      const forced = guard.overlapsCrossed
-        ? { specialsTakenOffSale: guard.overlapsCrossed.targetedIds }
-        : null;
+      const forced =
+        trueDouble && guard.overlapsCrossed
+          ? { specialsTakenOffSale: guard.overlapsCrossed.targetedIds }
+          : null;
       return { id: appt.id, forced, clientId };
     });
     const forced = result.forced;
@@ -4235,11 +4240,12 @@ export async function createAppointmentCore(req: DashboardWriteReq, res: Dashboa
     // these - the "Book anyway" under the list, and the question its second
     // tap answers (`message`).
     if (err instanceof OverlapError) {
-      const described = await describeOverlap(shopId, err.rows, shop.timezone);
+      const described = await describeOverlap(shopId, err.rows, shop.timezone, err.bufferOnly);
       res.status(409).json({
         error: "slot_taken",
         code: "OVERLAP",
         confirmable: true,
+        ...(err.bufferOnly ? { bufferOnly: true } : {}),
         reason: described.reason,
         conflicts: described.lines,
         message: described.question,

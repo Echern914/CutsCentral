@@ -154,11 +154,15 @@ export function describeBlocks(blocks: ExternalBlockSpan[]): {
  * from the OverlapError's own rows, so it describes exactly what the
  * confirmation is bound to. Other customers' names are fine here: this is the
  * shop's own calendar, shown to the shop.
+ *
+ * `bufferOnly`: nothing is really in the way, only the turnover buffer next to
+ * it (OverlapError.bufferOnly). Still asked, in words that say so.
  */
 export async function describeOverlap(
   shopId: string,
   rows: OverlapRows,
   timezone: string,
+  bufferOnly = false,
 ): Promise<{ reason: string; lines: string[]; question: string }> {
   const time = new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
@@ -228,6 +232,15 @@ export async function describeOverlap(
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
   const first = named[0];
   const more = named.length - 1;
+  if (bufferOnly) {
+    return {
+      reason: "That time only runs into the buffer next to:",
+      lines,
+      question: first
+        ? `This only runs into your buffer next to ${first.what} at ${time.format(first.at)}${more > 0 ? ` and ${more} more` : ""}. Book it anyway?`
+        : "This only runs into your buffer. Book it anyway?",
+    };
+  }
   const question = first
     ? `This overlaps ${first.what} at ${time.format(first.at)}${more > 0 ? ` and ${more} more` : ""}. Book it anyway?`
     : "This overlaps another booking. Book it anyway?";

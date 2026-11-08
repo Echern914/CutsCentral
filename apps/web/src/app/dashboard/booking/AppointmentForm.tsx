@@ -570,6 +570,10 @@ export function AppointmentForm({
     if (customPrice !== null && repeat) {
       return setError("A typed price is for one visit. Turn off Repeat, or clear the price.");
     }
+    // The hour he tapped, not one of the open times, still the time on the form:
+    // he means it, so Schedule books it the way "Book this time" would. It was
+    // refused as "That time isn't available" until he found that button.
+    const sendCustomTime = customTime || (offerTapped && startsAt === prefillISO);
 
     // `until` is inclusive of the chosen day (the server stops once an
     // occurrence starts AFTER untilDate), so send END of that day in the
@@ -601,7 +605,7 @@ export function AppointmentForm({
       // Ticked (the default) sends nothing: the API tells the client by itself.
       ...(notify ? {} : { notifyClient: false as const }),
       note: note.trim() || undefined,
-      customTime,
+      customTime: sendCustomTime,
       // Custom time only (typedPrice is null otherwise); empty = menu price.
       price: customPrice ?? undefined,
       externalBlockConfirmation,
@@ -701,6 +705,7 @@ export function AppointmentForm({
             confirmation: res.confirmation,
             details: res.conflicts,
             ask: res.message ?? "This overlaps another booking. Book it anyway?",
+            ...(res.bufferOnly ? { bufferOnly: true } : {}),
           });
           return;
         }
@@ -729,7 +734,7 @@ export function AppointmentForm({
               : res.error === "slot_taken"
                 ? special
                   ? "That special was just booked or taken off. Pick another time."
-                  : customTime
+                  : sendCustomTime
                     ? "That time is already booked."
                     : "That time was just taken. Pick another, or use Custom time to force it."
                 : res.error === "invalid_slot"
@@ -856,9 +861,11 @@ export function AppointmentForm({
             confirmLabel="Book anyway"
             pendingLabel="Booking…"
             consequence={
-              overlapConflict.confirmation
-                ? "Both stay on your calendar, and this one is marked Double-booked. A special listed here comes off sale so nobody can book on top of this."
-                : "Nothing was booked."
+              !overlapConflict.confirmation
+                ? "Nothing was booked."
+                : overlapConflict.bufferOnly
+                  ? "Nobody shares the chair, so it isn't marked Double-booked. It just takes up your buffer. A special listed here comes off sale."
+                  : "Both stay on your calendar, and this one is marked Double-booked. A special listed here comes off sale so nobody can book on top of this."
             }
             onConfirm={() => submit({ overlap: overlapConflict.confirmation })}
             onDismiss={() => setOverlapConflict(null)}
@@ -1174,8 +1181,15 @@ export function AppointmentForm({
                 <button
                   type="button"
                   data-qa="book-tapped-time"
+                  aria-pressed={startsAt === prefillISO}
                   onClick={bookTappedTime}
-                  className="flex min-h-[2.75rem] w-full min-w-0 items-center justify-between gap-3 rounded-xl border border-subtle px-4 py-2.5 text-left text-sm transition-colors duration-150 ease-out hover:bg-charcoal-700/40"
+                  className={cn(
+                    "flex min-h-[2.75rem] w-full min-w-0 items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-left text-sm transition-colors duration-150 ease-out",
+                    // Still the time on the form, so it is the pick: Schedule books it.
+                    startsAt === prefillISO
+                      ? "border-gold/50 bg-gold/10"
+                      : "border-subtle hover:bg-charcoal-700/40",
+                  )}
                 >
                   <span className="min-w-0">
                     <span className="block font-medium text-offwhite">

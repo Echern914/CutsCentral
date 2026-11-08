@@ -705,6 +705,8 @@ export type CreateApptResult = Result & {
   code?: string;
   /** For OVERLAP: what the time sits on, one line each, in the shop's zone. */
   conflicts?: string[];
+  /** For OVERLAP: only the turnover buffer is in the way, so no Double-booked tag. */
+  bufferOnly?: boolean;
   /**
    * For OVERLAP: the one-line question "Book anyway" asks before it books
    * ("This overlaps Marcus R. at 10:00 AM. Book it anyway?"), server-worded.
@@ -760,6 +762,7 @@ export async function createAppointmentAction(
       ...(res.confirmation ? { confirmation: res.confirmation } : {}),
       ...(res.code ? { code: res.code } : {}),
       ...(res.conflicts ? { conflicts: res.conflicts } : {}),
+      ...(res.bufferOnly ? { bufferOnly: true } : {}),
       ...(res.message ? { message: res.message } : {}),
     };
   }
@@ -2428,6 +2431,8 @@ export interface EditResult {
   code?: string;
   /** For OVERLAP: what the new time sits on, one line each, in the shop's zone. */
   conflicts?: string[];
+  /** For OVERLAP: only the turnover buffer is in the way, so no Double-booked tag. */
+  bufferOnly?: boolean;
   /** For OVERLAP: the question "Book anyway" asks before it moves the booking. */
   message?: string;
 }
@@ -2456,6 +2461,7 @@ export async function editAppointmentAction(
     ...(res.confirmation ? { confirmation: res.confirmation } : {}),
     ...(res.code ? { code: res.code } : {}),
     ...(res.conflicts ? { conflicts: res.conflicts } : {}),
+    ...(res.bufferOnly ? { bufferOnly: true } : {}),
     ...(res.message ? { message: res.message } : {}),
   };
 }

@@ -540,6 +540,7 @@ export function useAppointmentEdit({
                   confirmation: res.confirmation,
                   details: res.conflicts,
                   ask: res.message ?? "This overlaps another booking. Book it anyway?",
+                  ...(res.bufferOnly ? { bufferOnly: true } : {}),
                 }
               : {
                   reason: res.reason ?? "A customer is booking this time right now. Pick another time.",
@@ -761,9 +762,11 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
           confirmLabel="Book anyway"
           pendingLabel="Saving…"
           consequence={
-            state.overlapConflict.confirmation
-              ? "Both stay on your calendar, and this one is marked Double-booked."
-              : "Nothing was changed."
+            !state.overlapConflict.confirmation
+              ? "Nothing was changed."
+              : state.overlapConflict.bufferOnly
+                ? "Nobody shares the chair, so it isn't marked Double-booked. It just takes up your buffer."
+                : "Both stay on your calendar, and this one is marked Double-booked."
           }
           onConfirm={state.confirmOverlap}
           onDismiss={state.dismissOverlap}

@@ -106,6 +106,37 @@ describe("the hour he tapped is offered when it isn't an open time", () => {
     expect(sent().targetedSlotId).toBeUndefined();
   });
 
+  it("🔴 tapped 10 PM, not open: Schedule alone books it, without Book this time first", async () => {
+    await open();
+    expect((await bookTapped()).getAttribute("aria-pressed")).toBe("true");
+    nameIt();
+    schedule();
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(sent().startsAt).toBe(TEN_PM);
+    expect(sent().customTime).toBe(true);
+  });
+
+  it("picking an open time instead books THAT time, as an open time", async () => {
+    await open();
+    const offer = await bookTapped();
+    fireEvent.click(await screen.findByRole("button", { name: "7:00 PM" }));
+    expect(offer.getAttribute("aria-pressed")).toBe("false");
+    nameIt();
+    schedule();
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(sent().startsAt).toBe(SEVEN_PM.startsAt);
+    expect(sent().customTime).toBe(false);
+  });
+
+  it("the New button's default start is no tap: still asks for a time", async () => {
+    await open({ tapped: false });
+    await screen.findByRole("button", { name: "7:00 PM" });
+    nameIt();
+    schedule();
+    expect(await screen.findByText("Pick a time.")).toBeTruthy();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("not when it IS an open time - that chip is already the pick", async () => {
     getSlots.mockResolvedValue({ ok: true, slots: [SEVEN_PM, { startsAt: TEN_PM, endsAt: "2026-10-03T02:30:00.000Z" }] });
     await open();
