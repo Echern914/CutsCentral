@@ -383,15 +383,15 @@ describe("what is for one visit goes when the count goes up", () => {
   it("🔴 Repeat is cleared and says why", async () => {
     await open();
     await screen.findByRole("button", { name: "One more" });
-    fireEvent.click(screen.getByRole("button", { name: /Repeat/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Repeat appointment" }));
+    expect(screen.getByLabelText("Repeat every how many weeks")).toBeTruthy();
     more();
     await screen.findByText(/These all book for this one day/);
-    await waitFor(() => expect(lastSlotsCall()[5]).toBe(2));
-    await pickThree();
-    nameIt();
-    schedule();
-    await waitFor(() => expect(createRun).toHaveBeenCalledTimes(1));
-    expect(runArgs()).not.toHaveProperty("recurrence");
+    expect(screen.queryByLabelText("Repeat every how many weeks")).toBeNull();
+    // Back at 1 it is off, not quietly on again behind the count.
+    fewer();
+    await screen.findByRole("button", { name: "Repeat appointment" });
+    expect(screen.queryByLabelText("Repeat every how many weeks")).toBeNull();
   });
 
   it("🔴 picking a special puts the count back to 1: it is one time, at its own price", async () => {

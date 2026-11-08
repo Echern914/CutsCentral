@@ -4,6 +4,7 @@ import { prisma } from "@chairback/db";
 import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { AcuityError } from "../acuity/client.js";
 import { createApp } from "../app.js";
+import { settleBackgroundWork } from "../backgroundWork.js";
 import { planGroupSequence } from "../engines/appointmentGroup.js";
 import { groupConfirmationKey, settleAmbiguousGroups } from "../engines/appointmentGroupSettle.js";
 import { runAppointmentReminders } from "../engines/appointmentReminders.js";
@@ -241,11 +242,14 @@ describe("the grid for a run matches the writer", () => {
   });
 
   it("a run takes no add-ons, and 1 or 11 is no run", async () => {
+    // A REAL add-on: an unknown id is refused anyway, which would prove nothing.
+    const addOn = await prisma.serviceAddOn.create({ data: { shopId, name: "Trim", durationMin: 10 } });
     const res = await request(app)
       .get("/api/booking/slots")
-      .query({ staffId, serviceId, from: at(5, 0).toISOString(), to: at(5, 23, 59).toISOString(), run: 2, addOnIds: "x" })
+      .query({ staffId, serviceId, from: at(5, 0).toISOString(), to: at(5, 23, 59).toISOString(), run: 2, addOnIds: addOn.id })
       .set("Cookie", cookie);
     expect(res.status).toBe(400);
+    await prisma.serviceAddOn.delete({ where: { id: addOn.id } });
     const one = await request(app)
       .get("/api/booking/slots")
       .query({ staffId, serviceId, from: at(5, 0).toISOString(), to: at(5, 23, 59).toISOString(), run: 1 })
@@ -398,6 +402,22 @@ describe("who the run belongs to", () => {
     const missing = await bookRun({ startsAt: iso(at(12, 16)), clientId: "nobody", firstName: undefined, count: 2 });
     expect(missing.status).toBe(404);
     expect(await prisma.appointment.count({ where: { shopId, startsAt: at(12, 16) } })).toBe(0);
+
+    // A real client, of a real other shop: their id is not a way into this calendar.
+    const otherEmail = `run-other-${randomToken(6)}@test.local`.toLowerCase();
+    accounts.push(otherEmail);
+    const otherSignup = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: otherEmail, password: "supersecret123", name: "Other", smsAttested: true, acceptTerms: true });
+    const otherCookie = (otherSignup.headers["set-cookie"] as unknown as string[])[0]!;
+    await request(app).post("/api/shops").set("Cookie", otherCookie).send({ name: "Other Cuts", smsAttested: true });
+    const otherShopId = (await request(app).get("/api/shops/me").set("Cookie", otherCookie)).body.id as string;
+    const theirs = await prisma.client.create({
+      data: { shopId: otherShopId, acuityClientKey: `k-${randomToken(6)}`, magicToken: randomToken(), firstName: "Taylor", source: "manual" },
+    });
+    const foreign = await bookRun({ startsAt: iso(at(12, 19)), clientId: theirs.id, firstName: undefined, count: 2 });
+    expect(foreign.status).toBe(404);
+    expect(await prisma.appointment.count({ where: { shopId, startsAt: at(12, 19) } })).toBe(0);
   });
 });
 
@@ -412,6 +432,9 @@ describe("one confirmation for the whole run", () => {
     expect(res.status).toBe(201);
     expect(await intents(res.body.groupId)).toBe(1);
 
+    // The app notice goes after the answer: wait for it, or a second email it
+    // sent would land after this test had counted.
+    await settleBackgroundWork();
     await runEmailOutbox({ shopId });
     const mine = sentEmails.filter((e) => e.to === "casey.run@example.com");
     expect(mine).toHaveLength(1);
@@ -706,6 +729,16 @@ describe("on a shop mirroring to Acuity", () => {
     const retry = await eRun({ startsAt, operationId });
     expect(retry.status).toBe(409);
     expect(retry.body.error).toBe("operation_in_progress");
+
+    // 🔴 The blocks have gone quiet, and the run's own answer still isn't in: the
+    // marker alone keeps a retry from reporting it as done.
+    await prisma.acuityOutboundBlock.updateMany({
+      where: { appointment: { groupId: group.id } },
+      data: { state: "FAILED", updatedAt: new Date(Date.now() - 60 * 60_000) },
+    });
+    const later = await eRun({ startsAt, operationId });
+    expect(later.status).toBe(409);
+    expect(later.body.error).toBe("operation_in_progress");
   });
 
   it("🔴 once an ambiguous run settles: the one email goes, but never when he unticked it", async () => {
