@@ -587,8 +587,10 @@ export function notifyClientBookedByShop(params: {
   shopId: string;
   appointmentId: string;
   now?: Date;
-  /** The first visit of a repeat: how many more were booked with it. */
+  /** The first visit of a repeat or a run: how many more were booked with it. */
   moreVisits?: number;
+  /** A run's one email is already promised in the outbox: only the push is left. */
+  pushOnly?: boolean;
 }): Promise<void> {
   return trackBackgroundWork(notifyClientBookedByShopImpl(params));
 }
@@ -598,6 +600,7 @@ async function notifyClientBookedByShopImpl(params: {
   appointmentId: string;
   now?: Date;
   moreVisits?: number;
+  pushOnly?: boolean;
 }): Promise<void> {
   const now = params.now ?? new Date();
   try {
@@ -612,6 +615,7 @@ async function notifyClientBookedByShopImpl(params: {
       return;
     }
     await pushClientBooked(shop, appt, now, params.moreVisits ?? 0);
+    if (params.pushOnly) return;
     await notifyAppointmentConfirmation({ shopId: shop.id, appointmentId: appt.id, now });
   } catch (err) {
     logger.error(
@@ -769,6 +773,8 @@ export async function notifyAppointmentReminder(params: {
   shopId: string;
   appointmentId: string;
   now?: Date;
+  /** The first of a back-to-back run: how many more follow it. */
+  moreRightAfter?: number;
 }): Promise<boolean> {
   const now = params.now ?? new Date();
   try {
@@ -796,6 +802,7 @@ export async function notifyAppointmentReminder(params: {
           startsAt: appt.startsAt,
           timezone: shop.timezone,
           manageToken: appt.manageToken,
+          moreRightAfter: params.moreRightAfter,
         });
         const sent = await sendAppointmentSms(
           shop.id,
@@ -834,6 +841,7 @@ export async function notifyAppointmentReminder(params: {
           staffName: appt.staff.name,
           manageToken: appt.manageToken,
           clientNote: shop.clientNote,
+          moreRightAfter: params.moreRightAfter,
         });
         const sent = await sendAppointmentEmail({
           shopId: shop.id,

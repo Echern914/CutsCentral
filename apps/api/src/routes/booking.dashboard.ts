@@ -85,6 +85,9 @@ import {
   holdSentence,
   recordExternalBlockOverrides,
 } from "../services/appointmentOverride.js";
+import { MAX_DASH_RUN, MIN_DASH_RUN } from "../engines/appointmentGroup.js";
+import { answerBookingRefusal } from "./booking.refusal.js";
+import { dashRunOpenSlots, registerAppointmentRun } from "./booking.appointmentRun.js";
 import { registerAppointmentEdit } from "./booking.appointmentEdit.js";
 import { registerSeriesEdit } from "./booking.seriesEdit.js";
 import { registerBlockRoutes } from "./booking.blocks.js";
@@ -4210,79 +4213,13 @@ export async function createAppointmentCore(req: DashboardWriteReq, res: Dashboa
       res.status(409).json(offerRefusedBody(err, shop.timezone));
       return;
     }
-    // The one refusal that must be SHOWN, not just returned: which block, when,
-    // and why - so the barber decides with the facts, then confirms.
-    if (err instanceof ExternalBlockError) {
-      res.status(409).json({
-        error: "external_block",
-        code: "SLOT_UNAVAILABLE",
-        confirmable: true,
-        reason: blockSentence(err.blocks, shop.timezone),
-        blocks: describeBlocks(err.blocks),
-        confirmation: err.confirmation,
-      });
-      return;
-    }
-    // A customer's live hold is in the way: somebody is paying for or
-    // confirming this exact time. Said plainly, with when it ends - and never
-    // confirmable, so there is no "Book anyway" to offer.
-    if (err instanceof HeldSlotError) {
-      res.status(409).json({
-        error: "slot_taken",
-        code: "HELD",
-        confirmable: false,
-        reason: holdSentence(err.heldUntil, shop.timezone),
-      });
-      return;
-    }
-    // Over other bookings / visits / his own specials: not a dead end. Name
-    // each one and hand back the confirmation that lets him book over exactly
-    // these - the "Book anyway" under the list, and the question its second
-    // tap answers (`message`).
-    if (err instanceof OverlapError) {
-      const described = await describeOverlap(shopId, err.rows, shop.timezone, err.bufferOnly);
-      res.status(409).json({
-        error: "slot_taken",
-        code: "OVERLAP",
-        confirmable: true,
-        ...(err.bufferOnly ? { bufferOnly: true } : {}),
-        reason: described.reason,
-        conflicts: described.lines,
-        message: described.question,
-        confirmation: err.confirmation,
-      });
-      return;
-    }
-    const msg = (err as Error).message;
-    if (msg === "slot_taken") {
-      res.status(409).json({ error: "slot_taken" });
-      return;
-    }
-    if (msg === "client_not_found") {
-      res.status(404).json({ error: "client_not_found" });
-      return;
-    }
     if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2002"
+      await answerBookingRefusal(res, err, {
+        shopId,
+        timezone: shop.timezone,
+        overlapConfirmation: d.overlapConfirmation,
+      })
     ) {
-      // A forced booking cleared every overlap check and still hit the one
-      // rule that has no override: two live bookings cannot START at the same
-      // minute on one chair. Say that, not "already booked".
-      res.status(409).json({ error: d.overlapConfirmation ? "same_start" : "slot_taken" });
-      return;
-    }
-    // ENFORCING with a chair the mirror cannot protect. Same refusal the
-    // public booking page gives, for the same reason: confirming a booking
-    // the external calendar still shows as free is precisely what the mirror
-    // exists to prevent. Previously this fell through to a 500, which told
-    // the barber nothing and read as the product being broken.
-    if (isMirrorNotConfigured(err)) {
-      logger.error(
-        { shopId, staffId: err.staffId, mirror: mirrorNotConfiguredSource(err) },
-        "mirror: ENFORCE with an unmapped chair - dashboard create refused",
-      );
-      res.status(409).json({ error: "slot_unavailable_external" });
       return;
     }
     logger.error({ err, shopId }, "dashboard appointment create failed");
@@ -4290,6 +4227,7 @@ export async function createAppointmentCore(req: DashboardWriteReq, res: Dashboa
   }
 }
 bookingDashboardRouter.post("/appointments", (req, res) => createAppointmentCore(req, res));
+registerAppointmentRun(bookingDashboardRouter, noteAvailabilityChanged);
 
 /**
  * 🔴 THE BARBER'S OWN OPEN SPECIALS - one definition for every list in his
@@ -4356,6 +4294,12 @@ const dashSlotsSchema = z.object({
     .optional()
     .transform((v) => (v ?? "").split(",").map((x) => x.trim()).filter(Boolean))
     .pipe(z.array(z.string().min(1)).max(20)),
+  /**
+   * The form's `- 1 +`: this many of the service back to back. A time is
+   * offered only if the WHOLE run fits, by the rule POST /appointments/run
+   * books by. A run takes no add-ons, so the two are never asked together.
+   */
+  run: z.coerce.number().int().min(MIN_DASH_RUN).max(MAX_DASH_RUN).optional(),
 });
 
 bookingDashboardRouter.get("/slots", async (req, res) => {
@@ -4384,15 +4328,31 @@ bookingDashboardRouter.get("/slots", async (req, res) => {
     return;
   }
   const now = new Date();
-  const slots = await computeOpenSlots({
-    shopId,
-    staffId: parsed.data.staffId,
-    serviceId: parsed.data.serviceId,
-    fromDate: parsed.data.from,
-    toDate: parsed.data.to,
-    now,
-    extraDurationMin: addOns.extraDurationMin,
-  });
+  if (parsed.data.run !== undefined && parsed.data.addOnIds.length > 0) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const slots =
+    parsed.data.run !== undefined
+      ? await dashRunOpenSlots({
+          shopId,
+          staffId: parsed.data.staffId,
+          serviceId: parsed.data.serviceId,
+          count: parsed.data.run,
+          from: parsed.data.from,
+          to: parsed.data.to,
+          timezone: shop.timezone,
+          now,
+        })
+      : await computeOpenSlots({
+          shopId,
+          staffId: parsed.data.staffId,
+          serviceId: parsed.data.serviceId,
+          fromDate: parsed.data.from,
+          toDate: parsed.data.to,
+          now,
+          extraDurationMin: addOns.extraDurationMin,
+        });
 
   // The barber's own specials under THIS service (see openSpecialsFor).
   const targeted = (
