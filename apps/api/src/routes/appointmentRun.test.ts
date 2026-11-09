@@ -4,7 +4,11 @@ import { prisma } from "@chairback/db";
 import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { AcuityError } from "../acuity/client.js";
 import { createApp } from "../app.js";
-import { settleBackgroundWork } from "../backgroundWork.js";
+import {
+  armBackgroundWorkTracking,
+  disarmBackgroundWorkTracking,
+  settleBackgroundWork,
+} from "../backgroundWork.js";
 import { planGroupSequence } from "../engines/appointmentGroup.js";
 import { groupConfirmationKey, settleAmbiguousGroups } from "../engines/appointmentGroupSettle.js";
 import { runAppointmentReminders } from "../engines/appointmentReminders.js";
@@ -82,6 +86,8 @@ const membersOf = (groupId: string) =>
 const iso = (d: Date) => d.toISOString();
 
 beforeAll(async () => {
+  // Off by default, and settleBackgroundWork waits for nothing until it is on.
+  armBackgroundWorkTracking();
   // A new message path is proven with texting OFF, the way production runs.
   process.env.SMS_ENABLED = "false";
   __resetEnvCacheForTests();
@@ -120,6 +126,8 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
+  await settleBackgroundWork();
+  disarmBackgroundWorkTracking();
   if (ORIGINAL_SMS_ENABLED === undefined) delete process.env.SMS_ENABLED;
   else process.env.SMS_ENABLED = ORIGINAL_SMS_ENABLED;
   __resetEnvCacheForTests();

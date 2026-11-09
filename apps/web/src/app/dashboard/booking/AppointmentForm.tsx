@@ -952,7 +952,7 @@ export function AppointmentForm({
               !overlapConflict.confirmation
                 ? "Nothing was booked."
                 : overlapConflict.bufferOnly
-                  ? "Nobody shares the chair, so it isn't marked Double-booked. It just takes up your buffer. A special listed here comes off sale."
+                  ? "Nothing shares the same time, so it isn't marked Double-booked. It just takes up your buffer. A special listed here comes off sale."
                   : running
                     ? "Everything stays on your calendar, and the ones that share the time are marked Double-booked. A special listed here comes off sale so nobody can book on top of this."
                     : "Both stay on your calendar, and this one is marked Double-booked. A special listed here comes off sale so nobody can book on top of this."

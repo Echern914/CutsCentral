@@ -765,7 +765,7 @@ export function AppointmentEditFields({ state }: { state: AppointmentEditState }
             !state.overlapConflict.confirmation
               ? "Nothing was changed."
               : state.overlapConflict.bufferOnly
-                ? "Nobody shares the chair, so it isn't marked Double-booked. It just takes up your buffer."
+                ? "Nothing shares the same time, so it isn't marked Double-booked. It just takes up your buffer."
                 : "Both stay on your calendar, and this one is marked Double-booked."
           }
           onConfirm={state.confirmOverlap}
