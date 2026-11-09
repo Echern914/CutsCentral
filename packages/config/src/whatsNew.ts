@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-08-two-plans",
+    date: "2026-11-08",
+    kind: "feature",
+    title: "Two plans now: Starter and Premium",
+    body:
+      "Premium AI and the AI receptionist add-on are no longer offered to new customers. If you already have one, nothing changes. " +
+      "Texting stays off, so Premium's rebooking and win-back reminders go out as app notifications.",
+  },
+  {
     id: "2026-11-08-back-to-back-stepper",
     date: "2026-11-08",
     kind: "feature",

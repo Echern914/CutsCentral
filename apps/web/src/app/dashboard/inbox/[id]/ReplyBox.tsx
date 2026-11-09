@@ -12,7 +12,7 @@ const ERROR_COPY: Record<string, string> = {
   // the barber retried a send that could never work.
   texting_off: "Texting is turned off right now, so nothing was sent. Reach them another way for now.",
   // The plan has no receptionist (Starter, Premium, an AI trial that ended).
-  premium_ai_required: "Replying from the inbox is part of Premium AI, so nothing was sent.",
+  premium_ai_required: "Replying from the inbox isn't part of your plan, so nothing was sent.",
 };
 
 /**

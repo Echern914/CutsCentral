@@ -28,6 +28,8 @@ vi.mock("@/lib/billing", () => ({
   getBillingSummary: async () => ({ ok: true, data: billing.current }),
   // The receptionist page's soft "not switched on yet" fork, not the lapse lock.
   featureLocks: () => ({ premium: false, premiumAi: false }),
+  // These are the upgrade links that exist while it is on sale.
+  receptionistOnSale: () => true,
 }));
 vi.mock("@/lib/api", () => ({ apiGet: async () => ({ ok: true, data: api.current }) }));
 vi.mock("@/lib/me", () => ({ getMe: async () => ({ ok: true, data: { demo: false } }) }));

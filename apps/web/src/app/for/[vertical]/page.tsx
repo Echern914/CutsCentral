@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { APP_NAME, BILLING } from "@chairback/config/constants";
+import { APP_NAME, BILLING, PLANS } from "@chairback/config/constants";
 import {
   MARKETING_SLUGS,
   type BusinessTypeId,
@@ -39,9 +39,9 @@ const VERTICALS = {
     label: "Hair salons",
     industryKey: "salon",
     headline: ["Keep every chair", "booked solid."],
-    sub: "Automatic loyalty punch cards and perfectly-timed “time for a touch-up” texts for salons. No paper cards, no front-desk follow-up lists.",
+    sub: "Automatic loyalty punch cards and perfectly-timed “time for a touch-up” reminders for salons. No paper cards, no front-desk follow-up lists.",
     rhythm:
-      "Color clients run on 6-8 week cycles, cuts on 4-6. ChairBack learns each guest's real rhythm and texts them right when roots and split ends do the selling for you.",
+      "Color clients run on 6-8 week cycles, cuts on 4-6. ChairBack learns each guest's real rhythm and flags them right when roots and split ends do the selling for you.",
     points: [
       {
         title: "Every service earns automatically",
@@ -49,7 +49,7 @@ const VERTICALS = {
       },
       {
         title: "Win back lapsed guests",
-        body: "Guests drifting past their usual gap surface on your radar and get one well-worded text with your booking link. No blast, no spam.",
+        body: "Guests drifting past their usual gap surface on your radar, and those with the app get one well-timed notification. No blast, no spam.",
       },
       {
         title: "Your salon, your brand",
@@ -62,7 +62,7 @@ const VERTICALS = {
     label: "Nail studios",
     industryKey: "nails",
     headline: ["Fills that come back", "like clockwork."],
-    sub: "Digital punch cards and smart rebooking texts for nail techs and studios. Built for 2-3 week fill cycles.",
+    sub: "Digital punch cards and smart rebooking reminders for nail techs and studios. Built for 2-3 week fill cycles.",
     rhythm:
       "Nails are the perfect loyalty business: a fill every two to three weeks, all year. ChairBack counts every set and fill, and nudges clients the moment they start stretching past their cycle.",
     points: [
@@ -71,8 +71,8 @@ const VERTICALS = {
         body: "Every completed appointment counts itself. Clients watch their card fill from a magic link, no app, no password.",
       },
       {
-        title: "Slow-week promo blasts",
-        body: "Tuesday looking empty? Blast a “$5 off this week” promo to opted-in clients and see exactly who redeemed.",
+        title: "Slow-week emails",
+        body: "Tuesday looking empty? Email a “$5 off this week” offer to the clients on your list.",
       },
       {
         title: "Works with or without a booking app",
@@ -85,9 +85,9 @@ const VERTICALS = {
     label: "Lash & brow artists",
     industryKey: "lashes",
     headline: ["Lash fills,", "on autopilot."],
-    sub: "Loyalty and rebooking texts tuned for lash and brow studios, where a missed fill means a full set, and a lost client.",
+    sub: "Loyalty and rebooking reminders tuned for lash and brow studios, where a missed fill means a full set, and a lost client.",
     rhythm:
-      "Your clients should be back every 2-3 weeks. When someone slips past their fill window, ChairBack sends one perfectly-timed text before they end up needing (and shopping around for) a new full set.",
+      "Your clients should be back every 2-3 weeks. When someone slips past their fill window, ChairBack flags them before they end up needing (and shopping around for) a new full set.",
     points: [
       {
         title: "Protect the fill cycle",
@@ -118,7 +118,7 @@ const VERTICALS = {
       },
       {
         title: "Fill quiet weekdays",
-        body: "Targeted promo texts to clients who are due (not everyone) keep your weekday book from going hollow.",
+        body: "An email to the right clients, like a rewards tier or everyone who had a service, keeps your weekday book from going hollow.",
       },
       {
         title: "Elegant, branded, no app",
@@ -131,7 +131,7 @@ const VERTICALS = {
     label: "Tattoo & piercing studios",
     industryKey: "tattoo",
     headline: ["Bring collectors back", "for the next piece."],
-    sub: "Loyalty and follow-up texts for studios. Reward repeat sessions and stay top-of-mind between pieces.",
+    sub: "Loyalty and follow-up reminders for studios. Reward repeat sessions and stay top-of-mind between pieces.",
     rhythm:
       "Months can pass between sessions, and that's exactly when clients drift to whoever's on their feed. ChairBack keeps score of every session and reaches out when a client's usual gap says they're ready for the next one.",
     points: [
@@ -140,8 +140,8 @@ const VERTICALS = {
         body: "Sessions earn punches toward real money off the next piece: a reason to book the half-sleeve with you, not the shop across town.",
       },
       {
-        title: "Flash-day blasts that convert",
-        body: "Announce flash days and open slots to opted-in clients, with redemptions tracked so you know the blast paid.",
+        title: "Flash-day emails",
+        body: "Announce flash days and open slots to the clients on your list.",
       },
       {
         title: "Your book, owned by you",
@@ -154,9 +154,9 @@ const VERTICALS = {
     label: "Barbershops",
     industryKey: "barber",
     headline: ["Keep your", "chair full."],
-    sub: "Automatic loyalty punch cards and perfectly-timed rebooking texts for barbershops. Every cut counts itself.",
+    sub: "Automatic loyalty punch cards and perfectly-timed rebooking reminders for barbershops. Every cut counts itself.",
     rhythm:
-      "A two-week regular who slips to five weeks is money walking out the door. ChairBack learns each client's rhythm and texts them right when the fade grows out.",
+      "A two-week regular who slips to five weeks is money walking out the door. ChairBack learns each client's rhythm and flags them right when the fade grows out.",
     points: [
       {
         title: "Punches that count themselves",
@@ -195,7 +195,7 @@ export function generateMetadata({
   const v = verticalCopy(params.vertical);
   if (!v) return {};
   return {
-    title: `${APP_NAME} for ${v.label}: loyalty punch cards & rebooking texts`,
+    title: `${APP_NAME} for ${v.label}: loyalty punch cards & rebooking reminders`,
     description: v.sub,
     // A vertical page and the shop pages it competes with must not look like
     // duplicates to a crawler.
@@ -277,7 +277,7 @@ export default function VerticalPage({
             </Link>
           </div>
           <p className="mt-5 text-xs text-muted">
-            ${BILLING.priceMonthlyUsd}/mo after a{" "}
+            From ${PLANS.starter.priceMonthlyUsd}/mo after a{" "}
             {BILLING.trialDays}-day trial · no card to start
           </p>
         </section>

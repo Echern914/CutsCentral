@@ -102,6 +102,19 @@ export function featureLocks(res: ApiResult<BillingSummary>): FeatureLocks {
   // "has it", which is the safe direction - locks are an upsell, the API
   // enforces.
   const withoutPremium = !b.hasAccess || b.entitlements?.premium === false;
-  if (!withoutPremium) return NO_LOCKS;
-  return { premium: true, premiumAi: !b.receptionist.entitled };
+  // Off sale, and nothing of the shop's own behind it: never entitled, and no
+  // finished AI trial whose conversations are still worth reading.
+  const noReceptionist =
+    !receptionistOnSale(b) && !b.receptionist.entitled && b.aiTrial?.used !== true;
+  const gone = noReceptionist ? { noReceptionist: true } : {};
+  if (!withoutPremium) return noReceptionist ? { ...NO_LOCKS, ...gone } : NO_LOCKS;
+  return { premium: true, premiumAi: !b.receptionist.entitled, ...gone };
+}
+
+/**
+ * Can this shop still buy the AI receptionist in any form? Only an explicit
+ * "no" on both counts reads as off sale, so an older API payload changes nothing.
+ */
+export function receptionistOnSale(b: BillingSummary): boolean {
+  return !(b.premiumAi?.billingEnabled === false && b.receptionist?.billingEnabled === false);
 }

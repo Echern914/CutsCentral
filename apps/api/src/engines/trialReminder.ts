@@ -1,7 +1,12 @@
 import { PAID_PLAN_KEYS, PLANS } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
-import { billingEnabled, hasActiveAccess, priceIdForTier } from "../billing/stripe.js";
+import {
+  billingEnabled,
+  hasActiveAccess,
+  priceIdForTier,
+  receptionistSalesEnabled,
+} from "../billing/stripe.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import {
   buildCompEndedEmail,
@@ -129,7 +134,7 @@ export function followUpStageAt(locked: Date, now: Date): 4 | 5 | 0 {
 const PLAN_BLURBS: Record<(typeof PAID_PLAN_KEYS)[number], string> = {
   starter:
     "Your online booking page, calendar, client book, punch cards and email confirmations. No texts.",
-  pro: "Your booking page and everyday tools plus client texts: rebooking nudges, win-backs, promo blasts, waitlist alerts, and full Insights.",
+  pro: "Your booking page and everyday tools plus rebooking and win-back reminders by app notification, waitlist alerts, and full Insights.",
   pro_ai:
     "Everything in Premium plus an AI receptionist that answers and books by text, on your own number.",
 };
@@ -145,13 +150,15 @@ export function purchasablePlans(
   if (!(opts.billingOn ?? billingEnabled())) return [];
   // Premium is the base plan - billing being on at all means its price is set.
   // The other tiers are for sale only once their own price id is configured.
-  return PAID_PLAN_KEYS.filter((key) => key === "pro" || priceIdForTier(key) !== null).map(
-    (key) => ({
-      name: PLANS[key].name,
-      priceMonthlyUsd: PLANS[key].priceMonthlyUsd,
-      blurb: PLAN_BLURBS[key],
-    }),
-  );
+  return PAID_PLAN_KEYS.filter((key) => {
+    if (key === "pro") return true;
+    if (key === "pro_ai" && !receptionistSalesEnabled()) return false;
+    return priceIdForTier(key) !== null;
+  }).map((key) => ({
+    name: PLANS[key].name,
+    priceMonthlyUsd: PLANS[key].priceMonthlyUsd,
+    blurb: PLAN_BLURBS[key],
+  }));
 }
 
 /**

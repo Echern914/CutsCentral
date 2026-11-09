@@ -77,7 +77,7 @@ export const FEATURE_CATEGORIES: FeatureCategory[] = [
   {
     id: "account",
     name: "Account & help",
-    description: "Your login, the AI receptionist, and guided walkthroughs",
+    description: "Your login, your plan, and guided walkthroughs",
   },
 ];
 

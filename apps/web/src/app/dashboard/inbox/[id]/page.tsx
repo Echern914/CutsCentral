@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { apiGet } from "@/lib/api";
-import { getBillingSummary } from "@/lib/billing";
+import { getBillingSummary, receptionistOnSale } from "@/lib/billing";
 import { PlanBadge } from "../../_components/PlanBadge";
 import { UpgradeOnWebLink } from "@/components/UpgradeOnWebLink";
 import { Card } from "@/components/ui/Card";
@@ -56,6 +56,7 @@ export default async function ConversationPage({
   // or an older payload: show the box, the API is the gate.
   const billing = (await getBillingSummary()).data;
   const canReply = !billing || !billing.billingEnabled || billing.receptionist.entitled;
+  const onSale = !billing || receptionistOnSale(billing);
 
   return (
     <main className="mx-auto w-full max-w-2xl px-5 py-8">
@@ -86,9 +87,14 @@ export default async function ConversationPage({
         // Badge + words, no price. The way to billing is UpgradeOnWebLink: a
         // link on the web, Safari from the app, nothing in an older app build.
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-subtle bg-charcoal-800 px-4 py-3 text-sm text-muted">
-          <PlanBadge tier="pro_ai" />
-          <span>Replying from the inbox is part of Premium AI. This thread stays here to read.</span>
-          <UpgradeOnWebLink>See plans &rarr;</UpgradeOnWebLink>
+          {onSale && <PlanBadge tier="pro_ai" />}
+          <span>
+            {onSale
+              ? "Replying from the inbox is part of Premium AI."
+              : "Replying from the inbox isn't part of your plan."}{" "}
+            This thread stays here to read.
+          </span>
+          {onSale && <UpgradeOnWebLink>See plans &rarr;</UpgradeOnWebLink>}
         </div>
       )}
     </main>

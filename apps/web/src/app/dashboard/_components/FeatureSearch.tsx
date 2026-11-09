@@ -17,7 +17,7 @@ import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { openBillingInBrowser, useNativeBillingLink } from "@/lib/useNativeBillingLink";
 import { OpensBrowserMark } from "@/components/UpgradeOnWebLink";
 import { recentFeatureIds, rememberFeature } from "@/lib/recentFeatures";
-import { lockedTier, type FeatureLocks } from "@/lib/featureLocks";
+import { lockedTier, offeredFeatures, type FeatureLocks } from "@/lib/featureLocks";
 import { PlanBadge } from "./PlanBadge";
 
 /**
@@ -60,13 +60,16 @@ export function FeatureSearch({
   // no shelf in the More directory but must not dead-end here.
   const index = useMemo(
     () =>
-      searchableFeatures({
-        role,
-        inApp: inApp === true,
-        billingOnWeb,
-        flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
-      }),
-    [inApp, billingOnWeb, role, rewardsEnabled, affiliateProgramEnabled],
+      offeredFeatures(
+        searchableFeatures({
+          role,
+          inApp: inApp === true,
+          billingOnWeb,
+          flagsOff: flagsOffFor({ rewardsEnabled, affiliateProgramEnabled }),
+        }),
+        locks,
+      ),
+    [inApp, billingOnWeb, role, rewardsEnabled, affiliateProgramEnabled, locks],
   );
   // Where a query that matches nothing is handed off to. The assistant reads
   // the same registry PLUS the help corpus, so it can answer the "how do I…"

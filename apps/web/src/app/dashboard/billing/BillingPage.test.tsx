@@ -92,7 +92,7 @@ describe("the billing page", () => {
 
   it("🔴 a Starter -> Premium upgrade is told it got Premium, not Premium AI", async () => {
     await show(billing({ plan: "pro" }), { upgrade: "success" });
-    expect(screen.getByText("Upgraded to Premium. Your nudges, promos and full Insights are live.")).toBeTruthy();
+    expect(screen.getByText("Upgraded to Premium. Your rebooking reminders and full Insights are live.")).toBeTruthy();
     expect(screen.queryByText(/Upgraded to Premium AI/)).toBeNull();
   });
 
@@ -109,5 +109,56 @@ describe("the billing page", () => {
   it("a shop on its free trial is", async () => {
     await show(billing({ subscribed: false, subscriptionStatus: "none", trialDaysLeft: 9 }));
     expect(screen.getByText(/first 14 days free/)).toBeTruthy();
+  });
+
+  describe("with the receptionist off sale", () => {
+    const offSale = {
+      premiumAi: { billingEnabled: false, priceMonthlyUsd: 99 },
+      receptionist: { billingEnabled: false, subscriptionStatus: "none", compAccess: false, entitled: false, included: false },
+    };
+
+    it("🔴 a Premium shop sees no Premium AI card and nothing promising it soon", async () => {
+      await show(billing(offSale));
+      expect(screen.queryByText("Your shop answers its own texts.")).toBeNull();
+      expect(screen.queryByText(/Almost here/)).toBeNull();
+      expect(screen.queryByRole("button", { name: /Keep it|Upgrade now|Add the AI receptionist|Try it free/ })).toBeNull();
+    });
+
+    it("🔴 a shop on its free trial cannot pick Premium AI", async () => {
+      await show(billing({ ...offSale, subscribed: false, subscriptionStatus: "none", trialDaysLeft: 5 }));
+      expect(screen.queryByRole("button", { name: /Go Premium AI/ })).toBeNull();
+      expect(screen.getByRole("button", { name: /Go Premium —/ })).toBeTruthy();
+    });
+
+    it("🔴 a shop already on Premium AI still sees its plan", async () => {
+      await show(
+        billing({
+          ...offSale,
+          plan: "pro_ai",
+          planName: "Premium AI",
+          receptionist: { ...offSale.receptionist, entitled: true, included: true },
+        }),
+      );
+      expect(screen.getByText("Your shop answers its own texts.")).toBeTruthy();
+      expect(screen.getByText("Current plan", { selector: "span" })).toBeTruthy();
+    });
+
+    it("mid-AI-trial says it ends, and offers no way to keep it", async () => {
+      await show(
+        billing({
+          ...offSale,
+          aiTrial: { days: 14, active: true, endsAt: null, daysLeft: 9, used: true, available: false },
+          receptionist: { ...offSale.receptionist, entitled: true },
+        }),
+      );
+      expect(screen.getByText(/it just switches off\./)).toBeTruthy();
+      expect(screen.queryByText(/unless you keep it/)).toBeNull();
+      expect(screen.queryByRole("button", { name: /Keep it/ })).toBeNull();
+    });
+
+    it("a Premium shop running low is not pointed at a plan it cannot buy", async () => {
+      await show(billing({ ...offSale, emailUsage: { used: 4900, quota: 5000, resetsAt: "2026-12-01T00:00:00Z" } }));
+      expect(screen.queryByText(/Running low/)).toBeNull();
+    });
   });
 });

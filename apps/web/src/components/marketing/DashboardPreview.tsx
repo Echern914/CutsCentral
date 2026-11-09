@@ -130,7 +130,7 @@ export function DashboardPreview() {
           </div>
           <p className="mt-3 text-center text-[10px] leading-relaxed text-muted">
             ChairBack learns each client&apos;s rhythm and flags the ones
-            drifting away. One tap texts them back.
+            drifting away. Clients with the app get a nudge to come back.
           </p>
         </div>
       </div>

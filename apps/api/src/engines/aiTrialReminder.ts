@@ -1,7 +1,7 @@
 import { prisma } from "@chairback/db";
 import { APP_NAME, PLANS, apiEnv } from "@chairback/config";
 import { logger } from "../logger.js";
-import { billingEnabled } from "../billing/stripe.js";
+import { billingEnabled, receptionistSalesEnabled } from "../billing/stripe.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { trialStageAt, type TrialLadderStage } from "./trialReminder.js";
 
@@ -52,6 +52,9 @@ function buildEmail(
   const endDate = friendlyDate(shop.aiTrialEndsAt);
   const signoff = `\u2014 ${APP_NAME}`;
   const hi = `Hi ${shop.owner.name},`;
+  // 🔴 A shop still inside a trial when sales closed must not be sent to buy
+  // something the billing page will refuse.
+  const canKeep = receptionistSalesEnabled();
 
   switch (stage) {
     case 1:
@@ -62,8 +65,7 @@ function buildEmail(
           "",
           `Your free run at the AI receptionist ends on ${endDate}. After that ${shop.name} stays on Premium exactly as before \u2014 you will not be charged anything extra, and nothing else changes.`,
           "",
-          `Want to keep it answering? Premium AI is ${price}: ${billingUrl}`,
-          "",
+          ...(canKeep ? [`Want to keep it answering? Premium AI is ${price}: ${billingUrl}`, ""] : []),
           signoff,
         ].join("\n"),
       };
@@ -81,7 +83,9 @@ function buildEmail(
           "",
           `Heads up \u2014 the AI receptionist at ${shop.name} stops answering ${when} (${endDate}).`,
           "",
-          `You will NOT be charged. Your Premium plan carries on unchanged; the AI just switches off unless you keep it (${price}): ${billingUrl}`,
+          canKeep
+            ? `You will NOT be charged. Your Premium plan carries on unchanged; the AI just switches off unless you keep it (${price}): ${billingUrl}`
+            : `You will NOT be charged. Your Premium plan carries on unchanged; the AI just switches off.`,
           "",
           signoff,
         ].join("\n"),
@@ -95,7 +99,9 @@ function buildEmail(
           "",
           `The free run ended on ${endDate}, so the AI receptionist at ${shop.name} has stopped answering texts. You have not been charged anything extra and your Premium plan is untouched \u2014 booking, reminders and everything else carry on as normal.`,
           "",
-          `Every conversation it had is still in your inbox. Turn it back on any time for ${price}: ${billingUrl}`,
+          canKeep
+            ? `Every conversation it had is still in your inbox. Turn it back on any time for ${price}: ${billingUrl}`
+            : `Every conversation it had is still in your inbox.`,
           "",
           signoff,
         ].join("\n"),

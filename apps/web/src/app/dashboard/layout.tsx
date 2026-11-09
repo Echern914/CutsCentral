@@ -119,7 +119,7 @@ export default async function DashboardLayout({
   const settingUp = Boolean(setup && !setupComplete(setup.facts));
   const bellSignals = await collectNotificationSignals({
     barberOnly,
-    premiumAiLocked: locks?.premiumAi ?? false,
+    premiumAiLocked: Boolean(locks?.premiumAi || locks?.noReceptionist),
     settingUp,
   });
   return (

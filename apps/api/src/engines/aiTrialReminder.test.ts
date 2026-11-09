@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@chairback/db";
-import { randomToken } from "@chairback/config";
+import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 import { runAiTrialReminders } from "./aiTrialReminder.js";
 import {
@@ -140,7 +140,13 @@ type ShopKey =
   | "ended"
   | "early"
   | "converted"
-  | "dark";
+  | "dark"
+  | "offWeek"
+  | "offTomorrow"
+  | "offEnded"
+  | "onWeek"
+  | "onTomorrow"
+  | "onEnded";
 const ids = {} as Record<ShopKey, string>;
 
 async function makeShop(
@@ -235,5 +241,49 @@ describe("the ending gets warned about", () => {
     await makeShop("dark", 1);
     expect(await runAiTrialReminders(FROZEN_NOW, { billingOn: false })).toEqual([]);
     expect(await stageOf("dark")).toBe(0);
+  });
+});
+
+/**
+ * 🔴 A shop can still be mid-trial on the day sales close. Every email it gets
+ * after that must leave out the offer, because the billing page would refuse it.
+ */
+describe("what the emails offer", () => {
+  const OFFER = /Premium AI is|keep it \(|Turn it back on|\/dashboard\/billing/;
+
+  async function sweep(keys: { week: ShopKey; tomorrow: ShopKey; ended: ShopKey }) {
+    await makeShop(keys.week, 6);
+    await makeShop(keys.tomorrow, 1);
+    await makeShop(keys.ended, -2);
+    sent = [];
+    const out = await runAiTrialReminders(FROZEN_NOW, { billingOn: true });
+    // The sweep sees every shop in the database; only these three are ours.
+    const mine = new Set([ids[keys.week], ids[keys.tomorrow], ids[keys.ended]]);
+    expect(out.filter((s) => mine.has(s.shopId)).map((s) => s.stage).sort()).toEqual([1, 2, 3]);
+    return sent.filter((e) => /AiTrial (off|on)/.test(`${e.subject} ${e.text}`));
+  }
+
+  it("off sale, which is the default: all three warn and none of them sell", async () => {
+    delete process.env.AI_RECEPTIONIST_SALES_ENABLED;
+    __resetEnvCacheForTests();
+    const emails = await sweep({ week: "offWeek", tomorrow: "offTomorrow", ended: "offEnded" });
+    expect(emails.length).toBe(3);
+    for (const email of emails) {
+      expect(email.text).not.toMatch(OFFER);
+      expect(email.text).toContain("Premium");
+    }
+  });
+
+  it("on sale: all three still make the offer", async () => {
+    process.env.AI_RECEPTIONIST_SALES_ENABLED = "true";
+    __resetEnvCacheForTests();
+    try {
+      const emails = await sweep({ week: "onWeek", tomorrow: "onTomorrow", ended: "onEnded" });
+      expect(emails.length).toBe(3);
+      for (const email of emails) expect(email.text).toMatch(OFFER);
+    } finally {
+      delete process.env.AI_RECEPTIONIST_SALES_ENABLED;
+      __resetEnvCacheForTests();
+    }
   });
 });

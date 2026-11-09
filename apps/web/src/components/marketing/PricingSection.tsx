@@ -5,16 +5,19 @@ import { Reveal } from "./Reveal";
 import { SectionHeading } from "./SectionHeading";
 
 /**
- * The three-plan pricing grid, shared by the landing page (#pricing section)
+ * The two-plan pricing grid, shared by the landing page (#pricing section)
  * and the standalone /pricing page. The HideInNativeApp wrapper lives INSIDE
  * so no caller can accidentally render plan prices in the iOS WebView (App
  * Store 3.1.1) - in-app this renders nothing at all.
  *
  * Starter is the way in for a shop that wants online booking and nothing
- * outbound; Premium is the plan that brings clients back (texts + the full
- * analysis); Premium AI adds the receptionist. Every new shop trials all of
- * Premium for BILLING.trialDays days and then picks one. The receptionist is not
- * in that trial: it has its own, AI_TRIAL_DAYS.
+ * outbound; Premium is the plan that brings clients back (reminders + the full
+ * analysis). Every new shop trials all of Premium for BILLING.trialDays days and
+ * then picks one.
+ *
+ * 🔴 Texting is off and staying off, and Premium AI is no longer sold (Eric,
+ * 2026-11-08). Neither belongs here: promising them is how a shop pays for
+ * something that never arrives.
  */
 
 const CHECK = "mt-0.5 h-4 w-4 shrink-0 text-gold";
@@ -34,10 +37,11 @@ export function PricingSection() {
             }
             sub={`Every new shop gets all of Premium free for ${BILLING.trialDays} days — no card, nothing to cancel. Then pick the plan that fits, from $${PLANS.starter.priceMonthlyUsd} a month.`}
           />
-          <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-6xl gap-6 md:grid-cols-3">
+          <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-4xl gap-6 md:grid-cols-2">
             {/* Starter */}
             <div className="glass relative flex flex-col overflow-hidden rounded-3xl border border-subtle p-8">
-              <div className="flex items-center justify-between">
+              {/* The same height as Premium's row, which has a badge in it. */}
+              <div className="flex min-h-6 items-center justify-between">
                 <p className="text-xs uppercase tracking-[0.25em] text-muted">
                   {PLANS.starter.name}
                 </p>
@@ -47,7 +51,7 @@ export function PricingSection() {
                 <span className="text-lg text-muted">/month</span>
               </p>
               <p className="mt-2 text-sm text-muted">
-                Take bookings online. No texts, no AI.
+                Take bookings online and reward your regulars.
               </p>
               <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
                 {[
@@ -81,7 +85,7 @@ export function PricingSection() {
                 aria-hidden
                 className="pointer-events-none absolute inset-x-0 -top-24 -z-10 h-48 rounded-full bg-gold/15 blur-3xl"
               />
-              <div className="flex items-center justify-between">
+              <div className="flex min-h-6 items-center justify-between">
                 <p className="text-xs uppercase tracking-[0.25em] text-gold-soft">
                   {PLANS.pro.name}
                 </p>
@@ -94,21 +98,17 @@ export function PricingSection() {
                 <span className="text-lg text-muted">/month</span>
               </p>
               <p className="mt-2 text-sm text-muted">
-                Everything in Starter, plus the texts that bring clients back.
+                Everything in Starter, plus what brings clients back.
               </p>
               <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
                 {[
-                  // No included TEXT counts while texting is off (Eric,
-                  // 2026-10-28): the email allowance leads instead.
                   `${PLANS.pro.emailMonthlyQuota.toLocaleString()} client emails a month`,
-                  "Confirmation & reminder texts, on top of the emails",
-                  "Smart rebooking texts, timed per client",
-                  "Win-back texts that recover lapsed clients",
-                  "Promo blasts with revenue attribution",
-                  "Waitlist with “a slot just opened” alerts",
                   "Full Insights: trends, services, booked vs open hours, goals & the yearly report",
+                  "Smart rebooking reminders, timed per client, by app notification",
+                  "Win-back reminders for quiet clients, by app notification",
+                  "Waitlist with “a slot just opened” alerts by email and app",
                   "Holiday, weekend & time-of-day pricing, plus special-priced slots",
-                  "Square & Acuity sync — reminder texts cover synced bookings too",
+                  "Square & Acuity sync",
                 ].map((t) => (
                   <li key={t} className="flex items-start gap-2.5">
                     <CheckIcon className={CHECK} />
@@ -125,50 +125,6 @@ export function PricingSection() {
               </Link>
             </div>
 
-            {/* Premium AI */}
-            <div className="glass relative flex flex-col overflow-hidden rounded-3xl border border-gold/50 p-8">
-              <div
-                aria-hidden
-                className="pointer-events-none absolute inset-x-0 -top-24 -z-10 h-48 rounded-full bg-gold/20 blur-3xl"
-              />
-              <div className="flex items-center justify-between">
-                <p className="text-xs uppercase tracking-[0.25em] text-gold">
-                  {PLANS.pro_ai.name}
-                </p>
-                <span className="rounded-full bg-gold/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-gold">
-                  New
-                </span>
-              </div>
-              <p className="mt-4 font-display text-5xl tracking-tight">
-                ${PLANS.pro_ai.priceMonthlyUsd}
-                <span className="text-lg text-muted">/month</span>
-              </p>
-              <p className="mt-2 text-sm text-muted">
-                Everything in Premium, plus an AI receptionist on your line
-                around the clock.
-              </p>
-              <ul className="mt-6 flex flex-1 flex-col gap-2.5 text-left text-sm text-offwhite">
-                {[
-                  "AI receptionist answers client texts 24/7",
-                  "Books, reschedules & cancels by text",
-                  "Fills freed slots automatically when someone cancels",
-                  `${PLANS.pro_ai.emailMonthlyQuota.toLocaleString()} client emails a month`,
-                  "Everything in Premium",
-                ].map((t) => (
-                  <li key={t} className="flex items-start gap-2.5">
-                    <CheckIcon className={CHECK} />
-                    {t}
-                  </li>
-                ))}
-              </ul>
-              <Link
-                href="/signup"
-                className="mt-7 inline-flex items-center justify-center gap-2 rounded-full border border-gold/50 px-7 py-3 text-sm font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
-              >
-                Start your free trial
-                <ArrowIcon className="h-4 w-4" />
-              </Link>
-            </div>
           </Reveal>
           <p className="mx-auto mt-6 max-w-md text-center text-xs text-muted">
             No contracts, cancel anytime, switch plans whenever you like. The

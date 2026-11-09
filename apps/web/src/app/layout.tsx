@@ -34,20 +34,20 @@ export const metadata: Metadata = {
     template: `%s | ${APP_NAME}`,
   },
   description:
-    "Online booking, automatic loyalty punch cards, perfectly-timed rebooking texts, and an AI receptionist for barbershops, salons, and studios. Bring your own domain. Syncs with Acuity or Square.",
+    "Online booking, automatic loyalty punch cards, and perfectly-timed rebooking reminders for barbershops, salons, and studios. Bring your own domain. Syncs with Acuity or Square.",
   openGraph: {
     type: "website",
     siteName: APP_NAME,
     title: `${APP_NAME}: loyalty & rebooking for barbershops, salons & studios`,
     description:
-      "Online booking, automatic punch cards, perfectly-timed rebooking texts, and an AI receptionist. 0% commission - you keep 100% of your revenue and own your client list.",
+      "Online booking, automatic punch cards, and perfectly-timed rebooking reminders. 0% commission - you keep 100% of your revenue and own your client list.",
     url: "https://getchairback.com",
   },
   twitter: {
     card: "summary",
     title: `${APP_NAME}: keep your chair full`,
     description:
-      "Automatic loyalty punch cards and perfectly-timed rebooking texts for barbershops, salons, and studios.",
+      "Automatic loyalty punch cards and perfectly-timed rebooking reminders for barbershops, salons, and studios.",
   },
   // Declaring `icons` turns OFF Next's auto-injection of the icon.svg file
   // convention, so list BOTH here. The favicon (icon.svg, still served at

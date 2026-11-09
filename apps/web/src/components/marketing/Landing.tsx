@@ -84,7 +84,7 @@ export function Landing() {
             <StaggerItem>
               <p className="mx-auto mt-6 max-w-xl text-lg leading-relaxed text-muted lg:mx-0">
                 Automatic loyalty punch cards and perfectly-timed rebooking
-                texts for barbershops, salons, and studios. No paper cards, no
+                reminders for barbershops, salons, and studios. No paper cards, no
                 manual follow-up. Every visit counts itself.
               </p>
             </StaggerItem>
@@ -129,7 +129,7 @@ export function Landing() {
               <PunchCardDemo />
             </Tilt>
             <p className="mt-4 text-center text-xs text-muted">
-              What your clients see: live, from a text. No app, no login.
+              What your clients see: live, from a link. No login.
             </p>
           </Reveal>
         </section>
@@ -139,8 +139,7 @@ export function Landing() {
           <Marquee
             items={[
               "Automatic punch cards",
-              "Smart rebooking texts",
-              "AI receptionist",
+              "Smart rebooking reminders",
               "Your own domain",
               "Found on Google",
               "Holiday & weekend pricing",
@@ -151,11 +150,9 @@ export function Landing() {
               "Built-in online booking",
               "0% booking commission",
               "Magic-link rewards page",
-              "STOP handling built in",
               "Daily send caps",
               "Per-shop branding",
               "CSV exports",
-              "No app for clients",
             ]}
           />
         </section>
@@ -170,7 +167,7 @@ export function Landing() {
                 <span className="text-gradient-gold">automatic.</span>
               </>
             }
-            sub="Connect once. Every appointment becomes a punch, every drifting client gets a text, every regular stays a regular."
+            sub="Connect once. Every appointment becomes a punch, every drifting client lands on your radar, every regular stays a regular."
           />
           <Stagger className="relative mt-14 grid gap-10 sm:grid-cols-3" gap={0.12}>
             {/* connector line */}
@@ -213,7 +210,7 @@ export function Landing() {
           </Reveal>
         </section>
 
-        {/* ====== SMS nudges ====== */}
+        {/* ====== Smart nudges ====== */}
         <section className="border-y border-subtle bg-charcoal-900/40">
           <div className="mx-auto grid w-full max-w-6xl items-center gap-14 px-6 py-24 lg:grid-cols-2">
             <Reveal className="order-2 mx-auto lg:order-1">
@@ -232,14 +229,14 @@ export function Landing() {
                   Smart nudges
                 </p>
                 <h2 className="mt-5 font-display text-3xl tracking-tight sm:text-5xl">
-                  Texts that land at the{" "}
+                  Reminders that land at the{" "}
                   <span className="text-gradient-gold">perfect moment.</span>
                 </h2>
                 <p className="mt-4 max-w-lg leading-relaxed text-muted">
                   {APP_NAME} learns each client&apos;s natural rhythm from their
                   visit history. When someone drifts past their usual gap, they
-                  get one well-timed text: yours to word, with your booking
-                  link inside.
+                  land on your radar, and clients with the app get one
+                  well-timed notification.
                 </p>
               </Reveal>
               <Stagger className="mt-8 flex flex-col gap-4" gap={0.1}>
@@ -429,7 +426,7 @@ const STEPS = [
   },
   {
     title: "Let it run",
-    body: "Punches add up, smart texts go out, regulars come back. You just do the work you love.",
+    body: "Punches add up, smart reminders go out, regulars come back. You just do the work you love.",
   },
 ] as const;
 
@@ -440,13 +437,13 @@ const NUDGE_POINTS = [
     icon: <ClockIcon className="h-4 w-4" />,
   },
   {
-    title: "Your words, your link",
-    body: "Edit the message template, preview it live, and every text carries your booking link.",
+    title: "Email your whole book",
+    body: "Send an update or an offer to everyone, a rewards tier, or clients who had a service.",
     icon: <PenIcon className="h-4 w-4" />,
   },
   {
     title: "Respectful by default",
-    body: "Daily send caps, one-tap opt-outs, and instant STOP handling are built in, not bolted on.",
+    body: "Daily send caps and one-tap opt-outs are built in, not bolted on.",
     icon: <ShieldIcon className="h-4 w-4" />,
   },
 ] as const;
@@ -494,7 +491,7 @@ const FEATURES = [
   },
   {
     title: "Built-in compliance",
-    body: "STOP replies opt clients out instantly, send caps stop runaway texting, and every message is logged.",
+    body: "Clients opt out in one tap, send caps stop runaway messages, and every message is logged.",
     icon: <ShieldIcon className="h-5 w-5" />,
   },
 ] as const;
@@ -503,11 +500,11 @@ const FEATURES = [
 const FAQ: readonly { q: string; a: string; hasPrices?: boolean }[] = [
   {
     q: "Do my clients need to download an app?",
-    a: "No. Each client gets a private magic link to their punch card. It opens in the browser from a text. No account, no password, no app store.",
+    a: "Not for their punch card. Each client gets a private magic link that opens in the browser, with no account and no password. Rebooking and win-back reminders go out as app notifications, so those reach clients who have the app.",
   },
   {
     q: "Does it work with my existing Acuity account?",
-    a: "Yes. You connect Acuity once with one click. Past appointments backfill automatically, new ones flow in as they happen, and clients with synced appointments get reminder texts just like native bookings — you don't have to move your booking anywhere.",
+    a: "Yes. You connect Acuity once with one click. Past appointments backfill automatically, new ones flow in as they happen, and synced visits earn punches just like native bookings — you don't have to move your booking anywhere.",
   },
   {
     q: "Can I use my own domain?",
@@ -522,21 +519,21 @@ const FAQ: readonly { q: string; a: string; hasPrices?: boolean }[] = [
     a: "Completed appointments. Cancellations and no-shows never earn punches, so cards stay honest.",
   },
   {
-    q: "What if a client doesn't want texts?",
-    a: "They reply STOP and they're opted out instantly. You can also opt anyone out (or back in) from the dashboard.",
+    q: "What if a client doesn't want to hear from me?",
+    a: "Every marketing email carries an unsubscribe link, and clients control app notifications from their own phone.",
   },
   {
     q: "I'm not on Acuity, can I still use it?",
-    a: "Yes. Add clients in seconds and tap “Log visit” after each appointment: punches, rewards, and rebooking texts all work the same. Acuity just makes it automatic, and you can connect it anytime.",
+    a: "Yes. Add clients in seconds and tap “Log visit” after each appointment: punches, rewards, and rebooking reminders all work the same. Acuity just makes it automatic, and you can connect it anytime.",
   },
   {
     q: "How much does it cost?",
-    a: `Three plans. Starter ($${PLANS.starter.priceMonthlyUsd}/month) is your online booking page, calendar, client book, punch cards and email confirmations - no texts, no AI, and a preview of Insights. Premium ($${PLANS.pro.priceMonthlyUsd}/month, ${PLANS.pro.emailMonthlyQuota.toLocaleString()} client emails a month) adds the texting that brings clients back - rebooking nudges, win-backs, promo blasts, waitlist alerts - plus the full Insights picture and auto-sync with Acuity or Square. Premium AI ($${PLANS.pro_ai.priceMonthlyUsd}/month, ${PLANS.pro_ai.emailMonthlyQuota.toLocaleString()} client emails a month) adds an AI receptionist that answers client texts and books appointments 24/7. Every new shop gets all of Premium free for ${BILLING.trialDays} days, and one rebooked regular typically covers the month.`,
+    a: `Two plans. Starter ($${PLANS.starter.priceMonthlyUsd}/month) is your online booking page, calendar, client book, punch cards and email confirmations, with a preview of Insights. Premium ($${PLANS.pro.priceMonthlyUsd}/month, ${PLANS.pro.emailMonthlyQuota.toLocaleString()} client emails a month) adds what brings clients back - rebooking and win-back reminders by app notification, and waitlist alerts - plus the full Insights picture. Every new shop gets all of Premium free for ${BILLING.trialDays} days, and one rebooked regular typically covers the month.`,
     hasPrices: true,
   },
   {
     q: "Is it only for barbershops?",
-    a: "No. Salons, nail studios, lash artists, spas, and tattoo studios run the exact same playbook: visits earn punches, drifting clients get a perfectly-timed text. Pick your industry at signup and the defaults match your business.",
+    a: "No. Salons, nail studios, lash artists, spas, and tattoo studios run the exact same playbook: visits earn punches, drifting clients land on your radar. Pick your industry at signup and the defaults match your business.",
   },
 ];
 

@@ -44,13 +44,6 @@ export function PhoneDemo({ className }: { className?: string }) {
             </span>
           </motion.div>
 
-          <motion.div
-            variants={bubble}
-            className="max-w-[70%] self-end rounded-2xl rounded-br-md bg-gold-gradient px-3.5 py-2.5 text-[12px] font-medium leading-snug text-on-gold"
-          >
-            just booked thursday 🙏
-          </motion.div>
-
           <motion.div variants={bubble} className="self-center pt-1.5">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-soft/30 bg-emerald-soft/10 px-3 py-1 text-[10px] font-medium text-emerald-soft">
               <CheckIcon className="h-3 w-3" />
