@@ -506,7 +506,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     // money is the worst failure this file can have - whats-free had it right.
     a: `Yes — every new shop gets ${BILLING.trialDays} days of full Premium, and you don't need a card to start.\n\nNothing is ever charged unless you subscribe yourself. But the trial ending is not a downgrade: your booking page stops taking new bookings until you do. Your clients, history and loyalty data stay exactly where they are, and you can read or export your client book at any time.`,
     keywords: [
-      "trial", "free trial", "try", "test", "14 days", "30 days", "demo period", "trial end",
+      "trial", "free trial", "try", "test", "7 days", "14 days", "30 days", "demo period", "trial end",
       "try it first", "try before", "before paying", "before i pay", "test drive", "try it out",
     ],
     category: "money",
