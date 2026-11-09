@@ -9,6 +9,12 @@ import {
 } from "./features.js";
 
 describe("FEATURE_INDEX", () => {
+  it("🔴 rebooking nudges aren't described as a text (texting is off)", () => {
+    const nudges = FEATURE_INDEX.find((f) => f.id === "rebook-nudges");
+    expect(nudges?.description).toMatch(/app notification/);
+    expect(nudges?.description).not.toMatch(/\btexts?\b/i);
+  });
+
   it("has unique ids and names", () => {
     const ids = FEATURE_INDEX.map((f) => f.id);
     expect(new Set(ids).size).toBe(ids.length);

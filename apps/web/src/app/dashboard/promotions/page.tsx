@@ -45,7 +45,7 @@ export default async function PromotionsPage() {
         <h1 className="font-display text-3xl tracking-tight">Promotions</h1>
         <p className="mt-1 text-sm text-muted">
           Run your own specials: discounts, freebies, or double-punch windows. Live
-          promos show on your clients&apos; rewards page, and you can text them out.
+          promos show on your clients&apos; rewards page, and you can send them by email or app notification.
         </p>
         {offers.ok && (
           <p className="mt-2 text-sm">

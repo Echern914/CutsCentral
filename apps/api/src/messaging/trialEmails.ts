@@ -50,7 +50,7 @@ function money(usd: number): string {
 }
 
 /** The things a lapsed shop actually feels. One phrase, used everywhere. */
-const WHAT_PAUSES = "your online booking page, your calendar and client texts";
+const WHAT_PAUSES = "your online booking page and your calendar";
 /** What the owner is afraid of losing, named so the fear has an answer. */
 const WHAT_STAYS = "your clients, visit history, punch cards, services and hours";
 

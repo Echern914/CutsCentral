@@ -844,7 +844,7 @@ export const FEATURE_INDEX: FeatureIndexEntry[] = [
     id: "rebook-nudges",
     name: "Rebooking nudges",
     synonyms: ["nudge", "nudges", "win back", "winback", "lapsed clients", "lapsed", "overdue", "rebook", "come back", "haven't been back", "retention"],
-    description: "Overdue clients get an automatic 'time to rebook' text or push",
+    description: "Overdue clients get an automatic 'time to rebook' app notification",
     href: "/dashboard/nudges",
     category: "retention",
     tourStepId: "rewards-extras",

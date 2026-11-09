@@ -133,7 +133,7 @@ export function followUpStageAt(locked: Date, now: Date): 4 | 5 | 0 {
 /** One line per plan, what it is for - the email's plan table. */
 const PLAN_BLURBS: Record<(typeof PAID_PLAN_KEYS)[number], string> = {
   starter:
-    "Your online booking page, calendar, client book, punch cards and email confirmations. No texts.",
+    "Your online booking page, calendar, client book, punch cards and email confirmations.",
   pro: "Your booking page and everyday tools plus rebooking and win-back reminders by app notification, waitlist alerts, and full Insights.",
   pro_ai:
     "Everything in Premium plus an AI receptionist that answers and books by text, on your own number.",

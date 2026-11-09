@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-09-no-text-claims",
+    date: "2026-11-09",
+    kind: "fix",
+    title: "Clearer wording on how reminders go out",
+    body:
+      "The dashboard tour, trial emails, and the Promotions, Nudges and Win-back pages no longer mention texts. " +
+      "Reminders go out as app notifications, and promotions by email or app notification. Texting is still off.",
+  },
+  {
     id: "2026-11-08-two-plans",
     date: "2026-11-08",
     kind: "feature",

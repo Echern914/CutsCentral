@@ -1,7 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { BILLING, __resetEnvCacheForTests, randomToken } from "@chairback/config";
+import { BILLING, PLANS, __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
+import {
+  buildCompEndedEmail,
+  buildLockedFollowUpEmail,
+  buildTrialEmail,
+} from "../messaging/trialEmails.js";
 import {
   FOLLOW_UP_MAX_DAYS,
   followUpStageAt,
@@ -213,6 +218,31 @@ describe("runTrialReminders", () => {
     } finally {
       delete process.env.STRIPE_PREMIUM_AI_PRICE_ID;
       delete process.env.AI_RECEPTIONIST_SALES_ENABLED;
+      __resetEnvCacheForTests();
+    }
+  });
+
+  it("🔴 no trial email, follow-up or plan line mentions texts (texting is off)", () => {
+    process.env.STRIPE_STARTER_PRICE_ID = "price_test_starter";
+    __resetEnvCacheForTests();
+    try {
+      const plans = purchasablePlans({ billingOn: true });
+      expect(plans.map((plan) => plan.name)).toContain(PLANS.starter.name);
+      const who = { shopName: "A Shop", ownerName: "An Owner", plans };
+      const trial = { ...who, trialEndsAt: NOW, now: NOW };
+      const emails = [
+        buildTrialEmail(1, trial),
+        buildTrialEmail(2, trial),
+        buildTrialEmail(3, trial),
+        buildLockedFollowUpEmail(4, who),
+        buildLockedFollowUpEmail(5, who),
+        buildCompEndedEmail(who),
+      ];
+      for (const email of emails) {
+        expect(`${email.subject}\n${email.text}`).not.toMatch(/\b(texts?|texting|sms)\b/i);
+      }
+    } finally {
+      delete process.env.STRIPE_STARTER_PRICE_ID;
       __resetEnvCacheForTests();
     }
   });
