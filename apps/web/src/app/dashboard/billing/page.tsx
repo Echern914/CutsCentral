@@ -61,10 +61,10 @@ const STARTER_FEATURES: TierFeature[] = [
 
 // Premium — the outbound layer that actually brings clients back. (Acuity/
 // Square visit SYNC is free - the paid part is what we DO with the synced
-// calendar: nudges + the full analysis.)
-// 🔴 No included TEXT counts on any card: texting is off platform-wide
-// (Eric, 2026-10-28). The email allowance leads instead; the SMS quota stays
-// in PLANS and is still enforced, so the cap holds if texting comes back.
+// calendar: reminders + the full analysis.)
+// 🔴 No text promises on any card: texting is off platform-wide and staying off
+// (Eric, 2026-11-08). With it off, rebooking and win-back reminders reach clients
+// by app notification only, and promo blasts are refused, so they are not listed.
 // A function of the shop words rather than a module constant: one perk names
 // the workspace, and a module-level constant has no vocabulary to read.
 const premiumFeatures = (v: BusinessVocabulary): TierFeature[] => [
@@ -78,20 +78,16 @@ const premiumFeatures = (v: BusinessVocabulary): TierFeature[] => [
     detail: "trends, services, booked vs open hours, goals and the yearly report",
   },
   {
-    lead: "Smart rebooking texts",
-    detail: "timed to each client's own visit rhythm",
+    lead: "Smart rebooking reminders",
+    detail: "timed to each client's own visit rhythm, by app notification",
   },
   {
     lead: "Win-backs on autopilot",
-    detail: `quiet regulars get pulled back to the ${v.stationNoun}`,
-  },
-  {
-    lead: "Promo blasts with receipts",
-    detail: "see the exact bookings every blast brought in",
+    detail: `quiet regulars get pulled back to the ${v.stationNoun}, by app notification`,
   },
   {
     lead: "“A slot just opened” alerts",
-    detail: "cancellations backfill from your waitlist",
+    detail: "cancellations backfill from your waitlist, by email and app",
   },
 ];
 
@@ -153,7 +149,17 @@ export default async function BillingPage({
   const showMeter = Boolean(email?.quota && b?.hasAccess);
   // The next plan up with a bigger allowance, for the "running low" line.
   const roomierPlan =
-    b?.plan === "starter" ? PLANS.pro : b?.plan === "pro_ai" ? null : PLANS.pro_ai;
+    b?.plan === "starter"
+      ? PLANS.pro
+      : b?.plan !== "pro_ai" && b?.premiumAi.billingEnabled
+        ? PLANS.pro_ai
+        : null;
+  // 🔴 Premium AI is off sale (Eric, 2026-11-08). Its card stays only for a shop
+  // that has the receptionist or is mid-trial, to show what it has. A card with
+  // nothing to buy, shown to anyone else, would be an advert for nothing.
+  const showPremiumAiCard = Boolean(
+    b && (b.plan === "pro_ai" || b.receptionist.entitled || b.aiTrial.active || b.premiumAi.billingEnabled),
+  );
 
   return (
     <main className="mx-auto w-full max-w-4xl px-5 py-10">
@@ -188,7 +194,7 @@ export default async function BillingPage({
           {/* Plan-aware: a Starter shop bought no nudges or promos. */}
           {b?.plan === "starter"
             ? "You're subscribed. Welcome aboard. Your booking page is live."
-            : "You're subscribed. Welcome aboard. Your nudges and promos are live."}
+            : "You're subscribed. Welcome aboard. Your rebooking reminders and full Insights are live."}
         </div>
       )}
       {searchParams?.checkout === "canceled" && (
@@ -203,7 +209,7 @@ export default async function BillingPage({
               it bought Premium AI and to switch on a receptionist it lacks. */}
           {b?.plan === "pro_ai"
             ? `Upgraded to ${PLANS.pro_ai.name}. Turn on your receptionist below.`
-            : `Upgraded to ${PLANS.pro.name}. Your nudges, promos and full Insights are live.`}
+            : `Upgraded to ${PLANS.pro.name}. Your rebooking reminders and full Insights are live.`}
         </div>
       )}
       {searchParams?.receptionist === "success" && (
@@ -404,7 +410,10 @@ export default async function BillingPage({
               forbids in-app. Barbers compare and pick plans on the web. */}
           <HideInNativeApp>
           {/* #plans: where "Start your plan" (the lapse banner) lands. */}
-          <div id="plans" className="grid scroll-mt-24 items-stretch gap-5 sm:grid-cols-3">
+          <div
+            id="plans"
+            className={`grid scroll-mt-24 items-stretch gap-5 ${showPremiumAiCard ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}
+          >
             {/* Starter — the booking site and the everyday tools. No texts,
                 no AI, Insights as a preview. Dark until its Stripe price is
                 configured: the card still explains the tier, the button
@@ -423,7 +432,7 @@ export default async function BillingPage({
                 )}
               </div>
               <p className="mt-2 text-sm text-offwhite">
-                Take bookings online. Texts and AI are Premium.
+                Take bookings online and reward your regulars.
               </p>
               <ul className="mt-3 flex flex-col gap-2.5">
                 {STARTER_FEATURES.map((item) => (
@@ -527,6 +536,7 @@ export default async function BillingPage({
             {/* Premium AI — the showcase card. This should read like hiring
                 front-desk staff for the price of a few cuts, not like a
                 bigger text bundle. */}
+            {showPremiumAiCard && (
             <Card className="relative flex flex-col overflow-hidden border-gold/60 p-6 shadow-glow">
               <div
                 className="pointer-events-none absolute inset-0 bg-gradient-to-b from-gold/10 via-transparent to-transparent"
@@ -580,10 +590,12 @@ export default async function BillingPage({
 
               <div className="relative mt-auto">
                 <HideInNativeApp>
-                  <p className="mt-4 text-xs text-gold-soft">
-                    One filled cancellation usually covers the month. The rest
-                    is profit.
-                  </p>
+                  {b.premiumAi.billingEnabled && (
+                    <p className="mt-4 text-xs text-gold-soft">
+                      One filled cancellation usually covers the month. The rest
+                      is profit.
+                    </p>
+                  )}
                   {b.compAccess && (
                     <p className="mt-3 text-xs text-muted">
                       Already yours, on the house.
@@ -598,8 +610,8 @@ export default async function BillingPage({
                         <p className="mb-3 text-xs text-gold">
                           Free trial — {b.aiTrial.daysLeft} day
                           {b.aiTrial.daysLeft === 1 ? "" : "s"} left. You
-                          won&apos;t be charged; it just switches off unless you
-                          keep it.
+                          won&apos;t be charged; it just switches off
+                          {b.premiumAi.billingEnabled ? " unless you keep it." : "."}
                         </p>
                       )}
                       {/* Try-before-buy comes FIRST: offering the paid upgrade
@@ -620,11 +632,7 @@ export default async function BillingPage({
                           />
                         ) : b.receptionist.billingEnabled ? (
                           <ReceptionistAddonButton label="Add the AI receptionist, $40/mo" />
-                        ) : (
-                          <p className="text-xs text-muted">
-                            Almost here — check back soon.
-                          </p>
-                        ))}
+                        ) : null)}
                       {b.subscribed &&
                         b.plan !== "pro_ai" &&
                         ownsReceptionist(b) && (
@@ -633,18 +641,12 @@ export default async function BillingPage({
                             — same power, nothing more to buy.
                           </p>
                         )}
-                      {b.billingEnabled &&
-                        !b.subscribed &&
-                        (b.premiumAi.billingEnabled ? (
-                          <UpgradeButton
-                            tier="pro_ai"
-                            label={`Go Premium AI — $${b.premiumAi.priceMonthlyUsd}/mo`}
-                          />
-                        ) : (
-                          <p className="text-xs text-muted">
-                            Almost here — check back soon.
-                          </p>
-                        ))}
+                      {b.billingEnabled && !b.subscribed && b.premiumAi.billingEnabled && (
+                        <UpgradeButton
+                          tier="pro_ai"
+                          label={`Go Premium AI — $${b.premiumAi.priceMonthlyUsd}/mo`}
+                        />
+                      )}
                     </div>
                   )}
                   <p className="mt-3 text-[11px] text-muted">
@@ -654,6 +656,7 @@ export default async function BillingPage({
                 </HideInNativeApp>
               </div>
             </Card>
+            )}
           </div>
           </HideInNativeApp>
         </div>

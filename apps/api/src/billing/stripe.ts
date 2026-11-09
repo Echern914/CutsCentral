@@ -296,12 +296,23 @@ function checkoutKey(shopId: string, what: string): string {
 }
 
 /**
+ * Is the AI receptionist on sale to anyone new, in any form (Premium AI, the
+ * add-on, the AI trial)? Off since 2026-11-08. A shop that already has it keeps
+ * it: this gates buying only, never entitlement, and never priceIdForTier, which
+ * the webhooks need in order to recognise an existing subscriber.
+ */
+export function receptionistSalesEnabled(): boolean {
+  return apiEnv().AI_RECEPTIONIST_SALES_ENABLED;
+}
+
+/**
  * Whether the $74.99/mo Premium AI TIER can be sold self-serve. Needs base
- * billing configured PLUS its own price id. While unset, the tier is dark and
- * the receptionist only sells via the $40 add-on path.
+ * billing configured, its own price id, and the receptionist on sale.
  */
 export function premiumAiBillingEnabled(): boolean {
-  return billingEnabled() && Boolean(apiEnv().STRIPE_PREMIUM_AI_PRICE_ID);
+  return (
+    billingEnabled() && receptionistSalesEnabled() && Boolean(apiEnv().STRIPE_PREMIUM_AI_PRICE_ID)
+  );
 }
 
 /**
@@ -315,6 +326,7 @@ export function starterBillingEnabled(): boolean {
 
 /** Can `tier` be bought right now? One answer for the route and the pages. */
 export function tierBillingEnabled(tier: CheckoutTier): boolean {
+  if (tier === "pro_ai" && !receptionistSalesEnabled()) return false;
   return billingEnabled() && priceIdForTier(tier) !== null;
 }
 
@@ -381,11 +393,12 @@ export async function upgradeSubscriptionToPremiumAi(shop: {
 
 /**
  * Whether the $40/mo AI-receptionist ADD-ON can be sold self-serve. Needs base
- * billing configured PLUS its own price id. While unset, the add-on is dark and
- * only receptionistCompAccess (comped pilots) unlocks the feature.
+ * billing configured, its own price id, and the receptionist on sale.
  */
 export function receptionistBillingEnabled(): boolean {
-  return billingEnabled() && Boolean(apiEnv().STRIPE_RECEPTIONIST_PRICE_ID);
+  return (
+    billingEnabled() && receptionistSalesEnabled() && Boolean(apiEnv().STRIPE_RECEPTIONIST_PRICE_ID)
+  );
 }
 
 /**

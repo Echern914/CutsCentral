@@ -11,6 +11,7 @@ import {
 import {
   applyStripeEvent,
   hasActiveAccess,
+  planForSubscription,
   trialDaysLeft,
 } from "../billing/stripe.js";
 
@@ -497,7 +498,9 @@ describe("premium AI HTTP surface", () => {
     expect(upgrade.body.error).toBe("premium_ai_unavailable");
   });
 
-  describe("with the tier price configured", () => {
+  // 🔴 The prices stay configured in production, because webhooks read them to
+  // recognise an existing subscriber. So this is the case that has to hold.
+  describe("with the prices configured but the receptionist off sale", () => {
     beforeAll(() => {
       process.env.STRIPE_PREMIUM_AI_PRICE_ID = "price_test_premium_ai";
       process.env.STRIPE_RECEPTIONIST_PRICE_ID = "price_test_receptionist";
@@ -506,6 +509,55 @@ describe("premium AI HTTP surface", () => {
     afterAll(() => {
       delete process.env.STRIPE_PREMIUM_AI_PRICE_ID;
       delete process.env.STRIPE_RECEPTIONIST_PRICE_ID;
+      __resetEnvCacheForTests();
+    });
+
+    it("no route sells it, and the summary offers none of it", async () => {
+      const summary = await request(app).get("/api/billing").set("Cookie", cookie);
+      expect(summary.body.premiumAi.billingEnabled).toBe(false);
+      expect(summary.body.receptionist.billingEnabled).toBe(false);
+      expect(summary.body.aiTrial.available).toBe(false);
+
+      const checkout = await request(app)
+        .post("/api/billing/checkout")
+        .set("Cookie", cookie)
+        .send({ tier: "pro_ai" });
+      expect(checkout.status).toBe(409);
+      expect(checkout.body.error).toBe("premium_ai_unavailable");
+
+      const upgrade = await request(app).post("/api/billing/upgrade").set("Cookie", cookie);
+      expect(upgrade.status).toBe(409);
+      expect(upgrade.body.error).toBe("premium_ai_unavailable");
+
+      const addon = await request(app)
+        .post("/api/billing/receptionist/checkout")
+        .set("Cookie", cookie);
+      expect(addon.status).toBe(409);
+      expect(addon.body.error).toBe("receptionist_billing_disabled");
+
+      const trial = await request(app).post("/api/billing/ai-trial").set("Cookie", cookie);
+      expect(trial.status).toBe(409);
+      expect(trial.body.error).toBe("ai_trial_unavailable");
+    });
+
+    it("🔴 a subscriber already on the Premium AI price still reads as Premium AI", () => {
+      expect(
+        planForSubscription({ items: { data: [{ price: "price_test_premium_ai" }] }, metadata: {} }),
+      ).toBe("pro_ai");
+    });
+  });
+
+  describe("with the tier price configured", () => {
+    beforeAll(() => {
+      process.env.STRIPE_PREMIUM_AI_PRICE_ID = "price_test_premium_ai";
+      process.env.STRIPE_RECEPTIONIST_PRICE_ID = "price_test_receptionist";
+      process.env.AI_RECEPTIONIST_SALES_ENABLED = "true";
+      __resetEnvCacheForTests();
+    });
+    afterAll(() => {
+      delete process.env.STRIPE_PREMIUM_AI_PRICE_ID;
+      delete process.env.STRIPE_RECEPTIONIST_PRICE_ID;
+      delete process.env.AI_RECEPTIONIST_SALES_ENABLED;
       __resetEnvCacheForTests();
     });
 

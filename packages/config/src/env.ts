@@ -362,6 +362,12 @@ const apiSchema = z.object({
   // Insights preview). While unset, the tier is dark: checkout to starter
   // 409s and the pricing surfaces show the card as "almost here".
   STRIPE_STARTER_PRICE_ID: z.string().min(1).optional(),
+  // 🔴 Premium AI, the $40 receptionist add-on and the 14-day AI trial are no
+  // longer sold (Eric, 2026-11-08). Do NOT stop selling them by unsetting the
+  // two price ids above: webhooks read those ids to recognise a shop already
+  // subscribed, and unsetting them would misread that shop's plan. This switch
+  // only closes the door to new buyers.
+  AI_RECEPTIONIST_SALES_ENABLED: boolish.default("false"),
 
   // Error monitoring (optional).
   SENTRY_DSN: cleanUrl().optional(),

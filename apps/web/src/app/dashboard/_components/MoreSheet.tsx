@@ -18,7 +18,7 @@ import { searchFeatures } from "@chairback/config/helpMatch";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { openBillingInBrowser, useNativeBillingLink } from "@/lib/useNativeBillingLink";
 import { OpensBrowserMark } from "@/components/UpgradeOnWebLink";
-import { lockedTier, type FeatureLocks } from "@/lib/featureLocks";
+import { lockedTier, offeredFeatures, type FeatureLocks } from "@/lib/featureLocks";
 import { recentFeatureIds, rememberFeature } from "@/lib/recentFeatures";
 import { PlanBadge } from "./PlanBadge";
 
@@ -88,11 +88,11 @@ export function MoreSheet({
     }),
     [role, inApp, billingOnWeb, rewardsEnabled, affiliateProgramEnabled],
   );
-  const visible = useMemo(() => visibleFeatures(ctx), [ctx]);
+  const visible = useMemo(() => offeredFeatures(visibleFeatures(ctx), locks), [ctx, locks]);
   // The search box types against the wider index: the directory hides the
   // unlisted Contact support entry (it has its own section below), but "help"
   // typed here must still find it.
-  const typeable = useMemo(() => searchableFeatures(ctx), [ctx]);
+  const typeable = useMemo(() => offeredFeatures(searchableFeatures(ctx), locks), [ctx, locks]);
   const askHref = resolveHref("assistant", { role });
 
   const pathname = usePathname();

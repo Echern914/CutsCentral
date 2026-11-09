@@ -101,21 +101,19 @@ const partnerCashouts = PARTNER_PROGRAM.cashoutAmountsCents.map(dollars).join(" 
 const affiliateSignup = formatCreditUsd(AFFILIATE_POLICY.dollarCredit.signupCents);
 const affiliateMonthly = formatCreditUsd(AFFILIATE_POLICY.dollarCredit.monthlyCents);
 const proPrice = `$${PLANS.pro.priceMonthlyUsd}`;
-const proAiPrice = `$${PLANS.pro_ai.priceMonthlyUsd}`;
 const starterPrice = `$${PLANS.starter.priceMonthlyUsd}`;
 // No plan advertises an included TEXT count while texting is off platform-wide
 // (Eric, 2026-10-28): the email allowance is what each plan leads with. The
 // SMS quota itself still lives in PLANS and is still enforced.
 const starterEmails = PLANS.starter.emailMonthlyQuota.toLocaleString();
 const proEmails = PLANS.pro.emailMonthlyQuota.toLocaleString();
-const proAiEmails = PLANS.pro_ai.emailMonthlyQuota.toLocaleString();
 
 export const HELP_ANSWERS: HelpAnswer[] = [
   /* ============================ Getting started ========================== */
   {
     id: "what-is-it",
     q: "What is ChairBack?",
-    a: "It's booking, loyalty, and rebooking texts for barbershops, salons, and studios — in one place.\n\nClients book you online, every completed visit punches their card automatically, and the ones who drift get a perfectly-timed text to come back. You keep 100% of what you charge and you own your client list.",
+    a: "It's booking, loyalty, and rebooking reminders for barbershops, salons, and studios — in one place.\n\nClients book you online, every completed visit punches their card automatically, and the ones who drift get a perfectly-timed reminder to come back. You keep 100% of what you charge and you own your client list.",
     keywords: ["what is", "about", "explain", "overview", "what does it do", "chairback"],
     category: "start",
   },
@@ -134,7 +132,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "clients-need-app",
     q: "Do my clients need to download an app?",
-    a: "No. Each client gets a private magic link to their punch card that opens right in their browser from a text. No account, no password, no app store.",
+    a: "No. Each client gets a private magic link to their punch card that opens right in their browser. No account, no password, no app store.",
     keywords: ["download", "app store", "install", "client app", "do they need"],
     category: "start",
   },
@@ -195,7 +193,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "which-industries",
     q: "Is it only for barbershops?",
-    a: "No. Salons, nail studios, lash artists, spas, and tattoo studios run the exact same playbook: visits earn punches, drifting clients get a perfectly-timed text.\n\nPick your industry at signup and the defaults match your business — including what a visit is called.",
+    a: "No. Salons, nail studios, lash artists, spas, and tattoo studios run the exact same playbook: visits earn punches, drifting clients get a perfectly-timed reminder.\n\nPick your industry at signup and the defaults match your business — including what a visit is called.",
     keywords: ["salon", "nails", "lash", "spa", "tattoo", "industry", "barbershop only", "hair"],
     category: "start",
   },
@@ -463,7 +461,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "pricing",
     q: "How much does it cost?",
-    a: `Three plans. Starter (${starterPrice}/month) is your booking page, calendar, client book, punch cards and email confirmations, with ${starterEmails} client emails a month. Premium (${proPrice}/month, ${proEmails} client emails a month) adds what brings clients back: rebooking nudges, win-backs, promo blasts, waitlist alerts, the full Insights picture and auto-sync with Acuity or Square. Premium AI (${proAiPrice}/month, ${proAiEmails} client emails a month) adds an AI receptionist that answers client texts and books appointments 24/7.\n\nEvery new shop gets a ${BILLING.trialDays}-day full Premium trial, then picks a plan on the Billing page. One rebooked regular typically covers the month.`,
+    a: `Two plans. Starter (${starterPrice}/month) is your booking page, calendar, client book, punch cards and email confirmations, with ${starterEmails} client emails a month. Premium (${proPrice}/month, ${proEmails} client emails a month) adds what brings clients back: rebooking and win-back reminders by app notification, waitlist alerts and the full Insights picture.\n\nEvery new shop gets a ${BILLING.trialDays}-day full Premium trial, then picks a plan on the Billing page. One rebooked regular typically covers the month.`,
     keywords: ["cost", "price", "pricing", "how much", "plan", "subscription", "fee", "monthly", "expensive"],
     // A bare "price"/"cost" collides with add-services ("change a price").
     // A prospect asking the bot what it costs is by far the commoner intent.
@@ -749,7 +747,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     // 🔴 "a link straight to your booking page" was not what every shop sends:
     // a ChairBack-booking shop with no outside link saved sends the client's
     // rewards link. The after-visit push (#521) had no entry at all.
-    a: "ChairBack watches how often each client normally comes in. When someone goes quiet past their own rhythm, they get an automatic \"time to rebook\" text or push with a link back to your shop.\n\nIt's per-client, not a blanket blast, which is why it reads as your shop noticing rather than marketing.\n\nSeparately, about half an hour after a visit, a client with the ChairBack app gets a push asking if they want to lock in their next one. It skips anyone who's already booked again — in ChairBack, or in Acuity or Square if you sync one.",
+    a: "ChairBack watches how often each client normally comes in. When someone goes quiet past their own rhythm, they get an automatic \"time to rebook\" app notification with a link back to your shop. Texting is off for now, so a client without the ChairBack app doesn't get this reminder.\n\nIt's per-client, not a blanket blast, which is why it reads as your shop noticing rather than marketing.\n\nSeparately, about half an hour after a visit, a client with the ChairBack app gets a push asking if they want to lock in their next one. It skips anyone who's already booked again — in ChairBack, or in Acuity or Square if you sync one.",
     keywords: ["nudge", "win back", "winback", "lapsed", "overdue", "come back", "retention", "drifting", "automatic text"],
     category: "clients",
     action: { label: "Open nudges", featureId: "rebook-nudges" },
@@ -757,7 +755,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "promotions",
     q: "How do I run a promotion?",
-    a: "Set up a promo and it shows on your public page — and you can text it out to the clients you choose: everyone, just the ones who are overdue, or only a loyalty tier such as your Gold members.\n\nTexting uses your text allowance. To send the same promo as an app notification or an email instead — also to just one tier — tap Email or notify on it.\n\nGood for filling a specific dead window: a slow Tuesday, a new barber's first month, a holiday push.",
+    a: "Set up a promo and it shows on your public page. To send it out, tap Email or notify on it: it goes as an app notification or an email to everyone, or only a loyalty tier such as your Gold members.\n\nGood for filling a specific dead window: a slow Tuesday, a new barber's first month, a holiday push.",
     keywords: ["promo", "promotion", "deal", "special", "discount", "sale", "offer", "blast", "campaign"],
     category: "clients",
     action: { label: "Open promotions", featureId: "promotions" },
@@ -836,7 +834,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "how-many-texts",
     q: "How many texts do I get?",
-    a: `Plans don't include a set number of texts right now — your messages to clients go out by email and in the ChairBack app instead. Starter includes ${starterEmails} client emails a month, Premium ${proEmails} and Premium AI ${proAiEmails}.\n\nIt's a hard stop at the allowance — no surprise overage bills, ever. The Billing page shows a meter so you can see where you are.`,
+    a: `Plans don't include a set number of texts right now — your messages to clients go out by email and in the ChairBack app instead. Starter includes ${starterEmails} client emails a month and Premium ${proEmails}.\n\nIt's a hard stop at the allowance — no surprise overage bills, ever. The Billing page shows a meter so you can see where you are.`,
     keywords: ["texts", "sms", "quota", "how many", "limit", "messages", "overage", "run out"],
     category: "texting",
     hidesInApp: true,
@@ -869,7 +867,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "receptionist",
     q: "What does the AI receptionist do?",
-    a: "It answers client texts and books appointments 24/7, while you're behind the chair.\n\nIt knows your services, your prices, and your real openings, so it books into actual free slots — and it hands off to you in the Inbox whenever something needs a human.\n\nTo be clear about what it isn't: it handles text messages, not voice calls. It won't pick up the phone. It's included on the Premium AI plan.",
+    a: "It answers client texts and books appointments, and it hands off to you in the Inbox whenever something needs a human. It handles text messages, not voice calls.\n\nIt's no longer available to new customers, and it isn't part of Starter or Premium. A shop that already has it keeps it, and turns it on or off on the AI receptionist page.",
     keywords: [
       "ai", "receptionist", "answering", "missed call", "text booking", "assistant",
       "robot", "auto reply", "bot", "phone", "call", "voice", "answer", "24/7",
@@ -877,7 +875,6 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     primaryFor: ["receptionist", "ai"],
     category: "texting",
     hidesInApp: true,
-    action: { label: "Open billing", featureId: "billing" },
   },
 
   /* ============================ Acuity & Square ========================== */
@@ -1004,7 +1001,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "ai-assistant-plan",
     q: "Which ChairBack plan do I need to connect an AI assistant?",
-    a: "Premium or Premium AI, or an active trial.\n\nEverything else on the Assistant tab — your setup status, what's blocking bookings, guides, and finding your way around — works on any plan, connected or not. Only the connection itself needs the plan.\n\nSeparately, your AI provider's own plan decides whether you can add custom connectors at all. ChairBack doesn't sell or provide AI credits.",
+    a: "Premium, or an active trial.\n\nEverything else on the Assistant tab — your setup status, what's blocking bookings, guides, and finding your way around — works on any plan, connected or not. Only the connection itself needs the plan.\n\nSeparately, your AI provider's own plan decides whether you can add custom connectors at all. ChairBack doesn't sell or provide AI credits.",
     keywords: [
       "plan",
       "premium",
@@ -1722,7 +1719,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "text-everyone",
     q: "How do I text all my clients at once?",
-    a: "Write it as a promotion and send it out — that's the blast. It only goes to clients who haven't opted out, and it counts against your monthly text allowance.\n\nIt doesn't have to be a text: Message your clients on the Clients page sends the same news as an app notification or an email — to everyone, a loyalty tier, or the clients who had a certain service — and uses no texts at all.\n\nOne piece of advice worth more than the feature: a blast to everyone converts worse than a rebooking nudge to the twenty people who are actually overdue. Use it for genuine news, not for filling a Tuesday.",
+    a: "Message your clients on the Clients page sends your news as an app notification or an email — to everyone, a loyalty tier, or the clients who had a certain service. It only goes to clients who haven't opted out.\n\nOne piece of advice worth more than the feature: a blast to everyone converts worse than a rebooking nudge to the twenty people who are actually overdue. Use it for genuine news, not for filling a Tuesday.",
     keywords: [
       "text everyone", "text all", "blast", "mass text", "bulk text", "send to everyone",
       "text my list", "everyone at once",
@@ -1757,7 +1754,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "who-is-overdue",
     q: "Can I see who hasn't been in for a while?",
-    a: "Your client book shows each client's last visit and roughly how often they come, so the drift is visible at a glance.\n\nBut you shouldn't have to go looking: rebooking nudges watch every client's own rhythm and text the ones who are overdue, automatically. That's the feature built for this question.",
+    a: "Your client book shows each client's last visit and roughly how often they come, so the drift is visible at a glance.\n\nBut you shouldn't have to go looking: rebooking nudges watch every client's own rhythm and send an app notification to the ones who are overdue, automatically. That's the feature built for this question.",
     keywords: [
       "havent been in", "hasnt been", "overdue", "lapsed", "stopped coming",
       "not been back", "long time", "who is due", "due back", "missing clients",

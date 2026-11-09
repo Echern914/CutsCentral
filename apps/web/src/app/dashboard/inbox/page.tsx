@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { apiGet } from "@/lib/api";
-import { featureLocks, getBillingSummary } from "@/lib/billing";
+import { featureLocks, getBillingSummary, receptionistOnSale } from "@/lib/billing";
 import { Card } from "@/components/ui/Card";
 import { UpgradeCallout } from "../_components/UpgradeCallout";
 import { LocalDate } from "@/components/ui/LocalDate";
@@ -33,7 +33,9 @@ export default async function InboxPage() {
   }>("/api/dashboard/receptionist/conversations");
   // Sequential on purpose — memoized fetch; keeps apiGet's generic intact
   // (the dual-React `cache` typing hole would otherwise any-poison the tuple).
-  const locks = featureLocks(await getBillingSummary());
+  const billing = await getBillingSummary();
+  const locks = featureLocks(billing);
+  const onSale = !billing.data || receptionistOnSale(billing.data);
   const conversations = res.data?.conversations ?? [];
   const escalated = res.data?.escalatedCount ?? 0;
 
@@ -52,7 +54,7 @@ export default async function InboxPage() {
         Open one to read it or take over.
       </p>
 
-      {locks.premiumAi && (
+      {locks.premiumAi && onSale && (
         <div className="mb-6">
           <UpgradeCallout tier="pro_ai">
             The Inbox fills when your AI receptionist answers client texts —

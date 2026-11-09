@@ -297,7 +297,7 @@ const ALLOWED: Exception[] = [
   {
     path: "apps/web/src/components/marketing/Landing.tsx",
     lexeme: "barbershops",
-    snippet: "texts for barbershops, salons, and studios. No paper cards, no",
+    snippet: "reminders for barbershops, salons, and studios. No paper cards, no",
     count: 1,
     why: "The homepage subhead, which already names salons and studios alongside barbershops.",
   },

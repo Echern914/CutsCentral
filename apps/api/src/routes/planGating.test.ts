@@ -90,6 +90,7 @@ beforeAll(async () => {
   process.env.STRIPE_STARTER_PRICE_ID = STARTER_PRICE;
   process.env.STRIPE_PREMIUM_AI_PRICE_ID = AI_PRICE;
   process.env.STRIPE_RECEPTIONIST_PRICE_ID = "price_plan_addon";
+  process.env.AI_RECEPTIONIST_SALES_ENABLED = "true";
   process.env.STRIPE_WEBHOOK_SECRET = "whsec_plan";
   // The receptionist verdict is only reachable with a key and texting on.
   // Never called: nothing here runs a receptionist turn.
@@ -120,6 +121,7 @@ afterAll(async () => {
     "STRIPE_STARTER_PRICE_ID",
     "STRIPE_PREMIUM_AI_PRICE_ID",
     "STRIPE_RECEPTIONIST_PRICE_ID",
+    "AI_RECEPTIONIST_SALES_ENABLED",
     "STRIPE_WEBHOOK_SECRET",
   ]) {
     delete process.env[k];

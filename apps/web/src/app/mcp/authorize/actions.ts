@@ -51,7 +51,7 @@ export async function approveMcpAuthorization(input: {
               // barber loops, and the assistant just reports "authorization
               // failed" with no reason a human can act on.
               code === "plan_required"
-              ? "Connecting an AI assistant needs ChairBack Premium or Premium AI, or an active trial. Everything else in ChairBack is unaffected — this only stops the connection."
+              ? "Connecting an AI assistant needs ChairBack Premium or an active trial. Everything else in ChairBack is unaffected — this only stops the connection."
               : "Couldn't connect that assistant. Try starting the connection again.";
   return { ok: false, message };
 }

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getVocabulary } from "@/lib/vocab";
 import { apiGet } from "@/lib/api";
-import { featureLocks, getBillingSummary } from "@/lib/billing";
+import { featureLocks, getBillingSummary, receptionistOnSale } from "@/lib/billing";
 import { Card } from "@/components/ui/Card";
 import { CardHeader } from "@/components/ui/Card";
 import { UpgradeOnWebLink } from "@/components/UpgradeOnWebLink";
@@ -41,6 +41,7 @@ export default async function ReceptionistPage() {
   const shop = shopRes.data;
   const entitled = res.data?.receptionist.entitled ?? false;
   const locks = featureLocks(res);
+  const onSale = !res.data || receptionistOnSale(res.data);
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -59,6 +60,12 @@ export default async function ReceptionistPage() {
               shopNumber={shop.twilioNumber ?? null}
             />
           </div>
+        ) : !onSale ? (
+          /* No longer sold, so there is nothing to upgrade to. Reachable by an
+             old link or by a shop whose AI trial has ended. */
+          <p className="mt-4 rounded-2xl border border-subtle bg-charcoal-800 px-4 py-3 text-sm text-muted">
+            The AI receptionist isn&apos;t part of your plan.
+          </p>
         ) : locks.premiumAi ? (
           /* LAPSED shop: the full diamond treatment (badge + web-only upgrade
              steering). Distinct from the fork below, which is a shop WITH

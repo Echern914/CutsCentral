@@ -193,7 +193,7 @@ export default async function AssistantPage({
         )}
       </Card>
 
-      <QuickActions role={role} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} premiumAiLocked={locks?.premiumAi ?? false} />
+      <QuickActions role={role} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} premiumAiLocked={Boolean(locks?.premiumAi || locks?.noReceptionist)} />
     </main>
   );
 }

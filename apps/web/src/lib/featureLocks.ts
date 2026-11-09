@@ -14,10 +14,15 @@
  * seats (403 on /api/billing), and any fetch failure. Locks are an upsell,
  * not an enforcement layer — the API enforces; rendering none on doubt is
  * always safe.
+ *
+ * `noReceptionist` — the receptionist is off sale and this shop has never had
+ * it, so its two rows (Inbox, AI receptionist) lead nowhere and are left out.
+ * Absent means "show them", which is what every doubtful case gets.
  */
 export interface FeatureLocks {
   premium: boolean;
   premiumAi: boolean;
+  noReceptionist?: boolean;
 }
 
 export const NO_LOCKS: FeatureLocks = { premium: false, premiumAi: false };
@@ -26,6 +31,15 @@ export const NO_LOCKS: FeatureLocks = { premium: false, premiumAi: false };
  * Which badge (if any) a feature with `tier` shows under `locks`.
  * null = no badge — either the feature is untiered or the shop has it.
  */
+/** The features this shop should be offered at all. */
+export function offeredFeatures<T extends { tier?: "pro" | "pro_ai" }>(
+  features: readonly T[],
+  locks: FeatureLocks | undefined,
+): T[] {
+  if (!locks?.noReceptionist) return [...features];
+  return features.filter((f) => f.tier !== "pro_ai");
+}
+
 export function lockedTier(
   tier: "pro" | "pro_ai" | undefined,
   locks: FeatureLocks | undefined,

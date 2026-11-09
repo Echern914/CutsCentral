@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { randomToken } from "@chairback/config";
+import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 import {
@@ -7,6 +7,7 @@ import {
   followUpStageAt,
   lockedSince,
   notifyCompEnded,
+  purchasablePlans,
   runTrialReminders,
   trialStageAt,
 } from "./trialReminder.js";
@@ -191,6 +192,25 @@ describe("runTrialReminders", () => {
     expect(email.text).not.toContain("Starter");
     expect(email.text).not.toContain("Premium AI");
     expect(shop.id).toBeTruthy();
+  });
+
+  it("🔴 Premium AI stays out of the list with its price still set, until sales reopen", () => {
+    // Production keeps the price id, because existing subscribers are recognised
+    // by it. So the price being configured can't be what puts the plan on sale.
+    process.env.STRIPE_PREMIUM_AI_PRICE_ID = "price_test_premium_ai";
+    __resetEnvCacheForTests();
+    try {
+      const names = () => purchasablePlans({ billingOn: true }).map((plan) => plan.name);
+      expect(names()).not.toContain("Premium AI");
+
+      process.env.AI_RECEPTIONIST_SALES_ENABLED = "true";
+      __resetEnvCacheForTests();
+      expect(names()).toContain("Premium AI");
+    } finally {
+      delete process.env.STRIPE_PREMIUM_AI_PRICE_ID;
+      delete process.env.AI_RECEPTIONIST_SALES_ENABLED;
+      __resetEnvCacheForTests();
+    }
   });
 
   it("a shop discovered already-expired gets ONE ended email (stage jump), not three", async () => {

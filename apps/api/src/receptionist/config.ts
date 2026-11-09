@@ -3,6 +3,7 @@ import {
   ACTIVE_STATUSES,
   billingEnabled,
   hasActiveAccess,
+  receptionistSalesEnabled,
   type BillingShop,
 } from "../billing/stripe.js";
 import { smsEnabled } from "../messaging/twilio.js";
@@ -140,6 +141,9 @@ export function aiTrialAvailability(
   opts: { enabled?: boolean } = {},
 ): string | null {
   if (!(opts.enabled ?? billingEnabled())) return "billing_disabled";
+  // A taste of something that can no longer be bought is a trap. A trial already
+  // running is not touched: this only decides whether a new one may start.
+  if (opts.enabled === undefined && !receptionistSalesEnabled()) return "ai_trial_unavailable";
   // Once only, and the marker is never cleared - letting a trial lapse must
   // not buy another one.
   if (shop.aiTrialStartedAt !== null) return "ai_trial_used";
