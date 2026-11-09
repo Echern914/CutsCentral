@@ -2,7 +2,7 @@ import { APP_NAME, apiEnv } from "@chairback/config";
 import type { EmailCopy } from "./templates.js";
 
 /**
- * The signup-trial emails: a week out, the day before, and the day it ends.
+ * The signup-trial emails: a few days out, the day before, and the day it ends.
  *
  * Owner-facing lifecycle mail in the house dark card, one gold button. The
  * ended email is the one that matters: it is the only message a shop gets at
@@ -134,16 +134,21 @@ export function buildTrialEmail(stage: TrialEmailStage, ctx: TrialEmailContext):
 
   switch (stage) {
     case 1: {
+      // The real count, not "a week": this goes out anywhere from 7 days left
+      // (a longer trial) to 2 (a 7-day one). More than a day is always left at
+      // this stage, so it is always plural. Rounded up, like the dashboard's
+      // "Free trial: N days left", so the two agree.
+      const daysLeft = Math.ceil((ctx.trialEndsAt.getTime() - ctx.now.getTime()) / 86_400_000);
       const lines = [
         `Your free trial for ${ctx.shopName} ends on ${endDate}. After that, ${WHAT_PAUSES} pause until you pick a plan.`,
         `Everything you have set up stays put: ${WHAT_STAYS}.`,
         `Pick a plan${from} and nothing changes on ${endDate}.`,
       ];
       return {
-        subject: `Your ${APP_NAME} trial ends in a week`,
+        subject: `Your ${APP_NAME} trial ends in ${daysLeft} days`,
         text: text(lines, "Choose a plan"),
         html: shell({
-          heading: "One week left on your free trial",
+          heading: `${daysLeft} days left on your free trial`,
           paragraphs: lines,
           plans: ctx.plans,
           cta: { label: "Choose a plan", url: billingUrl },

@@ -110,11 +110,14 @@ export type PaidPlanKey = (typeof PAID_PLAN_KEYS)[number];
  * trialDays: every new shop gets this many days of FULL Premium before it
  * has to pick a plan (Starter, Premium or Premium AI). Read at signup
  * (routes/shops.ts) and by every trial sentence in the product.
+ *
+ * 🔴 Signup saves the end date on the shop, so changing this only ever affects
+ * shops created afterwards. A shop already on a longer trial keeps its date.
  */
 export const BILLING = {
   planName: PLANS.pro.name,
   priceMonthlyUsd: PLANS.pro.priceMonthlyUsd,
-  trialDays: 14,
+  trialDays: 7,
 } as const;
 
 /**
@@ -123,8 +126,8 @@ export const BILLING = {
  * `rewardDays` goes to BOTH sides, but at different moments. The friend's month
  * is added to their trial the instant their shop is created, so the benefit is
  * immediate - and it stacks ON TOP of the standard trial, which is why the copy
- * says an EXTRA month rather than "your first month free": they'd have had 30
- * days anyway, so the real offer is 60.
+ * says an EXTRA month rather than "your first month free": the real offer is
+ * BILLING.trialDays + rewardDays.
  *
  * The referrer's month is granted only once the friend's first invoice actually
  * clears. Any earlier trigger - signup, or merely entering a card - is farmable
