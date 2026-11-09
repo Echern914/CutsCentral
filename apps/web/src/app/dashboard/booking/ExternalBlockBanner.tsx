@@ -44,6 +44,11 @@ export interface BlockConflict {
   /** The digest that authorises exactly these blocks. Empty = not confirmable. */
   confirmation: string;
   /**
+   * An overlap that only touches the turnover buffer: nobody shares the chair,
+   * so saying yes is not marked Double-booked and the form must not say it is.
+   */
+  bufferOnly?: boolean;
+  /**
    * The server's own list under the sentence, one line each, in the shop's
    * zone - the bookings a block would sit on. Same rule as `reason`: shown
    * as text, never rebuilt here.

@@ -11,6 +11,13 @@ import {
 
 export const APP_NAME = "ChairBack";
 
+/**
+ * New appointment's `- 1 +`: how many of one service the shop can book back to
+ * back in one go. Here so the form's stepper and the API's refusal cannot disagree.
+ */
+export const MIN_DASH_RUN = 2;
+export const MAX_DASH_RUN = 10;
+
 /** Default loyalty + nudge settings applied to newly created shops. */
 export const DEFAULTS = {
   rewardThreshold: 10,

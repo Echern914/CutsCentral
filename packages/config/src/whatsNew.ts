@@ -36,6 +36,26 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-08-back-to-back-stepper",
+    date: "2026-11-08",
+    kind: "feature",
+    title: "Book several back to back with one tap",
+    body:
+      "New appointment now has a - 1 + under the service. Set how many, pick the start, and they all book end to " +
+      "end, with one confirmation and one reminder. Your time is blocked until the last one ends plus your buffer, " +
+      "and later times stay open.",
+  },
+  {
+    id: "2026-11-08-buffer-is-not-double-booked",
+    date: "2026-11-08",
+    kind: "fix",
+    title: "Running into your buffer isn't a double-booking",
+    body:
+      "Booking right up against your buffer still asks first, but it now says that's all it is, and the " +
+      "appointment is no longer marked Double-booked. And an hour you tap that isn't an open time now books with " +
+      "just Schedule.",
+  },
+  {
     id: "2026-11-08-affiliate-short-code",
     date: "2026-11-08",
     kind: "feature",

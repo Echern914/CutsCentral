@@ -262,6 +262,23 @@ describe("appointment messages carry the shop address", () => {
     expect(body.length).toBeLessThanOrEqual(306);
   });
 
+  it("a back-to-back run's one reminder says how many follow, and stays inside the same two segments", () => {
+    const body = buildAppointmentReminderBody({
+      ...base,
+      firstName: "Christopher",
+      serviceName: "Skin Fade + Beard Trim",
+      shopName: "The Gentlemen's Grooming Lounge",
+      address: { ...SHOP, addressStreet: "1234 Washington Boulevard" },
+      moreRightAfter: 9,
+    });
+    expect(body).toContain(" and 9 more right after.");
+    expect(body.length).toBeLessThanOrEqual(306);
+    expect(buildAppointmentReminderBody({ ...base })).not.toContain("right after");
+    const email = buildAppointmentReminderEmail({ ...base, moreRightAfter: 3 });
+    expect(email.text).toContain(" and 3 more right after.");
+    expect(email.html).toContain("and 3 more right after");
+  });
+
   it("a shop with no published address says nothing about one", () => {
     const partial = { addressCity: "Wilmington", addressRegion: "DE" }; // no street
     const email = buildAppointmentConfirmationEmail({ ...base, address: partial });

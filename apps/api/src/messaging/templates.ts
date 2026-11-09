@@ -413,6 +413,11 @@ export function buildAppointmentConfirmationBody(params: {
   return withStopNotice(body);
 }
 
+/** " and 3 more right after", or nothing. A run gets one reminder, so it says so. */
+function moreRightAfterText(more: number | undefined): string {
+  return more && more > 0 ? ` and ${more} more right after` : "";
+}
+
 /**
  * "Appointment reminder" SMS, sent ~24h before a native booking. Same manage
  * link so the customer can cancel/reschedule if plans changed.
@@ -425,6 +430,8 @@ export function buildAppointmentReminderBody(params: {
   timezone: string;
   manageToken: string;
   address?: ShopAddressInput | null;
+  /** The first of a back-to-back run: how many more follow it. */
+  moreRightAfter?: number;
 }): string {
   const when = formatApptTime(params.startsAt, params.timezone);
   const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
@@ -435,7 +442,7 @@ export function buildAppointmentReminderBody(params: {
   // fails rather than the SMS bill quietly doubling.
   const address = params.address ? formatShopAddress(params.address) : null;
   const body =
-    `Reminder, ${who}: your ${params.serviceName} at ${params.shopName} is ${when}. ` +
+    `Reminder, ${who}: your ${params.serviceName} at ${params.shopName} is ${when}${moreRightAfterText(params.moreRightAfter)}. ` +
     (address ? `${address}. ` : "") +
     `See you then! Manage: ${manageUrl}`;
   return withStopNotice(body);
@@ -1070,15 +1077,18 @@ export function buildAppointmentReminderEmail(params: {
   address?: ShopAddressInput | null;
   /** The shop's note for clients ("Please arrive 10 minutes early"). */
   clientNote?: string | null;
+  /** The first of a back-to-back run: how many more follow it. */
+  moreRightAfter?: number;
 }): EmailCopy {
   const when = formatApptTime(params.startsAt, params.timezone);
   const manageUrl = `${env.APP_BASE_URL}/book/manage/${params.manageToken}`;
   const who = params.firstName ?? "there";
   const address = params.address ? formatShopAddress(params.address) : null;
+  const more = moreRightAfterText(params.moreRightAfter);
   return {
     subject: `Reminder: ${params.serviceName} at ${params.shopName}`,
     text:
-      `Reminder, ${who}: your ${params.serviceName} at ${params.shopName} is ${when}. See you then!\n\n` +
+      `Reminder, ${who}: your ${params.serviceName} at ${params.shopName} is ${when}${more}. See you then!\n\n` +
       (address ? `Where: ${address}\n\n` : "") +
       clientNoteText(params.shopName, params.clientNote) +
       `Reschedule or cancel: ${manageUrl}\n\n` +
@@ -1088,7 +1098,7 @@ export function buildAppointmentReminderEmail(params: {
       intro: `Hi ${who}, this is a reminder about your upcoming appointment:`,
       shopName: params.shopName,
       serviceName: params.serviceName,
-      when,
+      when: `${when}${more}`,
       staffName: params.staffName,
       manageUrl,
       appStoreUrl: MOBILE_APP.appStoreUrl,
