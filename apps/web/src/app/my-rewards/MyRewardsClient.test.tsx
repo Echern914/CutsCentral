@@ -31,7 +31,7 @@ async function toCodeStep() {
   fireEvent.change(screen.getByPlaceholderText(/555/), {
     target: { value: "212 555 0134" },
   });
-  fireEvent.click(screen.getByText(/text me a code/i));
+  fireEvent.click(screen.getByText(/email me a code/i));
   await screen.findByText(/if that number's on file/i);
 }
 
@@ -50,7 +50,7 @@ describe("MyRewardsClient", () => {
     fireEvent.change(screen.getByPlaceholderText(/555/), {
       target: { value: "212 555 0134" },
     });
-    const btn = screen.getByText(/text me a code/i);
+    const btn = screen.getByText(/email me a code/i);
     fireEvent.click(btn);
     fireEvent.click(btn); // the second tap lands while the first is in flight
     await screen.findByText(/if that number's on file/i);
@@ -69,6 +69,31 @@ describe("MyRewardsClient", () => {
   it("the code step never asserts the number exists - 'if on file' copy", async () => {
     await toCodeStep();
     expect(screen.getByText(/if that number's on file/i)).toBeTruthy();
+  });
+
+  it("🔴 the page says email and never promises a text", async () => {
+    await toCodeStep();
+    expect(screen.getByText(/the email your shop has for you/i)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/text(ed)? (you|me|a code)|just texted/i);
+    // The way out for a customer whose email never comes.
+    expect(screen.getByText(/check your spam folder, or ask your shop/i)).toBeTruthy();
+  });
+
+  it("each shop shows a Connect label and the list says these are your shops", async () => {
+    await toCodeStep();
+    verify.mockResolvedValue(ok({ verified: true, proof: "p".repeat(24) }) as never);
+    shopsFn.mockResolvedValue(
+      ok({
+        shops: [
+          { selectionId: "a".repeat(32), ambiguous: false, name: "Alpha Cuts", logoUrl: null, industry: "barber", city: "Albany", region: "NY" },
+        ],
+      }) as never,
+    );
+    fireEvent.change(screen.getByPlaceholderText("••••••"), { target: { value: "424242" } });
+    fireEvent.click(screen.getByText(/^verify$/i));
+    expect(await screen.findByText(/the shops you're connected to/i)).toBeTruthy();
+    const row = screen.getByRole("button", { name: /alpha cuts/i });
+    expect(row.textContent).toMatch(/connect/i);
   });
 
   it("a failed verify is one generic message - wrong and never-sent look identical", async () => {
@@ -116,7 +141,7 @@ describe("MyRewardsClient", () => {
     fireEvent.change(screen.getByPlaceholderText("••••••"), { target: { value: "424242" } });
     fireEvent.click(screen.getByText(/^verify$/i));
 
-    const note = await screen.findByText(/more than one person at family cuts uses this number/i);
+    const note = await screen.findByText(/more than one person at family cuts uses this number and email/i);
     expect(note.textContent).toMatch(/ask family cuts to send you your personal rewards link/i);
     // Nothing to press for Family Cuts - and so nothing that could be selected.
     const buttons = screen.getAllByRole("button");

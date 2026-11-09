@@ -11,10 +11,11 @@ import {
 /**
  * Re-send a client their rewards link - the ONE engine behind every
  * authenticated door (the manager button on the client page, the barber's
- * own-clients list). The self-service phone-recovery flow is its sibling in
- * services/rewardsRecovery.ts; all of them commit onto the same loyalty-kind
- * Nudge trail under the same nudge:<clientId> advisory lock and reserve from
- * the same platform segment budget, so adding a door never adds an allowance.
+ * own-clients list). All of them commit onto the same loyalty-kind Nudge trail
+ * under the same nudge:<clientId> advisory lock and reserve from the same
+ * platform segment budget, so adding a door never adds an allowance. The
+ * self-service flow in services/rewardsRecovery.ts sends email, so it has its
+ * own ledger and writes nothing here.
  *
  * 🔴 CONSENT IS THE REAL GATE, and it is the shop's own rule, not a new one:
  * textable means optedOut === false AND smsConsentAt != null. A STOP is
@@ -135,10 +136,8 @@ export async function resendRewardsLink(params: {
   // read, PLATFORM segment reservation and the redacted PENDING row all commit
   // together or not at all. Without the lock, parallel resends from two
   // devices (or two doors) could all pass the reads before any create
-  // commits; with it, they serialize on the same key the self-service path
-  // locks (nudge:<clientId>), so every door shares one ledger in the
-  // strictest sense. Lock order everywhere: rec:<ipHash> (self-service only)
-  // then nudge:<clientId>; this engine takes only the second - no cycle.
+  // commits; with it, they serialize on nudge:<clientId>, so every door shares
+  // one ledger in the strictest sense. This is the only lock this engine takes.
   type Reserved =
     | { ok: true; nudgeId: string }
     | { ok: false; why: "too_soon" | "too_many_today" | "platform_budget" };
@@ -157,9 +156,8 @@ export async function resendRewardsLink(params: {
     });
     if (recent) return { ok: false, why: "too_soon" };
     // Daily ceiling so the authenticated doors are bounded too. Counts EVERY
-    // loyalty-kind row on this client - self-service recovery included,
-    // since those commit onto the same trail - so the worst case per client
-    // row per day is RESEND_DAILY_CAP however the doors are alternated.
+    // loyalty-kind row on this client, so the worst case per client row per day
+    // is RESEND_DAILY_CAP however the doors are alternated.
     const today = await tx.nudge.count({
       where: {
         shopId,
@@ -169,8 +167,8 @@ export async function resendRewardsLink(params: {
       },
     });
     if (today >= RESEND_DAILY_CAP) return { ok: false, why: "too_many_today" };
-    // The SAME platform breaker self-service uses, in billable segments of
-    // THIS exact body - an authenticated door is not a way around the cap.
+    // The platform breaker, in billable segments of THIS exact body - an
+    // authenticated door is not a way around the cap.
     if (!(await takeRecoverySmsBudget(tx, now, billableSegments(body)))) {
       return { ok: false, why: "platform_budget" };
     }

@@ -906,27 +906,20 @@ const resolveByPhoneSchema = z
  *
  *   - the response is the SAME `{ ok: true }` for every phone - known,
  *     unknown, one shop, twenty shops;
- *   - at most ONE SMS is sent, platform-neutral: no shop is named, no link to
- *     any shop's rewards, no balance - just the door to verified recovery,
- *     where the customer proves the phone and picks their shop themselves;
+ *   - one platform-neutral EMAIL per address on file for the number: no shop is
+ *     named, no link to any shop's rewards, no balance - just the door to
+ *     verified recovery, where the customer proves the address and picks their
+ *     shop themselves;
  *   - no shop is ever selected on the customer's behalf, silently or
  *     otherwise.
  *
- * OLD-BUILD COMPATIBILITY: the shipped screen shows "if that number's on
- * file, we just texted your rewards link" and waits for an SMS - which still
- * arrives. Its link now opens /my-rewards in the browser, the customer
- * verifies and picks their shop there, and the final rewards URL deep-links
- * back into the app exactly like every texted rewards link always has (the
- * app claims /r/* paths). Recovery completes on shipped builds with zero app
+ * OLD-BUILD COMPATIBILITY: a shipped screen may still say "we just texted your
+ * rewards link". What arrives is an email rather than a text, which those
+ * builds cannot be updated to say. Its link opens /my-rewards in the browser,
+ * the customer verifies and picks their shop there, and the final rewards URL
+ * deep-links back into the app like every rewards link always has (the app
+ * claims /r/* paths). Recovery completes on shipped builds with zero app
  * update.
- *
- * CONSENT: sent only when at least one matching client row is textable under
- * the EXISTING rule (optedOut false AND smsConsentAt set) - the same gate the
- * old implementation applied to its chosen row, kept rather than reinvented.
- * The Nudge audit row rides the OLDEST textable match: deterministic
- * bookkeeping for a message that names no shop, deliberately not
- * activity-based - activity-based selection is the defect this rewrite
- * removes.
  */
 rewardsRouter.post("/resolve-by-phone", async (req, res) => {
   const parsed = resolveByPhoneSchema.safeParse(req.body ?? {});
@@ -939,12 +932,12 @@ rewardsRouter.post("/resolve-by-phone", async (req, res) => {
   // send, which meant a caller could alternate between here and the recovery
   // route and draw TWO send allowances per phone while bypassing the
   // challenge row entirely. Now both doors are the same door: same
-  // eligibility decision, same cooldown, same per-phone cap, same IP ceiling,
-  // same purpose binding, same audit discipline - and its ONE message carries
-  // the code AND the /my-rewards door, so the whole legacy journey (open the
-  // link, enter the number, enter THIS code, choose the business) costs
-  // exactly one SMS. The response stays byte-identical {ok:true} for every
-  // phone, and the send is fire-and-forget inside the service.
+  // eligibility decision, same cooldown, same per-address cap, same IP ceiling,
+  // same purpose binding - and its ONE message carries the code AND the
+  // /my-rewards door, so the whole legacy journey (open the link, enter the
+  // number, enter THIS code, choose the business) costs no second send. The
+  // response stays byte-identical {ok:true} for every phone, and the send is
+  // fire-and-forget inside the service.
   if (phone) {
     await requestRecoveryChallenge({ phone, ip: req.ip ?? "unknown", now: new Date() });
   }

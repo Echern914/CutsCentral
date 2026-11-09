@@ -66,8 +66,6 @@ const EXEMPT: Record<string, string> = {
     "single-flight CACHE de-duplication in process - no database guard exists to remove",
   "serves concurrent cold callers one identical sweep, and recovers after":
     "single-flight cache de-duplication in process",
-  "🔴 a MULTI-SHOP phone gets exactly ONE SMS, naming no shop":
-    "message fan-in shaping; 'race' is not in play",
   "concurrent workers lose no increment and cannot exceed MAX_ATTEMPTS":
     "covered by the write-ahead attempt reservation asserted in the same file",
   "two disconnects racing settle on one outcome":
@@ -148,14 +146,6 @@ const BACKLOG: Record<string, string> = {
   "concurrent cancels with DIFFERENT clocks still produce one intent and one send":
     "UNPROVEN: audited 2026-08-31, not yet reshaped",
   "creates ONE intent when cancellations race":
-    "UNPROVEN: audited 2026-08-31, not yet reshaped",
-  "🔴 the IP ceiling is ATOMIC: a simultaneous burst of distinct phones cannot exceed it":
-    "REAL (audited): fails when the rec:<ipHash> advisory lock is removed",
-  "🔴 two concurrent correct verifications produce EXACTLY one proof":
-    "UNPROVEN: audited 2026-08-31, not yet reshaped",
-  "🔴 two simultaneous challenge creations leave ONE active row":
-    "UNPROVEN: audited 2026-08-31, not yet reshaped",
-  "🔴 two simultaneous selections produce exactly one credential":
     "UNPROVEN: audited 2026-08-31, not yet reshaped",
   "two concurrent requests create exactly ONE run":
     "UNPROVEN: audited 2026-08-31, not yet reshaped",

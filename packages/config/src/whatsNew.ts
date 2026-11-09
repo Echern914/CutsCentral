@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-08-find-my-rewards-by-email",
+    date: "2026-11-08",
+    kind: "fix",
+    title: "Clients can find their rewards by email",
+    body:
+      "A client who lost their rewards link enters their number and gets a code by email, then picks your shop. " +
+      "The code goes to the email on their profile, so a client with no email on file will need you to add one.",
+  },
+  {
     id: "2026-11-08-service-hours-targeted-slot-warning",
     date: "2026-11-08",
     kind: "fix",

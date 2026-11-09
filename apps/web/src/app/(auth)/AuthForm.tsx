@@ -296,6 +296,16 @@ export function AuthForm({
             </HideInNativeApp>
           )}
         </p>
+        {/* A client who lost their way in often lands on this page, which is for
+            shop owners. Send them to the door that does work for them. */}
+        {isSignup ? null : (
+          <p className="mt-2 text-center text-sm text-muted">
+            Looking for your rewards?{" "}
+            <Link href="/my-rewards" className="text-gold hover:underline">
+              Find my rewards
+            </Link>
+          </p>
+        )}
       </motion.div>
     </main>
   );

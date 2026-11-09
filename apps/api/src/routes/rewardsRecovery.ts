@@ -10,23 +10,21 @@ import {
 } from "../services/rewardsRecovery.js";
 
 /**
- * Rewards recovery over HTTP: enter phone -> verify -> choose business ->
- * open rewards. The customer-side answer to "I lost the text with my link".
+ * Rewards recovery over HTTP: enter number -> code by email -> choose business
+ * -> open rewards. The customer-side answer to "I lost my link".
  *
  * THE CONSTANCY CONTRACT. Until verification succeeds, every response is
  * independent of what the platform knows: challenge answers `{ok:true}` for
  * known, unknown, single-shop and multi-shop numbers alike (and for numbers
- * that failed a ceiling - the SMS simply does not arrive), and every verify
- * failure is one `{verified:false}`. Nothing before the proof reveals whether
- * the phone exists, how many shops match, which ones, whether rewards exist,
- * whether any row opted out, or whether the customer is active. Absence of a
- * shop from the post-verification chooser is equally silent.
+ * that failed a ceiling, or have no email - the code simply does not arrive),
+ * and every verify failure is one `{verified:false}`. Nothing before the proof
+ * reveals whether the phone exists, how many shops match, which ones, whether
+ * rewards exist, or whether the customer is active. Absence of a shop from the
+ * post-verification chooser is equally silent.
  *
- * CONSENT. The challenge SMS is customer-initiated transactional verification
- * of a number the customer just typed - the walk-in kiosk precedent, which
- * sends its OTP with no stored-consent check for the same reason. Shop-level
- * consent rules govern SHOP-initiated sends and nothing here is one; no
- * shop-specific message of any kind is sent by this flow.
+ * Text consent has no bearing here: nothing this flow sends is a text. It is a
+ * code the customer asked for, to an address already on their record, and no
+ * shop-specific message of any kind is sent.
  *
  * Tokens and proofs travel in POST bodies only - never in a URL - so no
  * logRedaction entry is needed for these paths.
@@ -50,7 +48,7 @@ rewardsRecoveryRouter.post("/challenge", recoverySmsLimiter, async (req, res) =>
     return;
   }
   const phone = toE164(parsed.data.phone);
-  // An unparseable number gets the same ok as everything else: its SMS simply
+  // An unparseable number gets the same ok as everything else: its code simply
   // never arrives, exactly like a number we've never heard of.
   if (!phone) {
     ok(res);
