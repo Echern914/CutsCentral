@@ -44,6 +44,26 @@ import {
 /** 🔴 Three. The UI offers 1/2/3 and the server refuses anything else. */
 export const MAX_GROUP_ATTENDEES = 3;
 
+/**
+ * THE SHOP'S OWN BACK-TO-BACK RUN: "4 of this service from 3:00", from New
+ * appointment. Stored as a party (a group of real appointments with no gaps),
+ * which already has what a run needs: one guard over the whole span, the buffer
+ * only on the outside, and one confirmation. It differs from a party in who
+ * sits in the chair: one client, so one reminder too.
+ */
+export { MAX_DASH_RUN, MIN_DASH_RUN } from "@chairback/config";
+
+/** A group's idempotency key says it is a run. A public party's never starts so. */
+const DASH_RUN_KEY_PREFIX = "dash-run:";
+
+export function dashRunKey(shopId: string, operationId: string): string {
+  return `${DASH_RUN_KEY_PREFIX}${shopId}:${operationId}`;
+}
+
+export function isDashRunKey(key: string | null | undefined): boolean {
+  return Boolean(key?.startsWith(DASH_RUN_KEY_PREFIX));
+}
+
 /** What the caller knows about one attendee before any times are worked out. */
 export interface GroupAttendeeInput {
   /** The attendee's own first name - what shows on the barber's calendar. */
@@ -134,10 +154,15 @@ export function planGroupSequence(input: {
   timezone: string;
   /** Every service the attendees chose, by id. */
   services: Map<string, GroupPlanService & { name: string }>;
+  /**
+   * The shop's own back-to-back run takes more than the public party's three
+   * (MAX_DASH_RUN). The public routes never pass this, so their cap stands.
+   */
+  maxAttendees?: number;
 }): GroupPlan {
   const { attendees, startsAt, timezone, services } = input;
   if (attendees.length < 1) throw new GroupPlanError("too_few_attendees");
-  if (attendees.length > MAX_GROUP_ATTENDEES) {
+  if (attendees.length > (input.maxAttendees ?? MAX_GROUP_ATTENDEES)) {
     throw new GroupPlanError("too_many_attendees");
   }
 

@@ -65,6 +65,14 @@ export const FOLLOW_UP_DAYS = { 4: 3, 5: 10 } as const;
  * first deploy would email every shop that lapsed months ago, cold.
  */
 export const FOLLOW_UP_MAX_DAYS = 90;
+/**
+ * A shop gets no "your trial is ending" email until it is this many days old.
+ * The first reminder is due once a week or less is left, and a 7-day trial
+ * starts inside that week: without this, an owner who signed up that morning
+ * would hear about the trial ending at the next sweep. Four days puts the
+ * email at 2-3 days left on a 7-day trial and changes nothing for a longer one.
+ */
+export const FIRST_REMINDER_MIN_AGE_DAYS = 4;
 
 export interface TrialReminderSummary {
   shopId: string;
@@ -169,10 +177,21 @@ export function purchasablePlans(
  *    ended": any trial still running is caught by the line above first.
  */
 function dueStage(
-  shop: { trialEndsAt: Date | null; compEndedAt: Date | null; trialReminderStage: number },
+  shop: {
+    createdAt: Date;
+    trialEndsAt: Date | null;
+    compEndedAt: Date | null;
+    trialReminderStage: number;
+  },
   now: Date,
 ): TrialReminderStage | 0 {
-  const trialStage = shop.trialEndsAt ? trialStageAt(shop.trialEndsAt, now) : 0;
+  const clockStage = shop.trialEndsAt ? trialStageAt(shop.trialEndsAt, now) : 0;
+  // Only the first reminder waits. "Ends tomorrow" and "has ended" are true
+  // and needed however new the shop is.
+  const tooNewForFirstReminder =
+    clockStage === 1 &&
+    now.getTime() - shop.createdAt.getTime() < FIRST_REMINDER_MIN_AGE_DAYS * MS_PER_DAY;
+  const trialStage = tooNewForFirstReminder ? 0 : clockStage;
   if (trialStage > shop.trialReminderStage) return trialStage;
 
   const locked = lockedSince(shop);
@@ -217,6 +236,7 @@ export async function runTrialReminders(
     select: {
       id: true,
       name: true,
+      createdAt: true,
       trialEndsAt: true,
       compEndedAt: true,
       trialReminderStage: true,

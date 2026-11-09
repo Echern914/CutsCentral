@@ -54,6 +54,8 @@ export interface ApiResult<T> {
    * lines as text and never rebuilds them from instants.
    */
   conflicts?: string[];
+  /** A confirmable overlap that only touches the turnover buffer. */
+  bufferOnly?: boolean;
   /**
    * The API's own STABLE classification of a failure, when it sent one.
    *
@@ -265,6 +267,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
   let message: string | undefined;
   let confirmation: string | undefined;
   let conflicts: string[] | undefined;
+  let bufferOnly: boolean | undefined;
   let policy: unknown;
   let payment: unknown;
   let booked: unknown;
@@ -298,6 +301,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
         const lines = listed.filter((l): l is string => typeof l === "string");
         if (lines.length > 0) conflicts = lines;
       }
+      if ((json as { bufferOnly?: unknown }).bufferOnly === true) bufferOnly = true;
       const raw = (json as { issues?: unknown }).issues;
       if (Array.isArray(raw)) {
         const valid = raw.filter(
@@ -326,6 +330,7 @@ async function toResult<T>(res: Response): Promise<ApiResult<T>> {
     ...(message ? { message } : {}),
     ...(confirmation ? { confirmation } : {}),
     ...(conflicts ? { conflicts } : {}),
+    ...(bufferOnly ? { bufferOnly } : {}),
     ...(policy ? { policy } : {}),
     ...(payment ? { payment } : {}),
     ...(booked ? { booked } : {}),

@@ -135,6 +135,25 @@ describe("billing HTTP surface", () => {
     expect(res.body.trialDaysLeft).toBeLessThanOrEqual(BILLING.trialDays);
   });
 
+  it("gives a new shop a 7-day trial, and leaves a shop already on a longer one alone", async () => {
+    // The product decision itself: the assertions above follow the constant.
+    expect(BILLING.trialDays).toBe(7);
+
+    const before = await prisma.shop.findUniqueOrThrow({ where: { id: shopId } });
+    const longer = new Date(Date.now() + 20 * DAY);
+    await prisma.shop.update({ where: { id: shopId }, data: { trialEndsAt: longer } });
+    try {
+      const res = await request(app).get("/api/billing").set("Cookie", cookie);
+      expect(res.body.trialDaysLeft).toBe(20);
+      expect(res.body.trialDays).toBe(7);
+    } finally {
+      await prisma.shop.update({
+        where: { id: shopId },
+        data: { trialEndsAt: before.trialEndsAt },
+      });
+    }
+  });
+
   it("requires auth", async () => {
     const res = await request(app).get("/api/billing");
     expect(res.status).toBe(401);

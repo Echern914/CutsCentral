@@ -131,6 +131,26 @@ describe("New appointment: a time that overlaps another booking", () => {
     expect(sent(0).overlapConfirmation).toBeUndefined();
   });
 
+  it("🔴 only the buffer in the way: still asks, and does not promise a Double-booked tag", async () => {
+    create.mockResolvedValueOnce({ ...OVERLAP, bufferOnly: true });
+    const dialog = await openForm();
+    customTime();
+    schedule();
+    const banner = await within(dialog).findByRole("alertdialog");
+    expect(banner).toHaveTextContent("it isn't marked Double-booked");
+    expect(banner).not.toHaveTextContent("this one is marked Double-booked");
+    expect(within(banner).getByRole("button", { name: "Book anyway" })).toBeInTheDocument();
+  });
+
+  it("a real overlap still says it will be marked", async () => {
+    create.mockResolvedValueOnce(OVERLAP);
+    const dialog = await openForm();
+    customTime();
+    schedule();
+    const banner = await within(dialog).findByRole("alertdialog");
+    expect(banner).toHaveTextContent("this one is marked Double-booked");
+  });
+
   it("🔴 Book anyway ASKS first; only 'Yes, book it' sends the answer and books it", async () => {
     create.mockResolvedValueOnce(OVERLAP);
     const dialog = await openForm();

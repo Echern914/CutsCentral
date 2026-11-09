@@ -35,7 +35,7 @@ export function PricingSection() {
                 <span className="text-gradient-gold">Pick the plan that pays for itself.</span>
               </>
             }
-            sub={`Every new shop gets the whole thing free for ${BILLING.trialDays} days — no card, nothing to cancel. Then keep everything from $${PLANS.starter.priceMonthlyUsd} a month.`}
+            sub={`Every new shop gets all of Premium free for ${BILLING.trialDays} days — no card, nothing to cancel. Then pick the plan that fits, from $${PLANS.starter.priceMonthlyUsd} a month.`}
           />
           <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-4xl gap-6 md:grid-cols-2">
             {/* Starter */}

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { __resetEnvCacheForTests, randomToken } from "@chairback/config";
+import { BILLING, __resetEnvCacheForTests, randomToken } from "@chairback/config";
 import { prisma } from "@chairback/db";
 import { __setSendEmailForTests, type SendEmailInput } from "../messaging/email.js";
 import {
@@ -39,6 +39,9 @@ async function makeShop(overrides: Record<string, unknown> = {}) {
       ownerId: userId,
       name: "Trial Shop",
       webhookSecret: randomToken(),
+      // Old enough for every email unless a test says otherwise: the default
+      // would be the real clock, which is years after NOW.
+      createdAt: new Date(NOW.getTime() - 60 * MS_PER_DAY),
       ...overrides,
     },
   });
@@ -107,7 +110,8 @@ describe("runTrialReminders", () => {
     let summaries = await runFiltered(NOW);
     expect(summaries).toEqual([{ shopId: shop.id, stage: 1, ownerEmail }]);
     expect(mine().length).toBe(1);
-    expect(mine()[0]!.subject).toContain("ends in a week");
+    expect(mine()[0]!.subject).toContain("ends in 6 days");
+    expect(mine()[0]!.html).toContain("6 days left on your free trial");
     // The email says what pauses, quotes the price, and links to billing.
     expect(mine()[0]!.text).toContain("$34.99");
     expect(mine()[0]!.text).toContain("/dashboard/billing");
@@ -219,6 +223,55 @@ describe("runTrialReminders", () => {
     expect(summaries).toEqual([{ shopId: shop.id, stage: 3, ownerEmail }]);
     expect(mine().length).toBe(1);
     expect(mine()[0]!.subject).toContain("trial has ended");
+  });
+
+  describe("a shop on the standard trial, from the day it signs up", () => {
+    const signedUp = new Date(NOW.getTime() - 2 * 60 * 60 * 1000);
+    const newShop = () =>
+      makeShop({
+        createdAt: signedUp,
+        trialEndsAt: new Date(signedUp.getTime() + BILLING.trialDays * MS_PER_DAY),
+      });
+    const day = (n: number) => new Date(NOW.getTime() + n * MS_PER_DAY);
+
+    it("hears nothing on signup day, or until the first reminder is due", async () => {
+      await newShop();
+      for (const n of [0, 1, 2, 3]) expect(await runFiltered(day(n))).toEqual([]);
+      expect(mine().length).toBe(0);
+    });
+
+    it("gets each email once, with the right number of days", async () => {
+      const shop = await newShop();
+      // The 14:00 sweep 4 days on is 4 days and 2 hours after signup, with 2
+      // days and 22 hours left.
+      expect(await runFiltered(day(4))).toEqual([{ shopId: shop.id, stage: 1, ownerEmail }]);
+      expect(mine()[0]!.subject).toContain("ends in 3 days");
+      expect(await runFiltered(day(5))).toEqual([]);
+      expect(await runFiltered(day(6))).toEqual([{ shopId: shop.id, stage: 2, ownerEmail }]);
+      expect(await runFiltered(day(7))).toEqual([{ shopId: shop.id, stage: 3, ownerEmail }]);
+      expect(mine().map((e) => e.subject).at(-1)).toContain("trial has ended");
+    });
+  });
+
+  it("the wait is only for the first reminder: a new shop still hears its trial is ending or over", async () => {
+    const createdAt = new Date(NOW.getTime() - MS_PER_DAY);
+    const ending = await makeShop({
+      createdAt,
+      trialEndsAt: new Date(NOW.getTime() + 12 * 60 * 60 * 1000),
+    });
+    const over = await makeShop({ createdAt, trialEndsAt: new Date(NOW.getTime() - 60 * 1000) });
+    const summaries = await runFiltered(NOW);
+    expect(summaries.find((s) => s.shopId === ending.id)?.stage).toBe(2);
+    expect(summaries.find((s) => s.shopId === over.id)?.stage).toBe(3);
+  });
+
+  it("a shop already on a 14-day trial still gets its first reminder with 7 days left", async () => {
+    const shop = await makeShop({
+      createdAt: new Date(NOW.getTime() - 7 * MS_PER_DAY),
+      trialEndsAt: new Date(NOW.getTime() + 7 * MS_PER_DAY),
+    });
+    expect(await runFiltered(NOW)).toEqual([{ shopId: shop.id, stage: 1, ownerEmail }]);
+    expect(mine()[0]!.subject).toContain("ends in 7 days");
   });
 
   it("skips shops with plenty of trial left", async () => {
