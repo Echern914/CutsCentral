@@ -475,7 +475,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "whats-free",
     q: "Is there a free plan?",
-    a: `No — but every new shop gets the whole thing free for ${BILLING.trialDays} days. No card to start, nothing to cancel if you walk away.
+    a: `No — but every new shop gets all of Premium free for ${BILLING.trialDays} days. No card to start, nothing to cancel if you walk away.
 
 When the trial ends your shop stops taking bookings until you pick a plan, starting at $${PLANS.starter.priceMonthlyUsd}/month for the booking site and the everyday tools. Your clients, history and loyalty data stay exactly where they are, and you can read or export your client book at any time.`,
     keywords: ["free", "free plan", "no card", "forever", "free forever", "without paying", "cheapest plan", "starter"],

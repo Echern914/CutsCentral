@@ -12,8 +12,9 @@ import { SectionHeading } from "./SectionHeading";
  *
  * Starter is the way in for a shop that wants online booking and nothing
  * outbound; Premium is the plan that brings clients back (texts + the full
- * analysis); Premium AI adds the receptionist. Every new shop trials the whole
- * thing for BILLING.trialDays days and then picks one.
+ * analysis); Premium AI adds the receptionist. Every new shop trials all of
+ * Premium for BILLING.trialDays days and then picks one. The receptionist is not
+ * in that trial: it has its own, AI_TRIAL_DAYS.
  */
 
 const CHECK = "mt-0.5 h-4 w-4 shrink-0 text-gold";
@@ -31,7 +32,7 @@ export function PricingSection() {
                 <span className="text-gradient-gold">Pick the plan that pays for itself.</span>
               </>
             }
-            sub={`Every new shop gets the whole thing free for ${BILLING.trialDays} days — no card, nothing to cancel. Then keep everything from $${PLANS.starter.priceMonthlyUsd} a month.`}
+            sub={`Every new shop gets all of Premium free for ${BILLING.trialDays} days — no card, nothing to cancel. Then pick the plan that fits, from $${PLANS.starter.priceMonthlyUsd} a month.`}
           />
           <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-6xl gap-6 md:grid-cols-3">
             {/* Starter */}
