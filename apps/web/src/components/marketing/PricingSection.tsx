@@ -40,7 +40,8 @@ export function PricingSection() {
           <Reveal delay={0.1} className="mx-auto mt-12 grid max-w-4xl gap-6 md:grid-cols-2">
             {/* Starter */}
             <div className="glass relative flex flex-col overflow-hidden rounded-3xl border border-subtle p-8">
-              <div className="flex items-center justify-between">
+              {/* The same height as Premium's row, which has a badge in it. */}
+              <div className="flex min-h-6 items-center justify-between">
                 <p className="text-xs uppercase tracking-[0.25em] text-muted">
                   {PLANS.starter.name}
                 </p>
@@ -84,7 +85,7 @@ export function PricingSection() {
                 aria-hidden
                 className="pointer-events-none absolute inset-x-0 -top-24 -z-10 h-48 rounded-full bg-gold/15 blur-3xl"
               />
-              <div className="flex items-center justify-between">
+              <div className="flex min-h-6 items-center justify-between">
                 <p className="text-xs uppercase tracking-[0.25em] text-gold-soft">
                   {PLANS.pro.name}
                 </p>

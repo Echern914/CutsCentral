@@ -167,9 +167,18 @@ describe("a Starter subscription", () => {
     });
 
     it("cannot start the AI trial: Premium first", async () => {
-      const res = await request(app).post("/api/billing/ai-trial").set("Cookie", cookie);
-      expect(res.status).toBe(409);
-      expect(res.body.error).toBe("premium_required");
+      // This rule only matters while the receptionist can be bought. With sales
+      // closed every shop gets ai_trial_unavailable first (billing.test.ts).
+      process.env.AI_RECEPTIONIST_SALES_ENABLED = "true";
+      __resetEnvCacheForTests();
+      try {
+        const res = await request(app).post("/api/billing/ai-trial").set("Cookie", cookie);
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe("premium_required");
+      } finally {
+        delete process.env.AI_RECEPTIONIST_SALES_ENABLED;
+        __resetEnvCacheForTests();
+      }
     });
 
     it("is not entitled to the assistant connector", async () => {
