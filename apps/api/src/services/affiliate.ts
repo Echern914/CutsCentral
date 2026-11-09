@@ -1,9 +1,11 @@
+import { randomInt } from "node:crypto";
 import { Prisma, runAsOwner } from "@chairback/db";
 import {
   AFFILIATE_CODE_BYTES,
   AFFILIATE_DECISION_PUBLIC_COPY,
   AFFILIATE_POLICY_VERSION,
   AFFILIATE_TERMS_VERSION,
+  affiliateShortCodePrefix,
   randomToken,
   type AffiliateDecisionReason,
   type AffiliateSuspensionReason,
@@ -232,6 +234,33 @@ export function mintAffiliateCode(): string {
   return randomToken(AFFILIATE_CODE_BYTES);
 }
 
+/**
+ * A code a person can say out loud. Skips one a partner already has, because a
+ * partner code wins when one is typed at signup. Null when every try was taken:
+ * the account still works through its long code, which beats refusing an
+ * approval over a nicety. Two approvals racing to the same candidate hit the
+ * unique index, and approveApplication retries the whole transaction.
+ */
+async function mintAffiliateShortCode(
+  tx: Prisma.TransactionClient,
+  shopName: string,
+): Promise<string | null> {
+  const prefix = affiliateShortCodePrefix(shopName);
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const candidate = `${prefix}${randomInt(100, 1000)}`;
+    const account = await tx.affiliateAccount.findUnique({
+      where: { shortCode: candidate },
+      select: { id: true },
+    });
+    const partner = await tx.partner.findUnique({
+      where: { codeKey: candidate },
+      select: { id: true },
+    });
+    if (!account && !partner) return candidate;
+  }
+  return null;
+}
+
 export type AdminActionResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: "not_found" | "invalid_transition" | "already_affiliate" };
@@ -254,7 +283,7 @@ export async function approveApplication(params: {
       return await runAsOwner(async (tx) => {
         const existing = await tx.affiliateApplication.findUnique({
           where: { id: params.applicationId },
-          select: { id: true, shopId: true, status: true },
+          select: { id: true, shopId: true, status: true, shop: { select: { name: true } } },
         });
         if (!existing) return { ok: false as const, error: "not_found" as const };
 
@@ -290,6 +319,7 @@ export async function approveApplication(params: {
             shopId: existing.shopId,
             applicationId: existing.id,
             code,
+            shortCode: await mintAffiliateShortCode(tx, existing.shop.name),
             acceptedTermsVersion: AFFILIATE_TERMS_VERSION,
             policyVersion: AFFILIATE_POLICY_VERSION,
           },
@@ -393,6 +423,7 @@ const ACCOUNT_ADMIN_SELECT = {
   shopId: true,
   applicationId: true,
   code: true,
+  shortCode: true,
   status: true,
   suspendedAt: true,
   suspensionReason: true,
@@ -558,7 +589,7 @@ export async function getApplicationForAdmin(applicationId: string): Promise<
 /** Admin account list. */
 export async function listAccounts(params: {
   status?: "ACTIVE" | "SUSPENDED";
-}): Promise<Array<AccountAdminRow & { shopName: string }>> {
+}): Promise<Array<AccountAdminRow & { shopName: string; referrals: number }>> {
   return runAsOwner(async (tx) => {
     const rows = await tx.affiliateAccount.findMany({
       where: params.status ? { status: params.status } : {},
@@ -566,6 +597,17 @@ export async function listAccounts(params: {
       take: 100,
       select: { ...ACCOUNT_ADMIN_SELECT, shop: { select: { name: true } } },
     });
-    return rows.map(({ shop, ...row }) => ({ ...row, shopName: shop.name }));
+    // ATTRIBUTED only: a rejected row (self-referral, expired) isn't theirs.
+    const counts = await tx.affiliateReferralAttribution.groupBy({
+      by: ["affiliateAccountId"],
+      where: { affiliateAccountId: { in: rows.map((r) => r.id) }, state: "ATTRIBUTED" },
+      _count: { _all: true },
+    });
+    const referrals = new Map(counts.map((c) => [c.affiliateAccountId, c._count._all] as const));
+    return rows.map(({ shop, ...row }) => ({
+      ...row,
+      shopName: shop.name,
+      referrals: referrals.get(row.id) ?? 0,
+    }));
   });
 }

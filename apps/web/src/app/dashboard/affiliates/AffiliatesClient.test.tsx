@@ -293,6 +293,14 @@ describe("choose styles", () => {
 });
 
 describe("dashboard", () => {
+  it("🔴 shows the short code to say out loud, while the link keeps its long code", () => {
+    const ov = overview({ account: { ...overview().account, shortCode: "FADEL482" } as never });
+    render(<AffiliatesClient status={active} overview={ov} appBase={APP} shopName="Fade Lab" />);
+    expect(screen.getByText("FADEL482")).toBeTruthy();
+    expect(screen.getByText(`${APP}/join?ref=abcDEF123456`)).toBeTruthy();
+    expect(screen.getByText(/type it when they set up their business/)).toBeTruthy();
+  });
+
   it("leads with what they've made in dollars, shows the link, one toolkit card per style, and masked referrals with stages", () => {
     render(<AffiliatesClient status={active} overview={overview()} appBase={APP} shopName="Fade Lab" />);
     expect(screen.getByText("earned so far").previousSibling?.textContent).toBe(usd(SIGNUP));

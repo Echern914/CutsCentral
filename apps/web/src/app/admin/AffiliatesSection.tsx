@@ -55,6 +55,10 @@ export interface AdminAccount {
   id: string;
   shopId: string;
   code: string;
+  /** Optional: a web deploy ahead of the API must not 500 the whole page. */
+  shortCode?: string | null;
+  /** Businesses this affiliate brought on. Optional for the same reason. */
+  referrals?: number;
   status: "ACTIVE" | "SUSPENDED";
   suspensionReason: string | null;
   /** Optional: a web deploy ahead of the API must not 500 the whole page. */
@@ -234,6 +238,7 @@ export function AffiliatesSection({
               <tr className="border-b border-subtle text-left text-xs uppercase tracking-wide text-muted">
                 <th className="px-4 py-3 font-medium">Shop</th>
                 <th className="px-4 py-3 font-medium">Code</th>
+                <th className="px-4 py-3 font-medium">Signups</th>
                 <th className="px-4 py-3 font-medium">Styles</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Since</th>
@@ -243,7 +248,7 @@ export function AffiliatesSection({
             <tbody>
               {accounts.length === 0 && (
                 <tr>
-                  <td className="px-4 py-4 text-muted" colSpan={6}>
+                  <td className="px-4 py-4 text-muted" colSpan={7}>
                     No accounts yet.
                   </td>
                 </tr>
@@ -437,7 +442,10 @@ function AccountRow({
   return (
     <tr className="border-b border-subtle/60 last:border-0">
       <td className="px-4 py-3 text-offwhite">{acc.shopName}</td>
-      <td className="px-4 py-3 font-mono text-xs text-muted">{acc.code}</td>
+      <td className="px-4 py-3 font-mono text-xs text-muted" title={acc.code}>
+        {acc.shortCode ?? acc.code}
+      </td>
+      <td className="px-4 py-3 text-offwhite">{acc.referrals ?? "-"}</td>
       <td className="px-4 py-3 text-xs text-muted">
         {(acc.promotionStyles ?? []).length === 0
           ? "not chosen yet"

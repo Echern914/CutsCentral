@@ -7,6 +7,7 @@ import {
   apiEnv,
   createAffiliateClaim,
   normalizeAffiliateCode,
+  shortAffiliateCodeKey,
   verifyAffiliateClaim,
   type AffiliateClaimKeyring,
   type AffiliateClaimSource,
@@ -85,6 +86,44 @@ function keyring(): AffiliateClaimKeyring {
 }
 
 /**
+ * Find an affiliate by either of their codes: the long one exactly as printed
+ * (its case is significant) or the short one in any case. The two can't collide,
+ * because a long code is 12 characters and a short one is at most 8.
+ */
+export function affiliateCodeWhere(raw: string): Prisma.AffiliateAccountWhereInput {
+  return { OR: [{ code: raw.trim() }, { shortCode: shortAffiliateCodeKey(raw) }] };
+}
+
+export type TypedAffiliateCode =
+  | { ok: true; code: string }
+  | { ok: false; error: "unknown_referral_code" | "own_referral_code" };
+
+/**
+ * An affiliate code typed while setting up a business, resolved to its long
+ * code. Returns null when it isn't an affiliate's code at all.
+ *
+ * Suspended reads the same as unknown, as it does on the public claim route:
+ * this answer must not say an affiliate exists and was suspended. Their own code
+ * can say so, because they already know it's theirs.
+ */
+export async function resolveTypedAffiliateCode(
+  raw: string,
+  ownerId: string,
+): Promise<TypedAffiliateCode | null> {
+  if (!affiliateAttributionEnabled()) return null;
+  const account = await runAsOwner((tx) =>
+    tx.affiliateAccount.findFirst({
+      where: affiliateCodeWhere(raw),
+      select: { code: true, status: true, shop: { select: { ownerId: true } } },
+    }),
+  );
+  if (!account) return null;
+  if (account.status !== "ACTIVE") return { ok: false, error: "unknown_referral_code" };
+  if (account.shop.ownerId === ownerId) return { ok: false, error: "own_referral_code" };
+  return { ok: true, code: account.code };
+}
+
+/**
  * Validate a public referral code and mint a claim for it.
  *
  * Returns null for every failure - unknown code, suspended affiliate,
@@ -102,9 +141,9 @@ export async function captureClaim(params: {
 
   const nowMs = params.nowMs ?? Date.now();
   const account = await runAsOwner((tx) =>
-    tx.affiliateAccount.findUnique({
-      where: { code },
-      select: { id: true, status: true },
+    tx.affiliateAccount.findFirst({
+      where: affiliateCodeWhere(code),
+      select: { id: true, code: true, status: true },
     }),
   );
   // Unknown and suspended are the same answer to the outside world.
@@ -114,7 +153,9 @@ export async function captureClaim(params: {
 
   return {
     claim: createAffiliateClaim({
-      code,
+      // Always the long code, even when the short one was typed: it's the one
+      // the claim is resolved by when the business is created.
+      code: account.code,
       source: params.source,
       secret: apiEnv().SESSION_SECRET,
       nowSeconds: Math.floor(nowMs / 1000),
@@ -168,14 +209,29 @@ export async function planAttribution(params: {
    */
   tx: Prisma.TransactionClient;
   claimToken: string | undefined;
+  /**
+   * A long code from resolveTypedAffiliateCode: the owner typed it on this form.
+   * It needs no claim and skips the legacy check below, because the route doesn't
+   * link a legacy referral for a typed code. That is what keeps one business from
+   * being claimable in both programs.
+   */
+  typedCode?: string;
   ownerId: string;
   nowMs?: number;
 }): Promise<AttributionPlan | null> {
   if (!affiliateAttributionEnabled()) return null;
-  if (!params.claimToken) return null;
 
   const nowMs = params.nowMs ?? Date.now();
   const nowSeconds = Math.floor(nowMs / 1000);
+  if (params.typedCode) {
+    return planForAccount(params.tx, params.ownerId, {
+      codeUsed: params.typedCode,
+      source: "explicit_code",
+      capturedAt: new Date(nowMs),
+      claimExpiresAt: new Date(nowMs + AFFILIATE_CLAIM_TTL_SECONDS * 1000),
+    });
+  }
+  if (!params.claimToken) return null;
   {
     // allowExpired so a genuine-but-stale claim can be told apart from a
     // forgery; the expiry decision is made explicitly below.
@@ -231,53 +287,64 @@ export async function planAttribution(params: {
       };
     }
 
-    const account = await params.tx.affiliateAccount.findUnique({
-      where: { code: claim.code },
-      select: {
-        id: true,
-        status: true,
-        shopId: true,
-        shop: { select: { ownerId: true } },
-      },
-    });
-    if (!account) {
-      // Includes a code that was rotated after capture: the old code no longer
-      // resolves, so the stale claim is refused rather than following the
-      // rotation to whoever holds the new one.
-      return {
-        ...base,
-        state: "REJECTED",
-        affiliateAccountId: null,
-        affiliateShopId: null,
-        rejectionReason: "unknown_code",
-      };
-    }
-    if (account.status !== "ACTIVE") {
-      return {
-        ...base,
-        state: "REJECTED",
-        affiliateAccountId: account.id,
-        affiliateShopId: account.shopId,
-        rejectionReason: "affiliate_suspended",
-      };
-    }
-    if (account.shop.ownerId === params.ownerId) {
-      return {
-        ...base,
-        state: "REJECTED",
-        affiliateAccountId: account.id,
-        affiliateShopId: account.shopId,
-        rejectionReason: "self_referral",
-      };
-    }
+    return planForAccount(params.tx, params.ownerId, base);
+  }
+}
+
+/** The eligibility decision a claim and a typed code share. Read inside the shop
+ *  transaction, so a suspension landing after the typed code was checked is a
+ *  durable rejection rather than a reward for a suspended affiliate. */
+async function planForAccount(
+  tx: Prisma.TransactionClient,
+  ownerId: string,
+  base: Pick<AttributionPlan, "codeUsed" | "source" | "capturedAt" | "claimExpiresAt">,
+): Promise<AttributionPlan> {
+  const account = await tx.affiliateAccount.findUnique({
+    where: { code: base.codeUsed },
+    select: {
+      id: true,
+      status: true,
+      shopId: true,
+      shop: { select: { ownerId: true } },
+    },
+  });
+  if (!account) {
+    // Includes a code that was rotated after capture: the old code no longer
+    // resolves, so the stale claim is refused rather than following the
+    // rotation to whoever holds the new one.
     return {
       ...base,
-      state: "ATTRIBUTED",
-      affiliateAccountId: account.id,
-      affiliateShopId: account.shopId,
-      rejectionReason: null,
+      state: "REJECTED",
+      affiliateAccountId: null,
+      affiliateShopId: null,
+      rejectionReason: "unknown_code",
     };
   }
+  if (account.status !== "ACTIVE") {
+    return {
+      ...base,
+      state: "REJECTED",
+      affiliateAccountId: account.id,
+      affiliateShopId: account.shopId,
+      rejectionReason: "affiliate_suspended",
+    };
+  }
+  if (account.shop.ownerId === ownerId) {
+    return {
+      ...base,
+      state: "REJECTED",
+      affiliateAccountId: account.id,
+      affiliateShopId: account.shopId,
+      rejectionReason: "self_referral",
+    };
+  }
+  return {
+    ...base,
+    state: "ATTRIBUTED",
+    affiliateAccountId: account.id,
+    affiliateShopId: account.shopId,
+    rejectionReason: null,
+  };
 }
 
 /**
@@ -385,8 +452,9 @@ export async function correctAttribution(params: {
       return { ok: false as const, error: "correction_window_closed" as const };
     }
 
-    const account = await tx.affiliateAccount.findUnique({
-      where: { code },
+    // Either code: the desk shows the short one, so that's the one an admin types.
+    const account = await tx.affiliateAccount.findFirst({
+      where: affiliateCodeWhere(code),
       select: { id: true, status: true, shop: { select: { ownerId: true } } },
     });
     // Unknown and suspended are one answer here too - an admin correcting an

@@ -751,8 +751,8 @@ function Dashboard({
         <p className="text-[10px] uppercase tracking-wide text-muted">Your link</p>
         <p className="mt-1 truncate font-mono text-sm text-offwhite">{link}</p>
         <p className="mt-1 min-w-0 break-words text-xs text-muted">
-          Your code: <span className="font-mono text-offwhite">{overview.account.code}</span>.
-          Someone on another device can enter it at {origin}/join/enter before they sign up.
+          Your code: <span className="font-mono text-offwhite">{overview.account.shortCode ?? overview.account.code}</span>.
+          A new owner can type it when they set up their business, or enter it at {origin}/join/enter before they sign up.
         </p>
         <p className="mt-1 text-xs text-muted">
           Opened {overview.clicks.last7Days} times this week · {overview.clicks.last30Days} this

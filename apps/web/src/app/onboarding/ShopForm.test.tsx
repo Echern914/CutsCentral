@@ -67,4 +67,55 @@ describe("setup step 1", () => {
     fireEvent.click(screen.getByRole("button", { name: "Have a referral code?" }));
     expect(screen.getByLabelText("Referral code (optional)")).toBeTruthy();
   });
+
+  describe("how did you hear about us", () => {
+    const question = () => screen.getByLabelText("How did you hear about us?") as HTMLSelectElement;
+    const answers = () => Array.from(question().options).map((o) => o.text);
+
+    it("🔴 must be answered, and nothing is answered for them", () => {
+      render(<ShopForm smsAttested initialType="" />);
+      expect(question().required).toBe(true);
+      expect(question().value).toBe("");
+      expect(question().name).toBe("heardAbout");
+    });
+
+    it("offers the six answers, in the person's own trade once they've said it", () => {
+      render(<ShopForm smsAttested initialType="nails" />);
+      expect(answers().slice(1)).toEqual([
+        "Another nail tech",
+        "Instagram",
+        "TikTok",
+        "Google",
+        "Friend or family",
+        "Other",
+      ]);
+    });
+
+    it("with no business type picked yet it still reads sensibly", () => {
+      render(<ShopForm smsAttested initialType="" />);
+      expect(answers()[1]).toBe("Another pro");
+    });
+
+    it("🔴 naming another pro opens the code box, and it isn't required", () => {
+      render(<ShopForm smsAttested initialType="" />);
+      expect(screen.queryByLabelText(/Referral code/)).toBeNull();
+      fireEvent.change(question(), { target: { value: "another_barber" } });
+      const box = screen.getByLabelText("Referral code (optional)") as HTMLInputElement;
+      expect(box.required).toBe(false);
+    });
+
+    it("any other answer leaves the box behind its link", () => {
+      render(<ShopForm smsAttested initialType="" />);
+      fireEvent.change(question(), { target: { value: "instagram" } });
+      expect(screen.queryByLabelText(/Referral code/)).toBeNull();
+    });
+
+    it("🔴 changing the answer afterwards doesn't throw away a code they typed", () => {
+      render(<ShopForm smsAttested initialType="" />);
+      fireEvent.change(question(), { target: { value: "another_barber" } });
+      fireEvent.change(screen.getByLabelText("Referral code (optional)"), { target: { value: "FADEL482" } });
+      fireEvent.change(question(), { target: { value: "google" } });
+      expect((screen.getByLabelText("Referral code (optional)") as HTMLInputElement).value).toBe("FADEL482");
+    });
+  });
 });

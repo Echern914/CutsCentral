@@ -854,6 +854,9 @@ model Shop {
   // referrals page, which mints it lazily; unique so a code resolves to exactly
   // one referrer.
   referralCode String? @unique
+  // The owner's answer to "How did you hear about us?" (Shop_heardAbout_check).
+  // Null = never asked: every business made before the question existed.
+  heardAbout   String?
   // Referrals this shop drove, and the single row (if any) recording that this
   // shop was itself referred.
   referralsGiven    Referral[] @relation("ReferralsGiven")
@@ -5751,6 +5754,11 @@ model AffiliateAccount {
   // (Shop.referralCode / User.referralCode) stay unambiguous. INERT until the
   // attribution phase wires capture.
   code String @unique
+
+  // The same affiliate, in a form a person can say out loud: up to five letters
+  // of the business name plus three digits ("FADEL482"). `code` stays because
+  // it is already printed into links and QR codes. Null falls back to `code`.
+  shortCode String? @unique
 
   status String @default("ACTIVE") // ACTIVE | SUSPENDED (CHECK-pinned)
 

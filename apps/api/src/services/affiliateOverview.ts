@@ -74,6 +74,8 @@ export interface OwnerAffiliateOverview {
   termsVersion: string;
   account: {
     code: string;
+    /** The one to say out loud. Null on an account that couldn't be given one. */
+    shortCode: string | null;
     status: string;
     createdAt: string;
     promotionStyles: AffiliatePromotionStyle[];
@@ -127,6 +129,7 @@ export async function getAffiliateOverview(
       select: {
         id: true,
         code: true,
+        shortCode: true,
         status: true,
         createdAt: true,
         suspensionReason: true,
@@ -231,6 +234,7 @@ export async function getAffiliateOverview(
       termsVersion: AFFILIATE_TERMS_VERSION,
       account: {
         code: account.code,
+        shortCode: account.shortCode,
         status: account.status,
         createdAt: account.createdAt.toISOString(),
         promotionStyles: account.promotionStyles as AffiliatePromotionStyle[],
@@ -584,7 +588,8 @@ function csvCell(value: string | number | null): string {
 /**
  * Accounts and their counts. Ids, codes and numbers only - no shop names, no
  * owner emails - so the file can be handed around without becoming a PII
- * incident. A test greps the output for both.
+ * incident. A test greps the output for both. The short code stays out for the
+ * same reason: its letters come from the business name.
  */
 export async function exportAffiliatesCsv(): Promise<string> {
   return runAsOwner(async (tx) => {

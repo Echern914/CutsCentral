@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-08-affiliate-short-code",
+    date: "2026-11-08",
+    kind: "feature",
+    title: "A short affiliate code you can say out loud",
+    body:
+      "Your affiliate code is now short, and it's on your Affiliates page. A new owner types it when they set up " +
+      "their business, and the signup counts as yours. Your old link and QR code still work.",
+  },
+  {
     id: "2026-11-08-find-my-rewards-by-email",
     date: "2026-11-08",
     kind: "fix",

@@ -305,7 +305,7 @@ describe("liability, export, flags", () => {
     // The desk reads each of these. A select that omits one is invisible to
     // the compiler (the web declares its own interface) and surfaces only as
     // a 500 on an admin page that has at least one account.
-    for (const field of ["id", "shopId", "code", "status", "suspensionReason", "createdAt", "shopName", "promotionStyles"]) {
+    for (const field of ["id", "shopId", "code", "shortCode", "referrals", "status", "suspensionReason", "createdAt", "shopName", "promotionStyles"]) {
       expect(Object.hasOwn(row!, field), `accounts payload is missing ${field}`).toBe(true);
     }
     expect(row!.promotionStyles).toEqual(["short_video", "flyer_qr"]);

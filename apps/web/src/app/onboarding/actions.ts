@@ -3,6 +3,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AFFILIATE_CLAIM_COOKIE } from "@chairback/config";
+import { isHeardAboutId } from "@chairback/config/heardAbout";
 import { PARTNER_CODE_ERROR_COPY } from "@chairback/config/partnerProgram";
 import { apiGet, apiSend } from "@/lib/api";
 import { clearActiveShopCookie } from "@/lib/activeShopCookie";
@@ -34,6 +35,7 @@ export async function createShopAction(
   // that renders neutral wording and gets asked once, which is the honest result.
   const industry = String(formData.get("industry") ?? "").trim();
   const partnerCode = String(formData.get("partnerCode") ?? "").trim();
+  const heardAbout = formData.get("heardAbout");
   // How clients book is its own step next; the reward is set up when Rewards
   // is switched on (the API seeds its default for the business type).
   const res = await apiSend("POST", "/api/shops", {
@@ -42,6 +44,7 @@ export async function createShopAction(
     timezone: String(formData.get("timezone") ?? "America/New_York"),
     smsAttested: true,
     ...(partnerCode ? { partnerCode } : {}),
+    ...(isHeardAboutId(heardAbout) ? { heardAbout } : {}),
   });
   // A referral code that can't be used stops here with its reason, before any
   // business exists - never a silent "continued without it".
