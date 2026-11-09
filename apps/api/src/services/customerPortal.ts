@@ -97,6 +97,17 @@ export interface PortalAppointment {
   canCancel: boolean;
   /** Said instead, when this booking lives in another system. */
   manageNote: string | null;
+  /**
+   * Rows sharing a key were booked together: a parent booking for two or three
+   * kids. Null for a booking on its own and for a synced visit. An app build
+   * older than this field ignores it and keeps showing separate rows.
+   */
+  partyKey: string | null;
+  /**
+   * Who this seat is for. Set only inside a party, where every seat sits on the
+   * booker's one client record and "Haircut" alone can't say which kid it is.
+   */
+  personName: string | null;
 }
 
 export interface PortalAppointmentDetail extends PortalAppointment {
@@ -157,6 +168,11 @@ export interface PortalHome {
   vocabulary: { providerNounPlural: string; serviceNoun: string };
   /** The full detail (address included), so the home card can offer Directions. */
   next: PortalAppointmentDetail | null;
+  /**
+   * Everyone still upcoming in `next`'s party, soonest first, `next` included.
+   * Empty unless at least two are left, so one row never reads as a party.
+   */
+  nextParty: PortalAppointment[];
   upcomingCount: number;
   shops: PortalShop[];
   rewards: PortalRewardSummary[];
@@ -238,6 +254,8 @@ interface ApptRow {
   priceAtBooking: { toString(): string } | null;
   service: { name: string; durationMin: number } | null;
   staff: { name: string; imageUrl: string | null } | null;
+  firstName: string;
+  groupId: string | null;
 }
 
 interface VisitRow {
@@ -374,6 +392,8 @@ export async function loadPortalView(accountId: string, now = new Date()): Promi
             holdExpiresAt: true,
             visitId: true,
             priceAtBooking: true,
+            firstName: true,
+            groupId: true,
             service: { select: { name: true, durationMin: true } },
             staff: { select: { name: true, imageUrl: true } },
           },
@@ -550,6 +570,8 @@ function normalizeEvents(
       canReschedule: clientMay(shop, "reschedule", a, now),
       canCancel: clientMay(shop, "cancel", a, now),
       manageNote: unfinished?.note ?? null,
+      partyKey: a.groupId,
+      personName: a.groupId ? a.firstName.trim() || null : null,
       address,
       durationMin: a.service?.durationMin ?? null,
       priceCents: cents(a.priceAtBooking),
@@ -589,6 +611,8 @@ function normalizeEvents(
         upcoming && (source === "acuity" || source === "square")
           ? `To change this visit, contact ${shop.name}.`
           : null,
+      partyKey: null,
+      personName: null,
       address,
       durationMin: null,
       priceCents: cents(v.price),
@@ -618,7 +642,17 @@ function listRow(e: PortalAppointmentDetail & { clientId: string }): PortalAppoi
     canReschedule: e.canReschedule,
     canCancel: e.canCancel,
     manageNote: e.manageNote,
+    partyKey: e.partyKey,
+    personName: e.personName,
   };
+}
+
+/** The rest of the next appointment's party, for the home card. See PortalHome.nextParty. */
+function nextPartyOf(upcoming: PortalAppointment[]): PortalAppointment[] {
+  const key = upcoming[0]?.partyKey;
+  if (!key) return [];
+  const members = upcoming.filter((e) => e.partyKey === key);
+  return members.length >= 2 ? members : [];
 }
 
 export function splitHistory(
@@ -717,6 +751,7 @@ export async function buildHome(accountId: string, now = new Date()): Promise<Po
     firstName: account?.firstName ?? null,
     vocabulary: homeVocabulary(bundles),
     next: upcoming[0] ? findEvent(bundles, upcoming[0].id) : null,
+    nextParty: nextPartyOf(upcoming),
     upcomingCount: upcoming.length,
     shops: shopCards(bundles, now),
     rewards: programs.map(summarize).filter((s): s is PortalRewardSummary => s !== null),

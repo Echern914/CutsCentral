@@ -100,6 +100,13 @@ export default function AppointmentScreen() {
       </View>
 
       <Group>
+        {/* Opened from a party's drop-down, this says which kid it is. */}
+        {a.personName ? (
+          <>
+            <Row title="For" subtitle={a.personName} chevron={false} />
+            {a.serviceName ? <Separator /> : null}
+          </>
+        ) : null}
         {a.serviceName ? <Row title="Service" subtitle={a.serviceName} chevron={false} /> : null}
         {a.providerName ? (
           <>

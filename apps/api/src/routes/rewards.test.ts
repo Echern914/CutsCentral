@@ -209,6 +209,106 @@ describe("the next appointment", () => {
       staffName: null,
       manageToken: null,
     });
+    expect(res.body.nextVisit.party).toBeNull();
+  });
+});
+
+describe("the next appointment, booked with others", () => {
+  /** A fresh client with a party of `names`, each booked in a row a few days out. */
+  async function bookParty(
+    names: string[],
+    over: { groupClientIsTheBooker?: boolean; cancel?: string[]; onOtherRecord?: string[] } = {},
+  ) {
+    const token = randomToken();
+    const key = `tel:+1302555${String(Math.floor(Math.random() * 10000)).padStart(4, "0")}`;
+    const start = Date.now() + 2 * 86_400_000;
+    return runWithShop(shopId, async (tx) => {
+      const client = await tx.client.create({
+        data: { shopId, acuityClientKey: key, magicToken: token, firstName: "Parent" },
+      });
+      const other = await tx.client.create({
+        data: { shopId, acuityClientKey: `${key}x`, magicToken: randomToken(), firstName: "Other" },
+      });
+      const staff = await tx.staff.create({ data: { shopId, name: `Dre ${randomToken(4)}` } });
+      const service = await tx.service.create({ data: { shopId, name: "Kids cut", durationMin: 30, price: 25 } });
+      const groupToken = randomToken();
+      const group = await tx.appointmentGroup.create({
+        data: {
+          shopId,
+          staffId: staff.id,
+          clientId: over.groupClientIsTheBooker === false ? other.id : client.id,
+          firstName: "Parent",
+          phone: "+13025550100",
+          email: "parent@test.local",
+          manageToken: groupToken,
+        },
+      });
+      for (const [i, firstName] of names.entries()) {
+        const startsAt = new Date(start + i * 30 * 60_000);
+        await tx.appointment.create({
+          data: {
+            shopId,
+            clientId: over.onOtherRecord?.includes(firstName) ? other.id : client.id,
+            staffId: staff.id,
+            serviceId: service.id,
+            firstName,
+            startsAt,
+            endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+            manageToken: randomToken(),
+            status: over.cancel?.includes(firstName) ? "CANCELED" : "BOOKED",
+            groupId: group.id,
+            groupPosition: i,
+          },
+        });
+      }
+      return { token, groupToken };
+    });
+  }
+
+  it("🔴 lists everyone ahead, soonest first, with the token that manages the whole party", async () => {
+    const { token, groupToken } = await bookParty(["Mia", "Leo", "Sam"]);
+    const res = await request(app).get(`/api/rewards/${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.nextVisit.party.manageToken).toBe(groupToken);
+    expect(res.body.nextVisit.party.members).toEqual([
+      expect.objectContaining({ firstName: "Mia", serviceName: "Kids cut" }),
+      expect.objectContaining({ firstName: "Leo", serviceName: "Kids cut" }),
+      expect.objectContaining({ firstName: "Sam", serviceName: "Kids cut" }),
+    ]);
+    // The booker's contact details are not part of the answer.
+    expect(JSON.stringify(res.body.nextVisit)).not.toContain("parent@test.local");
+    expect(JSON.stringify(res.body.nextVisit)).not.toContain("+13025550100");
+  });
+
+  it("leaves out a cancelled kid", async () => {
+    const { token } = await bookParty(["Mia", "Leo", "Sam"], { cancel: ["Leo"] });
+    const res = await request(app).get(`/api/rewards/${token}`);
+    expect(res.body.nextVisit.party.members.map((m: { firstName: string }) => m.firstName)).toEqual(["Mia", "Sam"]);
+  });
+
+  it("a seat moved to someone else's record leaves this card", async () => {
+    const { token } = await bookParty(["Mia", "Leo", "Sam"], { onOtherRecord: ["Leo"] });
+    const res = await request(app).get(`/api/rewards/${token}`);
+    expect(res.body.nextVisit.party.members.map((m: { firstName: string }) => m.firstName)).toEqual(["Mia", "Sam"]);
+  });
+
+  it("one kid left is an ordinary card, not a party of one", async () => {
+    const { token } = await bookParty(["Mia", "Leo"], { cancel: ["Leo"] });
+    const res = await request(app).get(`/api/rewards/${token}`);
+    expect(res.body.nextVisit.serviceName).toBe("Kids cut");
+    expect(res.body.nextVisit.party).toBeNull();
+  });
+
+  it("🔴 the whole-party token never goes to a record that did not book the party", async () => {
+    const { token, groupToken } = await bookParty(["Mia", "Leo"], { groupClientIsTheBooker: false });
+    const res = await request(app).get(`/api/rewards/${token}`);
+    expect(res.body.nextVisit.party).toBeNull();
+    expect(JSON.stringify(res.body)).not.toContain(groupToken);
+  });
+
+  it("a single booking has no party", async () => {
+    const res = await request(app).get(`/api/rewards/${magicToken}`);
+    expect(res.body.nextVisit.party).toBeNull();
   });
 });
 

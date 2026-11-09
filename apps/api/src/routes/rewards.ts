@@ -121,6 +121,18 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
         manageToken: true,
         service: { select: { name: true } },
         staff: { select: { name: true } },
+        // Booked with others, such as a parent booking for two or three kids.
+        group: {
+          select: {
+            manageToken: true,
+            clientId: true,
+            appointments: {
+              where: { clientId: client.id, status: "BOOKED", startsAt: { gt: now } },
+              orderBy: { startsAt: "asc" },
+              select: { firstName: true, startsAt: true, service: { select: { name: true } } },
+            },
+          },
+        },
       },
     }),
     tx.reward.findMany({
@@ -323,6 +335,20 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
   const nativeWins =
     nativeNext !== null &&
     (syncedNext === null || nativeNext.startsAt.getTime() <= syncedNext.scheduledAt.getTime());
+  // 🔴 The group token can move or cancel the whole party, so it only goes to
+  // the record that booked it. One seat left is not a party.
+  const nativeGroup = nativeWins ? nativeNext.group : null;
+  const party =
+    nativeGroup && nativeGroup.clientId === client.id && nativeGroup.appointments.length >= 2
+      ? {
+          manageToken: nativeGroup.manageToken,
+          members: nativeGroup.appointments.map((a) => ({
+            firstName: a.firstName,
+            serviceName: a.service?.name ?? null,
+            startsAt: a.startsAt.toISOString(),
+          })),
+        }
+      : null;
   const nextVisit = nativeWins
     ? {
         startsAt: nativeNext.startsAt.toISOString(),
@@ -332,6 +358,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
         timezone: client.shop.timezone,
         address: formatShopAddress(client.shop),
         mapsUrl: mapsUrlFor(client.shop),
+        party,
       }
     : syncedNext
       ? {
@@ -342,6 +369,7 @@ rewardsRouter.get("/:magicToken", async (req, res) => {
           timezone: client.shop.timezone,
           address: formatShopAddress(client.shop),
           mapsUrl: mapsUrlFor(client.shop),
+          party: null,
         }
       : null;
   // The rebooking countdown: THE rule (config/rebook.ts), shared with the app's

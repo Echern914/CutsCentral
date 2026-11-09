@@ -387,6 +387,108 @@ describe("the home", () => {
   });
 });
 
+describe("appointments booked together", () => {
+  /** A parent's record with a party on it, plus an account that opens that record. */
+  async function party(
+    names: string[],
+    over: { cancel?: string[]; firstStartsIn?: number } = {},
+  ) {
+    const phone = randomPhone();
+    const parent = await client(shopA, { phone, firstName: "Parent" });
+    const group = await prisma.appointmentGroup.create({
+      data: { shopId: shopA, staffId: staffA, clientId: parent.id, firstName: "Parent", manageToken: randomToken() },
+    });
+    const seats: { id: string; name: string }[] = [];
+    for (const [i, name] of names.entries()) {
+      const a = await appointment(shopA, parent.id, {
+        status: over.cancel?.includes(name) ? "CANCELED" : "BOOKED",
+        startsAt: from((over.firstStartsIn ?? 2 * DAY) + i * 60 * 60_000),
+      });
+      await prisma.appointment.update({
+        where: { id: a.id },
+        data: { firstName: name, groupId: group.id, groupPosition: i },
+      });
+      seats.push({ id: `a_${a.id}`, name });
+    }
+    const me = await account({ phone });
+    return { me, parent, group, seats };
+  }
+
+  it("🔴 the home gives everyone in the next party, soonest first", async () => {
+    const { me, group, seats } = await party(["Mia", "Leo", "Sam"]);
+    const home = (await get("/api/me/home", me.token)).body;
+    expect(home.next.id).toBe(seats[0]!.id);
+    expect(home.next.personName).toBe("Mia");
+    expect(home.upcomingCount).toBe(3);
+    expect(home.nextParty.map((a: { id: string }) => a.id)).toEqual(seats.map((s) => s.id));
+    expect(home.nextParty.map((a: { personName: string }) => a.personName)).toEqual(["Mia", "Leo", "Sam"]);
+    expect(home.nextParty.every((a: { partyKey: string }) => a.partyKey === group.id)).toBe(true);
+    // Each seat stays its own appointment, so it can still be moved or cancelled alone.
+    expect(home.nextParty.every((a: { canManage: boolean }) => a.canManage)).toBe(true);
+  });
+
+  it("the list rows and the detail screen say whose each one is", async () => {
+    const { me, group, seats } = await party(["Mia", "Leo"]);
+    const { upcoming } = (await get("/api/me/appointments", me.token)).body;
+    expect(upcoming.map((a: { personName: string; partyKey: string }) => [a.personName, a.partyKey])).toEqual([
+      ["Mia", group.id],
+      ["Leo", group.id],
+    ]);
+    const detail = (await get(`/api/me/appointments/${seats[1]!.id}`, me.token)).body.appointment;
+    expect(detail).toMatchObject({ personName: "Leo", partyKey: group.id, canManage: true });
+  });
+
+  it("a cancelled kid leaves the party and moves to the past, still named", async () => {
+    const { me, seats } = await party(["Mia", "Leo", "Sam"], { cancel: ["Leo"] });
+    const home = (await get("/api/me/home", me.token)).body;
+    expect(home.nextParty.map((a: { personName: string }) => a.personName)).toEqual(["Mia", "Sam"]);
+    const { past } = (await get("/api/me/appointments", me.token)).body;
+    expect(past.find((a: { id: string }) => a.id === seats[1]!.id)).toMatchObject({ personName: "Leo", status: "canceled" });
+  });
+
+  it("🔴 one kid left is not a party, so the home shows the ordinary card", async () => {
+    const { me } = await party(["Mia", "Leo"], { cancel: ["Leo"] });
+    const home = (await get("/api/me/home", me.token)).body;
+    expect(home.next.personName).toBe("Mia");
+    expect(home.nextParty).toEqual([]);
+  });
+
+  it("a booking on its own after the party stays out of it, and still counts as more upcoming", async () => {
+    const { me, parent, seats } = await party(["Mia", "Leo"]);
+    const later = await appointment(shopA, parent.id, { status: "BOOKED", startsAt: from(9 * DAY) });
+    const home = (await get("/api/me/home", me.token)).body;
+    expect(home.nextParty.map((a: { id: string }) => a.id)).toEqual(seats.map((s) => s.id));
+    expect(home.nextParty.map((a: { id: string }) => a.id)).not.toContain(`a_${later.id}`);
+    expect(home.upcomingCount).toBe(3);
+  });
+
+  it("a party later on isn't pulled up by a booking on its own that comes first", async () => {
+    const { me, parent } = await party(["Mia", "Leo"], { firstStartsIn: 5 * DAY });
+    const solo = await appointment(shopA, parent.id, { status: "BOOKED", startsAt: from(1 * DAY) });
+    const home = (await get("/api/me/home", me.token)).body;
+    expect(home.next.id).toBe(`a_${solo.id}`);
+    expect(home.nextParty).toEqual([]);
+    expect(home.upcomingCount).toBe(3);
+  });
+
+  it("🔴 a booking on its own names nobody, even though the row holds a first name", async () => {
+    const { me } = await regular();
+    const home = (await get("/api/me/home", me.token)).body;
+    expect(home.next).toMatchObject({ partyKey: null, personName: null });
+    expect(home.nextParty).toEqual([]);
+    const { upcoming } = (await get("/api/me/appointments", me.token)).body;
+    for (const row of upcoming) expect(row).toMatchObject({ partyKey: null, personName: null });
+  });
+
+  it("🔴 another account's party never shows up", async () => {
+    const { seats } = await party(["Mia", "Leo"]);
+    const stranger = await account({ phone: randomPhone() });
+    const home = (await get("/api/me/home", stranger.token)).body;
+    expect(home.nextParty).toEqual([]);
+    expect((await get(`/api/me/appointments/${seats[0]!.id}`, stranger.token)).status).toBe(404);
+  });
+});
+
 describe("history - native and synced, one list", () => {
   it("🔴 a completed native booking appears ONCE, and every status reads canonically", async () => {
     const { me, done, promoted } = await regular();
