@@ -52,8 +52,8 @@ export function WinbackPreview({
             </h2>
             <p className="text-xs text-muted">
               {premiumLocked
-                ? "These clients won't be texted while your plan is lapsed — win-back runs automatically once you subscribe."
-                : `Deeply lapsed clients ChairBack will automatically text back to the ${vocab.stationNoun}. Preview who's up next — no texts are sent here.`}
+                ? "These clients won't get win-back reminders while your plan is lapsed — win-back runs automatically once you subscribe."
+                : `Deeply lapsed clients ChairBack will automatically invite back to the ${vocab.stationNoun} by app notification. Preview who's up next — nothing is sent here.`}
             </p>
           </div>
           <button

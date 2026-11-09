@@ -71,6 +71,12 @@ describe.each(TOURS)("$name tour steps", ({ steps, routes }) => {
   });
 });
 
+it("🔴 neither tour promises a text or the AI receptionist (texting is off, and it isn't sold)", () => {
+  for (const step of [...DEMO_TOUR_STEPS, ...DASHBOARD_TOUR_STEPS]) {
+    expect(`${step.title} ${step.body}`).not.toMatch(/\b(texts?|texted|texting|sms|receptionist)\b/i);
+  }
+});
+
 it("the two tours never share a step id (feature-search deep links stay unambiguous)", () => {
   const client = new Set(DEMO_TOUR_STEPS.map((s) => s.id));
   for (const step of DASHBOARD_TOUR_STEPS) {

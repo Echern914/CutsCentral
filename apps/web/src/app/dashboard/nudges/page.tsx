@@ -54,7 +54,7 @@ export default async function NudgesPage() {
         <div className="mb-6">
           <UpgradeCallout tier="pro">
             Rebooking nudges are a Premium feature — automatic &ldquo;time to
-            rebook&rdquo; texts and manual sends need an active plan.
+            rebook&rdquo; reminders and manual sends need an active plan.
           </UpgradeCallout>
         </div>
       )}

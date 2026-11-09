@@ -41,7 +41,7 @@ export const DEMO_TOUR_STEPS: DemoTourStep<ClientTourRoute>[] = [
     route: "shop",
     anchor: "promotions",
     title: "Live promotions",
-    body: "Run a special and it shows up here automatically — and can go out to your clients as a text blast.",
+    body: "Run a special and it shows up here automatically — and you can send it to your clients by email or app notification.",
   },
   {
     id: "shop-rewards-menu",
@@ -215,8 +215,8 @@ export const DASHBOARD_TOUR_STEPS: DemoTourStep<DashboardTourRoute>[] = [
     id: "dash-nudges",
     route: "nudges",
     anchor: "nudge-history",
-    title: "Texts that bring them back",
-    body: "Every rebooking nudge and win-back text logs here, with which ones turned into bookings. Only clients who've opted in, within limits you set.",
+    title: "Reminders that bring them back",
+    body: "Every rebooking and win-back reminder logs here, with which ones turned into bookings. They go out as app notifications, only to clients who've turned them on.",
   },
   {
     id: "dash-site",
@@ -243,8 +243,8 @@ export const DASHBOARD_TOUR_STEPS: DemoTourStep<DashboardTourRoute>[] = [
     id: "dash-billing",
     route: "billing",
     anchor: "plan",
-    title: "Your plan — and the AI receptionist",
-    body: "Everything you just toured, in simple tiers. The top tier adds an AI receptionist that answers client texts and books them 24/7. That's the full tour — want to see what your CLIENTS get? There's a live demo on your Overview page.",
+    title: "Your plan",
+    body: "Everything you just toured, in two simple plans. That's the full tour — want to see what your CLIENTS get? There's a live demo on your Overview page.",
   },
 ];
 
