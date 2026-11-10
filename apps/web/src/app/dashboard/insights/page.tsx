@@ -5,6 +5,7 @@ import { apiGet } from "@/lib/api";
 import { getMe } from "@/lib/me";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { InsightsClient } from "./InsightsClient";
+import { InsightsLoadError } from "./InsightsLoadError";
 import { Suspense } from "react";
 import { FeatureAdoptionSection } from "./FeatureAdoptionSection";
 import type {
@@ -237,7 +238,10 @@ export default async function InsightsPage() {
     getMe(),
   ]);
   if (!res.ok || !res.data) {
-    return <main className="p-8 text-muted">Could not load your insights.</main>;
+    // Logged so the server logs carry the reason behind a screenshot of this.
+    // Status and error code only: never the body, which can carry shop data.
+    console.error("insights: main read failed", { status: res.status, error: res.error ?? null });
+    return <InsightsLoadError status={res.ok ? 500 : res.status} />;
   }
 
   return (

@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-10-insights-load-error",
+    date: "2026-11-10",
+    kind: "fix",
+    title: "Insights says why it didn't load, with Try again",
+    body:
+      "If Insights can't load, it now says why: it took too long, something went wrong on our side, or your plan " +
+      "has ended. When trying again can help, there's a Try again button, so you don't have to leave the page.",
+  },
+  {
     id: "2026-11-09-no-text-claims",
     date: "2026-11-09",
     kind: "fix",
