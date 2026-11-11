@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-11-checkout-ways-to-pay",
+    date: "2026-11-11",
+    kind: "feature",
+    title: "Checkout lists every way to pay, card on file first",
+    body:
+      "Start checkout now lists how they're paying: a card the client left on file (if they agreed at booking), " +
+      "cash, Zelle/Venmo/Cash App, your own card reader, or Other. It takes the full amount due, so for a " +
+      "discount, change the price on the appointment first.",
+  },
+  {
     id: "2026-11-10-insights-load-error",
     date: "2026-11-10",
     kind: "fix",

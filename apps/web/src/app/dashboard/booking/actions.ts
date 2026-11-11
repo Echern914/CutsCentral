@@ -1595,7 +1595,8 @@ export async function recordCashCheckoutAction(
   appointmentId: string,
   input: {
     amountCents: number;
-    method: "cash" | "direct" | "other";
+    /** `card` = run on the barber's own reader. Recorded, never charged here. */
+    method: "cash" | "direct" | "card" | "other";
     requestId: string;
     confirmed: true;
   },

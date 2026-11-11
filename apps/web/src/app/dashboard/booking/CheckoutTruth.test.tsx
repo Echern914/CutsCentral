@@ -88,7 +88,7 @@ function renderFlow(timeZone?: string) {
   );
 }
 async function pressChargeCard() {
-  fireEvent.click(await screen.findByText(/Charge card ending/));
+  fireEvent.click(await screen.findByText("Card on file"));
   fireEvent.click(document.querySelector('[data-qa="confirm-charge"]')!);
 }
 
@@ -141,7 +141,7 @@ describe("a charge's outcome is never guessed", () => {
     const charge = document.querySelector('[data-qa="confirm-charge"]') as HTMLButtonElement;
     expect(charge.disabled).toBe(false);
     expect(charge.textContent).not.toMatch(/Charging/);
-    expect((screen.getByRole("button", { name: "Back" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Pick another way to pay" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("pressing again after a lost answer sends the SAME request id", async () => {
@@ -209,7 +209,7 @@ describe("nothing to collect", () => {
     renderFlow();
     expect(await screen.findByText(/Nothing left to collect/)).toBeTruthy();
     expect(document.querySelector('[data-qa="method-cash"]')).toBeNull();
-    expect(screen.queryByText(/Charge card ending/)).toBeNull();
+    expect(screen.queryByText("Card on file")).toBeNull();
   });
 
   it("an unpriced booking says to set the price", async () => {

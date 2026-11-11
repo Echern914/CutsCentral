@@ -422,7 +422,11 @@ describe("what the screen offers", () => {
     // With nothing collected the ticket and the amount due are the same figure,
     // so this is scoped to the one the barber acts on.
     expect(document.querySelector('[data-qa="amount-due"]')?.textContent).toBe("$55.00");
-    expect(screen.getByText(/Charge card ending •••• 4242/)).toBeTruthy();
+    // First in the list, named by what the customer set up, with the card itself.
+    const row = document.querySelector('[data-qa="method-saved-card"]')!;
+    expect(row.textContent).toContain("Card on file");
+    expect(row.textContent).toContain("Visa ending 4242");
+    expect(row.parentElement!.firstElementChild).toBe(row);
   });
 
   it("charges the BALANCE when a deposit was already taken", async () => {
@@ -467,7 +471,7 @@ describe("what the screen offers", () => {
     await waitFor(() =>
       expect(screen.getByText(/only approved for no-show fees/i)).toBeTruthy(),
     );
-    expect(screen.queryByText(/Charge card ending/)).toBeNull();
+    expect(screen.queryByText("Card on file")).toBeNull();
   });
 
   it("shows no card row at all when there is no card", async () => {
@@ -482,7 +486,7 @@ describe("what the screen offers", () => {
     });
     renderFlow();
     await waitFor(() => expect(screen.getByText("Cash")).toBeTruthy());
-    expect(screen.queryByText(/Charge card ending/)).toBeNull();
+    expect(screen.queryByText("Card on file")).toBeNull();
     expect(screen.queryByText(/no-show fees/i)).toBeNull();
   });
 
@@ -515,7 +519,7 @@ describe("what the screen offers", () => {
     await waitFor(() =>
       expect(screen.getByText(/Too long since this appointment/i)).toBeTruthy(),
     );
-    expect(screen.queryByText(/Charge card ending/)).toBeNull();
+    expect(screen.queryByText("Card on file")).toBeNull();
   });
 
   it("says the card waits until the appointment is done", async () => {
@@ -537,7 +541,7 @@ describe("what the screen offers", () => {
     await waitFor(() =>
       expect(screen.getByText(/can be charged once the appointment is done/i)).toBeTruthy(),
     );
-    expect(screen.queryByText(/Charge card ending/)).toBeNull();
+    expect(screen.queryByText("Card on file")).toBeNull();
     // Cash is still offered.
     expect(screen.getByText("Cash")).toBeTruthy();
   });
@@ -562,7 +566,7 @@ describe("what the screen offers", () => {
     await waitFor(() =>
       expect(screen.getByText(/approved only up to \$40\.00/)).toBeTruthy(),
     );
-    expect(screen.queryByText(/Charge card ending/)).toBeNull();
+    expect(screen.queryByText("Card on file")).toBeNull();
     expect(screen.getByText("Cash")).toBeTruthy();
   });
 
@@ -577,8 +581,8 @@ describe("what the screen offers", () => {
 describe("confirmation", () => {
   it("🔴 choosing a method charges NOTHING - it only asks", async () => {
     renderFlow();
-    await waitFor(() => expect(screen.getByText(/Charge card ending/)).toBeTruthy());
-    fireEvent.click(screen.getByText(/Charge card ending/));
+    await waitFor(() => expect(screen.getByText("Card on file")).toBeTruthy());
+    fireEvent.click(screen.getByText("Card on file"));
     await waitFor(() => expect(screen.getByText("Confirm this charge")).toBeTruthy());
     // The amount is restated, alone, and nothing has been sent.
     expect(screen.getByRole("button", { name: /Charge \$55\.00/ })).toBeTruthy();
@@ -595,8 +599,8 @@ describe("confirmation", () => {
       receiptReference: "pi_123",
     });
     renderFlow();
-    await waitFor(() => expect(screen.getByText(/Charge card ending/)).toBeTruthy());
-    fireEvent.click(screen.getByText(/Charge card ending/));
+    await waitFor(() => expect(screen.getByText("Card on file")).toBeTruthy());
+    fireEvent.click(screen.getByText("Card on file"));
     await waitFor(() => expect(screen.getByText("Confirm this charge")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: /Charge \$55\.00/ }));
 
@@ -614,8 +618,8 @@ describe("confirmation", () => {
     let resolve!: (v: unknown) => void;
     chargeSavedCardAction.mockReturnValue(new Promise((r) => (resolve = r)));
     renderFlow();
-    await waitFor(() => expect(screen.getByText(/Charge card ending/)).toBeTruthy());
-    fireEvent.click(screen.getByText(/Charge card ending/));
+    await waitFor(() => expect(screen.getByText("Card on file")).toBeTruthy());
+    fireEvent.click(screen.getByText("Card on file"));
     await waitFor(() => expect(screen.getByText("Confirm this charge")).toBeTruthy());
 
     const btn = screen.getByRole("button", { name: /Charge \$55\.00/ });
@@ -638,8 +642,8 @@ describe("refusals", () => {
       reason: "generic_decline",
     });
     renderFlow();
-    await waitFor(() => expect(screen.getByText(/Charge card ending/)).toBeTruthy());
-    fireEvent.click(screen.getByText(/Charge card ending/));
+    await waitFor(() => expect(screen.getByText("Card on file")).toBeTruthy());
+    fireEvent.click(screen.getByText("Card on file"));
     await waitFor(() => expect(screen.getByText("Confirm this charge")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: /Charge \$55\.00/ }));
 
@@ -671,7 +675,7 @@ describe("refusals", () => {
     );
     expect(screen.getByText(/Do not collect again/)).toBeTruthy();
     // Nothing that could take money is on the screen at all.
-    expect(screen.queryByText(/Charge card ending/)).toBeNull();
+    expect(screen.queryByText("Card on file")).toBeNull();
     expect(screen.queryByText("Cash")).toBeNull();
     // And an ambiguous attempt may not be dismissed by the barber.
     expect(screen.queryByText(/Cancel and choose another method/)).toBeNull();
@@ -718,7 +722,11 @@ describe("cash", () => {
     await waitFor(() => expect(screen.getByText("Cash")).toBeTruthy());
     fireEvent.click(screen.getByText("Cash"));
     await waitFor(() => expect(screen.getByText(/no card charged/i)).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: /Charge \$55\.00/ }));
+    // 🔴 Cash is RECORDED. The word "Charge" belongs only where ChairBack
+    // takes the money, so neither the heading nor the button uses it here.
+    expect(screen.getByText("Confirm this payment")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Charge/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Record \$55\.00/ }));
 
     await waitFor(() => expect(recordCashCheckoutAction).toHaveBeenCalledTimes(1));
     const [, input] = recordCashCheckoutAction.mock.calls[0]!;
