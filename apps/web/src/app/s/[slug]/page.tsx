@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import type { BookingModeKey } from "@chairback/config/constants";
 import type { PublicAward } from "@chairback/config/providerAward";
 import { DOMAIN_PARAM, expectedDomain } from "@/lib/customDomainGuard";
-import { loadShopPage, shopPageMetadata, shopPageTree } from "./shopPage";
+import { loadHiddenShop, loadShopPage, shopPageMetadata, shopPageTree } from "./shopPage";
+import { HiddenShopNotice } from "./HiddenShopNotice";
 
 /**
  * A gallery photo. `serviceId` / `staffId` arrive only while they name a
@@ -154,7 +155,12 @@ export default async function PublicShopPage({
 }) {
   const expected = expectedDomain(searchParams);
   const data = await loadShopPage(params.slug, expected);
-  if (!data) notFound();
+  if (!data) {
+    // A hidden page is a real shop's right link: say so, not "doesn't exist".
+    const hidden = await loadHiddenShop(params.slug, expected);
+    if (hidden) return <HiddenShopNotice shop={hidden} />;
+    notFound();
+  }
   // The visitor's next tap is Book - same check there, so pass the marker on.
   const bookQuery =
     expected && expected !== "invalid" ? `?${DOMAIN_PARAM}=${encodeURIComponent(expected)}` : undefined;

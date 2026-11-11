@@ -80,6 +80,8 @@ describe("public shop page", () => {
   it("404s an unknown slug", async () => {
     const res = await request(app).get("/api/page/no-such-shop-anywhere");
     expect(res.status).toBe(404);
+    // No shop, so nothing to name: only a hidden page carries a name.
+    expect(res.body).toEqual({ error: "not_found" });
   });
 
   it("page fields save and round-trip to the public payload", async () => {
@@ -233,6 +235,17 @@ describe("public shop page", () => {
       .send({ publicPageEnabled: false });
     const off = await request(app).get(`/api/page/${slugA}`);
     expect(off.status).toBe(404);
+    // Hidden, not missing: the shop's own link must be able to say so. The
+    // name and whether it books here, and nothing else of the page.
+    const shop = await prisma.shop.findUniqueOrThrow({
+      where: { slug: slugA },
+      select: { name: true, bookingMode: true },
+    });
+    expect(off.body).toEqual({
+      error: "page_hidden",
+      name: shop.name,
+      booksHere: shop.bookingMode === "native",
+    });
 
     await request(app)
       .patch("/api/shops/me")
@@ -240,5 +253,24 @@ describe("public shop page", () => {
       .send({ publicPageEnabled: true });
     const on = await request(app).get(`/api/page/${slugA}`);
     expect(on.status).toBe(200);
+  });
+
+  it("a hidden page of a shop that books here says so, for its 'not taking online bookings' notice", async () => {
+    const before = await prisma.shop.findUniqueOrThrow({
+      where: { slug: slugB },
+      select: { bookingMode: true, publicPageEnabled: true },
+    });
+    await prisma.shop.update({
+      where: { slug: slugB },
+      data: { bookingMode: "native", publicPageEnabled: false },
+    });
+    try {
+      const res = await request(app).get(`/api/page/${slugB}`);
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("page_hidden");
+      expect(res.body.booksHere).toBe(true);
+    } finally {
+      await prisma.shop.update({ where: { slug: slugB }, data: before });
+    }
   });
 });

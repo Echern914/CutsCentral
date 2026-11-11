@@ -1167,8 +1167,22 @@ publicPageRouter.get("/-/sitemap", async (_req, res) => {
 publicPageRouter.get("/:slug", async (req, res) => {
   const slug = String(req.params.slug).toLowerCase();
   const shop = await prisma.shop.findUnique({ where: { slug } });
-  if (!shop || !shop.publicPageEnabled) {
+  if (!shop) {
     res.status(404).json({ error: "not_found" });
+    return;
+  }
+  if (!shop.publicPageEnabled) {
+    // Still a 404 - nothing of the page is served - but it says the page is
+    // HIDDEN, with the shop's name, so the client holding the shop's own link
+    // reads "<shop> isn't taking online bookings right now" instead of "that
+    // page doesn't exist". A shop's links all died that way, and nobody could
+    // tell it was one switch. The name only: no bio, no menu, no contact, and
+    // only to someone who already has this exact link.
+    res.status(404).json({
+      error: "page_hidden",
+      name: shop.name,
+      booksHere: shop.bookingMode === "native",
+    });
     return;
   }
   const now = new Date();
