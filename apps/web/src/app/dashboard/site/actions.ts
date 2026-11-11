@@ -93,6 +93,8 @@ export async function savePageAction(
     // switcher read it in the layout, and the public pages are cached for a
     // minute, so refresh those too rather than leave the old name up.
     if ("name" in body) revalidatePath("/dashboard", "layout");
+    // The home page warns while the page is hidden: show or clear that now.
+    else if ("publicPageEnabled" in body) revalidatePath("/dashboard");
     const slug = res.data?.slug;
     if (slug) {
       revalidatePath(`/s/${slug}`);

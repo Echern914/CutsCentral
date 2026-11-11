@@ -36,12 +36,16 @@ import { useLeaveGuard } from "@/lib/useLeaveGuard";
 import type { PageMenu, ShopPageSettings } from "./page";
 import type { ShopPageData } from "@/app/s/[slug]/page";
 import { savePageAction, type PageSettingsInput } from "./actions";
+
+/** What Save page owns: every page field but the Live switch, which saves itself. */
+type EditorFields = Omit<PageSettingsInput, "publicPageEnabled">;
 import { DesignPicker } from "./DesignPicker";
 import { GalleryEditor } from "./GalleryEditor";
 import { ImageField } from "./ImageField";
 import { SectionOrderEditor } from "./SectionOrderEditor";
 import { RewardsSectionToggles } from "./RewardsSectionToggles";
 import { LivePreview } from "./LivePreview";
+import { PageLiveSwitch } from "./PageLiveSwitch";
 import { SHOP_NAME_MAX, shopNameError } from "./shopName";
 
 const field =
@@ -96,7 +100,6 @@ export function PageEditor({
   const [pending, startTransition] = useTransition();
   const [name, setName] = useState(settings.name);
   const [slug, setSlug] = useState(settings.slug ?? "");
-  const [enabled, setEnabled] = useState(settings.publicPageEnabled);
   const [theme, setTheme] = useState<string>(settings.theme);
   const [pageDesign, setPageDesign] = useState<PageDesignKey>(pageDesignFor(settings.pageDesign));
   const [bio, setBio] = useState(settings.bio ?? "");
@@ -172,11 +175,11 @@ export function PageEditor({
   // load (a stale tab reverted edits made anywhere else - hero, gallery,
   // toggles - the #142 clobber class).
   //
-  // The full payload, exactly as a save would send it.
-  const payload: PageSettingsInput = {
+  // The full payload, exactly as a save would send it. Never the Live switch:
+  // that saves itself, so Save page can never re-send (or undo) it.
+  const payload: EditorFields = {
     name: name.trim(),
     slug: slug.trim().toLowerCase(),
-    publicPageEnabled: enabled,
     theme,
     pageDesign,
     bio: bio.trim(),
@@ -209,9 +212,9 @@ export function PageEditor({
   // Saved baseline: the form's mount state, replaced ONLY on a confirmed save.
   // Dirty + diff compare against this - never against props, which lag the
   // server for seconds after a save.
-  const baselineRef = useRef<PageSettingsInput | null>(null);
+  const baselineRef = useRef<EditorFields | null>(null);
   if (baselineRef.current === null) baselineRef.current = payload;
-  const changedKeys = (Object.keys(payload) as (keyof PageSettingsInput)[]).filter(
+  const changedKeys = (Object.keys(payload) as (keyof EditorFields)[]).filter(
     (k) => JSON.stringify(payload[k]) !== JSON.stringify(baselineRef.current?.[k]),
   );
   const dirty = changedKeys.length > 0;
@@ -331,7 +334,7 @@ export function PageEditor({
     // Diff-save: PATCH only the fields that changed since the last confirmed
     // save. An untouched field can never clobber an edit made from another
     // tab/device between this page's load and now.
-    const diff: Partial<PageSettingsInput> = {};
+    const diff: Partial<EditorFields> = {};
     for (const k of changedKeys) (diff as Record<string, unknown>)[k] = payload[k];
     const snapshot = payload;
     startTransition(async () => {
@@ -428,22 +431,14 @@ export function PageEditor({
             >
               Open
             </a>
-            <button
-              onClick={() => setEnabled((v) => !v)}
-              className={cn(
-                "rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
-                enabled ? "bg-emerald-soft/15 text-emerald-soft" : "border border-subtle text-muted hover:bg-charcoal-700",
-              )}
-            >
-              {enabled ? "Live" : "Hidden"}
-            </button>
-            {/* The pill only changes the form: nothing goes live (or comes
-                down) until Save at the bottom, which it never said. */}
-            {changedKeys.includes("publicPageEnabled") && (
-              <span className="text-xs text-gold" role="status">
-                {enabled ? "Save page to publish" : "Save page to hide it"}
-              </span>
-            )}
+          </div>
+          {/* Saves by itself, the moment it flips: it used to be a "Live" pill
+              that read like a badge and waited for Save at the very bottom. */}
+          <div className="w-full border-t border-subtle pt-3">
+            <PageLiveSwitch
+              initialEnabled={settings.publicPageEnabled}
+              booksHere={settings.bookingMode === "native"}
+            />
           </div>
         </Card>
 
@@ -955,8 +950,21 @@ export function PageEditor({
           </div>
         </Card>
 
-        {/* Save bar */}
-        <div className="flex flex-wrap items-center gap-3">
+        {/* Save bar. Pinned to the bottom of the screen while anything is
+            unsaved: it sat after the whole form, and on a phone that is a long
+            scroll nobody knew to make, so changes were left unsaved. */}
+        <div
+          data-testid="page-save-bar"
+          className={cn(
+            "flex flex-wrap items-center gap-2 sm:gap-3",
+            dirty &&
+              // On a phone the dashboard's tab pill (and the assistant bubble
+              // just above it, at 4.9rem + 3.5rem) are fixed to the bottom
+              // edge, so pinning to bottom-0 would tuck the bar under them.
+              // 9rem clears both; from sm up there is no pill.
+              "sticky bottom-[calc(9rem+env(safe-area-inset-bottom))] z-20 rounded-2xl border border-subtle bg-charcoal px-3 py-3 shadow-ambient-lg sm:bottom-0 sm:px-5",
+          )}
+        >
           <button
             disabled={
               pending ||
@@ -966,7 +974,7 @@ export function PageEditor({
               Boolean(shopNameError(name))
             }
             onClick={save}
-            className="rounded-full bg-gold px-6 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
+            className="rounded-full bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50 sm:px-6"
           >
             {pending ? "Saving…" : "Save page"}
           </button>
@@ -977,7 +985,7 @@ export function PageEditor({
           )}
           <button
             onClick={() => setShowPreviewMobile((v) => !v)}
-            className="rounded-full border border-subtle px-5 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 lg:hidden"
+            className="rounded-full border border-subtle px-4 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 sm:px-5 lg:hidden"
           >
             {showPreviewMobile ? "Hide preview" : "Preview"}
           </button>

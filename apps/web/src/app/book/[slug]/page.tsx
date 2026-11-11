@@ -6,6 +6,8 @@ import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import { apiPublicGet } from "@/lib/api";
 import { expectedDomain, servesDomain } from "@/lib/customDomainGuard";
 import { BookingClient } from "./BookingClient";
+import { loadHiddenShop } from "@/app/s/[slug]/shopPage";
+import { HiddenShopNotice } from "@/app/s/[slug]/HiddenShopNotice";
 import { AwardSpotlight } from "@/components/AwardSpotlight";
 import type { PublicAward } from "@chairback/config/providerAward";
 import { GetTheApp } from "@/components/GetTheApp";
@@ -342,6 +344,10 @@ export default async function BookPage({
   if (!data) {
     const page = await pageInsteadOfBooking(params.slug, searchParams);
     if (page) redirect(page);
+    // A shop that hid its page stops online booking too. Its clients' links
+    // are right, so they hear that, not "that page doesn't exist".
+    const hidden = await loadHiddenShop(params.slug, expectedDomain(searchParams));
+    if (hidden) return <HiddenShopNotice shop={hidden} />;
     notFound();
   }
   // Only once this page has decided to render for THIS shop (a refused or

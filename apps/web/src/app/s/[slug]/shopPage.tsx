@@ -23,12 +23,45 @@ import type { ShopPageData } from "./page";
 // 60s. (The live booking-slots feed on /book is deliberately NOT cached.)
 const SHOP_PAGE_REVALIDATE_S = 60;
 
-async function getData(slug: string, fresh = false): Promise<ShopPageData | null> {
-  const res = await apiPublicGet<ShopPageData>(
+function readPage(slug: string, fresh = false) {
+  return apiPublicGet<ShopPageData>(
     `/api/page/${encodeURIComponent(slug)}`,
     fresh ? undefined : SHOP_PAGE_REVALIDATE_S,
   );
+}
+
+async function getData(slug: string, fresh = false): Promise<ShopPageData | null> {
+  const res = await readPage(slug, fresh);
   return res.ok ? res.data : null;
+}
+
+/** A shop that exists but has hidden its page, as the page API names it. */
+export interface HiddenShop {
+  name: string;
+  /** It takes ChairBack bookings, so hiding the page stopped those too. */
+  booksHere: boolean;
+}
+
+/** The hidden shop a failed page read describes, or null for any other failure. */
+export function hiddenShopFrom(res: { ok: boolean; status: number; body?: unknown }): HiddenShop | null {
+  if (res.ok || res.status !== 404) return null;
+  const body = res.body as { error?: unknown; name?: unknown; booksHere?: unknown } | undefined;
+  if (body?.error !== "page_hidden" || typeof body.name !== "string" || !body.name.trim()) return null;
+  return { name: body.name.trim(), booksHere: body.booksHere === true };
+}
+
+/**
+ * The shop behind this slug when its page is hidden - so its own links can say
+ * so, instead of a bare "that page doesn't exist". Only for a visit on
+ * getchairback.com itself: a custom-domain visit names no shop it cannot prove
+ * owns the domain, so that one still gets the plain not-found.
+ */
+export async function loadHiddenShop(
+  slug: string,
+  expected: string | "invalid" | null,
+): Promise<HiddenShop | null> {
+  if (expected !== null) return null;
+  return hiddenShopFrom(await readPage(slug));
 }
 
 /**
