@@ -659,6 +659,48 @@ describe("charging the saved card", () => {
     expect(appt!.paidAt).toBeNull();
   });
 
+  it("🔴 a card run on the barber's OWN reader is recorded, never charged: method card, the money at the chair", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40 });
+    const res = await payCash(id, {
+      amountCents: 4000,
+      method: "card",
+      requestId: press(),
+      confirmed: true,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.result).toBe("paid");
+    expect(res.body.method).toBe("card");
+    expect(res.body.receiptReference).toBeNull();
+    // 🔴 No processor was involved, and no ChairBack payment exists for it.
+    expect(fake.calls.paymentIntents).toHaveLength(0);
+    expect(await prisma.payment.count({ where: { appointmentId: id } })).toBe(0);
+    // The same record the original chair checkout made for an own-reader card.
+    const appt = await prisma.appointment.findUnique({
+      where: { id },
+      select: { paidAt: true, paidMethod: true, paidAmount: true },
+    });
+    expect(appt!.paidAt).not.toBeNull();
+    expect(appt!.paidMethod).toBe("card");
+    expect(Number(appt!.paidAmount)).toBe(40);
+    // Filed as recorded-in-person, so it can never be mistaken for a charge.
+    const attempt = await prisma.checkoutAttempt.findFirst({ where: { appointmentId: id } });
+    expect(attempt!.method).toBe("cash_other");
+  });
+
+  it("a recorded method nobody offers is refused, and nothing is marked paid", async () => {
+    const id = await seedAppointment({ shopId, priceDollars: 40 });
+    const res = await payCash(id, {
+      amountCents: 4000,
+      method: "crypto",
+      requestId: press(),
+      confirmed: true,
+    });
+    expect(res.status).toBe(400);
+    const appt = await prisma.appointment.findUnique({ where: { id }, select: { paidAt: true } });
+    expect(appt!.paidAt).toBeNull();
+  });
+
   it("🔴 a decline leaves the cut UNPAID and retryable", async () => {
     fake.reset();
     fake.setNextOutcome("decline");

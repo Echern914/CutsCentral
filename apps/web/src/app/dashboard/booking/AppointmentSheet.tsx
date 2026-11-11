@@ -40,7 +40,7 @@ import {
   useAppointmentEdit,
   type SavedNotice,
 } from "./AppointmentEditForm";
-import { CheckoutFlow } from "./CheckoutFlow";
+import { CardIcon, CheckoutFlow, cardName } from "./CheckoutFlow";
 import { SeriesEditFields, SeriesEditFooter, useSeriesEdit } from "./SeriesEditView";
 import { CheckoutRefund } from "./CheckoutRefund";
 import { DepositRefund } from "./DepositRefund";
@@ -752,6 +752,25 @@ export function AppointmentSheet({
     <CheckoutNoShowRow outcome={checkoutNoShow} onMark={markNoShowFromCheckout} />
   ) : null;
 
+  // "Book again", from the appointment's own menu and from a paid checkout.
+  // Who and what carry over - never the time, price, payment or status. This
+  // sheet closes: the form takes over, and this appointment is left exactly
+  // as it is.
+  const bookAgain =
+    canBookAgain && detail?.clientId
+      ? () => {
+          requestRebook({
+            clientId: detail.clientId!,
+            clientLabel: detail.clientName,
+            serviceId: row.serviceId ?? null,
+            serviceName: detail.serviceName,
+            staffId: row.staffId ?? null,
+            staffName: detail.staffName,
+          });
+          onClose();
+        }
+      : undefined;
+
   //  ── chrome ──────────────────────────────────────────────────────────────
   const title =
     view === "series"
@@ -972,6 +991,7 @@ export function AppointmentSheet({
               load();
             }}
             onBackToAppointment={() => setView("detail")}
+            onBookNext={bookAgain}
             reviewExtra={checkoutNoShowRow}
           />
         ) : (
@@ -1024,24 +1044,7 @@ export function AppointmentSheet({
                 ? { onDecide: decideWaitingFee, busy: false, error: feeDecisionError }
                 : undefined
           }
-          onBookAgain={
-            canBookAgain && detail?.clientId
-              ? () => {
-                  // Who and what carry over - never the time, price, payment
-                  // or status. This sheet closes: the form takes over, and
-                  // this appointment is left exactly as it is.
-                  requestRebook({
-                    clientId: detail.clientId!,
-                    clientLabel: detail.clientName,
-                    serviceId: row.serviceId ?? null,
-                    serviceName: detail.serviceName,
-                    staffId: row.staffId ?? null,
-                    staffName: detail.staffName,
-                  });
-                  onClose();
-                }
-              : undefined
-          }
+          onBookAgain={bookAgain}
           onAct={act}
           onRemoveWalkIn={askRemoveWalkIn}
           onCorrect={askCorrect}
@@ -2225,6 +2228,11 @@ function PaymentCard({
   // payment, deliberately outside the service's money - so a closed booking
   // with only that fee must not read "Nothing paid".
   const fee = p.cardOnFile?.status ?? null;
+  // The held card is named beside Start checkout instead of in the ledger:
+  // only where checkout can charge a card at all, and only while it is held.
+  const cardBesideCheckout = Boolean(
+    canCheckout && detail.serviceCheckoutEnabled && p.card && p.cardOnFile?.status === "saved",
+  );
 
   const eyebrow = external
     ? `Managed in ${detail.originLabel}`
@@ -2356,8 +2364,9 @@ function PaymentCard({
             </>
           )}
           {/* ChairBack persists no card data, so this renders only if a
-              verified brand/last-four ever reaches the payload. */}
-          {p.card && (
+              verified brand/last-four ever reaches the payload. Not when the
+              same card is already named beside Start checkout, below. */}
+          {p.card && !cardBesideCheckout && (
             <Line
               label={
                 p.cardOnFile?.status === "saved"
@@ -2430,13 +2439,33 @@ function PaymentCard({
 
       {(canCheckout || p.receiptUrl) && (
         <div className="mt-3.5 flex flex-col gap-2 border-t border-subtle pt-3.5">
+          {/* The card they left, where the barber decides how to take payment -
+              not three lines down among the ledger rows. Only where checkout
+              can charge a card at all, and only while it is still held.
+              Whether THIS card may pay for THIS visit is the checkout's call
+              (the customer's own tick, the price they agreed), so this names
+              the card and promises nothing. */}
+          {cardBesideCheckout && (
+            <div
+              className="flex items-center gap-3 rounded-xl bg-charcoal-700 px-3.5 py-2.5"
+              data-qa="card-on-file-row"
+            >
+              <span aria-hidden className="shrink-0 text-offwhite">
+                <CardIcon />
+              </span>
+              <span className="flex min-w-0 flex-col">
+                <span className="text-sm font-semibold text-offwhite">{cardName(p.card)}</span>
+                <span className="text-[11px] text-muted">Card on file · kept, not charged</span>
+              </span>
+            </div>
+          )}
           {/* The sheet's ONE solid-brass action, next to the number it acts on. */}
           {canCheckout && (
             <button
               type="button"
               onClick={onCheckout}
               data-qa="start-checkout"
-              className="flex h-11 w-full items-center justify-center rounded-xl bg-gold px-5 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted"
+              className="flex h-12 w-full items-center justify-center rounded-full bg-gold px-5 font-display text-lg text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted"
             >
               {p.collectedCents > 0 ? "Collect the rest" : "Start checkout"}
             </button>

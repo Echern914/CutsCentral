@@ -1615,7 +1615,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "record-payment",
     q: "How do I record what someone paid?",
-    a: "Open the appointment on the calendar and tap Start checkout. The amount due is already filled in — change it if they paid something different (a discount goes there; a tip handed over at the chair can go on the appointment's Tip line instead, so it stays out of your sales - and a tip they left online is already recorded, so don't add it again), pick how they paid, and tap Mark paid. You record what they actually handed over — cash, card, whatever — and that's what feeds Insights.\n\nIt's deliberately what you TOOK, not what the service is priced at, so a discount or a friend rate doesn't quietly inflate your numbers.",
+    a: "Open the appointment on the calendar and tap Start checkout. It shows the amount due, then asks how they're paying: Cash, Zelle · Venmo · Cash App, Card on your own reader, or Other. Pick one, check the amount, and confirm. Those four record money you took yourself — nothing is charged by ChairBack — and that's what feeds Insights. If the customer left a card to pay with, it's listed first: see “How do I charge a customer's card after the appointment?”\n\nCheckout takes the full amount due. If they're paying something different (a discount, a friend rate), change the price on the appointment first, then check out, so your numbers show what you actually took and not what the service is priced at.\n\nA tip handed over in person goes on the appointment's Tip line, so it stays out of your sales. A tip they left online is already recorded, so don't add it again.",
     keywords: [
       "mark as paid", "record payment", "checkout", "check out", "cash", "took payment",
       "paid me", "how much they paid", "close out", "ring up", "settle up",
@@ -2230,12 +2230,12 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open clients", featureId: "clients" },
   },
   {
-    // 🔴 Only some shops' checkout can charge a saved card, so every answer
-    // here is conditional on the option being THERE. No general payments
-    // answer promises it.
+    // 🔴 Only some BOOKINGS can be paid by a saved card (the customer has to
+    // have left one and ticked the box), so every answer here is conditional
+    // on the option being THERE. No general payments answer promises it.
     id: "saved-card-charge",
     q: "How do I charge a customer's card after the appointment?",
-    a: "Where your checkout offers it: open the appointment, tap Start checkout, and pick “Charge card ending ••••”. It's only there when the customer ticked “Let this shop charge my saved card for the service when my appointment is done” when they booked.\n\nThe rules they agreed to:\n• Only after the appointment — once you've marked it done or its end time has passed.\n• Capped at what they booked: the agreed amount, less anything already paid. If the balance is higher, the card can't be used — take it another way.\n• Within 72 hours of the end.\n\nThey get an email receipt each time (when there's an email on the booking), with a link to stop further charges. Charging doesn't mark the appointment done, so tap Done when you're finished.\n\nNo card option in your checkout? Then it isn't available for your shop — record what they paid with Mark paid as usual.",
+    a: "Where your checkout offers it: open the appointment, tap Start checkout, and pick “Card on file”, the first way to pay in the list. It's only there when the customer left a card and ticked “Let this shop charge my saved card for the service when my appointment is done” when they booked.\n\nThe rules they agreed to:\n• Only after the appointment — once you've marked it done or its end time has passed.\n• Capped at what they booked: the agreed amount, less anything already paid. If the balance is higher, the card can't be used — take it another way.\n• Within 72 hours of the end.\n\nThey get an email receipt each time (when there's an email on the booking), with a link to stop further charges. Charging doesn't mark the appointment done, so tap Done when you're finished.\n\nNo “Card on file” in the list? Then this booking has no card you can charge for the visit: they skipped the card, left that box unticked, or one of the rules above applies. Take payment another way.",
     keywords: [
       "charge the saved card", "charge their saved card", "charge saved card",
       "charge the card after", "charge card ending", "saved card", "charge a customer's card",

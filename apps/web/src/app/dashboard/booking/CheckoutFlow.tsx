@@ -59,7 +59,7 @@ type Step = "review" | "confirm" | "result";
 type Choice =
   | { kind: "saved_card" }
   | { kind: "tap_to_pay" }
-  | { kind: "cash_other"; method: "cash" | "direct" | "other" };
+  | { kind: "cash_other"; method: "cash" | "direct" | "card" | "other" };
 
 /** Why a saved card is unavailable, in words a barber can act on. */
 const BLOCKER_COPY: Record<string, string> = {
@@ -92,9 +92,14 @@ function savedCardBlockerCopy(blocker: string, approvedUpToCents?: number | null
   return BLOCKER_COPY[blocker] ?? "Saved card unavailable";
 }
 
+// Money taken outside ChairBack. Every one of these RECORDS a payment and
+// charges nothing - including `card`, which is a card run on the barber's own
+// reader (the original chair checkout always offered it, and a shop that takes
+// cards that way must not have to file them under "Other").
 const CASH_METHODS = [
   { key: "cash" as const, label: "Cash", hint: "You keep 100%" },
   { key: "direct" as const, label: "Zelle · Venmo · Cash App", hint: "Sent to your handle" },
+  { key: "card" as const, label: "Card on your own reader", hint: "Recorded only, not charged here" },
   { key: "other" as const, label: "Other", hint: "Comp, trade, split" },
 ];
 
@@ -103,6 +108,7 @@ export function CheckoutFlow({
   timeZone,
   onDone,
   onBackToAppointment,
+  onBookNext,
   reviewExtra,
 }: {
   appointmentId: string;
@@ -112,6 +118,12 @@ export function CheckoutFlow({
   onDone: () => void;
   /** The clear way back to the same appointment. */
   onBackToAppointment: () => void;
+  /**
+   * Start this client's next booking. Given only where the calendar's booking
+   * form is mounted to answer it; absent, the paid screen offers no such
+   * button rather than one that does nothing.
+   */
+  onBookNext?: () => void;
   /**
    * Shown under the methods on the review step only - never beside an open
    * collection or a confirm (the sheet's "Didn't show up? Mark no-show").
@@ -393,30 +405,40 @@ export function CheckoutFlow({
   //  ── result ──────────────────────────────────────────────────────────────
   if (step === "result" && outcome) {
     const paid = outcome.result === "paid";
+    // A card was charged from file, as opposed to tapped or recorded by hand.
+    const fromFile = outcome.attempt?.method === "saved_card" || choice?.kind === "saved_card";
+    const firstName = firstNameOf(state.appointment.clientName);
     return (
       <div className="flex flex-col gap-4" data-qa="checkout-result">
         <div
           className={cn(
-            "rounded-xl border px-4 py-5 text-center",
+            "rounded-2xl border px-4 py-6 text-center",
             paid
               ? "border-emerald-soft/40 bg-emerald-soft/5"
               : "border-danger-soft/40 bg-danger-soft/5",
           )}
         >
+          {paid && (
+            <span
+              aria-hidden
+              className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-soft/15 text-emerald-soft"
+            >
+              <CheckIcon className="h-7 w-7" />
+            </span>
+          )}
           <p
             className={cn(
-              "text-xs font-medium uppercase tracking-wide",
+              "text-xs font-medium uppercase tracking-[0.14em]",
               paid ? "text-emerald-soft" : "text-danger-soft",
             )}
           >
             {paid ? "Paid" : outcome.result === "declined" ? "Declined" : "Not charged"}
           </p>
-          <p className="mt-1 font-display text-4xl tabular-nums text-offwhite">
+          <p className="mt-1.5 font-display text-5xl leading-none tabular-nums text-offwhite">
             {money(outcome.amountCents ?? chargeCents)}
           </p>
-          <p className="mt-2 text-sm text-muted">
-            {methodLabel(choice, outcome)}
-            {outcome.card?.last4 ? ` ending ${outcome.card.last4}` : ""}
+          <p className="mt-2.5 text-sm text-muted">
+            {outcome.card?.last4 ? cardName(outcome.card) : methodLabel(choice, outcome)}
           </p>
           {state.appointment.clientName && (
             <p className="mt-0.5 text-xs text-muted">{state.appointment.clientName}</p>
@@ -435,6 +457,14 @@ export function CheckoutFlow({
             <p className="mt-2 text-xs leading-relaxed text-danger-soft">{outcome.message}</p>
           )}
         </div>
+        {/* Only for a card charged from file: that is the one method whose
+            receipt ChairBack sends (the customer was promised it when they
+            agreed). A tap or cash has no such email, so it gets no such line. */}
+        {paid && fromFile && (
+          <p className="text-center text-xs text-muted" data-qa="receipt-sent">
+            A receipt is on its way to the email on their booking.
+          </p>
+        )}
         {/* Taking the money does not finish the cut - Done still does, and Done
             is where the punch is earned. Saying so here is the difference
             between a barber who knows there is a step left and one who finds
@@ -444,6 +474,22 @@ export function CheckoutFlow({
             Still on the books — mark it done when you are finished.
           </p>
         )}
+        {/* Paid is the best moment to get the next one on the books, so where
+            the calendar can answer it, that is the main button. Never offered
+            after a refusal: the money comes first. */}
+        {paid && onBookNext && (
+          <button
+            type="button"
+            data-qa="book-next"
+            onClick={() => {
+              onDone();
+              onBookNext();
+            }}
+            className="min-h-[3.5rem] rounded-full bg-gold px-4 font-display text-lg text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted"
+          >
+            {firstName ? `Book ${firstName}’s next visit` : "Book their next visit"}
+          </button>
+        )}
         <button
           type="button"
           data-qa="back-to-appointment"
@@ -451,7 +497,12 @@ export function CheckoutFlow({
             onDone();
             onBackToAppointment();
           }}
-          className="min-h-[2.75rem] rounded-lg bg-gold px-4 font-medium text-charcoal-900"
+          className={cn(
+            "min-h-[3rem] rounded-full px-4 font-medium transition-colors duration-150 ease-out",
+            paid && onBookNext
+              ? "border border-subtle-strong text-offwhite hover:bg-charcoal-700"
+              : "bg-gold text-charcoal-900 hover:bg-gold-muted",
+          )}
         >
           Back to the appointment
         </button>
@@ -477,23 +528,65 @@ export function CheckoutFlow({
 
   //  ── confirm ─────────────────────────────────────────────────────────────
   if (step === "confirm" && choice) {
+    // 🔴 "CHARGE" ONLY WHERE CHAIRBACK TAKES THE MONEY. Cash, a transfer, a
+    // card on the barber's own reader and "Other" are RECORDED: this screen
+    // moves nothing. A button reading "Charge $50.00" under "Card on your own
+    // reader" is how a barber believes the card was run when it was not.
+    const records = choice.kind === "cash_other";
     return (
       <div className="flex flex-col gap-5" data-qa="checkout-confirm">
         <div className="text-center">
           <p className="text-xs font-medium uppercase tracking-wide text-muted">
-            Confirm this charge
+            {records ? "Confirm this payment" : "Confirm this charge"}
           </p>
-          <p className="mt-2 font-display text-5xl tabular-nums text-offwhite">
+          <p className="mt-2 font-display text-5xl leading-none tabular-nums text-offwhite">
             {money(chargeCents)}
           </p>
-          <p className="mt-2 text-sm text-offwhite">{confirmMethodLine(choice, savedCard)}</p>
           {state.appointment.clientName && (
-            <p className="mt-1 text-xs text-muted">
+            <p className="mt-2.5 text-sm text-muted [overflow-wrap:anywhere]">
               {state.appointment.clientName}
               {state.appointment.serviceName ? ` · ${state.appointment.serviceName}` : ""}
             </p>
           )}
         </div>
+
+        {choice.kind === "saved_card" ? (
+          <>
+            {/* THE card, named, alone on the screen: what is about to be
+                charged is never a guess. */}
+            <div
+              className="flex items-center gap-3.5 rounded-2xl border border-gold bg-charcoal-800 px-3.5 py-3"
+              data-qa="confirm-card"
+            >
+              <span aria-hidden className="shrink-0 text-gold">
+                <CardIcon />
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="text-sm font-semibold text-offwhite">{cardName(savedCard.card)}</span>
+                <span className="text-xs text-muted">Card on file</span>
+              </span>
+            </div>
+            {/* 🔴 ONLY WHAT IS TRUE OF EVERY CHARGE THIS BUTTON CAN MAKE. The
+                server offers this method only with the customer's own tick for
+                this appointment, sends a receipt for every saved-card charge
+                (services/serviceChargeReceipt.ts), and pays the shop's
+                connected account. A line that needs "usually" does not belong
+                here: the barber reads these aloud. */}
+            <ul
+              className="flex flex-col gap-2 rounded-2xl bg-charcoal-700 px-4 py-3.5 text-xs leading-relaxed text-offwhite"
+              data-qa="saved-card-promises"
+            >
+              <Assurance>
+                {firstNameOf(state.appointment.clientName) ?? "The customer"} agreed when booking to pay
+                for this appointment with this card.
+              </Assurance>
+              <Assurance>A receipt goes to the email on their booking.</Assurance>
+              <Assurance>The money goes to your Stripe account.</Assurance>
+            </ul>
+          </>
+        ) : (
+          <p className="text-center text-sm text-offwhite">{confirmMethodLine(choice, savedCard)}</p>
+        )}
 
         {error && (
           <p role="alert" className="text-center text-sm text-danger-soft">
@@ -589,9 +682,15 @@ export function CheckoutFlow({
             setStep("result");
             onDone();
           }}
-          className="min-h-[3.25rem] rounded-xl bg-gold px-4 font-display text-lg text-charcoal-900 disabled:opacity-60"
+          className="min-h-[3.5rem] rounded-full bg-gold px-4 font-display text-xl text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-60"
         >
-          {busy ? "Charging…" : `Charge ${money(chargeCents)}`}
+          {records
+            ? busy
+              ? "Recording…"
+              : `Record ${money(chargeCents)}`
+            : busy
+              ? "Charging…"
+              : `Charge ${money(chargeCents)}`}
         </button>
         <button
           type="button"
@@ -603,9 +702,9 @@ export function CheckoutFlow({
             // Abandoning the confirm step abandons that press.
             requestId.current = null;
           }}
-          className="text-sm text-muted underline disabled:opacity-50"
+          className="min-h-[2.75rem] text-sm text-muted underline disabled:opacity-50"
         >
-          Back
+          Pick another way to pay
         </button>
       </div>
     );
@@ -614,12 +713,9 @@ export function CheckoutFlow({
   //  ── review ──────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-4" data-qa="checkout-review">
-      <div className="rounded-xl border border-subtle bg-charcoal-800/40 px-4 py-3 text-center">
-        <p className="[overflow-wrap:anywhere] text-sm font-medium text-offwhite">
+      <div className="min-w-0">
+        <p className="[overflow-wrap:anywhere] text-base font-semibold text-offwhite">
           {state.appointment.clientName ?? "Walk-in"}
-        </p>
-        <p className="mt-0.5 text-xs text-muted">
-          {state.appointment.serviceName ?? "Appointment"}
         </p>
         <p className="mt-0.5 text-xs text-muted">
           {new Date(state.appointment.startsAt).toLocaleString(undefined, {
@@ -642,25 +738,29 @@ export function CheckoutFlow({
         </p>
       )}
 
-      <div className="flex flex-col gap-1.5">
-        {state.totalCents !== null && (
-          <Row label="Ticket" value={money(state.totalCents)} />
-        )}
-        {state.collectedCents > 0 && (
-          <Row label="Already paid" value={`−${money(state.collectedCents)}`} tone="emerald" />
-        )}
-      </div>
-
-      <div className="border-t border-subtle pt-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
+      {/* The ticket: what is being paid for, what is already in, and the one
+          figure every method on this screen will take. */}
+      <div className="rounded-2xl border border-subtle bg-charcoal-800 px-4 py-4" data-qa="ticket">
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">On the ticket</p>
+        <div className="mt-2.5 flex flex-col gap-1.5">
+          <Row
+            label={state.appointment.serviceName ?? "Appointment"}
+            value={state.totalCents === null ? "—" : money(state.totalCents)}
+            strong
+          />
+          {state.collectedCents > 0 && (
+            <Row label="Already paid" value={`−${money(state.collectedCents)}`} tone="emerald" />
+          )}
+        </div>
+        <div className="mt-3 flex flex-wrap items-baseline justify-between gap-2 border-t border-subtle pt-3">
           <span className="text-sm text-muted">Amount due</span>
-          <span className="font-display text-3xl tabular-nums text-offwhite" data-qa="amount-due">
+          <span className="font-display text-4xl leading-none tabular-nums text-offwhite" data-qa="amount-due">
             {dueCents === null ? "—" : money(chargeCents)}
           </span>
         </div>
         {/* Said plainly, so a barber looking for the edit box knows where the
             number comes from instead of hunting for one that is not there. */}
-        <p className="mt-1 text-xs text-muted">
+        <p className="mt-2 text-xs text-muted">
           The full balance. To change it, edit the {"price"} on the appointment.
         </p>
       </div>
@@ -679,13 +779,17 @@ export function CheckoutFlow({
         </p>
       ) : (
       <div>
-        <p className="text-[11px] font-medium uppercase tracking-wide text-muted">How are they paying?</p>
-        <div className="mt-2 flex flex-col gap-1.5">
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">How are they paying?</p>
+        <div className="mt-2 flex flex-col gap-2">
           {savedCard.available && savedCard.card?.last4 ? (
+            // First, because it is the one the customer already set up. Not
+            // preselected: it opens the confirm step like every other method.
             <MethodButton
               qa="method-saved-card"
-              label={`Charge card ending •••• ${savedCard.card.last4}`}
-              hint={savedCard.card.brand ?? "Saved card"}
+              label="Card on file"
+              hint={cardName(savedCard.card)}
+              icon={<CardIcon />}
+              lead
               onClick={() => {
                 setChoice({ kind: "saved_card" });
                 setStep("confirm");
@@ -696,9 +800,9 @@ export function CheckoutFlow({
             // charged is shown as the reason it cannot, or not at all.
             savedCard.blocker &&
             savedCard.blocker !== "no_card" && (
-              <p className="rounded-lg border border-subtle/60 px-3.5 py-2.5 text-xs text-muted">
+              <MethodUnavailable>
                 {savedCardBlockerCopy(savedCard.blocker, savedCard.approvedUpToCents)}
-              </p>
+              </MethodUnavailable>
             )
           )}
 
@@ -711,7 +815,8 @@ export function CheckoutFlow({
             <MethodButton
               qa="method-tap-to-pay"
               label="Tap to Pay"
-              hint="Hold their card to this phone"
+              hint="Hold their card or phone to this iPhone"
+              icon={<TapIcon />}
               onClick={async () => {
                 // 🔴 APPLE'S REQUIRED EDUCATION, AT THE ENABLING POINT. Stripe's
                 // docs: Apple requires a "How to Tap" overlay when enabling Tap
@@ -737,12 +842,12 @@ export function CheckoutFlow({
               }}
             />
           ) : (
-            <p className="rounded-lg border border-subtle/60 px-3.5 py-2.5 text-xs text-muted">
+            <MethodUnavailable>
               Tap to Pay —{" "}
               {state.methods.tapToPay.available
                 ? BLOCKER_COPY.native_not_ready
                 : (BLOCKER_COPY[state.methods.tapToPay.blocker ?? ""] ?? "not available")}
-            </p>
+            </MethodUnavailable>
           )}
 
           {CASH_METHODS.map((m) => (
@@ -751,6 +856,7 @@ export function CheckoutFlow({
               qa={`method-${m.key}`}
               label={m.label}
               hint={m.hint}
+              icon={CASH_ICONS[m.key]}
               onClick={() => {
                 setChoice({ kind: "cash_other", method: m.key });
                 setStep("confirm");
@@ -769,16 +875,28 @@ function Row({
   label,
   value,
   tone,
+  strong,
 }: {
   label: string;
   value: string;
   tone?: "emerald";
+  /** The thing being paid for, rather than an adjustment to it. */
+  strong?: boolean;
 }) {
   return (
-    <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
-      <span className={tone === "emerald" ? "text-emerald-soft" : "text-muted"}>{label}</span>
+    // No wrap: a long service name breaks inside its own column, and the
+    // figure stays on the right where every other figure is.
+    <div className="flex items-baseline justify-between gap-3 text-sm">
       <span
-        className={cn("tabular-nums", tone === "emerald" ? "text-emerald-soft" : "text-offwhite")}
+        className={cn(
+          "min-w-0 flex-1 [overflow-wrap:anywhere]",
+          tone === "emerald" ? "text-emerald-soft" : strong ? "font-medium text-offwhite" : "text-muted",
+        )}
+      >
+        {label}
+      </span>
+      <span
+        className={cn("shrink-0 tabular-nums", tone === "emerald" ? "text-emerald-soft" : "text-offwhite")}
       >
         {value}
       </span>
@@ -786,14 +904,25 @@ function Row({
   );
 }
 
+/**
+ * One way to pay: what it is, one line about it, and a chevron, because
+ * choosing a method only ever moves to the confirm step.
+ *
+ * `lead` marks the card on file, the one method the customer already set up.
+ * It is drawn first and outlined in gold; nothing is preselected by it.
+ */
 function MethodButton({
   label,
   hint,
+  icon,
+  lead,
   onClick,
   qa,
 }: {
   label: string;
   hint: string;
+  icon: React.ReactNode;
+  lead?: boolean;
   onClick: () => void;
   qa: string;
 }) {
@@ -802,13 +931,159 @@ function MethodButton({
       type="button"
       data-qa={qa}
       onClick={onClick}
-      className="flex min-h-[2.75rem] flex-wrap items-center justify-between gap-x-3 gap-y-0.5 rounded-lg border border-subtle px-3.5 py-3 text-left text-sm text-offwhite transition-colors duration-150 ease-out hover:border-subtle-strong"
+      className={cn(
+        "flex min-h-[3.75rem] w-full items-center gap-3.5 rounded-2xl border bg-charcoal-800 px-3.5 py-2.5 text-left transition-colors duration-150 ease-out",
+        lead ? "border-gold hover:border-gold-muted" : "border-subtle hover:border-subtle-strong",
+      )}
     >
-      <span className="min-w-0 font-medium">{label}</span>
-      <span className="shrink-0 text-[11px] text-muted">{hint}</span>
+      <span aria-hidden className={cn("shrink-0", lead ? "text-gold" : "text-offwhite")}>
+        {icon}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-sm font-semibold text-offwhite">{label}</span>
+        <span className="text-xs text-muted [overflow-wrap:anywhere]">{hint}</span>
+      </span>
+      <ChevronIcon />
     </button>
   );
 }
+
+/** One line the barber can say to the customer before charging their card. */
+function Assurance({ children }: { children: React.ReactNode }) {
+  return (
+    <li className="flex items-start gap-2.5">
+      <CheckIcon className="mt-px shrink-0 text-emerald-soft" />
+      <span className="min-w-0">{children}</span>
+    </li>
+  );
+}
+
+/** A method that cannot be used here, as the reason it cannot. Never a button. */
+function MethodUnavailable({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="rounded-2xl border border-dashed border-subtle px-3.5 py-3 text-xs leading-relaxed text-muted">
+      {children}
+    </p>
+  );
+}
+
+/** Stripe's brand keys, as a person would say them. Unknown brands stay honest. */
+const BRAND_NAMES: Record<string, string> = {
+  visa: "Visa",
+  mastercard: "Mastercard",
+  amex: "Amex",
+  american_express: "Amex",
+  discover: "Discover",
+  diners: "Diners Club",
+  jcb: "JCB",
+  unionpay: "UnionPay",
+};
+
+/** "Visa ending 4242", or "Card ending 4242" when the brand is not known. */
+export function cardName(card: { brand: string | null; last4: string | null } | null | undefined): string {
+  if (!card?.last4) return "Card on file";
+  const key = (card.brand ?? "").trim().toLowerCase().replace(/\s+/g, "_");
+  return `${BRAND_NAMES[key] ?? "Card"} ending ${card.last4}`;
+}
+
+/** The first name alone, for a sentence about the customer. */
+function firstNameOf(name: string | null): string | null {
+  const first = (name ?? "").trim().split(/\s+/)[0];
+  return first ? first : null;
+}
+
+const ICON = {
+  width: 24,
+  height: 24,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.8,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+};
+
+export function CardIcon() {
+  return (
+    <svg {...ICON} aria-hidden>
+      <rect x="2.5" y="5" width="19" height="14" rx="2.5" />
+      <path d="M2.5 10h19" />
+    </svg>
+  );
+}
+
+function TapIcon() {
+  return (
+    <svg {...ICON} aria-hidden>
+      <path d="M8.5 15.5a5 5 0 0 1 0-7" />
+      <path d="M12 18a8.5 8.5 0 0 1 0-12" />
+      <path d="M15.5 20.5a12 12 0 0 1 0-17" />
+    </svg>
+  );
+}
+
+function CashIcon() {
+  return (
+    <svg {...ICON} aria-hidden>
+      <rect x="2.5" y="6" width="19" height="12" rx="2" />
+      <circle cx="12" cy="12" r="2.6" />
+    </svg>
+  );
+}
+
+function TransferIcon() {
+  return (
+    <svg {...ICON} aria-hidden>
+      <path d="M4 8h13" />
+      <path d="M14 4l4 4-4 4" />
+      <path d="M20 16H7" />
+      <path d="M10 12l-4 4 4 4" />
+    </svg>
+  );
+}
+
+function OtherIcon() {
+  return (
+    <svg {...ICON} fill="currentColor" stroke="none" aria-hidden>
+      <circle cx="5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="19" cy="12" r="1.8" />
+    </svg>
+  );
+}
+
+function ChevronIcon() {
+  return (
+    <svg {...ICON} width={18} height={18} strokeWidth={2} aria-hidden className="shrink-0 text-muted">
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg {...ICON} width={18} height={18} strokeWidth={2.2} aria-hidden className={className}>
+      <path d="M5 12.5l4.5 4.5L19 7.5" />
+    </svg>
+  );
+}
+
+function ReaderIcon() {
+  return (
+    <svg {...ICON} aria-hidden>
+      <rect x="6" y="3" width="12" height="18" rx="2.5" />
+      <path d="M9 7.5h6" />
+      <path d="M9.5 16.5h5" />
+    </svg>
+  );
+}
+
+const CASH_ICONS = {
+  cash: <CashIcon />,
+  direct: <TransferIcon />,
+  card: <ReaderIcon />,
+  other: <OtherIcon />,
+} as const;
 
 function confirmMethodLine(
   choice: Choice,
@@ -819,6 +1094,9 @@ function confirmMethodLine(
     return last4 ? `Saved card ending •••• ${last4}` : "Saved card";
   }
   if (choice.kind === "tap_to_pay") return "Tap to Pay";
+  // "No card charged" would read wrongly beside a card: one IS being charged,
+  // on their reader. What matters is that this screen does not do it.
+  if (choice.method === "card") return "Card on your own reader — recorded only. Run it on your reader.";
   const label = CASH_METHODS.find((m) => m.key === choice.method)?.label ?? "Other";
   return `${label} — recorded, no card charged`;
 }

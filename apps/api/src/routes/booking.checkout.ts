@@ -758,7 +758,13 @@ const cashSchema = z
     // Checked against the server's own figure below; the range here only keeps
     // an absurd number out of the maths.
     amountCents: z.number().int().positive().max(1_000_000),
-    method: z.enum(["cash", "direct", "other"]),
+    // `card` here is a card run on the barber's OWN reader, outside ChairBack:
+    // recorded exactly as the original chair checkout always recorded it
+    // (method card, the money at the chair, no Payment row). Without it, a
+    // shop moved to this checkout could only file those under "other". It is
+    // never a ChairBack charge - those go through charge-card and tap-to-pay,
+    // which keep the chair half at 0.
+    method: z.enum(["cash", "direct", "card", "other"]),
     requestId: z.string().min(8).max(64),
     /** The screen states plainly that this records money, and takes no card. */
     confirmed: z.literal(true),
