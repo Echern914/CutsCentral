@@ -17,6 +17,7 @@ import {
   cancellationTermsSnapshot,
   cardFeeConfigured,
   describeCardOnFileFee,
+  serviceChargeConsentRequired,
 } from "./shopPolicy.js";
 
 describe("describeMovePriceChange - the one sentence a move at a new price asks with", () => {
@@ -464,6 +465,36 @@ describe("card on file", () => {
     // A card-or-nothing shop, and a caller that doesn't know, keep the old line.
     expect(describeDepositPolicy({ ...base, requireCardToBook: true })).not.toMatch(/with or without/);
     expect(describeDepositPolicy(base)).not.toMatch(/with or without/);
+  });
+
+  it("🔴 a shop that REQUIRES the client's OK to pay with the card never says 'charged only for a no-show'", () => {
+    const required = { ...base, requireCardToBook: true, requireServiceChargeConsent: true };
+    const quiet = describeDepositPolicy(required);
+    expect(quiet).toMatch(/to book you agree the shop can charge it for your service once the appointment is done/);
+    expect(quiet).toMatch(/you can still pay another way at the shop/);
+    expect(quiet).not.toMatch(/only/);
+    const withFees = describeDepositPolicy({ ...required, chargeCardOnFileFees: true });
+    expect(withFees).toMatch(/to book you agree the shop can charge it for your service/);
+    expect(withFees).toMatch(/it is also charged for a no-show or a cancellation inside/);
+    expect(withFees).not.toMatch(/charged only for/);
+    // The switch without a required card is not the rule, so the old words stand.
+    const cardOptional = describeDepositPolicy({ ...required, requireCardToBook: false, chargeCardOnFileFees: true });
+    expect(cardOptional).toMatch(/you're booked with or without a card/);
+    expect(cardOptional).toMatch(/charged only for a no-show/);
+    // A channel that takes no card says so, whatever the shop requires online.
+    expect(describeDepositPolicy(required, { collectsAtBooking: false })).toBe("none up front - pay at the shop");
+  });
+
+  it("🔴 the rule needs card-on-file mode, a required card AND the switch - all three", () => {
+    const on = { paymentsMode: "card_on_file", requireCardToBook: true, requireServiceChargeConsent: true };
+    expect(serviceChargeConsentRequired(on)).toBe(true);
+    expect(serviceChargeConsentRequired({ ...on, requireCardToBook: false })).toBe(false);
+    expect(serviceChargeConsentRequired({ ...on, requireServiceChargeConsent: false })).toBe(false);
+    expect(serviceChargeConsentRequired({ ...on, paymentsMode: "deposit" })).toBe(false);
+    expect(serviceChargeConsentRequired({ ...on, paymentsMode: "off" })).toBe(false);
+    // Unknown is never "required": a caller that has not looked requires nothing.
+    expect(serviceChargeConsentRequired({ paymentsMode: "card_on_file" })).toBe(false);
+    expect(serviceChargeConsentRequired({ ...on, requireCardToBook: null })).toBe(false);
   });
 
   it("names the one condition once the switch is on", () => {

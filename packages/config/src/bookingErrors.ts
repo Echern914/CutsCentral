@@ -67,6 +67,14 @@ export const BOOKING_ERROR_CODES = [
    */
   "DEPOSIT_TERMS_CHANGED",
   /**
+   * The shop requires the customer's own tick that their saved card may be
+   * charged for the service, and this booking did not carry it - usually
+   * because the shop switched the rule on after the page loaded. Nothing was
+   * written or held. Answered with the current money terms, so the page can
+   * show the box as required and ask again. Never ticked on their behalf.
+   */
+  "SERVICE_CHARGE_CONSENT_REQUIRED",
+  /**
    * The saved card this device offered belongs to a different client record
    * than the person now on the form. Nothing was written; the page forgets
    * the card and books with a card step instead.

@@ -70,6 +70,13 @@ import {
 } from "./BookingPolicy";
 import { DEPOSIT_KEPT_LINE, DEPOSIT_TERMS_CHANGED_MESSAGE, readPaymentTerms } from "./depositTerms";
 import {
+  SERVICE_CHARGE_REQUIRED_HINT,
+  SERVICE_CHARGE_REQUIRED_MESSAGE,
+  serviceChargeBlocksConfirm,
+  serviceChargeRequiredNote,
+  serviceChargeTickRequired,
+} from "./serviceChargeRule";
+import {
   agreedAtFor,
   contactIdentity,
   forgetBooker,
@@ -555,6 +562,12 @@ export function BookingClient({
   // Confirm sends back what it showed.
   const [paymentTerms, setPaymentTerms] = useState(data.shop.payment ?? null);
   const depositKept = paymentTerms?.nonRefundable === true;
+  // A shop may require the client's OK to charge their saved card for the
+  // service before it will book online. Read from the terms THIS page shows,
+  // so a shop that switched it on meanwhile is honoured the moment the server
+  // says so.
+  const serviceChargeRequired = serviceChargeTickRequired(paymentTerms);
+  const serviceChargeBlocked = serviceChargeBlocksConfirm(paymentTerms, serviceChargeConsent);
   // The manage token of a booking awaiting payment (shown after the card clears).
   const [manageTokenPending, setManageTokenPending] = useState<string | null>(null);
   /**
@@ -1786,6 +1799,11 @@ export function BookingClient({
       setError(POLICY_HINT);
       return;
     }
+    // Same backstop for the shop's required card agreement.
+    if (serviceChargeBlocked) {
+      setError(SERVICE_CHARGE_REQUIRED_HINT);
+      return;
+    }
     // The barber to write against: the one bound to the chosen slot (may differ
     // from `staffId` when the provider step was skipped and several were free).
     const writeStaffId = pickedStaffId ?? staffId;
@@ -1931,6 +1949,17 @@ export function BookingClient({
           const current = readPaymentTerms(res.payment);
           setPaymentTerms((shown) => current ?? (shown ? { ...shown, nonRefundable: true } : shown));
           setError(DEPOSIT_TERMS_CHANGED_MESSAGE);
+          return;
+        }
+        if (res.code === "SERVICE_CHARGE_CONSENT_REQUIRED") {
+          // The shop began requiring the card agreement while this page was
+          // open. Nothing was booked or held; show the box as required (it is
+          // never ticked for them) and ask again.
+          const current = readPaymentTerms(res.payment);
+          setPaymentTerms(
+            (shown) => current ?? (shown ? { ...shown, serviceChargeConsentRequired: true } : shown),
+          );
+          setError(SERVICE_CHARGE_REQUIRED_MESSAGE);
           return;
         }
         if (res.code === "RATE_LIMITED") {
@@ -4067,18 +4096,21 @@ export function BookingClient({
                 page from ONE file (packages/config/checkoutConsent.ts) with a
                 version stamped against the card.
 
-                Optional on purpose: leaving it unticked keeps the card, keeps
-                the booking, and simply means paying at the chair. Nothing else
-                in the product can set it - a barber cannot tick it later on the
-                customer's behalf. */}
+                Optional unless the SHOP requires it to book online: then the
+                box says so, and Confirm waits for it. Either way nothing else
+                in the product can set it - it is never pre-ticked, and a
+                barber cannot tick it later on the customer's behalf. */}
             {data.shop.payment?.collects === "card" && (
-              <label className="flex items-start gap-2 rounded-lg border border-offwhite/10 p-2.5 text-xs text-muted">
+              <label
+                className={`flex items-start gap-2 rounded-lg border p-2.5 text-xs text-muted ${serviceChargeBlocked ? "border-gold/60" : "border-offwhite/10"}`}
+              >
                 <input
                   type="checkbox"
                   checked={serviceChargeConsent}
                   onChange={(e) => setServiceChargeConsent(e.target.checked)}
                   className="mt-0.5"
                   data-qa="service-charge-consent"
+                  aria-required={serviceChargeRequired || undefined}
                 />
                 <span>
                   <strong className="text-offwhite">
@@ -4089,6 +4121,14 @@ export function BookingClient({
                   <br />
                   {SERVICE_CHARGE_CONSENT.body}
                   {repeatOffered && repeat ? ` ${SERVICE_CHARGE_CONSENT_SERIES.body}` : ""}
+                  {serviceChargeRequired && (
+                    <>
+                      <br />
+                      <strong className="text-offwhite" data-qa="service-charge-required">
+                        {serviceChargeRequiredNote(data.shop.name)}
+                      </strong>
+                    </>
+                  )}
                 </span>
               </label>
             )}
@@ -4123,9 +4163,15 @@ export function BookingClient({
             <button
               type="button"
               onClick={submit}
-              disabled={submitting || !policyReady}
+              disabled={submitting || !policyReady || serviceChargeBlocked}
               aria-busy={submitting}
-              aria-describedby={!policyReady ? "booking-policy-hint" : undefined}
+              aria-describedby={
+                !policyReady
+                  ? "booking-policy-hint"
+                  : serviceChargeBlocked
+                    ? "service-charge-hint"
+                    : undefined
+              }
               className={primaryBtn}
               style={{ backgroundColor: accent, color: onAccent }}
             >
@@ -4140,6 +4186,11 @@ export function BookingClient({
             {!policyReady && (
               <p id="booking-policy-hint" className="text-center text-xs text-muted">
                 {POLICY_HINT}
+              </p>
+            )}
+            {policyReady && serviceChargeBlocked && (
+              <p id="service-charge-hint" className="text-center text-xs text-muted">
+                {SERVICE_CHARGE_REQUIRED_HINT}
               </p>
             )}
             {/* Guest booking needs no account, so no checkbox: the passive

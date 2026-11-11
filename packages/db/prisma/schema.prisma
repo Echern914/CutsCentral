@@ -685,6 +685,14 @@ model Shop {
   // client who leaves it is still booked, never silently released. ON: the
   // time is held while they save a card, and released if they don't.
   requireCardToBook Boolean @default(false)
+  // Card on file: must a client ALSO agree, at booking, that this card may be
+  // charged for the service once the appointment is done? OFF (the default):
+  // that tick is theirs to leave. ON: no tick, no online booking - so every
+  // online booking can be collected from the card on file at checkout. Only
+  // means anything together with requireCardToBook (an agreement about a card
+  // they may skip is no agreement); the one predicate is config
+  // `serviceChargeConsentRequired`. The words they agree to are unchanged.
+  requireServiceChargeConsent Boolean @default(false)
   // Card on file: does a CLIENT's own late cancel (their link, the texting
   // receptionist) wait for the barber before the fee is charged? OFF (the
   // default): charged on the spot, as always. ON: the fee waits on the

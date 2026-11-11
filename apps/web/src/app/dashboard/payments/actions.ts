@@ -56,6 +56,12 @@ export async function savePaymentSettingsAction(input: {
   cardFeeFlatCents?: number | null;
   /** card_on_file: hold the time until a card is saved (true), or book them anyway (false). */
   requireCardToBook?: boolean;
+  /**
+   * card_on_file, card required: no online booking without the client's own
+   * tick that the card may be charged for the service. Only applies while
+   * `requireCardToBook` is on.
+   */
+  requireServiceChargeConsent?: boolean;
   /** card_on_file: a client's own late cancel waits for the barber's Charge or Waive. */
   cardFeeNeedsApproval?: boolean;
   cancelWindowHours?: number;
@@ -135,6 +141,12 @@ export interface PaymentStatus {
    * default) = yes. Optional = an older API.
    */
   requireCardToBook?: boolean;
+  /**
+   * card_on_file, card required: must the client also agree, to book, that the
+   * card may be charged for the service? false (the default) = their choice.
+   * Optional = an older API.
+   */
+  requireServiceChargeConsent?: boolean;
   /**
    * card_on_file: does a client's own late cancel wait for the barber to
    * Charge or Waive? false (the default) = charged at once. Optional = an older API.
