@@ -18,6 +18,7 @@ import { SettingsCard, type ShopSettings } from "./_components/SettingsCard";
 import { ClientDemoCard } from "./_components/ClientDemoCard";
 import { TourReplayButton } from "./_components/TourReplayButton";
 import { SyncHealthBanner } from "./_components/SyncHealthBanner";
+import { HiddenPageBanner } from "./_components/HiddenPageBanner";
 import { SetupChecklist } from "./_components/SetupChecklist";
 import { getOnboardingState } from "@/app/onboarding/state";
 import { setupComplete } from "@chairback/config/onboarding";
@@ -32,6 +33,9 @@ interface ShopMe extends ShopSettings {
   connected: boolean;
   /** URL handle for the public booking page; null until one is picked. */
   slug: string | null;
+  /** The page's Live switch. Off also stops online booking. Optional = older API. */
+  publicPageEnabled?: boolean;
+  bookingMode?: string;
 }
 
 /** Counters behind the home-screen referral row (full list lives on its page). */
@@ -188,6 +192,11 @@ export default async function DashboardPage({
           shopName={shop.name}
         />
       </div>
+
+      {/* Only a real `false`: an older API that sends nothing is no warning. */}
+      {shop.slug && shop.publicPageEnabled === false && (
+        <HiddenPageBanner booksHere={shop.bookingMode === "native"} />
+      )}
 
       <SyncHealthBanner
         needsRepair={Boolean(sync.data?.needsRepair)}

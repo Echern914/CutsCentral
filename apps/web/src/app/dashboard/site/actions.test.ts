@@ -54,6 +54,14 @@ describe("savePageAction and the shop name", () => {
     );
   });
 
+  it("🔴 the Live switch refreshes the dashboard home, whose banner says the page is hidden", async () => {
+    apiSend.mockResolvedValue({ ok: true, data: { slug: "home-studio" } });
+    await savePageAction({ publicPageEnabled: false });
+    expect(apiSend).toHaveBeenLastCalledWith("PATCH", "/api/shops/me", { publicPageEnabled: false });
+    const paths = revalidatePath.mock.calls.map((c) => c.join(" "));
+    expect(paths).toEqual(expect.arrayContaining(["/dashboard", "/s/home-studio", "/book/home-studio"]));
+  });
+
   it("words the API's min/max refusal the way the Settings card does", async () => {
     apiSend.mockResolvedValue({
       ok: false,

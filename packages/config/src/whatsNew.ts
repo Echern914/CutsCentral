@@ -46,6 +46,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "discount, change the price on the appointment first.",
   },
   {
+    id: "2026-11-11-page-live-switch",
+    date: "2026-11-11",
+    kind: "fix",
+    title: "Your page's Live switch saves right away",
+    body:
+      "The Live switch on Your page now saves the moment you flip it, and asks first before hiding your page, " +
+      "since hiding stops online booking too. Save page stays on screen while you have changes, and your " +
+      "home page tells you if your page is hidden.",
+  },
+  {
     id: "2026-11-10-insights-load-error",
     date: "2026-11-10",
     kind: "fix",

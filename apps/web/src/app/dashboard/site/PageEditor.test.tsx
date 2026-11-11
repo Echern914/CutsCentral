@@ -253,3 +253,43 @@ describe("the shop name", () => {
     expect(screen.getByText("Ask the shop owner to change it.")).toBeInTheDocument();
   });
 });
+
+/**
+ * A page sat Hidden because its switch only changed the form, and "Save page"
+ * was at the very bottom of a long editor. The switch now saves itself, and
+ * the save bar stays on screen whenever there is something to save.
+ */
+describe("the Live switch and the save bar", () => {
+  const liveSwitch = () => screen.getByRole("switch", { name: /Your page is (live|hidden)/ });
+  const saveBar = () => screen.getByTestId("page-save-bar");
+
+  it("🔴 flipping it saves the flag alone, and leaves nothing unsaved", async () => {
+    render(<PageEditor settings={settings({ publicPageEnabled: false })} appBase="https://app.test" />);
+    expect(liveSwitch()).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(liveSwitch());
+    await waitFor(() => expect(liveSwitch()).toHaveAttribute("aria-checked", "true"));
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith({ publicPageEnabled: true });
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save page" })).toBeDisabled();
+  });
+
+  it("🔴 a later Save page does not re-send the flag the switch already saved", async () => {
+    render(<PageEditor settings={settings({ publicPageEnabled: false })} appBase="https://app.test" />);
+    fireEvent.click(liveSwitch());
+    await waitFor(() => expect(liveSwitch()).toHaveAttribute("aria-checked", "true"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Shop name" }), { target: { value: "New Name" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save page" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save).toHaveBeenLastCalledWith({ name: "New Name" });
+  });
+
+  it("🔴 the save bar is pinned to the bottom of the screen only while there are changes", () => {
+    render(<PageEditor settings={settings()} appBase="https://app.test" />);
+    expect(saveBar().className).not.toMatch(/\bsticky\b/);
+    fireEvent.change(screen.getByRole("textbox", { name: "Shop name" }), { target: { value: "New Name" } });
+    expect(saveBar().className).toMatch(/\bsticky\b/);
+    expect(saveBar().className).toMatch(/\bbottom-0\b/);
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+  });
+});
