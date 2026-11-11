@@ -11,8 +11,8 @@ import type { BookShopData } from "./page";
 type PaymentTerms = NonNullable<BookShopData["shop"]["payment"]>;
 
 /**
- * The shop's CURRENT money terms, from a DEPOSIT_TERMS_CHANGED answer - or
- * null when the body isn't that shape. Read defensively: a malformed body
+ * The shop's CURRENT money terms, from a DEPOSIT_TERMS_CHANGED or
+ * SERVICE_CHARGE_CONSENT_REQUIRED answer - or null when the body isn't that shape. Read defensively: a malformed body
  * must never be shown as terms.
  */
 export function readPaymentTerms(raw: unknown): PaymentTerms | null {
@@ -28,6 +28,11 @@ export function readPaymentTerms(raw: unknown): PaymentTerms | null {
     nonRefundable: p.nonRefundable === true,
     sentence: p.sentence,
     cancellation: typeof p.cancellation === "string" ? p.cancellation : null,
+    // The card half of the terms, so a card shop's page keeps saying the
+    // right thing after its terms are replaced (SERVICE_CHARGE_CONSENT_REQUIRED).
+    cardOptional: p.cardOptional === true,
+    cardFee: typeof p.cardFee === "string" ? p.cardFee : null,
+    serviceChargeConsentRequired: p.serviceChargeConsentRequired === true,
   };
 }
 

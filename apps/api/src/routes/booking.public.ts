@@ -23,6 +23,7 @@ import {
   depositIsNonRefundable,
   describeCancellationPolicy,
   describeDepositPolicy,
+  serviceChargeConsentRequired,
   statedCardOnFileFee,
   type ShopPaymentsMode,
   formatShopAddress,
@@ -214,6 +215,7 @@ function publicPaymentSummary(shop: {
   chargeCardOnFileFees: boolean;
   cardFeeFlatCents: number | null;
   requireCardToBook: boolean;
+  requireServiceChargeConsent: boolean;
   cancelWindowHours: number;
   cancelFeeBps: number;
   requireBookingApproval: boolean;
@@ -250,6 +252,14 @@ function publicPaymentSummary(shop: {
    * beside the condition. Null when the card would be charged nothing.
    */
   cardFee: string | null;
+  /**
+   * This shop will not book online unless the client ticks that their card may
+   * be charged for the service. Only ever true when this page saves a card and
+   * the card is required. The page sends the tick back on Confirm
+   * (`serviceChargeConsent`), and the route refuses a booking without it - see
+   * SERVICE_CHARGE_CONSENT_REQUIRED.
+   */
+  serviceChargeConsentRequired: boolean;
 } {
   const collects = collectsAtBooking({
     connectEnabled: connectEnabled(),
@@ -270,6 +280,7 @@ function publicPaymentSummary(shop: {
     chargeCardOnFileFees: shop.chargeCardOnFileFees,
     cardFeeFlatCents: shop.cardFeeFlatCents,
     requireCardToBook: shop.requireCardToBook,
+    requireServiceChargeConsent: shop.requireServiceChargeConsent,
     paymentsLive: collects !== null,
     requiresApproval: shop.requireBookingApproval,
     nonRefundable,
@@ -288,6 +299,7 @@ function publicPaymentSummary(shop: {
     cancellation,
     cardOptional: collects === "card" && !shop.requireCardToBook,
     cardFee: collects === "card" ? statedCardOnFileFee(shop) : null,
+    serviceChargeConsentRequired: collects === "card" && serviceChargeConsentRequired(shop),
   };
 }
 
@@ -2232,6 +2244,23 @@ bookingPublicRouter.post("/:slug", bookingWriteLimiter, countBookingRefusals, as
     res.status(409).json({
       error: "deposit_terms_changed",
       code: "DEPOSIT_TERMS_CHANGED",
+      payment: terms,
+    });
+    return;
+  }
+
+  // 🔴 NO TICK, NO ONLINE BOOKING, at a shop that requires it. The shop decided
+  // every online booking must be payable from the card on file, so a booking
+  // without the client's own agreement is refused here - before anything is
+  // written or held, for a single visit and a standing series alike. A 409
+  // carrying the current terms, because the shop may have switched this on
+  // after the page loaded and the page must be able to show the box as
+  // required rather than fail with nothing to do. Never set on the client's
+  // behalf: the only way through is their own tick.
+  if (terms.serviceChargeConsentRequired && d.serviceChargeConsent !== true) {
+    res.status(409).json({
+      error: "service_charge_consent_required",
+      code: "SERVICE_CHARGE_CONSENT_REQUIRED",
       payment: terms,
     });
     return;

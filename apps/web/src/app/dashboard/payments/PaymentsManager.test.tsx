@@ -106,6 +106,52 @@ describe("card on file in payment settings", () => {
     expect(save.mock.calls[0]![0]).toMatchObject({ paymentsMode: "card_on_file", requireCardToBook: false });
   });
 
+  it("🔴 'Clients must agree to pay with that card' shows only under a required card, and is OFF by default", async () => {
+    render(<PaymentsManager initial={status({ paymentsMode: "card_on_file" })} apiBase="http://api.test" />);
+    const name = "Clients must agree to pay with that card";
+    // A card they may skip: no agreement about it can be required.
+    expect(screen.queryByRole("checkbox", { name })).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Require a saved card to book" }));
+    const box = screen.getByRole("checkbox", { name });
+    expect(box).not.toBeChecked();
+    // It names the exact box their clients will see, and says they can still pay another way.
+    expect(screen.getByText(/Let this shop charge my saved card for the service when my appointment is done/)).toBeInTheDocument();
+    expect(screen.getByText(/They can still pay another way\s+in person/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save payment settings" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toMatchObject({ requireCardToBook: true, requireServiceChargeConsent: false });
+  });
+
+  it("🔴 turned on it saves, reads back, and is saved OFF again the moment the card stops being required", async () => {
+    const name = "Clients must agree to pay with that card";
+    const { unmount } = render(
+      <PaymentsManager
+        initial={status({ paymentsMode: "card_on_file", requireCardToBook: true })}
+        apiBase="http://api.test"
+      />,
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name }));
+    fireEvent.click(screen.getByRole("button", { name: "Save payment settings" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toMatchObject({ requireCardToBook: true, requireServiceChargeConsent: true });
+    unmount();
+
+    save.mockClear();
+    render(
+      <PaymentsManager
+        initial={status({ paymentsMode: "card_on_file", requireCardToBook: true, requireServiceChargeConsent: true })}
+        apiBase="http://api.test"
+      />,
+    );
+    expect(screen.getByRole("checkbox", { name })).toBeChecked();
+    // Stop requiring the card: the box goes, and the rule is saved off with it.
+    fireEvent.click(screen.getByRole("checkbox", { name: "Require a saved card to book" }));
+    expect(screen.queryByRole("checkbox", { name })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save payment settings" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toMatchObject({ requireCardToBook: false, requireServiceChargeConsent: false });
+  });
+
   it("turned on, it saves with the mode, reads back, and is never sent for another mode", async () => {
     const { unmount } = render(
       <PaymentsManager initial={status({ paymentsMode: "card_on_file" })} apiBase="http://api.test" />,

@@ -69,6 +69,14 @@ export interface ShopPolicyInput {
    */
   requireCardToBook?: boolean;
   /**
+   * card_on_file only: must the client also agree, to book, that the card may
+   * be charged for the SERVICE once the appointment is done? The raw shop
+   * switch; whether it applies is `serviceChargeConsentRequired`. Default
+   * false. When it applies, the prose must stop saying the card is charged
+   * "only" for a no-show: the client just agreed to more than that.
+   */
+  requireServiceChargeConsent?: boolean;
+  /**
    * Is what is taken AT BOOKING kept when the client cancels? Already
    * RESOLVED by the caller - never the raw shop switch:
    *  - about a booking that EXISTS: that booking's own snapshot
@@ -96,6 +104,32 @@ export function depositIsNonRefundable(shop: {
   depositNonRefundable?: boolean | null;
 }): boolean {
   return shop.paymentsMode === "deposit" && shop.depositNonRefundable === true;
+}
+
+/**
+ * Does booking online at this shop depend on the client agreeing that their
+ * card may be charged for the service?
+ *
+ * Only a card-on-file shop that ALSO requires the card. An agreement about a
+ * card the client is free to skip is no agreement, so the switch on its own
+ * never applies - a shop that turns "require a card" back off stops requiring
+ * this too, without a second setting to remember.
+ *
+ * 🔴 THE ONE PLACE THIS IS DECIDED: the booking route's refusal, the booking
+ * page's required tick, the settings screen and the policy sentence all ask
+ * here. Whether a card can be SAVED right now (Stripe live, no approval step)
+ * is a different question, answered where each of them already answers it.
+ */
+export function serviceChargeConsentRequired(shop: {
+  paymentsMode: string;
+  requireCardToBook?: boolean | null;
+  requireServiceChargeConsent?: boolean | null;
+}): boolean {
+  return (
+    shop.paymentsMode === "card_on_file" &&
+    shop.requireCardToBook === true &&
+    shop.requireServiceChargeConsent === true
+  );
 }
 
 /**
@@ -247,6 +281,14 @@ export function describeDepositPolicy(
       return shop.chargeCardOnFileFees
         ? `no charge at booking; you're booked with or without a card, and a card you save is kept on file and charged only for a no-show or a cancellation inside the cancellation window (see the cancellation policy)${fee}`
         : "no charge at booking; you're booked with or without a card, and a card you save is kept on file and not charged unless the shop turns on no-show fees - pay at the shop";
+    }
+    // 🔴 THE CLIENT AGREES TO MORE THAN A NO-SHOW FEE HERE. To book, they tick
+    // that the card may be charged for the service itself, so "charged only
+    // for a no-show" would be false in the sentence right beside that tick.
+    if (serviceChargeConsentRequired(shop)) {
+      return shop.chargeCardOnFileFees
+        ? `no charge at booking; a card is kept on file, and to book you agree the shop can charge it for your service once the appointment is done; it is also charged for a no-show or a cancellation inside the cancellation window (see the cancellation policy)${fee}`
+        : "no charge at booking; a card is kept on file, and to book you agree the shop can charge it for your service once the appointment is done - you can still pay another way at the shop";
     }
     return shop.chargeCardOnFileFees
       ? `no charge at booking; a card is kept on file and is charged only for a no-show or a cancellation inside the cancellation window (see the cancellation policy)${fee}`

@@ -42,6 +42,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
       chargeCardOnFileFees: true,
       cardFeeFlatCents: true,
       requireCardToBook: true,
+      requireServiceChargeConsent: true,
       cardFeeNeedsApproval: true,
       tipPolicy: true,
       onlineTipsEnabled: true,
@@ -85,6 +86,11 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
     cardFeeFlatCents: shop.cardFeeFlatCents,
     // Card on file: is a client who skips the card still booked? (false = yes)
     requireCardToBook: shop.requireCardToBook,
+    // Card on file, card required: must the client also agree, to book, that
+    // the card may be charged for the service? The raw switch - whether it
+    // APPLIES is config `serviceChargeConsentRequired` (it needs the card to
+    // be required too), which the screen and the booking route both ask.
+    requireServiceChargeConsent: shop.requireServiceChargeConsent,
     // Card on file: a client's own late cancel waits for the barber's Charge
     // or Waive instead of charging on the spot (services/cardFeeApproval.ts).
     cardFeeNeedsApproval: shop.cardFeeNeedsApproval,
@@ -194,6 +200,11 @@ const settingsSchema = z
     // Card on file: hold the time until a card is saved (true), or book the
     // client at Confirm and make the card step optional (false, the default).
     requireCardToBook: z.boolean().optional(),
+    // Card on file, card required: no online booking without the client's own
+    // tick that the card may be charged for the service (true), or leave that
+    // tick to them (false, the default). Stored as sent; it only ever applies
+    // while the card itself is required.
+    requireServiceChargeConsent: z.boolean().optional(),
     // Card on file: hold a client's own late-cancel fee for the barber to
     // Charge or Waive (true), or charge it on the spot (false, the default).
     // Read when a client cancels, never snapshotted: it only ever decides
@@ -255,6 +266,9 @@ paymentsDashboardRouter.patch("/settings", async (req, res) => {
       ...(d.chargeCardOnFileFees !== undefined ? { chargeCardOnFileFees: d.chargeCardOnFileFees } : {}),
       ...(d.cardFeeFlatCents !== undefined ? { cardFeeFlatCents: d.cardFeeFlatCents } : {}),
       ...(d.requireCardToBook !== undefined ? { requireCardToBook: d.requireCardToBook } : {}),
+      ...(d.requireServiceChargeConsent !== undefined
+        ? { requireServiceChargeConsent: d.requireServiceChargeConsent }
+        : {}),
       ...(d.cardFeeNeedsApproval !== undefined ? { cardFeeNeedsApproval: d.cardFeeNeedsApproval } : {}),
       ...(d.depositAmountCents !== undefined
         ? { depositAmountCents: d.depositAmountCents }

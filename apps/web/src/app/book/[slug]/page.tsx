@@ -97,6 +97,12 @@ export interface BookShopData {
        * condition. Null = nothing would be charged; optional = an older API.
        */
       cardFee?: string | null;
+      /**
+       * The shop will not book online without the client's tick that their
+       * card may be charged for the service. Optional = an older API, which
+       * never requires it.
+       */
+      serviceChargeConsentRequired?: boolean;
     } | null;
     /**
      * The shop's own policies + checklist ("Before you book"). Null = nothing

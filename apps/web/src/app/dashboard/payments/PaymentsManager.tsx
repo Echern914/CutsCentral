@@ -2,6 +2,7 @@
 
 import { cap, useVocab } from "@/components/VocabProvider";
 import { APP_NAME } from "@chairback/config/constants";
+import { SERVICE_CHARGE_CONSENT } from "@chairback/config/checkoutConsent";
 import { CARD_FEE_APPROVAL_DAYS } from "@chairback/config/shopPolicy";
 import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -89,6 +90,11 @@ export function PaymentsManager({
   // card_on_file: is the card a condition of the booking? Off (the default):
   // Confirm books them and the card step is optional.
   const [requireCard, setRequireCard] = useState(initial.requireCardToBook ?? false);
+  // Only means anything while the card itself is required: an agreement about
+  // a card the client may skip is no agreement. Saved as off whenever it is.
+  const [requirePayByCard, setRequirePayByCard] = useState(
+    initial.requireServiceChargeConsent ?? false,
+  );
   // card_on_file: a client's own late cancel waits for the barber's Charge or
   // Waive instead of charging their card on the spot.
   const [feeNeedsApproval, setFeeNeedsApproval] = useState(initial.cardFeeNeedsApproval ?? false);
@@ -338,6 +344,7 @@ export function PaymentsManager({
           ? {
               chargeCardOnFileFees: chargeFees,
               requireCardToBook: requireCard,
+              requireServiceChargeConsent: requireCard && requirePayByCard,
               cardFeeNeedsApproval: feeNeedsApproval,
               cardFeeFlatCents: flatFee ? Math.round(flatRaw * 100) : null,
             }
@@ -667,10 +674,11 @@ export function PaymentsManager({
                   Charge the card for no-shows and late cancellations
                 </span>
                 <span className="mt-0.5 block text-[11px] text-muted">
-                  Off by default: the card is only ever kept. On: when you mark a
+                  Off by default: no fee is ever charged. On: when you mark a
                   no-show, or a customer cancels inside your free-cancel cutoff, the
-                  fee below is charged to the card they saved. Nothing else is ever
-                  charged to it.
+                  fee below is charged to the card they saved. The only other thing
+                  the card can be charged for is the service itself, at checkout, and
+                  only if the client agreed to that when they booked.
                 </span>
               </span>
             </label>
@@ -712,6 +720,29 @@ export function PaymentsManager({
                 </span>
               </span>
             </label>
+            {/* Under the switch it depends on, and only while that is on. With
+                it, every online booking carries a card the shop may charge for
+                the visit at checkout - the client's own tick, in the same
+                words as always, now a condition of booking. */}
+            {requireCard && (
+              <label className="mt-3 flex items-start gap-3 pl-7" data-qa="require-pay-by-card">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4"
+                  checked={requirePayByCard}
+                  onChange={(e) => setRequirePayByCard(e.target.checked)}
+                  aria-label="Clients must agree to pay with that card"
+                />
+                <span>
+                  <span className="block text-sm font-medium">Clients must agree to pay with that card</span>
+                  <span className="mt-0.5 block text-[11px] text-muted">
+                    On: to book online they tick &ldquo;{SERVICE_CHARGE_CONSENT.label}&rdquo;, so every
+                    online booking has a card you can charge at checkout. They can still pay another way
+                    in person. Off: that box is their choice.
+                  </span>
+                </span>
+              </label>
+            )}
           </div>
         )}
         {mode === "deposit" && (

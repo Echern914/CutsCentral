@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-11-require-pay-by-card",
+    date: "2026-11-11",
+    kind: "feature",
+    title: "Require clients to agree to pay with their saved card",
+    body:
+      "In Payments, under Card on file, you can now require a saved card to book and also require clients to " +
+      "agree that you can charge it for the service. Every online booking then has a card you can charge at " +
+      "checkout. It's off unless you turn it on.",
+  },
+  {
     id: "2026-11-11-checkout-ways-to-pay",
     date: "2026-11-11",
     kind: "feature",

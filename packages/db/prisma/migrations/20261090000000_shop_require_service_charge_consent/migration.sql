@@ -1,0 +1,12 @@
+-- Card-on-file shops that require a card to book: must the client also agree
+-- that the card may be charged for the SERVICE once the appointment is done?
+--
+-- OFF (the default, and so every shop on deploy): that tick stays the client's
+-- own choice, exactly as before. ON: the booking page will not book without
+-- it, so every online booking can be collected from the card on file at
+-- checkout - which is what a shop coming from a scheduler that always kept a
+-- chargeable card expects.
+--
+-- The agreement's wording and version are unchanged; this only decides whether
+-- booking online depends on it.
+ALTER TABLE "Shop" ADD COLUMN IF NOT EXISTS "requireServiceChargeConsent" BOOLEAN NOT NULL DEFAULT false;
