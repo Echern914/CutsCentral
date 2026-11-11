@@ -24,6 +24,7 @@ import {
 import {
   attemptById,
   attemptForRequest,
+  BARBER_CONFIRMED_CONSENT,
   liveAttemptFor,
   openCheckoutAttempt,
   updateCheckoutAttempt,
@@ -467,6 +468,9 @@ checkoutRouter.get("/appointments/:id", async (req, res) => {
         // With `over_agreed_price`: the most the customer approved this card
         // for, so the screen can say "approved only up to $X".
         approvedUpToCents: state.savedCardApprovedUpToCents,
+        // Saved for no-show fees only: the screen must ask the barber to
+        // confirm the customer said yes, and the charge is refused without it.
+        needsBarberOk: state.savedCardNeedsBarberOk,
         dueCents: state.chargeableCents,
         card: state.card,
       },
@@ -501,6 +505,11 @@ const chargeCardSchema = z
     amountCents: z.number().int().positive().max(1_000_000),
     /** One press of Charge. The same value twice is the same attempt. */
     requestId: z.string().min(8).max(64),
+    /**
+     * The barber confirmed the customer said yes to this charge. Required, and
+     * only meaningful, for a card saved for no-show fees only.
+     */
+    barberConfirmedClientOk: z.literal(true).optional(),
   })
   .strict();
 
@@ -551,6 +560,13 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
     });
     return;
   }
+  // 🔴 A FEE-ONLY CARD IS CHARGED ONLY ON THE BARBER'S WORD. Checked before
+  // anything is opened or sent to Stripe. A screen that never asked (an older
+  // page, a script) gets a refusal, not a charge.
+  if (state.savedCardNeedsBarberOk && parsed.data.barberConfirmedClientOk !== true) {
+    res.status(409).json({ error: "barber_ok_required" });
+    return;
+  }
   if (!checkoutAmountAllowed(state, parsed.data.amountCents)) {
     // Exactly the balance, or nothing. A lower figure is a partial payment or a
     // silent discount and a higher one is over-collection - all out of scope,
@@ -587,9 +603,14 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
     cardBrand: card?.brand ?? null,
     cardLast4: card?.last4 ?? null,
     // Copied at charge time, so a later consent change cannot rewrite what
-    // this particular charge rested on.
-    consentVersion: card?.serviceChargeConsentVersion ?? null,
-    consentAt: card?.serviceChargeConsentAt ?? null,
+    // this particular charge rested on. A fee-only card rests on the barber's
+    // in-person confirmation instead, stamped now.
+    ...(state.savedCardNeedsBarberOk
+      ? { consentVersion: BARBER_CONFIRMED_CONSENT, consentAt: new Date() }
+      : {
+          consentVersion: card?.serviceChargeConsentVersion ?? null,
+          consentAt: card?.serviceChargeConsentAt ?? null,
+        }),
   });
 
   if (opened.kind === "paid") {
@@ -629,6 +650,7 @@ checkoutRouter.post("/appointments/:id/charge-card", async (req, res) => {
       attemptId: attempt.id,
       actorUserId: req.userId ?? null,
       amountCents: parsed.data.amountCents,
+      barberConfirmedClientOk: state.savedCardNeedsBarberOk,
       outcome: charged.outcome,
     },
     "service checkout: saved card attempt",

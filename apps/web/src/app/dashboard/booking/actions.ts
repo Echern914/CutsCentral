@@ -1286,6 +1286,11 @@ export interface CheckoutMethodState {
   card?: { brand: string | null; last4: string | null } | null;
   /** With `over_agreed_price`: the most the customer approved this card for. */
   approvedUpToCents?: number | null;
+  /**
+   * The card was saved for no-show fees only: charging it for the service
+   * needs the barber to confirm the customer said yes. Optional = older API.
+   */
+  needsBarberOk?: boolean;
 }
 
 export interface CheckoutAttemptView {
@@ -1498,7 +1503,7 @@ export type ChargeCardResult = Result & {
  */
 export async function chargeSavedCardAction(
   appointmentId: string,
-  input: { amountCents: number; requestId: string },
+  input: { amountCents: number; requestId: string; barberConfirmedClientOk?: true },
 ): Promise<ChargeCardResult> {
   const res = await apiSend(
     "POST",

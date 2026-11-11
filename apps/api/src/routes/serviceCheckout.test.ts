@@ -412,14 +412,21 @@ describe("what the checkout screen may offer", () => {
     expect(res.body.methods.savedCard.card).toBeNull();
   });
 
-  it("🔴 does NOT offer a card saved only for a no-show fee, and says why", async () => {
-    // The whole point of the consent split: this card exists, is saved, and is
-    // perfectly chargeable for a fee - and may not be charged for the haircut.
+  it("🔴 offers a card saved only for a no-show fee ONLY as ask-first", async () => {
+    // The consent split still shows: this card was saved for a fee, so the
+    // screen is told the barber must ask before charging it for the service.
     const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "none" } });
     const res = await getCheckout(id);
     expect(res.status).toBe(200);
-    expect(res.body.methods.savedCard.available).toBe(false);
-    expect(res.body.methods.savedCard.blocker).toBe("no_service_consent");
+    expect(res.body.methods.savedCard.available).toBe(true);
+    expect(res.body.methods.savedCard.blocker).toBeNull();
+    expect(res.body.methods.savedCard.needsBarberOk).toBe(true);
+  });
+
+  it("a card the customer authorised for the service needs no ask", async () => {
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    const res = await getCheckout(id);
+    expect(res.body.methods.savedCard.needsBarberOk).toBe(false);
   });
 
   it("charges only the balance when a deposit was already taken", async () => {
@@ -545,11 +552,91 @@ describe("🔴 a standing appointment's later visits can use the saved card", ()
     expect(fake.calls.paymentIntents[0]!.params.payment_method).toBe(anchorPm);
   });
 
-  it("🔴 consent for one visit still does not reach the next one", async () => {
+  it("🔴 consent for one visit still does not reach the next one: there, the barber must ask", async () => {
     const { laterId } = await seedSeries("single");
     const res = await getCheckout(laterId);
-    expect(res.body.methods.savedCard.available).toBe(false);
-    expect(res.body.methods.savedCard.blocker).toBe("no_service_consent");
+    expect(res.body.methods.savedCard.available).toBe(true);
+    expect(res.body.methods.savedCard.needsBarberOk).toBe(true);
+  });
+});
+
+describe("a card saved for no-show fees only", () => {
+  const attemptsFor = (appointmentId: string) =>
+    prisma.checkoutAttempt.findMany({ where: { appointmentId } });
+
+  it("🔴 is refused without the barber's confirmation, before anything is opened or sent to Stripe", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "none" } });
+    const res = await chargeCard(id, { amountCents: 4000, requestId: press() });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("barber_ok_required");
+    expect(fake.calls.paymentIntents).toHaveLength(0);
+    expect(await attemptsFor(id)).toHaveLength(0);
+    const appt = await prisma.appointment.findUniqueOrThrow({ where: { id } });
+    expect(appt.paidAt).toBeNull();
+  });
+
+  it("is charged with it, and the attempt records the barber's confirmation, not a booking consent", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "none" } });
+    const res = await chargeCard(id, { amountCents: 4000, requestId: press(), barberConfirmedClientOk: true });
+    expect(res.status).toBe(200);
+    expect(res.body.result).toBe("paid");
+    expect(fake.calls.paymentIntents).toHaveLength(1);
+    const [attempt] = await attemptsFor(id);
+    const { BARBER_CONFIRMED_CONSENT } = await import("../services/serviceCheckoutAttempt.js");
+    expect(attempt!.consentVersion).toBe(BARBER_CONFIRMED_CONSENT);
+    expect(attempt!.consentAt).toBeInstanceOf(Date);
+  });
+
+  it("a card with the customer's own consent keeps THAT on its attempt, even if the flag is sent", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "single" } });
+    const res = await chargeCard(id, { amountCents: 4000, requestId: press(), barberConfirmedClientOk: true });
+    expect(res.body.result).toBe("paid");
+    const [attempt] = await attemptsFor(id);
+    expect(attempt!.consentVersion).toBe(SERVICE_CHARGE_CONSENT_VERSION);
+  });
+
+  it("🔴 never once the customer stopped charges to the card", async () => {
+    fake.reset();
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "none" } });
+    await prisma.cardOnFile.update({ where: { appointmentId: id }, data: { serviceChargeWithdrawnAt: new Date() } });
+    const state = await getCheckout(id);
+    expect(state.body.methods.savedCard).toMatchObject({ available: false, blocker: "consent_withdrawn", needsBarberOk: false });
+    const res = await chargeCard(id, { amountCents: 4000, requestId: press(), barberConfirmedClientOk: true });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("consent_withdrawn");
+    expect(fake.calls.paymentIntents).toHaveLength(0);
+  });
+
+  it("is offered while the customer is still there (before the booked end), unlike a booking consent", async () => {
+    const startsAt = new Date(Date.now() - 5 * 60 * 1000); // a 30-minute cut, 5 minutes in
+    const asked = await seedAppointment({ shopId, priceDollars: 40, startsAt, card: { consent: "none" } });
+    expect((await getCheckout(asked)).body.methods.savedCard).toMatchObject({ available: true, needsBarberOk: true });
+    // One staff member cannot have two cuts starting at the same instant.
+    const alsoInProgress = new Date(startsAt.getTime() - 60 * 1000);
+    const agreed = await seedAppointment({ shopId, priceDollars: 40, startsAt: alsoInProgress, card: { consent: "single" } });
+    expect((await getCheckout(agreed)).body.methods.savedCard).toMatchObject({ available: false, blocker: "not_finished" });
+  });
+
+  it("is not capped at the booked price - the customer says yes to the figure on screen", async () => {
+    const id = await seedAppointment({ shopId, priceDollars: 40, card: { consent: "none" } });
+    // Through the audited price route, so the booked price stays $40 in the
+    // ledger - the same setup that blocks a consented card as over_agreed_price.
+    const raised = await request(app)
+      .post(`/api/booking/appointments/${id}/price`)
+      .set("Cookie", cookie)
+      .send({ amount: 55 });
+    expect(raised.status).toBe(200);
+    const state = await getCheckout(id);
+    expect(state.body.methods.savedCard).toMatchObject({ available: true, needsBarberOk: true, dueCents: 5500 });
+  });
+
+  it("is still closed 72 hours after the appointment", async () => {
+    const startsAt = new Date(Date.now() - 80 * 60 * 60 * 1000);
+    const id = await seedAppointment({ shopId, priceDollars: 40, startsAt, card: { consent: "none" } });
+    expect((await getCheckout(id)).body.methods.savedCard).toMatchObject({ available: false, blocker: "retention_expired" });
   });
 });
 

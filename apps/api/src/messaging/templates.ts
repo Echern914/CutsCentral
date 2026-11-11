@@ -1501,6 +1501,12 @@ export function buildServiceChargeReceiptEmail(params: {
   /** A short, display-safe reference the shop can find the payment by. */
   reference: string;
   manageToken: string;
+  /**
+   * The card was saved for no-show fees only and charged on the customer's
+   * yes at the shop. Says so, instead of "you agreed when you booked", and
+   * drops the line about stopping charges: there was no standing permission.
+   */
+  agreedInPerson?: boolean;
 }): EmailCopy {
   const when = formatApptTime(params.startsAt, params.timezone);
   const chargedWhen = formatApptTime(params.chargedAt, params.timezone);
@@ -1511,18 +1517,27 @@ export function buildServiceChargeReceiptEmail(params: {
     ? `your ${params.brand ? `${params.brand} ` : ""}card ending ${params.last4}`
     : "the card you saved";
   const what = `your ${params.serviceName} at ${params.shopName} on ${when}`;
+  const basis = params.agreedInPerson
+    ? `You OK'd this with ${params.shopName} at your appointment.`
+    : "You agreed to this when you booked.";
+  const stopText = params.agreedInPerson
+    ? `Questions? Contact ${params.shopName} directly. Your appointment link: ${manageUrl}`
+    : `Questions? Contact ${params.shopName} directly. You can stop ${params.shopName} charging this card from your appointment link: ${manageUrl}`;
+  const stopHtml = params.agreedInPerson
+    ? `Questions? Contact ${params.shopName} directly.`
+    : `You can stop ${params.shopName} charging this card from your appointment link.`;
   return {
     subject: `Receipt: ${dollars} paid to ${params.shopName}`,
     text:
       `Hi ${who}, ${dollars} was charged to ${card} on ${chargedWhen} for ${what}.\n\n` +
-      `You agreed to this when you booked. Reference: ${params.reference}.\n\n` +
-      `Questions? Contact ${params.shopName} directly. You can stop ${params.shopName} charging this card from your appointment link: ${manageUrl}`,
+      `${basis} Reference: ${params.reference}.\n\n` +
+      stopText,
     html: appointmentEmailHtml({
       heading: `Receipt: ${dollars} paid`,
       intro:
         `Hi ${who}, ${dollars} was charged to ${card} on ${chargedWhen} for ${what}. ` +
-        `You agreed to this when you booked. Reference: ${params.reference}. ` +
-        `You can stop ${params.shopName} charging this card from your appointment link.`,
+        `${basis} Reference: ${params.reference}. ` +
+        stopHtml,
       shopName: params.shopName,
       serviceName: params.serviceName,
       when,

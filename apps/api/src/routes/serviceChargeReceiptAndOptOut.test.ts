@@ -146,11 +146,11 @@ async function seed(opts: {
   return { id: appt.id, manageToken };
 }
 
-const chargeCard = (id: string) =>
+const chargeCard = (id: string, extra: Record<string, unknown> = {}) =>
   request(app)
     .post(`/api/checkout/appointments/${id}/charge-card`)
     .set("Cookie", cookie)
-    .send({ amountCents: 4000, requestId: press() });
+    .send({ amountCents: 4000, requestId: press(), ...extra });
 
 const receiptIntents = (appointmentId: string) =>
   prisma.emailIntent.findMany({ where: { appointmentId, kind: "service_charge_receipt" } });
@@ -291,6 +291,24 @@ describe('"You will get a receipt by email every time."', () => {
     // The Stripe id is never pasted whole into an inbox.
     expect(mine[0]!.text).not.toContain(attempt!.stripePaymentIntentId!);
     expect((await receiptIntents(id))[0]!.status).toBe("SENT");
+    expect(mine[0]!.text).toContain("You agreed to this when you booked.");
+  });
+
+  it("🔴 a card saved for fees only, charged on the barber's word: the receipt never says they agreed when booking", async () => {
+    const { id, manageToken } = await seed({ consent: "none" });
+    const res = await chargeCard(id, { barberConfirmedClientOk: true });
+    expect(res.body.result).toBe("paid");
+    expect(await receiptIntents(id)).toHaveLength(1);
+    expect((await deliverOwn(id)).outcome).toBe("sent");
+    const mine = emails.filter((e) => e.meta?.appointmentId === id);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.text).toContain("$40.00");
+    expect(mine[0]!.text).toContain("at your appointment");
+    expect(mine[0]!.text).not.toContain("when you booked");
+    // There was no standing permission, so nothing to "stop".
+    expect(mine[0]!.text).not.toContain("You can stop");
+    expect(mine[0]!.html).not.toContain("when you booked");
+    expect(mine[0]!.text).toContain(`/book/manage/${manageToken}`);
   });
 
   it("the webhook and the reconciler settling the same charge again do not send a second receipt", async () => {

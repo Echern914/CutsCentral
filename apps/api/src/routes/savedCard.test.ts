@@ -539,7 +539,7 @@ describe("the barber's checkout", () => {
     expect(fake.calls.charged[0]!.payment_method).toBe(pm);
   });
 
-  it("🔴 a booking the shop made carries it for fees - the service still needs the client's own tick", async () => {
+  it("🔴 a booking the shop made carries it for fees - the service needs the client's tick or the barber's ask", async () => {
     const client = await prisma.client.findFirstOrThrow({
       where: { shopId, phone: "+13025550170" },
       select: { id: true },
@@ -551,7 +551,15 @@ describe("the barber's checkout", () => {
     expect(created.status).toBe(201);
     await done(created.body.id);
     const state = await checkout(created.body.id);
-    expect(state.body.methods.savedCard).toMatchObject({ available: false, blocker: "no_service_consent" });
+    // Offered, but only as ask-first: the client never agreed to pay for the
+    // service with it, so the charge needs the barber's confirmation.
+    expect(state.body.methods.savedCard).toMatchObject({ available: true, blocker: null, needsBarberOk: true });
+    const refused = await request(app)
+      .post(`/api/checkout/appointments/${created.body.id}/charge-card`)
+      .set("Cookie", cookie)
+      .send({ amountCents: state.body.methods.savedCard.dueCents, requestId: `req_${randomToken(12)}` });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe("barber_ok_required");
   });
 });
 
