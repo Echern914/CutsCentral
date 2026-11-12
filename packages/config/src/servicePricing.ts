@@ -389,6 +389,116 @@ export function parseServiceHours(
   return out;
 }
 
+/** Is "YYYY-MM-DD" a calendar date that exists? ("2026-02-30" is not.) */
+export function isRealDateKey(k: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) return false;
+  const [y, m, d] = k.split("-").map(Number) as [number, number, number];
+  const probe = new Date(Date.UTC(y, m - 1, d));
+  return probe.getUTCFullYear() === y && probe.getUTCMonth() === m - 1 && probe.getUTCDate() === d;
+}
+
+/** How many dates one service may carry hours for, and windows per date. */
+export const MAX_DATE_HOURS_DATES = 120;
+export const MAX_DATE_HOURS_WINDOWS = 6;
+
+/** One date's hours for a service, as the engine reads them. */
+export interface DateHoursEntry {
+  /** Shop-local windows, sorted and merged. EMPTY = not offered that date. */
+  windows: { startMin: number; endMin: number }[];
+  /** Staff the entry applies to. EMPTY = everyone who offers the service. */
+  staffIds: string[];
+}
+
+/**
+ * Per-DATE hours for a service (`Service.dateHours`): a map of shop-local
+ * "YYYY-MM-DD" to {w: [{s,e}], staff?: [ids]}.
+ *
+ * 🔴 An entry REPLACES the day for that service: its windows are the whole
+ * answer for that date - not intersected with the staff's weekly hours, not
+ * with the service's weekly hours, and not joined by an "also open" window.
+ * That is what lets one entry both open time the week does not have and close
+ * a date the week does. See slots.ts, the only place it becomes availability.
+ *
+ * Read defensively, like every other layer here: a date that does not exist,
+ * a non-object entry or a `w` that is not an array is DROPPED, which leaves
+ * that date on its usual hours - the direction that changes nothing. Bad
+ * windows inside a good entry are dropped individually; overlapping ones merge.
+ * A present entry whose windows all fall away is kept as EMPTY only when `w`
+ * was written empty; if every window was junk the entry is dropped instead, so
+ * a corrupted row can never silently close a day.
+ */
+export function parseDateHours(raw: unknown): Map<string, DateHoursEntry> {
+  const out = new Map<string, DateHoursEntry>();
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isRealDateKey(key)) continue;
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const entry = value as { w?: unknown; staff?: unknown };
+    if (!Array.isArray(entry.w)) continue;
+    const spans: { startMin: number; endMin: number }[] = [];
+    for (const w of entry.w) {
+      if (!w || typeof w !== "object") continue;
+      const s = Number((w as { s?: unknown }).s);
+      const e = Number((w as { e?: unknown }).e);
+      // The same bounds as parseServiceHours and serviceWindowSchema.
+      if (Number.isInteger(s) && Number.isInteger(e) && s >= 0 && s <= 1439 && e >= 1 && e <= 1440 && e > s) {
+        spans.push({ startMin: s, endMin: e });
+      }
+    }
+    // Written with windows, none of them usable: corrupted, not "closed".
+    if (entry.w.length > 0 && spans.length === 0) continue;
+    spans.sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
+    const windows: { startMin: number; endMin: number }[] = [];
+    for (const sp of spans) {
+      const last = windows[windows.length - 1];
+      if (last && sp.startMin <= last.endMin) {
+        if (sp.endMin > last.endMin) last.endMin = sp.endMin;
+      } else {
+        windows.push({ ...sp });
+      }
+    }
+    const staffIds = Array.isArray(entry.staff)
+      ? [...new Set(entry.staff.filter((id): id is string => typeof id === "string" && id.length > 0))]
+      : [];
+    out.set(key, { windows, staffIds });
+  }
+  return out;
+}
+
+/** The stored shape of Service.dateHours. */
+export type StoredDateHours = Record<string, { w: { s: number; e: number }[]; staff: string[] }>;
+
+/** Back to the stored shape, dates in order - the inverse of parseDateHours. */
+export function serializeDateHours(hours: Map<string, DateHoursEntry>): StoredDateHours {
+  const out: StoredDateHours = {};
+  for (const key of [...hours.keys()].sort()) {
+    const entry = hours.get(key)!;
+    out[key] = {
+      w: entry.windows.map((w) => ({ s: w.startMin, e: w.endMin })),
+      staff: [...entry.staffIds],
+    };
+  }
+  return out;
+}
+
+/**
+ * The windows a service's date hours give ONE staff member on a date, or null
+ * when no entry applies to them - in which case the usual week decides.
+ *
+ * An entry naming staff applies only to those staff; everyone else offering
+ * the service keeps their usual day. `[]` back means "not offered that date".
+ */
+export function dateHoursFor(
+  hours: Map<string, DateHoursEntry>,
+  dateKey: string,
+  staffId: string | null,
+): { startMin: number; endMin: number }[] | null {
+  const entry = hours.get(dateKey);
+  if (!entry) return null;
+  if (entry.staffIds.length > 0 && (staffId === null || !entry.staffIds.includes(staffId))) return null;
+  return entry.windows.map((w) => ({ ...w }));
+}
+
 /**
  * The duration (minutes) in effect at an instant: its time-of-day window's
  * durationMin when the shop-local start minute falls in one, else the weekday
