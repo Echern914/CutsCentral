@@ -1,4 +1,24 @@
-import { ApiError } from "./api";
+import { ApiError, errorCopy } from "./api";
+
+/**
+ * What the Connect screen says after "Email me my link".
+ *
+ * `err` null = the server took the ask. It answers the same whether or not a
+ * profile had an email to send to, so the copy says "if" - the app cannot
+ * know, and must not guess. A rate limit means the customer asked recently,
+ * which is worth saying plainly so they look in their inbox instead of
+ * tapping again.
+ */
+export function emailLinkCopy(err: unknown, shop?: string): string {
+  const who = shop ? shop : "the shop";
+  if (err === null) {
+    return `If ${who} has an email on file for your profile, your link is on its way there. Open it on this phone and it connects here. Check spam if it isn't there in a minute.`;
+  }
+  if (err instanceof ApiError && err.kind === "rate_limited") {
+    return "You've asked for it recently. Check your email (and spam), or try again a little later.";
+  }
+  return errorCopy(err).body;
+}
 
 /**
  * Did the server REFUSE to connect this profile - or did the request simply

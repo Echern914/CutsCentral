@@ -32,6 +32,7 @@ import { resolveIdentifier } from "./customerAuth.js";
 import { logger } from "../logger.js";
 import { claimTierOpening, openingsForAccount } from "../engines/tierOpenings.js";
 import { announcementsForAccount, markAnnouncementsSeen } from "../services/customerAnnouncements.js";
+import { emailConnectLinks } from "../services/connectLinkEmail.js";
 import { notifyAppointmentConfirmation, notifyBarberBookingEvent } from "../services/appointmentNotify.js";
 
 /**
@@ -315,6 +316,35 @@ customerMeRouter.post("/profiles/claim", async (req, res) => {
       return;
     }
     return notFound(res);
+  }
+  res.json({ ok: true });
+});
+
+/**
+ * "Email me my link": for the shop the Connect screen is about, send each
+ * profile this account might be the shop's own link - to the email THAT
+ * PROFILE has on file (services/connectLinkEmail.ts). `key` is the opaque
+ * per-account key the home sent for the shop, never a shop id.
+ *
+ * The same `ok` whatever is found; 429 only on this account's own limits,
+ * which are taken before anything is looked up.
+ */
+const emailLinkSchema = z.object({ key: z.string().regex(/^[A-Za-z0-9_-]{16}$/) }).strict();
+
+customerMeRouter.post("/profiles/email-link", async (req, res) => {
+  const parsed = emailLinkSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input" });
+    return;
+  }
+  const outcome = await emailConnectLinks({
+    accountId: accountId(req),
+    shopKey: parsed.data.key,
+    now: new Date(),
+  });
+  if (!outcome.ok) {
+    res.status(429).json({ error: "rate_limited" });
+    return;
   }
   res.json({ ok: true });
 });
