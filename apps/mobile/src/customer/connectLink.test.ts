@@ -1,6 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
-import { claimWasRefused, isShopLinkNotPersonal, linkTarget } from "./connectLink";
+import { claimWasRefused, emailLinkCopy, isShopLinkNotPersonal, linkTarget } from "./connectLink";
+
+describe("emailLinkCopy", () => {
+  it("🔴 a sent ask says IF - the server answers the same whether or not there was an email to send to", () => {
+    const copy = emailLinkCopy(null, "Alpha Cuts");
+    expect(copy).toMatch(/^If Alpha Cuts has an email on file/);
+    expect(copy).not.toMatch(/we sent|we've sent|sent to/i);
+    expect(emailLinkCopy(null)).toMatch(/^If the shop has an email on file/);
+  });
+
+  it("a rate limit says they asked recently and to check their inbox, not that something broke", () => {
+    const copy = emailLinkCopy(new ApiError("rate_limited", 429, "rate_limited"));
+    expect(copy).toMatch(/asked for it recently/);
+    expect(copy).toMatch(/email/);
+  });
+
+  it("offline and a server error get the app's usual words", () => {
+    expect(emailLinkCopy(new ApiError("offline", 0))).toMatch(/connection/);
+    expect(emailLinkCopy(new ApiError("server", 503))).toMatch(/Try again/);
+  });
+});
 
 describe("claimWasRefused", () => {
   it("🔴 offline, a rate limit and a server error are NOT a refusal - the customer can try again", () => {

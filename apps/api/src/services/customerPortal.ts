@@ -464,6 +464,13 @@ export async function loadPortalView(accountId: string, now = new Date()): Promi
  * The key is an HMAC of (account, shop): stable for this customer, useless to
  * anybody else, and never a shop id on the wire.
  */
+export function ambiguousShopKey(accountId: string, shopId: string): string {
+  return createHmac("sha256", `${apiEnv().TOKEN_ENCRYPTION_KEY}:customer_ambiguous_v1`)
+    .update(`${accountId}:${shopId}`, "utf8")
+    .digest("base64url")
+    .slice(0, 16);
+}
+
 async function ambiguousShops(
   accountId: string,
   shopIds: string[],
@@ -477,10 +484,7 @@ async function ambiguousShops(
     }),
   );
   return shops.map((s) => ({
-    key: createHmac("sha256", `${apiEnv().TOKEN_ENCRYPTION_KEY}:customer_ambiguous_v1`)
-      .update(`${accountId}:${s.id}`, "utf8")
-      .digest("base64url")
-      .slice(0, 16),
+    key: ambiguousShopKey(accountId, s.id),
     name: s.name,
     logoUrl: s.logoUrl,
     city: s.addressCity,

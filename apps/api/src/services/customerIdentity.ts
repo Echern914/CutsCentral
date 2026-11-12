@@ -608,6 +608,80 @@ export async function syncCustomerLinks(accountId: string, now = new Date()): Pr
   return (await syncCustomerView(accountId, now)).links;
 }
 
+/** A record this account's contact matched at a shop, with its OWN email on file. */
+export interface ConnectableRecord {
+  clientId: string;
+  magicToken: string;
+  /** The address the SHOP has for this record - the only place its link may go. */
+  email: string;
+}
+
+/**
+ * The records at ONE shop that "Email me my link" may mail
+ * (services/connectLinkEmail.ts): those this account's proven contact matched
+ * - the same match, fan-out rule included, that put the shop on the Connect
+ * list - that it has not disowned, that nobody holds, and that carry an email
+ * of their own that is not a placeholder.
+ *
+ * 🔴 The address returned is the RECORD'S, never the account's. An address on
+ * more records than a person has is nobody's own, so its record is skipped.
+ * Call syncCustomerView first: this reads the links it settles.
+ */
+export async function connectableRecordsAt(
+  accountId: string,
+  shopId: string,
+): Promise<ConnectableRecord[]> {
+  return runAsOwner(async (tx) => {
+    const account = await tx.customerAccount.findUnique({
+      where: { id: accountId },
+      select: { phoneE164: true, emailNormalized: true, isDemo: true },
+    });
+    if (!account || account.isDemo) return [];
+
+    const phones = account.phoneE164 ? [account.phoneE164] : [];
+    const emails = account.emailNormalized ? [account.emailNormalized] : [];
+    const { byPhone, byEmail } = await contactHits(tx, phones, emails);
+    const matched = new Set<string>();
+    for (const [, hits] of [...byPhone, ...byEmail]) {
+      if (hits.length > MAX_CONTACT_FANOUT) continue;
+      for (const h of hits) if (h.shopId === shopId) matched.add(h.id);
+    }
+    if (matched.size === 0) return [];
+
+    // Held by anyone (nothing to connect), or disowned by this account.
+    const links = await tx.customerClientLink.findMany({
+      where: { clientId: { in: [...matched] } },
+      select: { accountId: true, clientId: true, status: true },
+    });
+    const skip = new Set(
+      links
+        .filter((l) => l.status === "active" || (l.accountId === accountId && l.status === "rejected"))
+        .map((l) => l.clientId),
+    );
+    const rows = await tx.client.findMany({
+      where: {
+        id: { in: [...matched].filter((id) => !skip.has(id)) },
+        shopId,
+        archivedAt: null,
+        // The shop's mail to this record bounced or was reported: not deliverable.
+        emailSuppressedAt: null,
+        email: { not: null },
+      },
+      select: { id: true, magicToken: true, email: true },
+      orderBy: { id: "asc" },
+    });
+    const keyed = rows
+      .map((r) => ({ ...r, email: (r.email ?? "").trim(), key: (r.email ?? "").trim().toLowerCase() }))
+      .filter((r) => r.key.includes("@"));
+    if (keyed.length === 0) return [];
+
+    const { byEmail: onAddress } = await contactHits(tx, [], [...new Set(keyed.map((r) => r.key))]);
+    return keyed
+      .filter((r) => (onAddress.get(r.key)?.length ?? 0) <= MAX_CONTACT_FANOUT)
+      .map((r) => ({ clientId: r.id, magicToken: r.magicToken, email: r.email }));
+  });
+}
+
 /**
  * The account a push for this record should also reach, re-derived NOW.
  *

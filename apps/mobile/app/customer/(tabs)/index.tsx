@@ -190,7 +190,7 @@ function HomeBody({ data, onChanged }: { data: Home; onChanged: () => void }) {
           <ConnectProfileList
             shops={ambiguous}
             onConnect={(shop) =>
-              router.navigate({ pathname: "/customer/connect", params: { shop: shop.name } })
+              router.navigate({ pathname: "/customer/connect", params: { shop: shop.name, key: shop.key } })
             }
           />
         </>
