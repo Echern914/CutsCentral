@@ -10,7 +10,14 @@ import {
 } from "@chairback/config";
 import { SERVICE_VISIBILITIES } from "@chairback/config/serviceVisibility";
 import { describeBlockScope } from "@chairback/config/blockScope";
-import { parseHolidayNames } from "@chairback/config/servicePricing";
+import {
+  isRealDateKey,
+  MAX_DATE_HOURS_WINDOWS,
+  parseDateHours,
+  parseHolidayNames,
+  serializeDateHours,
+} from "@chairback/config/servicePricing";
+import { setServiceDateHours } from "../services/serviceDateHours.js";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -451,6 +458,9 @@ bookingDashboardRouter.get("/services", async (req, res) => {
       durationOverrides: s.durationOverrides ?? {},
       dailyLimits: s.dailyLimits ?? {},
       hoursWindows: s.hoursWindows ?? {},
+      // Per-date hours, read through the engine's own parser so the editor
+      // shows exactly what the grid will act on (junk dropped, windows merged).
+      dateHours: serializeDateHours(parseDateHours(s.dateHours)),
       timeOverrides: s.timeOverrides ?? [],
       // Which group (if any) this service belongs to. null for every service on
       // a shop not using groups - the web UI keys the "in group X" badge off it.
@@ -683,6 +693,45 @@ bookingDashboardRouter.patch("/services/:id", async (req, res) => {
     await extendSoloStaffHoursFromServices(req.shop!.id);
   }
   res.json({ ok: true });
+});
+
+// "On these days, this service is open these hours." Several dates in one save
+// (the days of a holiday week), merged into the service's per-date hours under
+// a row lock - see services/serviceDateHours.ts for why it is never written
+// whole from the browser, and engines/slots.ts for what an entry means.
+//   hours: [{s,e}] the hours those dates · [] not offered · null back to usual
+//   staffIds: who it applies to (absent / [] = everyone who offers the service)
+//   price: optional, into the existing per-date price layer (null clears it)
+const dateHoursWriteSchema = z
+  .object({
+    dates: z
+      .array(z.string().refine(isRealDateKey, "Not a real date"))
+      .min(1)
+      .max(31),
+    hours: z.array(serviceWindowSchema).max(MAX_DATE_HOURS_WINDOWS).nullable(),
+    staffIds: z.array(z.string().min(1)).max(100).optional(),
+    price: z.number().min(0).max(100000).nullable().optional(),
+  })
+  .strict();
+
+bookingDashboardRouter.put("/services/:id/date-hours", async (req, res) => {
+  const parsed = dateHoursWriteSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const outcome = await setServiceDateHours({
+    shopId: req.shop!.id,
+    serviceId: req.params.id!,
+    timezone: req.shop!.timezone,
+    change: parsed.data,
+    now: new Date(),
+  });
+  if (!outcome.ok) {
+    res.status(outcome.error === "not_found" ? 404 : 400).json({ error: outcome.error });
+    return;
+  }
+  res.json({ ok: true, dateHours: outcome.dateHours, dateOverrides: outcome.dateOverrides });
 });
 
 // Soft-delete (active=false): Appointment.serviceId is Restrict, so history keeps
