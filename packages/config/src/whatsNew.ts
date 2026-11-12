@@ -45,6 +45,15 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "year or any time. The list shows only the clients who booked it.",
   },
   {
+    id: "2026-11-12-month-tap-glides",
+    date: "2026-11-12",
+    kind: "fix",
+    title: "Tapping a day in the calendar takes you to it",
+    body:
+      "On your phone, tapping a day in the month calendar now glides down to that day's appointments, so you " +
+      "don't have to scroll to find them.",
+  },
+  {
     id: "2026-11-11-require-pay-by-card",
     date: "2026-11-11",
     kind: "feature",

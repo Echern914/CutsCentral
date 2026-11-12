@@ -3,7 +3,7 @@ import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { invalidate, useCustomer } from "@/src/customer/CustomerProvider";
 import { ApiError, errorCopy } from "@/src/customer/api";
-import { isShopLinkNotPersonal } from "@/src/customer/connectLink";
+import { emailLinkCopy, isShopLinkNotPersonal } from "@/src/customer/connectLink";
 import { color, radius, space, type } from "@/src/customer/theme";
 import { Button, Txt } from "@/src/customer/ui";
 
@@ -24,10 +24,34 @@ import { Button, Txt } from "@/src/customer/ui";
 export default function ConnectScreen() {
   const router = useRouter();
   const { api } = useCustomer();
-  const { shop } = useLocalSearchParams<{ shop?: string }>();
+  // `key` is the home's opaque key for this shop - never a shop id. Absent when
+  // the screen was opened some other way, which only hides "Email me my link".
+  const { shop, key } = useLocalSearchParams<{ shop?: string; key?: string }>();
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [mailing, setMailing] = useState(false);
+  const [mailMessage, setMailMessage] = useState<string | null>(null);
+
+  /**
+   * No link to hand? The shop's link for each profile goes to the email THAT
+   * profile has on file - never to an address typed here - so it reaches only
+   * whoever the shop already writes to. The server answers the same either
+   * way, which is why the copy says "if".
+   */
+  async function emailMe() {
+    if (mailing || !key) return;
+    setMailing(true);
+    setMailMessage(null);
+    try {
+      await api.send("POST", "/api/me/profiles/email-link", { key });
+      setMailMessage(emailLinkCopy(null, shop));
+    } catch (err) {
+      setMailMessage(emailLinkCopy(err, shop));
+    } finally {
+      setMailing(false);
+    }
+  }
 
   async function connect() {
     const value = link.trim();
@@ -119,6 +143,29 @@ export default function ConnectScreen() {
           onPress={() => void connect()}
           style={styles.primary}
         />
+        {key ? (
+          <>
+            <Txt variant="footnoteStrong" tone="secondary" style={styles.label}>
+              Can't find the link?
+            </Txt>
+            <Txt variant="footnote" tone="secondary" style={styles.lede}>
+              We can email it to the address {shop ?? "the shop"} has on file for your profile.
+            </Txt>
+            <Button
+              label="Email me my link"
+              variant="secondary"
+              busy={mailing}
+              onPress={() => void emailMe()}
+              accessibilityHint="Sends your link to the email the shop has for your profile"
+              style={styles.secondary}
+            />
+            {mailMessage ? (
+              <Txt variant="footnote" tone="secondary" accessibilityLiveRegion="polite" style={styles.message}>
+                {mailMessage}
+              </Txt>
+            ) : null}
+          </>
+        ) : null}
         <Txt variant="caption" tone="tertiary" style={styles.small}>
           Nothing from either profile is shown until one is connected - not appointments, not rewards, not names.
         </Txt>
@@ -145,5 +192,6 @@ const styles = StyleSheet.create({
   },
   message: { marginTop: space.s2 },
   primary: { marginTop: space.s3, alignSelf: "stretch" },
+  secondary: { marginTop: space.s2, alignSelf: "stretch" },
   small: { marginTop: space.s3 },
 });

@@ -679,6 +679,38 @@ export function BookingCalendar({
   };
   const plannerSwipeHandlers = swipeHandlersFor((delta) => plannerMove.current(delta));
 
+  /**
+   * A TAPPED DAY GLIDES INTO VIEW. On a phone the month grid fills the
+   * screen, so tapping a day changed a panel nobody could see: the barber
+   * tapped, then had to scroll down to find the day they just asked for.
+   *
+   * Only a tap on the grid glides, never a swipe on the open planner (the
+   * barber is already looking at it) or a month change. Today is left to the
+   * planner's own "opens at now", which lands lower, on the booking in
+   * progress, and two glides at once would fight. A planner whose top is
+   * already in the upper half of the screen (a tall desktop window) stays put,
+   * so the grid the barber is using does not jump away from them.
+   *
+   * The ref is on a wrapper that outlives the keyed planner: AnimatePresence
+   * keeps the closing day mounted for its exit, and a ref on the planner itself
+   * would be nulled by that exit just before the glide reads it.
+   */
+  const plannerWrapRef = useRef<HTMLDivElement>(null);
+  const glideTo = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selectedDay || glideTo.current !== selectedDay) return;
+    glideTo.current = null;
+    // After the open animation, plus a few frames for the closing day to drop.
+    const timer = window.setTimeout(() => {
+      const el = plannerWrapRef.current;
+      if (!el || el.getBoundingClientRect().top < window.innerHeight / 2) return;
+      const reduced =
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      el.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+    }, PLANNER_OPEN_MS + 100);
+    return () => window.clearTimeout(timer);
+  }, [selectedDay]);
+
   const navBtn =
     "rounded-lg border border-subtle px-2.5 py-1.5 text-sm text-muted transition-colors hover:text-offwhite";
 
@@ -908,7 +940,15 @@ export function BookingCalendar({
               key={key}
               type="button"
               title={blocked ? "Has blocked-off time" : undefined}
-              onClick={() => setSelectedDay(isSelected ? null : key)}
+              onClick={() => {
+                if (isSelected) {
+                  setSelectedDay(null);
+                  return;
+                }
+                // Today scrolls itself, to now (see the glide above).
+                glideTo.current = key === todayKey ? null : key;
+                setSelectedDay(key);
+              }}
               className={cn(
                 "relative flex aspect-square flex-col items-center justify-center rounded-lg text-sm transition-colors",
                 inMonth ? "text-offwhite" : "text-muted/40",
@@ -944,7 +984,8 @@ export function BookingCalendar({
         })}
       </div>
 
-      {/* Expanded day planner */}
+      {/* Expanded day planner. scroll-mt clears the sticky top bar. */}
+      <div ref={plannerWrapRef} data-qa="month-day-planner-wrap" className="scroll-mt-20">
       <AnimatePresence initial={false}>
         {selectedDay && (
           <motion.div
@@ -996,6 +1037,7 @@ export function BookingCalendar({
           </motion.div>
         )}
       </AnimatePresence>
+      </div>
       </>
       )}
       </Card>
