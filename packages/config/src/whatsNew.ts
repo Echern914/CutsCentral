@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-12-clients-by-service",
+    date: "2026-11-12",
+    kind: "feature",
+    title: "See every client who booked a service",
+    body:
+      "On Clients, pick a service or a whole group in the new filter, then how far back: 30 days, 90 days, a " +
+      "year or any time. The list shows only the clients who booked it.",
+  },
+  {
     id: "2026-11-11-require-pay-by-card",
     date: "2026-11-11",
     kind: "feature",

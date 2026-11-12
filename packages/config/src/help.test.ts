@@ -505,6 +505,13 @@ describe("findHelp — what shipped late September", () => {
     ["send to only gold clients", "message-all-clients"],
     ["send to people who had a haircut", "message-by-service"],
     ["message clients who had a service", "message-by-service"],
+    // The Clients list's service filter (2026-11-12: a barber asked it word for word)
+    [
+      "Is there a way i can look at all the people that have booked braids/retwist in x amount of time",
+      "clients-by-service",
+    ],
+    ["filter clients by service", "clients-by-service"],
+    ["see everyone who booked a fade", "clients-by-service"],
     // The marketing-email yes (#515/#525/#527/#529)
     ["why can't email reach anyone", "email-reaches-nobody"],
     ["why does email say 0 people", "email-reaches-nobody"],

@@ -42,7 +42,14 @@ export interface ClientRow {
  * Selectable client list with a batch-action bar. Checkboxes drive a selection
  * set; the bar appears when 1+ are selected and runs opt-out / opt-in / nudge.
  */
-export function ClientsList({ clients }: { clients: ClientRow[] }) {
+export function ClientsList({
+  clients,
+  filtered = false,
+}: {
+  clients: ClientRow[];
+  /** A search or filter is narrowing the list: an empty one means "none match", not "none yet". */
+  filtered?: boolean;
+}) {
   const { toast } = useToast();
   // No "upgrade" steering inside the iOS app (Guideline 3.1.1) - the Billing
   // page is hidden there, so the hint would point at nothing anyway.
@@ -106,8 +113,9 @@ export function ClientsList({ clients }: { clients: ClientRow[] }) {
     return (
       <Card className="overflow-hidden">
         <p className="px-5 py-8 text-center text-sm text-muted">
-          No clients found. Use “Add client” for walk-ins, or connect Acuity to
-          sync your appointment history.
+          {filtered
+            ? "No clients match these filters."
+            : "No clients found. Use “Add client” for walk-ins, or connect Acuity to sync your appointment history."}
         </p>
       </Card>
     );

@@ -66,6 +66,11 @@ import {
   unarchiveClient,
 } from "../services/client.js";
 import { dismissDuplicates, findDuplicateGroups } from "../services/clientDuplicates.js";
+import {
+  clientServiceOptions,
+  clientsWhoHadService,
+  parseWithin,
+} from "../engines/clientServiceFilter.js";
 import { appNamesForClients, clientsForAccounts } from "../services/customerAppName.js";
 import { recomputeCadence } from "../engines/cadence.js";
 import { shopLocalDayWindow } from "../engines/serviceDailyLimit.js";
@@ -859,6 +864,17 @@ dashboardRouter.get("/clients", async (req, res) => {
   if ((LOYALTY_TIER_KEYS as readonly string[]).includes(tier)) {
     where.loyaltyTier = tier as LoyaltyTierKey;
   }
+  // Booked a service (a group, a menu item or an old system's name) in a
+  // window: the rule a message "By service" uses, so the two agree. ANDed with
+  // everything above. A pick that matches nobody shows nobody - never everyone.
+  const servicePick = String(req.query.service ?? "").trim();
+  const hadService =
+    servicePick === ""
+      ? null
+      : await runWithShop(shop.id, (tx) =>
+          clientsWhoHadService(tx, shop.id, servicePick, parseWithin(req.query.within), new Date()),
+        );
+  if (hadService !== null) where.id = { in: hadService };
 
   const db = forShop(shop.id);
 
@@ -882,11 +898,15 @@ dashboardRouter.get("/clients", async (req, res) => {
     // Handles are stored bare, so "@mike.fades" searches as "mike.fades".
     const igLike = `%${q.replace(/^@+/, "")}%`;
     const filterSql = buildClientFilterSql(filter, tier);
+    // An empty pick result must stay empty: ANY of an empty array is false.
+    const serviceSql =
+      hadService === null ? Prisma.empty : Prisma.sql`AND id = ANY(${hadService}::text[])`;
     const ranked = await runWithShop(shop.id, (tx) =>
       tx.$queryRaw<{ id: string }[]>`
         SELECT id FROM "Client"
         WHERE "shopId" = ${shop.id}
           ${filterSql}
+          ${serviceSql}
           AND (
             ${FULL_NAME_FOLDED} OPERATOR(extensions.%) ${foldedValue(q)}
             OR ${FULL_NAME_FOLDED} ILIKE ${foldedValue(like)}
@@ -1896,6 +1916,17 @@ dashboardRouter.delete("/clients/:clientId/email-marketing", async (req, res) =>
 // a phone or email, grouped, suggested keeper first. Suggestions only - nothing
 // merges until the barber uses the merge route below. Registered before
 // GET /clients/:clientId so "duplicates" is never read as a client id.
+/**
+ * GET /api/dashboard/clients/service-options - what the "Booked a service"
+ * filter lists: service groups, then services, then names only the old system
+ * used. Labels only; who had them is the list's job.
+ */
+dashboardRouter.get("/clients/service-options", async (req, res) => {
+  const shopId = req.shop!.id;
+  const options = await runWithShop(shopId, (tx) => clientServiceOptions(tx, shopId, new Date()));
+  res.json({ options });
+});
+
 dashboardRouter.get("/clients/duplicates", async (req, res) => {
   const shop = req.shop!;
   const { groups, total } = await findDuplicateGroups(shop.id);
