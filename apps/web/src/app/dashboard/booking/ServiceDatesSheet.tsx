@@ -64,8 +64,12 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const MAX_ROWS = 6;
 const DEFAULT_ROW: Row = { start: "09:00", end: "17:00" };
 
+// w-0 + min-w-0 + flex-1: the two pickers split the row evenly and SHRINK. A
+// native select is otherwise as wide as its longest option, and the "until"
+// one carries "12:00 AM (midnight)" - on a phone that pushed the remove button
+// off the edge of the sheet.
 const timeCls =
-  "min-h-[44px] flex-1 rounded-xl border border-subtle bg-charcoal-700 px-2.5 text-sm font-medium text-offwhite outline-none focus:border-gold/50";
+  "min-h-[44px] w-0 min-w-0 flex-1 rounded-xl border border-subtle bg-charcoal-700 px-2.5 text-sm font-medium text-offwhite outline-none focus:border-gold/50";
 const sectionLabel = "text-xs font-semibold uppercase tracking-wider text-muted";
 
 /** "YYYY-MM-DD" plus n days. A calendar date, so plain UTC arithmetic is exact. */
@@ -505,7 +509,11 @@ export function ServiceDatesSheet({
                     aria-label={`Remove hours ${i + 1}`}
                     className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-muted hover:text-danger-soft"
                   >
-                    <span aria-hidden="true">{"✕"}</span>
+                    {/* Drawn, not the "✕" character: the glyph took its colour
+                        from the font and came out blue on the dark theme. */}
+                    <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                      <path d="M4 4l8 8M12 4l-8 8" />
+                    </svg>
                   </button>
                 ) : (
                   <span className="w-11 shrink-0" aria-hidden="true" />
@@ -599,6 +607,10 @@ export function ServiceDatesSheet({
             <div className="rounded-xl border border-subtle px-3 py-2">
               {bars.map((b) => (
                 <div key={b.date} className="flex h-8 items-center gap-2.5">
+                  {/* Fixed-width ends, so every day's bar is the same length
+                      and the same hour sits at the same place on each. The
+                      right one is sized for the longest figure ("+4.5 h
+                      −3.5 h"), which wrapped at anything narrower. */}
                   <span className="w-[74px] shrink-0 text-xs font-medium text-offwhite">{dateLabel(b.date)}</span>
                   <div
                     role="img"
@@ -619,12 +631,12 @@ export function ServiceDatesSheet({
                       />
                     ))}
                   </div>
-                  <span className="w-[72px] shrink-0 text-right text-xs font-semibold tabular-nums text-gold">
+                  <span className="w-[88px] shrink-0 whitespace-nowrap text-right text-xs font-semibold tabular-nums text-gold">
                     {b.delta}
                   </span>
                 </div>
               ))}
-              <div className="flex justify-between pl-[84px] pr-[82px] pt-0.5 text-[11px] text-muted" aria-hidden="true">
+              <div className="flex justify-between pl-[84px] pr-[98px] pt-0.5 text-[11px] text-muted" aria-hidden="true">
                 <span>{hourTick(scale.start)}</span>
                 <span>{hourTick(scale.end)}</span>
               </div>
