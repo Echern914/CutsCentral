@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -46,6 +47,7 @@ import { ConflictInbox, ConflictTabBadge, useUnresolvedConflictCount } from "./C
 import { ShopQrCard } from "./ShopQrCard";
 import { NoBookingLinkBanner } from "./NoBookingLinkBanner";
 import { HolidaysAndSpecialDays } from "./HolidaysAndSpecialDays";
+import { ServiceDatesSheet } from "./ServiceDatesSheet";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import { AcuityCalendarMap } from "./AcuityCalendarMap";
 import { AcuityServiceImport } from "./AcuityServiceImport";
@@ -1220,6 +1222,11 @@ export function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast
 
 //  Services
 
+/** How many of a service's dated days are still ahead, today included. */
+function upcomingDatedDays(s: Pick<ServiceRow, "dateHours">, today: string): number {
+  return Object.keys(s.dateHours ?? {}).filter((d) => d >= today).length;
+}
+
 export function ServicesTab({
   initial,
   holidayNames,
@@ -1261,6 +1268,11 @@ export function ServicesTab({
   const [staffIds, setStaffIds] = useState<string[]>([]);
   // Which service the pencil opened for editing (null = the edit Sheet is closed).
   const [editing, setEditing] = useState<ServiceRow | null>(null);
+  // Which service "Dates" opened (its own hours on chosen days), by id. The
+  // close is stable on purpose: the Sheet re-runs its focus effect whenever
+  // onClose changes, which would pull focus out of a field mid-edit.
+  const [dating, setDating] = useState<string | null>(null);
+  const closeDating = useCallback(() => setDating(null), []);
   // A service's row as its last save wrote it, until the page's refresh lands -
   // so neither the list nor a reopened editor shows the pre-save values (and
   // a second save can't write them back). See justSaved.ts.
@@ -1278,6 +1290,12 @@ export function ServicesTab({
   const activeRows = initial.filter((s) => s.active);
   const activeServices =
     savedOrder && savedOrder.over === initial ? inSavedOrder(activeRows, savedOrder.ids) : activeRows;
+  // The shop's date today, for counting dated days still ahead.
+  const today = zonedDateKey(new Date(), timezone);
+  // Through the just-saved view, like Edit: a reopened sheet shows what the
+  // last save wrote even before the page's refresh lands.
+  const datingRow = dating ? initial.find((r) => r.id === dating) : undefined;
+  const datingService = datingRow ? justSaved.current(datingRow) : null;
 
   function add() {
     if (!name.trim()) return;
@@ -1604,6 +1622,15 @@ export function ServicesTab({
                   >
                     Edit
                   </button>
+                  {/* This service's own hours on chosen days ("Thanksgiving
+                      week I open at 8"). The count says some are already set. */}
+                  <button
+                    onClick={() => setDating(s.id)}
+                    className="text-xs text-gold hover:underline"
+                    aria-label={`Change some days for ${s.name}`}
+                  >
+                    {upcomingDatedDays(s, today) > 0 ? `Dates (${upcomingDatedDays(s, today)})` : "Dates"}
+                  </button>
                   <button
                     onClick={() => duplicate(s)}
                     disabled={pending}
@@ -1647,6 +1674,23 @@ export function ServicesTab({
           toast={toast}
           onClose={() => setEditing(null)}
           onSaved={(row) => justSaved.remember(initial.find((r) => r.id === row.id) ?? row, row)}
+        />
+      )}
+
+      {datingService && (
+        <ServiceDatesSheet
+          key={datingService.id}
+          service={datingService}
+          staff={staff}
+          timezone={timezone}
+          onClose={closeDating}
+          onSaved={(dateHours, dateOverrides) =>
+            justSaved.remember(initial.find((r) => r.id === datingService.id) ?? datingService, {
+              ...datingService,
+              dateHours,
+              dateOverrides,
+            })
+          }
         />
       )}
 
