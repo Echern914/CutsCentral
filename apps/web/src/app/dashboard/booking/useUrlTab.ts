@@ -24,14 +24,21 @@ export function useUrlTab<T extends string>({
   tabs,
   current,
   onRequest,
+  param = "tab",
 }: {
   tabs: readonly T[];
   current: T;
   /** Switch to `next`; false when it was refused. */
   onRequest: (next: T) => boolean;
+  /**
+   * Which address parameter carries it. "tab" is the page's own tab bar; the
+   * Services tab keeps its section (Menu / Special dates / Extras) in
+   * "section" the same way, for the same reason.
+   */
+  param?: string;
 }) {
   const params = useSearchParams();
-  const raw = params?.get("tab") ?? null;
+  const raw = params?.get(param) ?? null;
   const wanted = raw !== null && (tabs as readonly string[]).includes(raw) ? (raw as T) : null;
 
   // Latest values for the effects without re-running them on every render.
@@ -42,8 +49,8 @@ export function useUrlTab<T extends string>({
 
   useEffect(() => {
     if (wanted === null || wanted === currentRef.current) return;
-    if (!requestRef.current(wanted)) writeTab(currentRef.current);
-  }, [wanted]);
+    if (!requestRef.current(wanted)) writeTab(param, currentRef.current);
+  }, [wanted, param]);
 
   // Not on the first render: the address is what chose the first tab.
   const first = useRef(true);
@@ -52,15 +59,15 @@ export function useUrlTab<T extends string>({
       first.current = false;
       return;
     }
-    writeTab(current);
-  }, [current]);
+    writeTab(param, current);
+  }, [current, param]);
 }
 
-function writeTab(tab: string) {
+function writeTab(param: string, tab: string) {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
-  if (url.searchParams.get("tab") === tab) return;
-  url.searchParams.set("tab", tab);
+  if (url.searchParams.get(param) === tab) return;
+  url.searchParams.set(param, tab);
   // Next 14.1+ keeps useSearchParams in step with history.replaceState, with
   // no server round trip and no new history entry for a tab change.
   window.history.replaceState(null, "", url);

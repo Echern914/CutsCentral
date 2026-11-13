@@ -90,6 +90,7 @@ function renderTab() {
       toast={vi.fn()}
       groupUnsavedRef={{ current: null }}
       acuityConnected={false}
+      initialSection="extras"
     />,
   );
 }

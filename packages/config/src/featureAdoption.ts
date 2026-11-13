@@ -88,7 +88,7 @@ export const ADOPTION_FEATURES: readonly AdoptionFeature[] = [
   { id: "rewards", label: "Rewards & punch cards", href: "/dashboard/rewards", gate: "all" },
   { id: "card_at_booking", label: "Card or deposit at booking", href: "/dashboard/payments", gate: "all" },
   { id: "client_messages", label: "Messages or promos to clients", href: "/dashboard/clients", gate: "all" },
-  { id: "service_groups", label: "Service groups", href: "/dashboard/booking?tab=Services", gate: "all" },
+  { id: "service_groups", label: "Service groups", href: "/dashboard/booking?tab=Services&section=extras", gate: "all" },
   { id: "special_pricing", label: "Holiday, weekday or time-of-day pricing", href: "/dashboard/booking?tab=Services", gate: "all" },
   { id: "custom_domain", label: "Your own domain", href: "/dashboard/site", gate: "all" },
   { id: "rebook_nudges", label: "Rebooking nudges", href: "/dashboard/nudges", gate: "premium" },

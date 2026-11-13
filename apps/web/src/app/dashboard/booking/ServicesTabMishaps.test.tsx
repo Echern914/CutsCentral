@@ -100,7 +100,7 @@ async function card(title: string) {
   return within((await screen.findByText(title)).closest("li") as HTMLElement);
 }
 
-function renderTab(initial: ServiceRow[] = [RETWIST, BRAIDS], staffRows = staff) {
+function renderTab(initial: ServiceRow[] = [RETWIST, BRAIDS], staffRows = staff, section: "menu" | "dates" = "menu") {
   const toast = vi.fn();
   render(
     <ServicesTab
@@ -112,6 +112,7 @@ function renderTab(initial: ServiceRow[] = [RETWIST, BRAIDS], staffRows = staff)
       toast={toast}
       groupUnsavedRef={{ current: null }}
       acuityConnected={false}
+      initialSection={section}
     />,
   );
   return { toast };
@@ -131,7 +132,7 @@ afterEach(() => confirmSpy.mockReset());
 
 describe("targeted series and slots", () => {
   it("🔴 editing a series sends the 'Also bookable as' set it shows", async () => {
-    renderTab();
+    renderTab(undefined, undefined, "dates");
     (await card("Late night")).getByRole("button", { name: "Edit" }).click();
     const chips = within(await screen.findByRole("group", { name: "Other services this slot is bookable as" }));
     fireEvent.click(chips.getByRole("button", { name: /Braids/ }));
@@ -144,13 +145,13 @@ describe("targeted series and slots", () => {
 
   it("a draft copy's save button says Publish, as its toast promised", async () => {
     a.listTargetedSlotsAction.mockResolvedValue({ ok: true, slots: [], rules: [{ ...RULE, draft: true }] });
-    renderTab();
+    renderTab(undefined, undefined, "dates");
     (await card("Late night")).getByRole("button", { name: "Edit" }).click();
     expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
   });
 
   it("🔴 Turn off asks first, and a No leaves the series alone", async () => {
-    renderTab();
+    renderTab(undefined, undefined, "dates");
     confirmSpy.mockReturnValue(false);
     fireEvent.click(await screen.findByRole("button", { name: "Turn off" }));
     expect(confirmSpy).toHaveBeenCalledTimes(1);
@@ -162,7 +163,7 @@ describe("targeted series and slots", () => {
   });
 
   it("🔴 a cleared price on a special is refused, never saved as $0", async () => {
-    const { toast } = renderTab();
+    const { toast } = renderTab(undefined, undefined, "dates");
     const slot = await card("Model rate");
     fireEvent.click(slot.getByRole("button", { name: "Edit" }));
     const priceBox = (await slot.findByDisplayValue("25")) as HTMLInputElement;
@@ -173,7 +174,7 @@ describe("targeted series and slots", () => {
   });
 
   it("cards show cents: a $12.50 series is not $13", async () => {
-    renderTab();
+    renderTab(undefined, undefined, "dates");
     const series = await card("Late night");
     // The card's own disclosure button is the one that opens its dates.
     fireEvent.click(series.getAllByRole("button", { expanded: false })[0]!);
