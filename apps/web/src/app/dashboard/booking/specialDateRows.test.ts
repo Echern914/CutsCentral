@@ -302,6 +302,39 @@ describe("one service's own hours on a date", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.dates).toEqual(["2026-11-13"]);
   });
+
+  it("a change the shop named goes by its name, with the service under it", () => {
+    const named = { ...longer, n: "Holiday week" };
+    const rows = build({
+      services: [
+        svc({
+          id: "cut",
+          name: "Haircut",
+          dateHours: { "2026-11-23": named, "2026-11-24": named, "2026-11-26": { w: [], staff: [], n: "Family day" } },
+        }),
+      ],
+    });
+    expect(rows.map((r) => [r.kind, r.title, r.sub])).toEqual([
+      ["hours", "Holiday week", "Haircut · 8:00 AM – 9:00 PM · Mon Nov 23 and Tue 24"],
+      ["closed", "Family day", "Haircut closed"],
+    ]);
+  });
+
+  it("the same hours under a different name are two rows, as they are two bars on the calendar", () => {
+    const rows = build({
+      services: [
+        svc({
+          id: "cut",
+          name: "Haircut",
+          dateHours: { "2026-11-23": { ...longer, n: "Holiday week" }, "2026-11-24": longer },
+        }),
+      ],
+    });
+    expect(rows.map((r) => [r.title, r.dates])).toEqual([
+      ["Holiday week", ["2026-11-23"]],
+      ["Haircut", ["2026-11-24"]],
+    ]);
+  });
 });
 
 describe("a one-time opening", () => {

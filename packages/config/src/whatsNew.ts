@@ -46,6 +46,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "Add or change it under Your page.",
   },
   {
+    id: "2026-11-13-changed-hours-on-calendar",
+    date: "2026-11-13",
+    kind: "feature",
+    title: "Changed hours show on your calendar",
+    body:
+      "A day where a service has its own hours now carries a gold bar on the calendar, and the month " +
+      "marks it. Tap the bar to give the change a name only you see, change it, do the same for " +
+      "another service, or undo it.",
+  },
+  {
     id: "2026-11-13-special-dates-one-list",
     date: "2026-11-13",
     kind: "feature",

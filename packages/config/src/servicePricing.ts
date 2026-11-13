@@ -400,6 +400,8 @@ export function isRealDateKey(k: string): boolean {
 /** How many dates one service may carry hours for, and windows per date. */
 export const MAX_DATE_HOURS_DATES = 120;
 export const MAX_DATE_HOURS_WINDOWS = 6;
+/** The longest name a dated change can carry ("Thanksgiving week"). */
+export const MAX_DATE_HOURS_NAME = 40;
 
 /** One date's hours for a service, as the engine reads them. */
 export interface DateHoursEntry {
@@ -407,6 +409,12 @@ export interface DateHoursEntry {
   windows: { startMin: number; endMin: number }[];
   /** Staff the entry applies to. EMPTY = everyone who offers the service. */
   staffIds: string[];
+  /**
+   * What the shop calls this change ("Thanksgiving week"). Its own label on
+   * its own calendar: display only, never sent to a client, and it changes
+   * nothing about the hours. Absent = unnamed.
+   */
+  name?: string;
 }
 
 /**
@@ -433,7 +441,7 @@ export function parseDateHours(raw: unknown): Map<string, DateHoursEntry> {
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     if (!isRealDateKey(key)) continue;
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-    const entry = value as { w?: unknown; staff?: unknown };
+    const entry = value as { w?: unknown; staff?: unknown; n?: unknown };
     if (!Array.isArray(entry.w)) continue;
     const spans: { startMin: number; endMin: number }[] = [];
     for (const w of entry.w) {
@@ -460,13 +468,14 @@ export function parseDateHours(raw: unknown): Map<string, DateHoursEntry> {
     const staffIds = Array.isArray(entry.staff)
       ? [...new Set(entry.staff.filter((id): id is string => typeof id === "string" && id.length > 0))]
       : [];
-    out.set(key, { windows, staffIds });
+    const name = typeof entry.n === "string" ? entry.n.trim().slice(0, MAX_DATE_HOURS_NAME) : "";
+    out.set(key, name ? { windows, staffIds, name } : { windows, staffIds });
   }
   return out;
 }
 
 /** The stored shape of Service.dateHours. */
-export type StoredDateHours = Record<string, { w: { s: number; e: number }[]; staff: string[] }>;
+export type StoredDateHours = Record<string, { w: { s: number; e: number }[]; staff: string[]; n?: string }>;
 
 /** Back to the stored shape, dates in order - the inverse of parseDateHours. */
 export function serializeDateHours(hours: Map<string, DateHoursEntry>): StoredDateHours {
@@ -476,6 +485,7 @@ export function serializeDateHours(hours: Map<string, DateHoursEntry>): StoredDa
     out[key] = {
       w: entry.windows.map((w) => ({ s: w.startMin, e: w.endMin })),
       staff: [...entry.staffIds],
+      ...(entry.name ? { n: entry.name } : {}),
     };
   }
   return out;

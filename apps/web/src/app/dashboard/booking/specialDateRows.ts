@@ -1,4 +1,5 @@
 import { datesLabel, spansLabel } from "@chairback/config/dateHoursPlan";
+import { changeSignature } from "./dayChanges";
 import { zonedDateKey } from "@chairback/config/time";
 import { collapseRuns, expandRange } from "@/lib/dateRanges";
 import type { SpecialDayRow, TargetedSlotRow } from "./actions";
@@ -261,7 +262,10 @@ export function buildSpecialDates(input: {
     const same = new Map<string, string[]>();
     for (const [date, entry] of Object.entries(s.dateHours ?? {})) {
       if (date < today) continue;
-      const sig = JSON.stringify([entry.w.map((w) => [w.s, w.e]), [...entry.staff].sort()]);
+      // The same signature the calendar's bar groups by, so a change is one
+      // thing in both places. A name is part of it: "Thanksgiving week" and
+      // an unnamed day with the same hours are two changes.
+      const sig = changeSignature(entry);
       same.set(sig, [...(same.get(sig) ?? []), date]);
     }
     for (const dates of same.values()) {
@@ -270,6 +274,7 @@ export function buildSpecialDates(input: {
       const closed = entry.w.length === 0;
       const who = entry.staff.map(staffName).filter((n): n is string => !!n);
       const withWho = who.length > 0 ? `with ${few(who)}` : null;
+      const called = (entry.n ?? "").trim();
       out.push({
         key: `hours:${s.id}:${dates[0]}`,
         kind: closed ? "closed" : "hours",
@@ -277,9 +282,12 @@ export function buildSpecialDates(input: {
         dates,
         // The name alone on top, the hours under it: a service's name plus
         // two time ranges ran to six lines on a phone.
-        title: closed ? `${s.name} closed` : s.name,
+        // A change the shop named goes by its name, the way a holiday does;
+        // the service it is about moves down a line.
+        title: called || (closed ? `${s.name} closed` : s.name),
         sub:
           [
+            called ? (closed ? `${s.name} closed` : s.name) : null,
             closed ? null : spansLabel(entry.w.map((w) => ({ startMin: w.s, endMin: w.e }))),
             dates.length > 1 ? datesLabel(dates) : null,
             withWho,

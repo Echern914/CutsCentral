@@ -59,6 +59,23 @@ interface Row {
   end: string;
 }
 
+/**
+ * A change to open the sheet on, so the calendar's bar can hand one over.
+ *
+ *   dates alone      -> days ALREADY changed on this service, loaded back to
+ *                       be changed (their hours, people and price).
+ *   dates and hours  -> another service's change, to do the same here. The
+ *                       days and hours arrive filled in; nothing is saved
+ *                       until the barber presses Save.
+ */
+export interface DatesStart {
+  dates: string[];
+  hours?: { s: number; e: number }[];
+  staffIds?: string[];
+  /** The name the change carries, saved with the copy. */
+  name?: string | null;
+}
+
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const MAX_ROWS = 6;
@@ -116,6 +133,7 @@ export function ServiceDatesSheet({
   timezone,
   onClose,
   onSaved,
+  startOn,
 }: {
   service: DateService;
   staff: StaffRow[];
@@ -123,6 +141,8 @@ export function ServiceDatesSheet({
   onClose: () => void;
   /** The service's dated hours and prices as the server now holds them. */
   onSaved?: (dateHours: StoredDateHours, dateOverrides: Record<string, number>) => void;
+  /** Read once, when the sheet opens. */
+  startOn?: DatesStart;
 }) {
   const today = useMemo(() => zonedDateKey(new Date(), timezone), [timezone]);
   // The people who actually do this service. One of them = a solo setup, and
@@ -137,14 +157,46 @@ export function ServiceDatesSheet({
   const [saved, setSaved] = useState<StoredDateHours>(service.dateHours ?? {});
   const [prices, setPrices] = useState<Record<string, number>>(service.dateOverrides ?? {});
 
-  const [weekStart, setWeekStart] = useState(() => weekStartOf(today));
-  const [picked, setPicked] = useState<string[]>([]);
-  const [rows, setRows] = useState<Row[]>([DEFAULT_ROW]);
-  const [rowsTouched, setRowsTouched] = useState(false);
-  const [closed, setClosed] = useState(false);
-  const [price, setPrice] = useState("");
+  // What the sheet opens on. Worked out once: a day that has passed, or one
+  // that is no longer changed, is left out rather than loaded.
+  const [start] = useState(() => {
+    if (!startOn) return null;
+    const stored = service.dateHours ?? {};
+    const copying = startOn.hours !== undefined;
+    const dates = [...new Set(startOn.dates)]
+      .filter((d) => d >= today && (copying || stored[d] !== undefined))
+      .sort();
+    if (dates.length === 0) return null;
+    const first = stored[dates[0]!];
+    const hours = copying ? startOn.hours! : (first?.w ?? []);
+    const people = copying ? (startOn.staffIds ?? []) : (first?.staff ?? []);
+    const shared = [...new Set(dates.map((d) => (service.dateOverrides ?? {})[d]))];
+    return {
+      dates,
+      closed: hours.length === 0,
+      rows:
+        hours.length > 0
+          ? hours.slice(0, MAX_ROWS).map((w) => ({ start: minuteToHhmm(w.s), end: w.e >= 1440 ? MIDNIGHT_END : minuteToHhmm(w.e) }))
+          : [DEFAULT_ROW],
+      who: people.filter((id) => offering.some((s) => s.id === id)),
+      // The price those days already share is shown, and left alone unless
+      // the barber types over it.
+      price: !copying && shared.length === 1 && shared[0] !== undefined ? String(shared[0]) : "",
+      name: copying ? (startOn.name ?? "").trim() : "",
+    };
+  });
+
+  const [weekStart, setWeekStart] = useState(() => weekStartOf(start?.dates[0] ?? today));
+  const [picked, setPicked] = useState<string[]>(() => start?.dates ?? []);
+  const [rows, setRows] = useState<Row[]>(() => start?.rows ?? [DEFAULT_ROW]);
+  const [rowsTouched, setRowsTouched] = useState(start !== null);
+  const [closed, setClosed] = useState(start?.closed ?? false);
+  const [price, setPrice] = useState(start?.price ?? "");
   const [priceTouched, setPriceTouched] = useState(false);
-  const [who, setWho] = useState<string[]>([]);
+  const [who, setWho] = useState<string[]>(() => start?.who ?? []);
+  // The name a copied change brought with it. It rides on the first save
+  // only: after that the sheet is back to making changes of its own.
+  const [carriedName, setCarriedName] = useState(start?.name ?? "");
 
   const [busy, setBusy] = useState(false);
   // A ref as well as state: two taps in one frame both read the same `busy`.
@@ -269,6 +321,7 @@ export function ServiceDatesSheet({
       setRowsTouched(false);
       setPriceTouched(false);
       setPrice("");
+      setCarriedName("");
     } catch {
       setError(refusalCopy(undefined));
     } finally {
@@ -286,6 +339,9 @@ export function ServiceDatesSheet({
         ...(offering.length > 1 ? { staffIds: who } : {}),
         // Untouched = leave any price already on those days exactly as it is.
         ...(priceTouched ? { price: typedPrice } : {}),
+        // Absent = each day keeps the name it has, so changing a named week's
+        // hours does not unname it.
+        ...(carriedName ? { name: carriedName } : {}),
       },
       `Saved. ${sentence}`,
     );
@@ -353,6 +409,7 @@ export function ServiceDatesSheet({
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium text-offwhite">{dateLabel(d)}</div>
                       <div className="text-xs text-muted [overflow-wrap:anywhere]">
+                        {entry.n ? `${entry.n} · ` : ""}
                         {hours}
                         {prices[d] !== undefined ? ` · $${prices[d]}` : ""}
                         {names.length > 0 ? ` · ${names.join(", ")}` : ""}
