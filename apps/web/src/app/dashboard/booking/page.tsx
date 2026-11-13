@@ -88,6 +88,13 @@ export interface ServiceRow {
   // Per-weekday price overrides ({ "0": 55 } = Sunday $55). {} = base every day.
   priceOverrides: Record<string, number>;
   dateOverrides: Record<string, number>;
+  /**
+   * Per-DATE hours ({"2026-11-24": {w: [{s,e}], staff: []}}): this service's
+   * own hours on a chosen date, replacing its usual day. Edited only through
+   * the "Change some days" sheet. Optional so a web deploy ahead of the API
+   * reads none.
+   */
+  dateHours?: Record<string, { w: { s: number; e: number }[]; staff: string[] }>;
   // Per-weekday duration overrides ({ "5": 20 } = Friday 20 min). {} = base.
   durationOverrides: Record<string, number>;
   /**

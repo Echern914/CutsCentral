@@ -45,6 +45,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "year or any time. The list shows only the clients who booked it.",
   },
   {
+    id: "2026-11-12-service-hours-on-dates",
+    date: "2026-11-12",
+    kind: "feature",
+    title: "Give a service its own hours on the days you pick",
+    body:
+      "On Services, tap Dates on a service to set its hours for chosen days: open earlier for a holiday week, " +
+      "split them around a break, or close it. Everything else you offer keeps its usual hours and nobody " +
+      "already booked is moved. You see what changes before you save.",
+  },
+  {
     id: "2026-11-12-month-tap-glides",
     date: "2026-11-12",
     kind: "fix",
