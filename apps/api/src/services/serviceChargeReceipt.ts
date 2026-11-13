@@ -2,6 +2,7 @@ import { runAsOwner } from "@chairback/db";
 import { buildServiceChargeReceiptEmail } from "../messaging/templates.js";
 import { emailDispatchMode, ResendSendError, sendEmail } from "../messaging/email.js";
 import { logger } from "../logger.js";
+import { BARBER_CONFIRMED_CONSENT } from "./serviceCheckoutAttempt.js";
 import {
   ambiguous,
   classifyRefusedReservation,
@@ -119,6 +120,7 @@ export async function deliverServiceChargeReceiptIntent(params: {
       cardLast4: true,
       stripePaymentIntentId: true,
       settledAt: true,
+      consentVersion: true,
     },
   }));
   // Only a charge that actually succeeded has a receipt. Anything else would be
@@ -195,6 +197,9 @@ export async function deliverServiceChargeReceiptIntent(params: {
     // not the whole identifier in someone's inbox.
     reference: receiptReference(attempt.stripePaymentIntentId, attemptId),
     manageToken: appt.manageToken,
+    // A card saved for no-show fees only, charged on the customer's yes at the
+    // shop: the receipt must not claim they agreed when they booked.
+    agreedInPerson: attempt.consentVersion === BARBER_CONFIRMED_CONSENT,
   });
 
   const attemptNo = await reserveAttempt(intent.id, params.claimToken, now);

@@ -139,6 +139,9 @@ export function CheckoutFlow({
   const [outcome, setOutcome] = useState<ChargeCardResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A card saved for no-show fees only: the barber ticks that the customer
+  // said yes before Charge works. Cleared whenever the confirm step is left.
+  const [clientOk, setClientOk] = useState(false);
   const vocab = useVocab();
   // Whether THIS device can collect contactlessly. Read after mount, never
   // during render: the server render has no `window`, and a value baked into
@@ -533,6 +536,10 @@ export function CheckoutFlow({
     // moves nothing. A button reading "Charge $50.00" under "Card on your own
     // reader" is how a barber believes the card was run when it was not.
     const records = choice.kind === "cash_other";
+    // A card saved for no-show fees only. The customer never agreed to pay for
+    // the service with it, so the barber asks and says they did.
+    const askFirst = choice.kind === "saved_card" && savedCard.needsBarberOk === true;
+    const customer = firstNameOf(state.appointment.clientName);
     return (
       <div className="flex flex-col gap-5" data-qa="checkout-confirm">
         <div className="text-center">
@@ -572,17 +579,50 @@ export function CheckoutFlow({
                 (services/serviceChargeReceipt.ts), and pays the shop's
                 connected account. A line that needs "usually" does not belong
                 here: the barber reads these aloud. */}
-            <ul
-              className="flex flex-col gap-2 rounded-2xl bg-charcoal-700 px-4 py-3.5 text-xs leading-relaxed text-offwhite"
-              data-qa="saved-card-promises"
-            >
-              <Assurance>
-                {firstNameOf(state.appointment.clientName) ?? "The customer"} agreed when booking to pay
-                for this appointment with this card.
-              </Assurance>
-              <Assurance>A receipt goes to the email on their booking.</Assurance>
-              <Assurance>The money goes to your Stripe account.</Assurance>
-            </ul>
+            {askFirst ? (
+              // 🔴 THE ONE THING THIS CARD WAS NOT SAVED FOR. Said before the
+              // tick, so the barber knows what they are vouching for, and the
+              // tick is the barber's own word - never pre-ticked, never kept
+              // from a previous visit to this step.
+              <div
+                className="flex flex-col gap-3 rounded-2xl bg-charcoal-700 px-4 py-3.5 text-xs leading-relaxed text-offwhite"
+                data-qa="saved-card-ask-first"
+              >
+                <p>
+                  {customer ?? "The customer"} saved this card for no-show fees only. Ask them before you
+                  charge it for the {vocab.serviceNoun}.
+                </p>
+                <label className="flex min-h-[2.75rem] cursor-pointer items-start gap-2.5 text-sm">
+                  <input
+                    type="checkbox"
+                    data-qa="client-said-yes"
+                    checked={clientOk}
+                    disabled={busy}
+                    onChange={(e) => setClientOk(e.target.checked)}
+                    className="mt-0.5 h-5 w-5 shrink-0 accent-gold"
+                  />
+                  <span className="min-w-0">
+                    {customer ?? "They"} said yes to paying {money(chargeCents)} with this card
+                  </span>
+                </label>
+                <ul className="flex flex-col gap-2">
+                  <Assurance>A receipt goes to the email on their booking.</Assurance>
+                  <Assurance>The money goes to your Stripe account.</Assurance>
+                </ul>
+              </div>
+            ) : (
+              <ul
+                className="flex flex-col gap-2 rounded-2xl bg-charcoal-700 px-4 py-3.5 text-xs leading-relaxed text-offwhite"
+                data-qa="saved-card-promises"
+              >
+                <Assurance>
+                  {customer ?? "The customer"} agreed when booking to pay for this appointment with this
+                  card.
+                </Assurance>
+                <Assurance>A receipt goes to the email on their booking.</Assurance>
+                <Assurance>The money goes to your Stripe account.</Assurance>
+              </ul>
+            )}
           </>
         ) : (
           <p className="text-center text-sm text-offwhite">{confirmMethodLine(choice, savedCard)}</p>
@@ -599,9 +639,10 @@ export function CheckoutFlow({
           data-qa="confirm-charge"
           // 🔴 The double-tap guard the customer can see. The requestId makes a
           // second press harmless server-side; this makes it impossible.
-          disabled={busy}
+          disabled={busy || (askFirst && !clientOk)}
+          aria-describedby={askFirst && !clientOk ? "ask-first-hint" : undefined}
           onClick={async () => {
-            if (busy) return;
+            if (busy || (askFirst && !clientOk)) return;
             setBusy(true);
             setError(null);
             if (!requestId.current) requestId.current = newRequestId();
@@ -612,6 +653,7 @@ export function CheckoutFlow({
                   ? await chargeSavedCardAction(appointmentId, {
                       amountCents: chargeCents,
                       requestId: requestId.current,
+                      ...(askFirst ? { barberConfirmedClientOk: true as const } : {}),
                     })
                   : choice.kind === "tap_to_pay"
                     ? await runTapToPay(requestId.current)
@@ -692,6 +734,11 @@ export function CheckoutFlow({
               ? "Charging…"
               : `Charge ${money(chargeCents)}`}
         </button>
+        {askFirst && !clientOk && (
+          <p id="ask-first-hint" className="-mt-2 text-center text-xs text-muted">
+            Tick that {customer ?? "they"} said yes to charge this card.
+          </p>
+        )}
         <button
           type="button"
           disabled={busy}
@@ -787,10 +834,15 @@ export function CheckoutFlow({
             <MethodButton
               qa="method-saved-card"
               label="Card on file"
-              hint={cardName(savedCard.card)}
+              hint={
+                savedCard.needsBarberOk
+                  ? `${cardName(savedCard.card)} · saved for no-show fees, ask first`
+                  : cardName(savedCard.card)
+              }
               icon={<CardIcon />}
               lead
               onClick={() => {
+                setClientOk(false);
                 setChoice({ kind: "saved_card" });
                 setStep("confirm");
               }}
@@ -1129,6 +1181,9 @@ function errorCopy(
       return `This ${serviceNoun} has already been checked out.`;
     case "no_service_consent":
       return "This card was only approved for no-show fees.";
+    case "barber_ok_required":
+      // The server is newer than this screen and asks for the barber's word.
+      return "This card was saved for no-show fees. Close and reopen checkout to charge it.";
     case "not_finished":
       return "The saved card can be charged once the appointment is done.";
     case "over_agreed_price":
@@ -1175,6 +1230,7 @@ const DEFINITE_REFUSALS = new Set([
   "amount_not_authorized",
   "paid_already",
   "no_service_consent",
+  "barber_ok_required",
   "not_finished",
   "over_agreed_price",
   "consent_withdrawn",

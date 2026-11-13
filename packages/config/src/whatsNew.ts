@@ -64,6 +64,15 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "don't have to scroll to find them.",
   },
   {
+    id: "2026-11-11-charge-fee-only-card",
+    date: "2026-11-11",
+    kind: "feature",
+    title: "Charge a card saved for no-show fees, after asking",
+    body:
+      "A card a client saved only for no-show fees now shows at checkout too, marked ask first. Ask them, tick " +
+      "that they said yes, and charge it. They get an email receipt as usual.",
+  },
+  {
     id: "2026-11-11-require-pay-by-card",
     date: "2026-11-11",
     kind: "feature",

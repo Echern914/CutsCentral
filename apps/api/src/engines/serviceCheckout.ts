@@ -121,6 +121,12 @@ export interface ServiceCheckoutState {
   savedCardEligible: boolean;
   /** Why not, when it may not. Null when it may. */
   savedCardBlocker: SavedCardBlocker | null;
+  /**
+   * The card was saved for no-show fees only. It may be charged for the
+   * service only with the barber's confirmation that the customer said yes in
+   * person, sent with the charge. False whenever the card is not offered.
+   */
+  savedCardNeedsBarberOk: boolean;
   /** Display-safe card identity, for the "Charge card ending ••••4242" row. */
   card: { brand: string | null; last4: string | null } | null;
   /**
@@ -167,6 +173,9 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
 
   const card = input.card;
   let blocker: SavedCardBlocker | null = null;
+  // A card saved for no-show fees only. The barber may still charge it for
+  // the service, but only after confirming the customer said yes in person.
+  let barberOk = false;
   if (!card || (card.status === "pending" && !card.stripePaymentMethodId)) {
     // No row, or a card step the client never finished - at a card shop that
     // books without a card, one they skipped. Either way there is no card:
@@ -176,14 +185,19 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
     // `pending` never completed, `released` was let go, `charging` is mid-flight,
     // `charged`/`failed` are spent. None of them is a card we may charge now.
     blocker = "card_not_saved";
-  } else if (!card.serviceChargeConsentVersion || !card.serviceChargeConsentAt) {
-    // The fee-only case, and the one that matters most: this customer agreed to
-    // a no-show fee and nothing else.
-    blocker = "no_service_consent";
   } else if (card.serviceChargeWithdrawnAt) {
     // They agreed, then said stop. Told apart from "never agreed" so the barber
-    // knows it was the customer's own choice, not a missing tick.
+    // knows it was the customer's own choice, not a missing tick. Checked
+    // BEFORE the fee-only case: a customer who said stop is never offered to
+    // the barber's in-person route either.
     blocker = "consent_withdrawn";
+  } else if (!card.serviceChargeConsentVersion || !card.serviceChargeConsentAt) {
+    // 🔴 THE FEE-ONLY CARD. The customer agreed to a no-show fee and nothing
+    // else when booking. The shop's call (2026-11-11): the barber may charge it
+    // for the service after asking the customer, who is standing there. The
+    // server refuses the charge unless the request carries the barber's
+    // confirmation (`barberConfirmedClientOk`), and records that it did.
+    barberOk = true;
   } else if (
     !serviceChargeAuthorized(card, {
       appointmentId: input.appointmentId,
@@ -191,16 +205,21 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
     })
   ) {
     blocker = "consent_not_for_this_appointment";
+  }
+  if (blocker !== null) {
+    // Already refused; the reason above is the more useful one.
   } else if (serviceChargeWindowClosed(input.endsAt, input.now)) {
     // Checked AFTER consent, so a card that was never authorised still reports
     // the more useful reason. An open-ended right to charge for a haircut somebody had
     // last month is not what they agreed to.
     blocker = "retention_expired";
-  } else if (input.status !== "COMPLETED" && input.now.getTime() < input.endsAt.getTime()) {
+  } else if (!barberOk && input.status !== "COMPLETED" && input.now.getTime() < input.endsAt.getTime()) {
     // 🔴 THE CONSENT SAYS "only once your appointment is finished". Finished
     // means the barber pressed Done, or the booked time is over - never a cut
     // that has not happened yet. Cash and Tap to Pay are unaffected: the
-    // customer is standing there and can see what they are paying for.
+    // customer is standing there and can see what they are paying for. So is
+    // a fee-only card charged on the customer's in-person yes: that yes is
+    // given for this charge, now, not in advance at booking.
     blocker = "not_finished";
   }
 
@@ -211,8 +230,12 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
   // service swapped) is real money the customer can pay at the chair - but it
   // is not what they approved this card for, so the card is refused rather than
   // quietly charged for less. Collecting part of a balance is out of scope.
+  //
+  // A fee-only card approved no price at all; what the customer says yes to in
+  // person is the figure on the barber's confirm screen, so this cap has
+  // nothing to measure against there.
   let approvedUpToCents: number | null = null;
-  if (blocker === null && chargeableCents > 0) {
+  if (blocker === null && !barberOk && chargeableCents > 0) {
     const approved = Math.max(0, (input.agreedPriceCents ?? 0) - collectedCents);
     if (chargeableCents > approved) {
       blocker = "over_agreed_price";
@@ -237,6 +260,7 @@ export function serviceCheckoutState(input: ServiceCheckoutInput): ServiceChecko
     // card button that would take $0 is a dead end.
     savedCardEligible: blocker === null && chargeableCents > 0,
     savedCardBlocker: blocker,
+    savedCardNeedsBarberOk: blocker === null && barberOk,
     card: card ? { brand: card.brand, last4: card.last4 } : null,
     savedCardApprovedUpToCents: approvedUpToCents,
   };

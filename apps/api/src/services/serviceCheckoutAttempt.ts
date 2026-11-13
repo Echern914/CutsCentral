@@ -31,6 +31,15 @@ export const TERMINAL_STATES = ["succeeded", "failed", "canceled"] as const;
 
 export type CheckoutMethod = "saved_card" | "tap_to_pay" | "cash_other";
 
+/**
+ * What a charge on a card saved for no-show fees only rested on, copied onto
+ * its attempt in place of the customer's booking-time consent version: the
+ * barber's confirmation that the customer said yes in person. Never a value
+ * `serviceChargeConsentVersion` holds, so the two cannot be confused in the
+ * ledger - and the receipt reads it to say which one the customer gave.
+ */
+export const BARBER_CONFIRMED_CONSENT = "barber_confirmed_in_person.v1";
+
 export interface OpenAttemptInput {
   shopId: string;
   appointmentId: string;
