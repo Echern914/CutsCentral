@@ -113,7 +113,8 @@ import {
 } from "@/components/ui/UnitField";
 import { TargetedSlotCard } from "./TargetedSlotCard";
 import { ServiceCard, serviceSummary } from "./ServiceCard";
-import { GoRow, InfoRow, ServiceOwnActions, SettingGroup, SettingRow } from "./ServicePage";
+import { GoRow, InfoRow, ServiceOwnActions, SettingGroup, SettingRow, SwitchRow } from "./ServicePage";
+import { copyText } from "@/lib/contactUri";
 import {
   addOnsValue,
   byDayValue,
@@ -574,9 +575,9 @@ function ClientChangeRule({
   footer?: ReactNode;
 }) {
   return (
-    <div className="mt-4 rounded-xl border border-subtle p-4">
+    <div className="border-b border-subtle px-3.5 py-3 last:border-b-0">
       <div className="flex items-center justify-between gap-4">
-        <p className="min-w-0 text-sm font-medium text-offwhite">{title}</p>
+        <p className="min-w-0 text-sm text-offwhite">{title}</p>
         {on !== null && (
           <button
             type="button"
@@ -586,7 +587,7 @@ function ClientChangeRule({
             onClick={onToggle}
             disabled={pending}
             className={cn(
-              "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
+              "min-h-[44px] shrink-0 rounded-full px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
               on
                 ? "bg-emerald-soft/15 text-emerald-soft"
                 : "border border-subtle text-muted hover:bg-charcoal-700",
@@ -672,6 +673,8 @@ export function SettingsTab({
   const [remind24h, setRemind24h] = useState(shop.pushReminder24hEnabled);
   const [remind2h, setRemind2h] = useState(shop.pushReminder2hEnabled);
   const [pending, start] = useTransition();
+  // What the Copy button last did, said beside it (null = nothing yet).
+  const [copied, setCopied] = useState<"ok" | "failed" | null>(null);
 
   function persist(
     next: Partial<{
@@ -850,13 +853,53 @@ export function SettingsTab({
         </Card>
       )}
 
+      {/* The link every client books through, with Copy right beside it:
+          it is the one thing on this tab a barber reaches for daily. */}
       {mode === "native" && (
-        <Card className="p-5">
-          <CardHeader
-            title="Booking rules"
-            subtitle="How far out and how tight customers can book - targeted slots included."
-          />
-          <div className="mt-4 grid gap-4 sm:grid-cols-3">
+        <div className="flex items-center gap-3 rounded-2xl border border-subtle bg-charcoal-800/40 px-3.5 py-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted">Your booking link</p>
+            <a
+              href={`${bookUrl}?from=dashboard`}
+              target="_blank"
+              rel="noreferrer"
+              className="block truncate text-sm text-offwhite underline-offset-2 hover:underline"
+            >
+              {bookUrl.replace(/^https?:\/\//, "")}
+            </a>
+            {copied && (
+              <p
+                role={copied === "ok" ? "status" : "alert"}
+                className={cn("mt-0.5 text-xs", copied === "ok" ? "text-emerald-soft" : "text-danger-soft")}
+              >
+                {copied === "ok" ? "Copied. Paste it anywhere clients find you." : "Couldn't copy. Press and hold the link to copy it."}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              void copyText(bookUrl).then((ok) => setCopied(ok ? "ok" : "failed"));
+            }}
+            aria-label="Copy your booking link"
+            className="min-h-[44px] shrink-0 rounded-xl border border-gold/50 px-4 text-sm font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+          >
+            Copy
+          </button>
+        </div>
+      )}
+
+      {/* The QR code IS the link, so it sits right under it. */}
+      {mode === "native" && (
+        <ShopQrCard bookUrl={bookUrl} shopName={shop.name} toast={toast} />
+      )}
+
+      {/* WHEN AND HOW CLIENTS BOOK, AND WHAT THEY MAY CHANGE.
+          The pickers in these two groups save together, with the one button
+          under them; a switch saves the moment it is flipped. */}
+      {mode === "native" && (
+        <SettingGroup title="When clients can book">
+          <div className="grid gap-4 border-b border-subtle px-3.5 py-4 sm:grid-cols-3">
             <RuleSelect
               label="Last-minute booking limit"
               value={lead}
@@ -886,115 +929,151 @@ export function SettingsTab({
               help={describeBuffer(buffer)}
             />
           </div>
-          {/* WHAT CLIENTS MAY CHANGE THEMSELVES (config/customerChangeRules.ts):
-              from their link, their group link, or by text. The barber is
-              never limited. Each control appears only when the API answered
-              it - an older API refuses a field it doesn't know. */}
-          {(clientMoves !== null || cutoff !== null) && (
-            <ClientChangeRule
-              title="Clients can reschedule online"
-              on={clientMoves}
-              onToggle={toggleClientMoves}
-              pending={pending}
-              hours={cutoff}
-              onHours={setCutoff}
-              hoursOptions={ruleOptions.reschedule}
-              hoursLabel="Clients can reschedule up to"
-              helpId="cutoff-help"
-              help={
-                clientMoves === false
-                  ? "Off: clients can't move their appointment from their link or by text. They see a note to contact you instead of a Reschedule button."
-                  : cutoff !== null && cutoff > 0
-                    ? `Closer than ${formatCutoffHours(cutoff)} to the appointment, clients can't move it from their link or by text. They're asked to contact you.`
-                    : "No limit: clients can move their appointment any time before it starts."
-              }
-              always="You can always move any appointment yourself."
-            />
-          )}
-          {(clientCancels !== null || cancelCutoff !== null) && (
-            <ClientChangeRule
-              title="Clients can cancel online"
-              on={clientCancels}
-              onToggle={toggleClientCancels}
-              pending={pending}
-              hours={cancelCutoff}
-              onHours={setCancelCutoff}
-              hoursOptions={ruleOptions.cancel}
-              hoursLabel="Clients can cancel up to"
-              helpId="cancel-cutoff-help"
-              help={
-                clientCancels === false
-                  ? "Off: clients can't cancel from their link or by text. They see a note to contact you instead of a Cancel button."
-                  : cancelCutoff !== null && cancelCutoff > 0
-                    ? `Closer than ${formatCutoffHours(cancelCutoff)} to the appointment, clients can't cancel it from their link or by text. They're asked to contact you.`
-                    : "No limit: clients can cancel any time before the appointment starts."
-              }
-              always="You can always cancel any appointment yourself."
-              footer={
-                <>
-                  This only decides whether clients can cancel themselves. Whether a late cancel
-                  costs a fee is set in{" "}
-                  <Link href="/dashboard/payments" className="text-gold underline">
-                    Payments
-                  </Link>
-                  .
-                </>
-              }
-            />
-          )}
-          <p className="mt-3 text-xs text-muted">
-            Your booking page:{" "}
-            <a
-              href={`${bookUrl}?from=dashboard`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-gold underline"
-            >
-              {bookUrl}
-            </a>
-          </p>
-          <button
-            onClick={save}
+          <SwitchRow
+            id="setting-approve-bookings"
+            label="Approve each booking first"
+            hint={
+              requireApproval
+                ? "On: an online booking is a request until you say yes on your calendar."
+                : "Off: clients get a confirmed time the moment they book."
+            }
+            on={requireApproval}
+            onToggle={toggleRequireApproval}
             disabled={pending}
-            className="mt-5 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-          >
-            {pending ? "Saving…" : "Save booking rules"}
-          </button>
-        </Card>
-      )}
-
-      {/* Right under the booking link, because the code IS that link - a
-          barber looking for one is looking at the other. */}
-      {mode === "native" && (
-        <ShopQrCard bookUrl={bookUrl} shopName={shop.name} toast={toast} />
-      )}
-
-      {mode === "native" && (
-        <Card className="p-5">
-          <CardHeader
-            title="Notify the waitlist when a slot opens"
-            subtitle="When a booking cancels, matching waitlisters get a push + email that the time is free. You always get an alert either way."
           />
-          <div className="mt-4 flex items-center justify-between gap-4">
-            <p className="text-sm text-muted">
-              {slotOpened
-                ? "On — waitlisters are auto-notified of freed slots."
-                : "Off — only you are alerted when a slot opens."}
-            </p>
-            <button
-              onClick={toggleSlotOpened}
-              disabled={pending}
-              className={cn(
-                "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
-                slotOpened
-                  ? "bg-emerald-soft/15 text-emerald-soft"
-                  : "border border-subtle text-muted hover:bg-charcoal-700",
-              )}
+        </SettingGroup>
+      )}
+
+      {mode === "native" && (
+        <div className="flex flex-col gap-3">
+          <SettingGroup title="Changes and cancellations">
+            {/* WHAT CLIENTS MAY CHANGE THEMSELVES (config/customerChangeRules.ts):
+                from their link, their group link, or by text. The barber is
+                never limited. Each control appears only when the API answered
+                it - an older API refuses a field it doesn't know. */}
+            {(clientMoves !== null || cutoff !== null) && (
+              <ClientChangeRule
+                title="Clients can reschedule online"
+                on={clientMoves}
+                onToggle={toggleClientMoves}
+                pending={pending}
+                hours={cutoff}
+                onHours={setCutoff}
+                hoursOptions={ruleOptions.reschedule}
+                hoursLabel="Clients can reschedule up to"
+                helpId="cutoff-help"
+                help={
+                  clientMoves === false
+                    ? "Off: clients can't move their appointment from their link or by text. They see a note to contact you instead of a Reschedule button."
+                    : cutoff !== null && cutoff > 0
+                      ? `Closer than ${formatCutoffHours(cutoff)} to the appointment, clients can't move it from their link or by text. They're asked to contact you.`
+                      : "No limit: clients can move their appointment any time before it starts."
+                }
+                always="You can always move any appointment yourself."
+              />
+            )}
+            {(clientCancels !== null || cancelCutoff !== null) && (
+              <ClientChangeRule
+                title="Clients can cancel online"
+                on={clientCancels}
+                onToggle={toggleClientCancels}
+                pending={pending}
+                hours={cancelCutoff}
+                onHours={setCancelCutoff}
+                hoursOptions={ruleOptions.cancel}
+                hoursLabel="Clients can cancel up to"
+                helpId="cancel-cutoff-help"
+                help={
+                  clientCancels === false
+                    ? "Off: clients can't cancel from their link or by text. They see a note to contact you instead of a Cancel button."
+                    : cancelCutoff !== null && cancelCutoff > 0
+                      ? `Closer than ${formatCutoffHours(cancelCutoff)} to the appointment, clients can't cancel it from their link or by text. They're asked to contact you.`
+                      : "No limit: clients can cancel any time before the appointment starts."
+                }
+                always="You can always cancel any appointment yourself."
+                footer={
+                  <>
+                    This only decides whether clients can cancel themselves. Whether a late cancel
+                    costs a fee is set in{" "}
+                    <Link href="/dashboard/payments" className="text-gold underline">
+                      Payments
+                    </Link>
+                    .
+                  </>
+                }
+              />
+            )}
+            <Link
+              href="/dashboard/payments"
+              className="flex min-h-[52px] items-center gap-3 px-3.5 py-2 transition-colors duration-150 ease-out hover:bg-charcoal-700/40"
             >
-              {slotOpened ? "On" : "Off"}
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm text-offwhite">Deposits and late-cancel fees</span>
+                <span className="block text-xs text-muted">Set in Payments, with how clients pay.</span>
+              </span>
+              <svg
+                aria-hidden="true"
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="shrink-0 text-muted"
+              >
+                <path d="M6 3l5 5-5 5" />
+              </svg>
+            </Link>
+          </SettingGroup>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={save}
+              disabled={pending}
+              className="min-h-[44px] rounded-xl bg-gold px-5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+            >
+              {pending ? "Saving…" : "Save booking rules"}
             </button>
+            <p className="min-w-0 flex-1 text-xs text-muted">
+              Saves the limits above. Each switch saves as you flip it.
+            </p>
           </div>
-        </Card>
+        </div>
+      )}
+
+      {/* WHAT GOES OUT on its own: reminders and the waitlist alert. */}
+      {mode === "native" && (
+        <SettingGroup title="What goes out">
+          <SwitchRow
+            id="setting-remind-24h"
+            label="Reminder a day before"
+            hint="A free notification to the client's phone, 24 hours ahead. No texts."
+            on={remind24h}
+            onToggle={toggleRemind24h}
+            disabled={pending}
+          />
+          <SwitchRow
+            id="setting-remind-2h"
+            label="Reminder 2 hours before"
+            hint="A free notification to the client's phone. No texts."
+            on={remind2h}
+            onToggle={toggleRemind2h}
+            disabled={pending}
+          />
+          <SwitchRow
+            id="setting-waitlist-opened"
+            label="Tell the waitlist when a time opens"
+            hint={
+              slotOpened
+                ? "On: when a booking cancels, matching waitlisters get a push and an email. You get the alert either way."
+                : "Off: only you are alerted when a time opens."
+            }
+            on={slotOpened}
+            onToggle={toggleSlotOpened}
+            disabled={pending}
+          />
+        </SettingGroup>
       )}
 
       {/* Beside the waitlist switch: both are "what happens when someone
@@ -1008,137 +1087,43 @@ export function SettingsTab({
         />
       )}
 
-      {mode === "native" && (
-        <Card className="p-5">
-          <CardHeader
-            title="Automatic appointment reminders"
-            subtitle="Free push notifications to the client's phone. No texts are sent."
-          />
-          <div className="mt-4 flex flex-col gap-3">
-            {(
-              [
-                {
-                  label: "24 hours before",
-                  on: remind24h,
-                  toggle: toggleRemind24h,
-                },
-                { label: "2 hours before", on: remind2h, toggle: toggleRemind2h },
-              ] as const
-            ).map((tier) => (
-              <div
-                key={tier.label}
-                className="flex items-center justify-between gap-4"
-              >
-                <p className="text-sm text-muted">{tier.label}</p>
-                <button
-                  onClick={tier.toggle}
-                  disabled={pending}
-                  className={cn(
-                    "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
-                    tier.on
-                      ? "bg-emerald-soft/15 text-emerald-soft"
-                      : "border border-subtle text-muted hover:bg-charcoal-700",
-                  )}
-                >
-                  {tier.on ? "On" : "Off"}
-                </button>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {mode === "native" && (
-        <Card className="p-5">
-          <CardHeader
-            title="Require my approval before a booking is confirmed"
-            subtitle="When on, a customer's online booking comes in as a request. You approve or decline it from your calendar, and they're only confirmed once you approve."
-          />
-          <div className="mt-4 flex items-center justify-between gap-4">
-            <p className="text-sm text-muted">
-              {requireApproval
-                ? "On — new bookings wait for your approval."
-                : "Off — customers book confirmed times instantly."}
-            </p>
-            <button
-              onClick={toggleRequireApproval}
-              disabled={pending}
-              className={cn(
-                "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
-                requireApproval
-                  ? "bg-emerald-soft/15 text-emerald-soft"
-                  : "border border-subtle text-muted hover:bg-charcoal-700",
-              )}
-            >
-              {requireApproval ? "On" : "Off"}
-            </button>
-          </div>
-        </Card>
-      )}
-
-      {/* Every booking mode: joining from the app is about who is a client,
+      {/* WHO CAN BOOK, AND WHAT THE PAGE ASKS. Approving new clients is in
+          every booking mode: joining from the app is about who is a client,
           not how they book. */}
-      <Card className="p-5">
-        <CardHeader
-          title="Approve new clients"
-          subtitle="Customers can find your shop by name in the ChairBack app and press Join shop. When on, they wait for you to accept them on your Clients page before your shop shows up for them to book."
-        />
-        <div className="mt-4 flex items-center justify-between gap-4">
-          <p className="text-sm text-muted">
-            {approveClients
-              ? "On — new clients wait for you to accept them."
-              : "Off — anyone who joins becomes a client straight away."}
-          </p>
-          <button
-            onClick={toggleApproveClients}
+      <SettingGroup title="Your booking page">
+        {mode === "native" && (
+          <SwitchRow
+            id="setting-date-first"
+            label="Clients pick a date first"
+            hint={
+              groupsFirst
+                ? "On: clients pick a day, then see only your service groups with openings that day."
+                : "Off: your page lists every service first."
+            }
+            on={groupsFirst}
+            onToggle={toggleGroupsFirst}
             disabled={pending}
-            aria-pressed={approveClients}
-            aria-label="Approve new clients"
-            className={cn(
-              "min-h-[40px] shrink-0 rounded-full px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
-              approveClients
-                ? "bg-emerald-soft/15 text-emerald-soft"
-                : "border border-subtle text-muted hover:bg-charcoal-700",
-            )}
-          >
-            {approveClients ? "On" : "Off"}
-          </button>
-        </div>
-      </Card>
+          />
+        )}
+        <SwitchRow
+          id="setting-approve-clients"
+          label="Approve new clients"
+          hint={
+            approveClients
+              ? "On: people who join your shop in the ChairBack app wait for you to accept them on Clients."
+              : "Off: anyone who joins your shop in the ChairBack app is a client straight away."
+          }
+          on={approveClients}
+          onToggle={toggleApproveClients}
+          disabled={pending}
+        />
+      </SettingGroup>
 
       <WalkInSettingsCard
         initialEnabled={shop.walkInEnabled}
         initialAccepting={shop.walkInAcceptingNow}
         toast={toast}
       />
-
-      {mode === "native" && (
-        <Card className="p-5">
-          <CardHeader
-            title="Day-first booking page (bundles by date)"
-            subtitle="When on, customers pick a DATE first, then see only the bundles (your service groups) with openings that day and the exact times inside each — instead of every service at once. Bundles with nothing open that day don't appear."
-          />
-          <div className="mt-4 flex items-center justify-between gap-4">
-            <p className="text-sm text-muted">
-              {groupsFirst
-                ? "On — customers pick a day, then a time from that day's bundles."
-                : "Off — the menu lists every service (service first)."}
-            </p>
-            <button
-              onClick={toggleGroupsFirst}
-              disabled={pending}
-              className={cn(
-                "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
-                groupsFirst
-                  ? "bg-emerald-soft/15 text-emerald-soft"
-                  : "border border-subtle text-muted hover:bg-charcoal-700",
-              )}
-            >
-              {groupsFirst ? "On" : "Off"}
-            </button>
-          </div>
-        </Card>
-      )}
     </div>
   );
 }

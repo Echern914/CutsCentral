@@ -90,11 +90,13 @@ describe("booking rules", () => {
     a.saveBookingSettingsAction.mockResolvedValue({ ok: false, error: "invalid_input" });
     renderSettings();
     // The two reminder switches start On; everything else starts Off.
-    const onBefore = screen.getAllByRole("button", { name: "On" }).length;
-    fireEvent.click(screen.getAllByRole("button", { name: "Off" })[0]!);
-    expect(screen.getAllByRole("button", { name: "On" })).toHaveLength(onBefore + 1);
+    const onCount = () => screen.getAllByRole("switch").filter((s) => s.getAttribute("aria-checked") === "true").length;
+    const onBefore = onCount();
+    const firstOff = screen.getAllByRole("switch").find((s) => s.getAttribute("aria-checked") === "false")!;
+    fireEvent.click(firstOff);
+    expect(onCount()).toBe(onBefore + 1);
     await waitFor(() => expect(a.saveBookingSettingsAction).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getAllByRole("button", { name: "On" })).toHaveLength(onBefore));
+    await waitFor(() => expect(onCount()).toBe(onBefore));
   });
 });
 

@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-13-booking-settings-grouped",
+    date: "2026-11-13",
+    kind: "feature",
+    title: "Booking settings, sorted into groups",
+    body:
+      "Booking, Settings now sorts everything into a few groups: when clients can book, changes and " +
+      "cancellations, what goes out, and your booking page. Each on-or-off setting is one switch that " +
+      "saves as you flip it, and your booking link has a Copy button at the top.",
+  },
+  {
     id: "2026-11-13-special-dates-one-list",
     date: "2026-11-13",
     kind: "feature",
