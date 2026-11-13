@@ -65,6 +65,8 @@ export async function runTrialCheckIns(
       compAccess: false,
       compEndedAt: null,
       subscriptionStatus: "none",
+      // Only narrows the read. The guard against a second note is the
+      // compare-and-set below: falsified, removing this line changes nothing.
       trialCheckInSentAt: null,
       trialEndsAt: {
         lte: new Date(now.getTime() - CHECK_IN_AFTER_DAYS * MS_PER_DAY),
