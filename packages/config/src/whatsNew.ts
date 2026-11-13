@@ -46,6 +46,16 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
       "saves as you flip it, and your booking link has a Copy button at the top.",
   },
   {
+    id: "2026-11-13-booking-page-address",
+    date: "2026-11-13",
+    kind: "feature",
+    title: "Your address shows while clients book",
+    body:
+      "Your booking page now shows your address under your name, with a tap for directions, and again " +
+      "once they're booked. If your address is set to private, clients see your town until they book. " +
+      "Add or change it under Your page.",
+  },
+  {
     id: "2026-11-13-changed-hours-on-calendar",
     date: "2026-11-13",
     kind: "feature",
