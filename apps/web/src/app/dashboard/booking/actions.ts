@@ -238,7 +238,7 @@ export async function updateServiceAction(
 }
 
 /** Service.dateHours as stored: a shop-local date to that service's hours on it. */
-export type ServiceDateHours = Record<string, { w: { s: number; e: number }[]; staff: string[] }>;
+export type ServiceDateHours = Record<string, { w: { s: number; e: number }[]; staff: string[]; n?: string }>;
 
 /**
  * "On these days, this service is open these hours" - several dates in one
@@ -249,6 +249,7 @@ export type ServiceDateHours = Record<string, { w: { s: number; e: number }[]; s
  *   hours: [{s,e}] the hours those dates · [] not offered · null back to usual
  *   staffIds: who it applies to ([] = everyone who offers the service)
  *   price: a price for those dates · null clears it · absent leaves it alone
+ *   name: what the shop calls the change · "" takes it off · absent keeps it
  */
 export async function setServiceDateHoursAction(
   id: string,
@@ -257,6 +258,7 @@ export async function setServiceDateHoursAction(
     hours: { s: number; e: number }[] | null;
     staffIds?: string[];
     price?: number | null;
+    name?: string;
   },
 ): Promise<Result & { dateHours?: ServiceDateHours; dateOverrides?: Record<string, number> }> {
   const res = await apiSend<{ dateHours: ServiceDateHours; dateOverrides: Record<string, number> }>(
@@ -268,6 +270,24 @@ export async function setServiceDateHoursAction(
   return res.ok && res.data
     ? { ...outcome, dateHours: res.data.dateHours, dateOverrides: res.data.dateOverrides }
     : outcome;
+}
+
+/**
+ * Name a change that is already there ("Thanksgiving week"), or take its name
+ * off with "". Hours, staff and prices are not sent and not touched. Answers
+ * with the service's dated hours as they now stand.
+ */
+export async function nameServiceDatesAction(
+  id: string,
+  input: { dates: string[]; name: string },
+): Promise<Result & { dateHours?: ServiceDateHours }> {
+  const res = await apiSend<{ dateHours: ServiceDateHours }>(
+    "PUT",
+    `/api/booking/services/${id}/date-hours/name`,
+    input,
+  );
+  const outcome = done(res);
+  return res.ok && res.data ? { ...outcome, dateHours: res.data.dateHours } : outcome;
 }
 
 export async function deleteServiceAction(id: string): Promise<Result> {

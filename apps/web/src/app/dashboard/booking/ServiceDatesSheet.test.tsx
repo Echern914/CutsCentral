@@ -329,4 +329,121 @@ describe("days already changed", () => {
     expect(setServiceDateHoursAction).toHaveBeenCalledWith("svc1", { dates: ["2026-11-23"], hours: null });
     expect(screen.queryByRole("region", { name: "Days already changed" })).toBeNull();
   });
+
+  it("shows the name a change carries", () => {
+    open({
+      service: { ...changed, dateHours: { "2026-11-23": { ...changed.dateHours["2026-11-23"], n: "Holiday week" } } },
+    });
+    const list = screen.getByRole("region", { name: "Days already changed" });
+    expect(within(list).getByText(/Holiday week · 8:00 AM – 3:30 PM/)).toBeTruthy();
+  });
+});
+
+describe("opened on a change (from the calendar's bar)", () => {
+  const split = { w: [{ s: 480, e: 930 }, { s: 990, e: 1200 }], staff: ["st1"], n: "Holiday week" };
+  const week = {
+    ...service,
+    staffIds: ["st1", "st2"],
+    dateHours: { "2026-11-23": split, "2026-11-24": split, "2026-11-10": split },
+    dateOverrides: { "2026-11-23": 60, "2026-11-24": 60 },
+  };
+
+  it("loads every day of the change, with its hours, people and price", () => {
+    open({ service: week, staff: [avery, blake], startOn: { dates: ["2026-11-24", "2026-11-23"] } });
+    // On the change's own week, not this one.
+    expect(screen.getByText(/Nov 22 – 28/)).toBeTruthy();
+    expect(day("Mon Nov 23").getAttribute("aria-pressed")).toBe("true");
+    expect(day("Tue Nov 24").getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByLabelText("Hours 1 from") as HTMLSelectElement).value).toBe("08:00");
+    expect((screen.getByLabelText("Hours 2 until") as HTMLSelectElement).value).toBe("20:00");
+    expect(screen.getByRole("button", { name: "Avery" }).getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByLabelText(/Price on those days/) as HTMLInputElement).value).toBe("60");
+    expect(saveButton().textContent).toBe("Save 2 days");
+  });
+
+  it("🔴 saving a loaded change sends no name and no price: the days keep both", async () => {
+    setServiceDateHoursAction.mockResolvedValue({ ok: true, dateHours: {}, dateOverrides: {} });
+    open({ service: week, staff: [avery, blake], startOn: { dates: ["2026-11-23", "2026-11-24"] } });
+    setTime("Hours 1 from", "07:00");
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(setServiceDateHoursAction).toHaveBeenCalledTimes(1));
+    expect(setServiceDateHoursAction.mock.calls[0]![1]).toEqual({
+      dates: ["2026-11-23", "2026-11-24"],
+      hours: [
+        { s: 420, e: 930 },
+        { s: 990, e: 1200 },
+      ],
+      staffIds: ["st1"],
+    });
+  });
+
+  it("a day that has passed, or is no longer changed, is left out", () => {
+    open({ service: week, startOn: { dates: ["2026-11-10", "2026-11-23", "2026-11-30"] } });
+    expect(saveButton().textContent).toBe("Save 1 day");
+    expect(day("Mon Nov 23").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("with nothing left to load it opens as usual", () => {
+    open({ service: week, startOn: { dates: ["2026-11-10"] } });
+    expect(screen.getByText(/Nov 8 – 14/)).toBeTruthy();
+    expect(saveButton().textContent).toBe("Pick a day");
+  });
+});
+
+describe("doing the same for another service", () => {
+  const copy = {
+    dates: ["2026-11-23", "2026-11-24", "2026-11-10"],
+    hours: [
+      { s: 480, e: 930 },
+      { s: 990, e: 1440 },
+    ],
+    staffIds: ["st1", "gone"],
+    name: "Holiday week",
+  };
+  const beard = { ...service, id: "svc2", name: "Beard trim", staffIds: ["st1", "st2"] };
+
+  it("arrives filled in and unsaved, with only the people who do THIS service", () => {
+    open({ service: beard, staff: [avery, blake], startOn: copy });
+    expect(setServiceDateHoursAction).not.toHaveBeenCalled();
+    expect(day("Mon Nov 23").getAttribute("aria-pressed")).toBe("true");
+    expect(saveButton().textContent).toBe("Save 2 days");
+    expect((screen.getByLabelText("Hours 1 from") as HTMLSelectElement).value).toBe("08:00");
+    expect((screen.getByLabelText("Hours 2 until") as HTMLSelectElement).value).toBe("24:00");
+    expect(screen.getByRole("button", { name: "Avery" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Blake" }).getAttribute("aria-pressed")).toBe("false");
+    // The other service's price is not copied: this one has its own.
+    expect((screen.getByLabelText(/Price on those days/) as HTMLInputElement).value).toBe("");
+    expect(screen.getByText(/Beard trim with Avery is open 8:00 AM – 3:30 PM and 4:30 PM – midnight/)).toBeTruthy();
+  });
+
+  it("the name rides on the first save only", async () => {
+    setServiceDateHoursAction.mockResolvedValue({ ok: true, dateHours: {}, dateOverrides: {} });
+    open({ service: beard, staff: [avery, blake], startOn: copy });
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(setServiceDateHoursAction).toHaveBeenCalledTimes(1));
+    expect(setServiceDateHoursAction.mock.calls[0]![0]).toBe("svc2");
+    expect(setServiceDateHoursAction.mock.calls[0]![1]).toEqual({
+      dates: ["2026-11-23", "2026-11-24"],
+      hours: [
+        { s: 480, e: 930 },
+        { s: 990, e: 1440 },
+      ],
+      staffIds: ["st1"],
+      name: "Holiday week",
+    });
+
+    // A second change made in the same sheet is its own, and unnamed.
+    pick("Fri Nov 27");
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(setServiceDateHoursAction).toHaveBeenCalledTimes(2));
+    expect("name" in (setServiceDateHoursAction.mock.calls[1]![1] as object)).toBe(false);
+  });
+
+  it("an unnamed change copies with no name", async () => {
+    setServiceDateHoursAction.mockResolvedValue({ ok: true, dateHours: {}, dateOverrides: {} });
+    open({ service: beard, staff: [avery, blake], startOn: { ...copy, name: null } });
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(setServiceDateHoursAction).toHaveBeenCalledTimes(1));
+    expect("name" in (setServiceDateHoursAction.mock.calls[0]![1] as object)).toBe(false);
+  });
 });

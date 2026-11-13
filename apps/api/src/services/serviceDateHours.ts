@@ -2,6 +2,7 @@ import { Prisma, runWithShop } from "@chairback/db";
 import { zonedDateKey } from "@chairback/config";
 import {
   MAX_DATE_HOURS_DATES,
+  MAX_DATE_HOURS_NAME,
   parseDateHours,
   parseDateOverrides,
   serializeDateHours,
@@ -48,6 +49,11 @@ export interface DateHoursChange {
   staffIds?: string[];
   /** A price for those dates; null clears it; absent leaves prices alone. */
   price?: number | null;
+  /**
+   * What the shop calls the change. "" clears it. ABSENT KEEPS whatever name
+   * each date already has, so changing a named day's hours does not unname it.
+   */
+  name?: string;
 }
 
 export type DateHoursOutcome =
@@ -78,6 +84,7 @@ export async function setServiceDateHours(opts: {
     }
   }
   const staffIds = [...new Set(change.staffIds ?? [])];
+  const name = change.name === undefined ? undefined : change.name.trim().slice(0, MAX_DATE_HOURS_NAME);
 
   return runWithShop(shopId, async (tx): Promise<DateHoursOutcome> => {
     const rows = await tx.$queryRaw<{ dateHours: unknown; dateOverrides: unknown }[]>(Prisma.sql`
@@ -104,9 +111,11 @@ export async function setServiceDateHours(opts: {
     for (const date of dates) {
       if (hours === null) map.delete(date);
       else {
+        const called = name === undefined ? map.get(date)?.name : name;
         map.set(date, {
           windows: hours.map((h) => ({ startMin: h.s, endMin: h.e })),
           staffIds,
+          ...(called ? { name: called } : {}),
         });
       }
     }
@@ -132,5 +141,49 @@ export async function setServiceDateHours(opts: {
       },
     });
     return { ok: true, dateHours, dateOverrides: prices };
+  });
+}
+
+/**
+ * NAME A CHANGE THAT IS ALREADY THERE ("Thanksgiving week"), or take its name
+ * off with "". Hours, staff and prices are not touched.
+ *
+ * Under the same row lock as the hours writer, and for the same reason: the
+ * column is one map, and a name written from "the map as the browser last saw
+ * it" would put back hours another save had just changed.
+ *
+ * A date with no entry is SKIPPED, not refused: there is nothing there to
+ * name, and a day the barber undid in another tab a moment ago is not an
+ * error worth showing. A past date is skipped the same way.
+ */
+export async function nameServiceDateHours(opts: {
+  shopId: string;
+  serviceId: string;
+  timezone: string;
+  dates: string[];
+  name: string;
+  now: Date;
+}): Promise<{ ok: true; dateHours: StoredDateHours } | { ok: false; error: "not_found" }> {
+  const { shopId, serviceId, timezone, now } = opts;
+  const today = zonedDateKey(now, timezone);
+  const name = opts.name.trim().slice(0, MAX_DATE_HOURS_NAME);
+  return runWithShop(shopId, async (tx) => {
+    const rows = await tx.$queryRaw<{ dateHours: unknown }[]>(Prisma.sql`
+      SELECT "dateHours" FROM "Service"
+      WHERE "id" = ${serviceId} AND "shopId" = ${shopId}
+      FOR UPDATE`);
+    const row = rows[0];
+    if (!row) return { ok: false as const, error: "not_found" as const };
+    const map = parseDateHours(row.dateHours);
+    for (const key of [...map.keys()]) if (key < today) map.delete(key);
+    for (const date of new Set(opts.dates)) {
+      const entry = map.get(date);
+      if (!entry) continue;
+      const { name: _old, ...rest } = entry;
+      map.set(date, name ? { ...rest, name } : rest);
+    }
+    const dateHours = serializeDateHours(parseDateHours(serializeDateHours(map)));
+    await tx.service.updateMany({ where: { id: serviceId, shopId }, data: { dateHours } });
+    return { ok: true as const, dateHours };
   });
 }

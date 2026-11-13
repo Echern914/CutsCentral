@@ -68,6 +68,35 @@ describe("parseDateHours", () => {
     expect(Object.keys(out)).toEqual(["2031-11-24", "2031-11-25"]);
     expect(out).toEqual(stored);
   });
+
+  it("a name is kept, trimmed and capped; junk or blank is no name at all", () => {
+    const map = parseDateHours({
+      "2031-11-24": { w: [], staff: [], n: "  Long weekend " },
+      "2031-11-25": { w: [], staff: [], n: "x".repeat(60) },
+      "2031-11-26": { w: [], staff: [], n: "   " },
+      "2031-11-27": { w: [], staff: [], n: 7 },
+    });
+    expect(map.get("2031-11-24")!.name).toBe("Long weekend");
+    expect(map.get("2031-11-25")!.name).toBe("x".repeat(40));
+    expect("name" in map.get("2031-11-26")!).toBe(false);
+    expect("name" in map.get("2031-11-27")!).toBe(false);
+  });
+
+  it("a name round-trips, and an unnamed entry stores no name key", () => {
+    const stored = {
+      "2031-11-24": { w: [{ s: 480, e: 600 }], staff: [], n: "Long weekend" },
+      "2031-11-25": { w: [], staff: ["a"] },
+    };
+    const out = serializeDateHours(parseDateHours(stored));
+    expect(out).toEqual(stored);
+    expect("n" in out["2031-11-25"]!).toBe(false);
+  });
+
+  it("a name changes nothing about the hours", () => {
+    const named = parseDateHours({ "2031-11-24": { w: [{ s: 480, e: 600 }], staff: ["a"], n: "Long weekend" } });
+    expect(dateHoursFor(named, "2031-11-24", "a")).toEqual([{ startMin: 480, endMin: 600 }]);
+    expect(dateHoursFor(named, "2031-11-24", "b")).toBeNull();
+  });
 });
 
 describe("dateHoursFor", () => {
