@@ -153,6 +153,26 @@ describe("findHelp — real phrasings", () => {
     expectAnswer("talk to a real person", "contact-human");
   });
 
+  it("one service's hours for a few days: the barber's own words land, and take nothing from the neighbours", () => {
+    // As it was texted, 2026-11-12.
+    expectAnswer(
+      "i need to change the hours of mens haircut for just the days of thanksgiving week",
+      "service-hours-on-dates",
+    );
+    expectAnswer("so i can add more availability without messing w anything else", "service-hours-on-dates");
+    expectAnswer("can i open earlier on christmas eve for haircuts", "service-hours-on-dates");
+    expectAnswer("longer hours for one service on a holiday week", "service-hours-on-dates");
+    // Still theirs: the weekly hours, the holiday price, the day off.
+    expectAnswer("how do i set my hours", "set-hours");
+    expectAnswer("change hours", "set-hours");
+    expectAnswer("change my availability", "set-hours");
+    expectAnswer("holiday pricing", "holiday-pricing");
+    expectAnswer("how do i set holiday pricing", "holiday-pricing");
+    expectAnswer("block off thanksgiving", "time-off");
+    // A question about money on a holiday is not a question about hours.
+    expect(findHelp("can i charge more on thanksgiving").answer?.id).not.toBe("service-hours-on-dates");
+  });
+
   it("survives typos", () => {
     expectAnswer("does it work with aquity", "acuity");
     expectAnswer("cancle my subscription", "cancel-subscription");
@@ -505,6 +525,13 @@ describe("findHelp — what shipped late September", () => {
     ["send to only gold clients", "message-all-clients"],
     ["send to people who had a haircut", "message-by-service"],
     ["message clients who had a service", "message-by-service"],
+    // The Clients list's service filter (2026-11-12: a barber asked it word for word)
+    [
+      "Is there a way i can look at all the people that have booked braids/retwist in x amount of time",
+      "clients-by-service",
+    ],
+    ["filter clients by service", "clients-by-service"],
+    ["see everyone who booked a fade", "clients-by-service"],
     // The marketing-email yes (#515/#525/#527/#529)
     ["why can't email reach anyone", "email-reaches-nobody"],
     ["why does email say 0 people", "email-reaches-nobody"],

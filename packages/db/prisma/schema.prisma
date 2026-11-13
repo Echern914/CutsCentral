@@ -2923,6 +2923,24 @@ model Service {
   // deliberate overrides and are NOT restricted. See engines/slots.ts
   // (computeOpenSlots) and engines/pricing.ts (parseServiceHours).
   hoursWindows   Json     @default("{}")
+  // Per-DATE hours - "Thanksgiving week this service runs 8 to 8". A JSON map
+  // of shop-local calendar date ("YYYY-MM-DD") to {w, staff?}:
+  //   w     - [{s,e}] windows in minutes from shop-local midnight (e exclusive).
+  //           [] = this service is NOT offered that date.
+  //   staff - staff ids the entry applies to. Absent or [] = everyone who
+  //           offers the service.
+  // 🔴 It REPLACES, for that date and those staff: the windows are the whole
+  // answer. The staff member's weekly hours, this service's weekly
+  // hoursWindows and any "also open" time window are all set aside, which is
+  // how it can both ADD time (open at 8 on a day that starts at 12:30) and
+  // take it away (closed that date). Every other service keeps its usual day.
+  // It only decides which time is CANDIDATE time: breaks, block-offs, external
+  // blocks, bookings, holds, lead time and caps still subtract as always.
+  // A date absent from the map (every existing service is {}) changes nothing.
+  // Written only by PUT /services/:id/date-hours, which merges under a row
+  // lock and drops past dates. See config/servicePricing.ts (parseDateHours)
+  // and engines/slots.ts.
+  dateHours      Json     @default("{}")
   // Time-of-day price/duration windows: a JSON ARRAY of {s,e,price?,durationMin?}
   // where s/e are minutes from shop-local midnight (e exclusive), applied EVERY
   // day on top of the weekday overrides above. A slot whose START minute falls

@@ -5,10 +5,13 @@ import {
   zonedWallTimeToUtc,
 } from "@chairback/config";
 import {
+  dateHoursFor,
   effectiveDurationAt,
   hasOpeningWindows,
   openingSpansForWeekday,
+  parseDateHours,
   parseServiceHours,
+  type DateHoursEntry,
 } from "./pricing.js";
 import { occupyingWhere } from "./chairOccupancy.js";
 import { blockAppliesToService } from "@chairback/config/blockScope";
@@ -212,6 +215,7 @@ export interface FreeRangesService {
   durationOverrides: unknown;
   timeOverrides: unknown;
   hoursWindows: unknown;
+  dateHours: unknown;
   serviceGroupId: string | null;
   dailyLimits: unknown;
 }
@@ -362,6 +366,7 @@ export async function computeFreeRanges(
             durationOverrides: true,
             timeOverrides: true,
             hoursWindows: true,
+            dateHours: true,
             serviceGroupId: true,
             dailyLimits: true,
           },
@@ -716,6 +721,23 @@ export async function computeFreeRanges(
   // time and caps - so it adds candidate time and never overrides a conflict.
   const opensAnyHours = service ? hasOpeningWindows(service.timeOverrides) : false;
 
+  // PER-DATE HOURS ("Thanksgiving week Haircut runs 8 to 8"). Where a date
+  // carries an entry that applies to this staff member, its windows REPLACE the
+  // whole day for this service: the weekly rules, the service-hours restriction
+  // and the opened windows above are all set aside. That is deliberate - the
+  // barber named the date and said what its hours are, so nothing standing may
+  // widen or narrow it. It still only decides CANDIDATE time; every subtraction
+  // below (breaks, block-offs, external blocks, bookings, holds, lead time,
+  // caps) applies to it exactly as to a normal day.
+  //
+  // 🔴 Read here and nowhere else in the grid, so the page, the write-path
+  // re-check (isSlotBookable) and every other caller of this function agree by
+  // construction. Empty map (every existing service) => this is never consulted.
+  const dateHours: Map<string, DateHoursEntry> = service
+    ? parseDateHours(service.dateHours)
+    : new Map();
+  const hasDateHours = dateHours.size > 0;
+
   // Build the recurring windows by walking each shop-local calendar date across
   // the range (plus a day of slack on each side so a window that straddles
   // midnight in UTC is still captured).
@@ -729,7 +751,9 @@ export async function computeFreeRanges(
   // An opening window must be walked even on a weekday the staff has NO rule for
   // (a barber closed Sundays outright), so the walk can no longer be gated on
   // the staff schedule alone.
-  if (byWeekday.size > 0 || opensAnyHours) {
+  // ...and a dated entry must be walked even for a staff member with no weekly
+  // rules at all, for the same reason.
+  if (byWeekday.size > 0 || opensAnyHours || hasDateHours) {
     let cursor = addDays(new Date(rangeStart), -1);
     const walkEnd = addDays(new Date(rangeEnd), 1);
     while (cursor.getTime() <= walkEnd.getTime()) {
@@ -738,7 +762,23 @@ export async function computeFreeRanges(
       const opened = opensAnyHours
         ? openingSpansForWeekday(service!.timeOverrides, parts.weekday)
         : [];
-      if (dayRules || opened.length > 0) {
+      // null = no entry for this date and staff member: the usual week decides.
+      const dated = hasDateHours
+        ? dateHoursFor(
+            dateHours,
+            `${parts.year}-${String(parts.month0 + 1).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`,
+            input.staffId,
+          )
+        : null;
+      if (dated !== null) {
+        // The date's own hours are the whole day ([] = not offered).
+        for (const span of dated) {
+          windows.push({
+            start: zonedWallTimeToUtc(parts.year, parts.month0, parts.day, span.startMin, shop.timezone).getTime(),
+            end: zonedWallTimeToUtc(parts.year, parts.month0, parts.day, span.endMin, shop.timezone).getTime(),
+          });
+        }
+      } else if (dayRules || opened.length > 0) {
         // Service-hours restriction for THIS weekday. `restricted` is true iff
         // the barber set any windows for this weekday; when true, `allowed` is
         // the (possibly empty) list of allowed local windows.

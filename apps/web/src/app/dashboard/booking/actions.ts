@@ -237,6 +237,39 @@ export async function updateServiceAction(
   return { ...done(res), ...(field ? { field } : {}) };
 }
 
+/** Service.dateHours as stored: a shop-local date to that service's hours on it. */
+export type ServiceDateHours = Record<string, { w: { s: number; e: number }[]; staff: string[] }>;
+
+/**
+ * "On these days, this service is open these hours" - several dates in one
+ * save. The server merges them into the service's dated hours (it is never
+ * sent the whole map), and answers with the map and the per-date prices as
+ * they now stand, so the sheet can show the result without waiting for the
+ * page to refetch.
+ *   hours: [{s,e}] the hours those dates · [] not offered · null back to usual
+ *   staffIds: who it applies to ([] = everyone who offers the service)
+ *   price: a price for those dates · null clears it · absent leaves it alone
+ */
+export async function setServiceDateHoursAction(
+  id: string,
+  input: {
+    dates: string[];
+    hours: { s: number; e: number }[] | null;
+    staffIds?: string[];
+    price?: number | null;
+  },
+): Promise<Result & { dateHours?: ServiceDateHours; dateOverrides?: Record<string, number> }> {
+  const res = await apiSend<{ dateHours: ServiceDateHours; dateOverrides: Record<string, number> }>(
+    "PUT",
+    `/api/booking/services/${id}/date-hours`,
+    input,
+  );
+  const outcome = done(res);
+  return res.ok && res.data
+    ? { ...outcome, dateHours: res.data.dateHours, dateOverrides: res.data.dateOverrides }
+    : outcome;
+}
+
 export async function deleteServiceAction(id: string): Promise<Result> {
   return done(await apiSend("DELETE", `/api/booking/services/${id}`));
 }

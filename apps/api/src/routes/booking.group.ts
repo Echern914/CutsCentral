@@ -128,7 +128,7 @@ async function loadGroupServices(
   shopId: string,
   staffId: string,
   serviceIds: string[],
-): Promise<Map<string, GroupPlanService & { name: string; hoursWindows: unknown }> | null> {
+): Promise<Map<string, GroupPlanService & { name: string; hoursWindows: unknown; dateHours: unknown }> | null> {
   const unique = [...new Set(serviceIds)];
   const services = await prisma.service.findMany({
     where: { id: { in: unique }, shopId, ...PUBLIC_SERVICE },
@@ -142,6 +142,7 @@ async function loadGroupServices(
       dateOverrides: true,
       timeOverrides: true,
       hoursWindows: true,
+      dateHours: true,
     },
   });
   if (services.length !== unique.length) return null;
@@ -290,6 +291,8 @@ async function preflight(
       !serviceOfferedDuring({
         hoursWindows: svc.hoursWindows,
         timeOverrides: svc.timeOverrides,
+        dateHours: svc.dateHours,
+        staffId: input.staffId,
         startsAt: m.startsAt,
         endsAt: m.endsAt,
         timezone: shop.timezone,
@@ -497,6 +500,8 @@ bookingGroupRouter.get("/:slug/group/slots", bookingReadLimiter, async (req, res
         return serviceOfferedDuring({
           hoursWindows: svc.hoursWindows,
           timeOverrides: svc.timeOverrides,
+          dateHours: svc.dateHours,
+          staffId: parsed.data.staffId,
           startsAt: m.startsAt,
           endsAt: m.endsAt,
           timezone: shop.timezone,

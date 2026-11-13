@@ -5,7 +5,7 @@ import { DemoTour } from "@/components/tour/DemoTour";
 import { BroadcastCard, type BroadcastDraft } from "./BroadcastCard";
 import type { Promo } from "../promotions/page";
 import { draftTiersFromParam, promoBroadcastDraft } from "../promotions/promoDraft";
-import { ClientsControls } from "./ClientsControls";
+import { ClientsControls, type ServiceFilterOption } from "./ClientsControls";
 import { ClientsList, type ClientRow } from "./ClientsList";
 import { SavedByCard, type SavedByPerson } from "./SavedByCard";
 import { JoinRequestsCard, type JoinRequest } from "./JoinRequestsCard";
@@ -25,6 +25,10 @@ export default async function ClientsPage({
     sort?: string;
     filter?: string;
     tier?: string;
+    /** Booked a service: a group, a menu item or an old system's name. */
+    service?: string;
+    /** That service's window in days ("30" | "90" | "365"), or "any". */
+    within?: string;
     page?: string;
     /** "Email or notify" on a promo: which promo to write out, aimed at which tiers. */
     promo?: string;
@@ -32,15 +36,18 @@ export default async function ClientsPage({
   };
 }) {
   const qs = new URLSearchParams();
-  for (const k of ["q", "sort", "filter", "tier", "page"] as const) {
+  for (const k of ["q", "sort", "filter", "tier", "service", "within", "page"] as const) {
     if (searchParams[k]) qs.set(k, searchParams[k]!);
   }
-  const [res, dupes, savedBy, me] = await Promise.all([
+  const [res, dupes, savedBy, me, serviceOptions] = await Promise.all([
     apiGet<ClientsResponse>(`/api/dashboard/clients?${qs.toString()}`),
     apiGet<{ total: number }>("/api/dashboard/clients/duplicates"),
     apiGet<{ total: number; people: SavedByPerson[]; requests?: JoinRequest[] }>("/api/dashboard/saved-by"),
     // Memoized per render - the layout already fetched it.
     getMe(),
+    // The "Booked a service" list. A failed read hides the filter; the list
+    // itself never depends on it.
+    apiGet<{ options: ServiceFilterOption[] }>("/api/dashboard/clients/service-options"),
   ]);
   const data = res.data;
   // Written from the shop's own promo, looked up here rather than carried in
@@ -128,12 +135,21 @@ export default async function ClientsPage({
         </div>
       )}
 
-      <ClientsControls />
+      <ClientsControls serviceOptions={serviceOptions.data?.options ?? null} />
 
       {/* Keyed by the query so selection state resets when the visible rows
           change - otherwise bulk actions could hit clients from a previous page. */}
       <div data-tour="client-book">
-        <ClientsList key={qs.toString() || "all"} clients={clients} />
+        <ClientsList
+          key={qs.toString() || "all"}
+          clients={clients}
+          filtered={Boolean(
+            searchParams.q ||
+              (searchParams.filter && searchParams.filter !== "all") ||
+              searchParams.tier ||
+              searchParams.service,
+          )}
+        />
       </div>
 
       {pageCount > 1 && (

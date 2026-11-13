@@ -36,6 +36,34 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-12-clients-by-service",
+    date: "2026-11-12",
+    kind: "feature",
+    title: "See every client who booked a service",
+    body:
+      "On Clients, pick a service or a whole group in the new filter, then how far back: 30 days, 90 days, a " +
+      "year or any time. The list shows only the clients who booked it.",
+  },
+  {
+    id: "2026-11-12-service-hours-on-dates",
+    date: "2026-11-12",
+    kind: "feature",
+    title: "Give a service its own hours on the days you pick",
+    body:
+      "On Services, tap Dates on a service to set its hours for chosen days: open earlier for a holiday week, " +
+      "split them around a break, or close it. Everything else you offer keeps its usual hours and nobody " +
+      "already booked is moved. You see what changes before you save.",
+  },
+  {
+    id: "2026-11-12-month-tap-glides",
+    date: "2026-11-12",
+    kind: "fix",
+    title: "Tapping a day in the calendar takes you to it",
+    body:
+      "On your phone, tapping a day in the month calendar now glides down to that day's appointments, so you " +
+      "don't have to scroll to find them.",
+  },
+  {
     id: "2026-11-11-charge-fee-only-card",
     date: "2026-11-11",
     kind: "feature",

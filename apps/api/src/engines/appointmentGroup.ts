@@ -1,9 +1,11 @@
 import { Prisma } from "@chairback/db";
-import { zonedDateParts, zonedMinutesOfDay } from "@chairback/config";
+import { zonedDateKey, zonedDateParts, zonedMinutesOfDay } from "@chairback/config";
 import {
+  dateHoursFor,
   effectiveDurationAt,
   effectivePriceAt,
   openingSpansForWeekday,
+  parseDateHours,
   parseServiceHours,
 } from "./pricing.js";
 
@@ -276,11 +278,18 @@ export function groupExtraDurationMin(plan: GroupPlan): number {
 export function serviceOfferedDuring(input: {
   hoursWindows: unknown;
   timeOverrides: unknown;
+  /**
+   * Service.dateHours, and whose chair this is. Required, not optional: a
+   * call site that forgot them would let a group book a service on a date its
+   * own hours close - so forgetting is a compile error instead.
+   */
+  dateHours: unknown;
+  staffId: string;
   startsAt: Date;
   endsAt: Date;
   timezone: string;
 }): boolean {
-  const { hoursWindows, timeOverrides, startsAt, endsAt, timezone } = input;
+  const { hoursWindows, timeOverrides, dateHours, staffId, startsAt, endsAt, timezone } = input;
   const startMin = zonedMinutesOfDay(startsAt, timezone);
   const endMin = zonedMinutesOfDay(endsAt, timezone);
   // Crossed shop-local midnight (or landed exactly on it): minute-of-day
@@ -288,6 +297,13 @@ export function serviceOfferedDuring(input: {
   if (endMin <= startMin) return false;
 
   const { weekday } = zonedDateParts(startsAt, timezone);
+
+  // A date with its own hours is decided by them alone - the same REPLACE rule
+  // slots.ts applies: the weekly layers below are not consulted at all.
+  const dated = dateHoursFor(parseDateHours(dateHours), zonedDateKey(startsAt, timezone), staffId);
+  if (dated !== null) {
+    return dated.some((w) => startMin >= w.startMin && endMin <= w.endMin);
+  }
 
   // Explicitly opened hours outrank the restriction below - same order as slots.
   for (const w of openingSpansForWeekday(timeOverrides, weekday)) {
