@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import type { AddOnRow, ServiceRow, StaffRow } from "./page";
 
@@ -116,6 +116,9 @@ describe("a service's page is rows that say what is set", () => {
       .getAllByRole("button")
       .filter((b) => b.hasAttribute("aria-expanded"));
     expect(rows.map((b) => b.getAttribute("aria-expanded"))).toEqual(rows.map(() => "false"));
+    // Closed means out of reach, not only marked closed: the two number
+    // boxes on show are the length and the price, and no editor's.
+    expect(page().getAllByRole("spinbutton").map((b) => b.getAttribute("aria-label") ?? b.id)).toHaveLength(2);
     expect(rows.map((b) => b.firstElementChild?.textContent)).toEqual([
       "Description and photo",
       "Who does it",
@@ -226,6 +229,19 @@ describe("a service's page is rows that say what is set", () => {
     save();
     expect(await page().findByRole("alert")).toHaveTextContent("Pick at least one");
     expect(row("Who does it")).toHaveAttribute("aria-expanded", "true");
+    expect(a.updateServiceAction).not.toHaveBeenCalled();
+  });
+
+  it("🔴 a length too long for one day opens By day of the week", async () => {
+    open();
+    fireEvent.click(row("By day of the week"));
+    fireEvent.change(page().getByRole("spinbutton", { name: "Sun length" }), { target: { value: "99999" } });
+    fireEvent.click(row("By day of the week"));
+    expect(row("By day of the week")).toHaveAttribute("aria-expanded", "false");
+
+    save();
+    expect(await page().findByRole("alert")).toHaveTextContent("Sun length");
+    expect(row("By day of the week")).toHaveAttribute("aria-expanded", "true");
     expect(a.updateServiceAction).not.toHaveBeenCalled();
   });
 
@@ -355,8 +371,13 @@ describe("duplicate, on the page", () => {
     let finish: (v: { ok: boolean }) => void = () => {};
     a.createServiceAction.mockReturnValue(new Promise((resolve) => (finish = resolve)));
     open();
-    fireEvent.click(duplicate());
-    fireEvent.click(duplicate());
+    // Both taps land before the page has redrawn, so the button is not yet
+    // disabled for the second one. Only the in-flight flag stops it.
+    const button = duplicate();
+    act(() => {
+      button.click();
+      button.click();
+    });
     finish({ ok: true });
     await page().findByRole("status");
     expect(a.createServiceAction).toHaveBeenCalledTimes(1);
