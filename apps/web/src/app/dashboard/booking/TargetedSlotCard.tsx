@@ -36,7 +36,10 @@ export function TargetedSlotCard({
   actions,
   children,
   className,
+  id,
 }: {
+  /** So the page can bring this card into view (the Special dates list does). */
+  id?: string;
   /** The barber's name for this slot, or a sensible stand-in - never empty. */
   title: string;
   /** One short line kept visible while collapsed (e.g. "next Fri 9:00 PM"). */
@@ -56,7 +59,10 @@ export function TargetedSlotCard({
   const panelId = useId();
 
   return (
-    <li className={cn("rounded-xl border border-subtle", open && "border-gold/40", className)}>
+    <li
+      id={id}
+      className={cn("scroll-mt-24 rounded-xl border border-subtle", open && "border-gold/40", className)}
+    >
       {/* items-start, not items-center: with a subtitle the actions should sit
           against the top of the block, and on a phone they wrap under it. */}
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3">
@@ -69,7 +75,9 @@ export function TargetedSlotCard({
           // min-w-0 so a long label truncates instead of pushing the actions
           // off a narrow screen - the "zoomed in" bug this codebase has hit
           // before is exactly a missing min-w-0 on a flex child.
-          className="flex min-w-0 flex-1 items-start gap-2 text-left"
+          // basis-48: the name keeps a width of its own. Without one it gave
+          // way to the actions on a phone and read "Aft..." - now they wrap.
+          className="flex min-w-0 flex-1 basis-48 items-start gap-2 text-left"
         >
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold text-offwhite">

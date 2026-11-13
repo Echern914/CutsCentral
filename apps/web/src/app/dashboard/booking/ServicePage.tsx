@@ -99,7 +99,10 @@ export function SettingRow({
     wasOpen.current = open;
   }, [open]);
   return (
-    <div className="border-b border-subtle last:border-b-0">
+    // The id and the margin are for a page that brings the WHOLE row to the
+    // top itself (the Special dates list does, for a tool far below it); the
+    // margin keeps it clear of the dashboard's sticky bar.
+    <div id={id} className="scroll-mt-24 border-b border-subtle last:border-b-0">
       <button
         ref={button}
         type="button"

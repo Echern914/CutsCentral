@@ -113,6 +113,9 @@ function renderTab(initial: ServiceRow[] = [RETWIST, BRAIDS], staffRows = staff,
       groupUnsavedRef={{ current: null }}
       acuityConnected={false}
       initialSection={section}
+      // The tools under the Special dates list are closed rows; these tests
+      // are about the Targeted slots one, so it starts open.
+      initialDatesTool={section === "dates" ? "slots" : undefined}
     />,
   );
   return { toast };

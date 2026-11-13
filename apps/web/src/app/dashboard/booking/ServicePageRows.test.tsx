@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import type { AddOnRow, ServiceRow, StaffRow } from "./page";
@@ -96,7 +96,7 @@ const page = () => within(screen.getByRole("dialog", { name: "Edit service" }));
 const row = (label: string) => page().getByRole("button", { name: new RegExp(`^${label}`) });
 const save = () => fireEvent.click(page().getByRole("button", { name: "Save changes" }));
 
-let confirmSpy: ReturnType<typeof vi.spyOn>;
+let confirmSpy: MockInstance<typeof window.confirm>;
 beforeEach(() => {
   for (const fn of Object.values(a)) fn.mockReset();
   a.updateServiceAction.mockResolvedValue({ ok: true });
