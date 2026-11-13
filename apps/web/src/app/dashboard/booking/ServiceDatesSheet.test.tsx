@@ -400,7 +400,14 @@ describe("doing the same for another service", () => {
     staffIds: ["st1", "gone"],
     name: "Holiday week",
   };
-  const beard = { ...service, id: "svc2", name: "Beard trim", staffIds: ["st1", "st2"] };
+  // This service already has a price of its own on those days.
+  const beard = {
+    ...service,
+    id: "svc2",
+    name: "Beard trim",
+    staffIds: ["st1", "st2"],
+    dateOverrides: { "2026-11-23": 30, "2026-11-24": 30 },
+  };
 
   it("arrives filled in and unsaved, with only the people who do THIS service", () => {
     open({ service: beard, staff: [avery, blake], startOn: copy });
@@ -411,7 +418,8 @@ describe("doing the same for another service", () => {
     expect((screen.getByLabelText("Hours 2 until") as HTMLSelectElement).value).toBe("24:00");
     expect(screen.getByRole("button", { name: "Avery" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "Blake" }).getAttribute("aria-pressed")).toBe("false");
-    // The other service's price is not copied: this one has its own.
+    // A copy is hours and people only. The field starts empty, exactly as it
+    // does for days picked by hand, so this service's own price is left alone.
     expect((screen.getByLabelText(/Price on those days/) as HTMLInputElement).value).toBe("");
     expect(screen.getByText(/Beard trim with Avery is open 8:00 AM – 3:30 PM and 4:30 PM – midnight/)).toBeTruthy();
   });

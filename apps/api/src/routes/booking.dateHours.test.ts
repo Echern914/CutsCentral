@@ -526,7 +526,9 @@ describe("a change can carry a name", () => {
     // The name route is for the name: it will not carry hours in beside it.
     expect(await code({ dates: [monday], name: "x", hours: [] })).toBe("400 invalid_input");
     expect(await code({ dates: [monday], name: "x" }, "no-such-service")).toBe("404 not_found");
-    expect(await code({ dates: [monday], hours: [], name: "x".repeat(41) })).toBe("400 invalid_input");
+    // The hours route holds a name to the same length.
+    const long = await save({ dates: [monday], hours: [span("10:00", "11:00")], name: "x".repeat(41) });
+    expect(`${long.status} ${long.body.error}`).toBe("400 invalid_input");
     expect(await stored()).toEqual({ [monday]: { w: [{ s: 480, e: 540 }], staff: [] } });
   });
 
