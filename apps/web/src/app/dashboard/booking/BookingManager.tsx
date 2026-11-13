@@ -54,7 +54,11 @@ import { UnfinishedBookings } from "./UnfinishedBookings";
 import { ConflictInbox, ConflictTabBadge, useUnresolvedConflictCount } from "./ConflictInbox";
 import { ShopQrCard } from "./ShopQrCard";
 import { NoBookingLinkBanner } from "./NoBookingLinkBanner";
-import { HolidaysAndSpecialDays } from "./HolidaysAndSpecialDays";
+import { HolidayPricing } from "./HolidayPricing";
+import { SpecialDayCard } from "./SpecialDayCard";
+import { LiveDayView } from "./LiveDayView";
+import { SpecialDatesList, ToolShell, type AddKind } from "./SpecialDatesList";
+import { buildSpecialDates, byMonth, type SpecialDateEntry } from "./specialDateRows";
 import { ServiceDatesSheet } from "./ServiceDatesSheet";
 import { ConnectPlatforms } from "./ConnectPlatforms";
 import { AcuityCalendarMap } from "./AcuityCalendarMap";
@@ -86,6 +90,7 @@ import {
   getAvailabilityAction,
   duplicateTargetedRuleAction,
   duplicateTargetedSlotAction,
+  listSpecialDaysAction,
   listTargetedSlotsAction,
   saveAvailabilityAction,
   saveBookingSettingsAction,
@@ -98,6 +103,7 @@ import {
   type TargetedSlotRow,
   type TargetedSlotRuleRow,
   type RuleScheduleTime,
+  type SpecialDayRow,
 } from "./actions";
 
 import {
@@ -1258,9 +1264,12 @@ export function ServicesTab({
   groupUnsavedRef,
   acuityConnected,
   initialSection,
+  initialDatesTool,
 }: {
   /** Which section opens first when the address names none (default: Menu). */
   initialSection?: ServicesSection;
+  /** Which tool under the Special dates list starts open (default: none). */
+  initialDatesTool?: DatesTool;
   initial: ServiceRow[];
   holidayNames?: Record<string, string>;
   staff: StaffRow[];
@@ -1301,9 +1310,6 @@ export function ServicesTab({
   // Shown IN the sheet: a toast raised from inside a dialog sits behind it on
   // a phone.
   const [addError, setAddError] = useState<string | null>(null);
-  // Bumped when a special day is published or removed, so the Targeted slots
-  // card (which loads its own list) shows the new openings.
-  const [specialsVersion, setSpecialsVersion] = useState(0);
   const [name, setName] = useState("");
   const [duration, setDuration] = useState(30);
   const [price, setPrice] = useState("");
@@ -1325,6 +1331,9 @@ export function ServicesTab({
   // so neither the list nor a reopened editor shows the pre-save values (and
   // a second save can't write them back). See justSaved.ts.
   const justSaved = useJustSaved<ServiceRow>();
+  // Every service as its last save wrote it - what the Special dates list reads.
+  const currentOf = justSaved.current;
+  const currentServices = useMemo(() => initial.map((s) => currentOf(s)), [initial, currentOf]);
   const [pending, start] = useTransition();
   const activeStaff = staff.filter((s) => s.active);
   // Reorder mode: the list turns into ≡ / ▲ / ▼ rows (ServiceOrder.tsx).
@@ -1673,29 +1682,18 @@ export function ServicesTab({
       )}
 
       <div hidden={section !== "dates"}>
-        <div className="flex flex-col gap-5">
-          {/* Holiday pricing (shop-wide, grouped BY DATE - how a barber thinks
-              about a holiday) and Special day, sharing one live view of the day:
-              "Open live view" on either draws the date per chair to pick its
-              times and the price of each opening. Special days publish targeted
-              slots, so the Targeted slots card below re-reads on a save (key). */}
-          <HolidaysAndSpecialDays
-            services={initial}
-            staff={staff}
-            names={holidayNames}
-            timezone={timezone}
-            toast={toast}
-            onChanged={() => setSpecialsVersion((v) => v + 1)}
-          />
-
-          <TargetedSlotsManager
-            key={specialsVersion}
-            services={initial}
-            staff={staff}
-            timezone={timezone}
-            toast={toast}
-          />
-        </div>
+        {/* One list of every date that runs differently, then the three tools
+            that change them. The rows are the just-saved ones: a date-hours
+            save from here shows on the list before the page has refetched. */}
+        <SpecialDatesSection
+          services={currentServices}
+          staff={staff}
+          names={holidayNames ?? {}}
+          timezone={timezone}
+          toast={toast}
+          initialTool={initialDatesTool}
+          onServiceSaved={(row) => justSaved.remember(initial.find((r) => r.id === row.id) ?? row, row)}
+        />
       </div>
 
       <div hidden={section !== "extras"}>
@@ -1716,6 +1714,271 @@ export function ServicesTab({
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+//  Special dates - one list of every date that runs differently, and under it
+//  the three tools that change them.
+
+/** The tools under the list. Each is a row; one is open at a time. */
+export type DatesTool = "price" | "day" | "slots";
+
+function SpecialDatesSection({
+  services,
+  staff,
+  names,
+  timezone,
+  toast,
+  initialTool,
+  onServiceSaved,
+}: {
+  services: ServiceRow[];
+  staff: StaffRow[];
+  /** The shop's names for its dates ({"2026-11-26": "Thanksgiving"}). */
+  names: Record<string, string>;
+  timezone: string;
+  toast: Toast;
+  initialTool?: DatesTool;
+  /** A service's dated hours or prices were saved from here. */
+  onServiceSaved: (row: ServiceRow) => void;
+}) {
+  const today = zonedDateKey(new Date(), timezone);
+  const [tool, setTool] = useState<DatesTool | null>(initialTool ?? null);
+
+  // Upcoming special days, one row per staff member. null = still loading.
+  const [days, setDays] = useState<SpecialDayRow[] | null>(null);
+  const [daysFailed, setDaysFailed] = useState(false);
+  // The published slots as the Targeted slots tool last read them: undefined
+  // until its first read answers, null when that read failed. ONE read feeds
+  // both the tool and the list, so they cannot disagree.
+  const [slotData, setSlotData] = useState<
+    { slots: TargetedSlotRow[]; rules: TargetedSlotRuleRow[] } | null | undefined
+  >(undefined);
+  // Bumped when a special day is saved or removed: it publishes slots, so the
+  // tool re-reads (and hands the new read up).
+  const [slotsVersion, setSlotsVersion] = useState(0);
+
+  const [live, setLive] = useState<{ dates: string[]; name?: string; price?: number | null } | null>(null);
+  // The service whose "Change some days" sheet is open.
+  const [datesFor, setDatesFor] = useState<string | null>(null);
+  const closeDates = useCallback(() => setDatesFor(null), []);
+  // What the list asked a tool to do. Each ask carries a new number, so the
+  // same ask twice (tap a row, close the form, tap it again) works twice.
+  const asks = useRef(0);
+  const [priceAsk, setPriceAsk] = useState<{ n: number; edit?: string[] } | null>(null);
+  const [planAsk, setPlanAsk] = useState(0);
+  const [focusSlot, setFocusSlot] = useState<{ id: string; n: number } | null>(null);
+
+  // Loads on its own, never behind a busy flag: a reload after a save must
+  // not be dropped.
+  function loadDays() {
+    void listSpecialDaysAction()
+      .then((r) => {
+        if (r.ok && r.specialDays) {
+          setDays(r.specialDays);
+          setDaysFailed(false);
+        } else setDaysFailed(true);
+      })
+      .catch(() => setDaysFailed(true));
+  }
+  useEffect(() => {
+    loadDays();
+  }, []);
+
+  function daysChanged() {
+    loadDays();
+    // The tool is about to be mounted afresh; an old "show this slot" must
+    // not fire again on the new one.
+    setFocusSlot(null);
+    setSlotsVersion((v) => v + 1);
+  }
+
+  // Per date, across staff - the badge on a holiday row.
+  const dayTotals = useMemo(() => {
+    const out: Record<string, { openings: number; booked: number }> = {};
+    for (const r of days ?? []) {
+      const cur = out[r.date] ?? { openings: 0, booked: 0 };
+      out[r.date] = { openings: cur.openings + r.openings, booked: cur.booked + r.booked };
+    }
+    return out;
+  }, [days]);
+
+  const entries = useMemo(
+    () =>
+      buildSpecialDates({
+        services,
+        staff,
+        names,
+        specialDays: days ?? [],
+        slots: slotData?.slots ?? [],
+        rules: slotData?.rules ?? [],
+        today,
+        timezone,
+      }),
+    [services, staff, names, days, slotData, today, timezone],
+  );
+  const months = useMemo(() => byMonth(entries, today), [entries, today]);
+  const count = (kind: SpecialDateEntry["kind"]) => entries.filter((e) => e.kind === kind).length;
+
+  /**
+   * Open a tool's row and put it at the top of the screen. The list sits
+   * above the tools; without the move, a tap on a row opened a form somewhere
+   * below the screen and looked dead on a phone. After the draw, so the row
+   * is already open when it is measured.
+   */
+  function show(next: DatesTool) {
+    setTool(next);
+    setTimeout(() => document.getElementById(`dates-${next}`)?.scrollIntoView?.({ block: "start" }), 0);
+  }
+
+  function openEntry(e: SpecialDateEntry) {
+    const t = e.target;
+    if (t.kind === "day") setLive({ dates: [t.date], name: t.name ?? names[t.date] });
+    else if (t.kind === "hours") setDatesFor(t.serviceId);
+    else if (t.kind === "price") {
+      setPriceAsk({ n: ++asks.current, edit: t.dates });
+      show("price");
+    } else {
+      // The tool brings the slot itself into view a tick after this.
+      setFocusSlot({ id: t.slotId, n: ++asks.current });
+      show("slots");
+    }
+  }
+
+  function add(kind: AddKind, serviceId?: string) {
+    if (kind === "price") {
+      setPriceAsk({ n: ++asks.current });
+      show("price");
+    } else if (kind === "day") {
+      setPlanAsk(++asks.current);
+      show("day");
+    } else if (kind === "opening") show("slots");
+    else if (serviceId) setDatesFor(serviceId);
+  }
+
+  const toggle = (next: DatesTool) => setTool((cur) => (cur === next ? null : next));
+  const datesService = datesFor ? services.find((s) => s.id === datesFor) : undefined;
+  const series = (slotData?.rules ?? []).filter((r) => !r.specialDay && !r.draft).length;
+  const oneTime = count("opening");
+
+  return (
+    <div className="flex flex-col gap-5">
+      <SpecialDatesList
+        months={months}
+        services={services}
+        loading={(days === null && !daysFailed) || slotData === undefined}
+        missing={[
+          ...(daysFailed ? ["special days"] : []),
+          ...(slotData === null ? ["one-time openings"] : []),
+        ]}
+        onShowMissing={() => show(slotData === null ? "slots" : "day")}
+        onOpen={openEntry}
+        onAdd={add}
+      />
+
+      <SettingGroup
+        title="Set up and change"
+        note="Each tool lists what it holds. Openings that repeat every week live in Targeted slots."
+      >
+        <SettingRow
+          id="dates-price"
+          label="Holiday pricing"
+          value={count("price") === 0 ? "None" : `${count("price")} coming up`}
+          open={tool === "price"}
+          onToggle={() => toggle("price")}
+        >
+          <HolidayPricing
+            embedded
+            request={priceAsk}
+            services={services}
+            names={names}
+            timezone={timezone}
+            toast={toast}
+            specialDays={dayTotals}
+            onOpenLiveView={(dates, name, price) => setLive({ dates, name, price })}
+          />
+        </SettingRow>
+        <SettingRow
+          id="dates-day"
+          label="Special day"
+          value={
+            days === null
+              ? daysFailed
+                ? "Couldn't load"
+                : "Loading…"
+              : count("day") === 0
+                ? "None"
+                : `${count("day")} planned`
+          }
+          open={tool === "day"}
+          onToggle={() => toggle("day")}
+        >
+          <SpecialDayCard
+            embedded
+            planRequest={planAsk}
+            rows={days}
+            loadFailed={daysFailed}
+            onReload={loadDays}
+            staff={staff}
+            timezone={timezone}
+            toast={toast}
+            onOpen={(date, name) => setLive({ dates: [date], name: name ?? names[date] })}
+            onChanged={daysChanged}
+          />
+        </SettingRow>
+        <SettingRow
+          id="dates-slots"
+          label="Targeted slots"
+          value={
+            slotData === undefined
+              ? "Loading…"
+              : slotData === null
+                ? "Couldn't load"
+                : [series > 0 ? `${series} weekly` : null, oneTime > 0 ? `${oneTime} one-time` : null]
+                    .filter(Boolean)
+                    .join(", ") || "None"
+          }
+          open={tool === "slots"}
+          onToggle={() => toggle("slots")}
+        >
+          <TargetedSlotsManager
+            key={slotsVersion}
+            embedded
+            onData={setSlotData}
+            focusSlot={focusSlot}
+            services={services}
+            staff={staff}
+            timezone={timezone}
+            toast={toast}
+          />
+        </SettingRow>
+      </SettingGroup>
+
+      {live && (
+        <LiveDayView
+          open
+          dates={live.dates}
+          defaultName={live.name}
+          defaultPrice={live.price}
+          services={services}
+          staff={staff}
+          toast={toast}
+          onClose={() => setLive(null)}
+          onSaved={daysChanged}
+        />
+      )}
+      {datesService && (
+        <ServiceDatesSheet
+          // The sheet reads the service once, when it opens.
+          key={datesService.id}
+          service={datesService}
+          staff={staff}
+          timezone={timezone}
+          onClose={closeDates}
+          onSaved={(dateHours, dateOverrides) => onServiceSaved({ ...datesService, dateHours, dateOverrides })}
+        />
+      )}
     </div>
   );
 }
@@ -2599,7 +2862,20 @@ function TargetedSlotsManager({
   staff,
   timezone,
   toast,
+  embedded = false,
+  onData,
+  focusSlot = null,
 }: {
+  /** Inside a row that already says "Targeted slots": no card, no title. */
+  embedded?: boolean;
+  /**
+   * Every read of the list, handed up: the Special dates list shows the
+   * one-time openings from the SAME read, so the two cannot disagree. null =
+   * the read failed.
+   */
+  onData?: (data: { slots: TargetedSlotRow[]; rules: TargetedSlotRuleRow[] } | null) => void;
+  /** The Special dates list asked to see this slot: open it and bring it into view. */
+  focusSlot?: { id: string; n: number } | null;
   services: ServiceRow[];
   staff: StaffRow[];
   timezone: string; // IANA shop tz - the datetime input is shop wall clock
@@ -2685,8 +2961,10 @@ function TargetedSlotsManager({
         setRules(res.value.rules ?? []);
         setSelected(new Set());
         setLoadFailure(null);
+        onData?.({ slots: res.value.slots, rules: res.value.rules ?? [] });
       } else {
         setLoadFailure(res.ok ? "failed" : res.failure);
+        onData?.(null);
       }
       setLoading(false);
     });
@@ -2696,6 +2974,21 @@ function TargetedSlotsManager({
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Asked for from the Special dates list. Opening is immediate; the move
+  // waits a tick, because the row this tool sits in brings ITSELF into view
+  // when it opens, and that would otherwise land after this and win.
+  const focusN = focusSlot?.n;
+  useEffect(() => {
+    if (!focusSlot) return;
+    const id = focusSlot.id;
+    setOpenSlotIds((cur) => new Set(cur).add(id));
+    const timer = setTimeout(() => {
+      document.getElementById(`tslot-${id}`)?.scrollIntoView?.({ block: "start" });
+    }, 0);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusN]);
 
   // A duplicate must open in edit mode - the barber has to review and publish
   // it, and a draft they never see is a draft that never goes live. The copy's
@@ -3044,11 +3337,11 @@ function TargetedSlotsManager({
     list.find((x) => x.id === id)?.name ?? "?";
 
   return (
-    <Card className="p-5">
-      <CardHeader
-        title="Targeted slots"
+    <ToolShell
+      embedded={embedded}
+      title="Targeted slots"
         subtitle="Publish specific one-off times at their own price - a late-night special, a model rate. They show under the service with a badge, can be booked exactly once, and block that time from normal booking. Your booking rules apply to them too: clients can't book one inside your min notice or further out than you take bookings."
-      />
+    >
       {editingRule && (
         <div
           ref={editBannerRef}
@@ -3467,7 +3760,7 @@ function TargetedSlotsManager({
           <li className="text-sm text-muted">No targeted slots yet.</li>
         )}
       </ul>
-    </Card>
+    </ToolShell>
   );
 
   /** One slot row: checkbox (unbooked) + when + meta + badge + Edit/Remove.
@@ -3482,6 +3775,7 @@ function TargetedSlotsManager({
     return (
       <TargetedSlotCard
         key={t.id}
+        id={`tslot-${t.id}`}
         // Same rule as the series card: the barber's own name for it, falling
         // back to the service. "AFTER HOUR HAIRCUT" is what they scan for.
         title={t.label?.trim() || nameOf(services, t.serviceId)}

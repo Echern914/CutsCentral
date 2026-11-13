@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
-import { Card, CardHeader } from "@/components/ui/Card";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { cn } from "@/lib/cn";
 import { MoneyField } from "@/components/ui/UnitField";
 import { parsePrice } from "@/lib/serviceFields";
@@ -9,6 +8,8 @@ import { zonedDateKey } from "@chairback/config/time";
 import { collapseRuns, expandRange, MAX_RANGE_DAYS } from "@/lib/dateRanges";
 import { saveHolidayAction } from "./actions";
 import type { ServiceRow } from "./page";
+import { ToolShell } from "./SpecialDatesList";
+import { holidayGroups, holidayRuns, type HolidayGroup } from "./specialDateRows";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
 
@@ -35,12 +36,6 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  * (PUT /api/booking/holidays), so an edit can never leave half the services on
  * the old date and half on the new.
  */
-
-/** A date with everything priced on it, assembled back out of the services. */
-interface HolidayGroup {
-  date: string; // YYYY-MM-DD
-  entries: { serviceId: string; serviceName: string; price: number }[];
-}
 
 /**
  * The SHOP's date. Not the UTC date: in a US evening that is already tomorrow,
@@ -75,7 +70,17 @@ export function HolidayPricing({
   toast,
   specialDays = {},
   onOpenLiveView,
+  embedded = false,
+  request = null,
 }: {
+  /** Inside a row that already says "Holiday pricing": no card, no title. */
+  embedded?: boolean;
+  /**
+   * Asked for from outside (the Special dates list): open the form to add,
+   * or open it on the saved stretch holding `edit[0]`. `n` changes with each
+   * ask, so asking twice for the same thing opens it twice.
+   */
+  request?: { n: number; edit?: string[] } | null;
   services: ServiceRow[];
   /** The shop's names for its dates ({"2026-11-26": "Thanksgiving"}). */
   names?: Record<string, string>;
@@ -117,56 +122,15 @@ export function HolidayPricing({
 
   // Every priced date across every service, soonest first. Built from the same
   // dateOverrides the per-service editor writes, so the two cannot disagree.
-  const groups = useMemo<HolidayGroup[]>(() => {
-    const byDate = new Map<string, HolidayGroup["entries"]>();
-    for (const s of services) {
-      for (const [d, p] of Object.entries(s.dateOverrides ?? {})) {
-        byDate.set(d, [
-          ...(byDate.get(d) ?? []),
-          { serviceId: s.id, serviceName: s.name, price: Number(p) },
-        ]);
-      }
-    }
-    return [...byDate.entries()]
-      .map(([d, entries]) => ({ date: d, entries }))
-      .sort((a, b) => a.date.localeCompare(b.date));
-  }, [services]);
+  const groups = useMemo<HolidayGroup[]>(() => holidayGroups(services), [services]);
 
   // Saved dates collapse the same way the staged chips do: contiguous days
   // priced IDENTICALLY (same services at the same prices) render as one
   // "Dec 25 – 31" row, and Remove clears the whole stretch. Days that differ
-  // stay separate rows - collapsing them would hide a real difference.
-  const displayGroups = useMemo(() => {
-    // The NAME is part of the signature: Dec 24 "Christmas Eve" and Dec 25
-    // "Christmas" priced alike are still two holidays.
-    const signature = (g: HolidayGroup) =>
-      JSON.stringify([
-        names[g.date] ?? "",
-        [...g.entries]
-          .map((e) => [e.serviceId, e.price] as const)
-          .sort((a, b) => a[0].localeCompare(b[0])),
-      ]);
-    const byDate = new Map(groups.map((g) => [g.date, g]));
-    const out: { from: string; to: string; dates: string[]; group: HolidayGroup }[] = [];
-    for (const run of collapseRuns(groups.map((g) => g.date))) {
-      let days = expandRange(run.from, run.to) ?? [run.from];
-      // Split a contiguous stretch wherever the pricing changes mid-run.
-      while (days.length > 0) {
-        const first = byDate.get(days[0]!)!;
-        const sig = signature(first);
-        let n = 1;
-        while (n < days.length && signature(byDate.get(days[n]!)!) === sig) n++;
-        out.push({
-          from: days[0]!,
-          to: days[n - 1]!,
-          dates: days.slice(0, n),
-          group: first,
-        });
-        days = days.slice(n);
-      }
-    }
-    return out;
-  }, [groups, names]);
+  // stay separate rows - collapsing them would hide a real difference. The
+  // Special dates list is built from the same runs (specialDateRows.ts), so
+  // a row there and a row here are always the same stretch.
+  const displayGroups = useMemo(() => holidayRuns(groups, names), [groups, names]);
 
   const today = todayKey(timezone);
   // The form's dates when they are exactly ONE day still ahead.
@@ -208,6 +172,26 @@ export function HolidayPricing({
     setName(names[run.dates[0]!] ?? "");
     setPicked(new Set(run.group.entries.map((e) => e.serviceId)));
   }
+
+  // The Special dates list asked for this tool: to add, or to change one of
+  // its stretches. Keyed on the ask's number alone - the lists it reads are
+  // new objects on every render, and re-running on those would reopen a form
+  // the barber had just closed.
+  const asked = request?.n;
+  useEffect(() => {
+    if (!request) return;
+    const run = request.edit ? displayGroups.find((g) => g.dates.includes(request.edit![0]!)) : undefined;
+    reset();
+    if (run) beginEdit(run);
+    else setAdding(true);
+    // The form sits under this tool's own list, so on a phone it opened
+    // below the screen. A tick later than the row's own move, so this wins.
+    const timer = setTimeout(() => {
+      document.getElementById("holiday-form")?.scrollIntoView?.({ block: "start" });
+    }, 0);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked]);
 
   /**
    * What the from/to pair currently describes: one day, an inclusive range,
@@ -315,11 +299,11 @@ export function HolidayPricing({
   }
 
   return (
-    <Card className="p-5">
-      <CardHeader
-        title="Holiday pricing"
-        subtitle="Charge a different price on a named date. A holiday beats every other price rule you've set."
-      />
+    <ToolShell
+      embedded={embedded}
+      title="Holiday pricing"
+      subtitle="Charge a different price on a named date. A holiday beats every other price rule you've set."
+    >
 
       {groups.length === 0 ? (
         <p className="mt-3 text-sm text-muted">
@@ -429,7 +413,7 @@ export function HolidayPricing({
           + Add a holiday
         </button>
       ) : (
-        <div className="mt-4 rounded-xl border border-gold/40 bg-gold/5 p-3">
+        <div id="holiday-form" className="mt-4 scroll-mt-24 rounded-xl border border-gold/40 bg-gold/5 p-3">
           {editing && (
             <p className="mb-2 text-xs font-medium text-gold">
               Editing {names[editing[0]!] ?? prettyDate(editing[0]!)} - saving replaces it
@@ -596,6 +580,6 @@ export function HolidayPricing({
           )}
         </div>
       )}
-    </Card>
+    </ToolShell>
   );
 }

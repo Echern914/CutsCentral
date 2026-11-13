@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-13-special-dates-one-list",
+    date: "2026-11-13",
+    kind: "feature",
+    title: "All your special dates in one list",
+    body:
+      "Special dates now opens on one list of every day that runs differently: holiday prices, special " +
+      "days, a service's own hours and one-time openings. Tap a date to change it, or tap Add a date. " +
+      "Holiday pricing, Special day and Targeted slots are rows under the list.",
+  },
+  {
     id: "2026-11-13-service-page-rows",
     date: "2026-11-13",
     kind: "feature",

@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Card, CardHeader } from "@/components/ui/Card";
+import { useEffect, useMemo, useState } from "react";
 import { useVocab } from "@/components/VocabProvider";
 import { zonedDateKey } from "@chairback/config/time";
 import { removeSpecialDaysAction, type SpecialDayRow } from "./actions";
 import type { StaffRow } from "./page";
+import { ToolShell } from "./SpecialDatesList";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
 
@@ -41,7 +41,13 @@ export function SpecialDayCard({
   toast,
   onOpen,
   onChanged,
+  embedded = false,
+  planRequest = 0,
 }: {
+  /** Inside a row that already says "Special day": no card, no title. */
+  embedded?: boolean;
+  /** Changes each time the Special dates list asks to plan a day: the date box opens. */
+  planRequest?: number;
   /** Upcoming special days, one row per chair. null = still loading. */
   rows: SpecialDayRow[] | null;
   loadFailed: boolean;
@@ -64,6 +70,18 @@ export function SpecialDayCard({
   const [planning, setPlanning] = useState(false);
   const [date, setDate] = useState("");
   const [pending, setPending] = useState(false);
+  useEffect(() => {
+    if (planRequest === 0) return;
+    setDate("");
+    setPlanning(true);
+    // The date field sits under this tool's list of days. With a few days
+    // planned it opened below a phone's screen. A tick later than the row's
+    // own move, so this one wins; centred, clear of the app's tab bar.
+    const timer = setTimeout(() => {
+      document.getElementById("special-day-plan")?.scrollIntoView?.({ block: "center" });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [planRequest]);
 
   /** Every chair's special day on one date goes together. */
   async function remove(group: SpecialDayRow[]) {
@@ -101,11 +119,11 @@ export function SpecialDayCard({
   }, [rows]);
 
   return (
-    <Card className="p-5">
-      <CardHeader
-        title="Special day"
-        subtitle={`Run one date your own way: your hours, your lengths, a price on every opening. Only those openings can be booked that day - the normal schedule is closed for the ${vocab.providerNounPlural} who have them.`}
-      />
+    <ToolShell
+      embedded={embedded}
+      title="Special day"
+      subtitle={`Run one date your own way: your hours, your lengths, a price on every opening. Only those openings can be booked that day - the normal schedule is closed for the ${vocab.providerNounPlural} who have them.`}
+    >
 
       {rows === null && !loadFailed ? (
         <p className="mt-3 text-sm text-muted">Loading…</p>
@@ -188,7 +206,7 @@ export function SpecialDayCard({
           + Plan a special day
         </button>
       ) : (
-        <div className="mt-4 flex flex-wrap items-end gap-2 rounded-xl border border-gold/40 bg-gold/5 p-3">
+        <div id="special-day-plan" className="mt-4 flex flex-wrap items-end gap-2 rounded-xl border border-gold/40 bg-gold/5 p-3">
           <label className="flex flex-col gap-1 text-xs text-muted">
             Date
             <input
@@ -219,6 +237,6 @@ export function SpecialDayCard({
           </button>
         </div>
       )}
-    </Card>
+    </ToolShell>
   );
 }

@@ -107,7 +107,7 @@ function renderTab(services: ServiceRow[] = [service("fade", "Fade")], groups: S
 
 // One control from each section: on screen means its section is the one shown.
 const onMenu = () => screen.queryByRole("button", { name: "Add service" });
-const onDates = () => screen.queryByRole("button", { name: "Publish slot" });
+const onDates = () => screen.queryByRole("button", { name: "Add a date" });
 const onExtras = () => screen.queryByRole("button", { name: "Add add-on" });
 const go = (name: "Menu" | "Special dates" | "Extras") =>
   fireEvent.click(
