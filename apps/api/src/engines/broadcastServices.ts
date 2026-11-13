@@ -37,6 +37,12 @@ import { serviceKey } from "./insightsWindow.js";
 /** The window choices the composer offers. null = any time. */
 export const SINCE_DAYS = [90, 365] as const;
 export type SinceDays = (typeof SINCE_DAYS)[number] | null;
+/**
+ * Any window in days, or null for any time. The composer is held to
+ * SINCE_DAYS by its route; the Clients list filter offers its own windows
+ * (engines/clientServiceFilter.ts) over the same rule.
+ */
+export type WindowDays = number | null;
 
 const DAY_MS = 86_400_000;
 
@@ -51,7 +57,7 @@ export interface ServiceOption {
 }
 
 /** Which native appointments and synced visits count as having had a service. */
-function hadIt(now: Date, sinceDays: SinceDays) {
+function hadIt(now: Date, sinceDays: WindowDays) {
   const since = sinceDays === null ? undefined : new Date(now.getTime() - sinceDays * DAY_MS);
   const native: Prisma.AppointmentWhereInput = {
     holdExpiresAt: null,
@@ -127,7 +133,7 @@ export async function serviceAudienceMembers(
   tx: Prisma.TransactionClient,
   shopId: string,
   keys: readonly string[],
-  sinceDays: SinceDays,
+  sinceDays: WindowDays,
   now: Date,
 ): Promise<Set<string>> {
   const { native, synced } = hadIt(now, sinceDays);
@@ -181,7 +187,7 @@ export async function serviceAudienceMembers(
 export async function serviceAudienceOptions(
   tx: Prisma.TransactionClient,
   shopId: string,
-  sinceDays: SinceDays,
+  sinceDays: WindowDays,
   now: Date,
 ): Promise<ServiceOption[]> {
   const { native, synced } = hadIt(now, sinceDays);

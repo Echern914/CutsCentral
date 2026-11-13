@@ -2158,6 +2158,19 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     action: { label: "Open Message your clients", featureId: "message-clients" },
   },
   {
+    id: "clients-by-service",
+    q: "Can I see every client who booked a certain service?",
+    a: "Yes. On Clients, pick the service in the Any service filter, then how far back: Last 30 days, Last 90 days (the default), Last year or Any time. The list shows only clients who booked it in that time.\n\nIf your services are in a group, the group is listed first and covers every service in it. Pick a group like Retwist/Braids to see everyone who booked any of them.\n\nA client counts if they finished it in that time, or are booked in for it. No-shows and cancellations don't count. It works with the search box, the status filter and tiers, so a client has to match all of them.\n\nWant to message them? Use Message your clients, By service.",
+    keywords: [
+      "clients who booked", "people who booked", "everyone who booked", "who booked a",
+      "filter clients by service", "filter by service", "clients by service",
+      "list of clients who", "booked a service", "booked braids", "booked retwist",
+      "in the last 30 days", "appointment type filter",
+    ],
+    category: "clients",
+    action: { label: "Open Clients", featureId: "clients" },
+  },
+  {
     id: "email-marketing-yes",
     q: "How does a client say yes to getting my emails?",
     a: "Three ways, and your emails from Message your clients go only to people with one:\n\n1. They tick “Email me news and offers” on your booking page. It starts unticked.\n2. They tap “Email me news and offers” on their rewards page.\n3. You record it. Open the client, find the Marketing email card, tap Record their yes, and pick how they told you: In person, By text, By email or Paper form. Only record a yes they actually gave you. It needs an email address on file.\n\nThe card then shows when and how they said yes. A yes belongs to one address — if their email changes, it's cleared and they're back to “Not yet”. Adding or importing a client never counts as a yes.\n\nBooking emails, like confirmations, go out either way.",

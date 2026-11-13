@@ -13,8 +13,29 @@ import { ImportClients } from "./ImportClients";
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
+/** One entry in the "Booked a service" filter (GET /api/dashboard/clients/service-options). */
+export interface ServiceFilterOption {
+  key: string;
+  label: string;
+  kind: "group" | "menu" | "synced";
+}
+
+/** The windows the API accepts (engines/clientServiceFilter.ts), plus any time. */
+const WITHIN = [
+  ["30", "Last 30 days"],
+  ["90", "Last 90 days"],
+  ["365", "Last year"],
+  ["any", "Any time"],
+] as const;
+const DEFAULT_WITHIN = "90";
+
 /** Search + sort + filter bar, plus an Add-client form. Drives the URL query. */
-export function ClientsControls() {
+export function ClientsControls({
+  serviceOptions = null,
+}: {
+  /** null = the list could not be read: the filter is hidden, the rest works. */
+  serviceOptions?: ServiceFilterOption[] | null;
+} = {}) {
   const router = useRouter();
   const params = useSearchParams();
   const [adding, setAdding] = useState(false);
@@ -66,14 +87,29 @@ export function ClientsControls() {
     return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
-  function setParam(key: string, value: string) {
+  function setParams(changes: Record<string, string>) {
     const next = new URLSearchParams(params.toString());
-    if (value) next.set(key, value);
-    else next.delete(key);
+    for (const [key, value] of Object.entries(changes)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
     next.delete("page"); // reset to page 1 on any filter change
     next.delete("import"); // a filter change is not a request to reopen the importer
     router.push(`/dashboard/clients?${next.toString()}`);
   }
+  const setParam = (key: string, value: string) => setParams({ [key]: value });
+
+  // Booked a service. The window only means something with a service picked,
+  // so it goes with it: picking one starts at 90 days, clearing it drops both.
+  const service = params.get("service") ?? "";
+  // Missing or unknown reads as 90 days, as the API does (parseWithin).
+  const rawWithin = params.get("within");
+  const within = WITHIN.some(([v]) => v === rawWithin) ? rawWithin! : DEFAULT_WITHIN;
+  const groups = serviceOptions?.filter((o) => o.kind === "group") ?? [];
+  const menu = serviceOptions?.filter((o) => o.kind === "menu") ?? [];
+  const synced = serviceOptions?.filter((o) => o.kind === "synced") ?? [];
+  // A link to a service the list no longer offers still says what it filters by.
+  const unknownPick = service !== "" && !serviceOptions?.some((o) => o.key === service);
 
   return (
     <div className="mb-5 flex flex-col gap-3">
@@ -151,6 +187,66 @@ export function ClientsControls() {
             </option>
           ))}
         </select>
+        {serviceOptions !== null && serviceOptions.length > 0 && (
+          <select
+            data-qa="clients-service"
+            value={service}
+            onChange={(e) =>
+              setParams(
+                e.target.value
+                  ? { service: e.target.value, within }
+                  : { service: "", within: "" },
+              )
+            }
+            className={`${field} w-full sm:w-auto`}
+            aria-label="Booked a service"
+          >
+            <option value="">Any service</option>
+            {unknownPick && <option value={service}>A service no longer listed</option>}
+            {groups.length > 0 && (
+              <optgroup label="Groups">
+                {groups.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {menu.length > 0 && (
+              <optgroup label="Services">
+                {menu.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {synced.length > 0 && (
+              <optgroup label="From your old booking system">
+                {synced.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+        )}
+        {service !== "" && (
+          <select
+            data-qa="clients-service-within"
+            value={within}
+            onChange={(e) => setParam("within", e.target.value)}
+            className={`${field} w-full sm:w-auto`}
+            aria-label="Booked within"
+          >
+            {WITHIN.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           onClick={() => {
             setAdding((v) => !v);
