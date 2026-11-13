@@ -85,6 +85,10 @@ import { BlockOffForm } from "./BlockOffForm";
 import { BlockEditSheet, BlockMenu } from "./BlockEditSheet";
 import { spreadAcrossDays } from "./blockDays";
 import { TierOpeningForm } from "./TierOpeningForm";
+import type { StoredDateHours } from "@chairback/config/servicePricing";
+import { changedDays, changeHours, changesOn, type DayChange } from "./dayChanges";
+import { DayChangeBars, DayChangeSheet } from "./DayChangeSheet";
+import { ServiceDatesSheet, type DatesStart } from "./ServiceDatesSheet";
 import { useRouter } from "next/navigation";
 
 type Toast = (msg: string, kind?: "success" | "error") => void;
@@ -372,6 +376,52 @@ export function BookingCalendar({
   // falls back to today when the month view was sitting collapsed.
   const [view, setView] = useState<CalendarView>(openView === "day" ? "day" : "month");
   const shownDay = selectedDay ?? todayKey;
+
+  // ---- A service's own hours on a day (the gold bar) ----
+  // What a save from here answered, laid over the services the page was
+  // given, so the bar is right the moment the sheet says "saved" and not a
+  // page refetch later. New services from the page are the truth: they
+  // clear it.
+  const [savedDates, setSavedDates] = useState<
+    Record<string, { dateHours: StoredDateHours; dateOverrides?: Record<string, number> }>
+  >({});
+  useEffect(() => setSavedDates({}), [services]);
+  const liveServices = useMemo(
+    () =>
+      services.map((s) => {
+        const now = savedDates[s.id];
+        if (!now) return s;
+        return { ...s, dateHours: now.dateHours, ...(now.dateOverrides ? { dateOverrides: now.dateOverrides } : {}) };
+      }),
+    [services, savedDates],
+  );
+  const changedDayKeys = useMemo(
+    () => (isNative ? changedDays(liveServices, todayKey) : new Set<string>()),
+    [isNative, liveServices, todayKey],
+  );
+  const dayChanges = useCallback(
+    (dayKey: string) => (isNative ? changesOn(liveServices, dayKey, todayKey) : []),
+    [isNative, liveServices, todayKey],
+  );
+  // The change whose sheet is open, as it stood when its bar was tapped.
+  const [openChange, setOpenChange] = useState<DayChange | null>(null);
+  // A service's dates sheet, opened from that sheet on a change.
+  const [datesFor, setDatesFor] = useState<{ serviceId: string; startOn: DatesStart } | null>(null);
+  const datesService = datesFor ? liveServices.find((s) => s.id === datesFor.serviceId) : undefined;
+  const onDatesSaved = useCallback(
+    (serviceId: string, dateHours: StoredDateHours, dateOverrides?: Record<string, number>) => {
+      setSavedDates((cur) => ({
+        ...cur,
+        [serviceId]: { dateHours, dateOverrides: dateOverrides ?? cur[serviceId]?.dateOverrides },
+      }));
+      // The Services tab and the booking form read the same services.
+      router.refresh();
+    },
+    [router],
+  );
+  // Stable: the sheet re-runs its focus effect when onClose changes.
+  const closeChange = useCallback(() => setOpenChange(null), []);
+  const closeDatesFor = useCallback(() => setDatesFor(null), []);
 
   /**
    * NEWEST ANSWER WINS, per window of days. Swiping back and forth over a
@@ -882,6 +932,8 @@ export function BookingCalendar({
           <DayPlanner
             key={shownDay}
             standalone
+            banner={<DayChangeBars changes={dayChanges(shownDay)} staff={staff} onOpen={setOpenChange} />}
+            alsoHours={changeHours(dayChanges(shownDay))}
             // Remounts per day (the key), so paging back to today - the
             // Today button, the week strip, a swipe - opens at "now" again.
             isToday={shownDay === todayKey}
@@ -933,13 +985,20 @@ export function BookingCalendar({
           // off reads as a week off from here rather than as seven empty
           // days that happen to take no bookings.
           const blocked = rows.some((r) => r.source === "block");
+          // A service runs its own hours that day: the same gold as the bar
+          // the day opens with, so a changed week reads as one from here.
+          const changed = changedDayKeys.has(key);
           const isToday = key === todayKey;
           const isSelected = key === selectedDay;
           return (
             <button
               key={key}
               type="button"
-              title={blocked ? "Has blocked-off time" : undefined}
+              title={
+                [changed ? "Has changed hours" : null, blocked ? "Has blocked-off time" : null]
+                  .filter(Boolean)
+                  .join(" · ") || undefined
+              }
               onClick={() => {
                 if (isSelected) {
                   setSelectedDay(null);
@@ -972,6 +1031,16 @@ export function BookingCalendar({
                   {active}
                 </span>
               )}
+              {changed && (
+                <>
+                  <span
+                    aria-hidden
+                    data-qa="day-changed-mark"
+                    className="absolute left-1/2 top-0.5 h-0.5 w-3 -translate-x-1/2 rounded-full bg-gold"
+                  />
+                  <span className="sr-only">, changed hours</span>
+                </>
+              )}
               {blocked && (
                 <span
                   aria-hidden
@@ -1002,6 +1071,8 @@ export function BookingCalendar({
             <DayPlanner
               // The default view, so this is the planner most visits open on.
               isToday={selectedDay === todayKey}
+              banner={<DayChangeBars changes={dayChanges(selectedDay)} staff={staff} onOpen={setOpenChange} />}
+              alsoHours={changeHours(dayChanges(selectedDay))}
               // The +100 is a few frames for AnimatePresence to drop a day
               // that is closing above this one once its animation ends.
               scrollDelayMs={PLANNER_OPEN_MS + 100}
@@ -1153,6 +1224,42 @@ export function BookingCalendar({
             router.refresh();
           }}
           toast={toast}
+        />
+      )}
+
+      {/* A changed day's own sheet, and the service's dates it can open. One
+          at a time: the dates sheet replaces the change it was opened from. */}
+      {openChange && !datesFor && (
+        <DayChangeSheet
+          key={`${openChange.serviceId}:${openChange.dates[0]}`}
+          change={openChange}
+          services={liveServices}
+          staff={staff}
+          onClose={closeChange}
+          onSaved={onDatesSaved}
+          onChangeDays={() => {
+            setDatesFor({ serviceId: openChange.serviceId, startOn: { dates: openChange.dates } });
+            setOpenChange(null);
+          }}
+          onRepeatFor={(serviceId, name) => {
+            setDatesFor({
+              serviceId,
+              startOn: { dates: openChange.dates, hours: openChange.hours, staffIds: openChange.staffIds, name },
+            });
+            setOpenChange(null);
+          }}
+        />
+      )}
+      {datesFor && datesService && (
+        <ServiceDatesSheet
+          // The sheet reads the service once, when it opens.
+          key={datesFor.serviceId}
+          service={datesService}
+          staff={staff}
+          timezone={tz}
+          startOn={datesFor.startOn}
+          onClose={closeDatesFor}
+          onSaved={(dateHours, dateOverrides) => onDatesSaved(datesFor.serviceId, dateHours, dateOverrides)}
         />
       )}
 
@@ -1844,6 +1951,8 @@ function DayPlanner({
   timezone,
   isToday,
   scrollDelayMs = 0,
+  banner,
+  alsoHours = [],
 }: {
   rows: AgendaRow[];
   /** Gauge buckets (groups + ungrouped services) with their display-only targets. */
@@ -1880,6 +1989,13 @@ function DayPlanner({
   isToday: boolean;
   /** How long to wait before that scroll - see PLANNER_OPEN_MS. */
   scrollDelayMs?: number;
+  /** Drawn over the day's hours: what is different about this day. */
+  banner?: ReactNode;
+  /**
+   * Hours that must have a row even with nothing booked in them: a service
+   * opened at 6 AM for the day needs a 6 AM row to be booked into.
+   */
+  alsoHours?: number[];
 }) {
   const vocab = useVocab();
   // ---- Day gauge: how full is this day, and in what? ----
@@ -1925,8 +2041,8 @@ function DayPlanner({
   // We show each appointment on its START hour, and hours are 0-23, so the window
   // never needs to exceed 23 (an 11 PM cut just needs the 11 PM row to exist -
   // no +1, which would spill into a bogus hour 24 labelled "12 PM").
-  const startHour = Math.min(DEFAULT_START_HOUR, ...bookedHours);
-  const endHour = Math.min(23, Math.max(DEFAULT_END_HOUR, ...bookedHours));
+  const startHour = Math.max(0, Math.min(DEFAULT_START_HOUR, ...bookedHours, ...alsoHours));
+  const endHour = Math.min(23, Math.max(DEFAULT_END_HOUR, ...bookedHours, ...alsoHours));
   const hours: number[] = [];
   for (let h = startHour; h <= endHour; h++) hours.push(h);
   const byHour = new Map<number, AgendaRow[]>();
@@ -2105,6 +2221,8 @@ function DayPlanner({
         {!standalone && <h3 className="font-display text-base">{title}</h3>}
         <DayGauge count={shownCount} target={shownTarget} />
       </div>
+
+      {banner}
 
       {/* Category filter: retunes the gauge AND the planner below, so "just
           retwists" shows him the retwist bookings, not only their count. */}
