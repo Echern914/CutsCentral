@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-13-booking-page-address",
+    date: "2026-11-13",
+    kind: "feature",
+    title: "Your address shows while clients book",
+    body:
+      "Your booking page now shows your address under your name, with a tap for directions, and again " +
+      "once they're booked. If your address is set to private, clients see your town until they book. " +
+      "Add or change it under Your page.",
+  },
+  {
     id: "2026-11-13-special-dates-one-list",
     date: "2026-11-13",
     kind: "feature",

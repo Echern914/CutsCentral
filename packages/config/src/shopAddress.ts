@@ -124,3 +124,35 @@ export function publicShopAddress(shop: PublicAddressInput): PublicShopAddress {
     addressPostal: hidden ? null : (shop.addressPostal ?? null),
   };
 }
+
+/** Where the shop is, as the booking page says it before anyone has booked. */
+export interface BookingPageLocation {
+  /** The full address, or null when there is none to publish. */
+  address: string | null;
+  /** Directions for `address`; null whenever `address` is. */
+  mapsUrl: string | null;
+  /** The town ("Brooklyn, NY"), or null without a city. */
+  locality: string | null;
+  /**
+   * True when the shop keeps its street private but has one on file: the
+   * page names the town and says the exact address comes with the booking,
+   * which is true because the confirmation reads the stored columns.
+   */
+  sentAfterBooking: boolean;
+}
+
+/**
+ * The address for the booking page: the page a client is on when they wonder
+ * where they are going. Built on `publicShopAddress` because the booking shell
+ * is as public as the shop page, so a private street stays off it.
+ */
+export function bookingPageLocation(shop: PublicAddressInput): BookingPageLocation {
+  const seen = publicShopAddress(shop);
+  const address = formatShopAddress(seen);
+  return {
+    address,
+    mapsUrl: mapsUrlFor(seen),
+    locality: formatShopLocality(seen),
+    sentAfterBooking: address === null && shop.addressPrivate === true && hasShopAddress(shop),
+  };
+}

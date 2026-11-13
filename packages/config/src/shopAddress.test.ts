@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bookingPageLocation,
   formatShopAddress,
   formatShopLocality,
   hasShopAddress,
@@ -136,5 +137,32 @@ describe("publicShopAddress", () => {
       addressRegion: null,
       addressPostal: null,
     });
+  });
+});
+
+describe("bookingPageLocation", () => {
+  it("a published address is shown in full, with directions", () => {
+    expect(bookingPageLocation(FULL)).toEqual({
+      address: "123 Main St, Brooklyn, NY 11201",
+      mapsUrl: mapsUrlFor(FULL),
+      locality: "Brooklyn, NY",
+      sentAfterBooking: false,
+    });
+  });
+
+  it("a private street stays off the page: the town, and a promise the booking keeps", () => {
+    const loc = bookingPageLocation({ ...FULL, addressPrivate: true });
+    expect(loc).toEqual({ address: null, mapsUrl: null, locality: "Brooklyn, NY", sentAfterBooking: true });
+    expect(JSON.stringify(loc)).not.toContain("Main");
+    expect(JSON.stringify(loc)).not.toContain("11201");
+  });
+
+  it("private with no street on file promises nothing", () => {
+    const loc = bookingPageLocation({ addressCity: "Brooklyn", addressRegion: "NY", addressPrivate: true });
+    expect(loc).toEqual({ address: null, mapsUrl: null, locality: "Brooklyn, NY", sentAfterBooking: false });
+  });
+
+  it("no address at all says nothing", () => {
+    expect(bookingPageLocation({})).toEqual({ address: null, mapsUrl: null, locality: null, sentAfterBooking: false });
   });
 });

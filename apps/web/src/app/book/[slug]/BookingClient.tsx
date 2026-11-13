@@ -101,6 +101,7 @@ import { groupsToAutoExpand } from "./autoExpand";
 import { dayHasTimes, dayMenuGroups } from "./dayMenu";
 import { revealElement } from "./reveal";
 import { ClientNoteBlock } from "../ClientNoteBlock";
+import { ShopLocationBooked, ShopLocationLine } from "./ShopLocation";
 import { formatCents, formatPrice } from "@/lib/serviceFields";
 import { reloadPage } from "@/lib/reloadPage";
 
@@ -2732,6 +2733,7 @@ export function BookingClient({
           {/* The owner's note ("Please arrive 10 minutes early"). Not on a
               request: nothing is booked yet, and its approval email carries it. */}
           {!wasRequest && <ClientNoteBlock shopName={data.shop.name} note={data.shop.clientNote} />}
+          <ShopLocationBooked location={data.shop.location} />
           <Link
             href={`/book/manage/${confirmedToken}`}
             className="mt-5 inline-block rounded-xl px-5 py-2.5 text-sm font-semibold"
@@ -2895,6 +2897,8 @@ export function BookingClient({
             @{data.shop.instagramHandle}
           </a>
         )}
+        {/* Where they are going, before they book - not first in the email. */}
+        <ShopLocationLine location={data.shop.location} />
       </header>
 
       {/* A booking this device started and left at its card step. Its time is
