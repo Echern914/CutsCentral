@@ -10,7 +10,7 @@ import {
   type MutableRefObject,
   type ReactNode,
 } from "react";
-import { SERVICE_COLORS, SERVICE_COLOR_KEYS } from "@chairback/config/constants";
+import { SERVICE_COLORS, SERVICE_COLOR_KEYS, serviceColorHex } from "@chairback/config/constants";
 import { cap, useVocab } from "@/components/VocabProvider";
 import { zonedDateKey, zonedWallTimeToUtc } from "@chairback/config/time";
 import { parseWeeklyHours, type HoursWindow as PastedWindow } from "@chairback/config/clientImportParse";
@@ -79,7 +79,6 @@ import {
   createTargetedScheduleAction,
   createTargetedSlotAction,
   deleteAddOnAction,
-  deleteServiceAction,
   deleteServiceGroupAction,
   deleteStaffAction,
   deleteTargetedSlotAction,
@@ -107,7 +106,18 @@ import {
   MoneyField,
 } from "@/components/ui/UnitField";
 import { TargetedSlotCard } from "./TargetedSlotCard";
-import { EyeIcon, ServiceCard, serviceSummary } from "./ServiceCard";
+import { ServiceCard, serviceSummary } from "./ServiceCard";
+import { GoRow, InfoRow, ServiceOwnActions, SettingGroup, SettingRow } from "./ServicePage";
+import {
+  addOnsValue,
+  byDayValue,
+  byTimeValue,
+  colorValue,
+  datePricesValue,
+  detailsValue,
+  limitsValue,
+  whoValue,
+} from "./serviceRowValues";
 import { ServiceOrderList, inSavedOrder } from "./ServiceOrder";
 import { isHiddenService } from "@chairback/config/serviceVisibility";
 import { RESCHEDULE_CUTOFF_MAX_HOURS, formatCutoffHours } from "@chairback/config/rescheduleCutoff";
@@ -1306,13 +1316,11 @@ export function ServicesTab({
   // Empty = "offered by everyone" (resolved at submit). Starting empty avoids a
   // stale snapshot of the staff list - a barber added later is included by default.
   const [staffIds, setStaffIds] = useState<string[]>([]);
-  // Which service the pencil opened for editing (null = the edit Sheet is closed).
+  // The service whose page is open (null = closed). The close is stable on
+  // purpose: the Sheet re-runs its focus effect whenever onClose changes,
+  // which would pull focus out of a field mid-edit.
   const [editing, setEditing] = useState<ServiceRow | null>(null);
-  // Which service "Dates" opened (its own hours on chosen days), by id. The
-  // close is stable on purpose: the Sheet re-runs its focus effect whenever
-  // onClose changes, which would pull focus out of a field mid-edit.
-  const [dating, setDating] = useState<string | null>(null);
-  const closeDating = useCallback(() => setDating(null), []);
+  const closeEditing = useCallback(() => setEditing(null), []);
   // A service's row as its last save wrote it, until the page's refresh lands -
   // so neither the list nor a reopened editor shows the pre-save values (and
   // a second save can't write them back). See justSaved.ts.
@@ -1332,10 +1340,6 @@ export function ServicesTab({
     savedOrder && savedOrder.over === initial ? inSavedOrder(activeRows, savedOrder.ids) : activeRows;
   // The shop's date today, for counting dated days still ahead.
   const today = zonedDateKey(new Date(), timezone);
-  // Through the just-saved view, like Edit: a reopened sheet shows what the
-  // last save wrote even before the page's refresh lands.
-  const datingRow = dating ? initial.find((r) => r.id === dating) : undefined;
-  const datingService = datingRow ? justSaved.current(datingRow) : null;
 
   function add() {
     if (!name.trim()) {
@@ -1409,88 +1413,6 @@ export function ServicesTab({
       }
     });
   }
-  /**
-   * Clone everything a service carries into "<name> copy" (the pilot:
-   * "Duplicate Service to make it easier instead of retyping each day's
-   * custom hours individually"). The one thing deliberately NOT copied is the
-   * group membership - a copy starts ungrouped so it can't silently join the
-   * original's booking caps.
-   */
-  function duplicate(s: ServiceRow) {
-    start(async () => {
-      const r = await createServiceAction({
-        // The column caps at 120 - a long original must not make its copy 400.
-        name: `${s.name.slice(0, 115)} copy`,
-        description: s.description ?? undefined,
-        imageUrl: s.imageUrl ?? undefined,
-        durationMin: s.durationMin,
-        price: s.price,
-        priceOverrides: s.priceOverrides ?? undefined,
-        durationOverrides: s.durationOverrides ?? undefined,
-        dailyLimits: s.dailyLimits ?? undefined,
-        dateOverrides: s.dateOverrides ?? undefined,
-        hoursWindows: s.hoursWindows ?? undefined,
-        timeOverrides: s.timeOverrides ?? undefined,
-        color: s.color ?? null,
-        dailyTarget: s.dailyTarget ?? null,
-        offeredByAll: s.offeredByAll ?? false,
-        staffIds: s.offeredByAll ? undefined : (s.staffIds ?? []),
-        // 🔴 The API defaults a new service to public, so a hidden service's
-        // copy used to go straight onto the booking page.
-        visibility: isHiddenService(s) ? "hidden" : "public",
-      });
-      toast(
-        r.ok ? `Duplicated — "${s.name} copy" added below` : "Couldn't duplicate",
-        r.ok ? "success" : "error",
-      );
-    });
-  }
-
-  /**
-   * The eye (a barber: "I can create a service and tap the eye icon to turn it
-   * off and make it not visible"). Hidden = off the booking page, the texting
-   * receptionist and the kiosk; still bookable from New appointment, and
-   * anyone already booked into it keeps their appointment.
-   */
-  function toggleVisibility(s: ServiceRow) {
-    const hide = !isHiddenService(s);
-    start(async () => {
-      const r = await updateServiceAction(s.id, { visibility: hide ? "hidden" : "public" });
-      toast(
-        !r.ok
-          ? "Couldn't change that"
-          : hide
-            ? `"${s.name}" is hidden from clients. You can still book it yourself.`
-            : `"${s.name}" is back on your booking page.`,
-        r.ok ? "success" : "error",
-      );
-    });
-  }
-
-  function remove(id: string) {
-    // One tap here used to destroy a fully-configured service — per-day prices
-    // and durations, hours, time-of-day windows, staff assignments — with no
-    // confirm and no undo, sitting right next to "Edit" on every row. Name
-    // exactly what's being lost (group deletion already confirms; a service
-    // carries far more setup).
-    const svc = initial.find((s) => s.id === id);
-    const grp = initialServiceGroups.find(
-      (g) => g.active && g.serviceIds.includes(id),
-    );
-    if (
-      !window.confirm(
-        `Remove "${svc?.name ?? "this service"}"? Its prices, hours and staff setup are deleted` +
-          (grp ? ` and it leaves the "${grp.name}" group` : "") +
-          ". This can't be undone.",
-      )
-    ) {
-      return;
-    }
-    start(async () => {
-      const r = await deleteServiceAction(id);
-      toast(r.ok ? "Service removed" : "Couldn't remove", r.ok ? "success" : "error");
-    });
-  }
   function toggleStaff(id: string) {
     setStaffIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
   }
@@ -1499,7 +1421,9 @@ export function ServicesTab({
   // services, then whatever is in no group. No groups = the flat list.
   const menu = menuSections(activeServices, initialServiceGroups);
 
-  // One row of the menu, the same whether the menu is grouped or flat.
+  // One row of the menu, the same whether the menu is grouped or flat. The
+  // whole card opens the service's page; show/hide, duplicate and remove live
+  // there now (ServicePage.tsx).
   function serviceRow(listed: ServiceRow) {
     const s = justSaved.current(listed);
     // Hours the ENGINE will use for this service (a group overrides it).
@@ -1507,14 +1431,18 @@ export function ServicesTab({
     // his evening/weekend-only services without opening a single editor.
     const { windows } = effectiveServiceHours(s, initialServiceGroups);
     const offHours = hasCustomHours(windows);
+    // Days still ahead that run on their own hours.
+    const dated = upcomingDatedDays(s, today);
     return (
       <ServiceCard
         key={s.id}
         name={s.name}
-        selected={editing?.id === s.id}
+        color={serviceColorHex(s.color)}
         flagged={offHours}
         flagTitle="Not on regular hours"
         hidden={isHiddenService(s)}
+        note={dated > 0 ? `${dated} special ${dated === 1 ? "date" : "dates"}` : null}
+        onOpen={() => setEditing(s)}
         summary={serviceSummary({
           vocab,
           durationMin: s.durationMin,
@@ -1528,59 +1456,6 @@ export function ServicesTab({
             .filter((n): n is string => Boolean(n)),
           customHours: offHours ? hoursWindowsSummary(windows) : null,
         })}
-        actions={
-          <>
-            <button
-              type="button"
-              onClick={() => toggleVisibility(s)}
-              disabled={pending}
-              aria-pressed={isHiddenService(s)}
-              aria-label={
-                isHiddenService(s)
-                  ? `Show ${s.name} to clients`
-                  : `Hide ${s.name} from clients`
-              }
-              title={isHiddenService(s) ? "Hidden from clients - tap to show" : "Visible to clients - tap to hide"}
-              className={cn(
-                "-m-2 flex h-11 w-11 items-center justify-center rounded-lg transition-colors disabled:opacity-50",
-                isHiddenService(s) ? "text-muted hover:text-offwhite" : "text-gold hover:text-gold/80",
-              )}
-            >
-              <EyeIcon off={isHiddenService(s)} />
-            </button>
-            <button
-              onClick={() => setEditing(s)}
-              className="text-xs text-gold hover:underline"
-              aria-label={`Edit ${s.name}`}
-            >
-              Edit
-            </button>
-            {/* This service's own hours on chosen days ("Thanksgiving
-                week I open at 8"). The count says some are already set. */}
-            <button
-              onClick={() => setDating(s.id)}
-              className="text-xs text-gold hover:underline"
-              aria-label={`Change some days for ${s.name}`}
-            >
-              {upcomingDatedDays(s, today) > 0 ? `Dates (${upcomingDatedDays(s, today)})` : "Dates"}
-            </button>
-            <button
-              onClick={() => duplicate(s)}
-              disabled={pending}
-              className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
-              aria-label={`Duplicate ${s.name}`}
-            >
-              Duplicate
-            </button>
-            <button
-              onClick={() => remove(s.id)}
-              className="text-xs text-danger-soft hover:underline"
-              aria-label={`Remove ${s.name}`}
-            >
-              Remove
-            </button>
-          </>
-        }
       />
     );
   }
@@ -1697,7 +1572,7 @@ export function ServicesTab({
                 the first keystroke and left a bare number meaning nothing. */}
             <div className="grid gap-2 sm:grid-cols-[1fr_110px_110px]">
               <label className="block min-w-0">
-                <span className={labelCls}>Service name</span>
+                <span className={cn(labelCls, "block")}>Service name</span>
                 <input
                   className={cn(field, "mt-1")}
                   placeholder={`e.g. ${cap(vocab.serviceNoun)} - Classic`}
@@ -1783,6 +1658,7 @@ export function ServicesTab({
           service={editing}
           services={initial}
           staff={staff}
+          addOns={initialAddOns}
           groupName={
             editing.serviceGroupId
               ? (initialServiceGroups.find((g) => g.id === editing.serviceGroupId)
@@ -1791,25 +1667,8 @@ export function ServicesTab({
           }
           timezone={timezone}
           toast={toast}
-          onClose={() => setEditing(null)}
+          onClose={closeEditing}
           onSaved={(row) => justSaved.remember(initial.find((r) => r.id === row.id) ?? row, row)}
-        />
-      )}
-
-      {datingService && (
-        <ServiceDatesSheet
-          key={datingService.id}
-          service={datingService}
-          staff={staff}
-          timezone={timezone}
-          onClose={closeDating}
-          onSaved={(dateHours, dateOverrides) =>
-            justSaved.remember(initial.find((r) => r.id === datingService.id) ?? datingService, {
-              ...datingService,
-              dateHours,
-              dateOverrides,
-            })
-          }
         />
       )}
 
@@ -1870,6 +1729,7 @@ export function ServiceEditForm({
   service,
   services,
   staff,
+  addOns = [],
   groupName,
   timezone,
   toast,
@@ -1877,6 +1737,8 @@ export function ServiceEditForm({
   onSaved,
 }: {
   service: ServiceRow;
+  /** The shop's add-ons: the page says which ones go with this service. */
+  addOns?: AddOnRow[];
   /** The whole menu, for "Copy hours from" (retyping 7 days of custom windows
    *  per service was the pilot's exact complaint). */
   services: ServiceRow[];
@@ -1892,10 +1754,19 @@ export function ServiceEditForm({
   onSaved: (row: ServiceRow) => void;
 }) {
   const vocab = useVocab();
-  const shopToday = zonedDateKey(
-    new Date(),
-    timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
-  );
+  const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const shopToday = zonedDateKey(new Date(), zone);
+  // Which row's editor is open. One at a time: opening a row closes the last.
+  const [openRow, setOpenRow] = useState<string | null>(null);
+  const toggleRow = (id: string) => setOpenRow((cur) => (cur === id ? null : id));
+  // The service as the SERVER holds it now. It starts as the row the page
+  // opened with and moves when something here saves on its own (show/hide,
+  // the dates sheet) - so the final Save hands back a row that includes them.
+  const [base, setBase] = useState(service);
+  const [datesOpen, setDatesOpen] = useState(false);
+  // Stable: the Sheet re-runs its focus effect whenever onClose changes.
+  const closeDates = useCallback(() => setDatesOpen(false), []);
+  const [copiedFrom, setCopiedFrom] = useState<string | null>(null);
   const activeStaff = staff.filter((s) => s.active);
   const [name, setName] = useState(service.name);
   // Public-card content: a multi-line description (supports an "INCLUDES:" list)
@@ -1920,9 +1791,7 @@ export function ServiceEditForm({
   // while the barber edits it - keying rows by date would make the row jump or
   // collide the moment two rows briefly share a value.
   const [specialDates, setSpecialDates] = useState<SpecialDateRow[]>(() =>
-    Object.entries(service.dateOverrides ?? {})
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, price]) => ({ date, price: String(price) })),
+    dateRowsFrom(service.dateOverrides),
   );
   // "Offered by all" is a live intent (see the API): when on, the chips show all
   // active barbers lit and a barber added later is auto-included. Toggling any
@@ -2160,11 +2029,13 @@ export function ServiceEditForm({
     // cap), so these rows are always checked and always sent.
     if (hasInvalidHoursRow(hoursRows)) {
       setError("Service hours: each window's end must be after its start");
+      setOpenRow("hours");
       return;
     }
     const dayErr = dayOverridesError(dayPrices, dayDurations);
     if (dayErr) {
       setError(dayErr);
+      setOpenRow("byDay");
       return;
     }
     // Time windows validated with a SPECIFIC message (end>start, price/minutes
@@ -2172,12 +2043,14 @@ export function ServiceEditForm({
     const timeErr = timeRowsError(timeRows);
     if (timeErr) {
       setError(timeErr);
+      setOpenRow("byTime");
       return;
     }
     // If hand-picking, at least one barber must be selected (an empty pick that
     // isn't "all" would offer the service to nobody).
     if (!offeredByAll && staffIds.length === 0) {
       setError(`Pick at least one ${vocab.providerNoun}, or choose All`);
+      setOpenRow("who");
       return;
     }
     const written = {
@@ -2216,12 +2089,14 @@ export function ServiceEditForm({
       }
       if (!r.ok) {
         setError(serviceSaveRefusal(r));
+        const row = r.field ? SERVICE_FIELD_ROW[r.field] : undefined;
+        if (row) setOpenRow(row);
         return;
       }
       // What was just written, for the list and the next open of this editor
       // until the page's refresh lands (see justSaved.ts).
       onSaved({
-        ...service,
+        ...base,
         name: written.name,
         description: written.description || null,
         imageUrl: written.imageUrl || null,
@@ -2246,280 +2121,427 @@ export function ServiceEditForm({
     });
   }
 
+  // The dates sheet takes the page's place while it is open. Everything typed
+  // here is state of THIS component, so it is all still there on the way back.
+  if (datesOpen) {
+    return (
+      <ServiceDatesSheet
+        service={base}
+        staff={staff}
+        timezone={zone}
+        onClose={closeDates}
+        onSaved={(dateHours, dateOverrides) => {
+          const next = { ...base, dateHours, dateOverrides };
+          // 🔴 Save here sends the WHOLE map of dated prices. If the sheet
+          // just changed one, the rows below must hold the new map, or the
+          // next Save would write the old prices back over it.
+          if (JSON.stringify(dateOverrides) !== JSON.stringify(base.dateOverrides ?? {})) {
+            setSpecialDates(dateRowsFrom(dateOverrides));
+          }
+          setBase(next);
+          onSaved(next);
+        }}
+      />
+    );
+  }
+
+  const headingHex = serviceColorHex(color);
+  const datedDays = upcomingDatedDays(base, shopToday);
+
   return (
-    <Sheet title="Edit service" onClose={onClose}>
-      <div className="flex flex-col gap-4">
-        {/* Identical chrome to the add form. These three were the worst of the
-            placeholder-only fields: "Minutes" and "Price ($)" were the ONLY
-            thing naming the unit, and both disappeared the moment you typed. */}
-        <div className="grid gap-2 sm:grid-cols-[1fr_110px_110px]">
-          <label className="block min-w-0">
-            <span className={labelCls}>Service name</span>
-            <input
-              className={cn(field, "mt-1")}
-              placeholder={`e.g. ${cap(vocab.serviceNoun)} - Classic`}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+    <Sheet
+      title="Edit service"
+      heading={
+        <span className="flex items-center gap-3">
+          {headingHex && (
+            <span
+              aria-hidden="true"
+              className="h-10 w-1.5 shrink-0 rounded-full"
+              style={{ backgroundColor: headingHex }}
             />
-          </label>
-          <MinutesNumberField
-            value={duration}
-            onChange={setDuration}
-            min={MIN_SERVICE_MINUTES}
-            placeholder="30"
-          />
-          <MoneyField value={price} onChange={setPrice} placeholder="45" />
-        </div>
-
-        {/* Public booking-card content: what the customer sees when they pick
-            this service. A description (one line per bullet works — e.g. an
-            "INCLUDES:" list) and a menu photo. Both optional. */}
-        <div>
-          <span className={labelCls}>Description (shown on the booking page)</span>
-          <textarea
-            className={cn(field, "mt-1 min-h-[96px] resize-y leading-relaxed")}
-            placeholder={"What's included, e.g.\nThe VIP Package — most requested\nINCLUDES:\n• Your signature service\n• A finishing touch"}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            maxLength={800}
-          />
-          <span className="mt-0.5 block text-[11px] text-muted/80">
-            Line breaks are kept — put each “includes” item on its own line.
-          </span>
-        </div>
-
-        <div className="max-w-[220px]">
-          <ImageField
-            label="Photo (shown on the booking card)"
-            hint={`A square photo of the ${vocab.serviceNoun}/result. Optional.`}
-            value={imageUrl}
-            onChange={setImageUrl}
-            kind="service"
-            aspect="square"
-          />
-        </div>
-
-        {activeStaff.length > 0 && (
-          <div>
-            <span className={labelCls}>
-              Offered by {offeredByAll ? `(all ${vocab.providerNounPlural}, including any added later)` : ""}
+          )}
+          <span className="min-w-0">
+            <span className="block truncate">{base.name}</span>
+            <span className="block font-sans text-xs font-normal text-muted">
+              {groupName ? `${groupName} · ` : ""}
+              {isHiddenService(base) ? "Hidden from clients" : "Shown to clients"}
             </span>
-            <div className="mt-1 flex flex-wrap gap-2">
-              {/* "All" is a live intent: pick it and every barber - now or added
-                  later - offers this service. Picking individuals switches off it. */}
-              <button
-                onClick={chooseAll}
-                className={cn(
-                  "rounded-full border px-3 py-1 text-xs transition-colors",
-                  offeredByAll
-                    ? "border-gold/60 bg-gold/10 text-gold"
-                    : "border-subtle text-muted",
-                )}
-              >
-                All {vocab.providerNounPlural}
-              </button>
-              {activeStaff.map((s) => (
+          </span>
+        </span>
+      }
+      onClose={onClose}
+    >
+      <div className="flex flex-col gap-5">
+        <SettingGroup title="The basics">
+          {/* The three a barber changes most are never behind a tap. Each
+              carries a real label, and the unit sits INSIDE the box so it is
+              still on screen once a number is typed. */}
+          <div className="grid gap-2 border-b border-subtle p-3.5 sm:grid-cols-[1fr_110px_110px]">
+            <label className="block min-w-0">
+              <span className={cn(labelCls, "block")}>Service name</span>
+              <input
+                className={cn(field, "mt-1")}
+                placeholder={`e.g. ${cap(vocab.serviceNoun)} - Classic`}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </label>
+            <MinutesNumberField
+              value={duration}
+              onChange={setDuration}
+              min={MIN_SERVICE_MINUTES}
+              placeholder="30"
+            />
+            <MoneyField value={price} onChange={setPrice} placeholder="45" />
+          </div>
+
+          {/* What the client reads on the booking card: a description (one
+              line per bullet works, e.g. an "INCLUDES:" list) and a photo. */}
+          <SettingRow
+            id="svc-details"
+            label="Description and photo"
+            value={detailsValue(description, imageUrl)}
+            open={openRow === "details"}
+            onToggle={() => toggleRow("details")}
+          >
+            <div className="flex flex-col gap-4">
+              <div>
+                <span className={labelCls}>Description (shown on the booking page)</span>
+                <textarea
+                  className={cn(field, "mt-1 min-h-[96px] resize-y leading-relaxed")}
+                  placeholder={"What's included, e.g.\nThe VIP Package — most requested\nINCLUDES:\n• Your signature service\n• A finishing touch"}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  maxLength={800}
+                />
+                <span className="mt-0.5 block text-[11px] text-muted/80">
+                  Line breaks are kept — put each “includes” item on its own line.
+                </span>
+              </div>
+              <div className="max-w-[220px]">
+                <ImageField
+                  label="Photo (shown on the booking card)"
+                  hint={`A square photo of the ${vocab.serviceNoun}/result. Optional.`}
+                  value={imageUrl}
+                  onChange={setImageUrl}
+                  kind="service"
+                  aspect="square"
+                />
+              </div>
+            </div>
+          </SettingRow>
+
+          {activeStaff.length > 0 && (
+            <SettingRow
+              id="svc-who"
+              label="Who does it"
+              value={whoValue(
+                offeredByAll,
+                activeStaff.filter((s) => staffIds.includes(s.id)).map((s) => s.name),
+              )}
+              open={openRow === "who"}
+              onToggle={() => toggleRow("who")}
+            >
+              <p className="text-[11px] text-muted">
+                {offeredByAll
+                  ? `All ${vocab.providerNounPlural}, including any added later.`
+                  : `Only the ${vocab.providerNounPlural} picked here.`}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {/* "All" is a live intent: pick it and every barber - now or added
+                    later - offers this service. Picking individuals switches off it. */}
                 <button
-                  key={s.id}
-                  onClick={() => toggleStaff(s.id)}
+                  type="button"
+                  onClick={chooseAll}
                   className={cn(
-                    "rounded-full border px-3 py-1 text-xs transition-colors",
-                    !offeredByAll && staffIds.includes(s.id)
+                    "min-h-[44px] rounded-full border px-4 text-sm transition-colors",
+                    offeredByAll
                       ? "border-gold/60 bg-gold/10 text-gold"
                       : "border-subtle text-muted",
                   )}
                 >
-                  {s.name}
+                  All {vocab.providerNounPlural}
                 </button>
+                {activeStaff.map((s) => (
+                  <button
+                    type="button"
+                    key={s.id}
+                    onClick={() => toggleStaff(s.id)}
+                    className={cn(
+                      "min-h-[44px] rounded-full border px-4 text-sm transition-colors",
+                      !offeredByAll && staffIds.includes(s.id)
+                        ? "border-gold/60 bg-gold/10 text-gold"
+                        : "border-subtle text-muted",
+                    )}
+                  >
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            </SettingRow>
+          )}
+
+          {/* Tints this service's appointment blocks so the day view is
+              scannable by cut type. */}
+          <SettingRow
+            id="svc-color"
+            label="Calendar color"
+            value={colorValue(color)}
+            open={openRow === "color"}
+            onToggle={() => toggleRow("color")}
+          >
+            <ColorSwatchPicker value={color} onChange={setColor} />
+          </SettingRow>
+        </SettingGroup>
+
+        <div className="flex flex-col gap-2">
+          <SettingGroup title="When it can be booked">
+            {/* Per-service hours — THE one place these are edited, whether or
+                not the service is in a group. Open = whenever the barber works;
+                a custom day limits this service ("only 10:00-14:00"). It
+                intersects with the barber's weekly hours - it never widens
+                them. A group only shares booking limits; hours belong to the
+                service. */}
+            <SettingRow
+              id="svc-hours"
+              label="Weekly hours"
+              value={
+                hoursRows.every((r) => r.mode === "any") ? "Regular hours" : hoursSummary(hoursRows)
+              }
+              open={openRow === "hours"}
+              onToggle={() => toggleRow("hours")}
+            >
+              <div className="flex items-center justify-end">
+                {/* Flip every day in one tap instead of one by one. */}
+                <button
+                  type="button"
+                  onClick={() => setAllHours(allHoursCustom ? "any" : "custom")}
+                  className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
+                >
+                  {allHoursCustom ? "All days: open" : "All days: custom"}
+                </button>
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
+                Open = whenever the {vocab.providerNoun} works that day. Custom = only the windows
+                you set (add a second window for a split day). Not open = no
+                bookings that day.{" "}
+                <span className="text-offwhite">
+                  These can only narrow when you&apos;re bookable
+                </span>{" "}
+                — to work later than your day currently ends, extend your hours
+                under Staff → Hours.
+                {groupName ? (
+                  <>
+                    {" "}
+                    These are this service&apos;s own hours —{" "}
+                    <span className="text-offwhite">“{groupName}”</span> only shares
+                    booking limits with it, not hours.
+                  </>
+                ) : null}
+              </p>
+              {hoursDonors.length > 0 && (
+                <label className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+                  Copy hours from
+                  <select
+                    className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+                    value=""
+                    onChange={(e) => {
+                      const donor = hoursDonors.find((d) => d.id === e.target.value);
+                      if (donor) {
+                        setHoursRows(hoursRowsFromWindows(donor.hoursWindows));
+                        setCopiedFrom(donor.name);
+                      }
+                    }}
+                    aria-label="Copy hours from another service"
+                  >
+                    <option value="">another service…</option>
+                    {hoursDonors.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-muted/70">(replaces the rows below — save to keep)</span>
+                </label>
+              )}
+              {/* Said here, not in a toast: this sheet covers the toast on a phone. */}
+              {copiedFrom && (
+                <p role="status" className="mt-1.5 text-[11px] text-emerald-soft">
+                  Hours copied from {copiedFrom}. Save to keep them.
+                </p>
+              )}
+              <AvailableHoursRows
+                rows={hoursRows}
+                onChange={setHoursRows}
+                ariaScope="this service"
+              />
+              {isSoloShop && (
+                <p className="mt-2 text-[11px] leading-relaxed text-muted/80">
+                  You&rsquo;re the only {vocab.providerNoun} here, so these are your hours —
+                  saving opens your schedule to match, and you never have to retype
+                  them under Staff &rarr; Hours. To book less, shorten them here or
+                  trim your hours there.
+                </p>
+              )}
+              {hoursConflicts.length > 0 && (
+                <div
+                  role="alert"
+                  className="mt-2 flex flex-col gap-1 rounded-xl border border-warning-soft/40 bg-warning-soft/10 px-3 py-2 text-[11px] leading-relaxed text-warning-soft"
+                >
+                  {hoursConflicts.map((c) => (
+                    <p key={c}>{c}</p>
+                  ))}
+                </div>
+              )}
+            </SettingRow>
+
+            {/* This service's own hours (and price) on days the barber picks:
+                "Thanksgiving week I open at 8". Its own sheet, saved on its own. */}
+            <GoRow
+              label="Special dates"
+              hint="Different hours or price on days you pick."
+              value={datedDays > 0 ? `${datedDays} coming up` : "None"}
+              onClick={() => setDatesOpen(true)}
+            />
+
+            {/* How MANY of this service will be taken per day. */}
+            <SettingRow
+              id="svc-limits"
+              label="Most per day"
+              value={limitsValue(dayLimits)}
+              open={openRow === "limits"}
+              onToggle={() => toggleRow("limits")}
+            >
+              <DailyLimitsEditor
+                limits={dayLimits}
+                onChange={(wd, v) => setDayLimits((cur) => ({ ...cur, [wd]: v }))}
+              />
+            </SettingRow>
+          </SettingGroup>
+
+          {/* Outside the rows: the hours row opens closed, and this explains
+              why a time saved correctly is still missing from the booking page. */}
+          {slotConflicts.length > 0 && (
+            <div
+              role="status"
+              className="flex flex-col gap-1 rounded-xl border border-warning-soft/40 bg-warning-soft/10 px-3 py-2 text-[11px] leading-relaxed text-warning-soft"
+            >
+              {slotConflicts.map((c) => (
+                <p key={c.key}>{c.text}</p>
               ))}
             </div>
-          </div>
-        )}
-
-        {/* Calendar color: tints this service's appointment blocks so the day
-            view is scannable by cut type. */}
-        <div>
-          <span className={labelCls}>Calendar color</span>
-          <div className="mt-1.5">
-            <ColorSwatchPicker value={color} onChange={setColor} />
-          </div>
+          )}
         </div>
 
-        {/* Per-day price/duration overrides (same idiom as the add form). */}
-        <VaryByDayEditor
-          dayPrices={dayPrices}
-          dayDurations={dayDurations}
-          basePrice={price}
-          baseDuration={duration}
-          onPrice={(wd, v) => setDayPrices((cur) => ({ ...cur, [wd]: v }))}
-          onDuration={(wd, v) => setDayDurations((cur) => ({ ...cur, [wd]: v }))}
-        />
-
-        {/* How MANY of this service will be taken per day. Directly under
-            "vary by day" because both are read weekday-by-weekday, and the
-            barber setting a Sunday price is often the one who wants a Sunday
-            ceiling too. */}
-        <DailyLimitsEditor
-          limits={dayLimits}
-          onChange={(wd, v) => setDayLimits((cur) => ({ ...cur, [wd]: v }))}
-        />
-
-        {/* Named calendar dates - the holiday knob. Sits directly under "vary
-            by day" because a barber reaching for one usually wants the other,
-            and above the time windows because a date OUTRANKS them. */}
-        <SpecialDatesEditor
-          rows={specialDates}
-          onChange={setSpecialDates}
-          basePrice={price}
-          today={shopToday}
-        />
-
-        {/* Time-of-day windows: "after 9 PM this runs $60 and takes 20 min".
-            Inside a window the slot grid steps by the window's length and the
-            customer sees (and is charged) the window's price. */}
-        <VaryByTimeEditor
-          rows={timeRows}
-          onChange={setTimeRows}
-          basePrice={price}
-          baseDuration={duration}
-        />
-
-        {/* Per-service available hours — THE one place these are edited, whether
-            or not the service is in a group. Unchecked day = available whenever
-            the barber works; check a day + set a window to limit this service
-            (e.g. "Mens Haircut only 10:00-14:00"). It intersects with the
-            barber's weekly hours - it never widens them.
-
-            This used to be hidden for a grouped service, pointing the barber at
-            the group editor instead: hours were set in one place and shown in
-            another, and a grouped service's own windows were config the engine
-            silently ignored. A group is a bundle with shared booking limits now;
-            hours belong to the service. */}
-        <CollapsibleHours
-          title="Available hours for this service (optional)"
-          summary={hoursSummary(hoursRows)}
-        >
-          <div className="flex items-center justify-end">
-            {/* Flip every day in one tap instead of one by one. */}
-            <button
-              type="button"
-              onClick={() => setAllHours(allHoursCustom ? "any" : "custom")}
-              className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
-            >
-              {allHoursCustom ? "All days: open" : "All days: custom"}
-            </button>
-          </div>
-          <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
-            Open = whenever the {vocab.providerNoun} works that day. Custom = only the windows
-            you set (add a second window for a split day). Not open = no
-            bookings that day.{" "}
-            <span className="text-offwhite">
-              These can only narrow when you&apos;re bookable
-            </span>{" "}
-            — to work later than your day currently ends, extend your hours
-            under Staff → Hours.
-            {groupName ? (
-              <>
-                {" "}
-                These are this service&apos;s own hours —{" "}
-                <span className="text-offwhite">“{groupName}”</span> only shares
-                booking limits with it, not hours.
-              </>
-            ) : null}
-          </p>
-          {hoursDonors.length > 0 && (
-            <label className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
-              Copy hours from
-              <select
-                className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
-                value=""
-                onChange={(e) => {
-                  const donor = hoursDonors.find((d) => d.id === e.target.value);
-                  if (donor) {
-                    setHoursRows(hoursRowsFromWindows(donor.hoursWindows));
-                    toast(`Hours copied from ${donor.name}`, "success");
-                  }
-                }}
-                aria-label="Copy hours from another service"
-              >
-                <option value="">another service…</option>
-                {hoursDonors.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-              <span className="text-muted/70">(replaces the rows below — save to keep)</span>
-            </label>
-          )}
-          <AvailableHoursRows
-            rows={hoursRows}
-            onChange={setHoursRows}
-            ariaScope="this service"
-          />
-          {isSoloShop && (
-            <p className="mt-2 text-[11px] leading-relaxed text-muted/80">
-              You&rsquo;re the only {vocab.providerNoun} here, so these are your hours —
-              saving opens your schedule to match, and you never have to retype
-              them under Staff &rarr; Hours. To book less, shorten them here or
-              trim your hours there.
-            </p>
-          )}
-          {hoursConflicts.length > 0 && (
-            <div
-              role="alert"
-              className="mt-2 flex flex-col gap-1 rounded-xl border border-warning-soft/40 bg-warning-soft/10 px-3 py-2 text-[11px] leading-relaxed text-warning-soft"
-            >
-              {hoursConflicts.map((c) => (
-                <p key={c}>{c}</p>
-              ))}
-            </div>
-          )}
-        </CollapsibleHours>
-
-        {/* Outside the fold: the hours section opens closed, and this explains
-            why a time saved correctly is still missing from the booking page. */}
-        {slotConflicts.length > 0 && (
-          <div
-            role="status"
-            className="flex flex-col gap-1 rounded-xl border border-warning-soft/40 bg-warning-soft/10 px-3 py-2 text-[11px] leading-relaxed text-warning-soft"
+        <SettingGroup title="Price and length changes">
+          <SettingRow
+            id="svc-by-day"
+            label="By day of the week"
+            value={byDayValue(dayPrices, dayDurations)}
+            open={openRow === "byDay"}
+            onToggle={() => toggleRow("byDay")}
           >
-            {slotConflicts.map((c) => (
-              <p key={c.key}>{c.text}</p>
-            ))}
-          </div>
-        )}
+            <VaryByDayEditor
+              dayPrices={dayPrices}
+              dayDurations={dayDurations}
+              basePrice={price}
+              baseDuration={duration}
+              onPrice={(wd, v) => setDayPrices((cur) => ({ ...cur, [wd]: v }))}
+              onDuration={(wd, v) => setDayDurations((cur) => ({ ...cur, [wd]: v }))}
+              heading={false}
+            />
+          </SettingRow>
 
-        {/* "Daily target" USED TO SIT HERE, one field below the daily LIMIT.
-            Two boxes that looked alike, both a number of cuts a day, and only
-            one of them stopped a booking - a barber who mixed them up turned
-            away work to make a number look right. A goal is not an
-            availability setting, so it is no longer edited on this screen.
-            Insights owns it. Existing targets are untouched and the calendar
-            gauge still reads them. */}
-        <p className="rounded-xl border border-subtle bg-charcoal-800/40 p-3 text-[11px] text-muted">
+          {/* "After 9 PM this runs $60 and takes 20 min". Inside a window the
+              slot grid steps by the window's length and the client sees (and
+              is charged) the window's price. */}
+          <SettingRow
+            id="svc-by-time"
+            label="By time of day"
+            value={byTimeValue(timeRows)}
+            open={openRow === "byTime"}
+            onToggle={() => toggleRow("byTime")}
+          >
+            <VaryByTimeEditor
+              rows={timeRows}
+              onChange={setTimeRows}
+              basePrice={price}
+              baseDuration={duration}
+              heading={false}
+            />
+          </SettingRow>
+
+          {/* A price on one named date. It OUTRANKS the two rows above. */}
+          <SettingRow
+            id="svc-by-date"
+            label="On one date"
+            value={datePricesValue(specialDates, shopToday)}
+            open={openRow === "byDate"}
+            onToggle={() => toggleRow("byDate")}
+          >
+            <SpecialDatesEditor
+              rows={specialDates}
+              onChange={setSpecialDates}
+              basePrice={price}
+              today={shopToday}
+            />
+          </SettingRow>
+        </SettingGroup>
+
+        <SettingGroup title="Extras">
+          <InfoRow
+            label="Add-ons"
+            value={addOnsValue(addOns, service.id)}
+            hint="Add-ons are set up under Services → Extras."
+          />
+        </SettingGroup>
+
+        {/* "Daily target" USED TO SIT ON THIS SCREEN, one field below the
+            daily LIMIT. Two boxes that looked alike, both a number of cuts a
+            day, and only one of them stopped a booking - a barber who mixed
+            them up turned away work to make a number look right. A goal is not
+            an availability setting, so Insights owns it. Existing targets are
+            untouched and the calendar gauge still reads them. */}
+        <p className="text-[11px] text-muted">
           Looking for a <span className="text-offwhite">daily target</span>? That
           is a goal, not an availability rule — set it under{" "}
           <Link href="/dashboard/insights" className="text-gold hover:underline">
             Insights → Services
           </Link>
-          . The limits above are the ones that actually stop a booking.
+          . Most per day is the one that actually stops a booking.
         </p>
 
-        {/* Directly above the button the barber just pressed - an error he has
-            to scroll back up to find is an error that goes unread. */}
-        {error && (
-          <p role="alert" className="text-sm text-danger-soft">
-            {error}
-          </p>
-        )}
-        <button
-          onClick={save}
-          disabled={pending}
-          className="mt-1 self-start rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-        >
-          {pending ? "Saving…" : "Save changes"}
-        </button>
+        <div className="flex flex-col gap-2">
+          {/* Directly above the button the barber just pressed - an error he has
+              to scroll back up to find is an error that goes unread. */}
+          {error && (
+            <p role="alert" className="text-sm text-danger-soft">
+              {error}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={save}
+            disabled={pending}
+            className="min-h-[44px] self-start rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+          >
+            {pending ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+
+        <ServiceOwnActions
+          service={base}
+          groupName={groupName}
+          onVisibility={(hidden: boolean) => {
+            const next = { ...base, visibility: hidden ? ("hidden" as const) : ("public" as const) };
+            setBase(next);
+            onSaved(next);
+          }}
+          onRemoved={() => {
+            toast("Service removed", "success");
+            onClose();
+          }}
+        />
       </div>
     </Sheet>
   );
@@ -2541,6 +2563,21 @@ const SERVICE_FIELD_LABEL: Record<string, string> = {
   color: "the color",
   staffIds: "who offers it",
   offeredByAll: "who offers it",
+};
+
+/** The row whose editor holds a refused value, so a refusal can open it. */
+const SERVICE_FIELD_ROW: Record<string, string> = {
+  description: "details",
+  imageUrl: "details",
+  priceOverrides: "byDay",
+  durationOverrides: "byDay",
+  dateOverrides: "byDate",
+  dailyLimits: "limits",
+  timeOverrides: "byTime",
+  hoursWindows: "hours",
+  color: "color",
+  staffIds: "who",
+  offeredByAll: "who",
 };
 
 /** A refused save, in words the barber can act on. Nothing was changed in every case. */
@@ -4709,7 +4746,7 @@ function ServiceGroupEditor({
           Insights → Services
         </Link>
         . To actually cap bookings, use each service&rsquo;s{" "}
-        <span className="text-offwhite">&ldquo;Limit how many a day&rdquo;</span>.
+        <span className="text-offwhite">&ldquo;Most per day&rdquo;</span>.
       </p>
 
       <div className="flex items-center gap-3">
@@ -5241,6 +5278,13 @@ function buildPriceOverrides(dayPrices: Record<number, string>): Record<string, 
 /** One holiday-pricing row while it is being edited (see specialDates). */
 type SpecialDateRow = { date: string; price: string };
 
+/** The stored {date: price} map as editor rows, earliest first. */
+function dateRowsFrom(map: Record<string, number> | null | undefined): SpecialDateRow[] {
+  return Object.entries(map ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, price]) => ({ date, price: String(price) }));
+}
+
 /**
  * {"YYYY-MM-DD": price} from the holiday rows. Incomplete rows are dropped
  * rather than rejected - a barber who added a row and never filled it in has
@@ -5310,8 +5354,7 @@ function DailyLimitsEditor({
 }) {
   return (
     <div>
-      <span className={labelCls}>Limit how many a day? (optional)</span>
-      <p className="mt-0.5 text-[11px] text-muted">
+      <p className="text-[11px] text-muted">
         A hard cap, per day of the week. Leave a day blank for no limit. When a
         day hits its number this service stops being bookable for the rest of
         that day — other services are unaffected, and you can still add someone
@@ -5598,47 +5641,6 @@ function hoursSummary(rows: ServiceHoursRow[]): string {
 }
 
 /**
- * Collapsible "Available hours" wrapper: a summary button that expands the given
- * editor in place when tapped (and collapses again). Keeps the tall 7-day grid
- * out of the way until the barber wants it — the Edit-service / group modals were
- * dominated by it. `summary` reflects the current state so it's readable closed.
- */
-function CollapsibleHours({
-  title,
-  summary,
-  children,
-}: {
-  title: string;
-  summary: string;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="flex w-full items-center justify-between gap-3 rounded-xl border border-subtle bg-charcoal-700 px-3 py-2.5 text-left transition-colors hover:border-gold/50"
-      >
-        <span className="flex flex-col">
-          <span className="text-sm text-offwhite">{title}</span>
-          <span className="text-[11px] text-muted">{summary}</span>
-        </span>
-        <span
-          aria-hidden="true"
-          className="shrink-0 text-xs text-muted transition-transform duration-200"
-          style={{ transform: open ? "rotate(90deg)" : "none" }}
-        >
-          ▸
-        </span>
-      </button>
-      {open && <div className="mt-2">{children}</div>}
-    </div>
-  );
-}
-
-/**
  * The shared per-weekday availability editor (service editor + group editor).
  * Each day picks a mode — Open (barber's hours) / Custom hours / Not open —
  * and a custom day can hold several windows ("+ hours": 9-10am AND 8-11pm).
@@ -5701,23 +5703,31 @@ function AvailableHoursRows({
             // Stacked windows on one day need to read as a set that belongs to
             // THIS day, not as more loose rows: a left rule ties them together
             // and to the weekday beside them.
-            <div className="flex flex-col gap-2 border-l border-subtle pl-3">
+            <div className="flex min-w-0 flex-col gap-2 border-l border-subtle pl-3">
               {r.windows.map((w, k) => (
-                <div key={k} className="flex items-center gap-2.5">
-                  <TimeSelect
-                    value={w.start}
-                    onChange={(v) => patchWindow(i, k, { start: v })}
-                    className={timeSelectCls}
-                    aria-label={`${WEEKDAYS[i]} window ${k + 1} from`}
-                  />
-                  <span className="px-0.5 text-muted">–</span>
-                  <TimeSelect
-                    value={w.end}
-                    onChange={(v) => patchWindow(i, k, { end: v })}
-                    className={timeSelectCls}
-                    allowMidnightEnd
-                    aria-label={`${WEEKDAYS[i]} window ${k + 1} until`}
-                  />
+                // flex-wrap: on a phone the two times fill the line and the
+                // actions drop under them. Without it "+ hours" sat past the
+                // card's edge, clipped, where no thumb could reach it.
+                <div key={k} className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+                  {/* The pair never splits. The "until" list holds
+                      "12:00 AM (midnight)", so it is the wide one: min-w-0
+                      lets it give up that width instead of wrapping alone. */}
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    <TimeSelect
+                      value={w.start}
+                      onChange={(v) => patchWindow(i, k, { start: v })}
+                      className={timeSelectCls}
+                      aria-label={`${WEEKDAYS[i]} window ${k + 1} from`}
+                    />
+                    <span className="px-0.5 text-muted">–</span>
+                    <TimeSelect
+                      value={w.end}
+                      onChange={(v) => patchWindow(i, k, { end: v })}
+                      className={cn(timeSelectCls, "min-w-0")}
+                      allowMidnightEnd
+                      aria-label={`${WEEKDAYS[i]} window ${k + 1} until`}
+                    />
+                  </span>
                   {/* The row actions get their own margin + hit area: butted
                       straight against the "until" select they read as part of
                       the control, and were a hard tap target on a phone. */}
@@ -5792,8 +5802,7 @@ function SpecialDatesEditor({
   }
   return (
     <div>
-      <span className={labelCls}>Holiday &amp; special dates (optional)</span>
-      <p className="mt-0.5 text-[11px] text-muted">
+      <p className="text-[11px] text-muted">
         Charge a different price on one specific date — Christmas Eve, a game
         day, the Saturday before prom. Beats every other price rule for that
         day, including &ldquo;vary by day&rdquo; and any time-of-day window.
@@ -5862,7 +5871,10 @@ function VaryByDayEditor({
   baseDuration,
   onPrice,
   onDuration,
+  heading = true,
 }: {
+  /** Off on a service's page, where the row above already says it. */
+  heading?: boolean;
   dayPrices: Record<number, string>;
   dayDurations: Record<number, string>;
   basePrice: string;
@@ -5872,8 +5884,8 @@ function VaryByDayEditor({
 }) {
   return (
     <div>
-      <span className={labelCls}>Vary by day? (optional — price and/or length)</span>
-      <p className="mt-0.5 text-[11px] text-muted">
+      {heading && <span className={labelCls}>Vary by day? (optional — price and/or length)</span>}
+      <p className={cn("text-[11px] text-muted", heading && "mt-0.5")}>
         Leave a day blank to use the base {basePrice.trim() ? `$${basePrice}` : "price"} /{" "}
         {baseDuration || "?"} min. Fill one in to charge or run that day differently.
       </p>
@@ -6066,11 +6078,14 @@ function VaryByTimeEditor({
   onChange,
   basePrice,
   baseDuration,
+  heading = true,
 }: {
   rows: TimeWindowRow[];
   onChange: (rows: TimeWindowRow[]) => void;
   basePrice: string;
   baseDuration: number;
+  /** Off on a service's page, where the row above already says it. */
+  heading?: boolean;
 }) {
   const vocab = useVocab();
   // w-full + min-w-0: a <select> is a GRID ITEM here, and a grid item defaults
@@ -6085,8 +6100,8 @@ function VaryByTimeEditor({
   }
   return (
     <div>
-      <span className={labelCls}>Vary by time of day? (optional — price and/or length)</span>
-      <p className="mt-0.5 text-[11px] text-muted">
+      {heading && <span className={labelCls}>Vary by time of day? (optional — price and/or length)</span>}
+      <p className={cn("text-[11px] text-muted", heading && "mt-0.5")}>
         e.g. after 9 PM {vocab.serviceNounPlural} run $60 and take 20 min. Pick the days it repeats on
         (or leave them all off for every day), on top of any per-day settings.
         Leave a field blank to keep the usual{" "}

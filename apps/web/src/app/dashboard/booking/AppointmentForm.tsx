@@ -1720,10 +1720,13 @@ export function formatSpecialPrice(price: number): string {
  */
 export function Sheet({
   title,
+  heading,
   onClose,
   children,
 }: {
   title: string;
+  /** Drawn in place of the title (which still names the dialog to a screen reader). */
+  heading?: React.ReactNode;
   onClose: () => void;
   children: React.ReactNode;
 }) {
@@ -1766,7 +1769,7 @@ export function Sheet({
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="min-w-0 [overflow-wrap:anywhere] font-display text-lg text-offwhite">
-            {title}
+            {heading ?? title}
           </h2>
           <button
             type="button"
