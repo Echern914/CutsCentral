@@ -105,8 +105,8 @@ describe("trial check-in: who gets it", () => {
     const shop = await endedAgo(25);
 
     expect(await run()).toEqual([shop.id]);
-    const [note] = notesFor(shop.id);
     expect(notesFor(shop.id)).toHaveLength(1);
+    const note = notesFor(shop.id)[0]!;
     expect(note.to).toBe(ownerEmail);
     expect(note.fromName).toBe("Eric");
     expect(note.subject).toBe("Your experience on ChairBack");
