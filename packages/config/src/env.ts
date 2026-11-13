@@ -266,6 +266,16 @@ const apiSchema = z.object({
   RESEND_API_KEY: z.string().min(1).optional(),
   EMAIL_FROM: z.string().min(1).optional(),
 
+  // The founder's own mailbox, for the few notes that should read as a person
+  // writing (the trial check-in). Sent over Gmail SMTP, so it lands in that
+  // mailbox's Sent folder and replies thread there. Optional: while EITHER is
+  // unset, personalEmailEnabled() is false and those notes stay dark. The
+  // password is a Google "app password" (needs 2-Step Verification on the
+  // account), never the account password. Resend cannot send these: a
+  // @gmail.com From that did not come through Gmail fails DMARC.
+  GMAIL_SMTP_USER: z.string().min(1).optional(),
+  GMAIL_SMTP_APP_PASSWORD: z.string().min(1).optional(),
+
   // Supabase Storage for shop photo uploads (logo / hero / gallery). Optional:
   // while any of these is unset, the upload endpoint returns 503 and the page
   // editor falls back to paste-a-URL, so the app still boots and works without
