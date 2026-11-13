@@ -16,6 +16,7 @@ import {
 import { redactForAudit } from "../messaging/auditBody.js";
 import {
   apiEnv,
+  bookingPageLocation,
   isLikelyEmail,
   type BookingErrorCode,
   type BookingErrorField,
@@ -734,6 +735,11 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
       // actually put in their Instagram bio — never did, so the traffic arrived
       // from Instagram with no way back to it.
       instagramHandle: shop.instagramHandle,
+      // Where the shop is, said BEFORE the booking: clients kept asking their
+      // barber for the address because it first appeared in the confirmation.
+      // As public as the shop page, so a private street stays off it - the
+      // town shows instead, and the confirmation still carries the street.
+      location: bookingPageLocation(shop),
       // Minutes is the rule; hours stays on the wire for a page built before
       // minutes existed (rounded UP, so it never shows a shorter notice).
       bookingLeadMinutes: shop.bookingLeadMinutes,

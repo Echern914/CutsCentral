@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
 import { BOOKING_HANDOFF_PARAM, bookingHandoffFrom } from "@chairback/config/bookingHandoff";
 import type { BusinessVocabulary } from "@chairback/config/businessTypes";
+import type { BookingPageLocation } from "@chairback/config/shopAddress";
 import { apiPublicGet } from "@/lib/api";
 import { expectedDomain, servesDomain } from "@/lib/customDomainGuard";
 import { BookingClient } from "./BookingClient";
@@ -46,6 +47,11 @@ export interface BookShopData {
     accentColor: string | null;
     // Instagram handle WITHOUT the "@" (the API strips it on save).
     instagramHandle: string | null;
+    /**
+     * Where the shop is, as a client may see it before booking (a private
+     * street is withheld by the API). Optional: absent from an older API.
+     */
+    location?: BookingPageLocation | null;
     bookingLeadHours: number;
     /** Minimum notice in minutes. Optional = an older API. */
     bookingLeadMinutes?: number;
