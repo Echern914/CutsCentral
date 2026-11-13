@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { NEUTRAL_VOCABULARY } from "@chairback/config/businessTypes";
 import type { ServiceRow, StaffRow } from "./page";
 
@@ -61,7 +61,7 @@ const RETWIST: ServiceRow = {
   serviceGroupId: null,
 };
 
-function renderTab() {
+function renderTab(section: "menu" | "extras" = "menu") {
   const toast = vi.fn();
   render(
     <ServicesTab
@@ -73,6 +73,7 @@ function renderTab() {
       toast={toast}
       groupUnsavedRef={{ current: null }}
       acuityConnected={false}
+      initialSection={section}
     />,
   );
   return { toast };
@@ -86,17 +87,23 @@ beforeEach(() => {
 });
 
 describe("lengths the API would refuse", () => {
-  it("🔴 a 700-minute service is refused by name, and nothing is sent", () => {
+  it("🔴 a 700-minute service is refused by name, in the sheet, and nothing is sent", () => {
     const { toast } = renderTab();
-    fireEvent.change(screen.getByPlaceholderText(/e\.g\. .* - Classic/), { target: { value: "Locs install" } });
-    fireEvent.change(screen.getAllByLabelText("Duration")[0]!, { target: { value: "700" } });
     fireEvent.click(screen.getByRole("button", { name: "Add service" }));
-    expect(toast).toHaveBeenCalledWith("Length can't be more than 600 minutes", "error");
+    const sheet = within(screen.getByRole("dialog", { name: "Add a service" }));
+    fireEvent.change(sheet.getByPlaceholderText(/e\.g\. .* - Classic/), { target: { value: "Locs install" } });
+    fireEvent.change(sheet.getAllByLabelText("Duration")[0]!, { target: { value: "700" } });
+    fireEvent.click(sheet.getByRole("button", { name: "Add to menu" }));
+    // Said IN the sheet: a toast raised behind an open sheet is not seen on a phone.
+    expect(sheet.getByRole("alert")).toHaveTextContent("Length can't be more than 600 minutes");
+    expect(toast).not.toHaveBeenCalled();
     expect(a.createServiceAction).not.toHaveBeenCalled();
+    // Still open, with what was typed.
+    expect(sheet.getByPlaceholderText(/e\.g\. .* - Classic/)).toHaveValue("Locs install");
   });
 
   it("🔴 an add-on with 500 minutes of extra time is refused by name", () => {
-    const { toast } = renderTab();
+    const { toast } = renderTab("extras");
     fireEvent.change(screen.getByPlaceholderText("e.g. Beard trim"), { target: { value: "Beard" } });
     fireEvent.change(screen.getByLabelText("Extra time"), { target: { value: "500" } });
     fireEvent.click(screen.getByRole("button", { name: "Add add-on" }));
@@ -128,7 +135,7 @@ describe("time windows", () => {
 
 describe("service groups", () => {
   it("say what a group shares now: one 'at once' cap, not hours", () => {
-    renderTab();
+    renderTab("extras");
     expect(screen.getByText(/share one 'at once' limit/)).toBeTruthy();
     expect(screen.getByText(/Hours and daily limits are still set on each service/)).toBeTruthy();
     expect(screen.queryByText(/uses the group's hours/)).toBeNull();

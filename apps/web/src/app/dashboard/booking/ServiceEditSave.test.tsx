@@ -261,6 +261,7 @@ describe("🔴 the Services list right after a save, before the page refresh lan
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit service" })).toBeNull());
     // The group's own list still holds the old row; opening the member from
     // there must still land on what was saved.
+    fireEvent.click(screen.getByRole("button", { name: "Extras" }));
     fireEvent.click(screen.getByRole("button", { name: /^Locs/ }));
     fireEvent.click(screen.getByRole("button", { name: /^Edit hours for/ }));
     expect(sheet().getByRole("textbox", { name: "Service name" })).toHaveValue("Retwist + style");

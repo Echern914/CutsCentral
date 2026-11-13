@@ -27,7 +27,15 @@ import { ClientNoteCard } from "./ClientNoteCard";
 import { FillCancellationsCard } from "./FillCancellationsCard";
 import { useDemoTour } from "@/components/tour/state";
 import { useUrlTab } from "./useUrlTab";
+import {
+  SERVICES_SECTIONS,
+  SERVICES_SECTION_OPTIONS,
+  asServicesSection,
+  menuSections,
+  type ServicesSection,
+} from "./servicesMenu";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { useLeaveGuard } from "@/lib/useLeaveGuard";
 import type {
@@ -128,6 +136,8 @@ import {
 const field =
   "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
+// A group's name over its services in the menu.
+const menuGroupCls = "text-xs font-semibold uppercase tracking-wide text-muted";
 
 
 // Order is the order a barber needs them in: the day's book first, the things
@@ -1237,7 +1247,10 @@ export function ServicesTab({
   toast,
   groupUnsavedRef,
   acuityConnected,
+  initialSection,
 }: {
+  /** Which section opens first when the address names none (default: Menu). */
+  initialSection?: ServicesSection;
   initial: ServiceRow[];
   holidayNames?: Record<string, string>;
   staff: StaffRow[];
@@ -1251,6 +1264,33 @@ export function ServicesTab({
   acuityConnected: boolean;
 }) {
   const vocab = useVocab();
+  // Menu / Special dates / Extras. The address can name one (`?section=`), so
+  // a link from help or the Assistant lands on the section it is about, and
+  // the address follows the control (see useUrlTab for why both ways).
+  const params = useSearchParams();
+  const [section, setSection] = useState<ServicesSection>(
+    () => asServicesSection(params?.get("section")) ?? initialSection ?? "menu",
+  );
+  useUrlTab({
+    tabs: SERVICES_SECTIONS,
+    current: section,
+    param: "section",
+    onRequest: (next) => {
+      setSection(next);
+      return true;
+    },
+  });
+  // The "Add a service" sheet. The draft below lives here, not in the sheet,
+  // so closing it by accident loses nothing.
+  const [adding, setAdding] = useState(false);
+  const closeAdding = useCallback(() => setAdding(false), []);
+  const openAdding = useCallback(() => {
+    setAddError(null);
+    setAdding(true);
+  }, []);
+  // Shown IN the sheet: a toast raised from inside a dialog sits behind it on
+  // a phone.
+  const [addError, setAddError] = useState<string | null>(null);
   // Bumped when a special day is published or removed, so the Targeted slots
   // card (which loads its own list) shows the new openings.
   const [specialsVersion, setSpecialsVersion] = useState(0);
@@ -1298,7 +1338,10 @@ export function ServicesTab({
   const datingService = datingRow ? justSaved.current(datingRow) : null;
 
   function add() {
-    if (!name.trim()) return;
+    if (!name.trim()) {
+      setAddError("Give the service a name.");
+      return;
+    }
     // Length and price go through the SAME parsers the edit Sheet uses, so a
     // value that is refused here is refused there and vice versa. They used to
     // be checked in one form and not the other, which is how a service could be
@@ -1309,23 +1352,23 @@ export function ServicesTab({
       max: MAX_SERVICE_MINUTES,
     });
     if (!parsedDuration.ok) {
-      toast(parsedDuration.error, "error");
+      setAddError(parsedDuration.error);
       return;
     }
     const parsedPrice = parsePrice(price);
     if (!parsedPrice.ok) {
-      toast(parsedPrice.error, "error");
+      setAddError(parsedPrice.error);
       return;
     }
     const dayErr = dayOverridesError(dayPrices, dayDurations);
     if (dayErr) {
-      toast(dayErr, "error");
+      setAddError(dayErr);
       return;
     }
     // Time windows get the same specific validation as the edit Sheet.
     const timeErr = timeRowsError(timeRows);
     if (timeErr) {
-      toast(timeErr, "error");
+      setAddError(timeErr);
       return;
     }
     // No explicit selection -> offer via every barber as a LIVE intent
@@ -1334,6 +1377,7 @@ export function ServicesTab({
     const all = staffIds.length === 0;
     const overrides = buildPriceOverrides(dayPrices);
     const durOverrides = buildDurationOverrides(dayDurations);
+    setAddError(null);
     start(async () => {
       const r = await createServiceAction({
         name: name.trim(),
@@ -1347,6 +1391,8 @@ export function ServicesTab({
         staffIds: all ? undefined : staffIds,
       });
       if (r.ok) {
+        // Close first: the toast is drawn under an open sheet on a phone.
+        setAdding(false);
         toast("Service added", "success");
         setName("");
         setPrice("");
@@ -1354,7 +1400,13 @@ export function ServicesTab({
         setDayDurations({});
         setTimeRows([]);
         setStaffIds([]);
-      } else toast("Couldn't add", "error");
+      } else {
+        setAddError(
+          r.error === "network_error"
+            ? "Couldn't connect. Check your connection and tap Add to menu again - nothing was added."
+            : "Couldn't add this service. Nothing was added - check the details and try again.",
+        );
+      }
     });
   }
   /**
@@ -1443,220 +1495,287 @@ export function ServicesTab({
     setStaffIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
   }
 
+  // The menu drawn the way the booking page draws it: each group with its
+  // services, then whatever is in no group. No groups = the flat list.
+  const menu = menuSections(activeServices, initialServiceGroups);
+
+  // One row of the menu, the same whether the menu is grouped or flat.
+  function serviceRow(listed: ServiceRow) {
+    const s = justSaved.current(listed);
+    // Hours the ENGINE will use for this service (a group overrides it).
+    // Restricted => ★ + the windows spelled out, so the barber can spot
+    // his evening/weekend-only services without opening a single editor.
+    const { windows } = effectiveServiceHours(s, initialServiceGroups);
+    const offHours = hasCustomHours(windows);
+    return (
+      <ServiceCard
+        key={s.id}
+        name={s.name}
+        selected={editing?.id === s.id}
+        flagged={offHours}
+        flagTitle="Not on regular hours"
+        hidden={isHiddenService(s)}
+        summary={serviceSummary({
+          vocab,
+          durationMin: s.durationMin,
+          price: s.price,
+          priceOverrides: s.priceOverrides,
+          durationOverrides: s.durationOverrides,
+          timeOverrides: s.timeOverrides,
+          offeredByAll: s.offeredByAll ?? false,
+          staffNames: (s.staffIds ?? [])
+            .map((id) => staff.find((m) => m.id === id)?.name)
+            .filter((n): n is string => Boolean(n)),
+          customHours: offHours ? hoursWindowsSummary(windows) : null,
+        })}
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={() => toggleVisibility(s)}
+              disabled={pending}
+              aria-pressed={isHiddenService(s)}
+              aria-label={
+                isHiddenService(s)
+                  ? `Show ${s.name} to clients`
+                  : `Hide ${s.name} from clients`
+              }
+              title={isHiddenService(s) ? "Hidden from clients - tap to show" : "Visible to clients - tap to hide"}
+              className={cn(
+                "-m-2 flex h-11 w-11 items-center justify-center rounded-lg transition-colors disabled:opacity-50",
+                isHiddenService(s) ? "text-muted hover:text-offwhite" : "text-gold hover:text-gold/80",
+              )}
+            >
+              <EyeIcon off={isHiddenService(s)} />
+            </button>
+            <button
+              onClick={() => setEditing(s)}
+              className="text-xs text-gold hover:underline"
+              aria-label={`Edit ${s.name}`}
+            >
+              Edit
+            </button>
+            {/* This service's own hours on chosen days ("Thanksgiving
+                week I open at 8"). The count says some are already set. */}
+            <button
+              onClick={() => setDating(s.id)}
+              className="text-xs text-gold hover:underline"
+              aria-label={`Change some days for ${s.name}`}
+            >
+              {upcomingDatedDays(s, today) > 0 ? `Dates (${upcomingDatedDays(s, today)})` : "Dates"}
+            </button>
+            <button
+              onClick={() => duplicate(s)}
+              disabled={pending}
+              className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
+              aria-label={`Duplicate ${s.name}`}
+            >
+              Duplicate
+            </button>
+            <button
+              onClick={() => remove(s.id)}
+              className="text-xs text-danger-soft hover:underline"
+              aria-label={`Remove ${s.name}`}
+            >
+              Remove
+            </button>
+          </>
+        }
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col gap-5">
-      {acuityConnected && <AcuityServiceImport toast={toast} />}
-      <Card className="p-5">
-      <CardHeader title="Services" subtitle="What customers can book, with a length." />
-      {/* Switching apps: paste the old menu instead of typing it. Open from the
-          start while the menu is still empty - the first thing a new shop needs. */}
-      <PasteMenu existingNames={initial.map((s) => s.name)} defaultOpen={initial.length === 0} toast={toast} />
-      {/* All three carry a real label above the box. The unit lives INSIDE the
-          box as chrome (see UnitField), so it is still on screen after a value
-          is typed - a placeholder reading "Length" or "Price ($)" vanished on
-          the first keystroke and left a bare number meaning nothing. */}
-      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_120px_120px]">
-        <label className="block min-w-0">
-          <span className={labelCls}>Service name</span>
-          <input
-            className={cn(field, "mt-1")}
-            placeholder={`e.g. ${cap(vocab.serviceNoun)} - Classic`}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </label>
-        <MinutesNumberField
-          value={duration}
-          onChange={setDuration}
-          min={MIN_SERVICE_MINUTES}
-          placeholder="30"
-        />
-        <MoneyField value={price} onChange={setPrice} placeholder="45" />
-      </div>
-      {activeStaff.length > 0 && (
-        <div className="mt-3">
-          <span className={labelCls}>
-            Offered by {staffIds.length === 0 ? "(all staff)" : ""}
-          </span>
-          <div className="mt-1 flex flex-wrap gap-2">
-            {activeStaff.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => toggleStaff(s.id)}
-                className={cn(
-                  "rounded-full border px-3 py-1 text-xs transition-colors",
-                  staffIds.includes(s.id)
-                    ? "border-gold/60 bg-gold/10 text-gold"
-                    : "border-subtle text-muted",
-                )}
-              >
-                {s.name}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      <Segmented
+        options={SERVICES_SECTION_OPTIONS}
+        value={section}
+        onChange={setSection}
+        ariaLabel="Services sections"
+        size="comfortable"
+      />
 
-      {/* Optional per-day overrides ("Vary by day"). Leave a day blank to use
-          the base price/length; fill one in to differ (e.g. Sunday premium, or
-          "Friday cuts are 20 min"). Duration drives the slot grid: a 20-min
-          Friday makes Friday book in 20-min blocks. */}
-      <div className="mt-3">
-        <VaryByDayEditor
-          dayPrices={dayPrices}
-          dayDurations={dayDurations}
-          basePrice={price}
-          baseDuration={duration}
-          onPrice={(wd, v) => setDayPrices((cur) => ({ ...cur, [wd]: v }))}
-          onDuration={(wd, v) => setDayDurations((cur) => ({ ...cur, [wd]: v }))}
-        />
-      </div>
-
-      {/* Time-of-day windows ("after 9 PM: $60 / 20 min") — same editor as the
-          edit Sheet so a special evening rate can be set at create time. */}
-      <div className="mt-3">
-        <VaryByTimeEditor
-          rows={timeRows}
-          onChange={setTimeRows}
-          basePrice={price}
-          baseDuration={duration}
-        />
-      </div>
-
-      <button
-        onClick={add}
-        disabled={pending}
-        className="mt-4 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
-      >
-        Add service
-      </button>
-
-      {activeServices.length > 1 && (
-        <div className="mt-5 flex justify-end">
-          <button
-            type="button"
-            onClick={() => setReordering((r) => !r)}
-            aria-pressed={reordering}
-            className={cn(
-              "flex min-h-[44px] items-center gap-2 rounded-xl border px-4 text-sm font-medium transition-colors",
-              reordering
-                ? "border-gold bg-gold text-charcoal-900"
-                : "border-gold/40 text-gold hover:border-gold/70",
-            )}
-          >
-            {reordering ? (
-              "Done"
-            ) : (
-              <>
-                <span aria-hidden="true">≡</span> Reorder
-              </>
-            )}
-          </button>
-        </div>
-      )}
-
-      {reordering && activeServices.length > 1 ? (
-        <ServiceOrderList
-          services={activeServices.map((row) => {
-            const s = justSaved.current(row);
-            return { id: s.id, name: s.name, hidden: isHiddenService(s) };
-          })}
-          hasGroups={initialServiceGroups.some((g) => g.active && g.serviceIds.length > 0)}
-          onSaved={(ids) => setSavedOrder({ ids, over: initial })}
-          toast={toast}
-        />
-      ) : (
-      <ul className="mt-5 flex flex-col gap-2">
-        {activeServices.map((listed) => {
-          const s = justSaved.current(listed);
-          // Hours the ENGINE will use for this service (a group overrides it).
-          // Restricted => ★ + the windows spelled out, so the barber can spot
-          // his evening/weekend-only services without opening a single editor.
-          const { windows } = effectiveServiceHours(s, initialServiceGroups);
-          const offHours = hasCustomHours(windows);
-          return (
-            <ServiceCard
-              key={s.id}
-              name={s.name}
-              selected={editing?.id === s.id}
-              flagged={offHours}
-              flagTitle="Not on regular hours"
-              hidden={isHiddenService(s)}
-              summary={serviceSummary({
-                vocab,
-                durationMin: s.durationMin,
-                price: s.price,
-                priceOverrides: s.priceOverrides,
-                durationOverrides: s.durationOverrides,
-                timeOverrides: s.timeOverrides,
-                offeredByAll: s.offeredByAll ?? false,
-                staffNames: (s.staffIds ?? [])
-                  .map((id) => staff.find((m) => m.id === id)?.name)
-                  .filter((n): n is string => Boolean(n)),
-                customHours: offHours ? hoursWindowsSummary(windows) : null,
-              })}
-              actions={
-                <>
-                  <button
-                    type="button"
-                    onClick={() => toggleVisibility(s)}
-                    disabled={pending}
-                    aria-pressed={isHiddenService(s)}
-                    aria-label={
-                      isHiddenService(s)
-                        ? `Show ${s.name} to clients`
-                        : `Hide ${s.name} from clients`
-                    }
-                    title={isHiddenService(s) ? "Hidden from clients - tap to show" : "Visible to clients - tap to hide"}
-                    className={cn(
-                      "-m-2 flex h-11 w-11 items-center justify-center rounded-lg transition-colors disabled:opacity-50",
-                      isHiddenService(s) ? "text-muted hover:text-offwhite" : "text-gold hover:text-gold/80",
-                    )}
-                  >
-                    <EyeIcon off={isHiddenService(s)} />
-                  </button>
-                  <button
-                    onClick={() => setEditing(s)}
-                    className="text-xs text-gold hover:underline"
-                    aria-label={`Edit ${s.name}`}
-                  >
-                    Edit
-                  </button>
-                  {/* This service's own hours on chosen days ("Thanksgiving
-                      week I open at 8"). The count says some are already set. */}
-                  <button
-                    onClick={() => setDating(s.id)}
-                    className="text-xs text-gold hover:underline"
-                    aria-label={`Change some days for ${s.name}`}
-                  >
-                    {upcomingDatedDays(s, today) > 0 ? `Dates (${upcomingDatedDays(s, today)})` : "Dates"}
-                  </button>
-                  <button
-                    onClick={() => duplicate(s)}
-                    disabled={pending}
-                    className="text-xs text-muted hover:text-gold hover:underline disabled:opacity-50"
-                    aria-label={`Duplicate ${s.name}`}
-                  >
-                    Duplicate
-                  </button>
-                  <button
-                    onClick={() => remove(s.id)}
-                    className="text-xs text-danger-soft hover:underline"
-                    aria-label={`Remove ${s.name}`}
-                  >
-                    Remove
-                  </button>
-                </>
+      {/* All three sections stay mounted; the two not on screen are `hidden`.
+          Switching must not throw away a half-typed add-on or an open group
+          editor. The wrapper has no display class of its own on purpose: a
+          `flex` there out-ranks the hidden attribute and shows all three. */}
+      <div hidden={section !== "menu"}>
+        <div className="flex flex-col gap-5">
+          {acuityConnected && <AcuityServiceImport toast={toast} />}
+          <Card className="p-5">
+            <CardHeader
+              title="Services"
+              subtitle="What customers can book, with a length."
+              action={
+                <button
+                  type="button"
+                  onClick={openAdding}
+                  className="min-h-[44px] shrink-0 rounded-xl bg-gold px-4 text-sm font-semibold text-charcoal-900"
+                >
+                  Add service
+                </button>
               }
             />
-          );
-        })}
-        {activeServices.length === 0 && (
-          <li className="text-sm text-muted">No services yet.</li>
-        )}
-      </ul>
+
+            {activeServices.length > 1 && (
+              <div className="mt-5 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setReordering((r) => !r)}
+                  aria-pressed={reordering}
+                  className={cn(
+                    "flex min-h-[44px] items-center gap-2 rounded-xl border px-4 text-sm font-medium transition-colors",
+                    reordering
+                      ? "border-gold bg-gold text-charcoal-900"
+                      : "border-gold/40 text-gold hover:border-gold/70",
+                  )}
+                >
+                  {reordering ? (
+                    "Done"
+                  ) : (
+                    <>
+                      <span aria-hidden="true">≡</span> Reorder
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {reordering && activeServices.length > 1 ? (
+              <ServiceOrderList
+                services={activeServices.map((row) => {
+                  const s = justSaved.current(row);
+                  return { id: s.id, name: s.name, hidden: isHiddenService(s) };
+                })}
+                hasGroups={initialServiceGroups.some((g) => g.active && g.serviceIds.length > 0)}
+                onSaved={(ids) => setSavedOrder({ ids, over: initial })}
+                toast={toast}
+              />
+            ) : menu.sections.length === 0 ? (
+              <ul className="mt-5 flex flex-col gap-2">
+                {activeServices.map((s) => serviceRow(s))}
+                {activeServices.length === 0 && (
+                  <li className="text-sm text-muted">No services yet.</li>
+                )}
+              </ul>
+            ) : (
+              <div className="mt-5 flex flex-col gap-5">
+                {menu.sections.map((sec) => (
+                  <section key={sec.id}>
+                    <h3 className={menuGroupCls}>{sec.name}</h3>
+                    <ul className="mt-2 flex flex-col gap-2">
+                      {sec.services.map((s) => serviceRow(s))}
+                    </ul>
+                  </section>
+                ))}
+                {menu.ungrouped.length > 0 && (
+                  <section>
+                    <h3 className={menuGroupCls}>More services</h3>
+                    <ul className="mt-2 flex flex-col gap-2">
+                      {menu.ungrouped.map((s) => serviceRow(s))}
+                    </ul>
+                  </section>
+                )}
+              </div>
+            )}
+
+            <div className="mt-5">
+              {/* Switching apps: paste the old menu instead of typing it. Open from the
+                  start while the menu is still empty - the first thing a new shop needs. */}
+              <PasteMenu existingNames={initial.map((s) => s.name)} defaultOpen={initial.length === 0} toast={toast} />
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      {adding && (
+        <Sheet title="Add a service" onClose={closeAdding}>
+          <div className="flex flex-col">
+            {/* All three carry a real label above the box. The unit lives INSIDE the
+                box as chrome (see UnitField), so it is still on screen after a value
+                is typed - a placeholder reading "Length" or "Price ($)" vanished on
+                the first keystroke and left a bare number meaning nothing. */}
+            <div className="grid gap-2 sm:grid-cols-[1fr_110px_110px]">
+              <label className="block min-w-0">
+                <span className={labelCls}>Service name</span>
+                <input
+                  className={cn(field, "mt-1")}
+                  placeholder={`e.g. ${cap(vocab.serviceNoun)} - Classic`}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </label>
+              <MinutesNumberField
+                value={duration}
+                onChange={setDuration}
+                min={MIN_SERVICE_MINUTES}
+                placeholder="30"
+              />
+              <MoneyField value={price} onChange={setPrice} placeholder="45" />
+            </div>
+            {activeStaff.length > 0 && (
+              <div className="mt-3">
+                <span className={labelCls}>
+                  Offered by {staffIds.length === 0 ? "(all staff)" : ""}
+                </span>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {activeStaff.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => toggleStaff(s.id)}
+                      className={cn(
+                        "rounded-full border px-3 py-1 text-xs transition-colors",
+                        staffIds.includes(s.id)
+                          ? "border-gold/60 bg-gold/10 text-gold"
+                          : "border-subtle text-muted",
+                      )}
+                    >
+                      {s.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Optional per-day overrides ("Vary by day"). Leave a day blank to use
+                the base price/length; fill one in to differ (e.g. Sunday premium, or
+                "Friday cuts are 20 min"). Duration drives the slot grid: a 20-min
+                Friday makes Friday book in 20-min blocks. */}
+            <div className="mt-3">
+              <VaryByDayEditor
+                dayPrices={dayPrices}
+                dayDurations={dayDurations}
+                basePrice={price}
+                baseDuration={duration}
+                onPrice={(wd, v) => setDayPrices((cur) => ({ ...cur, [wd]: v }))}
+                onDuration={(wd, v) => setDayDurations((cur) => ({ ...cur, [wd]: v }))}
+              />
+            </div>
+
+            {/* Time-of-day windows ("after 9 PM: $60 / 20 min") — same editor as the
+                edit Sheet so a special evening rate can be set at create time. */}
+            <div className="mt-3">
+              <VaryByTimeEditor
+                rows={timeRows}
+                onChange={setTimeRows}
+                basePrice={price}
+                baseDuration={duration}
+              />
+            </div>
+
+            {/* In the sheet, never a toast: see addError. */}
+            <FormError className="mt-4">{addError}</FormError>
+            <button
+              type="button"
+              onClick={add}
+              disabled={pending}
+              className="mt-4 min-h-[44px] self-start rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+            >
+              {pending ? "Adding…" : "Add to menu"}
+            </button>
+          </div>
+        </Sheet>
       )}
-      </Card>
 
       {editing && (
         <ServiceEditForm
@@ -1694,42 +1813,50 @@ export function ServicesTab({
         />
       )}
 
-      {/* Upsells. Beside the service list because it is read as part of the
-          menu: which service leads to which. */}
-      <UpgradeRules services={initial} toast={toast} />
+      <div hidden={section !== "dates"}>
+        <div className="flex flex-col gap-5">
+          {/* Holiday pricing (shop-wide, grouped BY DATE - how a barber thinks
+              about a holiday) and Special day, sharing one live view of the day:
+              "Open live view" on either draws the date per chair to pick its
+              times and the price of each opening. Special days publish targeted
+              slots, so the Targeted slots card below re-reads on a save (key). */}
+          <HolidaysAndSpecialDays
+            services={initial}
+            staff={staff}
+            names={holidayNames}
+            timezone={timezone}
+            toast={toast}
+            onChanged={() => setSpecialsVersion((v) => v + 1)}
+          />
 
-      <ServiceGroupsManager
-        initial={initialServiceGroups}
-        services={initial}
-        // Through the same just-saved view as the list's own Edit button.
-        onEditService={(s) => setEditing(justSaved.current(s))}
-        toast={toast}
-        unsavedRef={groupUnsavedRef}
-      />
+          <TargetedSlotsManager
+            key={specialsVersion}
+            services={initial}
+            staff={staff}
+            timezone={timezone}
+            toast={toast}
+          />
+        </div>
+      </div>
 
-      {/* Holiday pricing (shop-wide, grouped BY DATE - how a barber thinks
-          about a holiday) and Special day, sharing one live view of the day:
-          "Open live view" on either draws the date per chair to pick its
-          times and the price of each opening. Special days publish targeted
-          slots, so the Targeted slots card below re-reads on a save (key). */}
-      <HolidaysAndSpecialDays
-        services={initial}
-        staff={staff}
-        names={holidayNames}
-        timezone={timezone}
-        toast={toast}
-        onChanged={() => setSpecialsVersion((v) => v + 1)}
-      />
+      <div hidden={section !== "extras"}>
+        <div className="flex flex-col gap-5">
+          <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
 
-      <AddOnsManager initial={initialAddOns} services={initial} toast={toast} />
+          {/* Upsells. Beside the service list because it is read as part of the
+              menu: which service leads to which. */}
+          <UpgradeRules services={initial} toast={toast} />
 
-      <TargetedSlotsManager
-        key={specialsVersion}
-        services={initial}
-        staff={staff}
-        timezone={timezone}
-        toast={toast}
-      />
+          <ServiceGroupsManager
+            initial={initialServiceGroups}
+            services={initial}
+            // Through the same just-saved view as the list's own Edit button.
+            onEditService={(s) => setEditing(justSaved.current(s))}
+            toast={toast}
+            unsavedRef={groupUnsavedRef}
+          />
+        </div>
+      </div>
     </div>
   );
 }

@@ -72,7 +72,7 @@ const SLOT: TargetedSlotRow = {
   booked: false,
 };
 
-function renderTab() {
+function renderTab(section: "dates" | "extras") {
   render(
     <ServicesTab
       initial={[RETWIST]}
@@ -83,6 +83,7 @@ function renderTab() {
       toast={vi.fn()}
       groupUnsavedRef={{ current: null }}
       acuityConnected={false}
+      initialSection={section}
     />,
   );
 }
@@ -98,7 +99,7 @@ beforeEach(() => {
 
 describe("Targeted slots card", () => {
   it("a successful read shows the list, with no error line", async () => {
-    renderTab();
+    renderTab("dates");
     expect(await screen.findByText("Model rate")).toBeTruthy();
     expect(screen.queryByText(/Couldn.t load your targeted slots/)).toBeNull();
     expect(screen.queryByText("Loading your targeted slots…")).toBeNull();
@@ -107,7 +108,7 @@ describe("Targeted slots card", () => {
   it("says it is loading while the first read runs", async () => {
     let answer: (v: unknown) => void = () => {};
     a.listTargetedSlotsAction.mockReturnValue(new Promise((r) => (answer = r)));
-    renderTab();
+    renderTab("dates");
     expect(await screen.findByText("Loading your targeted slots…")).toBeTruthy();
     answer({ ok: true, slots: [], rules: [] });
     expect(await screen.findByText("No targeted slots yet.")).toBeTruthy();
@@ -118,7 +119,7 @@ describe("Targeted slots card", () => {
     // Drick, 2026-11-07: the list sat on "Loading..." for minutes and the
     // Publish button was disabled the whole time, so a 7pm slot never saved.
     a.listTargetedSlotsAction.mockReturnValue(new Promise(() => {}));
-    renderTab();
+    renderTab("dates");
     expect(await screen.findByText("Loading your targeted slots…")).toBeTruthy();
     const publish = screen.getByRole("button", { name: "Publish slot" }) as HTMLButtonElement;
     expect(publish.disabled).toBe(false);
@@ -126,7 +127,7 @@ describe("Targeted slots card", () => {
 
   it("🔴 a failed read says so and reassures; Try again reads again and shows the list", async () => {
     a.listTargetedSlotsAction.mockResolvedValueOnce({ ok: false });
-    renderTab();
+    renderTab("dates");
     expect(await screen.findByText(/Couldn.t load your targeted slots\./)).toBeTruthy();
     expect(screen.getByText(LIVE_NOTE)).toBeTruthy();
     // Never the answer "you have none".
@@ -141,7 +142,7 @@ describe("Targeted slots card", () => {
 
   it("a read that throws (no answer at all) is a failure too, not a blank card", async () => {
     a.listTargetedSlotsAction.mockRejectedValueOnce(new TypeError("Load failed"));
-    renderTab();
+    renderTab("dates");
     expect(await screen.findByText(/Couldn.t load your targeted slots\./)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
@@ -150,7 +151,7 @@ describe("Targeted slots card", () => {
     // What Next 14.2 hands back for a server action the new build doesn't
     // have: no throw, just undefined (lib/loadAction.ts).
     a.listTargetedSlotsAction.mockResolvedValueOnce(undefined);
-    renderTab();
+    renderTab("dates");
     expect(await screen.findByText(/ChairBack was updated/)).toBeTruthy();
     expect(screen.getByText(LIVE_NOTE)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
@@ -162,7 +163,7 @@ describe("Targeted slots card", () => {
 describe("Upgrade prompts card", () => {
   it("🔴 a failed read is not 'Nothing set up'", async () => {
     a.listUpgradeRulesAction.mockResolvedValueOnce({ ok: false });
-    renderTab();
+    renderTab("extras");
     expect(await screen.findByText(/Couldn.t load your upgrade prompts\./)).toBeTruthy();
     expect(screen.queryByText(/Nothing set up/)).toBeNull();
 

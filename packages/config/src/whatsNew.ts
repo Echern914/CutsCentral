@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-13-services-menu-sections",
+    date: "2026-11-13",
+    kind: "feature",
+    title: "Services is now a clean menu",
+    body:
+      "Services opens on your menu alone, listed by group the way clients see it. Holiday pricing, special " +
+      "days and special slots moved to Special dates; add-ons, upgrade prompts and groups moved to Extras. " +
+      "Add service now opens its own form.",
+  },
+  {
     id: "2026-11-12-clients-by-service",
     date: "2026-11-12",
     kind: "feature",
