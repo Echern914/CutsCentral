@@ -55,6 +55,7 @@
     "./tips": "./src/tips.ts",
     "./promoPricing": "./src/promoPricing.ts",
     "./servicePricing": "./src/servicePricing.ts",
+    "./dateHoursPlan": "./src/dateHoursPlan.ts",
     "./offers": "./src/offers.ts",
     "./onboarding": "./src/onboarding.ts",
     "./providerAward": "./src/providerAward.ts",

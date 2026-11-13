@@ -153,6 +153,26 @@ describe("findHelp — real phrasings", () => {
     expectAnswer("talk to a real person", "contact-human");
   });
 
+  it("one service's hours for a few days: the barber's own words land, and take nothing from the neighbours", () => {
+    // As it was texted, 2026-11-12.
+    expectAnswer(
+      "i need to change the hours of mens haircut for just the days of thanksgiving week",
+      "service-hours-on-dates",
+    );
+    expectAnswer("so i can add more availability without messing w anything else", "service-hours-on-dates");
+    expectAnswer("can i open earlier on christmas eve for haircuts", "service-hours-on-dates");
+    expectAnswer("longer hours for one service on a holiday week", "service-hours-on-dates");
+    // Still theirs: the weekly hours, the holiday price, the day off.
+    expectAnswer("how do i set my hours", "set-hours");
+    expectAnswer("change hours", "set-hours");
+    expectAnswer("change my availability", "set-hours");
+    expectAnswer("holiday pricing", "holiday-pricing");
+    expectAnswer("how do i set holiday pricing", "holiday-pricing");
+    expectAnswer("block off thanksgiving", "time-off");
+    // A question about money on a holiday is not a question about hours.
+    expect(findHelp("can i charge more on thanksgiving").answer?.id).not.toBe("service-hours-on-dates");
+  });
+
   it("survives typos", () => {
     expectAnswer("does it work with aquity", "acuity");
     expectAnswer("cancle my subscription", "cancel-subscription");

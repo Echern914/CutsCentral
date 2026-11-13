@@ -214,7 +214,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "set-hours",
     q: "How do I set my hours?",
-    a: "Two layers, and the order matters.\n\nThe ceiling is per person: Calendar → Staff → Hours sets the days and times someone actually works. Nothing can be booked outside that.\n\nThen each service can narrow it further — a service you only do on weekends simply isn't bookable midweek. Service hours can shorten your day, never extend it, so if a time is missing, widen the staff hours first.\n\nIf you're the only one in the shop, saving hours on a service widens your own week to match, so you set them once and you're done.\n\nMoving from Booksy, TheCut or Google? In the Hours sheet, tap Paste hours from another app and paste your week: it fills in the days for you to check before you save.",
+    a: "Two layers, and the order matters.\n\nThe ceiling is per person: Calendar → Staff → Hours sets the days and times someone actually works. Nothing can be booked outside that.\n\nThen each service can narrow it further — a service you only do on weekends simply isn't bookable midweek. Service hours can shorten your day, never extend it, so if a time is missing, widen the staff hours first.\n\nThe one exception is a one-off: to open a service earlier or later on chosen days, like a holiday week, see “Can I set different hours for just a few days?”.\n\nIf you're the only one in the shop, saving hours on a service widens your own week to match, so you set them once and you're done.\n\nMoving from Booksy, TheCut or Google? In the Hours sheet, tap Paste hours from another app and paste your week: it fills in the days for you to check before you save.",
     keywords: [
       "hours", "availability", "schedule", "open times", "when i work",
       "working hours", "shifts", "change hours", "edit hours", "update hours",
@@ -224,6 +224,34 @@ export const HELP_ANSWERS: HelpAnswer[] = [
       "shop hours", "business hours", "store hours", "what are your hours",
     ],
     primaryFor: ["hours"],
+    category: "booking",
+    action: { label: "Open services", featureId: "services" },
+  },
+  {
+    // A barber, 2026-11-12: "I need to change the hours of mens haircut for
+    // just the days of thanksgiving week, so I can add more availability
+    // without messing with anything else." The set-hours answer above says a
+    // service can never extend your day, which was the whole truth until
+    // per-date hours existed - and would have sent him the wrong way.
+    id: "service-hours-on-dates",
+    // 🔴 The question deliberately does not contain the word "service": an
+    // entry's question scores too, and with it the bare query "services"
+    // landed here instead of on the Services page.
+    q: "Can I set different hours for just a few days?",
+    a: "Yes. On Services, tap Dates on that service. Pick the days (as many as you like, across weeks), set the hours it's open on them, and save. A holiday week is one save.\n\nOn those days the service runs on exactly the hours you set. They can be longer than your usual day (open at 8 when you normally start at noon) or shorter, and you can split them so a break stays closed. Tap Closed instead to not offer it at all on those days.\n\nNothing else moves: everything else you offer keeps its usual hours, and anyone already booked stays booked. Time you've blocked off stays blocked.\n\nYou can set a price for those days in the same place. To put a day back, open Dates and tap Undo on it.",
+    keywords: [
+      "just a few days", "just the days", "change the hours for just the days",
+      "certain days", "specific days", "specific dates",
+      "certain dates", "one day only", "just one week", "holiday week",
+      "holiday hours", "longer hours", "extra hours", "extended hours",
+      "special hours", "open earlier", "open later", "stay open later", "add availability",
+      "extra availability", "different hours one day",
+      "haircut hours for a week", "without messing",
+      // NOT "thanksgiving" / "christmas", and NOT "more availability": the
+      // holiday names are holiday-pricing's, and the bare word "more" outscored
+      // the pricing answers. Either one sent "can i charge more on
+      // thanksgiving" here, which is a question about money.
+    ],
     category: "booking",
     action: { label: "Open services", featureId: "services" },
   },
