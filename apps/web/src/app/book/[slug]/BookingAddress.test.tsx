@@ -200,6 +200,11 @@ describe("once booked", () => {
     );
   });
 
+  it("a town with no street on file makes no promise there either", async () => {
+    await book(shopData({ ...PRIVATE, sentAfterBooking: false }));
+    expect(document.querySelector('[data-qa="booked-address"]')).toBeNull();
+  });
+
   it("no address says nothing", async () => {
     await book(shopData(NONE));
     expect(document.querySelector('[data-qa="booked-address"]')).toBeNull();

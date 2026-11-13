@@ -153,6 +153,7 @@ export function bookingPageLocation(shop: PublicAddressInput): BookingPageLocati
     address,
     mapsUrl: mapsUrlFor(seen),
     locality: formatShopLocality(seen),
-    sentAfterBooking: address === null && shop.addressPrivate === true && hasShopAddress(shop),
+    // Withheld (address null) yet on file: only privacy does that.
+    sentAfterBooking: address === null && hasShopAddress(shop),
   };
 }
