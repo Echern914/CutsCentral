@@ -377,6 +377,10 @@ model Shop {
   // emails at most once no matter how many times the daily job runs. See
   // engines/trialReminder.ts.
   trialReminderStage   Int       @default(0)
+  // When the founder's personal "how was your trial?" note was sent (null =
+  // not yet). Set BEFORE the send, compare-and-set on null, so it goes at most
+  // once. See engines/trialCheckIn.ts.
+  trialCheckInSentAt   DateTime?
 
   // Public shop page (/s/[slug]) - each barber's own mini-site.
   slug              String?  @unique // URL handle; backfilled from name
