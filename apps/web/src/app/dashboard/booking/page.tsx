@@ -92,9 +92,10 @@ export interface ServiceRow {
    * Per-DATE hours ({"2026-11-24": {w: [{s,e}], staff: []}}): this service's
    * own hours on a chosen date, replacing its usual day. Edited only through
    * the "Change some days" sheet. Optional so a web deploy ahead of the API
-   * reads none.
+   * reads none. `n` is what the shop calls the change ("Thanksgiving week"):
+   * its own label, never shown to a client.
    */
-  dateHours?: Record<string, { w: { s: number; e: number }[]; staff: string[] }>;
+  dateHours?: Record<string, { w: { s: number; e: number }[]; staff: string[]; n?: string }>;
   // Per-weekday duration overrides ({ "5": 20 } = Friday 20 min). {} = base.
   durationOverrides: Record<string, number>;
   /**

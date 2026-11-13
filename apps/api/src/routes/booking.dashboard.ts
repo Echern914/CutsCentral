@@ -12,12 +12,13 @@ import { SERVICE_VISIBILITIES } from "@chairback/config/serviceVisibility";
 import { describeBlockScope } from "@chairback/config/blockScope";
 import {
   isRealDateKey,
+  MAX_DATE_HOURS_NAME,
   MAX_DATE_HOURS_WINDOWS,
   parseDateHours,
   parseHolidayNames,
   serializeDateHours,
 } from "@chairback/config/servicePricing";
-import { setServiceDateHours } from "../services/serviceDateHours.js";
+import { nameServiceDateHours, setServiceDateHours } from "../services/serviceDateHours.js";
 import { forShop, prisma, Prisma, runWithShop } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
@@ -711,8 +712,44 @@ const dateHoursWriteSchema = z
     hours: z.array(serviceWindowSchema).max(MAX_DATE_HOURS_WINDOWS).nullable(),
     staffIds: z.array(z.string().min(1)).max(100).optional(),
     price: z.number().min(0).max(100000).nullable().optional(),
+    // What the shop calls the change. Absent keeps each date's own name.
+    name: z.string().trim().max(MAX_DATE_HOURS_NAME).optional(),
   })
   .strict();
+
+// Name a change that is already there, or take its name off (""). Its own
+// route because it is its own act: the calendar's sheet names a change long
+// after the hours were saved, and must not have to resend them to do it.
+const dateHoursNameSchema = z
+  .object({
+    dates: z
+      .array(z.string().refine(isRealDateKey, "Not a real date"))
+      .min(1)
+      .max(31),
+    name: z.string().trim().max(MAX_DATE_HOURS_NAME),
+  })
+  .strict();
+
+bookingDashboardRouter.put("/services/:id/date-hours/name", async (req, res) => {
+  const parsed = dateHoursNameSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const outcome = await nameServiceDateHours({
+    shopId: req.shop!.id,
+    serviceId: req.params.id!,
+    timezone: req.shop!.timezone,
+    dates: parsed.data.dates,
+    name: parsed.data.name,
+    now: new Date(),
+  });
+  if (!outcome.ok) {
+    res.status(404).json({ error: outcome.error });
+    return;
+  }
+  res.json({ ok: true, dateHours: outcome.dateHours });
+});
 
 bookingDashboardRouter.put("/services/:id/date-hours", async (req, res) => {
   const parsed = dateHoursWriteSchema.safeParse(req.body ?? {});

@@ -420,6 +420,144 @@ describe("saving", () => {
   });
 });
 
+describe("a change can carry a name", () => {
+  const nameIt = (body: object, serviceId = cut, as = cookie) =>
+    request(app).put(`/api/booking/services/${serviceId}/date-hours/name`).set("Cookie", as).send(body);
+  const names = async () =>
+    Object.fromEntries(
+      Object.entries((await stored()) as Record<string, { n?: string }>).map(([date, entry]) => [date, entry.n]),
+    );
+
+  it("a save can name its dates, and a later save with no name keeps it", async () => {
+    const monday = nextDate(MONDAY);
+    const tuesday = plusDays(monday, 1);
+    const res = await save({ dates: [monday, tuesday], hours: [span("08:00", "09:00")], name: "  Long weekend  " });
+    expect(res.status).toBe(200);
+    expect(await names()).toEqual({ [monday]: "Long weekend", [tuesday]: "Long weekend" });
+
+    // Changing a named day's hours does not unname it.
+    await save({ dates: [monday], hours: [span("08:00", "10:00")] });
+    expect(await stored()).toEqual({
+      [monday]: { w: [{ s: 480, e: 600 }], staff: [], n: "Long weekend" },
+      [tuesday]: { w: [{ s: 480, e: 540 }], staff: [], n: "Long weekend" },
+    });
+
+    // An empty name in a save takes it off, and only for that save's dates.
+    await save({ dates: [monday], hours: [span("08:00", "10:00")], name: "" });
+    expect(await names()).toEqual({ [monday]: undefined, [tuesday]: "Long weekend" });
+  });
+
+  it("names a change that is already there without touching its hours", async () => {
+    const monday = nextDate(MONDAY);
+    const tuesday = plusDays(monday, 1);
+    await save({ dates: [monday], hours: [span("08:00", "10:00"), span("11:00", "13:00")], staffIds: [staffA] });
+    await save({ dates: [tuesday], hours: [] });
+
+    const res = await nameIt({ dates: [monday, tuesday], name: "Busy week" });
+    expect(res.status).toBe(200);
+    const after = {
+      [monday]: { w: [span("08:00", "10:00"), span("11:00", "13:00")], staff: [staffA], n: "Busy week" },
+      [tuesday]: { w: [], staff: [], n: "Busy week" },
+    };
+    expect(res.body.dateHours).toEqual(after);
+    expect(await stored()).toEqual(after);
+    // The day is offered exactly as it was before it had a name.
+    expect(await startsOn(monday)).toEqual(
+      new Set(["08:00", "08:30", "09:00", "09:30", "11:00", "11:30", "12:00", "12:30"]),
+    );
+
+    // "" takes the name off, and only where it was asked to.
+    expect((await nameIt({ dates: [monday], name: "" })).status).toBe(200);
+    expect(await names()).toEqual({ [monday]: undefined, [tuesday]: "Busy week" });
+  });
+
+  it("a day with no change is skipped: naming never creates one", async () => {
+    const monday = nextDate(MONDAY);
+    const tuesday = plusDays(monday, 1);
+    await save({ dates: [monday], hours: [span("08:00", "09:00")] });
+    const res = await nameIt({ dates: [monday, tuesday, "2020-01-06"], name: "Busy week" });
+    expect(res.status).toBe(200);
+    expect(await stored()).toEqual({ [monday]: { w: [{ s: 480, e: 540 }], staff: [], n: "Busy week" } });
+    // Tuesday still runs its usual hours.
+    expect(await startsOn(tuesday)).toEqual(new Set(["12:00", "12:30", "13:00", "13:30", "14:00", "14:30"]));
+  });
+
+  it("a name and an hours save at the same moment both land", async () => {
+    const monday = nextDate(MONDAY);
+    const tuesday = plusDays(monday, 1);
+    await save({ dates: [monday], hours: [span("08:00", "09:00")] });
+    const { results, settledEarly } = await raceBehindRowLock("Service", cut, [
+      () => nameIt({ dates: [monday], name: "Busy week" }),
+      () => save({ dates: [tuesday], hours: [span("10:00", "11:00")] }),
+    ]);
+    expect(settledEarly).toBe(0); // both really waited on the row
+    expect(results.map((r) => (r.status === "fulfilled" ? r.value.status : "rejected"))).toEqual([200, 200]);
+    expect(await stored()).toEqual({
+      [monday]: { w: [{ s: 480, e: 540 }], staff: [], n: "Busy week" },
+      [tuesday]: { w: [{ s: 600, e: 660 }], staff: [] },
+    });
+  });
+
+  it("the name is the shop's own: the booking page is never sent it", async () => {
+    const monday = nextDate(MONDAY);
+    await save({ dates: [monday], hours: [span("08:00", "09:00")], name: "Zq private label" });
+    const page = await request(app).get(`/api/book/${slug}`);
+    expect(page.status).toBe(200);
+    expect(JSON.stringify(page.body)).not.toContain("Zq private label");
+    const slots = await request(app)
+      .get(`/api/book/${slug}/slots`)
+      .query({ staffId: staffA, serviceId: cut, from: `${monday}T00:00:00.000Z`, to: `${plusDays(monday, 1)}T00:00:00.000Z` });
+    expect(slots.status).toBe(200);
+    expect(slots.body.slots.length).toBeGreaterThan(0);
+    expect(JSON.stringify(slots.body)).not.toContain("Zq private label");
+  });
+
+  it("refuses what it cannot mean", async () => {
+    const monday = nextDate(MONDAY);
+    await save({ dates: [monday], hours: [span("08:00", "09:00")] });
+    const code = async (body: object, serviceId = cut) => {
+      const res = await nameIt(body, serviceId);
+      return `${res.status} ${res.body.error}`;
+    };
+    expect(await code({ dates: [], name: "x" })).toBe("400 invalid_input");
+    expect(await code({ dates: ["2031-02-30"], name: "x" })).toBe("400 invalid_input");
+    expect(await code({ dates: [monday] })).toBe("400 invalid_input");
+    expect(await code({ dates: [monday], name: "x".repeat(41) })).toBe("400 invalid_input");
+    // The name route is for the name: it will not carry hours in beside it.
+    expect(await code({ dates: [monday], name: "x", hours: [] })).toBe("400 invalid_input");
+    expect(await code({ dates: [monday], name: "x" }, "no-such-service")).toBe("404 not_found");
+    // The hours route holds a name to the same length.
+    const long = await save({ dates: [monday], hours: [span("10:00", "11:00")], name: "x".repeat(41) });
+    expect(`${long.status} ${long.body.error}`).toBe("400 invalid_input");
+    expect(await stored()).toEqual({ [monday]: { w: [{ s: 480, e: 540 }], staff: [] } });
+  });
+
+  it("another shop cannot name this shop's change", async () => {
+    const monday = nextDate(MONDAY);
+    await save({ dates: [monday], hours: [span("08:00", "09:00")] });
+    const other = `dh3-${randomToken(6)}@test.local`.toLowerCase();
+    const signup = await request(app)
+      .post("/api/auth/signup")
+      .send({ email: other, password, name: "Other", smsAttested: true, acceptTerms: true });
+    const otherCookie = (signup.headers["set-cookie"] as unknown as string[])[0]!;
+    await request(app)
+      .post("/api/shops")
+      .set("Cookie", otherCookie)
+      .send({ name: "Other Cuts", bookingUrl: "https://dh3.test", smsAttested: true });
+    try {
+      const res = await nameIt({ dates: [monday], name: "Theirs" }, cut, otherCookie);
+      expect(res.status).toBe(404);
+      expect(await stored()).toEqual({ [monday]: { w: [{ s: 480, e: 540 }], staff: [] } });
+    } finally {
+      const user = await prisma.user.findUnique({ where: { email: other } });
+      if (user) {
+        await prisma.shop.deleteMany({ where: { ownerId: user.id } });
+        await prisma.user.delete({ where: { id: user.id } });
+      }
+    }
+  });
+});
+
 describe("a damaged row changes nothing", () => {
   it("junk in the column leaves the usual week in place - it never closes a day", async () => {
     const monday = nextDate(MONDAY);
