@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { BUSINESS_TYPES } from "@chairback/config/businessTypes";
-import { EyeIcon, ServiceCard, serviceSummary } from "./ServiceCard";
+import { ServiceCard, serviceSummary } from "./ServiceCard";
 
 /**
  * The Services list card.
@@ -124,18 +124,7 @@ describe("serviceSummary", () => {
 function Card(props: Partial<Parameters<typeof ServiceCard>[0]> = {}) {
   return (
     <ul>
-      <ServiceCard
-        name="Skin Fade"
-        summary={serviceSummary(BASE)}
-        actions={
-          <>
-            <button>Edit</button>
-            <button>Duplicate</button>
-            <button>Remove</button>
-          </>
-        }
-        {...props}
-      />
+      <ServiceCard name="Skin Fade" summary={serviceSummary(BASE)} onOpen={() => {}} {...props} />
     </ul>
   );
 }
@@ -169,14 +158,37 @@ describe("the card", () => {
     expect(text.match(/varies by day/g)).toHaveLength(1);
   });
 
-  it("keeps Edit, Duplicate and Remove in that order on every card", () => {
+  it("🔴 is ONE way in: the whole card opens the service, and nothing else is on it", () => {
+    // It used to carry an eye, Edit, Dates, Duplicate and Remove along its
+    // edge - five 16px links, Remove a thumb's width from Edit.
+    const onOpen = vi.fn();
+    render(<Card onOpen={onOpen} />);
+    const buttons = screen.getAllByRole("button");
+    expect(buttons).toHaveLength(1);
+    fireEvent.click(buttons[0]!);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("is named for the service, with the summary as its description", () => {
     render(<Card />);
-    const labels = screen.getAllByRole("button").map((b) => b.textContent);
-    expect(labels).toEqual(["Edit", "Duplicate", "Remove"]);
+    const open = screen.getByRole("button", { name: "Edit Skin Fade" });
+    expect(open).toHaveAccessibleDescription(/30 min · \$35 · Marcus · Regular hours/);
+  });
+
+  it("says custom hours to a screen reader, where the star says it to the eye", () => {
+    render(<Card flagged />);
+    expect(screen.getByRole("button", { name: "Edit Skin Fade" })).toHaveAccessibleDescription(
+      /^Custom hours\. /,
+    );
+  });
+
+  it("is tall enough for a thumb", () => {
+    render(<Card />);
+    expect(screen.getByRole("button", { name: "Edit Skin Fade" }).className).toContain("min-h-[64px]");
   });
 });
 
-describe("hidden from clients (the eye)", () => {
+describe("hidden from clients", () => {
   it("says Hidden beside the name when the barber has hidden it", () => {
     render(<Card hidden />);
     expect(screen.getByTestId("service-hidden-badge")).toHaveTextContent("Hidden");
@@ -186,42 +198,20 @@ describe("hidden from clients (the eye)", () => {
     render(<Card />);
     expect(screen.queryByTestId("service-hidden-badge")).toBeNull();
   });
-
-  it("the eye is struck through only when hidden", () => {
-    const open = render(<EyeIcon off={false} />);
-    expect(open.container.querySelectorAll("path")).toHaveLength(1);
-    open.unmount();
-    const off = render(<EyeIcon off />);
-    expect(off.container.querySelectorAll("path")).toHaveLength(2);
-  });
 });
 
-describe("selected state", () => {
-  it("is visibly stronger when the service is open in the editor", () => {
-    const { container, rerender } = render(<Card />);
-    const idle = container.querySelector("li");
-    expect(idle?.className).toContain("border-gold/25");
-    expect(idle).not.toHaveAttribute("aria-current");
-
-    rerender(<Card selected />);
-    const active = container.querySelector("li");
-    // Full-strength gold, a gold wash, and announced to AT.
-    expect(active?.className).toContain("border-gold");
-    expect(active?.className).not.toContain("border-gold/25");
-    expect(active).toHaveAttribute("aria-current", "true");
+describe("what is worth knowing before opening it", () => {
+  it("shows the note it is given", () => {
+    render(<Card note="2 special dates" />);
+    expect(screen.getByText("2 special dates")).toBeVisible();
   });
 
-  it("does not change the border WIDTH between states", () => {
-    // A 1px -> 2px swap on select makes every other card jump. Both states use
-    // the same `border`, only the colour differs.
-    const { container, rerender } = render(<Card />);
-    const idle = container.querySelector("li")!.className;
-    rerender(<Card selected />);
-    const active = container.querySelector("li")!.className;
-    for (const cls of [idle, active]) {
-      expect(cls).toContain("border ");
-      expect(cls).not.toMatch(/border-2|border-\[2px\]/);
-    }
+  it("draws the calendar colour as a bar, and no bar without one", () => {
+    const { unmount } = render(<Card color="#22C55E" />);
+    expect(screen.getByTestId("service-color-bar")).toHaveStyle({ backgroundColor: "#22C55E" });
+    unmount();
+    render(<Card />);
+    expect(screen.queryByTestId("service-color-bar")).toBeNull();
   });
 });
 
@@ -231,35 +221,21 @@ describe("responsive", () => {
     expect(screen.getByText(/The VIP Package/)).toHaveClass("truncate");
   });
 
-  it("truncates the summary from sm up, where it shares the row", () => {
-    render(<Card />);
-    expect(screen.getByText(/30 min/)).toHaveClass("sm:truncate");
-  });
-
-  it("lets the summary WRAP on a phone instead of hiding the barber", () => {
-    // At 390px, sharing the row with three buttons left room for
-    // "30 min · $35 · vari…" - two of the four facts were truncated away. The
-    // summary must not carry an unconditional truncate.
+  it("lets the summary WRAP instead of hiding who does it and when", () => {
+    // Truncated, "30 min · $35 · vari…" was all that fit on a phone - two of
+    // the four facts were cut away.
     render(<Card />);
     const line = screen.getByText(/30 min/);
-    expect(line.className.split(/s+/)).not.toContain("truncate");
+    expect(line.className).not.toMatch(/truncate/);
   });
 
-  it("gives the summary the full width on a phone so the buttons wrap under it", () => {
-    const { container } = render(<Card />);
-    const textBlock = container.querySelector("li > div > div");
-    expect(textBlock?.className).toContain("basis-full");
-    expect(textBlock?.className).toContain("sm:basis-auto");
-  });
-
-  it("lets the actions wrap under the summary on a narrow screen", () => {
-    // flex-wrap is what stops the row scrolling sideways on a phone; min-w-0
-    // on the text block is what lets truncate actually engage inside a flex
-    // child. Both are load-bearing and neither is visible in a happy-path test.
-    const { container } = render(<Card />);
-    const row = container.querySelector("li > div");
-    expect(row?.className).toContain("flex-wrap");
-    expect(row?.querySelector("div")?.className).toContain("min-w-0");
+  it("lets the text block shrink, so a long name cannot push the card wider than the phone", () => {
+    // min-w-0 is what lets truncate engage inside a flex child. It is
+    // load-bearing and invisible in a happy-path test.
+    render(<Card />);
+    const block = screen.getByText("Skin Fade").parentElement?.parentElement;
+    expect(block?.className).toContain("min-w-0");
+    expect(block?.className).toContain("flex-1");
   });
 
   it("applies the same shape to a VIP service as to a plain one", () => {

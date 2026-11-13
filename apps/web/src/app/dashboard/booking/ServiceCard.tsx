@@ -1,11 +1,10 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useId } from "react";
 import {
   NEUTRAL_VOCABULARY,
   type BusinessVocabulary,
 } from "@chairback/config/businessTypes";
-import { useVocab } from "@/components/VocabProvider";
 import { cn } from "@/lib/cn";
 import { formatPrice } from "@/lib/serviceFields";
 
@@ -22,7 +21,7 @@ import { formatPrice } from "@/lib/serviceFields";
  * clear at the top, and one line of summary underneath - how long, how much,
  * who does it, when it's bookable. The overrides are counted, not listed
  * ("varies by day"), because the number of them is the useful signal at a
- * glance and the detail is one tap away in Edit.
+ * glance and the detail is one tap away on the service's page.
  *
  * Every service gets the same treatment, whatever it is called or however it
  * is configured - a plain haircut and a "VIP Package" are the same shape, so a
@@ -106,78 +105,69 @@ function barberLabel(
   return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
 }
 
-/** The Services list's eye: open = clients can see it, struck through = hidden. */
-export function EyeIcon({ off }: { off: boolean }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      width="18"
-      height="18"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" />
-      <circle cx="12" cy="12" r="3" />
-      {off && <path d="M3 3l18 18" />}
-    </svg>
-  );
-}
-
+/**
+ * One service on the menu. The WHOLE card is the way in: tap it and the
+ * service's own page opens.
+ *
+ * It used to carry five small links along its right edge (an eye, Edit, Dates,
+ * Duplicate, Remove). On a phone they were 16px tall, wrapped under the
+ * summary, and Remove sat a thumb's width from Edit. Everything they did now
+ * lives on the service's page, as full-height rows; the card just says what
+ * the service is.
+ */
 export function ServiceCard({
   name,
   summary,
-  selected = false,
+  color = null,
   flagged = false,
   flagTitle,
   hidden = false,
-  actions,
+  note = null,
+  onOpen,
 }: {
   name: string;
   summary: ServiceSummary;
-  /** The service currently open in the editor - lit noticeably brighter. */
-  selected?: boolean;
+  /** The calendar colour as a hex, drawn as a bar; null draws none. */
+  color?: string | null;
   /** Custom hours: keeps the existing gold star affordance. */
   flagged?: boolean;
   flagTitle?: string;
-  /** Hidden from clients (the eye): only the barber can book it. */
+  /** Hidden from clients: only the barber can book it. */
   hidden?: boolean;
-  actions: ReactNode;
+  /** One short thing worth knowing before opening it ("2 special dates"). */
+  note?: string | null;
+  onOpen: () => void;
 }) {
-  const vocab = useVocab();
+  const summaryId = useId();
   return (
     <li
-      // Dark ground + a thin gold outline, brighter when this is the service
-      // being edited. All three states are the same border WIDTH so nothing
-      // shifts by a pixel when one is selected.
-      className={cn(
-        "rounded-xl border bg-charcoal-800/40 px-4 py-3 transition-colors duration-150 ease-out",
-        selected
-          ? "border-gold bg-gold/[0.06] shadow-[0_0_0_1px_rgba(212,175,55,0.35)]"
-          : "border-gold/25 hover:border-gold/50",
-      )}
-      aria-current={selected ? "true" : undefined}
+      // Dark ground + a thin gold outline, the same on every service.
+      className="rounded-xl border border-gold/25 bg-charcoal-800/40 transition-colors duration-150 ease-out hover:border-gold/50"
     >
-      {/* Wraps on a phone: the summary takes the full width and the buttons
-          drop underneath, rather than the row scrolling sideways. */}
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-        {/* basis-full below sm: on a phone the summary takes the whole width
-            and the buttons wrap underneath it. Sharing the row there squeezed
-            the text so hard that "30 min · $35 · vari…" was all that fit -
-            the barber and the availability, two of the four facts, were
-            truncated away entirely. */}
-        <div className="min-w-0 flex-1 basis-full sm:basis-auto">
-          <p className="flex items-center gap-1.5 text-sm font-semibold text-offwhite">
+      <button
+        type="button"
+        onClick={onOpen}
+        // The name alone names the button; the summary is its description, so
+        // a screen reader says "Edit Haircut" and then what the service is.
+        aria-label={`Edit ${name}`}
+        aria-describedby={summaryId}
+        className="flex min-h-[64px] w-full items-center gap-3 rounded-xl px-4 py-3 text-left"
+      >
+        {color && (
+          <span
+            aria-hidden="true"
+            data-testid="service-color-bar"
+            className="h-9 w-1 shrink-0 rounded-full"
+            style={{ backgroundColor: color }}
+          />
+        )}
+        {/* min-w-0 is what lets the name truncate inside a flex child. */}
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-offwhite">
             {flagged && (
-              <>
-                <span aria-hidden="true" className="text-gold" title={flagTitle}>
-                  ★
-                </span>
-                <span className="sr-only">Custom hours. </span>
-              </>
+              <span aria-hidden="true" className="text-gold" title={flagTitle}>
+                ★
+              </span>
             )}
             <span className="min-w-0 truncate">{name}</span>
             {hidden && (
@@ -188,12 +178,12 @@ export function ServiceCard({
                 Hidden
               </span>
             )}
-          </p>
-          {/* One line of four facts. It WRAPS on a phone (where it owns the
-              full width) and truncates from sm up, where it shares the row
-              with the buttons. min-w-0 on the parent is what lets truncate
-              engage at all inside a flex child. */}
-          <p className="mt-1 text-xs text-muted sm:truncate">
+          </span>
+          {/* One line of four facts. It WRAPS rather than truncating: nothing
+              shares the row with it any more, and a cut-off line hid who does
+              the service and when. */}
+          <span id={summaryId} className="mt-1 block text-xs font-normal text-muted">
+            {flagged && <span className="sr-only">Custom hours. </span>}
             {summary.duration}
             {" · "}
             {summary.price}
@@ -202,11 +192,28 @@ export function ServiceCard({
             {summary.barbers}
             {" · "}
             <span className={cn(flagged && "text-gold/90")}>{summary.availability}</span>
-          </p>
-        </div>
-        {/* Always the same three, always in the same order and place. */}
-        <div className="flex shrink-0 items-center gap-3">{actions}</div>
-      </div>
+          </span>
+        </span>
+        {note && (
+          <span className="shrink-0 rounded-full bg-gold/10 px-2.5 py-1 text-[11px] font-medium text-gold">
+            {note}
+          </span>
+        )}
+        <svg
+          aria-hidden="true"
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="shrink-0 text-muted"
+        >
+          <path d="M6 3l5 5-5 5" />
+        </svg>
+      </button>
     </li>
   );
 }

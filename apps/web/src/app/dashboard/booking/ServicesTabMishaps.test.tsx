@@ -193,6 +193,8 @@ describe("Duplicate keeps what the service is", () => {
       dateOverrides: { "2099-12-24": 80 },
     });
     renderTab([secret]);
+    // Duplicate lives on the service's own page now.
+    fireEvent.click(await screen.findByRole("button", { name: "Edit VIP cut" }));
     fireEvent.click(await screen.findByRole("button", { name: /Duplicate VIP cut/i }));
     await waitFor(() => expect(a.createServiceAction).toHaveBeenCalledTimes(1));
     expect(a.createServiceAction.mock.calls[0]![0]).toMatchObject({
@@ -205,6 +207,8 @@ describe("Duplicate keeps what the service is", () => {
 
   it("a public service's copy is public", async () => {
     renderTab([RETWIST]);
+    // Duplicate lives on the service's own page now.
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Retwist" }));
     fireEvent.click(await screen.findByRole("button", { name: /Duplicate Retwist/i }));
     await waitFor(() => expect(a.createServiceAction).toHaveBeenCalledTimes(1));
     expect(a.createServiceAction.mock.calls[0]![0]).toMatchObject({ visibility: "public" });
