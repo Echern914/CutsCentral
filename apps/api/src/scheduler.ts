@@ -24,6 +24,7 @@ import { runAcuityOutboundReconcile } from "./engines/acuityMirror.js";
 import { runGroupMirrorSettle } from "./engines/appointmentGroupSettle.js";
 import { runTrialReminders } from "./engines/trialReminder.js";
 import { runAiTrialReminders } from "./engines/aiTrialReminder.js";
+import { runTrialCheckIns } from "./engines/trialCheckIn.js";
 import { autoCloseIdleConversations } from "./receptionist/conversation.js";
 import { expireStaleWalkIns } from "./engines/walkInExpiry.js";
 import { releaseAffiliateRewardHolds } from "./services/affiliateQualification.js";
@@ -327,6 +328,17 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
     ttlMs: 10 * MINUTE,
     run: () => runAiTrialReminders(),
     failMsg: "ai trial reminder sweep failed",
+  },
+  // The founder's personal check-in, from his own Gmail, a day after a trial
+  // ends without a plan. 15:00 UTC = 10-11 AM US Eastern, a sensible hour for
+  // a note from a person. Once per shop (trialCheckInSentAt compare-and-set);
+  // a no-op until billing is on, the Gmail mailbox is set and DRY_RUN is off.
+  {
+    cronExpr: "0 15 * * *",
+    name: "trial-check-in",
+    ttlMs: 10 * MINUTE,
+    run: () => runTrialCheckIns(),
+    failMsg: "trial check-in sweep failed",
   },
   // AI receptionist: close conversation threads idle >24h (hourly) so a
   // months-later text starts fresh instead of resuming a stale thread.
