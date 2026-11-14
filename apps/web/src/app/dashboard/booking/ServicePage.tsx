@@ -149,6 +149,59 @@ export function GoRow({
   );
 }
 
+/**
+ * A yes-or-no setting that saves the moment it is flipped: the whole row is
+ * the switch, with one line under the label saying what On means. The On/Off
+ * pill is the same one "Shown to clients" uses, so a switch looks the same
+ * everywhere in Booking.
+ */
+export function SwitchRow({
+  id,
+  label,
+  hint,
+  on,
+  onToggle,
+  disabled = false,
+}: {
+  id: string;
+  label: string;
+  hint: string;
+  on: boolean;
+  onToggle: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="border-b border-subtle last:border-b-0">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
+        aria-describedby={`${id}-hint`}
+        onClick={onToggle}
+        disabled={disabled}
+        className={cn(rowCls, "hover:bg-charcoal-700/40 disabled:opacity-50")}
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm text-offwhite">{label}</span>
+          <span id={`${id}-hint`} className="block text-xs text-muted">
+            {hint}
+          </span>
+        </span>
+        <span
+          aria-hidden="true"
+          className={cn(
+            "shrink-0 rounded-full px-4 py-2 text-xs font-medium",
+            on ? "bg-emerald-soft/15 text-emerald-soft" : "border border-subtle text-muted",
+          )}
+        >
+          {on ? "On" : "Off"}
+        </span>
+      </button>
+    </div>
+  );
+}
+
 /** A row that only tells: the setting lives somewhere else. */
 export function InfoRow({ label, value, hint }: { label: string; value: string; hint: string }) {
   return (
