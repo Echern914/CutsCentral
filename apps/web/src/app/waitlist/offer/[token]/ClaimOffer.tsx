@@ -1,6 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
+import type { BookingPolicyData } from "@/app/book/[slug]/page";
+import {
+  BookingPolicyPanel,
+  POLICY_CHANGED_MESSAGE,
+  readBookingPolicy,
+  useBookingPolicy,
+} from "@/app/book/[slug]/BookingPolicy";
 import { claimOfferAction, declineOfferAction } from "./actions";
 
 export interface OfferView {
@@ -14,13 +21,24 @@ export interface OfferView {
   email: string | null;
   /** Approval-mode shop: the tap submits a REQUEST the shop still confirms. */
   approvalRequired: boolean;
+  /** The shop's "Before you book". Null/absent = nothing to tick. */
+  bookingPolicy?: BookingPolicyData | null;
 }
+
+/** Under the button while a "Before you book" line is still unticked. */
+export const CLAIM_POLICY_HINT = "Tick each line under “Before you book” to take this time.";
 
 /**
  * The claim screen: shows the held time, counts the hold down, and books on a
  * single deliberate tap. Renders exactly one generic card for every dead link
  * (unknown, expired, released, already used) - the page must never leak
  * whether a token WAS valid once, or whose it was.
+ *
+ * 🔴 A CLAIM BOOKS, SO IT ASKS WHAT BOOKING ASKS. The shop's "Before you book"
+ * (the same panel and the same unticked boxes as the booking page) sits above
+ * the button, and the button stays off until every line is ticked. The API
+ * refuses a claim without them either way (engines/bookingPolicy.ts); this is
+ * what makes the rule visible.
  */
 export function ClaimOffer({
   token,
@@ -44,6 +62,9 @@ export function ClaimOffer({
   >({ phase: "idle" });
   const [email, setEmail] = useState(offer?.email ?? "");
   const [pending, start] = useTransition();
+  const policy = useBookingPolicy(offer?.bookingPolicy);
+  /** The shop changed its words while this card was open. */
+  const [policyChanged, setPolicyChanged] = useState(false);
   const [msLeft, setMsLeft] = useState(() =>
     offer ? new Date(offer.expiresAt).getTime() - Date.now() : 0,
   );
@@ -226,6 +247,23 @@ export function ClaimOffer({
           className="mt-1 w-full rounded-lg border border-offwhite/15 bg-offwhite/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-offwhite/40"
         />
       </label>
+      {policy.policy && (
+        <div className="mt-4">
+          <BookingPolicyPanel
+            policy={policy.policy}
+            ticked={policy.ticked}
+            onToggle={(i) => {
+              setPolicyChanged(false);
+              policy.toggle(i);
+            }}
+          />
+        </div>
+      )}
+      {policyChanged && (
+        <p role="alert" className="mt-3 text-xs text-danger-soft">
+          {POLICY_CHANGED_MESSAGE}
+        </p>
+      )}
       {state.phase === "error" && (
         <p role="alert" className="mt-3 text-xs text-danger-soft">
           Something went wrong — please try again.
@@ -233,18 +271,31 @@ export function ClaimOffer({
       )}
       <button
         type="button"
-        disabled={pending}
+        disabled={pending || !policy.complete}
         aria-busy={pending}
+        aria-describedby={!policy.complete ? "claim-policy-hint" : undefined}
         onClick={() =>
           start(async () => {
-            const res = await claimOfferAction(token, { email });
+            const res = await claimOfferAction(token, {
+              email,
+              policyVersion: policy.acceptedVersion,
+            });
             if (res.ok)
               setState({ phase: "done", startsAt: res.startsAt, pending: res.pending });
             else if (res.reason === "expired") setState({ phase: "expired" });
             else if (res.reason === "gone") setState({ phase: "gone" });
             else if (res.reason === "deposit") setState({ phase: "deposit" });
             else if (res.reason === "contact_shop") setState({ phase: "contact_shop" });
-            else setState({ phase: "error" });
+            else if (res.reason === "policy") {
+              // New words (or ones this card never had): show them, clear
+              // every tick, and let them tap again - the hold is still theirs.
+              const next = readBookingPolicy(res.policy);
+              if (next) {
+                policy.replace(next);
+                setPolicyChanged(true);
+                setState({ phase: "idle" });
+              } else setState({ phase: "error" });
+            } else setState({ phase: "error" });
           })
         }
         className="mt-5 w-full rounded-xl border border-offwhite/15 bg-offwhite/10 py-3 text-sm font-semibold text-offwhite transition-colors hover:bg-offwhite/15 disabled:opacity-50"
@@ -257,6 +308,11 @@ export function ClaimOffer({
             ? "Request this time"
             : "Book this time"}
       </button>
+      {!policy.complete && (
+        <p id="claim-policy-hint" className="mt-2 text-center text-xs text-muted">
+          {CLAIM_POLICY_HINT}
+        </p>
+      )}
       {/* Can't make it: pass the time on now instead of making the next
           person wait out the hold. The second one is the only way off the
           list most of them have - the offer email is their one message. */}

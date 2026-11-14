@@ -405,6 +405,8 @@ bookingPublicRouter.get("/offer/:token", bookingReadLimiter, async (req, res) =>
           slug: true,
           timezone: true,
           requireBookingApproval: true,
+          bookingPolicyText: true,
+          bookingPolicyChecklist: true,
         },
       },
       entry: { select: { firstName: true, email: true } },
@@ -441,6 +443,9 @@ bookingPublicRouter.get("/offer/:token", bookingReadLimiter, async (req, res) =>
     expiresAt: offer.expiresAt.toISOString(),
     // Approval-mode shop: the claim page must say "request", not "book".
     approvalRequired: offer.shop.requireBookingApproval,
+    // "Before you book" - the same words, and the same version, the booking
+    // page shows. The claim echoes the version back; null = nothing to tick.
+    bookingPolicy: publicBookingPolicy(offer.shop),
     firstName: offer.entry.firstName,
     // Prefilled (and maskable) contact for the claim form - this goes only to
     // the link holder, who is the person the email was sent to.
@@ -455,6 +460,8 @@ const claimSchema = z
     // Same address rule as the booking form - see createSchema below.
     email: z.string().trim().max(200).refine(isLikelyEmail).optional().or(z.literal("")),
     phone: z.string().trim().max(40).optional().or(z.literal("")),
+    // The "Before you book" version the client ticked (GET's bookingPolicy).
+    policyVersion: z.string().trim().min(1).max(64).optional(),
   })
   .strict();
 
@@ -471,6 +478,7 @@ bookingPublicRouter.post(
     const d = parsed.data;
     const result = await claimOffer({
       token: String(req.params.token),
+      policyVersion: d.policyVersion,
       customer: {
         firstName: d.firstName || undefined,
         lastName: d.lastName || undefined,
@@ -535,6 +543,11 @@ bookingPublicRouter.post(
         // The shop blocked this client after the offer went out. The offer
         // was RELEASED so the time is not held for nobody.
         res.status(403).json({ error: CONTACT_SHOP_ERROR, code: "CONTACT_SHOP" });
+        return;
+      case "policy":
+        // Not ticked, or ticked words the shop has since changed. The same
+        // body the booking page gets, current policy attached; the hold stays.
+        res.status(result.status).json(result.body);
         return;
       default: {
         //  🔴 EXHAUSTIVENESS, AND WHY IT IS HERE.
