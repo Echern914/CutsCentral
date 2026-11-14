@@ -38,7 +38,7 @@ export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
     id: "2026-11-14-waitlist-claims-agree-to-policies",
     date: "2026-11-14",
-    kind: "improvement",
+    kind: "feature",
     title: "Waitlist clients agree to your policies too",
     body:
       "When a spot opens and a waitlist client takes it from their email, they now see your policies " +

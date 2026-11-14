@@ -198,7 +198,7 @@ describe("POST /api/book/offer/:token/claim and the policy", () => {
       .send({ policyVersion: version });
     expect(res.status).toBe(201);
 
-    const [appt] = await bookedAt(o.slot.startsAt);
+    const appt = (await bookedAt(o.slot.startsAt))[0]!;
     expect(appt.bookedVia).toBe("waitlist_offer");
     expect(appt.policyAcceptedAt).toBeInstanceOf(Date);
     // Ticked on this claim, so no agreedEarlierAt.
@@ -210,7 +210,7 @@ describe("POST /api/book/offer/:token/claim and the policy", () => {
     const o = await heldOffer();
     const res = await request(app).post(`/api/book/offer/${o.token}/claim`).send({});
     expect(res.status).toBe(201);
-    const [appt] = await bookedAt(o.slot.startsAt);
+    const appt = (await bookedAt(o.slot.startsAt))[0]!;
     expect(appt.policyAcceptedAt).toBeNull();
     expect(appt.policySnapshot).toBeNull();
   });
