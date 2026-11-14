@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-14-waitlist-claims-agree-to-policies",
+    date: "2026-11-14",
+    kind: "feature",
+    title: "Waitlist clients agree to your policies too",
+    body:
+      "When a spot opens and a waitlist client takes it from their email, they now see your policies " +
+      "and tick each line before it books, the same as on your booking page. What they agreed to shows " +
+      "on the appointment. Edit them under Booking, Your policies.",
+  },
+  {
     id: "2026-11-13-booking-settings-grouped",
     date: "2026-11-13",
     kind: "feature",

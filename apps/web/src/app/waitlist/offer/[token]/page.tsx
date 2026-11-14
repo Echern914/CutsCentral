@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { apiPublicGet } from "@/lib/api";
+import type { BookingPolicyData } from "@/app/book/[slug]/page";
 import { ClaimOffer, type OfferView } from "./ClaimOffer";
 
 /**
@@ -30,6 +31,8 @@ interface OfferPayload {
   approvalRequired: boolean;
   firstName: string;
   email: string | null;
+  /** "Before you book". Optional = an API from before claims asked. */
+  bookingPolicy?: BookingPolicyData | null;
 }
 
 export default async function WaitlistOfferPage({
@@ -52,6 +55,7 @@ export default async function WaitlistOfferPage({
           approvalRequired: Boolean(res.data.approvalRequired),
           firstName: res.data.firstName,
           email: res.data.email,
+          bookingPolicy: res.data.bookingPolicy ?? null,
         }
       : null;
 

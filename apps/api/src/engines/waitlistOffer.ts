@@ -1,6 +1,7 @@
 import { Prisma, prisma, runAsOwner } from "@chairback/db";
 import { apiEnv, cancellationTermsSnapshot, randomToken } from "@chairback/config";
 import { logger } from "../logger.js";
+import { checkPolicyAcceptance, type PolicyCheck } from "./bookingPolicy.js";
 import { AUTO_FILL_MIN_WAITLIST_HOLD_MS, AUTO_FILL_STAGE_MS, autoFillDeadline } from "./autoFillRules.js";
 import { ACTIVE_WAITLIST_STATUSES, sha256Hex } from "./waitlistJoin.js";
 import { entryPrefsMatchSlot } from "./waitlistMatch.js";
@@ -980,7 +981,14 @@ export type ClaimResult =
    * (offers skip blocked clients, so only a block landing mid-hold reaches
    * this). The offer is RELEASED, as for a deposit, and nothing is written.
    */
-  | { outcome: "contact_shop" };
+  | { outcome: "contact_shop" }
+  /**
+   * The shop has a "Before you book" checklist and the claim did not carry
+   * agreement to its current words (none sent: 422, an older version: 409).
+   * Nothing is written and the HOLD STAYS: the client reads, ticks and taps
+   * again inside the same hold. `body` carries the current policy.
+   */
+  | { outcome: "policy"; status: 409 | 422; body: Extract<PolicyCheck, { ok: false }>["body"] };
 
 /**
  * Redeem a claim token: revalidate and book ATOMICALLY.
@@ -1002,6 +1010,12 @@ export type ClaimResult =
 export async function claimOffer(params: {
   token: string;
   now?: Date;
+  /**
+   * The "Before you book" version the claim page showed and the client ticked.
+   * A claim books an appointment exactly like the booking page does, so it
+   * agrees to the same words, checked by the same rule (bookingPolicy.ts).
+   */
+  policyVersion?: string;
   /** Optional corrections from the claim form; entry values are the default. */
   customer?: {
     firstName?: string;
@@ -1100,6 +1114,9 @@ export async function claimOffer(params: {
             cancelFeeBps: true,
             chargeCardOnFileFees: true,
             cardFeeFlatCents: true,
+            // The words the client agrees to before the claim books.
+            bookingPolicyText: true,
+            bookingPolicyChecklist: true,
           },
         }),
         tx.service.findFirst({
@@ -1165,6 +1182,17 @@ export async function claimOffer(params: {
         });
         endedHold = spanOf(offer);
         return { outcome: "contact_shop" as const };
+      }
+
+      // 🔴 "BEFORE YOU BOOK" GATES A CLAIM TOO. A waitlist claim used to book
+      // without the client ever seeing the shop's policies - the one way into
+      // a booking that skipped them. Checked AFTER the refusals that end the
+      // hold (they would refuse anyway) and BEFORE anything is locked or
+      // written, so a refusal here touches nothing: the hold stays theirs and
+      // the claim page asks them to tick, then they tap again.
+      const policy = checkPolicyAcceptance(shop, params.policyVersion, now);
+      if (!policy.ok) {
+        return { outcome: "policy" as const, status: policy.status, body: policy.body };
       }
 
       // Same guard as every booking write; our own hold must not block us.
@@ -1273,6 +1301,14 @@ export async function claimOffer(params: {
           manageToken,
           bookedVia: "waitlist_offer",
           ...cancellationTermsSnapshot(shop),
+          // What they ticked, frozen the same way the booking page freezes it,
+          // so the barber's sheet shows the agreement on a claimed visit too.
+          ...(policy.record
+            ? {
+                policyAcceptedAt: policy.record.policyAcceptedAt,
+                policySnapshot: policy.record.policySnapshot as unknown as Prisma.InputJsonValue,
+              }
+            : {}),
         },
         select: { id: true, manageToken: true },
       });

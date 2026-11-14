@@ -4,6 +4,8 @@ import { apiPublicSend } from "@/lib/api";
 
 export interface ClaimInput {
   email?: string;
+  /** The "Before you book" version the client ticked, when the shop has one. */
+  policyVersion?: string;
 }
 
 export type ClaimActionResult =
@@ -17,6 +19,12 @@ export type ClaimActionResult =
   | { ok: false; reason: "deposit" }
   /** The shop arranges this person's bookings itself (CONTACT_SHOP). The hold was let go. */
   | { ok: false; reason: "contact_shop" }
+  /**
+   * Not ticked, or ticked words the shop changed since the page loaded. The
+   * hold is untouched; `policy` is the shop's current one (raw, read by the
+   * card) to show and ask again.
+   */
+  | { ok: false; reason: "policy"; policy: unknown }
   | { ok: false; reason: "error" };
 
 /**
@@ -35,6 +43,7 @@ export async function claimOfferAction(
     pending: boolean;
   }>("POST", `/api/book/offer/${encodeURIComponent(token)}/claim`, {
     email: input.email?.trim() || undefined,
+    policyVersion: input.policyVersion || undefined,
   });
   if (res.ok && res.data) {
     return {
@@ -46,6 +55,9 @@ export async function claimOfferAction(
   }
   if (res.status === 410 || res.status === 404) return { ok: false, reason: "expired" };
   if (res.code === "CONTACT_SHOP") return { ok: false, reason: "contact_shop" };
+  if (res.code === "POLICY_CHANGED" || res.code === "POLICY_NOT_ACCEPTED") {
+    return { ok: false, reason: "policy", policy: res.policy ?? null };
+  }
   if (res.status === 409) {
     return { ok: false, reason: res.error === "deposit_required" ? "deposit" : "gone" };
   }
