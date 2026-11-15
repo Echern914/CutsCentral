@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-14-working-fast-no-too-many-requests",
+    date: "2026-11-14",
+    kind: "fix",
+    title: "Working fast no longer hits “Too many requests”",
+    body:
+      "Saving several things quickly, like flipping a few switches or checking in a line of clients, " +
+      "could lock every page behind “Too many requests at once” for up to a minute. The limit is now " +
+      "five times higher, so normal use should not reach it.",
+  },
+  {
     id: "2026-11-14-waitlist-claims-agree-to-policies",
     date: "2026-11-14",
     kind: "feature",
