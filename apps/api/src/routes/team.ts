@@ -5,7 +5,7 @@ import { APP_NAME, apiEnv, randomToken, vocabularyForShop } from "@chairback/con
 import { forShop, prisma, runAsOwner, type Prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager, requireOwner } from "../auth/roles.js";
-import { accountLimiter, dashboardLimiter } from "../middleware/rateLimit.js";
+import { accountLimiter } from "../middleware/rateLimit.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { applyChairLink, releaseChairLink } from "../services/staffUserLink.js";
 import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
@@ -89,7 +89,7 @@ function sha256Hex(value: string): string {
  * Managers can see the roster (they work with these people); only the owner can
  * change it, which the mutating routes below enforce individually.
  */
-teamRouter.get("/", dashboardLimiter, async (req, res) => {
+teamRouter.get("/", async (req, res) => {
   const shopId = req.shop!.id;
   const [members, invites, staff, shop] = await Promise.all([
     // Plain prisma: ShopMember carries a tenant policy, but the joined User is

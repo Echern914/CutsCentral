@@ -380,11 +380,39 @@ export const assistantLimiter = make({
 /** For the test that pins why the chat has its own key. */
 export const __dashboardKeyForTests = sessionKey;
 
-/** General authenticated dashboard reads: per-user, loose. */
+/**
+ * What ONE full dashboard render costs in API requests, rounded up. The web
+ * server turns a single page view into many calls with the same session: the
+ * layout reads identity, terms, billing, setup, notices and eight bell signals
+ * (13), and the busiest pages (Home, Calendar) add about a dozen more.
+ *
+ * 🔴 A SAVE costs a full render too. Almost every dashboard server action ends
+ * in revalidatePath, and Next answers that by re-rendering the layout AND the
+ * page - so one tap on a switch is 1 write + ~25 reads, not 1 request.
+ */
+export const DASHBOARD_RENDER_COST = 25;
+
+/**
+ * The per-session dashboard budget, per minute.
+ *
+ * 🔴 Denominated in RENDERS, not requests. This was 120, which reads as "two a
+ * second" but was really under five page renders a minute: a barber who made
+ * five quick saves (five switches on a settings screen, five check-ins at a
+ * busy desk) spent the lot, and every dashboard page then answered 429 until
+ * the minute ran out. Insights is where they saw it, because Insights is the
+ * page that names a 429 instead of rendering with pieces missing.
+ *
+ * 600 is 24 full renders a minute - one every 2.5 seconds, sustained. A person
+ * does not outrun that; a script still does. Per session, so one account
+ * cannot spend another's budget.
+ */
+export const DASHBOARD_LIMIT_PER_MIN = 600;
+
+/** General authenticated dashboard reads and writes: per session. */
 export const dashboardLimiter = make({
   name: "dashboard",
   windowMs: 60 * 1000,
-  limit: 120,
+  limit: DASHBOARD_LIMIT_PER_MIN,
   keyGenerator: sessionKey,
 });
 
@@ -398,8 +426,9 @@ export const dashboardLimiter = make({
  * customer using the same provider. This is the same lesson the auth limiter
  * learned when one Vercel egress IP became a platform-wide login budget.
  *
- * 120/min matches the dashboard: an assistant is a person asking questions, not
- * a crawler, and a tool call is roughly as expensive as a dashboard read.
+ * 120/min: an assistant is a person asking questions, not a crawler, and one
+ * question is one tool call. (The dashboard budget is higher only because one
+ * page view there fans out into ~25 requests - see DASHBOARD_RENDER_COST.)
  */
 export const mcpLimiter = make({
   name: "mcp",
@@ -458,16 +487,22 @@ export function baselineKey(req: Request): string {
  * its tighter, purpose-built limit; this exists so a route added later without
  * one is never unlimited.
  *
- * Deliberately loose (600/min, ~10/s per caller) - a ceiling on floods, not a
+ * Deliberately loose (1200/min, ~20/s per caller) - a ceiling on floods, not a
  * fair-share rule. Counted in MEMORY, not Postgres: it runs on every request,
  * and a database write per request on a 10-connection pool would cost more
  * than the abuse it bounds. Per replica and reset by a deploy, which is fine for
  * a backstop.
+ *
+ * 🔴 MUST stay above DASHBOARD_LIMIT_PER_MIN. A signed-in barber's requests
+ * count here AND in dashboardLimiter under the same session, plus the calls
+ * that never reach the dashboard bucket (/api/auth/me on every render). Set
+ * level with it and the backstop becomes the limit that fires first.
  */
+export const BASELINE_LIMIT_PER_MIN = 1200;
 export const baselineLimiter = make({
   name: "baseline",
   windowMs: 60 * 1000,
-  limit: 600,
+  limit: BASELINE_LIMIT_PER_MIN,
   keyGenerator: baselineKey,
   memoryStore: true,
 });
