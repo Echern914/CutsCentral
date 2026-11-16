@@ -183,7 +183,7 @@ export default async function DashboardLayout({
             <Link
               href="/dashboard"
               aria-label={`${shopName ?? APP_NAME}, home`}
-              className="flex h-11 shrink-0 items-center pl-1.5"
+              className="flex h-11 min-w-[44px] shrink-0 items-center justify-center rounded-lg"
             >
               <ShopMark name={shopName} />
             </Link>

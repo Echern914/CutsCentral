@@ -379,7 +379,7 @@ export function HelpBubble() {
                 type="button"
                 onClick={() => setOpen(false)}
                 aria-label="Close the assistant"
-                className="shrink-0 rounded-full border border-subtle p-1.5 text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-subtle text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
               >
                 <CloseIcon className="h-3.5 w-3.5" />
               </button>

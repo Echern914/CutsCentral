@@ -126,8 +126,11 @@ export function DashboardSidebar({
         {switcher ? (
           <ShopSwitcher shops={shops} teams={teams} activeShopId={activeShopId} wide />
         ) : (
-          <Link href="/dashboard" className="min-w-0 flex-1 truncate px-1 text-sm font-semibold text-offwhite">
-            {shopName ?? APP_NAME}
+          <Link
+            href="/dashboard"
+            className="flex min-h-[44px] min-w-0 flex-1 items-center rounded-lg px-1 text-sm font-semibold text-offwhite"
+          >
+            <span className="truncate">{shopName ?? APP_NAME}</span>
           </Link>
         )}
       </div>
