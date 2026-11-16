@@ -64,7 +64,7 @@ export function PreflightSection({ p }: { p: Preflight }) {
       </p>
 
       <Card className="overflow-hidden p-0">
-        <ul className="divide-y divide-subtle/60">
+        <ul className="divide-y divide-subtle">
           {p.checks.map((c) => (
             <li key={c.key} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-4 py-3">
               <div className="min-w-0 flex-1">

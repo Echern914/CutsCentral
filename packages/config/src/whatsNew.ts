@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-16-appointment-sheet-and-checkout-look",
+    date: "2026-11-16",
+    kind: "feature",
+    title: "A cleaner appointment sheet and checkout",
+    body:
+      "Open an appointment and the client's name sits beside their initials, with the visit's details as one " +
+      "list: when, service, price and tip. Contact, Reschedule and More are larger tiles. At checkout the " +
+      "amount due is the headline and the ways to pay are one list.",
+  },
+  {
     id: "2026-11-16-studio-page-and-rewards-pass",
     date: "2026-11-16",
     kind: "feature",

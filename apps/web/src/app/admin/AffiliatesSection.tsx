@@ -211,7 +211,7 @@ export function AffiliatesSection({
         {applications.length === 0 ? (
           <p className="px-4 py-4 text-sm text-muted">Nothing waiting.</p>
         ) : (
-          <ul className="divide-y divide-subtle/60">
+          <ul className="divide-y divide-subtle">
             {applications.map((a) => (
               <ApplicationRow
                 key={a.id}
@@ -278,7 +278,7 @@ export function AffiliatesSection({
         {rewards.length === 0 ? (
           <p className="px-4 py-4 text-sm text-muted">Nothing held for review.</p>
         ) : (
-          <ul className="divide-y divide-subtle/60">
+          <ul className="divide-y divide-subtle">
             {rewards.map((r) => (
               <li key={r.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
                 <div className="min-w-0 flex-1">
@@ -320,7 +320,7 @@ export function AffiliatesSection({
         {credits.length === 0 ? (
           <p className="px-4 py-4 text-sm text-muted">No credit operations yet.</p>
         ) : (
-          <ul className="divide-y divide-subtle/60">
+          <ul className="divide-y divide-subtle">
             {credits.map((c) => (
               <CreditRow
                 key={c.id}
@@ -440,7 +440,7 @@ function AccountRow({
 }) {
   const [reason, setReason] = useState<string>(AFFILIATE_SUSPENSION_REASONS[0]);
   return (
-    <tr className="border-b border-subtle/60 last:border-0">
+    <tr className="border-b border-subtle last:border-0">
       <td className="px-4 py-3 text-offwhite">{acc.shopName}</td>
       <td className="px-4 py-3 font-mono text-xs text-muted" title={acc.code}>
         {acc.shortCode ?? acc.code}

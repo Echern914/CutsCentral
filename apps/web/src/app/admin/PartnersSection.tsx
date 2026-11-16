@@ -135,7 +135,7 @@ export function PartnersSection({ data }: { data: AdminPartners }) {
       {data.pendingCashouts.length > 0 ? (
         <Card className="mb-4 p-4">
           <p className="mb-2 text-xs uppercase tracking-wide text-muted">Cashouts to pay</p>
-          <ul className="divide-y divide-subtle/60 text-sm">
+          <ul className="divide-y divide-subtle text-sm">
             {data.pendingCashouts.map((c) => (
               <li key={c.id} className="flex flex-wrap items-center justify-between gap-3 py-2">
                 <span>
@@ -200,7 +200,7 @@ export function PartnersSection({ data }: { data: AdminPartners }) {
             </thead>
             <tbody>
               {data.partners.map((p) => (
-                <tr key={p.id} className="border-b border-subtle/60 last:border-0">
+                <tr key={p.id} className="border-b border-subtle last:border-0">
                   <td className="px-4 py-3">
                     <p className="font-medium text-offwhite">{p.name}</p>
                     <p className="text-xs text-muted">{p.email ?? "Login deleted"}</p>

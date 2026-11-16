@@ -202,7 +202,7 @@ export function ConnectPlatforms({
                 "group relative flex flex-col gap-3 rounded-2xl border p-4 text-left transition-all duration-200 ease-out",
                 selected
                   ? "border-gold/60 bg-gold/10 ring-1 ring-gold/30"
-                  : "border-subtle hover:border-subtle/80 hover:bg-charcoal-700",
+                  : "border-subtle hover:border-subtle-strong hover:bg-charcoal-700",
                 !available && "cursor-not-allowed opacity-50",
               )}
             >

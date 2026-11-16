@@ -79,7 +79,7 @@ export function SectionOrderEditor({
             }}
             className={cn(
               "flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 transition-[border-color,background-color,box-shadow,opacity] duration-150 ease-out",
-              isVisible ? "cursor-grab border-subtle bg-charcoal-700 active:cursor-grabbing" : "border-subtle/60 opacity-55",
+              isVisible ? "cursor-grab border-subtle bg-charcoal-700 active:cursor-grabbing" : "border-subtle opacity-55",
               overKey === key && dragKey ? "border-gold/70 ring-2 ring-gold/40" : "",
             )}
           >

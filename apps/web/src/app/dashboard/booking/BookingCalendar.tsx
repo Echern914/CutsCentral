@@ -1488,7 +1488,7 @@ function DayHeader({
     <div className="sticky top-16 z-10 -mx-1 mb-3 rounded-xl bg-charcoal-800/80 px-1 py-1.5 backdrop-blur">
       <WeekStrip days={days} shownDay={shownDay} todayKey={todayKey} onPick={onPick} />
       {showTotal && (
-        <div className="mt-1.5 flex items-center justify-between gap-3 border-t border-subtle/60 px-1.5 pt-1.5">
+        <div className="mt-1.5 flex items-center justify-between gap-3 border-t border-subtle px-1.5 pt-1.5">
           <p className="flex min-w-0 items-baseline gap-1.5">
             <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted">
               On the books
@@ -2309,7 +2309,7 @@ function DayPlanner({
                 data-hour={item.hour}
                 variants={fadeUp}
                 className={cn(
-                  "flex gap-3 border-b border-subtle/60 py-2 last:border-b-0",
+                  "flex gap-3 border-b border-subtle py-2 last:border-b-0",
                   rowScrollMargin,
                 )}
               >
@@ -2343,7 +2343,7 @@ function DayPlanner({
               data-hour={h}
               variants={fadeUp}
               className={cn(
-                "flex gap-3 border-b border-subtle/60 py-2 last:border-b-0",
+                "flex gap-3 border-b border-subtle py-2 last:border-b-0",
                 rowScrollMargin,
               )}
             >
@@ -2770,7 +2770,7 @@ export function AppointmentBlock({
     return (
       <div
         className={cn(
-          "flex flex-col gap-0.5 rounded-lg border border-subtle/80 border-l-2 border-l-charcoal-600 bg-charcoal-800/30 px-3 py-2 text-xs",
+          "flex flex-col gap-0.5 rounded-lg border border-subtle border-l-2 border-l-charcoal-600 bg-charcoal-800/30 px-3 py-2 text-xs",
           BLOCK_STRIPES,
         )}
       >
@@ -3335,7 +3335,7 @@ export function AppointmentBlock({
                       {preset}
                     </button>
                   ))}
-                  <div className="mt-1 flex gap-1 border-t border-subtle/60 p-1.5">
+                  <div className="mt-1 flex gap-1 border-t border-subtle p-1.5">
                     <input
                       value={customNudge}
                       onChange={(e) => setCustomNudge(e.target.value.slice(0, NUDGE_MAX_LEN))}

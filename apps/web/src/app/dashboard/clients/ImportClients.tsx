@@ -317,7 +317,7 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
                   const name = fullName(d);
                   const contact = [d.phone, d.email].filter(Boolean).join(" · ");
                   return (
-                    <li key={i} className="border-b border-subtle/60 last:border-b-0">
+                    <li key={i} className="border-b border-subtle last:border-b-0">
                       <label className="flex min-w-0 cursor-pointer items-center gap-3 px-3 py-2">
                         <input
                           type="checkbox"

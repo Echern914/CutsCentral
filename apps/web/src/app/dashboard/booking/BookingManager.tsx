@@ -5344,7 +5344,7 @@ export function StaffHoursSheet({
           {/* Switching from Booksy or TheCut: paste the week from the old
               profile instead of setting seven days by hand. Fills the rows
               below; Save hours stays the only thing that saves. */}
-          <div className="mb-3 min-w-0 rounded-lg border border-subtle/60 p-2.5">
+          <div className="mb-3 min-w-0 rounded-lg border border-subtle p-2.5">
             <button
               type="button"
               aria-expanded={pasteOpen}
@@ -5405,7 +5405,7 @@ export function StaffHoursSheet({
 
           <div className="flex flex-col gap-3">
             {rows.map((r, i) => (
-              <div key={i} className="rounded-lg border border-subtle/60 p-2.5">
+              <div key={i} className="rounded-lg border border-subtle p-2.5">
                 <div className="flex items-center gap-3">
                   <label className="flex w-20 items-center gap-2 text-sm">
                     <input
