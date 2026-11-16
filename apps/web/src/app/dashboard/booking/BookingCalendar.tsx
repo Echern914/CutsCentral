@@ -79,6 +79,8 @@ import {
   type WaitlistBookDetail,
 } from "./WaitlistBoard";
 import { AppointmentSheet, type SheetView } from "./AppointmentSheet";
+import { WeekView } from "./WeekView";
+import { weekRangeLabel } from "./weekLayout";
 import { SpecialChip } from "../_components/SpecialChip";
 import { BlockOffForm } from "./BlockOffForm";
 import { BlockEditSheet, BlockMenu } from "./BlockEditSheet";
@@ -168,9 +170,34 @@ const WEEKDAY_FULL_FMT = new Intl.DateTimeFormat("en-US", {
 });
 const VIEWS = [
   { key: "month", label: "Month" },
+  { key: "week", label: "Week" },
   { key: "day", label: "Day" },
 ] as const;
 type CalendarView = (typeof VIEWS)[number]["key"];
+/** Where Week is offered: seven columns of names do not fit a phone. */
+const WEEK_QUERY = "(min-width: 1024px)";
+const VIEWS_NARROW = VIEWS.filter((v) => v.key !== "week");
+
+/**
+ * Whether the week fits this window, followed live (a window dragged
+ * narrower falls back to Day). null until measured after mount, so a week
+ * link never flashes the day planner - and its scroll to now - first.
+ */
+function useWeekFits(): boolean | null {
+  const [fits, setFits] = useState<boolean | null>(null);
+  useEffect(() => {
+    const mq = typeof window.matchMedia === "function" ? window.matchMedia(WEEK_QUERY) : null;
+    if (!mq) {
+      setFits(false);
+      return;
+    }
+    const read = () => setFits(mq.matches);
+    read();
+    mq.addEventListener?.("change", read);
+    return () => mq.removeEventListener?.("change", read);
+  }, []);
+  return fits;
+}
 // Default planner window (barber's local hours). Runs to midnight because some
 // barbers cut late into the night; the window auto-widens earlier/later to fit
 // any booking outside it (e.g. a 6am or 1am appointment).
@@ -228,8 +255,8 @@ export function BookingCalendar({
    * appointment"). Anything that isn't a date is ignored.
    */
   openDay?: string;
-  /** Open on the Day view (the address remembers it, below). */
-  openView?: "day";
+  /** Open on the Day or Week view (the address remembers it, below). */
+  openView?: "day" | "week";
   /**
    * A waitlist "Book appointment" tapped on the WAITLIST TAB, where this
    * calendar is not mounted and so could not hear the event. BookingManager
@@ -373,8 +400,12 @@ export function BookingCalendar({
   const [selectedDay, setSelectedDay] = useState<string | null>(linkedDay ?? todayKey);
   // Month overview vs one-day planner. Day view needs a day, so the switch
   // falls back to today when the month view was sitting collapsed.
-  const [view, setView] = useState<CalendarView>(openView === "day" ? "day" : "month");
+  const [view, setView] = useState<CalendarView>(openView ?? "month");
   const shownDay = selectedDay ?? todayKey;
+  // Week asked for where it does not fit (a phone opening a desktop's link,
+  // a window dragged narrow) shows the Day; the choice itself is kept.
+  const weekFits = useWeekFits();
+  const shownView: CalendarView = view === "week" && weekFits === false ? "day" : view;
 
   // ---- A service's own hours on a day (the gold bar) ----
   // What a save from here answered, laid over the services the page was
@@ -630,7 +661,8 @@ export function BookingCalendar({
    */
   function switchView(next: CalendarView) {
     setView(next);
-    if (next === "day") {
+    // The week shown is the one holding the day you were on.
+    if (next === "day" || next === "week") {
       setSelectedDay(shownDay);
       const [y, m] = shownDay.split("-").map(Number);
       if (y !== viewYear || m !== viewMonth) {
@@ -651,7 +683,8 @@ export function BookingCalendar({
   const monthTitle = monthTitleFmt.format(new Date(viewYear, viewMonth - 1, 15, 12));
 
   const selectedRows = selectedDay ? byDay.get(selectedDay) ?? [] : [];
-  const isDayView = view === "day";
+  const isDayView = shownView === "day";
+  const isWeekView = shownView === "week";
   // The day view's own rows/title, independent of whether a month cell is
   // selected - `shownDay` always names a day.
   const shownDayRows = byDay.get(shownDay) ?? [];
@@ -784,7 +817,7 @@ export function BookingCalendar({
   useEffect(() => {
     const url = new URL(window.location.href);
     url.searchParams.delete("appointment");
-    if (view === "day") url.searchParams.set("view", "day");
+    if (view === "day" || view === "week") url.searchParams.set("view", view);
     else url.searchParams.delete("view");
     if (selectedDay && selectedDay !== todayKey) url.searchParams.set("day", selectedDay);
     else url.searchParams.delete("day");
@@ -856,6 +889,35 @@ export function BookingCalendar({
     [],
   );
 
+  // ---- The week view's doors into the sheets every other view opens ----
+  // Hosted like a card's, so a poll that moves the booking keeps the sheet.
+  const openFromWeek = (row: AgendaRow, sheetView: SheetView) =>
+    openHostedSheet(row, sheetView, (v, live, close) => (
+      <AppointmentSheet
+        row={live}
+        toast={toast}
+        initialView={v}
+        onClose={close}
+        onChanged={refreshAgenda}
+        canBookAgain={isNative}
+      />
+    ));
+  // A block of our own opens its sheet, as its Edit does on the day; an
+  // external one (Acuity) has nothing to edit here, so its day opens instead.
+  const openBlockFromWeek = (row: AgendaRow, dayKey: string) => {
+    if (row.syncedExternal) {
+      setSelectedDay(dayKey);
+      setView("day");
+      return;
+    }
+    openHostedSheet(row, "detail", (_v, live, close) => (
+      <BlockEditSheet blockId={live.id} onClose={close} onChanged={refreshAgenda} toast={toast} />
+    ));
+  };
+  const weekTitle = weekRangeLabel(weekDays[0]!.key, weekDays[6]!.key);
+  // New appointment from the week starts on today when today is in it.
+  const weekAnchorDay = weekDays.some((d) => d.key === todayKey) ? todayKey : weekDays[0]!.key;
+
   return (
     <SheetHost.Provider value={openHostedSheet}>
     <BlockMenu.Provider value={services}>
@@ -868,8 +930,8 @@ export function BookingCalendar({
           (months vs days) - reading it after the arrows would be backwards. */}
       <div className="mb-3 flex items-center justify-between gap-2">
         <Segmented
-          options={VIEWS}
-          value={view}
+          options={weekFits ? VIEWS : VIEWS_NARROW}
+          value={shownView}
           onChange={switchView}
           ariaLabel="Calendar view"
         />
@@ -887,31 +949,72 @@ export function BookingCalendar({
         )}
       </div>
 
-      {/* Pager: months in month view, days in day view. */}
+      {/* Pager: months in month view, weeks in week view, days in day view. */}
       <div className="flex items-center justify-between gap-2">
         <button
           type="button"
-          onClick={() => (isDayView ? gotoDay(-1) : gotoMonth(-1))}
-          aria-label={isDayView ? "Previous day" : "Previous month"}
+          onClick={() => (isDayView ? gotoDay(-1) : isWeekView ? gotoDay(-7) : gotoMonth(-1))}
+          aria-label={isDayView ? "Previous day" : isWeekView ? "Previous week" : "Previous month"}
           className={navBtn}
         >
           ‹
         </button>
         <h2 className="min-w-0 truncate text-center font-display text-lg">
-          {isDayView ? dayTitle : monthTitle}
+          {isDayView ? dayTitle : isWeekView ? weekTitle : monthTitle}
           {pendingMonth && <span className="ml-2 text-xs text-muted">loading…</span>}
         </h2>
         <button
           type="button"
-          onClick={() => (isDayView ? gotoDay(1) : gotoMonth(1))}
-          aria-label={isDayView ? "Next day" : "Next month"}
+          onClick={() => (isDayView ? gotoDay(1) : isWeekView ? gotoDay(7) : gotoMonth(1))}
+          aria-label={isDayView ? "Next day" : isWeekView ? "Next week" : "Next month"}
           className={navBtn}
         >
           ›
         </button>
       </div>
 
-      {isDayView ? (
+      {view === "week" && weekFits === null ? (
+        /* Not measured yet (the first frame after mount): hold the space
+           rather than flash a day planner that then scrolls the page. */
+        <div className="mt-4 min-h-[24rem]" aria-busy="true" />
+      ) : isWeekView ? (
+        <WeekView
+          days={weekDays}
+          rowsByDay={byDay}
+          todayKey={todayKey}
+          timeZone={tz}
+          timeFmt={timeFmt}
+          minuteOf={(iso) => {
+            const p = shopParts(iso);
+            return p.h * 60 + p.min;
+          }}
+          staff={staff}
+          isNative={isNative}
+          onOpen={openFromWeek}
+          onOpenBlock={openBlockFromWeek}
+          onOpenDay={(key) => {
+            gotoDayKey(key);
+            setView("day");
+          }}
+          onAddAt={
+            isNative
+              ? (key, hour, minute) => {
+                  setAddAt(isoForDayHour(key, hour, tz, minute));
+                  setAddTapped(true);
+                }
+              : undefined
+          }
+          onNew={
+            isNative
+              ? () => {
+                  setAddAt(isoForDayHour(weekAnchorDay, DEFAULT_START_HOUR, tz));
+                  setAddTapped(false);
+                }
+              : undefined
+          }
+          onBlock={isNative ? () => setBlockDay({ dayKey: weekAnchorDay, hour: 12 }) : undefined}
+        />
+      ) : isDayView ? (
         /* DAY VIEW: the planner gets the whole card. Keyed on the day so it
            remounts as you page - which is what resets DayPlanner's category
            filter, exactly as tapping a different month cell does. */

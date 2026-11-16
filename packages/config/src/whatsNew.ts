@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-16-calendar-week-view",
+    date: "2026-11-16",
+    kind: "feature",
+    title: "A Week view on the calendar",
+    body:
+      "On a computer, the calendar now has a Week view: seven days side by side, with each appointment at its " +
+      "time and its edge showing whether it is booked, requested or paid. Click one to see its details, or " +
+      "click a day to open it.",
+  },
+  {
     id: "2026-11-16-appointment-sheet-and-checkout-look",
     date: "2026-11-16",
     kind: "feature",

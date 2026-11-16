@@ -2048,7 +2048,7 @@ function TipEditor({ state }: { state: TipEditState }) {
  * quiet on the left, the value in weight on the right. 52px tall, so a row
  * holding a 44px Edit button grows by only a few pixels.
  */
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+export function Fact({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex min-h-[3.25rem] min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-subtle px-4 py-1.5 first:border-t-0 sm:px-5">
       <dt className="flex-none text-sm text-muted">{label}</dt>
