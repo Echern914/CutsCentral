@@ -1,5 +1,18 @@
 import type { AgendaRow } from "./page";
 
+/**
+ * The fields the arithmetic reads. Narrow on purpose: the dashboard's Today
+ * list carries a smaller row, and it must be totalled by THIS function, not by
+ * a copy that would one day disagree with the calendar.
+ */
+export type TotalsRow = Pick<
+  AgendaRow,
+  "source" | "start" | "status" | "price" | "blockServiceIds"
+> & {
+  /** Optional here: Today's row may simply not carry it (a synced visit). */
+  end?: AgendaRow["end"];
+};
+
 export interface DayTotals {
   /** Everything on the books today: upcoming + completed tickets. */
   revenue: number;
@@ -40,7 +53,7 @@ export interface DayTotals {
  * waits a day so a no-show can still be marked (NO_SHOW_WINDOW_MS), and
  * without this the morning's cuts read as "to come" all afternoon.
  */
-export function dayTotals(rows: AgendaRow[], now: number = Date.now()): DayTotals {
+export function dayTotals(rows: TotalsRow[], now: number = Date.now()): DayTotals {
   let revenue = 0;
   let doneRevenue = 0;
   let unpricedCount = 0;

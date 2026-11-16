@@ -28,7 +28,6 @@ import {
   BTN_BASE,
   NAME_WRAP_CLS,
   appointmentStatusPill,
-  initialsOf,
 } from "../_components/appointmentCardStyles";
 import { resolveServiceColor } from "@chairback/config/serviceColor";
 import {
@@ -3024,50 +3023,34 @@ export function AppointmentBlock({
   return (
     <div
       className={cn(
-        "rounded-xl border border-subtle bg-charcoal-800/60 px-3.5 py-3 shadow-[0_2px_10px_-6px_rgba(0,0,0,0.6)]",
+        // Studio density (Drick, 20 a day): two lines, ~64px, where the card
+        // was three lines and an avatar at ~107px. A full day is a scroll,
+        // not a wall; everything the collapsed card promised is still on it.
+        "rounded-lg border border-subtle bg-charcoal-800 px-3 py-2.5 transition-colors duration-150 ease-out hover:border-subtle-strong",
         colorHex && "border-l-[3px]",
         row.status === "canceled" && "opacity-60",
       )}
       style={colorHex ? { borderLeftColor: colorHex } : undefined}
     >
-      {/* When + status. Wraps rather than overflows: at 320px a time RANGE
-          plus a status pill does not fit one line, and a clipped "Upcomi" is
-          worse than a second row. */}
-      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-        <span className="whitespace-nowrap text-xs tabular-nums text-muted">
-          {timeLabel}
-        </span>
-        <span
-          className={cn(
-            "shrink-0 rounded-md px-2.5 py-0.5 text-[10px] font-semibold",
-            pill.cls,
-          )}
-        >
-          {pill.label}
-        </span>
-      </div>
-
-      {/* WHO, and the toggle. The one fact this card exists to show: full
-          width, wraps naturally, never truncates - "Ab…" is how double-books
-          happen. Tapping it opens the rest of the card in place; the sheet
-          (contact, payment, history) is one more tap from inside. */}
+      {/* WHO + status, and the toggle. The name is the one fact this card
+          exists to show: wraps naturally, never truncates - "Ab…" is how
+          double-books happen. Tapping opens the rest of the card in place;
+          the sheet (contact, payment, history) is one more tap from inside.
+          🔴 The button is one text line tall, so its ::after stretches the
+          tap area over the whole collapsed card (44px+), the service line
+          included. Anything clickable below it sits above that layer. */}
+      <div className="relative flex items-start gap-2">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
         aria-label={`${expanded ? "Collapse" : "Expand"} appointment for ${row.clientName || "this client"}`}
-        className="mt-2 flex w-full items-start gap-2.5 rounded-lg py-0.5 text-left transition-colors duration-150 ease-out hover:bg-charcoal-700/40"
+        className="flex min-w-0 flex-1 items-start text-left after:absolute after:-inset-x-3 after:-bottom-8 after:-top-2.5 after:rounded-lg"
       >
-        <span
-          aria-hidden
-          className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-[11px] font-semibold text-offwhite/80 ring-1 ring-offwhite/10"
-        >
-          {initialsOf(row.clientName || "Client")}
-        </span>
         {/* The chip rides WITH the name (Drick: "in the name it should say
             after hour"), wrapping under it rather than squeezing it. */}
         <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-          <span className={cn(NAME_WRAP_CLS, "text-[17px]")}>
+          <span className={cn(NAME_WRAP_CLS, "text-[15px] leading-[22px]")}>
             {row.clientName || "Client"}
             {/* Which Mike: the handle a first-name-only client gave instead of
                 a last name. Plain text - this whole line is the expand toggle. */}
@@ -3089,28 +3072,41 @@ export function AppointmentBlock({
             </span>
           )}
         </span>
+      </button>
+        <span
+          className={cn(
+            "mt-0.5 shrink-0 rounded-md px-2 py-0.5 text-[10px] font-semibold",
+            pill.cls,
+          )}
+        >
+          {pill.label}
+        </span>
         <span
           aria-hidden
           className={cn(
-            "mt-1 shrink-0 text-muted transition-transform duration-150 ease-out",
+            "mt-0.5 shrink-0 text-muted transition-transform duration-150 ease-out",
             expanded && "rotate-180",
           )}
         >
           <ChevronDownIcon />
         </span>
-      </button>
+      </div>
 
       {/* 🔴 THE SERVICE NAME IS NOT BEHIND THE TAP. It used to be: this whole
           line sat inside `expanded`, so a collapsed card showed when, who and
           a status pill, and "what am I actually doing at 2pm" cost a tap per
           appointment. Drick asked for it back after comparing with Acuity.
           What stays hidden is what actually made the day an unscrollable wall
-          - the price, the duration and six buttons - so the card grew one line
-          of text, not its old height. */}
+          - the price, the duration and six buttons. The time rides at the
+          front of this line ("1:15–1:45 PM · Haircut"), as on the board. */}
       <p
         data-testid="service-line"
-        className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 pl-[38px] text-xs text-muted"
+        className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted"
       >
+        <span className="whitespace-nowrap tabular-nums text-offwhite/80">{timeLabel}</span>
+        {/* The dot travels WITH the service name: as separate wrap items, an
+            expanded card (" · 30m · $35") left the dot alone on the time line. */}
+        <span className="flex min-w-0 items-center gap-1.5">
         {colorHex && (
           <span
             aria-hidden
@@ -3118,7 +3114,7 @@ export function AppointmentBlock({
             style={{ backgroundColor: colorHex }}
           />
         )}
-        <span className="[overflow-wrap:anywhere]">
+        <span className="min-w-0 [overflow-wrap:anywhere]">
           {row.serviceName ?? "Appointment"}
           {/* The add-ons the customer picked, written the way an Acuity
               booking already reads ("Haircut + Hot towel"). The duration and
@@ -3128,6 +3124,7 @@ export function AppointmentBlock({
               the at-a-glance fact, and they are what crowded the line. */}
           {expanded && durMin !== null && ` · ${fmtDuration(durMin)}`}
           {expanded && row.price != null && ` · $${row.price.toFixed(0)}`}
+        </span>
         </span>
         {isRecurring && (
           <span
@@ -3147,7 +3144,8 @@ export function AppointmentBlock({
             onClick={() => openSheet("detail")}
             data-testid="note-chip"
             aria-label={`Read the note on ${row.clientName || "this client"}'s appointment`}
-            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-gold/15 px-1.5 text-[10px] font-medium leading-4 text-gold transition-colors duration-150 ease-out hover:bg-gold/25"
+            // Above the card's stretched tap layer (see the toggle's ::after).
+            className="relative z-10 inline-flex shrink-0 items-center gap-1 rounded-full bg-gold/15 px-1.5 text-[10px] font-medium leading-4 text-gold transition-colors duration-150 ease-out hover:bg-gold/25"
           >
             <NoteIcon />
             {row.clientNote ? "Client note" : "Note"}

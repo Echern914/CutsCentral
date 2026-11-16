@@ -74,8 +74,13 @@ describe("Today", () => {
   });
 
   it("prices keep their cents", () => {
-    render(<TodayAgenda rows={[row({})]} timezone="America/New_York" />);
-    expect(screen.getByText("$27.50")).toBeTruthy();
+    // "Left" goes by the clock, so read the day from before the cut starts.
+    const before = Date.parse("2026-10-08T15:00:00.000Z");
+    render(<TodayAgenda rows={[row({})]} timezone="America/New_York" now={before} />);
+    // The day's total and the schedule row (Up next carries it inside a
+    // longer sentence, so it is not an exact match).
+    expect(screen.getAllByText("$27.50")).toHaveLength(2);
+    expect(within(screen.getByText("Booked").closest("dl")!).getByText("$27.50")).toBeTruthy();
     expect(screen.getByText("1 appointment left today.")).toBeTruthy();
   });
 });
