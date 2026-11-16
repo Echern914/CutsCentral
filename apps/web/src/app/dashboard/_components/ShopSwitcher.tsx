@@ -16,10 +16,13 @@ export function ShopSwitcher({
   shops,
   teams = [],
   activeShopId,
+  wide = false,
 }: {
   shops: { id: string; name: string }[];
   teams?: { id: string; name: string }[];
   activeShopId: string | null;
+  /** Fills its row at a 44px height: the sidebar's top row on a computer. */
+  wide?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   // Grouped only when both kinds exist - "Your shop" over a single option would
@@ -27,7 +30,7 @@ export function ShopSwitcher({
   const grouped = shops.length > 0 && teams.length > 0;
 
   return (
-    <label className="flex shrink-0 items-center">
+    <label className={wide ? "flex min-w-0 flex-1 items-center" : "flex shrink-0 items-center"}>
       <span className="sr-only">Active shop</span>
       <select
         value={activeShopId ?? ""}
@@ -39,7 +42,11 @@ export function ShopSwitcher({
           // the transition is what stays pending until that navigation lands.
           startTransition(() => switchShopAction(id));
         }}
-        className="max-w-[9.5rem] truncate rounded-md border border-subtle bg-charcoal-800 px-3 py-1.5 text-xs text-offwhite outline-none transition-colors duration-150 ease-out hover:bg-charcoal-700 focus:border-gold/50 disabled:opacity-50"
+        className={
+          wide
+            ? "min-h-[44px] w-full min-w-0 truncate rounded-lg border border-transparent bg-transparent px-2 text-sm font-semibold text-offwhite outline-none transition-colors duration-150 ease-out hover:bg-charcoal-700 focus-visible:border-subtle-strong disabled:opacity-50"
+            : "min-h-[44px] max-w-[9.5rem] truncate rounded-lg border border-subtle-strong bg-charcoal-800 px-3 text-sm text-offwhite outline-none transition-colors duration-150 ease-out hover:bg-charcoal-700 focus:border-gold/50 disabled:opacity-50"
+        }
         title="Switch shop"
       >
         {grouped ? (

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { SeatRole } from "@chairback/config/features";
+import { resolveHref, type SeatRole } from "@chairback/config/features";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
@@ -16,6 +16,9 @@ import { ThemeSync } from "@/components/ThemeSync";
 import { PREPAINT_SCRIPT } from "@/lib/theme";
 import { logoutAction } from "../(auth)/actions";
 import { DashboardNavInline, DashboardTabBar } from "./_components/DashboardNav";
+import { DashboardSidebar } from "./_components/DashboardSidebar";
+import { AskButton } from "./_components/AskButton";
+import { ShopMark } from "./_components/ShopMark";
 import { DemoBanner } from "./_components/DemoBanner";
 import { FeatureSearch } from "./_components/FeatureSearch";
 import { NotificationBell } from "./_components/NotificationBell";
@@ -27,13 +30,19 @@ import { setupBrief, setupComplete } from "@chairback/config/onboarding";
 import { HelpSeatSync } from "@/components/help/helpSeat";
 
 /**
- * Shared dashboard chrome: a slim sticky top bar (brand, search, account, sign
- * out) plus the primary nav, which renders as a bottom tab bar on phones and an
- * inline row in the top bar on wider screens.
+ * Shared dashboard chrome (Studio redesign, 2026-11-16):
+ *  - phones: a flat top bar (shop, "Search or ask", bell, account) and a flat
+ *    tab bar on the bottom edge;
+ *  - tablets: the same top bar with the five tabs inline;
+ *  - computers: a left sidebar carries the shop, the tabs, the shop's main
+ *    pages, Help, the account and sign out; the top bar keeps search and bell.
  *
- * The tab bar is mounted at the root of this tree, NOT inside <header>: the
- * header's `.glass` sets `backdrop-filter`, which would make the fixed bar
- * position against the nav pill instead of the viewport.
+ * There is no floating chat button on the dashboard: "Search or ask" opens the
+ * Assistant panel (components/help/openAssistant.ts).
+ *
+ * The tab bar is mounted at the root of this tree, NOT inside <header>, so no
+ * header style (a filter or transform) can ever become the containing block of
+ * the fixed bar.
  */
 export default async function DashboardLayout({
   children,
@@ -90,6 +99,16 @@ export default async function DashboardLayout({
   const shops = me.data?.shops ?? [];
   const teams = me.data?.teams ?? [];
   const activeShopId = me.data?.activeShopId ?? null;
+  const switcher = shops.length + teams.length > 1;
+  // The name the chrome shows: the shop being worked in, else the first one.
+  const shopName =
+    [...shops, ...teams].find((s) => s.id === activeShopId)?.name ?? shops[0]?.name ?? teams[0]?.name ?? null;
+  const demo = me.data?.demo ?? false;
+  // Sign out lives in the More sheet and the sidebar now. A demo session gets
+  // none: the demo ribbon has its own exit, and logoutAction on the shared demo
+  // account would end every other visitor's session (DemoBanner.tsx).
+  const signOutAction = demo ? undefined : logoutAction;
+  const assistantHref = resolveHref("assistant", { role: seatRole });
   // Which premium features render locked (diamond badges). NO_LOCKS for
   // trialing/subscribed/comped shops, billing-off installs, demo, and employee
   // seats (403 on /api/billing) — see lib/billing.ts. Employee seats skip the
@@ -122,8 +141,17 @@ export default async function DashboardLayout({
     premiumAiLocked: Boolean(locks?.premiumAi || locks?.noReceptionist),
     settingUp,
   });
+  const navProps = {
+    isAdmin,
+    rewardsEnabled,
+    affiliateProgramEnabled,
+    barberOnly,
+    role: seatRole,
+    locks,
+    signOutAction,
+  };
   return (
-    <div className="min-h-dvh">
+    <div className="min-h-dvh lg:flex">
       {/* Apply the stored theme BEFORE first paint (a light-mode barber must
           never flash dark on a hard load), then sync the API's answer - the
           server value wins so the choice follows the account to new devices. */}
@@ -132,17 +160,48 @@ export default async function DashboardLayout({
       {/* Swipe down at the top of any dashboard page to reload - the phone
           (and the iOS shell especially) has no refresh button. */}
       <PullToRefresh />
-      <header className="sticky top-0 z-20 px-4">
-        <nav className="glass mx-auto mt-3 flex w-full max-w-6xl items-center justify-between gap-2 rounded-xl px-4 py-2.5 sm:px-5">
-          <Link href="/dashboard" className="flex shrink-0 items-center gap-2">
-            <ScissorsMark />
-            <span className="hidden font-display text-sm tracking-tight sm:inline">
-              {APP_NAME}
-            </span>
-          </Link>
-          <DashboardNavInline isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} barberOnly={barberOnly} role={seatRole} locks={locks} />
-          <div className="flex shrink-0 items-center gap-2">
-            {!barberOnly && (
+      <DashboardSidebar
+        {...navProps}
+        shopName={shopName}
+        shops={shops}
+        teams={teams}
+        activeShopId={activeShopId}
+        userName={me.data?.name ?? null}
+        avatarUrl={me.data?.avatarUrl ?? null}
+        demo={demo}
+      />
+      <div className="min-w-0 flex-1">
+      <header className="sticky top-0 z-20 border-b border-subtle bg-charcoal">
+        <nav
+          aria-label="Top"
+          className="mx-auto flex h-14 w-full max-w-6xl items-center gap-1 px-2 sm:h-16 sm:gap-2 sm:px-4 lg:max-w-none lg:px-6"
+        >
+          {/* Which shop. On a computer the sidebar shows it, so this hides at
+              `lg`. On a tablet only the mark shows, to leave room for the
+              tabs; a switcher stays, because it is the only way between shops. */}
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:flex-none lg:hidden">
+            <Link
+              href="/dashboard"
+              aria-label={`${shopName ?? APP_NAME}, home`}
+              className="flex h-11 shrink-0 items-center pl-1.5"
+            >
+              <ShopMark name={shopName} />
+            </Link>
+            {switcher ? (
+              <div className="flex min-w-0 flex-1 sm:w-40 sm:flex-none">
+                <ShopSwitcher shops={shops} teams={teams} activeShopId={activeShopId} wide />
+              </div>
+            ) : (
+              <span className="min-w-0 truncate text-[15px] font-semibold text-offwhite sm:hidden">
+                {shopName ?? APP_NAME}
+              </span>
+            )}
+          </div>
+          <DashboardNavInline {...navProps} />
+          <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
+            {barberOnly ? (
+              assistantHref && <AskButton assistantHref={assistantHref} />
+            ) : (
               <FeatureSearch
                 locks={locks}
                 role={seatRole}
@@ -155,41 +214,33 @@ export default async function DashboardLayout({
             <NotificationBell
               signals={bellSignals}
               whatsNew={me.data?.whatsNew ?? null}
-              demo={me.data?.demo ?? false}
+              demo={demo}
               notices={platformNotices}
             />
-            {shops.length + teams.length > 1 && (
-              <ShopSwitcher shops={shops} teams={teams} activeShopId={activeShopId} />
-            )}
-            {/* Personal account page. Hidden for read-only demo sessions (shared
+            {/* Personal account page; on a computer it sits at the foot of the
+                sidebar instead. Hidden for read-only demo sessions (shared
                 account). Deliberately NOT hidden in the native app: App Store
                 5.1.1(v) requires in-app account deletion to stay reachable, and
-                it lives on this page. The label collapses on phones so the top
-                bar stays a single uncrowded row. */}
-            {!me.data?.demo && (
+                it lives on this page. */}
+            {!demo && (
               <Link
                 href="/dashboard/account"
                 aria-label="Account"
-                className="flex shrink-0 items-center gap-1.5 rounded-md border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite sm:px-3.5"
+                title="Account"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite lg:hidden"
               >
                 {me.data?.avatarUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={me.data.avatarUrl}
                     alt=""
-                    className="h-4 w-4 rounded-full object-cover"
+                    className="h-7 w-7 rounded-full object-cover"
                   />
                 ) : (
                   <PersonMark />
                 )}
-                <span className="hidden sm:inline">Account</span>
               </Link>
             )}
-            <form action={logoutAction} className="shrink-0">
-              <button className="rounded-md border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite sm:px-3.5">
-                Sign out
-              </button>
-            </form>
           </div>
         </nav>
       </header>
@@ -209,64 +260,46 @@ export default async function DashboardLayout({
            factual line in the native app (previously: total silence in-app). */
         <TrialBanner settingUp={settingUp} />
       )}
-      {/* The corner Assistant answers as THIS seat, and an owner's "how do I
+      {/* The Assistant panel answers as THIS seat, and an owner's "how do I
           finish setting up?" from their own setup (components/help/helpSeat). */}
       <HelpSeatSync role={seatRole} setup={setup ? setupBrief(setup.facts) : null} />
-      {/* Phones scroll under the floating tab pill, so the last card needs
-          clearance or it sits permanently behind it. The pill is ~3.6rem tall
-          and floats 0.625rem above the home-indicator inset, so budget a little
-          over the sum; from `sm` up the pill is hidden and no padding applies.
+      {/* Phones scroll under the tab bar, so the last card needs clearance or
+          it sits permanently behind it. The bar is 52px plus the home-indicator
+          inset, so budget a little over that; from `sm` up the bar is hidden
+          and no padding applies.
 
-          Applies to EVERY seat now. An employee used to get no tab bar and so
-          no padding; they get Home + Assistant, so without this their last card
-          would sit behind the pill. */}
+          Applies to EVERY seat. An employee gets Home + Assistant, so without
+          this their last card would sit behind the bar too. */}
       <div
         className="sm:!pb-0"
-        style={{ paddingBottom: "calc(5.5rem + env(safe-area-inset-bottom))" }}
+        style={{ paddingBottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
       >
         {/* Resolved ONCE on the server here; every client component below reads
             it with useVocab(). NEUTRAL for a shop that has not chosen a type. */}
         <VocabProvider value={vocab}>{children}</VocabProvider>
       </div>
-      <DashboardTabBar isAdmin={isAdmin} rewardsEnabled={rewardsEnabled} affiliateProgramEnabled={affiliateProgramEnabled} barberOnly={barberOnly} role={seatRole} locks={locks} />
+      </div>
+      <DashboardTabBar {...navProps} />
     </div>
   );
 }
 
-/** Fallback avatar for the account chip when the barber has no photo set. */
+/** Fallback avatar for the account button when the person has no photo set. */
 function PersonMark() {
   return (
     <svg
-      className="h-4 w-4"
+      className="h-6 w-6"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
+      strokeWidth="1.75"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden
     >
-      <circle cx="12" cy="8.5" r="3.5" />
-      <path d="M5 20c0-3.6 3.1-6.2 7-6.2s7 2.6 7 6.2" />
-    </svg>
-  );
-}
-
-function ScissorsMark() {
-  return (
-    <svg
-      className="h-4 w-4 text-gold"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <circle cx="6" cy="6" r="3" />
-      <circle cx="6" cy="18" r="3" />
-      <path d="M8.12 8.12 20 20M14.47 14.48 20 4M8.12 15.88 12 12" />
+      <circle cx="12" cy="12" r="9.5" />
+      <circle cx="12" cy="10" r="3" />
+      <path d="M6.6 18.4c1.2-1.9 3.1-3 5.4-3s4.2 1.1 5.4 3" />
     </svg>
   );
 }

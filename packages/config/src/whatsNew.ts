@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-16-search-or-ask",
+    date: "2026-11-16",
+    kind: "feature",
+    title: "Search or ask, at the top of every page",
+    body:
+      "The chat button that covered the corner of each page is gone. Tap the magnifier at the top to find any setting " +
+      "or ask a question, and the answer opens right there. On a computer you now get a sidebar. " +
+      "Sign out has moved to the bottom of More.",
+  },
+  {
     id: "2026-11-16-a-cleaner-look",
     date: "2026-11-16",
     kind: "feature",

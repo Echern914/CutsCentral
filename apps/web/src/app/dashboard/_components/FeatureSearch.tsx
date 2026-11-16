@@ -18,6 +18,7 @@ import { openBillingInBrowser, useNativeBillingLink } from "@/lib/useNativeBilli
 import { OpensBrowserMark } from "@/components/UpgradeOnWebLink";
 import { recentFeatureIds, rememberFeature } from "@/lib/recentFeatures";
 import { lockedTier, offeredFeatures, type FeatureLocks } from "@/lib/featureLocks";
+import { openAssistant } from "@/components/help/openAssistant";
 import { PlanBadge } from "./PlanBadge";
 
 /**
@@ -178,6 +179,21 @@ export function FeatureSearch({
     [router, billingOnWeb],
   );
 
+  /**
+   * "Search or ask": the typed words go to the Assistant panel, which answers
+   * them through resolveSupport right here on the page. Where no panel is
+   * listening, the full Assistant page takes them instead, so this is never
+   * a dead end.
+   */
+  const ask = useCallback(
+    (question: string) => {
+      setOpen(false);
+      if (openAssistant(question, triggerRef.current)) return;
+      if (askHref) router.push(`${askHref}?q=${encodeURIComponent(question)}`);
+    },
+    [askHref, router],
+  );
+
   function onInputKey(e: React.KeyboardEvent) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -205,16 +221,19 @@ export function FeatureSearch({
         ref={triggerRef}
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="Search features (Ctrl+K)"
-        title="Search features (Ctrl+K)"
-        className="shrink-0 rounded-full border border-subtle p-2 text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+        aria-label="Search or ask (Ctrl+K)"
+        title="Search or ask (Ctrl+K)"
+        /* A 44px icon on phones and tablets, where the bar has no room; a
+           field-shaped button on a computer, where the sidebar has taken the
+           tabs and the bar has room for it. */
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite lg:h-10 lg:w-72 lg:justify-start lg:gap-2.5 lg:border lg:border-subtle-strong lg:bg-charcoal-800 lg:px-3 lg:text-sm"
       >
         <svg
-          className="h-3.5 w-3.5"
+          className="h-5 w-5 shrink-0 lg:h-4 lg:w-4"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
-          strokeWidth="2"
+          strokeWidth="1.8"
           strokeLinecap="round"
           strokeLinejoin="round"
           aria-hidden
@@ -222,6 +241,10 @@ export function FeatureSearch({
           <circle cx="11" cy="11" r="7" />
           <path d="m21 21-4.35-4.35" />
         </svg>
+        <span className="hidden lg:inline">Search or ask</span>
+        <kbd className="ml-auto hidden rounded border border-subtle bg-charcoal px-1.5 font-sans text-[11px] text-muted lg:inline">
+          Ctrl K
+        </kbd>
       </button>
 
       {/* PORTALED TO <body> — not merely tidy, it's the whole reason the palette
@@ -245,7 +268,7 @@ export function FeatureSearch({
             ref={dialogRef}
             role="dialog"
             aria-modal="true"
-            aria-label="Search features"
+            aria-label="Search or ask"
             className="glass mx-auto w-full max-w-lg overflow-hidden rounded-2xl shadow-2xl"
             onClick={(e) => e.stopPropagation()}
             onKeyDown={trapTab}
@@ -272,9 +295,9 @@ export function FeatureSearch({
                   setCursor(0);
                 }}
                 onKeyDown={onInputKey}
-                placeholder="Search features — waitlist, punch cards, pay direct…"
-                className="w-full bg-transparent text-sm text-offwhite placeholder:text-muted focus:outline-none"
-                aria-label="Search features"
+                placeholder="Search or ask: waitlist, deposits, how do I…"
+                className="w-full bg-transparent text-base text-offwhite placeholder:text-muted focus:outline-none sm:text-sm"
+                aria-label="Search or ask"
                 role="combobox"
                 aria-expanded={true}
                 aria-controls="feature-search-results"
@@ -307,12 +330,10 @@ export function FeatureSearch({
                   {askHref && (
                     <button
                       type="button"
-                      onClick={() =>
-                        go(null, `${askHref}?q=${encodeURIComponent(query.trim())}`)
-                      }
-                      className="mt-3 rounded-md border border-gold/40 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+                      onClick={() => ask(query.trim())}
+                      className="mt-3 inline-flex min-h-[44px] items-center rounded-xl border border-subtle-strong bg-charcoal-800 px-4 text-sm font-semibold text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
                     >
-                      Ask the assistant about &ldquo;{query.trim()}&rdquo; →
+                      Ask the assistant about &ldquo;{query.trim()}&rdquo;
                     </button>
                   )}
                 </li>
@@ -332,6 +353,34 @@ export function FeatureSearch({
                 />
               ))}
             </ul>
+            {/* The "or ask" half: typed words that DID match features may
+                still be a question ("how do I take deposits"), so the ask is
+                offered under the matches too, not only when nothing matched. */}
+            {askHref && query.trim() && results.length > 0 && (
+              <div className="border-t border-subtle p-1.5">
+                <button
+                  type="button"
+                  onClick={() => ask(query.trim())}
+                  className="flex min-h-[44px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+                >
+                  <svg
+                    className="h-4 w-4 shrink-0 text-muted"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M20.5 12.2c0 3.9-3.8 7-8.5 7a9.8 9.8 0 0 1-2.6-.35L4.5 20.5l1.3-3.3A6.7 6.7 0 0 1 3.5 12.2c0-3.9 3.8-7 8.5-7s8.5 3.1 8.5 7Z" />
+                  </svg>
+                  <span className="min-w-0 truncate">
+                    Ask &ldquo;{query.trim()}&rdquo;
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
         </div>,
         document.body,

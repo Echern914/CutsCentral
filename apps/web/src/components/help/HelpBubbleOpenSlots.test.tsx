@@ -17,6 +17,7 @@ vi.mock("@/app/dashboard/assistant/actions", () => ({ getOpenSlots }));
 
 const { HelpBubble } = await import("./HelpBubble");
 const { HelpSeatSync } = await import("./helpSeat");
+const { openAssistant } = await import("./openAssistant");
 
 const BRIEF: OpenSlotsBrief = {
   scope: "own",
@@ -50,7 +51,10 @@ function mount(seat: boolean) {
       <HelpBubble />
     </>,
   );
-  fireEvent.click(screen.getByRole("button", { name: "Open the assistant" }));
+  // The dashboard opens the panel from "Search or ask"; there is no corner button there.
+  act(() => {
+    openAssistant();
+  });
 }
 
 beforeEach(() => getOpenSlots.mockReset());

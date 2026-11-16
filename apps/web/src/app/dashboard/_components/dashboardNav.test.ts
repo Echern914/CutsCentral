@@ -54,10 +54,11 @@ describe("the tab bar, for every role", () => {
   it("a manager and an owner get Insights in the fourth slot", () => {
     for (const role of ["OWNER", "MANAGER"] as const) {
       const tabs = tabsFor(role);
+      // Home leads since the Studio redesign (it used to sit in the middle).
       expect(tabs.map((t) => t.featureId)).toEqual([
+        "home",
         "online-booking",
         "clients",
-        "home",
         "insights",
       ]);
       // And NOT the Assistant fallback - that branch must not fire for them.
