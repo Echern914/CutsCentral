@@ -79,7 +79,7 @@ describe("the sidebar", () => {
     render(<DashboardSidebar {...base} />);
     const main = screen.getByRole("navigation", { name: "Main" });
     expect(within(main).getAllByRole("link").map((a) => a.textContent)).toEqual([
-      "Home",
+      "Today",
       "Calendar",
       "Clients",
       "Insights",
@@ -98,7 +98,7 @@ describe("the sidebar", () => {
     render(<DashboardSidebar {...base} role="BARBER" barberOnly />);
     expect(screen.queryByRole("navigation", { name: "Shop" })).toBeNull();
     const main = screen.getByRole("navigation", { name: "Main" });
-    expect(within(main).getAllByRole("link").map((a) => a.textContent)).toEqual(["Home", "Assistant"]);
+    expect(within(main).getAllByRole("link").map((a) => a.textContent)).toEqual(["Today", "Assistant"]);
   });
 
   it("a rewards-off shop gets no Rewards row", () => {

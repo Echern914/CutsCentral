@@ -4,12 +4,17 @@ import { resolveServiceColor } from "@chairback/config/serviceColor";
 import { NAME_WRAP_CLS, initialsOf } from "./appointmentCardStyles";
 import { SpecialChip } from "./SpecialChip";
 import { formatPrice } from "@/lib/serviceFields";
+import { durationLabel, planToday, startsIn, type ScheduleItem } from "./todayPlan";
 
 /** One row of today's agenda (the subset of /api/booking/agenda we render). */
 export interface TodayRow {
   id: string;
   source: "appointment" | "visit" | "block";
   start: string; // ISO
+  /** ISO; null when the source never said (an older synced visit). */
+  end?: string | null;
+  /** The chair it is on. Gaps are only drawn when the day has ONE chair. */
+  staffId?: string | null;
   clientName: string;
   serviceName: string | null;
   serviceColor: string | null;
@@ -57,149 +62,320 @@ export function addOnIcon(name: string): string {
 /** Statuses that are done/void — dimmed, and excluded from the "left today" count. */
 const CLOSED = new Set(["completed", "canceled", "no_show"]);
 
+/** Where a row opens: its own sheet when the calendar can open one. */
+function hrefFor(row: TodayRow): string {
+  return row.source === "appointment"
+    ? `/dashboard/booking?appointment=${encodeURIComponent(row.id)}`
+    : "/dashboard/booking?view=day";
+}
+
 /**
- * Today's appointments, first thing on the dashboard: when a barber opens the
- * app this is what they land on, so the day reads at a glance before any of the
- * analytics below. Rows come from the normalized agenda endpoint, so this works
- * identically for native-booking and synced (Acuity/Square) shops.
+ * Today, first thing on the dashboard (Studio redesign): what the day is
+ * worth, who is next, what is waiting on the barber, then the day in order
+ * with its open gaps. Rows come from the normalized agenda endpoint, so this
+ * works identically for native-booking and synced (Acuity/Square) shops.
+ *
+ * `now` is a prop so the clock-based claims ("in 18 min", "left") are tested
+ * against a fixed instant instead of whenever the suite happens to run.
  */
 export function TodayAgenda({
   rows,
   timezone,
+  now = Date.now(),
 }: {
   rows: TodayRow[];
   timezone: string;
+  now?: number;
 }) {
   const timeFmt = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
     hour: "numeric",
     minute: "2-digit",
   });
+  const time = (iso: string | number) => timeFmt.format(new Date(iso));
+  // "11:00 – 11:35 AM": the period once when both ends share it.
+  const range = (row: TodayRow) => {
+    const a = time(row.start);
+    if (!row.end) return a;
+    const b = time(row.end);
+    const pa = a.slice(-2);
+    return pa === b.slice(-2) ? `${a.slice(0, -3)} – ${b}` : `${a} – ${b}`;
+  };
+
+  const plan = planToday(rows, now);
   // 🔴 Blocked time (a lunch, an Acuity block) is not an appointment. It was
   // counted in "N appointments left" and drawn as a client row, initials and
   // all - "1 appointment left today" on a day with nothing booked.
   const bookings = rows.filter((r) => r.source !== "block");
-  const remaining = bookings.filter((r) => !CLOSED.has(r.status)).length;
+  const next = plan.upNext;
+  const firstRequest = plan.requests[0];
 
   return (
-    <Card className="mb-6 overflow-hidden" >
-      <div className="flex items-baseline justify-between gap-3 border-b border-subtle px-5 py-4">
-        <div>
-          <h2 className="font-display text-lg">Today</h2>
-          <p className="text-xs text-muted">
-            {bookings.length === 0
-              ? "Nothing on the books."
-              : `${remaining} ${remaining === 1 ? "appointment" : "appointments"} left today.`}
-          </p>
-        </div>
-        <Link
-          href="/dashboard/booking"
-          className="shrink-0 text-xs font-medium text-muted transition-colors hover:text-offwhite"
-        >
-          Full calendar →
-        </Link>
-      </div>
+    <section aria-label="Today's schedule" className="mb-6 flex flex-col gap-3">
+      <dl className="grid grid-cols-3 gap-2.5">
+        <Stat
+          label="Booked"
+          value={plan.bookedUnknown ? "—" : formatPrice(plan.booked)}
+          hint={plan.bookedUnknown ? "No prices on these bookings" : undefined}
+        />
+        <Stat label="Left today" value={String(plan.left)} />
+        <Stat
+          label="Open gaps"
+          value={plan.openMin === null ? "—" : plan.openMin === 0 ? "None" : durationLabel(plan.openMin)}
+          hint={plan.openMin === null ? "Some bookings have no end time" : undefined}
+        />
+      </dl>
 
-      {rows.length === 0 ? (
-        <p className="px-5 py-6 text-sm text-muted">
-          No appointments today. Enjoy the quiet — or share your booking link.
-        </p>
-      ) : (
-        <ul className="divide-y divide-subtle">
-          {rows.map((r) => {
-            // Same resolver as the calendar, so one service is one colour on
-            // both surfaces - explicit choice first, then derived from the name.
-            const stripe = resolveServiceColor({
-              explicitKey: r.serviceColor,
-              serviceName: r.serviceName,
-            }).hex;
-            const closed = CLOSED.has(r.status);
-            if (r.source === "block") {
-              return (
-                <li key={r.id} className="px-5 py-3" style={{ opacity: 0.6 }}>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs tabular-nums text-muted">
-                      {timeFmt.format(new Date(r.start))}
-                    </span>
-                    <span className="shrink-0 rounded-md bg-charcoal-700 px-2.5 py-0.5 text-[10px] font-medium text-muted">
-                      Blocked
-                    </span>
-                  </div>
-                  <p className="mt-1 text-sm text-muted [overflow-wrap:anywhere]">{r.clientName}</p>
-                  {(r.blockServiceIds?.length ?? 0) > 0 && r.blockScope && (
-                    <p className="mt-0.5 text-[11px] text-muted [overflow-wrap:anywhere]">
-                      {r.blockScope}. Other services stay bookable.
-                    </p>
-                  )}
-                </li>
-              );
-            }
-            return (
-              <li
-                key={r.id}
-                className="px-5 py-3.5"
-                style={{
-                  borderLeft: stripe ? `3px solid ${stripe}` : undefined,
-                  opacity: closed ? 0.5 : undefined,
-                }}
-              >
-                {/* Same hierarchy as the booking card: when + status quietly on
-                    top, then WHO at full width, then the service line. */}
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs tabular-nums text-muted">
-                    {timeFmt.format(new Date(r.start))}
-                  </span>
-                  {r.status === "pending" ? (
-                    <span className="shrink-0 rounded-md bg-gold/15 px-2.5 py-0.5 text-[10px] font-semibold text-gold">
-                      Request
-                    </span>
-                  ) : r.price !== null ? (
-                    <span className="shrink-0 text-xs tabular-nums text-muted">
-                      {formatPrice(r.price)}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="mt-1.5 flex items-start gap-2.5">
-                  <span
-                    aria-hidden
-                    className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-[11px] font-semibold text-offwhite/80 ring-1 ring-offwhite/10"
-                  >
-                    {initialsOf(r.clientName)}
-                  </span>
-                  {/* Never truncated: the client's full name is the point. */}
-                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-                    <p
-                      className={`${NAME_WRAP_CLS} text-[17px]`}
-                      style={{ textDecoration: closed ? "line-through" : undefined }}
-                    >
-                      {r.clientName}
-                    </p>
-                    {r.special && <SpecialChip afterHours={r.afterHours} premium={r.premium} />}
-                  </div>
-                </div>
-                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 pl-[38px] text-xs text-muted">
-                  {r.serviceName && (
-                    <span className="[overflow-wrap:anywhere]">{r.serviceName}</span>
-                  )}
-                  {/* Add-on icons: the barber sees at a glance that this cut
-                      also has a beard trim, a wash, etc. Title carries the
-                      real name for anyone hovering / using a screen reader. */}
-                  {(r.addOns ?? []).map((a) => (
-                    <span
-                      key={a.id}
-                      title={a.name}
-                      aria-label={a.name}
-                      className="leading-none"
-                    >
-                      {addOnIcon(a.name)}
-                    </span>
-                  ))}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+      {firstRequest && (
+        <Link
+          href={hrefFor(firstRequest)}
+          className="flex min-h-[56px] items-center justify-between gap-3 rounded-2xl border border-gold/40 bg-gold/10 px-4 py-3 transition-colors duration-150 ease-out hover:bg-gold/15"
+        >
+          <span className="min-w-0">
+            <span className="block text-sm font-semibold text-offwhite">
+              {plan.requests.length === 1
+                ? "1 request needs you"
+                : `${plan.requests.length} requests need you`}
+            </span>
+            <span className="block truncate text-xs text-muted">
+              {firstRequest.clientName} asked for {time(firstRequest.start)}
+              {plan.requests.length > 1 ? ` · and ${plan.requests.length - 1} more` : ""}
+            </span>
+          </span>
+          <span aria-hidden className="shrink-0 text-sm font-semibold text-gold">
+            Review →
+          </span>
+        </Link>
       )}
-    </Card>
+
+      {next && (
+        <Card className="px-4 py-4 sm:px-5">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-muted">
+              {startsIn(next, now) === "Now" ? "With you now" : "Up next"}
+            </h2>
+            <span className="text-xs font-semibold tabular-nums text-gold">{startsIn(next, now)}</span>
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <span
+              aria-hidden
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-sm font-semibold text-offwhite"
+            >
+              {initialsOf(next.clientName)}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className={`${NAME_WRAP_CLS} text-lg`}>{next.clientName}</p>
+              <p className="text-sm text-muted [overflow-wrap:anywhere]">
+                {[next.serviceName, range(next), next.price !== null ? formatPrice(next.price) : null]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            </div>
+            <Link
+              href={hrefFor(next)}
+              className="flex min-h-[44px] shrink-0 items-center rounded-xl bg-primary px-4 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
+            >
+              Open
+            </Link>
+          </div>
+        </Card>
+      )}
+
+      <Card className="overflow-hidden">
+        <div className="flex items-baseline justify-between gap-3 border-b border-subtle px-4 py-3.5 sm:px-5">
+          <div>
+            <h2 className="font-display text-lg">Schedule</h2>
+            <p className="text-xs text-muted">
+              {bookings.length === 0
+                ? "Nothing on the books."
+                : `${plan.left} ${plan.left === 1 ? "appointment" : "appointments"} left today.`}
+            </p>
+          </div>
+          <Link
+            href="/dashboard/booking"
+            className="flex min-h-[44px] shrink-0 items-center text-sm font-medium text-gold underline-offset-2 hover:underline"
+          >
+            Open calendar
+          </Link>
+        </div>
+
+        {rows.length === 0 ? (
+          <p className="px-4 py-6 text-sm text-muted sm:px-5">
+            No appointments today. Enjoy the quiet — or share your booking link.
+          </p>
+        ) : (
+          <ul className="divide-y divide-subtle">
+            {plan.earlier > 0 && (
+              // A busy day's finished bookings fold away so the list opens on
+              // what is next. A native <details>: no client JS, and the rows
+              // are still one tap away (and still in the page for search).
+              <li>
+                <details className="group">
+                  <summary className="flex min-h-[48px] cursor-pointer list-none items-center gap-3 px-4 py-2.5 text-sm transition-colors duration-150 ease-out hover:bg-charcoal-700/50 sm:px-5 [&::-webkit-details-marker]:hidden">
+                    <span className="flex-1 font-medium text-offwhite">Earlier today</span>
+                    <span className="text-xs tabular-nums text-muted">
+                      {plan.earlierBookings} {plan.earlierBookings === 1 ? "appointment" : "appointments"}
+                    </span>
+                    <span aria-hidden className="text-muted transition-transform duration-150 ease-out group-open:rotate-180">
+                      <ChevronMark />
+                    </span>
+                  </summary>
+                  <ul className="divide-y divide-subtle border-t border-subtle">
+                    {plan.schedule.slice(0, plan.earlier).map((item) => (
+                      <ScheduleLine key={keyOf(item)} item={item} time={time} />
+                    ))}
+                  </ul>
+                </details>
+              </li>
+            )}
+            {plan.schedule.slice(plan.earlier).map((item) => (
+              <ScheduleLine key={keyOf(item)} item={item} time={time} />
+            ))}
+          </ul>
+        )}
+      </Card>
+    </section>
+  );
+}
+
+const keyOf = (item: ScheduleItem) =>
+  item.kind === "row" ? `${item.row.source}:${item.row.id}` : `gap:${item.start}`;
+
+function ChevronMark() {
+  return (
+    <svg
+      className="h-4 w-4"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="min-w-0 rounded-2xl border border-subtle bg-charcoal-800 px-3 py-3 sm:px-4">
+      <dt className="truncate text-xs text-muted">{label}</dt>
+      <dd className="mt-1 font-display text-xl tabular-nums sm:text-2xl" title={hint}>
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+const STATUS_WORD: Partial<Record<TodayRow["status"], string>> = {
+  completed: "Done",
+  canceled: "Canceled",
+  no_show: "No-show",
+};
+
+function ScheduleLine({
+  item,
+  time,
+}: {
+  item: ScheduleItem;
+  time: (iso: string | number) => string;
+}) {
+  if (item.kind === "gap") {
+    // A past gap, or the last few minutes of one, is history, not an invitation.
+    return (
+      <li className="flex items-center gap-3 px-4 py-2.5 sm:px-5">
+        <span className="w-16 shrink-0 text-xs tabular-nums text-muted">{time(item.start)}</span>
+        <span className="flex-1 text-sm text-muted">Open · {durationLabel(item.minutes)}</span>
+        {item.fillable && (
+          <Link
+            href="/dashboard/booking?view=day"
+            className="flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-gold underline-offset-2 hover:underline"
+          >
+            Fill it
+          </Link>
+        )}
+      </li>
+    );
+  }
+
+  const r = item.row;
+  if (r.source === "block") {
+    return (
+      <li className="flex gap-3 px-4 py-3 sm:px-5" style={{ opacity: 0.6 }}>
+        <span className="w-16 shrink-0 pt-0.5 text-xs tabular-nums text-muted">{time(r.start)}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm text-muted [overflow-wrap:anywhere]">{r.clientName}</p>
+            <span className="shrink-0 rounded-md bg-charcoal-700 px-2.5 py-0.5 text-[10px] font-medium text-muted">
+              Blocked
+            </span>
+          </div>
+          {(r.blockServiceIds?.length ?? 0) > 0 && r.blockScope && (
+            <p className="mt-0.5 text-[11px] text-muted [overflow-wrap:anywhere]">
+              {r.blockScope}. Other services stay bookable.
+            </p>
+          )}
+        </div>
+      </li>
+    );
+  }
+
+  // Same resolver as the calendar, so one service is one colour on both
+  // surfaces - explicit choice first, then derived from the name.
+  const stripe = resolveServiceColor({ explicitKey: r.serviceColor, serviceName: r.serviceName }).hex;
+  const closed = CLOSED.has(r.status);
+  const word = STATUS_WORD[r.status];
+  return (
+    <li style={{ opacity: closed ? 0.5 : undefined }}>
+      <Link
+        href={hrefFor(r)}
+        className="flex min-h-[56px] gap-3 px-4 py-3 transition-colors duration-150 ease-out hover:bg-charcoal-700/50 sm:px-5"
+      >
+        <span className="w-16 shrink-0 pt-0.5 text-xs tabular-nums text-muted">{time(r.start)}</span>
+        <span
+          aria-hidden
+          className="w-[3px] shrink-0 self-stretch rounded-full"
+          style={{ backgroundColor: stripe ?? "transparent" }}
+        />
+        {/* Never truncated: the client's full name is the point. */}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <p
+              className={`${NAME_WRAP_CLS} text-base`}
+              style={{ textDecoration: closed ? "line-through" : undefined }}
+            >
+              {r.clientName}
+            </p>
+            {r.special && <SpecialChip afterHours={r.afterHours} premium={r.premium} />}
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+            {r.serviceName && <span className="[overflow-wrap:anywhere]">{r.serviceName}</span>}
+            {/* Add-on icons: the barber sees at a glance that this cut also
+                has a beard trim, a wash, etc. Title carries the real name for
+                anyone hovering / using a screen reader. */}
+            {(r.addOns ?? []).map((a) => (
+              <span key={a.id} title={a.name} aria-label={a.name} className="leading-none">
+                {addOnIcon(a.name)}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          {r.status === "pending" ? (
+            <span className="rounded-md bg-gold/15 px-2.5 py-0.5 text-[10px] font-semibold text-gold">
+              Request
+            </span>
+          ) : (
+            <>
+              {r.price !== null && (
+                <span className="block text-sm tabular-nums text-offwhite">{formatPrice(r.price)}</span>
+              )}
+              {word && <span className="block text-[11px] text-muted">{word}</span>}
+            </>
+          )}
+        </div>
+      </Link>
+    </li>
   );
 }

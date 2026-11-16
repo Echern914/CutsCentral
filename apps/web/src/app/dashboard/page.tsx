@@ -23,8 +23,7 @@ import { SetupChecklist } from "./_components/SetupChecklist";
 import { getOnboardingState } from "@/app/onboarding/state";
 import { setupComplete } from "@chairback/config/onboarding";
 import { ConsentSetup } from "./_components/ConsentSetup";
-import { ShopIdentity } from "./_components/ShopIdentity";
-import { QuickActions } from "./_components/QuickActions";
+import { TodayHeader } from "./_components/TodayHeader";
 import { ReferralCard } from "./_components/ReferralCard";
 import { BarberHome, type BarberHomeData } from "./_components/BarberHome";
 import { DemoTour } from "@/components/tour/DemoTour";
@@ -67,8 +66,6 @@ export default async function DashboardPage({
   // with pieces missing. getMe() is memoized, so this costs no extra round trip
   // for owners.
   const who = await getMe();
-  // OFF when unknown: a web deploy ahead of the API must never point at a dark tab.
-  const affiliateProgramEnabled = who.data?.affiliateProgramEnabled ?? false;
   if (who.status === 401) redirect("/login");
   if (who.data?.shopRole === "BARBER") {
     // Generous UTC window; the API narrows to the shop's own calendar day.
@@ -110,7 +107,6 @@ export default async function DashboardPage({
     activity,
     leaderboard,
     trends,
-    me,
     sync,
     agenda,
     referrals,
@@ -121,8 +117,6 @@ export default async function DashboardPage({
     apiGet<{ items: ActivityItem[] }>("/api/dashboard/activity"),
     apiGet<{ leaders: Leader[] }>("/api/dashboard/leaderboard"),
     apiGet<{ series: TrendPoint[] }>("/api/dashboard/trends"),
-    // Memoized: shares the layout's /api/auth/me round-trip for this render.
-    getMe(),
     apiGet<SyncStatus>("/api/acuity/oauth/status"),
     apiGet<{ agenda: TodayRow[]; timezone: string }>(
       `/api/booking/agenda?from=${encodeURIComponent(agendaFrom)}&to=${encodeURIComponent(agendaTo)}`,
@@ -175,23 +169,19 @@ export default async function DashboardPage({
           packages/config/src/demoTour.ts (DASHBOARD_TOUR_STEPS). */}
       <DemoTour tour="dashboard" route="overview" />
 
-      {/* Identity first, then the one action that matters. Everything below is
-          reference material — see the layout note at the bottom of this file. */}
-      {/* Capped on wide screens: a full-width primary button across 1280px reads
-          as a banner, not a button. The identity block centers with it. */}
-      <div className="mx-auto w-full max-w-xl">
-        <ShopIdentity
-          shopName={shop.name}
-          avatarUrl={me.data?.avatarUrl}
-          publicUrl={shop.slug ? `${appBase}/book/${shop.slug}` : null}
-        />
-        <QuickActions
-          rewardsEnabled={shop.rewardsEnabled}
-        affiliateProgramEnabled={affiliateProgramEnabled}
-          bookUrl={shop.slug ? `${appBase}/book/${shop.slug}` : null}
-          shopName={shop.name}
-        />
-      </div>
+      {/* The day first (Studio redesign): the date, then sharing the link and
+          booking someone in. Everything below Today is reference material -
+          see the layout note at the bottom of this file. */}
+      <TodayHeader
+        dateLabel={new Intl.DateTimeFormat("en-US", {
+          timeZone: agendaTz,
+          weekday: "long",
+          month: "long",
+          day: "numeric",
+        }).format(new Date())}
+        bookUrl={shop.slug ? `${appBase}/book/${shop.slug}` : null}
+        shopName={shop.name}
+      />
 
       {/* Only a real `false`: an older API that sends nothing is no warning. */}
       {shop.slug && shop.publicPageEnabled === false && (

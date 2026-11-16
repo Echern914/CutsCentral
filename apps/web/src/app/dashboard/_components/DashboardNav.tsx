@@ -56,7 +56,7 @@ export interface Tab {
 // The routes come from the registry so this list cannot drift from the palette,
 // the More sheet or the help corpus — the whole reason those three disagreed.
 const TAB_SPECS: { featureId: string; label: string; Icon: Tab["Icon"] }[] = [
-  { featureId: "home", label: "Home", Icon: HomeIcon },
+  { featureId: "home", label: "Today", Icon: HomeIcon },
   { featureId: "online-booking", label: "Calendar", Icon: CalendarIcon },
   { featureId: "clients", label: "Clients", Icon: ClientsIcon },
   { featureId: "insights", label: "Insights", Icon: InsightsIcon },

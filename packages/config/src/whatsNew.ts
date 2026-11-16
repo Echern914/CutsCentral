@@ -36,6 +36,26 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-16-calendar-density",
+    date: "2026-11-16",
+    kind: "feature",
+    title: "A busy day fits on the screen",
+    body:
+      "Each appointment on the calendar's day view is now two lines: who, status, time and service. A full " +
+      "day shows about twice as much per screen. On Today, a busy morning folds into one Earlier today row, " +
+      "so the list opens on what is next.",
+  },
+  {
+    id: "2026-11-16-today-page",
+    date: "2026-11-16",
+    kind: "feature",
+    title: "Home is now Today",
+    body:
+      "Your first page now opens on the day: what it is worth, who is up next, any request waiting on you, " +
+      "and open gaps you could still fill. Tap anyone to open their booking. Share link and Book appointment " +
+      "sit at the top.",
+  },
+  {
     id: "2026-11-16-search-or-ask",
     date: "2026-11-16",
     kind: "feature",
