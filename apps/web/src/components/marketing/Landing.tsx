@@ -1,498 +1,231 @@
 import Link from "next/link";
 import { APP_NAME, BILLING, PLANS } from "@chairback/config/constants";
 import { HideInNativeApp } from "@/components/HideInNativeApp";
-import { DashboardPreview } from "./DashboardPreview";
-import { Marquee } from "./Marquee";
-import { PhoneDemo } from "./PhoneDemo";
-import { ArrowIcon, CheckIcon, PricingSection } from "./PricingSection";
-import { PunchCardDemo, ScissorsMark } from "./PunchCardDemo";
-import { Reveal, Stagger, StaggerItem } from "./Reveal";
-import { SectionHeading } from "./SectionHeading";
+import { HeroPhone, WeekPreview } from "./LandingVisuals";
+import { CheckIcon, PricingSection } from "./PricingSection";
+import { SiteFooter } from "./SiteFooter";
+import { SiteHeader } from "./SiteHeader";
 import { Testimonials } from "./Testimonials";
-import { Tilt } from "./Tilt";
 
 /**
- * The marketing landing page. Server component shell — every animated piece
- * is a small client component so the page still streams fast and SEO-renders.
+ * The marketing homepage (the "Studio" redesign, 2026-11). A server component
+ * with no client JavaScript of its own: the product pictures are static
+ * markup, so the page streams fast and renders fully for search engines.
+ *
+ * 🔴 Every claim here is something a shop can switch on today. Texting is off
+ * in production, so nothing promises a text; reminders are app notifications
+ * and email. The testimonials section renders nothing until there is a real
+ * quote (see Testimonials.tsx), and prices come from PLANS, never a literal.
  */
+
+const BTN =
+  "inline-flex min-h-[48px] items-center justify-center rounded-xl px-6 text-base font-semibold transition-colors duration-150 ease-out";
+const BTN_PRIMARY = `${BTN} bg-primary text-on-primary hover:bg-primary/90`;
+const BTN_OUTLINE = `${BTN} border border-subtle-strong bg-charcoal-800 text-offwhite hover:bg-charcoal-700`;
+const EYEBROW = "text-sm font-semibold text-gold";
+const H2 =
+  "font-display text-[32px] leading-[38px] tracking-[-0.025em] [text-wrap:balance] sm:text-[44px] sm:leading-[50px]";
+
 export function Landing() {
   return (
-    <div className="relative min-h-dvh overflow-x-clip">
-      {/* Ambient hero glow, brighter than the global backdrop */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[42rem]"
-        style={{
-          background:
-            "radial-gradient(56rem 30rem at 70% -10%, rgba(212,175,55,0.13), transparent 65%), radial-gradient(40rem 24rem at 10% 0%, rgba(212,175,55,0.07), transparent 60%)",
-        }}
-      />
-
-      {/* ====== Nav ====== */}
-      <header className="sticky top-0 z-20">
-        <nav
-          aria-label="Primary"
-          className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-xl px-5 py-3"
-        >
-          <Link href="/" className="flex items-center gap-2">
-            <ScissorsMark className="h-4 w-4 text-gold" />
-            <span className="font-display text-base tracking-tight">{APP_NAME}</span>
-          </Link>
-          <div className="flex items-center gap-2">
-            {/* Pricing is hidden inside the native app (App Store 3.1.1). */}
-            <HideInNativeApp>
-              <a
-                href="#pricing"
-                className="hidden rounded-xl px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:inline"
-              >
-                Pricing
-              </a>
-            </HideInNativeApp>
-            <Link
-              href="/login"
-              className="rounded-xl px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
-            >
-              Sign in
-            </Link>
-            <Link
-              href="/signup"
-              className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-[box-shadow,filter] duration-150 ease-out hover:bg-primary/90"
-            >
-              Get started
-            </Link>
-          </div>
-        </nav>
-      </header>
+    <div className="min-h-dvh overflow-x-clip bg-charcoal-900">
+      <SiteHeader />
 
       <main>
         {/* ====== Hero ====== */}
-        <section className="mx-auto grid w-full max-w-6xl items-center gap-16 px-6 pb-20 pt-16 sm:pt-24 lg:grid-cols-[1.05fr_0.95fr]">
-          <Stagger className="text-center lg:text-left" gap={0.1}>
-            <StaggerItem>
-              <p className="inline-flex items-center gap-2 rounded-md border border-gold/30 bg-gold/10 px-3 py-1 text-xs font-medium text-gold-soft">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-gold" />
-                Works with Acuity, Square, or ChairBack&apos;s own booking
-              </p>
-            </StaggerItem>
-            <StaggerItem>
-              <h1 className="mt-6 font-display text-5xl leading-[1.02] tracking-tight sm:text-7xl lg:text-[5.2rem]">
-                Keep your
-                <br />
-                <span className="text-gradient-gold">chair full.</span>
-              </h1>
-            </StaggerItem>
-            <StaggerItem>
-              <p className="mx-auto mt-6 max-w-xl text-lg leading-relaxed text-muted lg:mx-0">
-                Automatic loyalty punch cards and perfectly-timed rebooking
-                reminders for barbershops, salons, and studios. No paper cards, no
-                manual follow-up. Every visit counts itself.
-              </p>
-            </StaggerItem>
-            <StaggerItem>
-              <div className="mt-9 flex flex-wrap items-center justify-center gap-4 lg:justify-start">
-                <Link
-                  href="/signup"
-                  className="inline-flex items-center gap-2 rounded-xl bg-primary px-8 py-3.5 text-sm font-semibold text-on-primary transition-[box-shadow,filter] duration-150 ease-out hover:bg-primary/90"
-                >
-                  Start free
-                  <ArrowIcon className="h-4 w-4" />
-                </Link>
-                <Link
-                  href="/login"
-                  className="rounded-xl border border-subtle px-7 py-3.5 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:border-subtle-strong hover:bg-charcoal-700"
-                >
-                  Sign in
-                </Link>
-              </div>
-            </StaggerItem>
-            <StaggerItem>
-              <ul className="mt-7 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-muted lg:justify-start">
-                {["Set up in minutes", "Works with your booking link", `${BILLING.trialDays} days free, no card`].map(
-                  (t) => (
-                    <li key={t} className="flex items-center gap-1.5">
-                      <CheckIcon className="h-3.5 w-3.5 text-gold/70" />
-                      {t}
-                    </li>
-                  ),
-                )}
-              </ul>
-            </StaggerItem>
-          </Stagger>
-
-          {/* Living punch card */}
-          <Reveal delay={0.15} className="relative mx-auto w-full max-w-sm">
-            <div
-              className="absolute -inset-12 -z-10 rounded-full bg-gold/10 blur-3xl"
-              aria-hidden
-            />
-            <Tilt>
-              <PunchCardDemo />
-            </Tilt>
-            <p className="mt-4 text-center text-xs text-muted">
-              What your clients see: live, from a link. No login.
+        <section className="mx-auto grid w-full max-w-6xl items-center gap-12 px-6 pb-20 pt-12 sm:pt-16 lg:grid-cols-2 lg:pb-24 lg:pt-20">
+          <div className="min-w-0">
+            <p className={EYEBROW}>For barbershops, salons and studios</p>
+            <h1 className="mt-3.5 font-display text-[44px] leading-[48px] tracking-[-0.035em] [text-wrap:balance] sm:text-[68px] sm:leading-[72px]">
+              Keep your chair full.
+            </h1>
+            <p className="mt-5 max-w-[500px] text-lg leading-7 text-muted">
+              Clients book in a few taps, pay up front when you ask them to, and
+              come back for their punch card. You run the whole day from one
+              screen.
             </p>
-          </Reveal>
-        </section>
-
-        {/* ====== Capability marquee ====== */}
-        <section className="border-y border-subtle bg-charcoal-900/40 py-5">
-          <Marquee
-            items={[
-              "Automatic punch cards",
-              "Smart rebooking reminders",
-              "Your own domain",
-              "Found on Google",
-              "Holiday & weekend pricing",
-              "Special-priced slots",
-              "Revenue attribution",
-              "At-risk client radar",
-              "Acuity + Square sync",
-              "Built-in online booking",
-              "0% booking commission",
-              "Magic-link rewards page",
-              "Daily send caps",
-              "Per-shop branding",
-              "CSV exports",
-            ]}
-          />
-        </section>
-
-        {/* ====== How it works ====== */}
-        <section className="mx-auto w-full max-w-6xl px-6 py-24">
-          <SectionHeading
-            eyebrow="How it works"
-            title={
-              <>
-                Three steps, then it&apos;s{" "}
-                <span className="text-gradient-gold">automatic.</span>
-              </>
-            }
-            sub="Connect once. Every appointment becomes a punch, every drifting client lands on your radar, every regular stays a regular."
-          />
-          <Stagger className="relative mt-14 grid gap-10 sm:grid-cols-3" gap={0.12}>
-            {/* connector line */}
-            <div
-              aria-hidden
-              className="absolute left-[16%] right-[16%] top-6 hidden h-px bg-gradient-to-r from-transparent via-gold/40 to-transparent sm:block"
-            />
-            {STEPS.map((s, i) => (
-              <StaggerItem key={s.title} className="relative text-center">
-                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-gold-gradient font-display text-lg text-on-gold">
-                  {i + 1}
-                </div>
-                <h3 className="mt-5 font-display text-xl">{s.title}</h3>
-                <p className="mx-auto mt-2 max-w-xs text-sm leading-relaxed text-muted">
-                  {s.body}
-                </p>
-              </StaggerItem>
-            ))}
-          </Stagger>
-        </section>
-
-        {/* ====== Dashboard preview ====== */}
-        <section className="mx-auto w-full max-w-6xl px-6 pb-24">
-          <SectionHeading
-            eyebrow="The dashboard"
-            title={
-              <>
-                Watch the money{" "}
-                <span className="text-gradient-gold">walk back in.</span>
-              </>
-            }
-            sub="Every nudge that turns into a booking is tracked to the dollar. Know exactly who's drifting, who came back, and what it earned you."
-          />
-          <Reveal delay={0.1} className="relative mt-12">
-            <div
-              aria-hidden
-              className="absolute -inset-8 -z-10 rounded-[3rem] bg-gold/[0.06] blur-3xl"
-            />
-            <DashboardPreview />
-          </Reveal>
-        </section>
-
-        {/* ====== Smart nudges ====== */}
-        <section className="border-y border-subtle bg-charcoal-900/40">
-          <div className="mx-auto grid w-full max-w-6xl items-center gap-14 px-6 py-24 lg:grid-cols-2">
-            <Reveal className="order-2 mx-auto lg:order-1">
-              <div className="relative">
-                <div
-                  aria-hidden
-                  className="absolute -inset-10 -z-10 rounded-full bg-gold/10 blur-3xl"
-                />
-                <PhoneDemo className="rotate-[-3deg]" />
-              </div>
-            </Reveal>
-            <div className="order-1 lg:order-2">
-              <Reveal>
-                <p className="inline-flex items-center gap-2 rounded-md border border-gold/30 bg-gold/10 px-3 py-1 text-xs font-medium text-gold-soft">
-                  <span className="h-1.5 w-1.5 rounded-full bg-gold" />
-                  Smart nudges
-                </p>
-                <h2 className="mt-5 font-display text-3xl tracking-tight sm:text-5xl">
-                  Reminders that land at the{" "}
-                  <span className="text-gradient-gold">perfect moment.</span>
-                </h2>
-                <p className="mt-4 max-w-lg leading-relaxed text-muted">
-                  {APP_NAME} learns each client&apos;s natural rhythm from their
-                  visit history. When someone drifts past their usual gap, they
-                  land on your radar, and clients with the app get one
-                  well-timed notification.
-                </p>
-              </Reveal>
-              <Stagger className="mt-8 flex flex-col gap-4" gap={0.1}>
-                {NUDGE_POINTS.map((p) => (
-                  <StaggerItem key={p.title} className="flex items-start gap-3.5">
-                    <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-gold/25 bg-gold/10 text-gold">
-                      {p.icon}
-                    </span>
-                    <div>
-                      <p className="text-sm font-semibold text-offwhite">{p.title}</p>
-                      <p className="mt-0.5 text-sm leading-relaxed text-muted">{p.body}</p>
-                    </div>
-                  </StaggerItem>
-                ))}
-              </Stagger>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <Link href="/signup" className={BTN_PRIMARY}>
+                Start free
+              </Link>
+              <Link href="/demo" className={BTN_OUTLINE}>
+                See the demo
+              </Link>
             </div>
+            <p className="mt-4 text-sm text-muted">
+              {BILLING.trialDays} days free, no card
+            </p>
+          </div>
+          <HeroPhone />
+        </section>
+
+        {/* ====== Where clients come from ====== */}
+        <div className="border-y border-subtle bg-charcoal-800">
+          <p className="mx-auto flex min-h-[72px] w-full max-w-6xl flex-wrap items-center justify-center gap-x-8 gap-y-2 px-6 py-4 text-center text-[15px] text-muted">
+            <span>Bring your clients from</span>
+            <span className="font-semibold text-offwhite">Acuity</span>
+            <span className="font-semibold text-offwhite">Square</span>
+            <span>or start fresh on {APP_NAME} booking</span>
+          </p>
+        </div>
+
+        {/* ====== What you get ====== */}
+        <section id="features" className="mx-auto w-full max-w-6xl scroll-mt-20 px-6 py-20 sm:py-24">
+          <div className="max-w-2xl">
+            <p className={EYEBROW}>What you get</p>
+            <h2 className={`mt-2.5 ${H2}`}>Less chasing. More cutting.</h2>
+          </div>
+          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {FEATURES.map((f) => (
+              <div key={f.title} className="rounded-2xl border border-subtle bg-charcoal-800 p-7">
+                <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-gold/15 text-gold">
+                  {f.icon}
+                </span>
+                <h3 className="mt-[18px] font-display text-[22px] leading-7">{f.title}</h3>
+                <p className="mt-1.5 text-muted">{f.body}</p>
+              </div>
+            ))}
+          </div>
+          <ul className="mt-10 grid gap-x-8 gap-y-3 text-[15px] sm:grid-cols-2 lg:grid-cols-3">
+            {ALSO.map((a) => (
+              <li key={a} className="flex items-start gap-2.5">
+                <CheckIcon className="mt-1 h-4 w-4 shrink-0 text-gold" />
+                <span>{a}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        {/* ====== Phone and desk ====== */}
+        <section className="border-y border-subtle bg-charcoal-800">
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-10 px-6 py-20 sm:py-24">
+            <div className="max-w-3xl">
+              <p className={EYEBROW}>On any screen</p>
+              <h2 className={`mt-2.5 ${H2}`}>
+                Run the day from your phone. Plan the week from your desk.
+              </h2>
+            </div>
+            <WeekPreview />
+            <ol className="grid gap-6 sm:grid-cols-3">
+              {STEPS.map((s, i) => (
+                <li key={s.title} className="flex gap-3.5">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-subtle-strong font-display tabular-nums">
+                    {i + 1}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block font-semibold">{s.title}</span>
+                    <span className="block text-muted">{s.body}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
           </div>
         </section>
 
-        {/* ====== Feature bento ====== */}
-        <section className="mx-auto w-full max-w-6xl px-6 py-24">
-          <SectionHeading
-            eyebrow="Everything included"
-            title="Loyalty that runs itself."
-          />
-          <Stagger className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3" gap={0.07}>
-            {FEATURES.map((f, i) => (
-              <StaggerItem
-                key={f.title}
-                className={i === 0 ? "sm:col-span-2 lg:col-span-1" : undefined}
-              >
-                <div className="glass group h-full rounded-3xl p-7 transition-all duration-200 ease-out hover:-translate-y-1 hover:border-gold/25">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-gold/25 bg-gold/10 text-gold transition-transform duration-200 ease-out group-hover:scale-110">
-                    {f.icon}
-                  </div>
-                  <h3 className="mt-5 font-display text-xl">{f.title}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-muted">{f.body}</p>
-                </div>
-              </StaggerItem>
-            ))}
-          </Stagger>
-        </section>
-
-        {/* ====== Testimonials ====== */}
+        {/* ====== Testimonials (renders nothing until a real quote exists) ====== */}
         <Testimonials />
 
         {/* ====== Pricing (shared with /pricing; hides itself in-app) ====== */}
         <PricingSection />
 
         {/* ====== FAQ ====== */}
-        <section className="mx-auto w-full max-w-3xl px-6 pb-24 pt-24">
-          <SectionHeading eyebrow="FAQ" title="Quick answers." />
-          <Reveal className="mt-10 flex flex-col gap-3">
+        <section className="mx-auto w-full max-w-3xl px-6 py-20 sm:py-24">
+          <p className={EYEBROW}>FAQ</p>
+          <h2 className={`mt-2.5 ${H2}`}>Quick answers.</h2>
+          <div className="mt-8 divide-y divide-subtle overflow-hidden rounded-2xl border border-subtle bg-charcoal-800">
             {FAQ.map((f) => {
               const item = (
-                <details
-                  key={f.q}
-                  className="group rounded-2xl border border-subtle bg-charcoal-800/60 px-6 py-4 transition-colors duration-200 ease-out open:border-gold/25"
-                >
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-sm font-medium text-offwhite [&::-webkit-details-marker]:hidden">
+                <details key={f.q} className="group">
+                  <summary className="flex min-h-[56px] cursor-pointer list-none items-center justify-between gap-4 px-5 py-3 font-medium [&::-webkit-details-marker]:hidden">
                     {f.q}
-                    <span className="text-gold transition-transform duration-200 ease-out group-open:rotate-45">
-                      <PlusIcon className="h-4 w-4" />
-                    </span>
+                    <PlusIcon className="h-4 w-4 shrink-0 text-muted transition-transform duration-200 ease-out group-open:rotate-45" />
                   </summary>
-                  <p className="mt-3 text-sm leading-relaxed text-muted">{f.a}</p>
+                  <p className="px-5 pb-5 text-[15px] leading-relaxed text-muted">{f.a}</p>
                 </details>
               );
-              // The cost answer carries plan prices — forbidden in-app (3.1.1).
+              // The cost answer carries plan prices, forbidden in-app (3.1.1).
               return f.hasPrices ? (
                 <HideInNativeApp key={f.q}>{item}</HideInNativeApp>
               ) : (
                 item
               );
             })}
-          </Reveal>
+          </div>
         </section>
 
-        {/* ====== Final CTA ====== */}
-        <section className="relative overflow-hidden border-t border-subtle">
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-0 -z-10"
-            style={{
-              background:
-                "radial-gradient(42rem 22rem at 50% 120%, rgba(212,175,55,0.14), transparent 70%)",
-            }}
-          />
-          <div className="mx-auto w-full max-w-4xl px-6 py-28 text-center">
-            <Reveal>
-              <h2 className="font-display text-4xl tracking-tight sm:text-6xl">
-                Your regulars,{" "}
-                <span className="text-gradient-gold">on autopilot.</span>
-              </h2>
-              <p className="mx-auto mt-5 max-w-md text-muted">
-                Stop losing clients who just forgot to rebook. {APP_NAME} brings
-                them back to your chair.
+        {/* ====== Final call to action: the one inverted band ====== */}
+        <section className="bg-primary text-on-primary">
+          <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-8 px-6 py-20">
+            <div className="min-w-0">
+              <h2 className={H2}>Your chair, full.</h2>
+              <p className="mt-3 text-lg leading-7 opacity-75">
+                Bring your clients with you. The first {BILLING.trialDays} days are on us.
               </p>
-              <div className="mt-9">
-                <Link
-                  href="/signup"
-                  className="inline-flex items-center gap-2 rounded-xl bg-primary px-10 py-4 text-base font-semibold text-on-primary transition-[filter] duration-150 ease-out hover:bg-primary/90"
-                >
-                  Get started free
-                  <ArrowIcon className="h-4 w-4" />
-                </Link>
-              </div>
-              <p className="mt-5 text-xs text-muted">
-                No credit card. Connect Acuity or Square - or use {APP_NAME}&apos;s
-                own booking - and your punch cards fill themselves.
-              </p>
-            </Reveal>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Link
+                href="/signup"
+                className={`${BTN} bg-charcoal-900 text-offwhite hover:bg-charcoal-800`}
+              >
+                Start free
+              </Link>
+              <a
+                href="mailto:support@getchairback.com"
+                className={`${BTN} border border-on-primary/30 hover:bg-on-primary/10`}
+              >
+                Talk to us
+              </a>
+            </div>
           </div>
         </section>
       </main>
 
-      {/* ====== Footer ====== */}
-      <footer className="border-t border-subtle py-10">
-        <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-4 px-6 text-xs text-muted sm:flex-row">
-          <span className="flex items-center gap-2">
-            <ScissorsMark className="h-3.5 w-3.5 text-gold/60" />
-            {APP_NAME}: built for barbershops, salons & studios.
-          </span>
-          <div className="flex flex-wrap justify-center gap-5">
-            <Link href="/login" className="transition-colors duration-150 ease-out hover:text-offwhite">
-              Sign in
-            </Link>
-            <Link href="/signup" className="transition-colors duration-150 ease-out hover:text-offwhite">
-              Create account
-            </Link>
-            <Link href="/terms" className="transition-colors duration-150 ease-out hover:text-offwhite">
-              Terms
-            </Link>
-            <Link href="/privacy" className="transition-colors duration-150 ease-out hover:text-offwhite">
-              Privacy
-            </Link>
-            <Link href="/sms" className="transition-colors duration-150 ease-out hover:text-offwhite">
-              SMS Policy
-            </Link>
-            <Link href="/accessibility" className="transition-colors duration-150 ease-out hover:text-offwhite">
-              Accessibility
-            </Link>
-            <a
-              href="mailto:support@getchairback.com"
-              className="transition-colors duration-150 ease-out hover:text-offwhite"
-            >
-              Contact
-            </a>
-          </div>
-        </div>
-        <div className="mx-auto mt-5 flex w-full max-w-6xl flex-wrap items-center justify-center gap-x-5 gap-y-2 border-t border-subtle px-6 pt-5 text-xs text-muted sm:justify-start">
-          <span className="text-muted/70">Also built for:</span>
-          <Link href="/for/salons" className="transition-colors duration-150 ease-out hover:text-offwhite">
-            Hair salons
-          </Link>
-          <Link href="/for/nails" className="transition-colors duration-150 ease-out hover:text-offwhite">
-            Nail studios
-          </Link>
-          <Link href="/for/lashes" className="transition-colors duration-150 ease-out hover:text-offwhite">
-            Lash &amp; brow artists
-          </Link>
-          <Link href="/for/spas" className="transition-colors duration-150 ease-out hover:text-offwhite">
-            Spas &amp; skincare
-          </Link>
-          <Link href="/for/tattoo" className="transition-colors duration-150 ease-out hover:text-offwhite">
-            Tattoo studios
-          </Link>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }
 
 /* ====== content ====== */
 
-const STEPS = [
-  {
-    title: "Connect your booking",
-    // Not "past appointments backfill punch cards": since rewards count from
-    // the day they're switched on (Shop.rewardsStartedAt), a past visit earns
-    // only when the owner credits it on the Rewards page.
-    body: "One click links Acuity or Square - your clients and their visit history come right in, and you choose which past visits count toward rewards. No booking app? Use ChairBack's own booking page, or just log visits with one tap.",
-  },
-  {
-    title: "Set your reward",
-    body: "10 cuts for a free cut? 8 for a free beard trim? Your card, your rules, your branding.",
-  },
-  {
-    title: "Let it run",
-    body: "Punches add up, smart reminders go out, regulars come back. You just do the work you love.",
-  },
-] as const;
-
-const NUDGE_POINTS = [
-  {
-    title: "Timing learned per client",
-    body: "A 2-week regular and a 6-week regular get nudged on their own schedules, not a blast on yours.",
-    icon: <ClockIcon className="h-4 w-4" />,
-  },
-  {
-    title: "Email your whole book",
-    body: "Send an update or an offer to everyone, a rewards tier, or clients who had a service.",
-    icon: <PenIcon className="h-4 w-4" />,
-  },
-  {
-    title: "Respectful by default",
-    body: "Daily send caps and one-tap opt-outs are built in, not bolted on.",
-    icon: <ShieldIcon className="h-4 w-4" />,
-  },
-] as const;
-
 const FEATURES = [
   {
-    title: "Punches that count themselves",
-    body: "Every completed appointment automatically adds a punch. No-shows and cancellations never sneak one in.",
-    icon: <BadgeIcon className="h-5 w-5" />,
+    title: "A calendar that fills itself",
+    body: "When someone cancels, the opening goes to your waitlist and your best clients first, so the gap closes before you notice it.",
+    icon: <CalendarCheckIcon className="h-[22px] w-[22px]" />,
   },
   {
-    title: "A rewards page clients open",
-    body: "Each client gets a private magic link: their card, their progress, your branding. No app, no password.",
-    icon: <LinkIcon className="h-5 w-5" />,
+    title: "Paid before they sit down",
+    body: "Deposits at booking, a saved card for late cancels, and one checkout for the balance, the tip and cash.",
+    icon: <CardIcon className="h-[22px] w-[22px]" />,
   },
   {
-    title: "See the money come back",
-    body: "Bookings that follow a nudge are attributed automatically, so the dashboard shows real recovered revenue.",
-    icon: <ChartIcon className="h-5 w-5" />,
+    title: "Rewards that bring them back",
+    body: "A punch card your clients keep in Apple Wallet, and tiers that give your regulars first pick of an opening.",
+    icon: <MedalIcon className="h-[22px] w-[22px]" />,
+  },
+] as const;
+
+const ALSO = [
+  "Rebooking reminders timed to each client's own rhythm",
+  "Clients drifting past their usual gap, flagged before they're gone",
+  "Saturday and holiday prices, shown before anyone books",
+  "Card payments into your own Stripe, with 0% booking commission",
+  "Your own domain, and a page Google can read",
+  "Import from Acuity or Square, export to CSV any time",
+] as const;
+
+const STEPS = [
+  {
+    title: "Bring your clients",
+    body: "Import from Acuity or Square, or add them as they book.",
   },
   {
-    title: "At-risk radar",
-    body: "Clients drifting past their usual gap surface on the dashboard before they're gone for good.",
-    icon: <RadarIcon className="h-5 w-5" />,
+    title: "Share your link",
+    body: "In your bio, on a QR code at your station, anywhere.",
   },
   {
-    title: "Your whole client book",
-    body: "Search, sort, bulk actions, bonus punches, notes, and CSV export (manual walk-ins included).",
-    icon: <UsersIcon className="h-5 w-5" />,
-  },
-  {
-    title: "Your name, your domain",
-    body: "Connect the domain you own and it lands clients straight on your page — and with your address filled in, your shop shows up when people search on Google.",
-    icon: <GlobeIcon className="h-5 w-5" />,
-  },
-  {
-    title: "Charge what the day is worth",
-    body: "Saturday prices on Saturday, holiday rates on holidays, late-night specials at their own price — every rate shown honestly before the client books.",
-    icon: <TagIcon className="h-5 w-5" />,
-  },
-  {
-    title: "Get paid with 0% commission",
-    body: "Card and Apple Pay at booking straight into your own Stripe account, or Zelle, Venmo, and Cash App direct. Your money never routes through us.",
-    icon: <WalletIcon className="h-5 w-5" />,
-  },
-  {
-    title: "Built-in compliance",
-    body: "Clients opt out in one tap, send caps stop runaway messages, and every message is logged.",
-    icon: <ShieldIcon className="h-5 w-5" />,
+    title: "Get paid and rebooked",
+    body: "Check out after the visit and book the next one before they leave.",
   },
 ] as const;
 
@@ -547,105 +280,29 @@ function PlusIcon({ className }: { className?: string }) {
   );
 }
 
-function BadgeIcon({ className }: { className?: string }) {
+function CalendarCheckIcon({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z" />
-      <path d="m9 12 2 2 4-4" />
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4M8 2v4M3 10h18M9 16l2 2 4-4" />
     </svg>
   );
 }
 
-function LinkIcon({ className }: { className?: string }) {
+function CardIcon({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="2" y="5" width="20" height="14" rx="2" />
+      <path d="M2 10h20M6 15h4" />
     </svg>
   );
 }
 
-function ChartIcon({ className }: { className?: string }) {
+function MedalIcon({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M3 3v18h18" />
-      <path d="m7 14 4-4 3 3 5-6" />
-    </svg>
-  );
-}
-
-function RadarIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <circle cx="12" cy="12" r="9" />
-      <circle cx="12" cy="12" r="4.5" />
-      <path d="M12 12 18 6" />
-      <circle cx="12" cy="12" r="0.5" fill="currentColor" />
-    </svg>
-  );
-}
-
-function UsersIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-      <circle cx="9" cy="7" r="4" />
-      <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
-    </svg>
-  );
-}
-
-function GlobeIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M3 12h18" />
-      <path d="M12 3a15.3 15.3 0 0 1 4 9 15.3 15.3 0 0 1-4 9 15.3 15.3 0 0 1-4-9 15.3 15.3 0 0 1 4-9Z" />
-    </svg>
-  );
-}
-
-function TagIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M12.6 2.6 21 11a2 2 0 0 1 0 2.8l-7.2 7.2a2 2 0 0 1-2.8 0L2.6 12.6A2 2 0 0 1 2 11.2V4a2 2 0 0 1 2-2h7.2a2 2 0 0 1 1.4.6Z" />
-      <circle cx="7.5" cy="7.5" r="1.3" />
-    </svg>
-  );
-}
-
-function WalletIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M21 7H5a2 2 0 0 1-2-2 2 2 0 0 1 2-2h14v4" />
-      <path d="M3 5v14a2 2 0 0 0 2 2h16V7" />
-      <path d="M16 14h.01" />
-    </svg>
-  );
-}
-
-function ShieldIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10Z" />
-      <path d="m9 12 2 2 4-4" />
-    </svg>
-  );
-}
-
-function ClockIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3 3" />
-    </svg>
-  );
-}
-
-function PenIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M17 3a2.83 2.83 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="8" r="6" />
+      <path d="M15.5 13.5 17 22l-5-3-5 3 1.5-8.5" />
     </svg>
   );
 }

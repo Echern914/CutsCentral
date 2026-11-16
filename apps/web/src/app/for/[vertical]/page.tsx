@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { SiteFooter } from "@/components/marketing/SiteFooter";
+import { SiteHeader } from "@/components/marketing/SiteHeader";
 import { APP_NAME, BILLING, PLANS } from "@chairback/config/constants";
 import {
   MARKETING_SLUGS,
@@ -216,40 +218,8 @@ export default function VerticalPage({
   const signupHref = `/signup?type=${v.industryKey}`;
 
   return (
-    <div className="relative min-h-dvh overflow-x-clip">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[36rem]"
-        style={{
-          background:
-            "radial-gradient(50rem 26rem at 70% -10%, rgba(212,175,55,0.12), transparent 65%)",
-        }}
-      />
-
-      <header className="sticky top-0 z-20">
-        <nav
-          aria-label="Primary"
-          className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-xl px-5 py-3"
-        >
-          <Link href="/" className="font-display text-base tracking-tight">
-            {APP_NAME}
-          </Link>
-          <div className="flex items-center gap-2">
-            <Link
-              href="/login"
-              className="rounded-xl px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
-            >
-              Sign in
-            </Link>
-            <Link
-              href={signupHref}
-              className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-[box-shadow,filter] duration-150 ease-out hover:bg-primary/90"
-            >
-              Get started
-            </Link>
-          </div>
-        </nav>
-      </header>
+    <div className="min-h-dvh overflow-x-clip bg-charcoal-900">
+      <SiteHeader signupHref={signupHref} />
 
       <main className="mx-auto w-full max-w-4xl px-6">
         <section className="pb-16 pt-16 text-center sm:pt-24">
@@ -314,24 +284,8 @@ export default function VerticalPage({
           </Link>
         </section>
 
-        <footer className="flex flex-wrap items-center justify-center gap-5 py-10 text-xs text-muted">
-          <Link href="/" className="transition-colors duration-150 ease-out hover:text-offwhite">
-            {APP_NAME} home
-          </Link>
-          <Link href="/terms" className="transition-colors duration-150 ease-out hover:text-offwhite">
-            Terms
-          </Link>
-          <Link href="/privacy" className="transition-colors duration-150 ease-out hover:text-offwhite">
-            Privacy
-          </Link>
-          <Link href="/sms" className="transition-colors duration-150 ease-out hover:text-offwhite">
-            SMS Policy
-          </Link>
-          <Link href="/accessibility" className="transition-colors duration-150 ease-out hover:text-offwhite">
-            Accessibility
-          </Link>
-        </footer>
       </main>
+      <SiteFooter />
     </div>
   );
 }
