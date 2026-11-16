@@ -265,7 +265,7 @@ export function BookingManager({
   /** Its shop-local day (YYYY-MM-DD), so the calendar opens on it. */
   openDay?: string;
   /** "day" when the address says the calendar was on its Day view. */
-  openView?: "day";
+  openView?: "day" | "week";
   initialAgenda: AgendaResponse;
   initialWaitlist: WaitlistRow[];
 }) {

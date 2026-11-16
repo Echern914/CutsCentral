@@ -399,7 +399,7 @@ export default async function BookingPage({
   };
 
   return (
-    <main className="mx-auto w-full max-w-4xl px-5 py-8">
+    <main className="mx-auto w-full max-w-4xl px-5 py-8 lg:has-[[data-qa=week-view]]:max-w-[96rem]">
       {/* Barber-side guided tour — anchors live inside BookingManager. */}
       <DemoTour tour="dashboard" route="agenda" />
       <header className="mb-6">
@@ -415,7 +415,7 @@ export default async function BookingPage({
         initialTab={searchParams?.tab}
         openAppointmentId={searchParams?.appointment}
         openDay={searchParams?.day}
-        openView={searchParams?.view === "day" ? "day" : undefined}
+        openView={searchParams?.view === "day" || searchParams?.view === "week" ? searchParams.view : undefined}
         appBase={process.env.APP_BASE_URL ?? ""}
         apiBase={API_BASE}
         connect={connect}
