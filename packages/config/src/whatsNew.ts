@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-16-app-tab-bar-home-indicator",
+    date: "2026-11-16",
+    kind: "fix",
+    title: "The app's bottom tabs clear the iPhone home bar",
+    body:
+      "In the iPhone app, the line at the bottom of the screen sat over the Today, Calendar, Clients and " +
+      "Insights labels. The tabs, the More menu, pop-up sheets and messages now sit above it on every " +
+      "iPhone, and each label stays on one line.",
+  },
+  {
     id: "2026-11-16-booking-times-by-part-of-day",
     date: "2026-11-16",
     kind: "feature",

@@ -24,6 +24,11 @@
    signal. Values come from the approved redesign canvas. */
 :root {
   color-scheme: light;
+  /* The gap every bottom-anchored surface clears: the iPhone home indicator.
+     env() reads 0 inside the iOS app (its WebView never sets viewport-fit=cover),
+     so the dashboard supplies --cb-app-inset-bottom there (lib/appSafeArea.ts).
+     max(), not a sum, so the two can never double up. */
+  --cb-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--cb-app-inset-bottom, 0px));
   --cb-bg: 246 244 239; /* #F6F4EF paper */
   --cb-s900: 251 250 247; /* #FBFAF7 a panel just off the paper */
   --cb-s800: 255 255 255; /* surface: cards, sheets */

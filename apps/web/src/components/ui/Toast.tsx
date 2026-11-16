@@ -44,7 +44,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         aria-live="polite"
         // Both sides anchored: centred with translate, the container shrank to
         // half the screen and long messages wrapped into a cramped pill.
-        className="pointer-events-none fixed inset-x-4 bottom-5 z-50 flex flex-col items-center gap-2"
+        // Lifted by the home-indicator gap, or a toast lands on the indicator
+        // in the iOS app (lib/appSafeArea.ts).
+        className="pointer-events-none fixed inset-x-4 bottom-[calc(1.25rem+var(--cb-safe-bottom))] z-50 flex flex-col items-center gap-2"
       >
         <AnimatePresence>
           {toasts.map((t) => (
