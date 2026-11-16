@@ -16,13 +16,13 @@ export default function NotFound() {
       <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
         <Link
           href="/"
-          className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-on-gold transition-[filter] duration-150 ease-out hover:brightness-105"
+          className="rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-on-primary transition-[filter] duration-150 ease-out hover:bg-primary/90"
         >
           Go home
         </Link>
         <Link
           href="/dashboard"
-          className="rounded-full border border-subtle px-6 py-2.5 text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+          className="rounded-xl border border-subtle px-6 py-2.5 text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
         >
           My dashboard
         </Link>

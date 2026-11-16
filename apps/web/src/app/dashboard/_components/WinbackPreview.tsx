@@ -59,7 +59,7 @@ export function WinbackPreview({
           <button
             onClick={doPreview}
             disabled={pending}
-            className="shrink-0 rounded-full border border-gold/50 px-5 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
+            className="shrink-0 rounded-md border border-gold/50 px-5 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
           >
             {pending ? "Checking…" : preview || errored ? "Refresh preview" : "Preview win-back"}
           </button>

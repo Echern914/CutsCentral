@@ -26,7 +26,7 @@ import { cn } from "@/lib/cn";
  * what an input is for; the sheet's width is not negotiable.
  */
 export const INPUT =
-  "h-11 w-full min-w-0 rounded-lg border border-subtle bg-charcoal-900 px-3 text-base text-offwhite transition-colors duration-150 ease-out placeholder:text-muted/60 focus-visible:border-gold/50";
+  "h-11 w-full min-w-0 rounded-xl border border-subtle-strong bg-charcoal-800 px-3 text-base text-offwhite transition-colors duration-150 ease-out placeholder:text-muted/60 focus-visible:border-gold/50";
 
 /**
  * A selectable chip — provider pickers, time slots, repeat toggles. One shape
@@ -136,7 +136,7 @@ export function FormFooter({
         className={cn(
           "flex h-11 w-full items-center justify-center rounded-xl px-5 text-sm font-semibold transition-colors duration-150 ease-out disabled:opacity-50",
           tone === "gold"
-            ? "bg-gold text-charcoal-900 hover:bg-gold-muted"
+            ? "bg-primary text-on-primary hover:bg-primary/90"
             : "bg-offwhite text-charcoal hover:bg-offwhite/90",
         )}
       >

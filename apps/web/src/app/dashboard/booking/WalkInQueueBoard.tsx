@@ -63,7 +63,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 /** 44px-on-mobile action pill (relaxes once there's a pointer). */
 const ACT_BTN =
-  "flex h-11 items-center justify-center rounded-full px-4 text-xs font-semibold transition-colors disabled:opacity-40 sm:h-9 sm:px-3.5";
+  "flex h-11 items-center justify-center rounded-md px-4 text-xs font-semibold transition-colors disabled:opacity-40 sm:h-9 sm:px-3.5";
 
 function displayName(e: Pick<WalkInEntryRow, "firstName" | "lastName">): string {
   const initial = e.lastName?.trim()?.[0];
@@ -280,7 +280,7 @@ export function WalkInQueueBoard({
                 <li key={e.id} className="flex min-w-0 items-center gap-3 px-4 py-3">
                   <span
                     className={cn(
-                      "shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide",
+                      "shrink-0 rounded-md px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide",
                       STATUS_BADGE[e.status] ?? STATUS_BADGE.CANCELED,
                     )}
                   >
@@ -357,14 +357,14 @@ function WalkInCard({
               </p>
               <span
                 className={cn(
-                  "shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide",
+                  "shrink-0 rounded-md px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide",
                   STATUS_BADGE[e.status] ?? STATUS_BADGE.WAITING,
                 )}
               >
                 {STATUS_LABEL[e.status] ?? e.status}
               </span>
               {e.source === "KIOSK" && (
-                <span className="shrink-0 rounded-full bg-charcoal-700 px-2 py-1 text-[10px] uppercase tracking-wide text-muted">
+                <span className="shrink-0 rounded-md bg-charcoal-700 px-2 py-1 text-[10px] uppercase tracking-wide text-muted">
                   Kiosk
                 </span>
               )}
@@ -431,7 +431,7 @@ function WalkInCard({
           {(e.status === "WAITING" || e.status === "ASSIGNED") && (
             <select
               aria-label={`Chair for ${displayName(e)}`}
-              className="h-11 min-w-0 rounded-full border border-subtle bg-charcoal-900 px-3 text-xs text-offwhite sm:h-9"
+              className="h-11 min-w-0 rounded-md border border-subtle bg-charcoal-900 px-3 text-xs text-offwhite sm:h-9"
               value={pickedChair}
               disabled={pending}
               onChange={(ev) => {
@@ -471,7 +471,7 @@ function WalkInCard({
           {(e.status === "WAITING" || e.status === "ASSIGNED" || e.status === "READY") && (
             <button
               type="button"
-              className={cn(ACT_BTN, "bg-gold text-charcoal hover:bg-gold-muted")}
+              className={cn(ACT_BTN, "bg-primary text-on-primary hover:bg-primary/90")}
               disabled={pending || (e.status === "WAITING" && !pickedChair)}
               onClick={() =>
                 onStart(e.status === "WAITING" ? pickedChair : undefined)
@@ -483,7 +483,7 @@ function WalkInCard({
           {e.status === "IN_SERVICE" && (
             <button
               type="button"
-              className={cn(ACT_BTN, "bg-gold text-charcoal hover:bg-gold-muted")}
+              className={cn(ACT_BTN, "bg-primary text-on-primary hover:bg-primary/90")}
               disabled={pending}
               onClick={() => onAction("complete")}
             >

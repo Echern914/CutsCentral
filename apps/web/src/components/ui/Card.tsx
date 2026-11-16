@@ -1,8 +1,8 @@
 import { cn } from "@/lib/cn";
 
 /**
- * Elevated glass surface: translucent charcoal + blur, 1px border, top sheen.
- * `hover` adds a lift + gold-tinted border for interactive grids.
+ * A surface: solid white (charcoal on dark), 1px line, 14px corners.
+ * `hover` firms up the line for interactive grids - no lift, no glow.
  */
 export function Card({
   id,
@@ -22,7 +22,7 @@ export function Card({
       className={cn(
         "glass rounded-2xl",
         hover &&
-          "transition-all duration-200 ease-out hover:-translate-y-0.5 hover:border-gold/25 hover:shadow-glow-sm",
+          "transition-colors duration-150 ease-out hover:border-subtle-strong",
         className,
       )}
     >

@@ -19,7 +19,7 @@ function SubmitButton({ label, disabled = false }: { label: string; disabled?: b
     <button
       type="submit"
       disabled={pending || disabled}
-      className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-on-gold shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+      className="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-on-primary transition-all duration-200 ease-out hover:bg-primary/90 disabled:opacity-50"
     >
       {pending ? "Please wait…" : label}
     </button>
@@ -35,7 +35,7 @@ function HideInAppWhen({ hide, children }: { hide: boolean; children: React.Reac
 // Keep the global :focus-visible ring visible (WCAG 2.4.7): we no longer strip
 // the outline with `outline-none`; the border tint is an extra, not the sole cue.
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-4 py-3 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 
 export function AuthForm({
   mode,

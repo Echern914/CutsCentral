@@ -39,13 +39,13 @@ export default function DashboardError({
             type="button"
             onClick={tryAgain}
             disabled={retrying}
-            className="rounded-full bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-60"
+            className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-60"
           >
             {retrying ? "Trying again" : "Try again"}
           </button>
           <a
             href="/login"
-            className="rounded-full border border-subtle px-5 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
+            className="rounded-xl border border-subtle px-5 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
           >
             Sign in again
           </a>

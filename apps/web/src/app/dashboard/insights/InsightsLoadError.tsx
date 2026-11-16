@@ -97,7 +97,7 @@ export function InsightsLoadError({ status }: { status: number }) {
             type="button"
             onClick={tryAgain}
             disabled={pending}
-            className="mt-4 inline-flex min-h-[44px] items-center rounded-full border border-gold/50 px-5 text-sm font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
+            className="mt-4 inline-flex min-h-[44px] items-center rounded-xl border border-gold/50 px-5 text-sm font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
           >
             {pending ? "Trying again…" : "Try again"}
           </button>

@@ -18,7 +18,7 @@ export function PlanBadge({ tier }: { tier: "pro" | "pro_ai" }) {
       : "bg-gold/15 text-gold";
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${styles}`}
+      className={`inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-[10px] uppercase tracking-wide ${styles}`}
     >
       <DiamondIcon />
       {name}

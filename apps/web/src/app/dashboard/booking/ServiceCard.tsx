@@ -173,7 +173,7 @@ export function ServiceCard({
             {hidden && (
               <span
                 data-testid="service-hidden-badge"
-                className="shrink-0 rounded-full border border-subtle px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
+                className="shrink-0 rounded-md border border-subtle px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
               >
                 Hidden
               </span>
@@ -195,7 +195,7 @@ export function ServiceCard({
           </span>
         </span>
         {note && (
-          <span className="shrink-0 rounded-full bg-gold/10 px-2.5 py-1 text-[11px] font-medium text-gold">
+          <span className="shrink-0 rounded-md bg-gold/10 px-2.5 py-1 text-[11px] font-medium text-gold">
             {note}
           </span>
         )}

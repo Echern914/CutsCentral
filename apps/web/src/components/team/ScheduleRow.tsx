@@ -40,7 +40,7 @@ export function ScheduleRow({
         {now && (
           <span
             className={cn(
-              "shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-medium",
+              "shrink-0 rounded-md px-2.5 py-0.5 text-[11px] font-medium",
               now.tone === "free"
                 ? "bg-emerald-soft/15 text-emerald-soft"
                 : now.tone === "busy"

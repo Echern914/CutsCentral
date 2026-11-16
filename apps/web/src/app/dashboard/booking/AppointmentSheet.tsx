@@ -949,7 +949,7 @@ export function AppointmentSheet({
             type="button"
             onClick={back}
             data-qa="sheet-back"
-            className="-ml-1 flex h-11 min-w-[2.75rem] items-center justify-center rounded-full border border-subtle px-3 text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+            className="-ml-1 flex h-11 min-w-[2.75rem] items-center justify-center rounded-xl border border-subtle px-3 text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
             aria-label="Back"
           >
             <ArrowLeftIcon />
@@ -1496,7 +1496,7 @@ function Hero({
 
         <div className="mt-2.5 flex flex-wrap items-center justify-center gap-1.5">
           <span
-            className={cn("rounded-full px-2.5 py-1 text-[10px] font-semibold", pill.cls)}
+            className={cn("rounded-md px-2.5 py-1 text-[10px] font-semibold", pill.cls)}
           >
             {pill.label}
           </span>
@@ -1504,7 +1504,7 @@ function Hero({
               one; what differs is who owns it. */}
           <span
             className={cn(
-              "rounded-full px-2.5 py-1 text-[10px] font-medium",
+              "rounded-md px-2.5 py-1 text-[10px] font-medium",
               external ? "bg-info-soft/15 text-info-soft" : "bg-charcoal-700 text-muted",
             )}
           >
@@ -1514,7 +1514,7 @@ function Hero({
           {row.seriesId && (
             <span
               title="Repeat appointment"
-              className="rounded-full bg-gold/15 px-2.5 py-1 text-[10px] font-medium text-gold"
+              className="rounded-md bg-gold/15 px-2.5 py-1 text-[10px] font-medium text-gold"
             >
               ↻ Repeats
             </span>
@@ -1797,7 +1797,7 @@ function PriceEditor({ state }: { state: PriceEditState }) {
           onClick={state.save}
           disabled={state.pending}
           data-qa="price-save"
-          className="h-11 rounded-lg bg-gold px-3 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold/90 disabled:opacity-60 sm:h-9"
+          className="h-11 rounded-lg bg-primary px-3 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-60 sm:h-9"
         >
           {state.pending ? "Saving…" : "Save price"}
         </button>
@@ -2051,7 +2051,7 @@ function TipEditor({ state }: { state: TipEditState }) {
           onClick={state.save}
           disabled={state.saving}
           data-qa="tip-save"
-          className="h-11 rounded-lg bg-gold px-3 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold/90 disabled:opacity-60 sm:h-9"
+          className="h-11 rounded-lg bg-primary px-3 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-60 sm:h-9"
         >
           {state.saving ? "Saving…" : "Save tip"}
         </button>
@@ -2465,7 +2465,7 @@ function PaymentCard({
               type="button"
               onClick={onCheckout}
               data-qa="start-checkout"
-              className="flex h-12 w-full items-center justify-center rounded-full bg-gold px-5 font-display text-lg text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted"
+              className="flex h-12 w-full items-center justify-center rounded-xl bg-primary px-5 font-display text-lg text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
             >
               {p.collectedCents > 0 ? "Collect the rest" : "Start checkout"}
             </button>
@@ -2667,7 +2667,7 @@ function HistoryGroup({
               </span>
               <span
                 className={cn(
-                  "flex-none rounded-full px-2 py-0.5 text-[10px] font-medium",
+                  "flex-none rounded-md px-2 py-0.5 text-[10px] font-medium",
                   pill.cls,
                 )}
               >
@@ -4006,7 +4006,7 @@ function TwoUp({
         type="button"
         onClick={primary.onClick}
         disabled={primary.disabled}
-        className="flex h-11 flex-none items-center justify-center rounded-xl bg-gold px-5 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50 min-[380px]:flex-1 sm:max-w-[16rem]"
+        className="flex h-11 flex-none items-center justify-center rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50 min-[380px]:flex-1 sm:max-w-[16rem]"
       >
         {primary.label}
       </button>

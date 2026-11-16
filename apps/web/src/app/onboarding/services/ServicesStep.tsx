@@ -10,9 +10,9 @@ import { PasteMenu } from "@/app/dashboard/booking/PasteMenu";
 import { createServicesBulkAction } from "@/app/dashboard/booking/actions";
 
 const primary =
-  "inline-flex h-11 w-full items-center justify-center rounded-full bg-gold px-5 text-sm font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50";
+  "inline-flex h-11 w-full items-center justify-center rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50";
 const field =
-  "h-10 w-full rounded-lg border border-subtle bg-charcoal-700 px-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
+  "min-h-[44px] h-10 w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-2 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 
 interface StarterRow {
   key: string;
@@ -172,7 +172,7 @@ export function ServicesStep({
               type="button"
               onClick={() => void addStarters()}
               disabled={pending || Boolean(problem)}
-              className="mt-3 h-11 rounded-lg bg-gold px-4 text-sm font-semibold text-charcoal-900 disabled:opacity-50 sm:h-9"
+              className="mt-3 h-11 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary disabled:opacity-50 sm:h-9"
             >
               {pending ? "Adding…" : `Add ${picked.length} ${picked.length === 1 ? "service" : "services"}`}
             </button>

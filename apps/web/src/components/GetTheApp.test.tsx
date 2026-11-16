@@ -155,7 +155,8 @@ describe("Open in ChairBack", () => {
     setUA(IPHONE_SAFARI);
     render(<GetTheApp surface="booking" openPath="/book/cherncuts" />);
     const store = (await screen.findByText(/get the app/i)).closest("a")!;
-    expect(store.className).toMatch(/bg-gold/);
+    // The main button wears the primary fill (ink since the Studio redesign).
+    expect(store.className).toMatch(/\bbg-primary\b/);
   });
 
   it("without an openPath the card is install-only", async () => {

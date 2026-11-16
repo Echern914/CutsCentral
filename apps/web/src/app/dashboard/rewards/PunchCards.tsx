@@ -21,11 +21,11 @@ import {
 } from "./actions";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const smallBtn =
-  "rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-40";
+  "rounded-md border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-40";
 const goldBtn =
-  "rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50";
+  "rounded-md bg-primary px-4 py-2 text-xs font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90 disabled:opacity-50";
 
 type CardType = LoyaltyConfig["cards"][number];
 
@@ -149,7 +149,7 @@ export function PunchCards({ cards }: { cards: CardType[] }) {
                       {card.emoji ? `${card.emoji} ` : ""}
                       {card.name}
                       {card.exclusive && (
-                        <span className="ml-2 rounded-full bg-gold/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gold">
+                        <span className="ml-2 rounded-md bg-gold/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gold">
                           invite-only
                         </span>
                       )}
@@ -211,7 +211,7 @@ export function PunchCards({ cards }: { cards: CardType[] }) {
                               else toast("Could not delete", "error");
                             })
                           }
-                          className="rounded-full bg-danger-soft/20 px-3 py-1.5 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/30"
+                          className="rounded-md bg-danger-soft/20 px-3 py-1.5 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/30"
                         >
                           Confirm
                         </button>
@@ -319,7 +319,7 @@ function CardForm({
           {terms.map((t) => (
             <span
               key={t}
-              className="flex items-center gap-1.5 rounded-full border border-subtle bg-charcoal-700 px-3 py-1 text-xs text-offwhite"
+              className="flex items-center gap-1.5 rounded-md border border-subtle bg-charcoal-700 px-3 py-1 text-xs text-offwhite"
             >
               {t}
               <button
@@ -457,7 +457,7 @@ function MembersPanel({ cardId }: { cardId: string }) {
           {grants.map((g) => (
             <li
               key={g.clientId}
-              className="flex items-center gap-2 rounded-full border border-subtle bg-charcoal-700 px-3 py-1 text-xs text-offwhite"
+              className="flex items-center gap-2 rounded-md border border-subtle bg-charcoal-700 px-3 py-1 text-xs text-offwhite"
             >
               {g.name}
               <button

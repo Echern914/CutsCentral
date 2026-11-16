@@ -76,7 +76,7 @@ export function FlowPrimaryLink({
   return (
     <a
       href={href}
-      className="flex min-h-[44px] w-full items-center justify-center rounded-xl bg-gold px-5 py-3 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted"
+      className="flex min-h-[44px] w-full items-center justify-center rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90"
     >
       {children}
     </a>

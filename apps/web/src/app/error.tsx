@@ -28,7 +28,7 @@ export default function AppError({ error }: { error: Error & { digest?: string }
           type="button"
           data-qa="app-error-reload"
           onClick={() => window.location.reload()}
-          className="min-h-[44px] rounded-full bg-gold px-6 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+          className="min-h-[44px] rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
         >
           Reload
         </button>

@@ -318,7 +318,7 @@ export function HelpBubble() {
         aria-label={open ? "Close the assistant" : "Open the assistant"}
         aria-expanded={open}
         title="Assistant"
-        className={`fixed right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-gold text-charcoal shadow-ambient-lg transition-transform duration-150 ease-out hover:scale-105 focus-visible:ring-2 focus-visible:ring-offwhite focus-visible:ring-offset-2 focus-visible:ring-offset-charcoal ${launcherOffset}`}
+        className={`fixed right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-on-primary shadow-ambient-lg transition-transform duration-150 ease-out hover:scale-105 focus-visible:ring-2 focus-visible:ring-offwhite focus-visible:ring-offset-2 focus-visible:ring-offset-charcoal ${launcherOffset}`}
       >
         {open ? <CloseIcon /> : <ChatIcon />}
       </button>
@@ -419,7 +419,7 @@ export function HelpBubble() {
                 type="submit"
                 disabled={query.trim().length === 0}
                 aria-label="Send question"
-                className="shrink-0 rounded-full bg-gold p-2 text-charcoal transition-opacity duration-150 ease-out disabled:opacity-40"
+                className="shrink-0 rounded-full bg-primary p-2 text-on-primary transition-opacity duration-150 ease-out disabled:opacity-40"
               >
                 <SendIcon />
               </button>
@@ -500,7 +500,7 @@ function BotBubble({
         <button
           type="button"
           onClick={() => onNavigate(action.href)}
-          className="rounded-full border border-gold/40 px-3 py-1 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+          className="rounded-md border border-gold/40 px-3 py-1 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
         >
           {action.label} →
         </button>
@@ -580,7 +580,7 @@ function Chip({ label, onClick }: { label: string; onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="rounded-full border border-subtle px-2.5 py-1 text-left text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+      className="rounded-md border border-subtle px-2.5 py-1 text-left text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
     >
       {label}
     </button>

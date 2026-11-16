@@ -33,7 +33,7 @@ import { NumberField } from "@/components/ui/NumberField";
  */
 
 const inputBase =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
 /** Room for the "$" on the left. */
 const PREFIX_PAD = "pl-7 pr-3";

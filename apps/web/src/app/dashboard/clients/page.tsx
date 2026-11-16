@@ -82,7 +82,7 @@ export default async function ClientsPage({
             {duplicateGroups > 0 && (
               <Link
                 href="/dashboard/clients/duplicates"
-                className="rounded-full border border-gold/40 px-3 py-1.5 text-xs text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+                className="rounded-md border border-gold/40 px-3 py-1.5 text-xs text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
               >
                 {duplicateGroups === 1
                   ? "1 possible duplicate"
@@ -91,13 +91,13 @@ export default async function ClientsPage({
             )}
             <a
               href="/dashboard/export/clients"
-              className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
+              className="rounded-md border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               Export CSV
             </a>
             <Link
               href="/dashboard/clients/switch"
-              className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
+              className="rounded-md border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               Switching from Booksy or TheCut?
             </Link>
@@ -157,12 +157,12 @@ export default async function ClientsPage({
           {page > 1 ? (
             <Link
               href={pageUrl(page - 1)}
-              className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+              className="rounded-md border border-subtle px-4 py-2 text-xs text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               ← Prev
             </Link>
           ) : (
-            <span className="rounded-full border border-subtle px-4 py-2 text-xs text-muted/40">
+            <span className="rounded-md border border-subtle px-4 py-2 text-xs text-muted/40">
               ← Prev
             </span>
           )}
@@ -172,12 +172,12 @@ export default async function ClientsPage({
           {page < pageCount ? (
             <Link
               href={pageUrl(page + 1)}
-              className="rounded-full border border-subtle px-4 py-2 text-xs text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+              className="rounded-md border border-subtle px-4 py-2 text-xs text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               Next →
             </Link>
           ) : (
-            <span className="rounded-full border border-subtle px-4 py-2 text-xs text-muted/40">
+            <span className="rounded-md border border-subtle px-4 py-2 text-xs text-muted/40">
               Next →
             </span>
           )}

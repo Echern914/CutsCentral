@@ -280,7 +280,7 @@ function OpenTip({
             type="button"
             disabled={pending || (!custom && preset === null)}
             onClick={() => void start()}
-            className="mt-4 flex h-11 w-full items-center justify-center rounded-xl bg-gold px-5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+            className="mt-4 flex h-11 w-full items-center justify-center rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             {pending
               ? "Getting your payment ready…"

@@ -881,7 +881,7 @@ export function BookingCalendar({
           <button
             type="button"
             onClick={gotoToday}
-            className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors duration-150 ease-out hover:border-gold/50 hover:text-gold"
+            className="rounded-md border border-subtle px-3 py-1 text-xs text-muted transition-colors duration-150 ease-out hover:border-gold/50 hover:text-gold"
           >
             Today
           </button>
@@ -1025,7 +1025,7 @@ export function BookingCalendar({
                 <span
                   className={cn(
                     "mt-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none",
-                    isSelected ? "bg-gold text-charcoal-900" : "bg-gold/20 text-gold",
+                    isSelected ? "bg-primary text-on-primary" : "bg-gold/20 text-gold",
                   )}
                 >
                   {active}
@@ -1360,12 +1360,12 @@ function WaitlistPanel({
         <span className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="font-display text-base">Waitlist</span>
           {waitingCount > 0 && (
-            <span className="rounded-full bg-gold/15 px-2 py-0.5 text-xs font-semibold text-gold">
+            <span className="rounded-md bg-gold/15 px-2 py-0.5 text-xs font-semibold text-gold">
               {waitingCount} waiting
             </span>
           )}
           {contactedCount > 0 && (
-            <span className="rounded-full bg-info-soft/15 px-2 py-0.5 text-xs font-medium text-info-soft">
+            <span className="rounded-md bg-info-soft/15 px-2 py-0.5 text-xs font-medium text-info-soft">
               {contactedCount} contacted
             </span>
           )}
@@ -1421,7 +1421,7 @@ function WeekStrip({
                 // at 320px (a grid item's default min-width is auto).
                 "flex min-h-[2.75rem] min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg px-0.5 py-1 transition-colors duration-150 ease-out",
                 selected
-                  ? "bg-gold text-charcoal-900"
+                  ? "bg-primary text-on-primary"
                   : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
               )}
             >
@@ -1591,7 +1591,7 @@ function CategoryChip({
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        "shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs transition-colors",
+        "shrink-0 whitespace-nowrap rounded-md border px-3 py-1 text-xs transition-colors",
         active
           ? "border-gold/50 bg-gold/15 text-gold"
           : "border-subtle text-muted hover:border-gold/40 hover:text-offwhite",
@@ -2476,7 +2476,7 @@ function DayPlanner({
                 To fill
               </span>
               {allFull ? (
-                <span className="rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-soft">
+                <span className="rounded-md border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-soft">
                   Every target hit — the day is full ✦
                 </span>
               ) : (
@@ -2484,14 +2484,14 @@ function DayPlanner({
                   f.left === 0 ? (
                     <span
                       key={f.id}
-                      className="rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-0.5 text-[11px] tabular-nums text-emerald-soft"
+                      className="rounded-md border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-0.5 text-[11px] tabular-nums text-emerald-soft"
                     >
                       {f.name} full ✓
                     </span>
                   ) : (
                     <span
                       key={f.id}
-                      className="rounded-full border border-gold/40 bg-gold/10 px-2.5 py-0.5 text-[11px] tabular-nums text-gold"
+                      className="rounded-md border border-gold/40 bg-gold/10 px-2.5 py-0.5 text-[11px] tabular-nums text-gold"
                     >
                       {f.name} · {f.left} to fill
                     </span>
@@ -2574,7 +2574,7 @@ function WaitlistShortcut({ count, onOpen }: { count: number; onOpen: () => void
       {count > 0 && (
         <span
           aria-hidden
-          className="absolute -right-1 -top-1 min-w-[1.15rem] rounded-full bg-gold px-1 text-[10px] font-bold leading-[1.15rem] text-charcoal-900 lg:hidden"
+          className="absolute -right-1 -top-1 min-w-[1.15rem] rounded-full bg-primary px-1 text-[10px] font-bold leading-[1.15rem] text-on-primary lg:hidden"
         >
           {shown}
         </span>
@@ -2792,11 +2792,11 @@ export function AppointmentBlock({
               </span>
             )}
             {row.syncedExternal ? (
-              <span className="rounded-full bg-info-soft/15 px-2 py-0.5 text-[10px] font-medium tabular-nums text-info-soft">
+              <span className="rounded-md bg-info-soft/15 px-2 py-0.5 text-[10px] font-medium tabular-nums text-info-soft">
                 Acuity{durSuffix}
               </span>
             ) : (
-              <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted">
+              <span className="rounded-md bg-charcoal-700 px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted">
                 Blocked{durSuffix}
               </span>
             )}
@@ -3039,7 +3039,7 @@ export function AppointmentBlock({
         </span>
         <span
           className={cn(
-            "shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-semibold",
+            "shrink-0 rounded-md px-2.5 py-0.5 text-[10px] font-semibold",
             pill.cls,
           )}
         >
@@ -3254,7 +3254,7 @@ export function AppointmentBlock({
                   if (res.ok) onChanged();
                 })
               }
-              className="rounded bg-gold px-2 py-0.5 text-[11px] font-semibold text-charcoal-900 disabled:opacity-50"
+              className="rounded bg-primary px-2 py-0.5 text-[11px] font-semibold text-on-primary disabled:opacity-50"
             >
               Apply
             </button>
@@ -3392,7 +3392,7 @@ export function AppointmentBlock({
               BTN_BASE,
               row.paid != null
                 ? "border border-gold/40 bg-gold/10 font-semibold text-gold"
-                : "bg-gold font-semibold text-charcoal-900 hover:bg-gold/90",
+                : "bg-primary font-semibold text-on-primary hover:bg-primary/90",
             )}
           >
             {row.paid != null ? "Paid ✓" : "Checkout"}

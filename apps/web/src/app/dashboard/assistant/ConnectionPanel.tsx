@@ -168,14 +168,14 @@ export function ConnectionPanel({
                       type="button"
                       onClick={() => void disconnect(c.id)}
                       disabled={busyId === c.id}
-                      className="rounded-full bg-danger px-3 py-1.5 text-xs font-semibold text-offwhite transition-colors duration-150 ease-out disabled:opacity-60"
+                      className="rounded-md bg-danger px-3 py-1.5 text-xs font-semibold text-offwhite transition-colors duration-150 ease-out disabled:opacity-60"
                     >
                       {busyId === c.id ? "Disconnecting…" : "Yes, disconnect"}
                     </button>
                     <button
                       type="button"
                       onClick={() => setConfirmId(null)}
-                      className="rounded-full border border-subtle px-3 py-1.5 text-xs font-medium text-muted"
+                      className="rounded-md border border-subtle px-3 py-1.5 text-xs font-medium text-muted"
                     >
                       Keep
                     </button>
@@ -184,7 +184,7 @@ export function ConnectionPanel({
                   <button
                     type="button"
                     onClick={() => setConfirmId(c.id)}
-                    className="shrink-0 rounded-full border border-subtle px-3 py-1.5 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:border-strong"
+                    className="shrink-0 rounded-md border border-subtle px-3 py-1.5 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:border-strong"
                   >
                     Disconnect
                   </button>
@@ -224,7 +224,7 @@ export function ConnectionPanel({
                     type="button"
                     onClick={() => void disconnectMany(unused.map((c) => c.id))}
                     disabled={busyId === "sweep"}
-                    className="rounded-full bg-danger px-3 py-1.5 text-xs font-semibold text-offwhite transition-colors duration-150 ease-out disabled:opacity-60"
+                    className="rounded-md bg-danger px-3 py-1.5 text-xs font-semibold text-offwhite transition-colors duration-150 ease-out disabled:opacity-60"
                   >
                     {busyId === "sweep"
                       ? "Disconnecting…"
@@ -233,7 +233,7 @@ export function ConnectionPanel({
                   <button
                     type="button"
                     onClick={() => setConfirmSweep(false)}
-                    className="rounded-full border border-subtle px-3 py-1.5 text-xs font-medium text-muted"
+                    className="rounded-md border border-subtle px-3 py-1.5 text-xs font-medium text-muted"
                   >
                     Keep them
                   </button>
@@ -277,7 +277,7 @@ export function ConnectionPanel({
             <button
               type="button"
               onClick={() => void copyUrl()}
-              className="shrink-0 rounded-full bg-gold px-3 py-2 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+              className="shrink-0 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
             >
               {copied ? "Copied" : "Copy"}
             </button>

@@ -34,14 +34,11 @@ export function Segmented<K extends string>({
       role="group"
       aria-label={ariaLabel}
       className={cn(
-        "flex items-center gap-1 border border-subtle p-0.5",
-        // A pill that WRAPS is not a pill: at 320px six comfortable segments
-        // need two rows, and `rounded-full` turned that into a lozenge with a
-        // single orphaned option floating inside it. Comfortable therefore
-        // rounds like a card until there is room for one row.
-        size === "comfortable"
-          ? "w-full flex-wrap rounded-2xl sm:w-fit sm:flex-nowrap sm:rounded-full"
-          : "w-fit rounded-full",
+        // Studio: a field-coloured track; the chosen segment is a raised
+        // surface. Square-ish corners, so a track that WRAPS to two rows at
+        // 320px still reads as one control rather than a lozenge.
+        "flex items-center gap-1 rounded-xl bg-offwhite/[0.06] p-0.5",
+        size === "comfortable" ? "w-full flex-wrap sm:w-fit sm:flex-nowrap" : "w-fit",
         className,
       )}
     >
@@ -52,13 +49,15 @@ export function Segmented<K extends string>({
           onClick={() => onChange(o.key)}
           aria-pressed={value === o.key}
           className={cn(
-            "rounded-full text-xs transition-colors duration-150 ease-out",
+            "rounded-lg text-xs font-medium transition-colors duration-150 ease-out",
             size === "comfortable"
               ? // Even thirds while wrapped, so two rows read as a grid rather
                 // than as a full row plus a leftover.
                 "flex h-11 min-w-[2.75rem] flex-1 basis-[calc(33.333%-0.5rem)] items-center justify-center px-3 sm:h-8 sm:min-w-0 sm:flex-none sm:basis-auto"
               : "px-3 py-1",
-            value === o.key ? "bg-gold/15 text-gold" : "text-muted hover:text-offwhite",
+            value === o.key
+              ? "bg-charcoal-800 text-offwhite shadow-ambient ring-1 ring-offwhite/[0.08]"
+              : "text-muted hover:text-offwhite",
           )}
         >
           {o.label}

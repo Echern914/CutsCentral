@@ -211,7 +211,7 @@ export function GoalPlanner({
               type="button"
               onClick={() => void save()}
               disabled={saving}
-              className="flex h-11 flex-1 items-center justify-center rounded-xl bg-gold px-4 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50 max-[380px]:flex-none sm:h-10 sm:flex-none"
+              className="flex h-11 flex-1 items-center justify-center rounded-xl bg-primary px-4 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50 max-[380px]:flex-none sm:h-10 sm:flex-none"
             >
               {saving ? "Saving…" : "Save goal & plan"}
             </button>

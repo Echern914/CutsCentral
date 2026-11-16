@@ -220,7 +220,7 @@ function DuplicateGroupCard({ group }: { group: DuplicateGroupView }) {
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={merge}
-                  className="rounded-full bg-gold px-4 py-1.5 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
+                  className="rounded-md bg-primary px-4 py-1.5 text-xs font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
                 >
                   {pending ? "Merging…" : "Yes, merge"}
                 </button>
@@ -237,7 +237,7 @@ function DuplicateGroupCard({ group }: { group: DuplicateGroupView }) {
               <button
                 onClick={() => setConfirming(true)}
                 disabled={toMerge.length === 0}
-                className="rounded-full bg-gold px-4 py-1.5 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
+                className="rounded-md bg-primary px-4 py-1.5 text-xs font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
               >
                 {toMerge.length <= 1
                   ? `Merge into ${keep.name}`
@@ -245,7 +245,7 @@ function DuplicateGroupCard({ group }: { group: DuplicateGroupView }) {
               </button>
               <button
                 onClick={dismiss}
-                className="rounded-full border border-subtle px-4 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+                className="rounded-md border border-subtle px-4 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
               >
                 {group.clients.length === 2 ? "Not the same person" : "None of these are the same"}
               </button>

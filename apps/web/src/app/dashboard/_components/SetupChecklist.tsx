@@ -75,7 +75,7 @@ export function SetupChecklist({ state }: { state: OnboardingState }) {
       {next !== "done" && next !== "clients" && (
         <Link
           href={ONBOARDING_PATH[next]}
-          className="mt-4 inline-flex h-11 w-full items-center justify-center rounded-full bg-gold px-5 text-sm font-semibold text-charcoal transition-colors hover:bg-gold-muted sm:w-auto"
+          className="mt-4 inline-flex h-11 w-full items-center justify-center rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 sm:w-auto"
         >
           Continue setup
         </Link>

@@ -71,7 +71,7 @@ export function JoinTeamClient({
             onClick={() => void ask()}
             disabled={pending}
             data-qa="ask-to-join"
-            className="flex min-h-[44px] w-full items-center justify-center rounded-xl bg-gold px-5 py-3 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50"
+            className="flex min-h-[44px] w-full items-center justify-center rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90 disabled:opacity-50"
           >
             {pending ? "Sending…" : "Ask to join"}
           </button>

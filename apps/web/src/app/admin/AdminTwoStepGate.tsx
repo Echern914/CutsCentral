@@ -24,7 +24,7 @@ const MESSAGES: Record<string, string> = {
 const say = (error?: string) => MESSAGES[error ?? ""] ?? "Something went wrong. Try again.";
 
 const INPUT =
-  "w-full rounded-xl border border-subtle bg-charcoal-900 px-4 py-3 text-center font-mono text-2xl tracking-[0.4em] text-offwhite placeholder:text-muted/50 focus-visible:border-gold/60";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-4 py-3 text-center font-mono text-2xl tracking-[0.4em] text-offwhite placeholder:text-muted/50 focus-visible:border-gold/60";
 
 export function AdminTwoStepGate({
   totpEnabled,

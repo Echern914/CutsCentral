@@ -129,7 +129,7 @@ export function ClientsList({
           <button
             disabled={pending}
             onClick={() => runBulk("nudge")}
-            className="rounded-full bg-gold px-4 py-1.5 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
+            className="rounded-md bg-primary px-4 py-1.5 text-xs font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
           >
             Nudge
           </button>
@@ -143,21 +143,21 @@ export function ClientsList({
               )
                 runBulk("attestConsent");
             }}
-            className="rounded-full border border-emerald-soft/40 px-4 py-1.5 text-xs text-emerald-soft transition-colors duration-150 ease-out hover:bg-emerald-soft/10 disabled:opacity-50"
+            className="rounded-md border border-emerald-soft/40 px-4 py-1.5 text-xs text-emerald-soft transition-colors duration-150 ease-out hover:bg-emerald-soft/10 disabled:opacity-50"
           >
             Mark consent
           </button>
           <button
             disabled={pending}
             onClick={() => runBulk("optOut")}
-            className="rounded-full border border-subtle px-4 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+            className="rounded-md border border-subtle px-4 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
           >
             Opt out
           </button>
           <button
             disabled={pending}
             onClick={() => runBulk("optIn")}
-            className="rounded-full border border-subtle px-4 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+            className="rounded-md border border-subtle px-4 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
           >
             Opt in
           </button>
@@ -216,7 +216,7 @@ export function ClientsList({
                           customer's own, from their ChairBack app - say so. */}
                       {c.nameFromApp && (
                         <span
-                          className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted"
+                          className="rounded-md bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted"
                           title="You have no name for this client. This is the name they set in their own ChairBack app."
                         >
                           name from app
@@ -224,7 +224,7 @@ export function ClientsList({
                       )}
                       {c.loyaltyTier && (
                         <span
-                          className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                          className="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
                           style={{
                             color: LOYALTY_TIERS[c.loyaltyTier].color,
                             backgroundColor: `${LOYALTY_TIERS[c.loyaltyTier].color}1A`,
@@ -236,38 +236,38 @@ export function ClientsList({
                       )}
                       {c.frequencySegment && (
                         <span
-                          className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted"
+                          className="rounded-md bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted"
                           title="How often this client visits"
                         >
                           {FREQUENCY_SEGMENTS[c.frequencySegment].label}
                         </span>
                       )}
                       {c.archived && (
-                        <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted/80">
+                        <span className="rounded-md bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted/80">
                           archived
                         </span>
                       )}
                       {c.bookingBlocked && (
                         <span
-                          className="rounded-full bg-danger-soft/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-danger-soft"
+                          className="rounded-md bg-danger-soft/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-danger-soft"
                           title="Blocked from booking online - they can't book, join your waitlist or move a booking themselves"
                         >
                           blocked
                         </span>
                       )}
                       {c.source === "manual" && (
-                        <span className="rounded-full bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+                        <span className="rounded-md bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
                           manual
                         </span>
                       )}
                       {c.optedOut && (
-                        <span className="rounded-full bg-danger-soft/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-danger-soft">
+                        <span className="rounded-md bg-danger-soft/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-danger-soft">
                           opted out
                         </span>
                       )}
                       {!c.optedOut && !c.smsConsent && (
                         <span
-                          className="rounded-full bg-gold/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gold/90"
+                          className="rounded-md bg-gold/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gold/90"
                           title="No SMS consent on file - this client won't be texted until they opt in"
                         >
                           needs consent

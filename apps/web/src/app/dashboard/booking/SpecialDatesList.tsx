@@ -163,7 +163,7 @@ export function SpecialDatesList({
           <button
             type="button"
             onClick={() => setAdding(true)}
-            className="min-h-[44px] shrink-0 rounded-xl bg-gold px-4 text-sm font-semibold text-charcoal-900"
+            className="min-h-[44px] shrink-0 rounded-xl bg-primary px-4 text-sm font-semibold text-on-primary"
           >
             Add a date
           </button>
@@ -197,7 +197,7 @@ export function SpecialDatesList({
                       close();
                       onAdd("hours", s.id);
                     }}
-                    className="min-h-[44px] max-w-full truncate rounded-full border border-subtle px-4 text-sm text-offwhite transition-colors hover:border-gold/50"
+                    className="min-h-[44px] max-w-full truncate rounded-xl border border-subtle px-4 text-sm text-offwhite transition-colors hover:border-gold/50"
                   >
                     {s.name}
                   </button>
@@ -272,7 +272,7 @@ export function SpecialDatesList({
                   </span>
                   <span
                     className={cn(
-                      "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium",
+                      "shrink-0 rounded-md px-2 py-0.5 text-[11px] font-medium",
                       CHIP[e.kind],
                     )}
                   >

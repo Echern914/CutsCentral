@@ -74,7 +74,7 @@ export function TermsGate({ previouslyAgreed }: { previouslyAgreed: boolean }) {
           type="button"
           onClick={() => void agree()}
           disabled={!checked || busy}
-          className="mt-4 w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-on-gold shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+          className="mt-4 w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-on-primary transition-all duration-200 ease-out hover:bg-primary/90 disabled:opacity-50"
         >
           {busy ? "Saving…" : "Agree and continue"}
         </button>

@@ -39,7 +39,7 @@ export function ShopSwitcher({
           // the transition is what stays pending until that navigation lands.
           startTransition(() => switchShopAction(id));
         }}
-        className="max-w-[9.5rem] truncate rounded-full border border-subtle bg-charcoal-800 px-3 py-1.5 text-xs text-offwhite outline-none transition-colors duration-150 ease-out hover:bg-charcoal-700 focus:border-gold/50 disabled:opacity-50"
+        className="max-w-[9.5rem] truncate rounded-md border border-subtle bg-charcoal-800 px-3 py-1.5 text-xs text-offwhite outline-none transition-colors duration-150 ease-out hover:bg-charcoal-700 focus:border-gold/50 disabled:opacity-50"
         title="Switch shop"
       >
         {grouped ? (

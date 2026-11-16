@@ -75,7 +75,7 @@ export function WaitlistForm({
   const input =
     "w-full rounded-lg border border-offwhite/15 bg-offwhite/5 px-4 py-2.5 text-sm text-offwhite placeholder:text-muted focus:border-offwhite/40";
   const chip = (on: boolean) =>
-    `rounded-full border px-3 py-1 text-xs transition-colors ${
+    `rounded-md border px-3 py-1 text-xs transition-colors ${
       on ? "border-offwhite/50 bg-offwhite/15 text-offwhite" : "border-offwhite/15 text-muted"
     }`;
 

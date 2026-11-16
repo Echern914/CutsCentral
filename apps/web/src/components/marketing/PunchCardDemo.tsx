@@ -33,7 +33,7 @@ export function PunchCardDemo() {
     <div
       ref={ref}
       className={`ring-conic glass rounded-3xl p-7 transition-shadow duration-700 ${
-        unlocked ? "shadow-glow" : ""
+        unlocked ? "" : ""
       }`}
     >
       <div className="flex items-center justify-between">
@@ -89,7 +89,7 @@ export function PunchCardDemo() {
             transition={{ duration: 0.35, ease: "easeOut" }}
             className={
               i < count
-                ? "aspect-square rounded-full bg-gold-gradient shadow-glow-sm"
+                ? "aspect-square rounded-full bg-gold-gradient"
                 : "aspect-square rounded-full border border-subtle bg-charcoal-700"
             }
           />
@@ -99,7 +99,7 @@ export function PunchCardDemo() {
       <div className="hairline mt-6" />
       <div className="mt-4 flex items-center justify-between text-xs text-muted">
         <span>Last visit · May 28</span>
-        <span className="rounded-full border border-gold/40 px-2.5 py-1 text-gold">
+        <span className="rounded-xl border border-gold/40 px-2.5 py-1 text-gold">
           Book again
         </span>
       </div>

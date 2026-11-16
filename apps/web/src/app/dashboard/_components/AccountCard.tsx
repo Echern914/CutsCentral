@@ -16,7 +16,7 @@ import {
 } from "../actions";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
 
 function Btn({ label }: { label: string }) {
@@ -25,7 +25,7 @@ function Btn({ label }: { label: string }) {
     <button
       type="submit"
       disabled={pending}
-      className="rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50"
+      className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90 disabled:opacity-50"
     >
       {pending ? "Saving…" : label}
     </button>
@@ -134,7 +134,7 @@ export function AccountCard({
           {methods.map((m) => (
             <span
               key={m}
-              className="rounded-full border border-subtle px-3 py-1 text-xs text-muted"
+              className="rounded-md border border-subtle px-3 py-1 text-xs text-muted"
             >
               {m} ✓
             </span>
@@ -232,7 +232,7 @@ export function AccountCard({
         </div>
         <a
           href="/dashboard?tour=1"
-          className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+          className="shrink-0 rounded-md border border-subtle px-4 py-2 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
         >
           Replay tour
         </a>
@@ -252,7 +252,7 @@ export function AccountCard({
         </div>
         <a
           href="/support"
-          className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+          className="shrink-0 rounded-md border border-subtle px-4 py-2 text-xs font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
         >
           Support page
         </a>
@@ -271,14 +271,14 @@ export function AccountCard({
             {shopName && (
               <button
                 onClick={() => setConfirming("shop")}
-                className="rounded-full border border-danger-soft/50 px-4 py-2 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
+                className="rounded-md border border-danger-soft/50 px-4 py-2 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
               >
                 Delete shop
               </button>
             )}
             <button
               onClick={() => setConfirming("account")}
-              className="rounded-full border border-danger-soft/50 px-4 py-2 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
+              className="rounded-md border border-danger-soft/50 px-4 py-2 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
             >
               Delete account
             </button>
@@ -302,14 +302,14 @@ export function AccountCard({
             <div className="flex items-center gap-2">
               <button
                 type="submit"
-                className="rounded-full bg-danger-soft px-4 py-2 text-xs font-semibold text-charcoal transition-opacity duration-150 ease-out hover:opacity-90"
+                className="rounded-md bg-danger-soft px-4 py-2 text-xs font-semibold text-charcoal transition-opacity duration-150 ease-out hover:opacity-90"
               >
                 Permanently delete
               </button>
               <button
                 type="button"
                 onClick={() => setConfirming(null)}
-                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
+                className="rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
               >
                 Cancel
               </button>
@@ -335,14 +335,14 @@ export function AccountCard({
             <div className="flex items-center gap-2">
               <button
                 type="submit"
-                className="rounded-full bg-danger-soft px-4 py-2 text-xs font-semibold text-charcoal transition-opacity duration-150 ease-out hover:opacity-90"
+                className="rounded-md bg-danger-soft px-4 py-2 text-xs font-semibold text-charcoal transition-opacity duration-150 ease-out hover:opacity-90"
               >
                 Permanently delete account
               </button>
               <button
                 type="button"
                 onClick={() => setConfirming(null)}
-                className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
+                className="rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
               >
                 Cancel
               </button>

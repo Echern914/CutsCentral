@@ -118,13 +118,13 @@ export default async function AdminPage() {
   return (
     <div className="min-h-dvh">
       <header className="sticky top-0 z-20 px-4">
-        <nav className="glass mx-auto mt-3 flex w-full max-w-6xl items-center justify-between gap-2 rounded-full px-5 py-2.5">
+        <nav className="glass mx-auto mt-3 flex w-full max-w-6xl items-center justify-between gap-2 rounded-xl px-5 py-2.5">
           <span className="font-display text-sm tracking-tight">
             {APP_NAME} <span className="text-gold">Admin</span>
           </span>
           <Link
             href="/dashboard"
-            className="rounded-full border border-subtle px-3.5 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+            className="rounded-md border border-subtle px-3.5 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
           >
             Back to dashboard
           </Link>
@@ -274,7 +274,7 @@ function StatusPill({ shop }: { shop: AdminShop }) {
         ? ["Trial", "bg-charcoal-700 text-offwhite"]
         : ["Locked", "bg-danger-soft/15 text-danger-soft"];
   return (
-    <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${cls}`}>{text}</span>
+    <span className={`rounded-md px-2.5 py-1 text-xs font-medium ${cls}`}>{text}</span>
   );
 }
 

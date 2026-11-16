@@ -300,7 +300,7 @@ export function GroupManageClient({
                       type="button"
                       disabled={busy}
                       onClick={() => void move(priceAsk.iso, priceAsk)}
-                      className="rounded-lg bg-gold px-3 py-1.5 text-xs font-semibold text-charcoal-900 disabled:opacity-40"
+                      className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-40"
                     >
                       {busy ? "Moving…" : `Move everyone at ${money(priceAsk.toCents)}`}
                     </button>
@@ -401,7 +401,7 @@ export function GroupManageClient({
               type="button"
               disabled={busy}
               onClick={() => void doCancel()}
-              className="flex-1 rounded-xl bg-gold px-5 py-3 font-semibold text-charcoal-900 disabled:opacity-50"
+              className="flex-1 rounded-xl bg-primary px-5 py-3 font-semibold text-on-primary disabled:opacity-50"
             >
               {busy
                 ? "Cancelling…"

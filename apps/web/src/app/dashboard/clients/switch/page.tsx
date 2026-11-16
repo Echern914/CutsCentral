@@ -19,9 +19,9 @@ interface ShopForGuide {
 }
 
 const primaryBtn =
-  "inline-flex items-center justify-center rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted";
+  "inline-flex items-center justify-center rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90";
 const quietBtn =
-  "inline-flex items-center justify-center rounded-full border border-subtle px-4 py-2 text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700";
+  "inline-flex items-center justify-center rounded-xl border border-subtle px-4 py-2 text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700";
 
 function Steps({ items }: { items: ReactNode[] }) {
   return (

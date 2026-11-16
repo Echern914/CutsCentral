@@ -49,8 +49,8 @@ export function WhatsNewSection({
                 <span
                   className={
                     e.kind === "fix"
-                      ? "rounded-full border border-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-offwhite"
-                      : "rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gold"
+                      ? "rounded-md border border-subtle px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-offwhite"
+                      : "rounded-md border border-gold/40 bg-gold/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gold"
                   }
                 >
                   {e.kind === "fix" ? "Fix" : "New feature"}

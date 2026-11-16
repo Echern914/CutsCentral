@@ -26,7 +26,7 @@ export default function RewardsNotFound() {
         </p>
         <Link
           href="/my-rewards"
-          className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-gold text-sm font-semibold text-charcoal-900 transition-transform duration-150 hover:scale-[1.01]"
+          className="mt-6 flex h-12 w-full items-center justify-center rounded-full bg-primary text-sm font-semibold text-on-primary transition-transform duration-150 hover:scale-[1.01]"
         >
           Find my rewards
         </Link>

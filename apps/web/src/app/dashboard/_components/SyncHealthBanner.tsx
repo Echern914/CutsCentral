@@ -43,7 +43,7 @@ export function SyncHealthBanner({
         </div>
         <a
           href={reconnectHref}
-          className="shrink-0 rounded-full bg-gold px-5 py-2 text-center text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+          className="shrink-0 rounded-xl bg-primary px-5 py-2 text-center text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
         >
           Reconnect Acuity
         </a>
@@ -81,7 +81,7 @@ export function SyncHealthBanner({
       <button
         onClick={repair}
         disabled={pending}
-        className="shrink-0 rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
+        className="shrink-0 rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
       >
         {pending ? "Repairing…" : "Repair sync"}
       </button>

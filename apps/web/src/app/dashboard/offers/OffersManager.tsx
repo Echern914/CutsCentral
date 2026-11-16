@@ -56,7 +56,7 @@ export function OffersManager({ list, clientId }: { list: OffersList; clientId?:
         <button
           type="button"
           onClick={() => setCreating(true)}
-          className="flex h-11 items-center justify-center self-start rounded-xl bg-gold px-5 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted"
+          className="flex h-11 items-center justify-center self-start rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
         >
           Create offer
         </button>
@@ -90,7 +90,7 @@ export function OffersManager({ list, clientId }: { list: OffersList; clientId?:
                   >
                     {o.code}
                   </button>
-                  <span className="shrink-0 rounded-full border border-subtle px-2.5 py-0.5 text-[11px] text-muted">
+                  <span className="shrink-0 rounded-md border border-subtle px-2.5 py-0.5 text-[11px] text-muted">
                     {copied === o.id ? "Copied" : STATUS_WORDS[o.status]}
                   </span>
                 </div>

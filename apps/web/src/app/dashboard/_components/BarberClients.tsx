@@ -105,7 +105,7 @@ export function BarberClients() {
           onChange={(e) => onQuery(e.target.value)}
           placeholder="Search your clients"
           aria-label="Search your clients"
-          className="mt-3 h-11 w-full rounded-full border border-subtle bg-charcoal-800 px-4 text-base text-offwhite placeholder:text-muted focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/40"
+          className="mt-3 h-11 w-full rounded-xl border border-subtle bg-charcoal-800 px-4 text-base text-offwhite placeholder:text-muted focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/40"
         />
       </div>
 
@@ -150,7 +150,7 @@ export function BarberClients() {
                     type="button"
                     disabled={state.kind === "sending" || state.kind === "sent"}
                     onClick={() => send(c.id)}
-                    className="flex h-11 shrink-0 items-center justify-center rounded-full border border-gold/40 px-4 text-xs font-semibold text-gold transition-colors hover:bg-gold/10 disabled:opacity-50"
+                    className="flex h-11 shrink-0 items-center justify-center rounded-md border border-gold/40 px-4 text-xs font-semibold text-gold transition-colors hover:bg-gold/10 disabled:opacity-50"
                   >
                     {state.kind === "sending"
                       ? "Sending…"

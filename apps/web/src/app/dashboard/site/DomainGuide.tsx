@@ -40,7 +40,7 @@ export function DomainGuideButton({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1.5 rounded-full border border-subtle px-3 py-1.5 text-xs font-medium text-offwhite/90 transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+        className="inline-flex items-center gap-1.5 rounded-md border border-subtle px-3 py-1.5 text-xs font-medium text-offwhite/90 transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
       >
         <span aria-hidden className="text-gold">?</span>
         Step-by-step for GoDaddy, Namecheap &amp; more
@@ -65,7 +65,7 @@ export function DomainGuideButton({
               type="button"
               aria-pressed={picked === g.id}
               onClick={() => setPicked(g.id)}
-              className={`rounded-full border px-3 py-1.5 text-sm transition-colors duration-150 ease-out ${
+              className={`rounded-xl border px-3 py-1.5 text-sm transition-colors duration-150 ease-out ${
                 picked === g.id
                   ? "border-gold bg-gold/15 font-semibold text-offwhite"
                   : "border-subtle text-muted hover:text-offwhite"

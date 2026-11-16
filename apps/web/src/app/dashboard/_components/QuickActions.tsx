@@ -58,7 +58,7 @@ export function QuickActions({
       {bookHref && (
       <Link
         href={bookHref}
-        className="flex w-full items-center justify-center gap-2 rounded-full bg-gold px-6 py-3.5 text-sm font-semibold text-charcoal shadow-glow-sm transition-colors duration-200 ease-out hover:bg-gold-muted"
+        className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3.5 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90"
       >
         <CalendarPlusMark />
         Book appointment

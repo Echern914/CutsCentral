@@ -310,7 +310,7 @@ export function FeatureSearch({
                       onClick={() =>
                         go(null, `${askHref}?q=${encodeURIComponent(query.trim())}`)
                       }
-                      className="mt-3 rounded-full border border-gold/40 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+                      className="mt-3 rounded-md border border-gold/40 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
                     >
                       Ask the assistant about &ldquo;{query.trim()}&rdquo; →
                     </button>
@@ -404,7 +404,7 @@ function Row({
           <button
             type="button"
             onClick={onDemo}
-            className="shrink-0 rounded-full border border-gold/40 px-2.5 py-1 text-[10px] font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+            className="shrink-0 rounded-md border border-gold/40 px-2.5 py-1 text-[10px] font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
           >
             See it live →
           </button>

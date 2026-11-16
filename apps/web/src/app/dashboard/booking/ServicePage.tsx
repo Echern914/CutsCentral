@@ -191,7 +191,7 @@ export function SwitchRow({
         <span
           aria-hidden="true"
           className={cn(
-            "shrink-0 rounded-full px-4 py-2 text-xs font-medium",
+            "shrink-0 rounded-md px-4 py-2 text-xs font-medium",
             on ? "bg-emerald-soft/15 text-emerald-soft" : "border border-subtle text-muted",
           )}
         >
@@ -329,7 +329,7 @@ export function ServiceOwnActions({
             <span
               aria-hidden="true"
               className={cn(
-                "shrink-0 rounded-full px-4 py-2 text-xs font-medium",
+                "shrink-0 rounded-md px-4 py-2 text-xs font-medium",
                 hidden ? "border border-subtle text-muted" : "bg-emerald-soft/15 text-emerald-soft",
               )}
             >

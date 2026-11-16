@@ -81,7 +81,7 @@ export function JoinClient({
       <button
         onClick={accept}
         disabled={pending}
-        className="mt-5 min-h-[44px] w-full rounded-xl bg-gold px-5 py-3 text-sm font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50"
+        className="mt-5 min-h-[44px] w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50"
       >
         {pending ? "Joining…" : "Accept invitation"}
       </button>

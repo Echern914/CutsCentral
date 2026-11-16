@@ -26,13 +26,13 @@ export default function ClientDetailError({
         <div className="mt-6 flex justify-center gap-3">
           <button
             onClick={reset}
-            className="rounded-full bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+            className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
           >
             Try again
           </button>
           <Link
             href="/dashboard/clients"
-            className="rounded-full border border-subtle px-5 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
+            className="rounded-xl border border-subtle px-5 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
           >
             All clients
           </Link>

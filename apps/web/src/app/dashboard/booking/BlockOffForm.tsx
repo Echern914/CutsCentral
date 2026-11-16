@@ -674,7 +674,7 @@ export function Pill({
       data-qa={qa}
       className={cn(
         // 44px hit area, pill look, header stays tight.
-        "-my-2 flex h-11 flex-none items-center whitespace-nowrap rounded-full border px-3.5 text-xs font-medium transition-colors duration-150 ease-out",
+        "-my-2 flex h-11 flex-none items-center whitespace-nowrap rounded-md border px-3.5 text-xs font-medium transition-colors duration-150 ease-out",
         on ? "border-gold/50 bg-gold/10 text-gold" : "border-subtle text-muted hover:text-offwhite",
       )}
     >

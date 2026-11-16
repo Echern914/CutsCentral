@@ -8,7 +8,7 @@ import { submitReferralCodeAction } from "./actions";
 // Keep the global :focus-visible ring (WCAG 2.4.7): no `outline-none`, and the
 // border tint supplements that ring rather than replacing it.
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-4 py-3 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-4 py-3 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 
 function Submit() {
   const { pending } = useFormStatus();
@@ -16,7 +16,7 @@ function Submit() {
     <button
       type="submit"
       disabled={pending}
-      className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-on-gold shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+      className="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-on-primary transition-all duration-200 ease-out hover:bg-primary/90 disabled:opacity-50"
     >
       {pending ? "Checking…" : "Continue"}
     </button>

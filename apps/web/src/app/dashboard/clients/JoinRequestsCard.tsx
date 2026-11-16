@@ -80,7 +80,7 @@ export function JoinRequestsCard({ requests }: { requests: JoinRequest[] }) {
                 type="button"
                 onClick={() => void answer(r.id, "accept")}
                 disabled={busy !== null}
-                className="min-h-[40px] rounded-full bg-gold px-4 text-sm font-semibold text-charcoal transition-opacity duration-150 ease-out disabled:opacity-50"
+                className="min-h-[40px] rounded-xl bg-primary px-4 text-sm font-semibold text-on-primary transition-opacity duration-150 ease-out disabled:opacity-50"
               >
                 {busy === r.id ? "Saving…" : "Accept"}
               </button>
@@ -88,7 +88,7 @@ export function JoinRequestsCard({ requests }: { requests: JoinRequest[] }) {
                 type="button"
                 onClick={() => void answer(r.id, "decline")}
                 disabled={busy !== null}
-                className="min-h-[40px] rounded-full border border-subtle px-4 text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+                className="min-h-[40px] rounded-xl border border-subtle px-4 text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
               >
                 Decline
               </button>

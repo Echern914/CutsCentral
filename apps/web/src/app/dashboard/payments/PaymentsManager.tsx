@@ -48,7 +48,7 @@ const CONNECT_RESULT: Record<string, { text: string; tone: "success" | "error" }
 };
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
 
 /** What the API accepts for a Venmo username or a $cashtag (payments.dashboard.ts). */
@@ -421,7 +421,7 @@ export function PaymentsManager({
       <button
         onClick={savePayDirect}
         disabled={pending}
-        className="mt-4 self-start rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+        className="mt-4 self-start rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
       >
         {pending ? "Saving…" : "Save pay-direct settings"}
       </button>
@@ -477,7 +477,7 @@ export function PaymentsManager({
                 <button
                   onClick={linkExistingStripe}
                   disabled={pending}
-                  className="mt-4 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+                  className="mt-4 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
                 >
                   {pending ? "Opening…" : "Connect your Stripe account"}
                 </button>
@@ -530,7 +530,7 @@ export function PaymentsManager({
                   <button
                     onClick={linkExistingStripe}
                     disabled={pending}
-                    className="mt-3 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+                    className="mt-3 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
                   >
                     {pending ? "Opening…" : "Connect your Stripe account"}
                   </button>
@@ -551,7 +551,7 @@ export function PaymentsManager({
                   <button
                     onClick={openStripeDashboard}
                     disabled={pending}
-                    className="self-start rounded-xl bg-gold px-4 py-2 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+                    className="self-start rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:opacity-50"
                   >
                     {pending ? "Opening…" : "See your balance & payouts in Stripe"}
                   </button>
@@ -588,13 +588,13 @@ export function PaymentsManager({
                   <button
                     onClick={disconnectStripe}
                     disabled={pending}
-                    className="rounded-full bg-danger px-3 py-1.5 text-xs font-semibold text-offwhite disabled:opacity-60"
+                    className="rounded-md bg-danger px-3 py-1.5 text-xs font-semibold text-offwhite disabled:opacity-60"
                   >
                     {pending ? "Disconnecting…" : "Yes, disconnect"}
                   </button>
                   <button
                     onClick={() => setConfirmDisconnect(false)}
-                    className="rounded-full border border-subtle px-3 py-1.5 text-xs font-medium text-muted"
+                    className="rounded-md border border-subtle px-3 py-1.5 text-xs font-medium text-muted"
                   >
                     Keep it
                   </button>
@@ -805,7 +805,7 @@ export function PaymentsManager({
               disabled={tipsSaving || (!onlineTips && !ready)}
               onClick={() => void switchOnlineTips(!onlineTips)}
               className={cn(
-                "shrink-0 rounded-full border px-4 py-2 text-xs font-semibold transition-colors disabled:opacity-50",
+                "shrink-0 rounded-md border px-4 py-2 text-xs font-semibold transition-colors disabled:opacity-50",
                 onlineTips
                   ? "border-gold/60 bg-gold/15 text-offwhite"
                   : "border-subtle bg-charcoal-700 text-muted hover:text-offwhite",
@@ -933,7 +933,7 @@ export function PaymentsManager({
               ).map((o) => (
                 <label
                   key={o.v}
-                  className={`flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${
+                  className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-1.5 text-sm ${
                     cardFeeKind === o.v ? "border-gold text-offwhite" : "border-subtle text-muted"
                   }`}
                 >
@@ -1005,7 +1005,7 @@ export function PaymentsManager({
       <button
         onClick={save}
         disabled={pending}
-        className="self-start rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+        className="self-start rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
       >
         {pending ? "Saving…" : "Save payment settings"}
       </button>

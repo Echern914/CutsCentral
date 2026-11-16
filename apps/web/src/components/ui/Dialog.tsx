@@ -397,7 +397,7 @@ export function Dialog({
             onClick={onClose}
             // 44px touch target; the visible pill is centered inside it.
             className={cn(
-              "-mr-1 flex h-11 min-w-[2.75rem] flex-none items-center justify-center rounded-full border border-subtle px-3 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite",
+              "-mr-1 flex h-11 min-w-[2.75rem] flex-none items-center justify-center rounded-md border border-subtle px-3 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite",
               titleAlign === "center" ? "sm:h-11" : "sm:h-9",
             )}
           >

@@ -24,7 +24,7 @@ export function ClientDemoCard() {
         </div>
         <a
           href="/demo"
-          className="shrink-0 rounded-full bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted"
+          className="shrink-0 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90"
         >
           Take the 2-minute demo →
         </a>

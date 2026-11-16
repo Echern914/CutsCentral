@@ -236,7 +236,7 @@ export function UpgradeRules({
                     )
                   }
                   className={cn(
-                    "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+                    "rounded-md border px-2.5 py-1 text-[11px] transition-colors",
                     on
                       ? "border-gold/60 bg-gold/15 text-gold"
                       : "border-subtle text-muted hover:text-offwhite",

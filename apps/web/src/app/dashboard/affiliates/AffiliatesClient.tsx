@@ -155,16 +155,16 @@ function fmtDate(iso: string | null): string {
 }
 
 const INPUT =
-  "w-full rounded-xl border border-subtle bg-charcoal-800 px-3 py-2.5 text-base text-offwhite placeholder:text-muted focus:border-gold focus:outline-none focus:ring-1 focus:ring-gold";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2.5 text-base text-offwhite placeholder:text-muted focus:border-gold focus:outline-none focus:ring-1 focus:ring-gold";
 
 const PRIMARY =
-  "rounded-full bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:cursor-not-allowed disabled:opacity-50";
+  "rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50";
 const SECONDARY =
-  "rounded-full border border-subtle px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite";
+  "rounded-xl border border-subtle px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite";
 
 function chip(selected: boolean): string {
   return cn(
-    "rounded-full border px-3.5 py-2 text-sm transition-colors duration-150 ease-out",
+    "rounded-xl border px-3.5 py-2 text-sm transition-colors duration-150 ease-out",
     selected
       ? "border-gold bg-gold/15 text-offwhite"
       : "border-subtle text-muted hover:bg-charcoal-700 hover:text-offwhite",
@@ -831,7 +831,7 @@ function Dashboard({
                     <p className="min-w-0 truncate text-sm font-medium text-offwhite">{r.label}</p>
                     <span
                       className={cn(
-                        "shrink-0 rounded-full px-2.5 py-0.5 text-[11px]",
+                        "shrink-0 rounded-md px-2.5 py-0.5 text-[11px]",
                         step === null ? "bg-offwhite/5 text-muted" : "bg-gold/15 text-gold",
                       )}
                     >

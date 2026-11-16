@@ -142,14 +142,14 @@ export function PeriodControl({
               setPickerOpen(false);
               onApplyRange({ from, to });
             }}
-            className="rounded-full bg-gold px-3.5 py-1.5 text-xs font-semibold text-charcoal-900 disabled:opacity-50"
+            className="rounded-md bg-primary px-3.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
           >
             Show this range
           </button>
           <button
             type="button"
             onClick={() => setPickerOpen(false)}
-            className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted hover:text-offwhite"
+            className="rounded-md border border-subtle px-3 py-1.5 text-xs text-muted hover:text-offwhite"
           >
             Cancel
           </button>

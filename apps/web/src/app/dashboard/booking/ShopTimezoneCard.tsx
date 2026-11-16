@@ -84,7 +84,7 @@ export function ShopTimezoneCard({ current }: { current: string }) {
             type="button"
             onClick={() => void save()}
             disabled={pending}
-            className="h-11 rounded-lg bg-gold px-4 text-sm font-semibold text-charcoal-900 disabled:opacity-50 sm:h-9"
+            className="h-11 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary disabled:opacity-50 sm:h-9"
           >
             {pending ? "Saving…" : "Save time zone"}
           </button>

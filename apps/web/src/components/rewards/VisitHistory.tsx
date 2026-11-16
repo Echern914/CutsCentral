@@ -29,7 +29,7 @@ export function VisitHistory({
             <span className="truncate text-sm">{v.service ?? "Visit"}</span>
             {v.punches != null && v.punches > 0 && (
               <span
-                className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                className="shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold"
                 style={{ color: theme.accent, backgroundColor: `${theme.accent}1A` }}
               >
                 +{v.punches}

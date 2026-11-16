@@ -159,7 +159,7 @@ export function PartnersSection({ data }: { data: AdminPartners }) {
                         `Marked ${money(c.amountCents)} paid`,
                       )
                     }
-                    className="rounded-full border border-subtle px-3 py-1 text-xs hover:bg-charcoal-700 disabled:opacity-50"
+                    className="rounded-md border border-subtle px-3 py-1 text-xs hover:bg-charcoal-700 disabled:opacity-50"
                   >
                     {busy === c.id ? "Saving…" : c.uncovered ? "Paid anyway" : "Mark paid"}
                   </button>
@@ -173,7 +173,7 @@ export function PartnersSection({ data }: { data: AdminPartners }) {
                         `Declined ${money(c.amountCents)}`,
                       )
                     }
-                    className="rounded-full border border-subtle px-3 py-1 text-xs text-muted hover:bg-charcoal-700 disabled:opacity-50"
+                    className="rounded-md border border-subtle px-3 py-1 text-xs text-muted hover:bg-charcoal-700 disabled:opacity-50"
                   >
                     {busy === `decline:${c.id}` ? "Saving…" : "Decline"}
                   </button>
@@ -247,7 +247,7 @@ export function PartnersSection({ data }: { data: AdminPartners }) {
                           p.active ? `${p.name}'s code is paused` : `${p.name}'s code is back on`,
                         )
                       }
-                      className="rounded-full border border-subtle px-3 py-1 text-xs hover:bg-charcoal-700 disabled:opacity-50"
+                      className="rounded-md border border-subtle px-3 py-1 text-xs hover:bg-charcoal-700 disabled:opacity-50"
                     >
                       {p.active ? "Pause" : "Resume"}
                     </button>
@@ -289,7 +289,7 @@ export function PartnersSection({ data }: { data: AdminPartners }) {
         <button
           type="submit"
           disabled={busy !== null}
-          className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-on-gold disabled:opacity-50"
+          className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:opacity-50"
         >
           {busy === "create" ? "Adding…" : "Add partner"}
         </button>

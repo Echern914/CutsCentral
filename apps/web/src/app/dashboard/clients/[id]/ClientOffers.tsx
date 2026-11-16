@@ -33,7 +33,7 @@ export function ClientOffers({ list, client }: { list: OffersList; client: { id:
           <button
             type="button"
             onClick={() => setCreating(true)}
-            className="h-9 rounded-full border border-gold/50 px-3 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+            className="h-9 rounded-md border border-gold/50 px-3 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
           >
             Create offer
           </button>

@@ -6,9 +6,9 @@ import { FormError } from "@/components/ui/FormError";
 import { addTeamAction } from "../stepActions";
 
 const field =
-  "h-11 w-full min-w-0 rounded-xl border border-subtle bg-charcoal-700 px-3 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
+  "h-11 w-full min-w-0 rounded-xl border border-subtle-strong bg-charcoal-800 px-3 text-sm text-offwhite placeholder:text-muted focus:border-gold/50";
 const primary =
-  "inline-flex h-11 w-full items-center justify-center rounded-full bg-gold px-5 text-sm font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50";
+  "inline-flex h-11 w-full items-center justify-center rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50";
 
 /**
  * Setup: who takes appointments. Their own name is already filled in from

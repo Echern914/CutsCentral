@@ -687,7 +687,7 @@ export function SeriesEditFooter({ state, onClose }: { state: SeriesEditState; o
           onClick={primary.onClick}
           disabled={primary.disabled}
           className={cn(
-            "flex h-11 flex-none items-center justify-center rounded-xl bg-gold px-5 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50 min-[380px]:flex-1 sm:max-w-[16rem]",
+            "flex h-11 flex-none items-center justify-center rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50 min-[380px]:flex-1 sm:max-w-[16rem]",
           )}
         >
           {primary.label}

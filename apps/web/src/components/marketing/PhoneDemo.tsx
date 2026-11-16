@@ -45,7 +45,7 @@ export function PhoneDemo({ className }: { className?: string }) {
           </motion.div>
 
           <motion.div variants={bubble} className="self-center pt-1.5">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-soft/30 bg-emerald-soft/10 px-3 py-1 text-[10px] font-medium text-emerald-soft">
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-soft/30 bg-emerald-soft/10 px-3 py-1 text-[10px] font-medium text-emerald-soft">
               <CheckIcon className="h-3 w-3" />
               Rebooked: $35 recovered
             </span>

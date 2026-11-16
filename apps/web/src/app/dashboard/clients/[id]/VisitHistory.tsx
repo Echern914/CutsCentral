@@ -154,7 +154,7 @@ export function VisitHistory({
                     <button
                       onClick={() => remove(v)}
                       disabled={pending}
-                      className="rounded-full bg-danger-soft/90 px-3 py-1 text-[11px] font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-danger-soft disabled:opacity-50"
+                      className="rounded-md bg-danger-soft/90 px-3 py-1 text-[11px] font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-danger-soft disabled:opacity-50"
                     >
                       {pending ? "…" : "Yes, delete"}
                     </button>
@@ -187,7 +187,7 @@ export function VisitHistory({
                     <button
                       onClick={() => saveEdit(v)}
                       disabled={pending}
-                      className="rounded-full bg-gold px-3 py-1 text-[11px] font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
+                      className="rounded-md bg-primary px-3 py-1 text-[11px] font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
                     >
                       {pending ? "…" : "Save"}
                     </button>

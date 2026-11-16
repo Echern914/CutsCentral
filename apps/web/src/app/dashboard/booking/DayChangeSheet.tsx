@@ -234,7 +234,7 @@ export function DayChangeSheet({
                   <button
                     type="submit"
                     disabled={busy}
-                    className="min-h-[44px] shrink-0 rounded-lg bg-gold px-3.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+                    className="min-h-[44px] shrink-0 rounded-lg bg-primary px-3.5 text-sm font-semibold text-on-primary disabled:opacity-50"
                   >
                     {busy ? "Saving…" : typed ? "Save name" : "Take name off"}
                   </button>
@@ -374,7 +374,7 @@ export function DayChangeSheet({
             <button
               type="button"
               onClick={onClose}
-              className="min-h-[48px] rounded-xl bg-gold text-sm font-semibold text-charcoal-900"
+              className="min-h-[48px] rounded-xl bg-primary text-sm font-semibold text-on-primary"
             >
               Done
             </button>

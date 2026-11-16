@@ -105,7 +105,7 @@ export function RebookPanel({
         }
         // The only "no" left: a client blocked from booking (page.tsx).
         title={canNudge ? "" : "Blocked from booking - unblock them to send a nudge"}
-        className="w-full rounded-full border border-gold/50 px-4 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
+        className="w-full rounded-md border border-gold/50 px-4 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
       >
         {nudged ? "Nudge sent" : pending ? "…" : "Nudge now"}
       </button>

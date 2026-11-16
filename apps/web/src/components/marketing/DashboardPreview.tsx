@@ -35,7 +35,7 @@ export function DashboardPreview() {
           <span className="h-2.5 w-2.5 rounded-full bg-charcoal-600" />
           <span className="h-2.5 w-2.5 rounded-full bg-charcoal-600" />
         </div>
-        <div className="mx-auto flex items-center gap-2 rounded-full border border-subtle bg-charcoal px-4 py-1 text-[11px] text-muted">
+        <div className="mx-auto flex items-center gap-2 rounded-md border border-subtle bg-charcoal px-4 py-1 text-[11px] text-muted">
           <LockIcon className="h-3 w-3 text-gold/60" />
           chairback.app/dashboard
         </div>
@@ -75,7 +75,7 @@ export function DashboardPreview() {
               <p className="text-xs font-medium text-offwhite">
                 Revenue recovered
               </p>
-              <span className="rounded-full border border-subtle px-2 py-0.5 text-[10px] text-muted">
+              <span className="rounded-md border border-subtle px-2 py-0.5 text-[10px] text-muted">
                 6 months
               </span>
             </div>
@@ -89,7 +89,7 @@ export function DashboardPreview() {
                     transition={{ duration: 0.5, delay: i * 0.08, ease: EASE }}
                     className={`w-full rounded-md ${
                       i === BARS.length - 1
-                        ? "bg-gold-gradient shadow-glow-sm"
+                        ? "bg-gold-gradient"
                         : "bg-gold/25"
                     }`}
                   />
@@ -104,7 +104,7 @@ export function DashboardPreview() {
         <div className="rounded-2xl border border-subtle bg-charcoal-800/70 p-4">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-offwhite">At-risk clients</p>
-            <span className="rounded-full bg-danger-soft/10 px-2 py-0.5 text-[10px] font-medium text-danger-soft">
+            <span className="rounded-md bg-danger-soft/10 px-2 py-0.5 text-[10px] font-medium text-danger-soft">
               due for a cut
             </span>
           </div>
@@ -122,7 +122,7 @@ export function DashboardPreview() {
                     {c.last} · {c.usual}
                   </p>
                 </div>
-                <span className="shrink-0 rounded-full bg-gold-gradient px-2.5 py-1 text-[10px] font-semibold text-on-gold">
+                <span className="shrink-0 rounded-md bg-primary px-2.5 py-1 text-[10px] font-semibold text-on-primary">
                   Nudge
                 </span>
               </div>

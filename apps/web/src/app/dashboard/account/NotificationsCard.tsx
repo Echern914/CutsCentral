@@ -52,7 +52,7 @@ function Toggle({
       disabled={disabled}
       onClick={() => onChange(!on)}
       className={cn(
-        "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
+        "shrink-0 rounded-md px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
         on
           ? "bg-emerald-soft/15 text-emerald-soft"
           : "border border-subtle text-muted hover:bg-charcoal-700",
@@ -175,7 +175,7 @@ export function NotificationsCard({
             type="button"
             onClick={() => void sendTest()}
             disabled={testing}
-            className="shrink-0 rounded-full border border-gold/50 px-3 py-1.5 text-xs text-gold transition-colors hover:bg-gold/10 disabled:opacity-50"
+            className="shrink-0 rounded-md border border-gold/50 px-3 py-1.5 text-xs text-gold transition-colors hover:bg-gold/10 disabled:opacity-50"
           >
             {testing ? "Sending…" : "Send test"}
           </button>
@@ -446,7 +446,7 @@ export function AdvancedCard({ timezone }: { timezone: string | null }) {
         </div>
         <a
           href="/dashboard/export/clients"
-          className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
+          className="shrink-0 rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
         >
           Export CSV
         </a>
@@ -484,7 +484,7 @@ export function AdvancedCard({ timezone }: { timezone: string | null }) {
             <button
               type="button"
               onClick={() => setConfirming(false)}
-              className="rounded-full border border-subtle px-3 py-2 text-xs text-muted"
+              className="rounded-md border border-subtle px-3 py-2 text-xs text-muted"
             >
               Cancel
             </button>
@@ -492,7 +492,7 @@ export function AdvancedCard({ timezone }: { timezone: string | null }) {
               type="button"
               onClick={signOutEverywhere}
               disabled={pending}
-              className="rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal-900 disabled:opacity-50"
+              className="rounded-md bg-primary px-4 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
             >
               {pending ? "Signing out…" : "Yes, sign out"}
             </button>
@@ -501,7 +501,7 @@ export function AdvancedCard({ timezone }: { timezone: string | null }) {
           <button
             type="button"
             onClick={() => setConfirming(true)}
-            className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
+            className="shrink-0 rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
           >
             Sign out
           </button>

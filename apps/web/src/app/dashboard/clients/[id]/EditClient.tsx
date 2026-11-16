@@ -10,7 +10,7 @@ import {
 } from "../../actions";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
 /**
  * Barber edit controls for a client's own profile: edit name/phone/email inline,
@@ -153,7 +153,7 @@ export function EditClient({
           <button
             onClick={save}
             disabled={pending}
-            className="rounded-full bg-gold px-4 py-1.5 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
+            className="rounded-md bg-primary px-4 py-1.5 text-xs font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
           >
             {pending ? "Saving…" : "Save"}
           </button>
@@ -183,7 +183,7 @@ export function EditClient({
           setEditing(true);
         }}
         disabled={pending}
-        className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+        className="rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
       >
         Edit profile
       </button>
@@ -192,7 +192,7 @@ export function EditClient({
         <button
           onClick={restore}
           disabled={pending}
-          className="rounded-full border border-emerald-soft/40 px-4 py-2 text-xs text-emerald-soft transition-colors duration-150 ease-out hover:bg-emerald-soft/10 disabled:opacity-50"
+          className="rounded-md border border-emerald-soft/40 px-4 py-2 text-xs text-emerald-soft transition-colors duration-150 ease-out hover:bg-emerald-soft/10 disabled:opacity-50"
         >
           {pending ? "…" : "Restore client"}
         </button>
@@ -204,7 +204,7 @@ export function EditClient({
           <button
             onClick={archive}
             disabled={pending}
-            className="rounded-full bg-danger-soft/90 px-3 py-1.5 text-[11px] font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-danger-soft disabled:opacity-50"
+            className="rounded-md bg-danger-soft/90 px-3 py-1.5 text-[11px] font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-danger-soft disabled:opacity-50"
           >
             {pending ? "…" : "Yes, archive"}
           </button>
@@ -220,7 +220,7 @@ export function EditClient({
         <button
           onClick={() => setConfirmArchive(true)}
           disabled={pending}
-          className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:text-danger-soft hover:bg-charcoal-700 disabled:opacity-50"
+          className="rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:text-danger-soft hover:bg-charcoal-700 disabled:opacity-50"
         >
           Archive
         </button>

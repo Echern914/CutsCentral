@@ -135,7 +135,7 @@ export function MentorPairs({
           type="button"
           disabled={!mentor || !student || busy !== null}
           onClick={() => void pair()}
-          className="min-h-[40px] rounded-full bg-gold px-4 text-xs font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50"
+          className="min-h-[40px] rounded-md bg-primary px-4 text-xs font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50"
           data-qa="pair-mentor"
         >
           {busy === "pair" ? "Pairing…" : "Pair"}

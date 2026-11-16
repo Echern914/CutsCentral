@@ -138,7 +138,7 @@ export default async function AssistantPage({
             </p>
             <Link
               href={ONBOARDING_PATH[setupNextStep]}
-              className="mt-3 inline-flex items-center rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+              className="mt-3 inline-flex items-center rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
             >
               Continue setup →
             </Link>
@@ -158,7 +158,7 @@ export default async function AssistantPage({
             {stepCta ? (
               <Link
                 href={stepCta.href}
-                className="mt-3 inline-flex items-center rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+                className="mt-3 inline-flex items-center rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
               >
                 {stepCta.label} →
               </Link>
@@ -273,7 +273,7 @@ function ProblemRow({
           {cta ? (
             <Link
               href={cta.href}
-              className="mt-2.5 inline-flex items-center rounded-full border border-gold/40 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+              className="mt-2.5 inline-flex items-center rounded-md border border-gold/40 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
             >
               {cta.label} →
             </Link>

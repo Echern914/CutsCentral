@@ -187,7 +187,7 @@ export function NotificationBell({
                 e.stopPropagation();
                 setOpen(false);
               }}
-              className="glass fixed left-4 z-10 inline-flex min-h-[44px] items-center gap-1.5 rounded-full px-4 text-sm font-semibold text-offwhite shadow-lg transition-colors duration-150 ease-out hover:bg-charcoal-700"
+              className="glass fixed left-4 z-10 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-4 text-sm font-semibold text-offwhite shadow-lg transition-colors duration-150 ease-out hover:bg-charcoal-700"
               style={{ top: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
             >
               <svg
@@ -219,7 +219,7 @@ export function NotificationBell({
                   disabled={refreshing || demo}
                   data-qa="bell-refresh"
                   aria-label={refreshing ? "Refreshing notifications" : "Refresh notifications"}
-                  className="-mr-2 inline-flex min-h-[44px] items-center gap-1.5 rounded-full px-3 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-60"
+                  className="-mr-2 inline-flex min-h-[44px] items-center gap-1.5 rounded-md px-3 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-60"
                 >
                   <svg
                     className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`}

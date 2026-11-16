@@ -153,7 +153,7 @@ export function NextVisitCard({ visit, theme }: { visit: NextVisit; theme: Rewar
       {party ? (
         <Link
           href={`/book/group/${party.manageToken}`}
-          className="mt-4 inline-block rounded-full border px-4 py-2 text-sm font-medium"
+          className="mt-4 inline-block rounded-xl border px-4 py-2 text-sm font-medium"
           style={{ borderColor: theme.border, color: theme.accent }}
         >
           Manage appointments
@@ -162,7 +162,7 @@ export function NextVisitCard({ visit, theme }: { visit: NextVisit; theme: Rewar
         visit.manageToken && (
           <Link
             href={`/book/manage/${visit.manageToken}`}
-            className="mt-4 inline-block rounded-full border px-4 py-2 text-sm font-medium"
+            className="mt-4 inline-block rounded-xl border px-4 py-2 text-sm font-medium"
             style={{ borderColor: theme.border, color: theme.accent }}
           >
             Manage appointment

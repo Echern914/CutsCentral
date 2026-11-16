@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-16-a-cleaner-look",
+    date: "2026-11-16",
+    kind: "feature",
+    title: "A cleaner, calmer look",
+    body:
+      "ChairBack has a new look: calmer pages, clear solid buttons, simpler cards and bigger, easier fields. " +
+      "Gold now marks what matters, like rewards and today. Nothing moved and everything works the same. " +
+      "More screens get redesigned over the next updates.",
+  },
+  {
     id: "2026-11-14-working-fast-no-too-many-requests",
     date: "2026-11-14",
     kind: "fix",

@@ -86,9 +86,9 @@ export interface TeamLinksData {
 }
 
 const quiet =
-  "min-h-[40px] rounded-full border border-subtle px-4 text-xs text-muted transition-colors hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-50";
+  "min-h-[40px] rounded-md border border-subtle px-4 text-xs text-muted transition-colors hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-50";
 const primary =
-  "min-h-[40px] rounded-full bg-gold px-4 text-xs font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50";
+  "min-h-[40px] rounded-md bg-primary px-4 text-xs font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50";
 
 /**
  * The owner's side of an independent team (booth-rent shops): one link to
@@ -322,7 +322,7 @@ export function IndependentTeam({
                 disabled={loadingPeriod}
                 onClick={() => void pickPeriod(key)}
                 className={cn(
-                  "min-h-[40px] rounded-full border px-4 text-xs font-medium transition-colors disabled:opacity-60",
+                  "min-h-[40px] rounded-md border px-4 text-xs font-medium transition-colors disabled:opacity-60",
                   period === key
                     ? "border-gold/50 bg-gold/10 text-gold"
                     : "border-subtle text-muted hover:text-offwhite",
@@ -550,7 +550,7 @@ export function IndependentTeam({
                   "Couldn't remove them - try again",
                 );
               }}
-              className="min-h-[40px] rounded-full bg-danger-soft/90 px-4 text-xs font-semibold text-white transition-colors hover:bg-danger-soft disabled:opacity-50"
+              className="min-h-[40px] rounded-md bg-danger-soft/90 px-4 text-xs font-semibold text-white transition-colors hover:bg-danger-soft disabled:opacity-50"
             >
               Remove from team
             </button>

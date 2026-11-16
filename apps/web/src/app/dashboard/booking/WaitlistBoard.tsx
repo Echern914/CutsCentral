@@ -51,7 +51,7 @@ const SECTIONS: { key: WaitlistSection; label: string }[] = [
 const chipCls = (active: boolean) =>
   cn(
     // 44px on mobile (the tap rule), relaxing to 36px once there is a pointer.
-    "flex h-11 shrink-0 items-center gap-1.5 rounded-full px-4 text-xs font-medium transition-colors sm:h-9 sm:px-3.5",
+    "flex h-11 shrink-0 items-center gap-1.5 rounded-md px-4 text-xs font-medium transition-colors sm:h-9 sm:px-3.5",
     active
       ? "bg-gold/15 text-gold ring-1 ring-gold/30"
       : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
@@ -184,7 +184,7 @@ export function WaitlistBoard({
             "flex h-11 items-center rounded-xl px-4 text-sm font-semibold transition-colors sm:h-10",
             adding
               ? "border border-subtle text-muted hover:text-offwhite"
-              : "bg-gold text-charcoal-900 hover:bg-gold/90",
+              : "bg-primary text-on-primary hover:bg-primary/90",
           )}
         >
           {adding ? "Cancel" : "+ Add someone"}
@@ -400,7 +400,7 @@ function WaitlistCard({
         </span>
         <span
           className={cn(
-            "shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-semibold",
+            "shrink-0 rounded-md px-2.5 py-0.5 text-[10px] font-semibold",
             STATUS_BADGE[status] ?? STATUS_BADGE.REMOVED,
           )}
         >
@@ -511,7 +511,7 @@ function WaitlistCard({
             type="button"
             onClick={() => window.dispatchEvent(bookEvent(entry))}
             disabled={pending}
-            className={cn(BTN_BASE, "bg-gold font-semibold text-charcoal-900 hover:bg-gold/90")}
+            className={cn(BTN_BASE, "bg-primary font-semibold text-on-primary hover:bg-primary/90")}
           >
             Book appointment
           </button>

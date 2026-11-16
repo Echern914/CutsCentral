@@ -65,7 +65,7 @@ export function RevenueTrends({ series: initial }: { series: TrendPoint[] }) {
           <button
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
-            className="shrink-0 rounded-full border border-gold/50 px-5 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+            className="shrink-0 rounded-md border border-gold/50 px-5 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
           >
             {open ? "Hide trends ▴" : "View trends ▾"}
           </button>
@@ -92,9 +92,9 @@ export function RevenueTrends({ series: initial }: { series: TrendPoint[] }) {
                         disabled={pending}
                         aria-pressed={range === m}
                         aria-label={`Last ${m} months`}
-                        className={`rounded-full px-2.5 py-1 text-xs transition-colors duration-150 ease-out ${
+                        className={`rounded-md px-2.5 py-1 text-xs transition-colors duration-150 ease-out ${
                           range === m
-                            ? "bg-gold text-charcoal"
+                            ? "bg-primary text-on-primary"
                             : "text-muted hover:text-offwhite"
                         }`}
                       >

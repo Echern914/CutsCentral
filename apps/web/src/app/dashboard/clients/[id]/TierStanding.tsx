@@ -31,7 +31,7 @@ export interface ClientTier {
 
 // Bigger than the old 10px badge on purpose: the owner could not find it.
 const PILL =
-  "inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide sm:text-sm";
+  "inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border px-3 py-1 text-xs font-semibold uppercase tracking-wide sm:text-sm";
 
 function pillStyle(color: string | null) {
   return color ? { color, backgroundColor: `${color}1A`, borderColor: `${color}66` } : undefined;

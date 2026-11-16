@@ -79,7 +79,7 @@ export function MemberOffers({
             setEditing(false);
           }}
           disabled={pending}
-          className="rounded-full bg-gold px-3 py-1 text-xs font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50"
+          className="rounded-md bg-primary px-3 py-1 text-xs font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50"
         >
           Save
         </button>

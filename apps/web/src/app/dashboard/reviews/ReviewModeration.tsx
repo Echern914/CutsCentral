@@ -38,7 +38,7 @@ export function ReviewModeration({ id, status }: { id: string; status: Status })
               })
             }
             className={cn(
-              "rounded-full px-2.5 py-1 text-[10px] uppercase tracking-wide transition-colors duration-150 ease-out disabled:cursor-default",
+              "rounded-md px-2.5 py-1 text-[10px] uppercase tracking-wide transition-colors duration-150 ease-out disabled:cursor-default",
               active
                 ? opt.value === "APPROVED"
                   ? "bg-emerald-soft/15 text-emerald-soft"
