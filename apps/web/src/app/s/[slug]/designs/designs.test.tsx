@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { PagePhoto, ShopPageData } from "../page";
 
@@ -112,7 +112,7 @@ describe("the design a shop gets", () => {
 });
 
 describe("every new design", () => {
-  for (const design of ["grid", "lookbook", "reel", "profile", "fresh"]) {
+  for (const design of ["grid", "lookbook", "reel", "profile", "fresh", "studio"]) {
     it(`🔴 ${design}: Book leads, the work shows, and the standing waitlist is off the top`, () => {
       render(<ShopPageClient data={page({ pageDesign: design })} />);
       expect(screen.getAllByRole("link", { name: "Book an appointment" }).length).toBeGreaterThan(0);
@@ -215,7 +215,7 @@ describe("the rewards button", () => {
     <ShopPageClient data={page({ pageDesign: design })} rewardsHref="/r/tok/rewards" rewardsLabel="Your rewards · 3 punches" />
   );
 
-  for (const design of [undefined, "grid"]) {
+  for (const design of [undefined, "grid", "studio"]) {
     const name = design ?? "classic";
 
     it(`🔴 ${name}: inside an app build whose Rewards tab holds it all - timer included - it leaves the page`, () => {
@@ -273,7 +273,7 @@ describe("the designs' own jobs", () => {
   it("a #reviews link has somewhere to land in every design, and opens profile's Reviews tab", () => {
     window.history.replaceState(null, "", "#reviews");
     try {
-      for (const pageDesign of ["classic", "grid", "lookbook", "reel", "fresh", "profile"]) {
+      for (const pageDesign of ["classic", "grid", "lookbook", "reel", "fresh", "profile", "studio"]) {
         const { unmount } = render(<ShopPageClient data={page({ pageDesign })} />);
         expect(document.getElementById("reviews"), pageDesign).not.toBeNull();
         if (pageDesign === "profile") {
@@ -317,6 +317,118 @@ describe("the designs' own jobs", () => {
       />,
     );
     expect(screen.queryByText("“Best in town”")).toBeNull();
+  });
+});
+
+describe("studio", () => {
+  it("every row of the menu books that service, and everyone on the team books with them", () => {
+    render(<ShopPageClient data={page({ pageDesign: "studio" })} />);
+    expect(screen.getByRole("link", { name: /^Book Haircut/ }).getAttribute("href")).toBe("/book/fresh?service=svc-cut");
+    expect(screen.getByRole("link", { name: /^Book Beard Trim/ }).getAttribute("href")).toBe("/book/fresh?service=svc-beard");
+    expect(screen.getByRole("link", { name: "Book with Marcus" }).getAttribute("href")).toBe("/book/fresh?staff=st-marcus");
+    expect(screen.getByRole("link", { name: "Book with Dre" }).getAttribute("href")).toBe("/book/fresh?staff=st-dre");
+  });
+
+  it("a team of one is the shop itself, so there is no team to pick from", () => {
+    render(<ShopPageClient data={page({ pageDesign: "studio", staff: [STAFF[0]!] })} />);
+    expect(screen.queryByText("The team")).toBeNull();
+  });
+
+  it("🔴 Book is pinned once, with the lowest price beside it - not repeated at the top", () => {
+    render(<ShopPageClient data={page({ pageDesign: "studio" })} />);
+    const book = screen.getAllByRole("link", { name: "Book an appointment" });
+    expect(book).toHaveLength(1);
+    expect(book[0]!.getAttribute("href")).toBe("/book/fresh");
+    expect(book[0]!.getAttribute("data-tour")).toBe("book-cta");
+    // Beard Trim's $20, not the first service's $35.
+    expect(screen.getByText("From").parentElement?.textContent).toBe("From$20");
+  });
+
+  it("a shop with no way to book online gets the request form in the page, and no pinned bar", () => {
+    render(
+      <ShopPageClient
+        data={page({ pageDesign: "studio", bookingMode: "link", bookingUrl: null, services: [], staff: [] })}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Send request" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Book an appointment" })).toBeNull();
+    expect(screen.queryByText("From")).toBeNull();
+  });
+
+  it("offers directions, a text and Instagram only when the shop has them", () => {
+    const { unmount } = render(<ShopPageClient data={page({ pageDesign: "studio" })} />);
+    expect(screen.queryByRole("link", { name: /Directions to/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Text Fresh Studio" })).toBeNull();
+    unmount();
+    render(
+      <ShopPageClient
+        data={page({
+          pageDesign: "studio",
+          addressStreet: "12 Main St",
+          addressCity: "Hoboken",
+          addressRegion: "NJ",
+          instagramHandle: "freshstudio",
+        })}
+      />,
+    );
+    const directions = screen.getByRole("link", { name: "Directions to Fresh Studio" }).getAttribute("href")!;
+    expect(decodeURIComponent(directions)).toContain("Fresh Studio, 12 Main St, Hoboken, NJ");
+    expect(screen.getByRole("link", { name: "Fresh Studio on Instagram" }).getAttribute("href")).toBe(
+      "https://instagram.com/freshstudio",
+    );
+    expect(screen.queryByRole("link", { name: "Text Fresh Studio" })).toBeNull();
+    expect(screen.getByText("Hoboken, NJ")).toBeTruthy();
+  });
+
+  describe("Share", () => {
+    const realShare = Object.getOwnPropertyDescriptor(navigator, "share");
+    const realClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    afterEach(() => {
+      if (realShare) Object.defineProperty(navigator, "share", realShare);
+      else delete (navigator as { share?: unknown }).share;
+      if (realClipboard) Object.defineProperty(navigator, "clipboard", realClipboard);
+      else delete (navigator as { clipboard?: unknown }).clipboard;
+      window.history.replaceState(null, "", "/");
+    });
+
+    it("🔴 shares the shop's page by its name, never the address bar a client's rewards link put them on", async () => {
+      const share = vi.fn(async (_data: ShareData) => {});
+      Object.defineProperty(navigator, "share", { value: share, configurable: true });
+      window.history.replaceState(null, "", "/r/secret-token-123/shop?ref=x");
+      render(<ShopPageClient data={page({ pageDesign: "studio" })} rewardsHref="/r/secret-token-123/rewards" />);
+      fireEvent.click(screen.getByRole("button", { name: "Share" }));
+      await vi.waitFor(() => expect(share).toHaveBeenCalledTimes(1));
+      const sent = share.mock.calls[0]![0];
+      expect(sent).toEqual({ title: "Fresh Studio", url: `${window.location.origin}/s/fresh` });
+      expect(JSON.stringify(sent)).not.toContain("secret-token");
+    });
+
+    it("on the shop's own domain the shared link is the platform's, which works anywhere", async () => {
+      const share = vi.fn(async (_data: ShareData) => {});
+      Object.defineProperty(navigator, "share", { value: share, configurable: true });
+      render(<ShopPageClient data={page({ pageDesign: "studio" })} platformOrigin="https://getchairback.com" />);
+      fireEvent.click(screen.getByRole("button", { name: "Share" }));
+      await vi.waitFor(() => expect(share).toHaveBeenCalledTimes(1));
+      expect(share.mock.calls[0]![0].url).toBe("https://getchairback.com/s/fresh");
+    });
+
+    it("with no share sheet, copies the link and says so", async () => {
+      delete (navigator as { share?: unknown }).share;
+      const writeText = vi.fn(async () => {});
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      render(<ShopPageClient data={page({ pageDesign: "studio" })} />);
+      fireEvent.click(screen.getByRole("button", { name: "Share" }));
+      await screen.findByText("Link copied");
+      expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/s/fresh`);
+    });
+
+    it("does nothing in the editor preview", () => {
+      const share = vi.fn(async () => {});
+      Object.defineProperty(navigator, "share", { value: share, configurable: true });
+      render(<ShopPageClient data={page({ pageDesign: "studio" })} preview />);
+      fireEvent.click(screen.getByRole("button", { name: "Share" }));
+      expect(share).not.toHaveBeenCalled();
+    });
   });
 });
 

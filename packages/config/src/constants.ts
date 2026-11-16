@@ -828,6 +828,7 @@ export const PAGE_DESIGNS = {
   reel: { label: "The reel", hint: "Your best photos play at the top" },
   profile: { label: "Profile", hint: "Work, services, reviews and info tabs" },
   fresh: { label: "Fresh work", hint: "Newest photos first, with your reviews" },
+  studio: { label: "Studio", hint: "Your menu and team, with Book always in reach" },
 } as const satisfies Record<string, { label: string; hint: string }>;
 
 export type PageDesignKey = keyof typeof PAGE_DESIGNS;

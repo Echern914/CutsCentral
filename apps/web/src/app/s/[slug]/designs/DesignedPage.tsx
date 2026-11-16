@@ -7,6 +7,7 @@ import { GridDesign } from "./GridDesign";
 import { LookbookDesign } from "./LookbookDesign";
 import { ProfileDesign } from "./ProfileDesign";
 import { ReelDesign } from "./ReelDesign";
+import { StudioDesign } from "./StudioDesign";
 
 /**
  * Every design but classic. Classic stays inline in ShopPageClient, exactly as
@@ -24,5 +25,7 @@ export function DesignedPage({ design, ctx }: { design: Exclude<PageDesignKey, "
       return <ProfileDesign ctx={ctx} />;
     case "fresh":
       return <FreshDesign ctx={ctx} />;
+    case "studio":
+      return <StudioDesign ctx={ctx} />;
   }
 }

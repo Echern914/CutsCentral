@@ -6,8 +6,6 @@ import { DEMO } from "@chairback/config/demo";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { DemoTour } from "@/components/tour/DemoTour";
-import { CountUp } from "@/components/motion/CountUp";
-import { PunchGrid } from "@/components/rewards/PunchGrid";
 import { RebookCountdown } from "@/components/rewards/RebookCountdown";
 import { RewardCelebration } from "@/components/rewards/RewardCelebration";
 import { RewardsClaimed } from "@/components/rewards/RewardsClaimed";
@@ -22,6 +20,8 @@ import { AddToWallet } from "@/components/AddToWallet";
 import { TextToBook } from "@/components/TextToBook";
 import { DeleteMyData } from "./DeleteMyData";
 import { YourStatus } from "./YourStatus";
+import { PunchPass, type PunchPassProps } from "./PunchPass";
+import { readableOn } from "@/lib/contrast";
 import { resolveRewardsTheme, rewardsFontVars, surfaceStyle, type RewardsTheme } from "./theme";
 import { AppFrameScheme } from "@/components/PageScheme";
 // The interface lives with the rewards sub-route (its page owns the API call);
@@ -135,6 +135,9 @@ export function RewardsClient({
   const multiCard = cards.length > 1;
   // "Ready" celebration spans every card the client can see.
   const readyAll = multiCard ? cards.flatMap((c) => c.rewards.filter((r) => r.ready)) : ready;
+  // Who the pass belongs to, printed on every card they hold.
+  const holder = { shopName: shop.name, logoUrl: shop.logoUrl, firstName: client.firstName, visits: loyalty.visits };
+  const tierBadge = loyalty.tier && loyalty.label ? { label: loyalty.label, color: loyalty.color } : null;
 
   // Root style: theme colors + the chosen font families exposed as locals the
   // page reads via `fontFamily: "var(--page-display)"` etc. (the --font-page-*
@@ -212,26 +215,16 @@ export function RewardsClient({
                 {welcome}
               </p>
             )}
-            {/* Loyalty status: a colored "member" pill once they've reached a
-                tier, plus a gentle nudge toward the next one (which doubles as a
-                "1 visit to Bronze" prompt for a brand-new client). */}
-            {rewardsOn && loyalty.tier && loyalty.color && (
-              <span
-                className="mt-3 inline-block rounded-md px-3 py-1 text-xs font-semibold uppercase tracking-wide"
-                style={{
-                  color: loyalty.color,
-                  backgroundColor: `${loyalty.color}1A`,
-                  border: `1px solid ${loyalty.color}55`,
-                }}
-              >
-                {loyalty.label} member
-              </span>
-            )}
+            {/* Loyalty status: the tier they hold is printed on their pass
+                (PunchPass), and the header keeps what it is worth and the
+                nudge toward the next one (which doubles as a "1 visit to
+                Bronze" prompt for a brand-new client). */}
             {/* What the tier is actually WORTH here. A rank with nothing
                 attached is a badge; a rank with a promise under it is a reason
                 to come back. Rendered only when the shop has written one. */}
             {rewardsOn && loyalty.perk && (
-              <p className="mt-1.5 text-xs font-medium" style={{ color: t.text }}>
+              <p className="mt-3 text-xs font-medium" style={{ color: t.text }}>
+                {loyalty.label ? `${loyalty.label} · ` : ""}
                 {loyalty.perk}
               </p>
             )}
@@ -311,12 +304,14 @@ export function RewardsClient({
             </motion.div>
           )}
 
-          {/* Punch balance. Multi-card shops get one stacked surface per card
-              (each with its own balance, accent, rewards, and grid); everyone
-              else gets the classic single-balance card, byte-for-byte. A
-              rewards-off shop renders NO balance card at all. */}
+          {/* Punch balance, printed as a pass (PunchPass): the count toward
+              the next reward, a punch drawn for each (the "Punch grid" section
+              toggle hides them), the tier, the client's name and visits.
+              Multi-card shops get one pass per card - its own name, accent and
+              balance - with that card's rewards listed under it. A rewards-off
+              shop renders NO balance card at all. */}
           {!rewardsOn ? null : multiCard ? (
-            <motion.div variants={fadeUp} className="flex flex-col gap-4" data-tour="punch-card">
+            <motion.div variants={fadeUp} className="flex flex-col gap-5" data-tour="punch-card">
               {cards.map((card) => (
                 <PunchCardSurface
                   key={card.id ?? "default"}
@@ -325,39 +320,36 @@ export function RewardsClient({
                   surface={surface}
                   showRewards={show("rewardMenu")}
                   showGrid={show("punchGrid")}
+                  holder={holder}
+                  // The tier belongs to the client, so it is printed once: on
+                  // the shop's own card, the one every visit punches.
+                  tier={card.id == null ? tierBadge : null}
                 />
               ))}
             </motion.div>
           ) : (
             <motion.div variants={fadeUp} data-tour="punch-card">
-              <div
-                className={`p-6 text-center ${ready.length > 0 ? "ring-conic" : ""}`}
-                style={surface}
-              >
-                <div
-                  className="text-6xl leading-none"
-                  style={{ color: accent, fontFamily: "var(--page-display)" }}
-                >
-                  <CountUp value={punches.balance} />
-                  <span className="text-2xl" style={{ color: t.muted }}>
-                    {" "}
-                    {punches.balance === 1 ? "punch" : "punches"}
-                  </span>
-                </div>
-                <p className="mt-3 text-sm" style={{ color: t.muted }}>
-                  {ready.length > 0
-                    ? ready.length === 1
-                      ? `Your ${ready[0]!.name} is ready!`
-                      : `${ready.length} rewards ready to claim!`
-                    : next
-                      ? `${next.remaining} more to your ${next.name}`
-                      : rewards.length > 0
-                        ? "Keep visiting to stack up punches"
-                        : "Every visit earns punches"}
-                </p>
-              </div>
+              <PunchPass
+                theme={t}
+                {...holder}
+                balance={punches.balance}
+                next={next}
+                ready={ready}
+                hasRewards={rewards.length > 0}
+                badge={tierBadge}
+                showDots={show("punchGrid")}
+              />
             </motion.div>
           )}
+
+          {/* Apple Wallet punch card, right under the card it puts in Wallet -
+              iOS Safari only, and only once the API can mint passes
+              (wallet.available). Renders nothing elsewhere. */}
+          <AddToWallet
+            href={`/r/${magicToken}/wallet-pass`}
+            available={data.wallet?.available ?? false}
+            label="Add your punch card to Apple Wallet"
+          />
 
           {/* One-tap cadence capture (cold start): only for a client with no
               stated cadence and not enough visit history to have computed one.
@@ -375,14 +367,6 @@ export function RewardsClient({
             theme={t}
             appStoreUrl={appStoreUrl}
             playStoreUrl={playStoreUrl}
-          />
-
-          {/* Apple Wallet punch card - iOS Safari only, and only once the API
-              can mint passes (wallet.available). Renders nothing elsewhere. */}
-          <AddToWallet
-            href={`/r/${magicToken}/wallet-pass`}
-            available={data.wallet?.available ?? false}
-            label="Add your punch card to Apple Wallet"
           />
 
           {/* SMS consent - prominent when not yet opted in, quiet once handled */}
@@ -568,24 +552,6 @@ export function RewardsClient({
             </motion.section>
           )}
 
-          {/* Punch grid toward the next reward (decorative for small targets).
-              Multi-card mode draws a grid inside each card surface instead. */}
-          {!multiCard && show("punchGrid") && next && next.punchCost <= 20 && (
-            <motion.div variants={fadeUp}>
-              <div className="p-6" style={surface}>
-                <PunchGrid
-                  filled={next.punchCost - next.remaining}
-                  threshold={next.punchCost}
-                  theme={t}
-                />
-                <p className="mt-4 text-center text-xs" style={{ color: t.muted }}>
-                  {next.punchCost - next.remaining}/{next.punchCost} toward your{" "}
-                  {next.name}
-                </p>
-              </div>
-            </motion.div>
-          )}
-
           {/* Booking CTA only in STANDALONE mode (shop has no public page, so
               this page is the landing and their only way to book). When this is
               the shop page's rewards sub-view, the shop page owns Book - two
@@ -708,9 +674,10 @@ export function RewardsClient({
 }
 
 /**
- * One punch card in the multi-card stack: its own balance, accent, reward
- * rows, and (for small targets) a dot grid. The card's accentColor overrides
- * the shop accent so a "VIP" card can look like ITS card, not the default.
+ * One punch card in the multi-card stack: its own pass - name, accent,
+ * balance and punches - with that card's rewards listed under it. The card's
+ * accentColor overrides the shop accent so a "VIP" card looks like ITS card,
+ * not the default, and an exclusive card says VIP where a tier would go.
  */
 function PunchCardSurface({
   card,
@@ -718,75 +685,38 @@ function PunchCardSurface({
   surface,
   showRewards,
   showGrid,
+  holder,
+  tier,
 }: {
   card: NonNullable<RewardsData["cards"]>[number];
   theme: RewardsTheme;
   surface: CSSProperties;
   showRewards: boolean;
   showGrid: boolean;
+  holder: Pick<PunchPassProps, "shopName" | "logoUrl" | "firstName" | "visits">;
+  tier: PunchPassProps["badge"];
 }) {
   const t = theme;
   const accent = card.accentColor ?? t.accent;
-  const cardTheme: RewardsTheme = { ...t, accent };
-  const readyCount = card.rewards.filter((r) => r.ready).length;
-  const target = card.nextTarget;
+  const cardTheme: RewardsTheme = { ...t, accent, onAccent: readableOn(accent) };
 
   return (
-    <div
-      className={`overflow-hidden ${readyCount > 0 ? "ring-conic" : ""}`}
-      style={surface}
-    >
-      <div className="p-6 text-center">
-        <p
-          className="text-xs font-semibold uppercase tracking-[0.2em]"
-          style={{ color: accent }}
-        >
-          {card.emoji ? `${card.emoji} ` : ""}
-          {card.name}
-          {card.exclusive && (
-            <span
-              className="ml-2 rounded-md px-2 py-0.5 text-[9px] tracking-wide"
-              style={{ border: `1px solid ${accent}66`, color: accent }}
-            >
-              VIP
-            </span>
-          )}
-        </p>
-        <div
-          className="mt-3 text-5xl leading-none"
-          style={{ color: accent, fontFamily: "var(--page-display)" }}
-        >
-          <CountUp value={card.balance} />
-          <span className="text-xl" style={{ color: t.muted }}>
-            {" "}
-            {card.balance === 1 ? "punch" : "punches"}
-          </span>
-        </div>
-        <p className="mt-3 text-sm" style={{ color: t.muted }}>
-          {readyCount > 0
-            ? readyCount === 1
-              ? `Your ${card.rewards.find((r) => r.ready)!.name} is ready!`
-              : `${readyCount} rewards ready to claim!`
-            : target
-              ? `${target.remaining} more to your ${target.name}`
-              : card.rewards.length > 0
-                ? "Keep visiting to stack up punches"
-                : "Every visit earns punches"}
-        </p>
-        {showGrid && target && target.punchCost <= 20 && (
-          <div className="mt-5">
-            <PunchGrid
-              filled={target.punchCost - target.remaining}
-              threshold={target.punchCost}
-              theme={cardTheme}
-            />
-          </div>
-        )}
-      </div>
+    <div className="flex flex-col gap-2">
+      <PunchPass
+        theme={cardTheme}
+        {...holder}
+        title={`${card.emoji ? `${card.emoji} ` : ""}${card.name}`}
+        badge={card.exclusive ? { label: "VIP", color: accent } : tier}
+        balance={card.balance}
+        next={card.nextTarget}
+        ready={card.rewards.filter((r) => r.ready)}
+        hasRewards={card.rewards.length > 0}
+        showDots={showGrid}
+      />
 
       {showRewards && card.rewards.length > 0 && (
-        <ul>
-          {card.rewards.map((reward) => {
+        <ul className="overflow-hidden" style={surface}>
+          {card.rewards.map((reward, i) => {
             const progress = Math.min(
               100,
               Math.round(((reward.punchCost - reward.remaining) / reward.punchCost) * 100),
@@ -795,7 +725,7 @@ function PunchCardSurface({
               <li
                 key={reward.id}
                 className="px-5 py-4"
-                style={{ borderTop: `1px solid ${t.border}` }}
+                style={i > 0 ? { borderTop: `1px solid ${t.border}` } : undefined}
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
