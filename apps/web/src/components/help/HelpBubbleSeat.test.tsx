@@ -19,6 +19,7 @@ vi.mock("@/lib/useIsNativeApp", () => ({ useIsNativeApp: () => false }));
 
 const { HelpBubble } = await import("./HelpBubble");
 const { HelpSeatSync } = await import("./helpSeat");
+const { openAssistant } = await import("./openAssistant");
 
 const facts: OnboardingFacts = {
   hasShop: true,
@@ -32,7 +33,10 @@ const facts: OnboardingFacts = {
 };
 
 async function ask(q: string) {
-  fireEvent.click(screen.getByRole("button", { name: "Open the assistant" }));
+  // The dashboard opens the panel from "Search or ask"; there is no corner button there.
+  act(() => {
+    openAssistant();
+  });
   fireEvent.change(screen.getByLabelText("Ask a question"), { target: { value: q } });
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Send question" }));

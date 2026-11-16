@@ -18,6 +18,7 @@ import { getOpenSlots } from "@/app/dashboard/assistant/actions";
 import { useHelpSeat } from "./helpSeat";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { isPlatformHost } from "@/lib/customDomainGuard";
+import { OPEN_ASSISTANT_EVENT, type OpenAssistantDetail } from "./openAssistant";
 
 /**
  * The Assistant, in the corner of every page.
@@ -180,11 +181,15 @@ export function HelpBubble() {
   const launcherRef = useRef<HTMLButtonElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const wasOpen = useRef(false);
+  // Whatever opened the panel from outside (the top bar's "Search or ask", the
+  // sidebar's Help), so closing hands focus back there (WCAG 2.4.3).
+  const returnFocus = useRef<HTMLElement | null>(null);
 
-  // The dashboard's floating tab pill owns the bottom-right corner on phones,
-  // so the launcher has to clear it (pill is ~3.6rem tall, floating 0.625rem
-  // above the safe-area inset). From `sm` up the pill is hidden and the
-  // launcher drops back down. See DashboardNav.tsx.
+  // 🔴 NO FLOATING BUTTON ON THE DASHBOARD. It sat on top of whatever was in
+  // the bottom-right corner of every page. There, the panel opens from
+  // "Search or ask" in the top bar and Help in the sidebar instead
+  // (openAssistant.ts). Marketing and setup pages have no top bar, so they
+  // keep the corner button.
   const onDashboard = pathname.startsWith("/dashboard");
 
   // A shop's custom domain serves its pages at a bare "/", which no prefix
@@ -225,6 +230,25 @@ export function HelpBubble() {
     [asker, respond],
   );
 
+  // Opened from elsewhere on the page (openAssistant.ts), maybe with the words
+  // already typed into "Search or ask". Not listening where the panel is
+  // hidden: a client page must never open the owner's assistant, and the
+  // caller falls back to the Assistant page when nobody takes it.
+  useEffect(() => {
+    if (hidden) return;
+    function onOpen(e: Event) {
+      e.preventDefault();
+      const detail = (e as CustomEvent<OpenAssistantDetail>).detail;
+      returnFocus.current =
+        detail?.returnTo ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      setOpen(true);
+      const question = detail?.question?.trim();
+      if (question) send(question);
+    }
+    window.addEventListener(OPEN_ASSISTANT_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_ASSISTANT_EVENT, onOpen);
+  }, [hidden, send]);
+
   // Greet on first open so the panel is never an empty box with a cursor.
   useEffect(() => {
     if (!open || messages.length > 0) return;
@@ -253,11 +277,12 @@ export function HelpBubble() {
       const t = window.setTimeout(() => inputRef.current?.focus(), 10);
       return () => window.clearTimeout(t);
     }
-    // Restore focus to the launcher on close (WCAG 2.4.3), but only after a
-    // real open/close cycle rather than on mount.
+    // Restore focus to whatever opened it (WCAG 2.4.3), but only after a real
+    // open/close cycle rather than on mount.
     if (wasOpen.current) {
       wasOpen.current = false;
-      launcherRef.current?.focus();
+      (returnFocus.current ?? launcherRef.current)?.focus();
+      returnFocus.current = null;
     }
   }, [open]);
 
@@ -305,23 +330,29 @@ export function HelpBubble() {
 
   if (hidden) return null;
 
-  const launcherOffset = onDashboard
-    ? "bottom-[calc(4.9rem+env(safe-area-inset-bottom))] sm:bottom-[calc(1.25rem+env(safe-area-inset-bottom))]"
-    : "bottom-[calc(1.25rem+env(safe-area-inset-bottom))]";
+  // From `sm` up the panel is a corner card. Off the dashboard it parks ABOVE
+  // the corner button (3.5rem tall + gap) so the toggle stays clickable; on
+  // the dashboard there is no button, so it hangs under the top bar it was
+  // opened from.
+  const panelPlacement = onDashboard
+    ? "sm:top-[4.5rem] sm:bottom-auto sm:h-[min(36rem,calc(100vh-6rem))]"
+    : "sm:top-auto sm:bottom-[calc(5.5rem+env(safe-area-inset-bottom))] sm:h-[min(32rem,calc(100vh-11rem))]";
 
   return (
     <>
-      <button
-        ref={launcherRef}
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-label={open ? "Close the assistant" : "Open the assistant"}
-        aria-expanded={open}
-        title="Assistant"
-        className={`fixed right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-on-primary shadow-ambient-lg transition-transform duration-150 ease-out hover:scale-105 focus-visible:ring-2 focus-visible:ring-offwhite focus-visible:ring-offset-2 focus-visible:ring-offset-charcoal ${launcherOffset}`}
-      >
-        {open ? <CloseIcon /> : <ChatIcon />}
-      </button>
+      {!onDashboard && (
+        <button
+          ref={launcherRef}
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-label={open ? "Close the assistant" : "Open the assistant"}
+          aria-expanded={open}
+          title="Assistant"
+          className="fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom))] right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-on-primary shadow-ambient-lg transition-transform duration-150 ease-out hover:scale-105 focus-visible:ring-2 focus-visible:ring-offwhite focus-visible:ring-offset-2 focus-visible:ring-offset-charcoal"
+        >
+          {open ? <CloseIcon /> : <ChatIcon />}
+        </button>
+      )}
 
       {/* Portaled for the same reason FeatureSearch is: any ancestor with a
           filter/backdrop-filter (the dashboard's `glass` nav) becomes the
@@ -335,10 +366,9 @@ export function HelpBubble() {
             aria-modal="true"
             aria-label="Assistant"
             onKeyDown={trapTab}
-            /* Phones: a near-fullscreen sheet. From `sm` up: a corner panel
-               parked ABOVE the launcher (3.5rem tall + gap) rather than on top
-               of it, so the toggle stays visible and clickable the whole time. */
-            className="glass fixed inset-x-3 bottom-[calc(1rem+env(safe-area-inset-bottom))] top-16 z-40 flex flex-col overflow-hidden rounded-2xl shadow-2xl sm:inset-x-auto sm:right-4 sm:top-auto sm:bottom-[calc(5.5rem+env(safe-area-inset-bottom))] sm:h-[min(32rem,calc(100vh-11rem))] sm:w-[24rem]"
+            /* Phones: a near-fullscreen sheet. From `sm` up: a corner card,
+               placed by `panelPlacement` above. */
+            className={`glass fixed inset-x-3 bottom-[calc(1rem+env(safe-area-inset-bottom))] top-16 z-40 flex flex-col overflow-hidden rounded-2xl shadow-2xl sm:inset-x-auto sm:right-4 sm:w-[24rem] ${panelPlacement}`}
           >
             <header className="flex items-start justify-between gap-3 border-b border-subtle px-4 py-3">
               <div>
@@ -349,7 +379,7 @@ export function HelpBubble() {
                 type="button"
                 onClick={() => setOpen(false)}
                 aria-label="Close the assistant"
-                className="shrink-0 rounded-full border border-subtle p-1.5 text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-subtle text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
               >
                 <CloseIcon className="h-3.5 w-3.5" />
               </button>

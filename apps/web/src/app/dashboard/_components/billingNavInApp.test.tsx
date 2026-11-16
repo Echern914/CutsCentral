@@ -71,8 +71,8 @@ function moreSheet(onClose = vi.fn()) {
 
 function palette(query: string) {
   render(<FeatureSearch role="OWNER" rewardsEnabled affiliateProgramEnabled />);
-  fireEvent.click(screen.getByRole("button", { name: "Search features (Ctrl+K)" }));
-  fireEvent.change(screen.getByRole("combobox", { name: "Search features" }), { target: { value: query } });
+  fireEvent.click(screen.getByRole("button", { name: "Search or ask (Ctrl+K)" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Search or ask" }), { target: { value: query } });
 }
 
 const billingAnchors = () => document.querySelectorAll('a[href^="/dashboard/billing"]');
@@ -134,7 +134,7 @@ describe("the palette in an app build that can open Safari", () => {
   it("Enter on it does the same", async () => {
     app(CAPABLE);
     palette("plan & billing");
-    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search features" }), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search or ask" }), { key: "Enter" });
     await waitFor(() => expect(go).toHaveBeenCalledWith(SIGNED_IN));
     expect(push).not.toHaveBeenCalled();
   });
@@ -142,7 +142,7 @@ describe("the palette in an app build that can open Safari", () => {
   it("every other feature still navigates in the app as before", () => {
     app(CAPABLE);
     palette("tips");
-    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search features" }), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search or ask" }), { key: "Enter" });
     expect(push).toHaveBeenCalledTimes(1);
     expect(push.mock.calls[0]![0]).not.toMatch(/billing/);
   });

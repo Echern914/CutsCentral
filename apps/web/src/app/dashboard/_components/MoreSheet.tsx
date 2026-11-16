@@ -46,6 +46,7 @@ export function MoreSheet({
   affiliateProgramEnabled = false,
   role,
   locks,
+  signOutAction,
 }: {
   open: boolean;
   onClose: () => void;
@@ -56,6 +57,11 @@ export function MoreSheet({
   role?: SeatRole;
   /** Premium lock flags — tier-tagged rows get a diamond when locked. */
   locks?: FeatureLocks;
+  /**
+   * Ends the sheet with "Sign out" when given. It moved here from the top bar
+   * (the layout passes the server action down; a demo session gets none).
+   */
+  signOutAction?: () => Promise<void>;
 }) {
   // Portals need a DOM to target; SSR has none. Same mounted gate the feature
   // palette and demo tour use.
@@ -311,6 +317,19 @@ export function MoreSheet({
             )}
           </ul>
         </section>
+
+        {/* Last thing in the sheet, as in most apps: it is needed rarely, and
+            the top bar had no room left for it on a phone. */}
+        {signOutAction && (
+          <form action={signOutAction} className="mt-4 border-t border-subtle pt-4">
+            <button
+              type="submit"
+              className="flex min-h-[44px] w-full items-center justify-center rounded-xl border border-subtle-strong bg-charcoal-800 px-4 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+            >
+              Sign out
+            </button>
+          </form>
+        )}
       </div>
     </div>,
     document.body,

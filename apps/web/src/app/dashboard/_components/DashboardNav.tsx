@@ -8,8 +8,8 @@ import { cn } from "@/lib/cn";
 import { MoreSheet } from "./MoreSheet";
 
 /**
- * Primary navigation. Five fixed destinations — the four a barber opens daily
- * plus "More", which opens the full feature directory (MoreSheet).
+ * Primary navigation. Five fixed destinations — the four opened daily plus
+ * "More", which opens the full feature directory (MoreSheet).
  *
  * This replaced a 15-link horizontal scroller that shared one pill with the
  * brand, search, shop switcher, account and sign-out. On a phone that strip was
@@ -17,20 +17,18 @@ import { MoreSheet } from "./MoreSheet";
  * app's navigation. Everything dropped from the strip is still one tap away in
  * the More sheet — nothing was removed, only re-homed.
  *
- * Renders twice, responsively: a bottom tab bar on phones (thumb reach, native
- * feel) and an inline row in the top bar from `sm` up, where a bottom bar would
- * look out of place. Only one is visible at a time.
+ * Renders three ways, one per screen size, and only one is visible at a time:
+ *  - phones: a flat tab bar along the bottom edge (<DashboardTabBar>);
+ *  - tablets: an inline row in the top bar (<DashboardNavInline>);
+ *  - computers: the left sidebar (DashboardSidebar.tsx), which also carries
+ *    the shop's most-used settings.
  *
- * They are TWO exports on purpose, mounted at different points in the layout.
- * The top bar carries `.glass`, whose `backdrop-filter` establishes a
- * containing block for fixed-position descendants — a `position: fixed` bar
- * nested inside it would anchor to the nav pill instead of the viewport. So
- * <DashboardNavInline> goes inside the header and <DashboardTabBar> is mounted
- * at the layout root, outside any blurred ancestor. Each owns its own MoreSheet
- * state; only one is ever visible, so the hidden one's sheet never opens.
+ * Each owns its own MoreSheet state; only one is ever visible, so the hidden
+ * ones' sheets never open. The tab bar is mounted at the layout root, outside
+ * the header, so nothing in the header can become its containing block.
  */
 
-interface Tab {
+export interface Tab {
   /** Registry id. The route is RESOLVED, never written here. */
   featureId: string;
   href: string;
@@ -38,11 +36,9 @@ interface Tab {
   Icon: (props: { className?: string }) => JSX.Element;
 }
 
-// Order is deliberate and left-to-right: Home sits in the MIDDLE rather than
-// first. On the bottom bar (the phone's real navigation, and the iOS shell's
-// only navigation) the centre two slots are the easiest thumb reach, so the
-// screens opened most often live there. "More" is appended by the renderers,
-// always last.
+// Home leads, as it does in almost every app with a bottom bar: the first slot
+// is where people expect "where I start the day" (Studio redesign, approved
+// 2026-11-16). "More" is appended by the renderers, always last.
 //
 // 🔴 FIVE SLOTS, and Insights holds the fourth. It briefly lost that slot to
 // Assistant and went into the More sheet; this puts it back, because the two
@@ -50,11 +46,9 @@ interface Tab {
 // screen with a shape you scan, several times a week. Assistant answers a
 // question you happen to have, which is not a place at all.
 //
-// So Assistant lives in the corner bubble instead (components/help/HelpBubble),
-// which is strictly better for it: reachable from EVERY page rather than one,
-// including the pages where the question actually occurs to you, and it opens
-// as a chat you can ask straight away instead of a tab you navigate to and then
-// have to find your way around. The bubble also links through to the full page.
+// So Assistant opens from "Search or ask" in the top bar instead (and Help in
+// the sidebar): reachable from EVERY page rather than one, including the pages
+// where the question actually occurs to you. See components/help/openAssistant.
 //
 // A six-item bar was never an option: it does not fit a 320px phone at a 44px
 // touch target, which is the floor the whole nav is built to.
@@ -62,9 +56,9 @@ interface Tab {
 // The routes come from the registry so this list cannot drift from the palette,
 // the More sheet or the help corpus — the whole reason those three disagreed.
 const TAB_SPECS: { featureId: string; label: string; Icon: Tab["Icon"] }[] = [
+  { featureId: "home", label: "Home", Icon: HomeIcon },
   { featureId: "online-booking", label: "Calendar", Icon: CalendarIcon },
   { featureId: "clients", label: "Clients", Icon: ClientsIcon },
-  { featureId: "home", label: "Home", Icon: HomeIcon },
   { featureId: "insights", label: "Insights", Icon: InsightsIcon },
 ];
 
@@ -76,10 +70,10 @@ const TAB_SPECS: { featureId: string; label: string; Icon: Tab["Icon"] }[] = [
  * tab is simply not drawn — a nav full of doors that refuse to open reads as a
  * broken app rather than a limited one.
  *
- * 🔴 THE BARBER FALLBACK IS LOAD-BEARING. Assistant is where an employee's own
- * setup tasks and the whole offline help corpus live, and it is the only other
- * thing they can reach. Without it their bar is a single Home tab, so when
- * Insights is withheld the Assistant tab takes that slot back.
+ * 🔴 THE EMPLOYEE FALLBACK IS LOAD-BEARING. Assistant is where an employee's
+ * own setup tasks and the whole offline help corpus live, and it is the only
+ * other thing they can reach. Without it their bar is a single Home tab, so
+ * when Insights is withheld the Assistant tab takes that slot back.
  */
 export function tabsFor(role: SeatRole): Tab[] {
   const out: Tab[] = [];
@@ -102,12 +96,12 @@ export function tabsFor(role: SeatRole): Tab[] {
 }
 
 /** True when the current path belongs to `href`'s section. */
-function isActive(pathname: string, href: string): boolean {
+export function isActive(pathname: string, href: string): boolean {
   // "/dashboard" would prefix-match every dashboard page, so Home is exact.
   return href === "/dashboard" ? pathname === "/dashboard" : pathname.startsWith(href);
 }
 
-interface NavProps {
+export interface NavProps {
   isAdmin?: boolean;
   rewardsEnabled?: boolean;
   affiliateProgramEnabled?: boolean;
@@ -134,11 +128,18 @@ interface NavProps {
   barberOnly?: boolean;
   /** Premium lock flags for the More sheet's diamond badges (lib/featureLocks). */
   locks?: import("@/lib/featureLocks").FeatureLocks;
+  /**
+   * The sign-out server action, handed down by the layout so the More sheet
+   * can end with "Sign out" (it left the crowded top bar). Absent for a demo
+   * session: the demo ribbon has its own exit, and signing out of the shared
+   * demo account would end every other visitor's session too.
+   */
+  signOutAction?: () => Promise<void>;
 }
 
 /**
- * Phones only. MUST be mounted outside the blurred top bar — see the note above
- * about `backdrop-filter` and fixed positioning.
+ * Phones only. A flat bar on the bottom edge: white surface, one hairline on
+ * top, the current tab in ink and the rest muted.
  */
 export function DashboardTabBar({
   isAdmin = false,
@@ -147,6 +148,7 @@ export function DashboardTabBar({
   barberOnly = false,
   role: seatRole,
   locks,
+  signOutAction,
 }: NavProps) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
@@ -156,19 +158,15 @@ export function DashboardTabBar({
 
   return (
     <>
-      {/* A floating pill rather than an edge-to-edge strip: it reads as a
-          control sitting ON the app instead of a band welded to the bottom of
-          the screen, and the page visibly scrolls underneath it. */}
       <nav
         aria-label="Primary"
-        className="glass fixed inset-x-3 z-30 overflow-hidden rounded-full shadow-ambient-lg sm:hidden"
-        // Floats CLEAR of the home indicator instead of padding itself out of
-        // the way. The native shell insets only the TOP edge (SafeAreaView
-        // edges={["top"]}) and disables automatic content insets, so this offset
-        // has to include the inset itself — otherwise the pill would sit ON the
-        // indicator rather than above it. The WebView injects viewport-fit=cover
-        // so env() resolves in-app; on plain web it's simply 0.
-        style={{ bottom: "calc(0.625rem + env(safe-area-inset-bottom))" }}
+        className="fixed inset-x-0 bottom-0 z-30 border-t border-subtle bg-charcoal-800 sm:hidden"
+        // The bar owns the home-indicator gap itself. The native shell insets
+        // only the TOP edge (SafeAreaView edges={["top"]}) and disables
+        // automatic content insets, so without this the labels would sit
+        // under the indicator. The WebView injects viewport-fit=cover so env()
+        // resolves in-app; on plain web it's simply 0.
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         <ul className="flex items-stretch">
           {tabs.map((t) => (
@@ -190,12 +188,13 @@ export function DashboardTabBar({
         affiliateProgramEnabled={affiliateProgramEnabled}
         role={role}
         locks={locks}
+        signOutAction={signOutAction}
       />
     </>
   );
 }
 
-/** Tablet and up: the same five destinations, inline in the top bar. */
+/** Tablets: the same five destinations, inline in the top bar. */
 export function DashboardNavInline({
   isAdmin = false,
   rewardsEnabled = true,
@@ -203,6 +202,7 @@ export function DashboardNavInline({
   barberOnly = false,
   role: seatRole,
   locks,
+  signOutAction,
 }: NavProps) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
@@ -214,13 +214,14 @@ export function DashboardNavInline({
 
   return (
     <>
-      {/* 🔴 `min-w-0` is the fix, not tidying. The bar is three groups in a
-          `justify-between` row and the other two are `shrink-0`, so with a
-          default `min-width: auto` here nothing could give and the whole PAGE
+      {/* 🔴 `min-w-0` is the fix, not tidying. The bar is groups in a row and
+          the right-hand cluster is `shrink-0`, so with a default
+          `min-width: auto` here nothing could give and the whole PAGE
           overflowed at 768px (774>768). This group yields instead, and scrolls
           its own tabs in the last resort - the page never widens again however
-          many tabs or however long their labels get. */}
-      <div className="hidden min-w-0 items-center gap-1 overflow-x-auto sm:flex [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          many tabs or however long their labels get. Hidden from `lg`, where
+          the sidebar carries the same destinations. */}
+      <div className="hidden min-w-0 items-center gap-0.5 overflow-x-auto sm:flex lg:hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {tabs.map((t) => {
           const active = isActive(pathname, t.href);
           return (
@@ -229,13 +230,10 @@ export function DashboardNavInline({
               href={t.href}
               aria-current={active ? "page" : undefined}
               className={cn(
-                // px-3 until there is real room: at 768 the five tabs plus the
-                // logo and the account/sign-out cluster were 6px too wide for
-                // the viewport. Full padding returns at lg.
-                "shrink-0 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors duration-150 ease-out lg:px-4",
+                "flex min-h-[44px] shrink-0 items-center rounded-lg px-3 text-sm transition-colors duration-150 ease-out",
                 active
-                  ? "bg-gold/15 text-gold"
-                  : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
+                  ? "bg-charcoal-700 font-semibold text-offwhite"
+                  : "font-medium text-muted hover:bg-charcoal-700 hover:text-offwhite",
               )}
             >
               {t.label}
@@ -248,11 +246,10 @@ export function DashboardNavInline({
           aria-haspopup="dialog"
           aria-expanded={moreOpen}
           className={cn(
-            // Matches the tabs beside it - see the padding note above.
-            "shrink-0 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors duration-150 ease-out lg:px-4",
+            "flex min-h-[44px] shrink-0 items-center rounded-lg px-3 text-sm transition-colors duration-150 ease-out",
             moreActive
-              ? "bg-gold/15 text-gold"
-              : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
+              ? "bg-charcoal-700 font-semibold text-offwhite"
+              : "font-medium text-muted hover:bg-charcoal-700 hover:text-offwhite",
           )}
         >
           More
@@ -267,6 +264,7 @@ export function DashboardNavInline({
         affiliateProgramEnabled={affiliateProgramEnabled}
         role={role}
         locks={locks}
+        signOutAction={signOutAction}
       />
     </>
   );
@@ -279,11 +277,11 @@ function TabLink({ tab, active }: { tab: Tab; active: boolean }) {
       href={tab.href}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "flex flex-col items-center gap-1 px-1 py-2 text-[11px] font-medium transition-colors duration-150 ease-out",
-        active ? "text-gold" : "text-muted",
+        "flex min-h-[52px] flex-col items-center justify-center gap-0.5 px-1 pb-1 pt-1.5 text-[11px] transition-colors duration-150 ease-out",
+        active ? "font-semibold text-offwhite" : "font-medium text-muted",
       )}
     >
-      <Icon className="h-5 w-5" />
+      <Icon className="h-6 w-6" />
       {tab.label}
     </Link>
   );
@@ -296,67 +294,65 @@ function MoreTab({ active, onOpen }: { active: boolean; onOpen: () => void }) {
       onClick={onOpen}
       aria-haspopup="dialog"
       className={cn(
-        "flex w-full flex-col items-center gap-1 px-1 py-2 text-[11px] font-medium transition-colors duration-150 ease-out",
-        active ? "text-gold" : "text-muted",
+        "flex min-h-[52px] w-full flex-col items-center justify-center gap-0.5 px-1 pb-1 pt-1.5 text-[11px] transition-colors duration-150 ease-out",
+        active ? "font-semibold text-offwhite" : "font-medium text-muted",
       )}
     >
-      <MoreIcon className="h-5 w-5" />
+      <MoreIcon className="h-6 w-6" />
       More
     </button>
   );
 }
 
-/* Icons — inline so the bundle gains no dependency. Stroke style matches the
-   brand mark in the dashboard layout (1.8 width, round caps). */
+/* Icons — inline so the bundle gains no dependency. One stroke style
+   everywhere (1.75 width, round caps), matching the redesign's icon set. */
 
 const strokeProps = {
   fill: "none",
   stroke: "currentColor",
-  strokeWidth: 1.8,
+  strokeWidth: 1.75,
   strokeLinecap: "round" as const,
   strokeLinejoin: "round" as const,
 };
 
-function HomeIcon({ className }: { className?: string }) {
+export function HomeIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden {...strokeProps}>
-      <path d="M3 10.5 12 3l9 7.5" />
-      <path d="M5.5 9.5V20h13V9.5" />
+      <path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" />
     </svg>
   );
 }
 
-function CalendarIcon({ className }: { className?: string }) {
+export function CalendarIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden {...strokeProps}>
-      <rect x="3" y="5" width="18" height="16" rx="2.5" />
-      <path d="M3 10h18M8 3v4M16 3v4" />
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4M8 2v4M3 10h18" />
     </svg>
   );
 }
 
-function ClientsIcon({ className }: { className?: string }) {
+export function ClientsIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden {...strokeProps}>
-      <circle cx="9" cy="8" r="3.2" />
-      <path d="M3.5 20c0-3 2.5-5.2 5.5-5.2s5.5 2.2 5.5 5.2" />
-      <path d="M16.5 5.2a3.2 3.2 0 0 1 0 5.9M18 14.9c2 .7 3.5 2.6 3.5 5.1" />
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
     </svg>
   );
 }
 
-function InsightsIcon({ className }: { className?: string }) {
+export function InsightsIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden {...strokeProps}>
-      <path d="M4 20V4" />
-      <path d="M4 20h16" />
-      <path d="M8 20v-6M13 20V9M18 20v-9" />
+      <path d="M3 3v18h18" />
+      <path d="M18 17V9M13 17V5M8 17v-3" />
     </svg>
   );
 }
 
 /** A speech bubble with a spark: help that answers, not a generic robot. */
-function AssistantIcon({ className }: { className?: string }) {
+export function AssistantIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden {...strokeProps}>
       <path d="M20.5 12.2c0 3.9-3.8 7-8.5 7a9.8 9.8 0 0 1-2.6-.35L4.5 20.5l1.3-3.3A6.7 6.7 0 0 1 3.5 12.2c0-3.9 3.8-7 8.5-7s8.5 3.1 8.5 7Z" />
@@ -365,10 +361,10 @@ function AssistantIcon({ className }: { className?: string }) {
   );
 }
 
-function MoreIcon({ className }: { className?: string }) {
+export function MoreIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden {...strokeProps}>
-      <path d="M4 7h16M4 12h16M4 17h16" />
+      <path d="M4 6h16M4 12h16M4 18h16" />
     </svg>
   );
 }

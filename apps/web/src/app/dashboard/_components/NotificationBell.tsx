@@ -121,14 +121,14 @@ export function NotificationBell({
         aria-label={label}
         title={label}
         aria-expanded={open}
-        className="relative shrink-0 rounded-full border border-subtle p-2 text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+        className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
       >
         <svg
-          className="h-3.5 w-3.5"
+          className="h-5 w-5"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
-          strokeWidth="1.8"
+          strokeWidth="1.75"
           strokeLinecap="round"
           strokeLinejoin="round"
           aria-hidden
@@ -147,7 +147,7 @@ export function NotificationBell({
           // would be unreadable in one of them.
           <span
             aria-hidden
-            className="absolute -right-1 -top-1 min-w-[1.15rem] rounded-full bg-danger-soft px-1 text-[10px] font-bold leading-[1.15rem] text-charcoal-900"
+            className="absolute right-0.5 top-1 min-w-[1.15rem] rounded-full bg-danger-soft px-1 text-[10px] font-bold leading-[1.15rem] text-charcoal-900"
           >
             {shown}
           </span>
@@ -158,7 +158,7 @@ export function NotificationBell({
           <span
             aria-hidden
             data-qa="whats-new-dot"
-            className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-gold ring-2 ring-charcoal-900"
+            className="absolute right-2.5 top-2.5 h-2.5 w-2.5 rounded-full bg-gold ring-2 ring-charcoal"
           />
         )}
       </button>

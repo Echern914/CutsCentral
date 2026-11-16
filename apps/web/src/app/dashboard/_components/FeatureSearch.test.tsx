@@ -20,8 +20,8 @@ vi.mock("@/lib/useIsNativeApp", () => ({ useIsNativeApp: () => false }));
 
 function openPalette(role: "OWNER" | "MANAGER" = "OWNER") {
   render(<FeatureSearch role={role} rewardsEnabled affiliateProgramEnabled />);
-  fireEvent.click(screen.getByRole("button", { name: "Search features (Ctrl+K)" }));
-  return screen.getByRole("combobox", { name: "Search features" });
+  fireEvent.click(screen.getByRole("button", { name: "Search or ask (Ctrl+K)" }));
+  return screen.getByRole("combobox", { name: "Search or ask" });
 }
 
 const firstOption = () => screen.getAllByRole("option")[0]!;
@@ -59,6 +59,31 @@ describe("FeatureSearch", () => {
     const ask = screen.getByRole("button", { name: /Ask the assistant about/ });
     fireEvent.click(ask);
     expect(push).toHaveBeenCalledWith("/dashboard/assistant?q=zzzzqqq");
+  });
+
+  it("words that DO match features can still be asked as a question", () => {
+    // "Search or ask": a query like "deposits" finds the feature AND may be
+    // a how-do-I, so the ask is offered under the matches too.
+    const input = openPalette();
+    fireEvent.change(input, { target: { value: "deposits" } });
+    expect(screen.queryAllByRole("option").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Ask “deposits”" }));
+    // No panel mounted here, so the full Assistant page takes the question.
+    expect(push).toHaveBeenCalledWith("/dashboard/assistant?q=deposits");
+  });
+
+  it("🔴 with the Assistant panel on the page, the ask opens it right there", async () => {
+    const { HelpBubble } = await import("@/components/help/HelpBubble");
+    render(<HelpBubble />);
+    const input = openPalette();
+    fireEvent.change(input, { target: { value: "deposits" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask “deposits”" }));
+    // Answered in place: no navigation, the palette closed, the panel open
+    // with the question already asked.
+    expect(push).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Search or ask" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Assistant" })).toBeTruthy();
+    expect(screen.getByText("deposits")).toBeTruthy();
   });
 
   it("'help' reaches Contact support - unlisted in More, but typeable here", () => {

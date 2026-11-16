@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 
 /**
  * Shared-UI mishaps from the 2026-10-08 sweep:
@@ -26,6 +26,7 @@ const rec = vi.hoisted(() => ({
 vi.mock("@/app/my-rewards/actions", () => rec);
 
 const { HelpBubble } = await import("./help/HelpBubble");
+const { openAssistant } = await import("./help/openAssistant");
 const { NumberField } = await import("./ui/NumberField");
 const { MyRewardsClient } = await import("@/app/my-rewards/MyRewardsClient");
 
@@ -35,9 +36,25 @@ beforeEach(() => {
 });
 
 describe("the Assistant bubble", () => {
-  it("shows on the dashboard", () => {
+  it("keeps its corner button on the marketing pages", () => {
+    pathname.current = "/pricing";
     render(<HelpBubble />);
     expect(screen.getByRole("button", { name: "Open the assistant" })).toBeTruthy();
+  });
+
+  it("on the dashboard it has no corner button, and opens from the top bar instead", () => {
+    // The floating button sat on top of whatever was in the bottom-right
+    // corner of every dashboard page; "Search or ask" replaced it.
+    render(<HelpBubble />);
+    expect(screen.queryByRole("button", { name: "Open the assistant" })).toBeNull();
+    let taken = false;
+    act(() => {
+      taken = openAssistant("how do I add a service");
+    });
+    expect(taken).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Assistant" })).toBeTruthy();
+    // The question typed into "Search or ask" is asked, not just carried over.
+    expect(screen.getByText("how do I add a service")).toBeTruthy();
   });
 
   it.each(["/kiosk", "/line", "/waitlist/hold/abc", "/my-rewards", "/custom-domain/x.com"])(
@@ -46,6 +63,15 @@ describe("the Assistant bubble", () => {
       pathname.current = path;
       render(<HelpBubble />);
       expect(screen.queryByRole("button", { name: "Open the assistant" })).toBeNull();
+      // ...and cannot be opened from elsewhere on the page either: nobody
+      // takes the request, so a caller falls back instead of opening the
+      // owner's assistant in front of a client.
+      let taken = true;
+      act(() => {
+        taken = openAssistant("anything");
+      });
+      expect(taken).toBe(false);
+      expect(screen.queryByRole("dialog", { name: "Assistant" })).toBeNull();
     },
   );
 });
