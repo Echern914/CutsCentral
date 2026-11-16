@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-16-studio-page-and-rewards-pass",
+    date: "2026-11-16",
+    kind: "feature",
+    title: "A new Studio page design, and a punch card like a pass",
+    body:
+      "Pick Studio under Page design: your services as one list, your team, recent work, and Book pinned to the " +
+      "bottom with your lowest price. Your clients' punch card now looks like a pass, with their punches, " +
+      "tier and visits on it.",
+  },
+  {
     id: "2026-11-16-app-tab-bar-home-indicator",
     date: "2026-11-16",
     kind: "fix",

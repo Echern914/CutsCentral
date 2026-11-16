@@ -167,5 +167,28 @@ function Sketch({ design, t, accent }: { design: PageDesignKey; t: Tokens; accen
           <div className="h-3 rounded" style={surface} />
         </div>
       );
+    case "studio":
+      return (
+        <div className="flex h-full flex-col">
+          <div className="flex flex-1 flex-col gap-1 p-2">
+            <div className="h-4 rounded" style={photo} />
+            <div className="-mt-2">{coin()}</div>
+            {line("40%", t.text)}
+            <div className="grid grid-cols-3 gap-0.5">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="h-2 rounded-sm" style={surface} />
+              ))}
+            </div>
+            <div className="flex flex-1 flex-col justify-evenly rounded px-1" style={surface}>
+              {line("60%", t.text)}
+              {line("45%", t.text)}
+            </div>
+          </div>
+          <div className="flex items-center gap-1 px-2 py-1" style={{ borderTop: `1px solid ${t.border}` }}>
+            {line("18%")}
+            <div className="h-2 flex-1 rounded-full" style={{ backgroundColor: accent }} />
+          </div>
+        </div>
+      );
   }
 }
