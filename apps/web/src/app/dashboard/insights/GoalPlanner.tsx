@@ -362,7 +362,7 @@ export function GoalPlanner({
             <span className="text-right">More {nounPlural}</span>
             <span className="text-right">Ceiling at {bookedPct}%</span>
           </div>
-          <ul className="flex flex-col divide-y divide-subtle/60">
+          <ul className="flex flex-col divide-y divide-subtle">
             {proj.rows.map((s) => (
               <ServiceRow
                 key={s.serviceId}

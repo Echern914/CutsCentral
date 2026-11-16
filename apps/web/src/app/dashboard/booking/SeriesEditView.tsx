@@ -488,7 +488,7 @@ export function SeriesEditFields({ state }: { state: SeriesEditState }) {
                 : "No upcoming appointment in this repeat can take this change."}
             </p>
           ) : (
-            <ul className="flex flex-col divide-y divide-subtle/60">
+            <ul className="flex flex-col divide-y divide-subtle">
               {p.change.map((c) => {
                 const moved = c.from.startsAt !== c.to.startsAt;
                 return (

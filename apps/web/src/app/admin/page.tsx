@@ -200,7 +200,7 @@ export default async function AdminPage() {
               </thead>
               <tbody>
                 {shops.map((s) => (
-                  <tr key={s.id} className="border-b border-subtle/60 last:border-0">
+                  <tr key={s.id} className="border-b border-subtle last:border-0">
                     <td className="px-4 py-3">
                       <p className="font-medium text-offwhite">{s.name}</p>
                       <p className="text-xs capitalize text-muted">{s.industry}</p>

@@ -135,7 +135,7 @@ export function PartnerEarnings({ me }: { me: PartnerMe }) {
       <FormError className="mt-2">{error}</FormError>
 
       {me.cashouts.length > 0 ? (
-        <ul className="mt-4 divide-y divide-subtle/60 text-sm">
+        <ul className="mt-4 divide-y divide-subtle text-sm">
           {me.cashouts.map((c) => (
             <li key={c.id} className="flex items-center justify-between py-2">
               <span>

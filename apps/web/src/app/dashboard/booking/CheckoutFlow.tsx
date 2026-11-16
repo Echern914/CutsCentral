@@ -724,7 +724,7 @@ export function CheckoutFlow({
             setStep("result");
             onDone();
           }}
-          className="min-h-[3.5rem] rounded-xl bg-primary px-4 font-display text-xl text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-60"
+          className="min-h-[3.25rem] rounded-xl bg-primary px-4 text-base font-semibold tabular-nums text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-60"
         >
           {records
             ? busy
@@ -787,9 +787,22 @@ export function CheckoutFlow({
 
       {/* The ticket: what is being paid for, what is already in, and the one
           figure every method on this screen will take. */}
-      <div className="rounded-2xl border border-subtle bg-charcoal-800 px-4 py-4" data-qa="ticket">
-        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">On the ticket</p>
-        <div className="mt-2.5 flex flex-col gap-1.5">
+      {/* Studio: the figure every method below will take is the headline,
+          centered, with the ticket that makes it up underneath. */}
+      <div className="rounded-2xl border border-subtle bg-charcoal-800 px-4 pb-4 pt-5" data-qa="ticket">
+        <p className="text-center text-[13px] font-medium text-muted">Amount due</p>
+        <p
+          className="mt-1 text-center font-display text-5xl font-semibold leading-none tabular-nums text-offwhite"
+          data-qa="amount-due"
+        >
+          {dueCents === null ? "—" : money(chargeCents)}
+        </p>
+        {/* Said plainly, so a barber looking for the edit box knows where the
+            number comes from instead of hunting for one that is not there. */}
+        <p className="mt-2 text-center text-xs text-muted">
+          The full balance. To change it, edit the {"price"} on the appointment.
+        </p>
+        <div className="mt-4 flex flex-col gap-1.5 border-t border-subtle pt-3">
           <Row
             label={state.appointment.serviceName ?? "Appointment"}
             value={state.totalCents === null ? "—" : money(state.totalCents)}
@@ -799,17 +812,6 @@ export function CheckoutFlow({
             <Row label="Already paid" value={`−${money(state.collectedCents)}`} tone="emerald" />
           )}
         </div>
-        <div className="mt-3 flex flex-wrap items-baseline justify-between gap-2 border-t border-subtle pt-3">
-          <span className="text-sm text-muted">Amount due</span>
-          <span className="font-display text-4xl leading-none tabular-nums text-offwhite" data-qa="amount-due">
-            {dueCents === null ? "—" : money(chargeCents)}
-          </span>
-        </div>
-        {/* Said plainly, so a barber looking for the edit box knows where the
-            number comes from instead of hunting for one that is not there. */}
-        <p className="mt-2 text-xs text-muted">
-          The full balance. To change it, edit the {"price"} on the appointment.
-        </p>
       </div>
 
       {/* 🔴 NOTHING TO COLLECT, NO METHODS. The server takes exactly the
@@ -817,7 +819,7 @@ export function CheckoutFlow({
           unpriced booking failed on every method, every time. */}
       {dueCents === null || dueCents === 0 ? (
         <p
-          className="rounded-lg border border-subtle/60 px-3.5 py-3 text-center text-sm text-muted"
+          className="rounded-lg border border-subtle px-3.5 py-3 text-center text-sm text-muted"
           data-qa="nothing-due"
         >
           {dueCents === 0
@@ -826,8 +828,9 @@ export function CheckoutFlow({
         </p>
       ) : (
       <div>
-        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">How are they paying?</p>
-        <div className="mt-2 flex flex-col gap-2">
+        <p className="text-[13px] font-semibold text-muted">How are they paying?</p>
+        {/* Studio: the ways to pay as one grouped list, a hairline between. */}
+        <div className="mt-2 flex flex-col divide-y divide-subtle overflow-hidden rounded-2xl border border-subtle bg-charcoal-800">
           {savedCard.available && savedCard.card?.last4 ? (
             // First, because it is the one the customer already set up. Not
             // preselected: it opens the confirm step like every other method.
@@ -961,7 +964,10 @@ function Row({
  * choosing a method only ever moves to the confirm step.
  *
  * `lead` marks the card on file, the one method the customer already set up.
- * It is drawn first and outlined in gold; nothing is preselected by it.
+ * It is drawn first with a gold edge; nothing is preselected by it.
+ *
+ * A row of the grouped list rather than a card of its own (Studio), so the
+ * list draws the borders and a row only fills on hover.
  */
 function MethodButton({
   label,
@@ -983,11 +989,9 @@ function MethodButton({
       type="button"
       data-qa={qa}
       onClick={onClick}
-      className={cn(
-        "flex min-h-[3.75rem] w-full items-center gap-3.5 rounded-2xl border bg-charcoal-800 px-3.5 py-2.5 text-left transition-colors duration-150 ease-out",
-        lead ? "border-gold hover:border-gold-muted" : "border-subtle hover:border-subtle-strong",
-      )}
+      className="relative flex min-h-[3.75rem] w-full items-center gap-3.5 px-4 py-2.5 text-left transition-colors duration-150 ease-out hover:bg-charcoal-700/60"
     >
+      {lead && <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-gold" />}
       <span aria-hidden className={cn("shrink-0", lead ? "text-gold" : "text-offwhite")}>
         {icon}
       </span>
@@ -1013,7 +1017,7 @@ function Assurance({ children }: { children: React.ReactNode }) {
 /** A method that cannot be used here, as the reason it cannot. Never a button. */
 function MethodUnavailable({ children }: { children: React.ReactNode }) {
   return (
-    <p className="rounded-2xl border border-dashed border-subtle px-3.5 py-3 text-xs leading-relaxed text-muted">
+    <p className="px-4 py-3 text-xs leading-relaxed text-muted">
       {children}
     </p>
   );

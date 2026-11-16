@@ -52,7 +52,7 @@ export function RewardsSectionToggles({
             key={key}
             className={cn(
               "flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 transition-[border-color,opacity] duration-150 ease-out",
-              isVisible ? "border-subtle bg-charcoal-700" : "border-subtle/60 opacity-55",
+              isVisible ? "border-subtle bg-charcoal-700" : "border-subtle opacity-55",
             )}
           >
             <div className="min-w-0">

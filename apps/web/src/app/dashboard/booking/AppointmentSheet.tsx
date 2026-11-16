@@ -1421,131 +1421,109 @@ function Hero({
   const name = row.clientName || "Client";
 
   return (
-    <section className="relative overflow-hidden rounded-2xl border border-subtle bg-charcoal-800/60">
-      {/* A barber's straight razor line: one brass hairline across the top,
-          fading out at both ends so it reads as a finish, not a border. */}
-      <span
-        aria-hidden
-        className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-gold/45 to-transparent"
-      />
-      {/* Fine parallel lines at a weight you notice only as texture, masked so
-          the pattern never has a hard edge and never competes with the name. */}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 h-28 text-offwhite opacity-[0.035]"
-        style={{
-          backgroundImage:
-            "repeating-linear-gradient(112deg, currentColor 0 1px, transparent 1px 11px)",
-          maskImage: "linear-gradient(to bottom, black, transparent)",
-          WebkitMaskImage: "linear-gradient(to bottom, black, transparent)",
-        }}
-      />
-
-      <div className="relative px-4 pb-3.5 pt-4 text-center sm:px-6">
+    <section className="overflow-hidden rounded-2xl border border-subtle bg-charcoal-800">
+      {/* Studio: the client's coin beside their name, read left to right like
+          every other row on the sheet. */}
+      <div className="flex items-start gap-3 px-4 pb-3.5 pt-4 sm:px-5">
         <span
           aria-hidden
           className={cn(
-            "mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-charcoal-700 font-display text-base text-offwhite/85 ring-2 ring-offset-2 ring-offset-charcoal-800",
+            "flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-charcoal-700 text-base font-semibold text-offwhite/85 ring-2 ring-offset-2 ring-offset-charcoal-800",
             pill.ringCls,
           )}
         >
           {initialsOf(name)}
         </span>
 
-        {detail?.clientId ? (
-          // The name is also the way through to the client's page, so it has to
-          // BE a real touch target: one line of 22px type is 28px tall, and 12px
-          // of padding takes the hit box to 52. The WRAPPER owns the spacing and
-          // cancels that padding, so the hero looks identical either way — and
-          // putting the padding AND a negative margin on the link itself sets
-          // margin-top twice, where the winner is Tailwind's output order rather
-          // than the order written here.
-          <div className="-mb-3 mt-0.5">
-            <Link
-              href={`/dashboard/clients/${detail.clientId}`}
+        <div className="min-w-0 flex-1">
+          {detail?.clientId ? (
+            // The name is also the way through to the client's page, so it has to
+            // BE a real touch target: one line of 22px type is 28px tall, and 10px
+            // of padding takes the hit box to 48. The WRAPPER owns the spacing and
+            // cancels that padding, so the name sits level with the coin either
+            // way — and putting the padding AND a negative margin on the link
+            // itself sets the margin twice, where the winner is Tailwind's output
+            // order rather than the order written here.
+            <div className="-my-2.5">
+              <Link
+                href={`/dashboard/clients/${detail.clientId}`}
+                className={cn(
+                  NAME_WRAP_CLS,
+                  "block py-2.5 font-display text-[22px] leading-7 transition-colors duration-150 ease-out hover:text-gold",
+                )}
+              >
+                {name}
+              </Link>
+            </div>
+          ) : (
+            <h3 className={cn(NAME_WRAP_CLS, "font-display text-[22px] leading-7")}>{name}</h3>
+          )}
+          {detail?.clientInstagram && (
+            <p className="mt-0.5 text-sm">
+              <InstagramHandle handle={detail.clientInstagram} />
+            </p>
+          )}
+          {/* A group member points at the booker's client: labelled, never
+              shown bare under the attendee's name as if it were theirs. */}
+          {detail?.bookedByInstagram && (
+            <p className="mt-0.5 text-sm text-muted">
+              Booked by <InstagramHandle handle={detail.bookedByInstagram} />
+            </p>
+          )}
+
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span
+              className={cn("rounded-md px-2.5 py-1 text-[10px] font-semibold", pill.cls)}
+            >
+              {pill.label}
+            </span>
+            {/* SOURCE, not status. A synced booking is just as booked as a native
+                one; what differs is who owns it. */}
+            <span
               className={cn(
-                NAME_WRAP_CLS,
-                "block py-3 font-display text-[22px] font-normal leading-tight transition-colors duration-150 ease-out hover:text-gold sm:text-[26px]",
+                "rounded-md px-2.5 py-1 text-[10px] font-medium",
+                external ? "bg-info-soft/15 text-info-soft" : "bg-charcoal-700 text-muted",
               )}
             >
-              {name}
-            </Link>
-          </div>
-        ) : (
-          <h3
-            className={cn(
-              NAME_WRAP_CLS,
-              "mt-3.5 font-display text-[22px] font-normal leading-tight sm:text-[26px]",
-            )}
-          >
-            {name}
-          </h3>
-        )}
-        {detail?.clientInstagram && (
-          <p className="mt-1 text-sm">
-            <InstagramHandle handle={detail.clientInstagram} />
-          </p>
-        )}
-        {/* A group member points at the booker's client: labelled, never
-            shown bare under the attendee's name as if it were theirs. */}
-        {detail?.bookedByInstagram && (
-          <p className="mt-1 text-sm text-muted">
-            Booked by <InstagramHandle handle={detail.bookedByInstagram} />
-          </p>
-        )}
-
-        <div className="mt-2.5 flex flex-wrap items-center justify-center gap-1.5">
-          <span
-            className={cn("rounded-md px-2.5 py-1 text-[10px] font-semibold", pill.cls)}
-          >
-            {pill.label}
-          </span>
-          {/* SOURCE, not status. A synced booking is just as booked as a native
-              one; what differs is who owns it. */}
-          <span
-            className={cn(
-              "rounded-md px-2.5 py-1 text-[10px] font-medium",
-              external ? "bg-info-soft/15 text-info-soft" : "bg-charcoal-700 text-muted",
-            )}
-          >
-            {sourceLabel}
-          </span>
-          {/* "Repeats", not "Weekly": a series can be every 1 to 8 weeks. */}
-          {row.seriesId && (
-            <span
-              title="Repeat appointment"
-              className="rounded-md bg-gold/15 px-2.5 py-1 text-[10px] font-medium text-gold"
-            >
-              ↻ Repeats
+              {sourceLabel}
             </span>
-          )}
-          {row.special && <SpecialChip afterHours={row.afterHours} premium={row.premium} className="px-2.5 py-1" />}
+            {/* "Repeats", not "Weekly": a series can be every 1 to 8 weeks. */}
+            {row.seriesId && (
+              <span
+                title="Repeat appointment"
+                className="rounded-md bg-gold/15 px-2.5 py-1 text-[10px] font-medium text-gold"
+              >
+                ↻ Repeats
+              </span>
+            )}
+            {row.special && <SpecialChip afterHours={row.afterHours} premium={row.premium} className="px-2.5 py-1" />}
+          </div>
         </div>
       </div>
 
-      {/* The booking's own facts. Label left, value right, wrapping to its own
-          line before anything compresses — a 40-character service name pushes
-          the price down, it never squeezes it. */}
-      <dl className="relative border-t border-subtle px-4 py-2.5 text-sm sm:px-6">
-        <Fact icon={<TagIcon />} label="Service">
+      {/* The booking's own facts, one row each. Label left, value right,
+          wrapping to its own line before anything compresses — a 40-character
+          service name pushes the price down, it never squeezes it. */}
+      <dl className="border-t border-subtle text-sm">
+        <Fact label="When">
+          <span className="tabular-nums">{dateLabel}</span>
+          <span className="block">
+            <span className="tabular-nums">{timeLabel}</span>
+            {durMin && <span className="font-normal text-muted"> · {durMin} min</span>}
+          </span>
+        </Fact>
+        <Fact label="Service">
           <span className="[overflow-wrap:anywhere]">
             {service ?? "Appointment"}
             {addOns.map((a) => ` + ${a.name}`).join("")}
           </span>
         </Fact>
         {barber && (
-          <Fact icon={<ScissorsIcon />} label={cap(vocab.providerNoun)}>
+          <Fact label={cap(vocab.providerNoun)}>
             <span className="[overflow-wrap:anywhere]">{barber}</span>
           </Fact>
         )}
-        <Fact icon={<CalendarIcon />} label="Date">
-          <span className="tabular-nums">{dateLabel}</span>
-        </Fact>
-        <Fact icon={<ClockIcon />} label="Time">
-          <span className="tabular-nums">{timeLabel}</span>
-          {durMin && <span className="text-muted"> · {durMin} min</span>}
-        </Fact>
-        <Fact icon={<CashIcon />} label="Price">
+        <Fact label="Price">
           <span className="tabular-nums">
             {price != null ? `$${price.toFixed(2)}` : "Not priced"}
           </span>
@@ -1561,16 +1539,16 @@ function Hero({
           )}
         </Fact>
         {tips && (
-          <Fact icon={<TipIcon />} label="Tip">
+          <Fact label="Tip">
             {tips.totalCents > 0 ? (
               <>
                 <span className="tabular-nums" data-qa="tip-total">
                   {formatTipCents(tips.totalCents)}
                 </span>
-                <span className="text-muted"> · {tipSourceLabel(tips)}</span>
+                <span className="font-normal text-muted"> · {tipSourceLabel(tips)}</span>
               </>
             ) : (
-              <span className="text-muted" data-qa="tip-total">
+              <span className="font-normal text-muted" data-qa="tip-total">
                 None yet
               </span>
             )}
@@ -2065,22 +2043,16 @@ function TipEditor({ state }: { state: TipEditState }) {
  * right. `min-w-0` on the value plus `flex-wrap` means a long value wraps under
  * its own label instead of squashing it — the failure the old edit grid had.
  */
-function Fact({
-  icon,
-  label,
-  children,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  children: React.ReactNode;
-}) {
+/**
+ * One of the booking's facts as a row of a grouped list (Studio): the label
+ * quiet on the left, the value in weight on the right. 52px tall, so a row
+ * holding a 44px Edit button grows by only a few pixels.
+ */
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-subtle/50 py-1.5 first:pt-0 last:border-b-0 last:pb-0">
-      <dt className="flex flex-none items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted">
-        <span className="flex h-4 w-4 items-center justify-center text-gold/70">{icon}</span>
-        {label}
-      </dt>
-      <dd className="ml-auto min-w-0 text-right text-sm leading-snug text-offwhite">
+    <div className="flex min-h-[3.25rem] min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-subtle px-4 py-1.5 first:border-t-0 sm:px-5">
+      <dt className="flex-none text-sm text-muted">{label}</dt>
+      <dd className="ml-auto min-w-0 text-right text-sm font-semibold leading-snug text-offwhite">
         {children}
       </dd>
     </div>
@@ -2168,8 +2140,10 @@ function ActionButton({
   disabled?: boolean;
   title?: string;
 }) {
+  // Studio: a solid tile with the icon in the text's own ink - gold is kept
+  // for signals, and three gold icons in a row were not one.
   const cls =
-    "flex min-h-[3.25rem] min-w-0 flex-col items-center justify-center gap-1 rounded-xl border border-subtle bg-charcoal-800/40 px-1.5 py-2 text-[11px] font-medium leading-tight text-offwhite/85 transition-colors duration-150 ease-out hover:border-gold/40 hover:text-gold disabled:pointer-events-none disabled:opacity-40";
+    "flex min-h-[3.75rem] min-w-0 flex-col items-center justify-center gap-1 rounded-xl border border-subtle bg-charcoal-800 px-1.5 py-2 text-[13px] font-semibold leading-tight text-offwhite transition-colors duration-150 ease-out hover:border-subtle-strong hover:bg-charcoal-700/60 disabled:pointer-events-none disabled:opacity-40";
   if (href) {
     return (
       <a
@@ -2179,14 +2153,14 @@ function ActionButton({
         title={title}
         className={cls}
       >
-        <span className="text-gold/80">{icon}</span>
+        <span>{icon}</span>
         <span className="[overflow-wrap:anywhere] text-center">{label}</span>
       </a>
     );
   }
   return (
     <button type="button" onClick={onClick} disabled={disabled} title={title} className={cls}>
-      <span className={cn(disabled ? "text-muted" : "text-gold/80")}>{icon}</span>
+      <span className={cn(disabled && "text-muted")}>{icon}</span>
       <span className="[overflow-wrap:anywhere] text-center">{label}</span>
     </button>
   );
@@ -2273,12 +2247,10 @@ function PaymentCard({
   return (
     <Panel title="Payment">
       <div className="min-w-0">
-        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-          {eyebrow}
-        </p>
+        <p className="text-xs font-medium text-muted">{eyebrow}</p>
         <p
           className={cn(
-            "mt-1 font-display leading-tight [overflow-wrap:anywhere]",
+            "mt-0.5 font-display font-semibold leading-tight [overflow-wrap:anywhere]",
             numeric ? "text-3xl tabular-nums" : "text-xl",
             external
               ? "text-muted"
@@ -2465,7 +2437,7 @@ function PaymentCard({
               type="button"
               onClick={onCheckout}
               data-qa="start-checkout"
-              className="flex h-12 w-full items-center justify-center rounded-xl bg-primary px-5 font-display text-lg text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
+              className="flex h-[3.25rem] w-full items-center justify-center rounded-xl bg-primary px-5 text-base font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
             >
               {p.collectedCents > 0 ? "Collect the rest" : "Start checkout"}
             </button>
@@ -2519,7 +2491,7 @@ function ClientCard({
     <Panel title="Client">
       <dl className="flex flex-col gap-2.5 text-sm">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-          <dt className="flex flex-none items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+          <dt className="flex flex-none items-center gap-2 text-sm text-muted">
             <span className={cn("flex h-4 w-4 items-center justify-center", sms.tone)}>
               {sms.ok ? <CheckIcon /> : <BanIcon />}
             </span>
@@ -2533,9 +2505,9 @@ function ClientCard({
           </dd>
         </div>
 
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-t border-subtle/50 pt-2.5">
-          <dt className="flex flex-none items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-muted">
-            <span className="flex h-4 w-4 items-center justify-center text-gold/70">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-t border-subtle pt-2.5">
+          <dt className="flex flex-none items-center gap-2 text-sm text-muted">
+            <span className="flex h-4 w-4 items-center justify-center">
               <GlobeIcon />
             </span>
             Timezone
@@ -4028,13 +4000,13 @@ function Panel({
   return (
     <section
       className={cn(
-        "min-w-0 rounded-2xl border border-subtle bg-charcoal-800/40 p-3.5 sm:p-4",
+        "min-w-0 rounded-2xl border border-subtle bg-charcoal-800 p-3.5 sm:p-4",
         className,
       )}
     >
-      <h3 className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-gold/80">
-        {title}
-      </h3>
+      {/* Studio: a card's name is a quiet label, not a gold eyebrow - the
+          content under it is what a barber is reading for. */}
+      <h3 className="mb-2 text-[13px] font-semibold text-muted">{title}</h3>
       {children}
     </section>
   );
@@ -4296,37 +4268,6 @@ const CalendarIcon = () => (
   <Svg>
     <rect x="3" y="5" width="18" height="16" rx="2" />
     <path d="M3 10h18M8 3v4M16 3v4" />
-  </Svg>
-);
-const ClockIcon = () => (
-  <Svg>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M12 7v5l3 2" />
-  </Svg>
-);
-/** Barber-inspired, not a barber pole: the shears themselves. */
-const ScissorsIcon = () => (
-  <Svg>
-    <circle cx="6" cy="6" r="2.5" />
-    <circle cx="6" cy="18" r="2.5" />
-    <path d="M8 7.5 20 18M8 16.5 20 6" />
-  </Svg>
-);
-const TagIcon = () => (
-  <Svg>
-    <path d="M3 12V4h8l9 9-8 8-9-9Z" />
-    <circle cx="7.5" cy="7.5" r="1.2" />
-  </Svg>
-);
-const CashIcon = () => (
-  <Svg>
-    <rect x="2.5" y="6" width="19" height="12" rx="2" />
-    <circle cx="12" cy="12" r="2.5" />
-  </Svg>
-);
-const TipIcon = () => (
-  <Svg>
-    <path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" />
   </Svg>
 );
 const GlobeIcon = () => (
