@@ -14,9 +14,11 @@ import { getPlatformNotices } from "@/lib/platformNotices";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { ThemeSync } from "@/components/ThemeSync";
 import { PREPAINT_SCRIPT } from "@/lib/theme";
+import { APP_INSET_SCRIPT } from "@/lib/appSafeArea";
 import { logoutAction } from "../(auth)/actions";
 import { DashboardNavInline, DashboardTabBar } from "./_components/DashboardNav";
 import { DashboardSidebar } from "./_components/DashboardSidebar";
+import { AppBottomInset } from "./_components/AppBottomInset";
 import { AskButton } from "./_components/AskButton";
 import { ShopMark } from "./_components/ShopMark";
 import { DemoBanner } from "./_components/DemoBanner";
@@ -157,6 +159,12 @@ export default async function DashboardLayout({
           server value wins so the choice follows the account to new devices. */}
       <script dangerouslySetInnerHTML={{ __html: PREPAINT_SCRIPT }} />
       <ThemeSync theme={me.data?.theme ?? "light"} />
+      {/* The iPhone home-indicator gap, which env() cannot report inside the
+          iOS app (lib/appSafeArea.ts). The script sets it before the tab bar
+          below is painted; AppBottomInset repeats it after a client-side
+          navigation, which never runs inline scripts. */}
+      <script dangerouslySetInnerHTML={{ __html: APP_INSET_SCRIPT }} />
+      <AppBottomInset />
       {/* Swipe down at the top of any dashboard page to reload - the phone
           (and the iOS shell especially) has no refresh button. */}
       <PullToRefresh />
@@ -272,7 +280,7 @@ export default async function DashboardLayout({
           this their last card would sit behind the bar too. */}
       <div
         className="sm:!pb-0"
-        style={{ paddingBottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
+        style={{ paddingBottom: "calc(4.5rem + var(--cb-safe-bottom))" }}
       >
         {/* Resolved ONCE on the server here; every client component below reads
             it with useVocab(). NEUTRAL for a shop that has not chosen a type. */}

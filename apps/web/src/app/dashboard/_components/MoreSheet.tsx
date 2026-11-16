@@ -162,7 +162,7 @@ export function MoreSheet({
         className="animate-fade-in relative max-h-[85dvh] border border-subtle bg-charcoal-900 shadow-lg w-full overflow-y-auto rounded-t-3xl px-4 pt-4 sm:max-h-[80dvh] sm:max-w-2xl sm:rounded-3xl sm:px-6"
         // The sheet is the bottom-most surface in the app, so it owns the
         // home-indicator gap itself (the native shell insets only the TOP).
-        style={{ paddingBottom: "calc(1.5rem + env(safe-area-inset-bottom))" }}
+        style={{ paddingBottom: "calc(1.5rem + var(--cb-safe-bottom))" }}
       >
         <div className="sticky top-0 z-10 -mx-4 mb-3 bg-charcoal-900/90 px-4 pb-3 pt-2 backdrop-blur sm:-mx-6 sm:px-6">
           <div className="flex items-center justify-between">

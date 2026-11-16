@@ -435,10 +435,11 @@ ACTIVE                ${vpDebug.active ? "YES" : "no"}`
             data-qa="dialog-footer"
             className="flex flex-none flex-col gap-2 border-t border-subtle bg-charcoal-900/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6"
             // The sheet is the bottom-most surface on a phone, so it owns the
-            // home-indicator gap. env() reads 0 today (the app deliberately does
-            // NOT set viewport-fit=cover — see globals.css) and turns itself on
-            // if that ever changes; nothing moves in the meantime.
-            style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom, 0px))" }}
+            // home-indicator gap. Not env(), which reads 0 in the iOS app (it
+            // deliberately does NOT set viewport-fit=cover): --cb-safe-bottom
+            // is env() on the web and the app's real gap inside the dashboard
+            // (lib/appSafeArea.ts).
+            style={{ paddingBottom: "calc(0.75rem + var(--cb-safe-bottom))" }}
           >
             {footer}
           </div>

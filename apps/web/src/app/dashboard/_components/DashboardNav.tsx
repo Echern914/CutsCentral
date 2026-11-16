@@ -163,10 +163,12 @@ export function DashboardTabBar({
         className="fixed inset-x-0 bottom-0 z-30 border-t border-subtle bg-charcoal-800 sm:hidden"
         // The bar owns the home-indicator gap itself. The native shell insets
         // only the TOP edge (SafeAreaView edges={["top"]}) and disables
-        // automatic content insets, so without this the labels would sit
-        // under the indicator. The WebView injects viewport-fit=cover so env()
-        // resolves in-app; on plain web it's simply 0.
-        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        // automatic content insets, so without this the labels sit under the
+        // indicator. 🔴 NOT env(): the WebView never sets viewport-fit=cover,
+        // so env() reads 0 in the app - which is exactly how the labels ended
+        // up covered. --cb-safe-bottom carries the app's real gap
+        // (lib/appSafeArea.ts) and is plain env() everywhere else.
+        style={{ paddingBottom: "var(--cb-safe-bottom)" }}
       >
         <ul className="flex items-stretch">
           {tabs.map((t) => (
@@ -282,7 +284,7 @@ function TabLink({ tab, active }: { tab: Tab; active: boolean }) {
       )}
     >
       <Icon className="h-6 w-6" />
-      {tab.label}
+      <TabLabel>{tab.label}</TabLabel>
     </Link>
   );
 }
@@ -299,9 +301,18 @@ function MoreTab({ active, onOpen }: { active: boolean; onOpen: () => void }) {
       )}
     >
       <MoreIcon className="h-6 w-6" />
-      More
+      <TabLabel>More</TabLabel>
     </button>
   );
+}
+
+/**
+ * One line, always. Five tabs on a 320px phone leave each label 56px, which
+ * fits the longest one ("Assistant") - but a label that ever wrapped would
+ * make its tab taller than the rest, so it shortens with an ellipsis instead.
+ */
+function TabLabel({ children }: { children: string }) {
+  return <span className="block max-w-full truncate leading-tight">{children}</span>;
 }
 
 /* Icons — inline so the bundle gains no dependency. One stroke style

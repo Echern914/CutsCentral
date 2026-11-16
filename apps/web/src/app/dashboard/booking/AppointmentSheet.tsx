@@ -2766,7 +2766,7 @@ function ActionMenu({
           if (next && !e.currentTarget.contains(next)) onClose();
         }}
         className="relative w-full max-w-md rounded-t-2xl border border-subtle bg-charcoal-900 p-2 shadow-ambient-lg sm:max-w-xs sm:rounded-2xl"
-        style={{ paddingBottom: "calc(0.5rem + env(safe-area-inset-bottom, 0px))" }}
+        style={{ paddingBottom: "calc(0.5rem + var(--cb-safe-bottom))" }}
       >
         <p className="px-3 pb-1.5 pt-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-gold/80">
           {title}

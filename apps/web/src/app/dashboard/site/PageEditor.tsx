@@ -962,7 +962,7 @@ export function PageEditor({
               // just above it, at 4.9rem + 3.5rem) are fixed to the bottom
               // edge, so pinning to bottom-0 would tuck the bar under them.
               // 9rem clears both; from sm up there is no pill.
-              "sticky bottom-[calc(9rem+env(safe-area-inset-bottom))] z-20 rounded-2xl border border-subtle bg-charcoal px-3 py-3 shadow-ambient-lg sm:bottom-0 sm:px-5",
+              "sticky bottom-[calc(9rem+var(--cb-safe-bottom))] z-20 rounded-2xl border border-subtle bg-charcoal px-3 py-3 shadow-ambient-lg sm:bottom-0 sm:px-5",
           )}
         >
           <button
