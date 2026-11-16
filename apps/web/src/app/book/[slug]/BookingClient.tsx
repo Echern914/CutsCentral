@@ -172,6 +172,32 @@ function monthGrid(month: string): { day: string; inMonth: boolean }[] {
 
 const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
 
+/** The time grid's groups, by the hour a visit starts on the shop's clock. */
+const DAY_PARTS = [
+  { label: "Morning", from: 0, to: 12 },
+  { label: "Afternoon", from: 12, to: 17 },
+  { label: "Evening", from: 17, to: 24 },
+] as const;
+
+/**
+ * Split a day's times into DAY_PARTS, dropping the empty parts. `hourOf` reads
+ * the start on the SHOP's clock (see hourFmt). Both time grids - the day view
+ * every client sees and a prefilled service's calendar - group through this,
+ * so the two can't disagree about where 12:00 or 17:00 falls.
+ */
+function byDayPart<T extends { startsAt: string }>(
+  slots: readonly T[],
+  hourOf: (iso: string) => number,
+): { label: string; slots: T[] }[] {
+  return DAY_PARTS.map(({ label, from, to }) => ({
+    label,
+    slots: slots.filter((s) => {
+      const h = hourOf(s.startsAt);
+      return h >= from && h < to;
+    }),
+  })).filter((part) => part.slots.length > 0);
+}
+
 /**
  * Public native booking picker: pick service -> (provider, only when the service
  * has more than one barber) -> a day on the monthly calendar -> open slot ->
@@ -1149,6 +1175,10 @@ export function BookingClient({
   function dayServiceRow(svc: DayService) {
     const stripe = serviceColorHex(svc.color);
     const chips = svc.slots;
+    // One column count for the whole row, so its Morning and Evening line up.
+    const twoLine = chips.some(
+      (s) => s.targeted || s.price !== undefined || s.durationMin !== undefined,
+    );
     const hasDetails = Boolean(svc.imageUrl || svc.description);
     const detailsOpen = openDetails.has(svc.id);
     const detailsId = `svc-details-${svc.id}`;
@@ -1205,65 +1235,68 @@ export function BookingClient({
           {chips.length === 0 && (
             <p className="mt-2 text-xs text-muted">No times this day</p>
           )}
-          {chips.length > 0 && (
-          <div className="mt-2.5 flex flex-wrap gap-2">
-            {chips.map((s) => {
-              // Compound key incl. the targeted id (same as the service-first
-              // grid): a special and a normal slot can share the same instant
-              // on different barbers, and only ONE of them may light up - they
-              // carry different prices.
-              const chosen =
-                slot === s.startsAt &&
-                serviceId === svc.id &&
-                (slotTargeted?.id ?? null) === (s.targeted?.id ?? null);
-              return (
-                <button
-                  key={`${s.startsAt}-${s.targeted?.id ?? "grid"}`}
-                  type="button"
-                  onClick={() => pickDaySlot(svc, s)}
-                  aria-pressed={chosen}
-                  className="rounded-lg border px-3 py-1.5 text-xs transition-colors"
-                  style={{
-                    // A special keeps its gold even when it isn't the chosen
-                    // chip, so it reads as "extra" while scanning the grid.
-                    borderColor: s.targeted
-                      ? SPECIAL_GOLD
-                      : chosen
-                        ? accent
-                        : `rgb(var(--cb-fg) / 0.15)`,
-                    backgroundColor: s.targeted
-                      ? `${SPECIAL_GOLD}${chosen ? "2E" : "14"}`
-                      : chosen
-                        ? `${accent}14`
-                        : "transparent",
-                    color: s.targeted ? SPECIAL_GOLD_INK : chosen ? accentInk : undefined,
-                  }}
-                >
-                  {s.targeted && (
-                    <span aria-hidden className="mr-1">
-                      ★
-                    </span>
-                  )}
-                  {timeFmt.format(new Date(s.startsAt))}
-                  {s.targeted && (
-                    <span className="ml-1 opacity-80">
-                      · {formatPrice(s.targeted.price)}
-                      {s.targeted.label ? ` · ${s.targeted.label}` : ""}
-                    </span>
-                  )}
-                  {/* A time-of-day window's own price/length (the API attaches
-                      these only when they differ from the day-level card). */}
-                  {!s.targeted && (s.price !== undefined || s.durationMin !== undefined) && (
-                    <span className="ml-1 opacity-80">
-                      {s.price !== undefined && s.price !== null ? ` · ${formatPrice(s.price)}` : ""}
-                      {s.durationMin !== undefined ? ` · ${s.durationMin} min` : ""}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-          )}
+          {/* Times grouped Morning / Afternoon / Evening on the shop's clock,
+              in 44px buttons. Three across on a phone (this sits inside a
+              card), four from sm - or three throughout when any time carries
+              a second line (a special, or a time-of-day price). */}
+          {byDayPart(chips, shopHour).map(({ label, slots: part }) => {
+            return (
+              <div key={label} role="group" aria-label={label} className="mt-3">
+                <p aria-hidden className="mb-1.5 text-xs font-semibold text-muted">
+                  {label}
+                </p>
+                <div className={`grid gap-2 ${twoLine ? "grid-cols-3" : "grid-cols-3 sm:grid-cols-4"}`}>
+                  {part.map((s) => {
+                    // Compound key incl. the targeted id (same as the
+                    // service-first grid): a special and a normal slot can
+                    // share the same instant on different barbers, and only ONE
+                    // of them may light up - they carry different prices.
+                    const chosen =
+                      slot === s.startsAt &&
+                      serviceId === svc.id &&
+                      (slotTargeted?.id ?? null) === (s.targeted?.id ?? null);
+                    // A time-of-day window's own price/length (the API attaches
+                    // these only when they differ from the day-level card).
+                    const windowNote = !s.targeted
+                      ? [
+                          s.price !== undefined && s.price !== null ? formatPrice(s.price) : null,
+                          s.durationMin !== undefined ? `${s.durationMin} min` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : "";
+                    return (
+                      <button
+                        key={`${s.startsAt}-${s.targeted?.id ?? "grid"}`}
+                        type="button"
+                        onClick={() => pickDaySlot(svc, s)}
+                        aria-pressed={chosen}
+                        className={s.targeted ? `${TIME_CHIP} col-span-2` : TIME_CHIP}
+                        style={timeChipStyle(Boolean(s.targeted), chosen)}
+                      >
+                        {s.targeted && (
+                          <span aria-hidden className="mr-1">
+                            ★
+                          </span>
+                        )}
+                        {timeFmt.format(new Date(s.startsAt))}
+                        {s.targeted && (
+                          <span className="block text-[11px] font-medium">
+                            {s.targeted.label || "Special"} · {formatPrice(s.targeted.price)}
+                          </span>
+                        )}
+                        {windowNote && (
+                          <span className="block text-[11px] font-medium opacity-80">
+                            {windowNote}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -1384,6 +1417,43 @@ export function BookingClient({
       }),
     [tz],
   );
+  // The hour of a start on the SHOP's clock (0-23), which sorts the time grid
+  // into Morning / Afternoon / Evening. Never the viewer's clock: someone
+  // booking from another timezone must see the shop's 9:00 under Morning.
+  const hourFmt = useMemo(
+    () =>
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        hour: "numeric",
+        hourCycle: "h23",
+      }),
+    [tz],
+  );
+  const shopHour = (iso: string) => Number(hourFmt.format(new Date(iso))) % 24;
+
+  /**
+   * One time button's colours, shared by both grids. Gold marks a special
+   * whether or not it's picked; when picked it fills, so it still reads as the
+   * selection. A plain time fills with the shop's accent when picked.
+   */
+  function timeChipStyle(special: boolean, picked: boolean): React.CSSProperties {
+    if (special) {
+      return {
+        borderColor: SPECIAL_GOLD,
+        backgroundColor: picked ? SPECIAL_GOLD : `${SPECIAL_GOLD}14`,
+        color: picked ? readableOn(SPECIAL_GOLD) : SPECIAL_GOLD_INK,
+      };
+    }
+    return {
+      borderColor: picked ? accent : `rgb(var(--cb-fg) / 0.12)`,
+      backgroundColor: picked ? accent : "transparent",
+      color: picked ? onAccent : undefined,
+    };
+  }
+  // A special spans two cells (col-span-2 at the call sites), so its label and
+  // price sit on one line under the time instead of stacking in a narrow cell.
+  const TIME_CHIP =
+    "min-h-[44px] rounded-xl border px-1 py-1.5 text-center text-sm font-semibold leading-tight tabular-nums transition-colors";
 
   /** Local (shop-tz) YYYY-MM-DD bucket key for an instant. */
   function dayKey(iso: string): string {
@@ -2635,32 +2705,84 @@ export function BookingClient({
     // The client half (they agreed, and gave a phone) AND the shop half.
     const textsReminder = consent && phone.trim() !== "" && data.shop.textReminders === true;
     return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-10 text-offwhite">
+      <main className="mx-auto min-h-screen max-w-md px-5 pb-10 pt-10 text-offwhite">
         {data.shop.slug === DEMO.SHOP_SLUG && <DemoTour route="book" />}
         {/* data-tour: keep in sync with packages/config/src/demoTour.ts */}
-        <div
-          className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6 text-center"
-          data-tour="confirmation"
-        >
+        <div data-tour="confirmation">
           <div
             aria-hidden="true"
-            className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full text-2xl"
+            className="mb-4 flex h-[52px] w-[52px] items-center justify-center rounded-full"
             style={{ backgroundColor: `${accent}22`, color: accentInk }}
           >
-            ✓
+            <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 6 9 17l-5-5" />
+            </svg>
           </div>
-          <h1 ref={confirmHeadingRef} tabIndex={-1} className="font-display text-2xl outline-none">
+          <h1
+            ref={confirmHeadingRef}
+            tabIndex={-1}
+            className="font-display text-[30px] leading-9 outline-none"
+          >
             {wasRequest ? "Request sent" : "You're booked!"}
           </h1>
+          <p className="mt-1.5 text-[15px] text-muted">
+            {/* Confirmations go by EMAIL now (SMS confirmation is off for
+                cost - see appointmentNotify.ts); the reminder TEXT stays. The
+                promises below must track the channels that actually fire. */}
+            {wasRequest ? (
+              <>
+                {data.shop.name} will review your request and confirm your time.
+                {email.trim()
+                  ? " We'll email you as soon as it's approved."
+                  : " Save this page to check the status."}
+              </>
+            ) : (
+              <>
+                {data.shop.name} has your appointment.
+                {email.trim() ? " We'll email your confirmation." : ""}
+                {/* Only when a text can really go: texting is a platform
+                    switch (off for weeks at a time) and a Premium feature. */}
+                {textsReminder ? " We'll text you a reminder before your visit." : ""}
+                {!email.trim() && !textsReminder
+                  ? " Save this page to manage your appointment."
+                  : ""}
+              </>
+            )}
+          </p>
           {/* Spell out WHEN — "You're booked!" with no date/time forced the
-              customer into the manage page just to see what they booked. */}
+              customer into the manage page just to see what they booked. A
+              date tile in the shop's colour, then the day and time on the
+              shop's clock, the service and the shop. */}
           {shownSlot !== null && (
-            <p className="mt-2 text-base font-semibold">
-              {dateFmt.format(new Date(shownSlot))} · {timeFmt.format(new Date(shownSlot))}
-              {selectedService ? (
-                <span className="font-normal text-muted"> · {selectedService.name}</span>
-              ) : null}
-            </p>
+            <div className="mt-5 flex gap-3.5 rounded-2xl border border-subtle bg-charcoal-800 p-4">
+              <span className="w-14 shrink-0 self-start overflow-hidden rounded-xl border border-subtle text-center">
+                <span
+                  className="block text-[11px] font-semibold uppercase leading-[18px] tracking-[0.04em]"
+                  style={{ backgroundColor: accent, color: onAccent }}
+                >
+                  {new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "short" }).format(
+                    new Date(shownSlot),
+                  )}
+                </span>
+                <span className="block font-display text-2xl leading-[34px] tabular-nums">
+                  {new Intl.DateTimeFormat("en-US", { timeZone: tz, day: "numeric" }).format(
+                    new Date(shownSlot),
+                  )}
+                </span>
+              </span>
+              <span className="min-w-0">
+                <span className="block font-semibold tabular-nums">
+                  {new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "long" }).format(
+                    new Date(shownSlot),
+                  )}
+                  , {timeFmt.format(new Date(shownSlot))}
+                </span>
+                {selectedService ? (
+                  <span className="block text-sm text-muted">{selectedService.name}</span>
+                ) : null}
+                <span className="block text-sm text-muted">{data.shop.name}</span>
+              </span>
+            </div>
           )}
           {/* A standing appointment: what actually landed, and WHICH dates did
               not. A customer who asked for twelve and got ten must hear it
@@ -2693,30 +2815,6 @@ export function BookingClient({
               )}
             </p>
           )}
-          <p className="mt-2 text-sm text-muted">
-            {/* Confirmations go by EMAIL now (SMS confirmation is off for
-                cost - see appointmentNotify.ts); the reminder TEXT stays. The
-                promises below must track the channels that actually fire. */}
-            {wasRequest ? (
-              <>
-                {data.shop.name} will review your request and confirm your time.
-                {email.trim()
-                  ? " We'll email you as soon as it's approved."
-                  : " Save this page to check the status."}
-              </>
-            ) : (
-              <>
-                {data.shop.name} has your appointment.
-                {email.trim() ? " We'll email your confirmation." : ""}
-                {/* Only when a text can really go: texting is a platform
-                    switch (off for weeks at a time) and a Premium feature. */}
-                {textsReminder ? " We'll text you a reminder before your visit." : ""}
-                {!email.trim() && !textsReminder
-                  ? " Save this page to manage your appointment."
-                  : ""}
-              </>
-            )}
-          </p>
           {/* Booked from the ChairBack app as themselves, but onto a record
               that also carries a phone or email the account has not
               confirmed: the booking is real, but the app cannot list it (it
@@ -2736,7 +2834,7 @@ export function BookingClient({
           <ShopLocationBooked location={data.shop.location} />
           <Link
             href={`/book/manage/${confirmedToken}`}
-            className="mt-5 inline-block rounded-xl px-5 py-2.5 text-sm font-semibold"
+            className="mt-5 flex min-h-[48px] w-full items-center justify-center rounded-xl px-5 text-[15px] font-semibold"
             style={{ backgroundColor: accent, color: onAccent }}
           >
             View / change my appointment
@@ -2775,7 +2873,7 @@ export function BookingClient({
               (rewards home or shop page). */}
           <CustomerBack
             label={`← Back to ${data.shop.name}`}
-            className="mt-4 block w-full text-center text-xs text-muted transition-colors hover:text-offwhite"
+            className="mt-2 flex min-h-[44px] w-full items-center justify-center text-sm text-muted transition-colors hover:text-offwhite"
           />
 
           {data.shop.payDirect && (
@@ -3434,14 +3532,24 @@ export function BookingClient({
                 }}
               />
 
-              {/* Times for the selected day. */}
-              <div className="mt-4 grid grid-cols-3 gap-2">
-                {daySlots.length === 0 && (
-                  <p className="col-span-3 text-sm text-muted">
-                    Pick a highlighted day to see open times.
-                  </p>
-                )}
-                {daySlots.map((s) => {
+              {/* Times for the selected day, grouped by part of the day on the
+                  shop's clock. Four across, or three when a special carries a
+                  second line (its label and price). */}
+              {daySlots.length === 0 && (
+                <p className="mt-4 text-sm text-muted">
+                  Pick a highlighted day to see open times.
+                </p>
+              )}
+              {byDayPart(daySlots, shopHour).map(({ label, slots: part }) => {
+                return (
+                  <div key={label} role="group" aria-label={label} className="mt-4">
+                    <p aria-hidden className="mb-2 text-[13px] font-semibold text-muted">
+                      {label}
+                    </p>
+                    <div
+                      className={`grid gap-2 ${part.some((s) => s.targeted) ? "grid-cols-3" : "grid-cols-4"}`}
+                    >
+                {part.map((s) => {
                   const picked =
                     slot === s.startsAt &&
                     (slotTargeted?.id ?? null) === (s.targeted?.id ?? null);
@@ -3463,30 +3571,8 @@ export function BookingClient({
                         });
                       }}
                       aria-pressed={picked}
-                      className="rounded-lg border py-2 text-center text-sm transition-colors"
-                      style={{
-                        // Gold marks a special whether or not it's picked; when
-                        // picked it fills, so it still reads as the selection.
-                        borderColor: s.targeted
-                          ? SPECIAL_GOLD
-                          : picked
-                            ? accent
-                            : `rgb(var(--cb-fg) / 0.12)`,
-                        backgroundColor: s.targeted
-                          ? picked
-                            ? SPECIAL_GOLD
-                            : `${SPECIAL_GOLD}14`
-                          : picked
-                            ? accent
-                            : "transparent",
-                        color: s.targeted
-                          ? picked
-                            ? readableOn(SPECIAL_GOLD)
-                            : SPECIAL_GOLD_INK
-                          : picked
-                            ? onAccent
-                            : undefined,
-                      }}
+                      className={s.targeted ? `${TIME_CHIP} col-span-2` : TIME_CHIP}
+                      style={timeChipStyle(Boolean(s.targeted), picked)}
                     >
                       {s.targeted && (
                         <span aria-hidden className="mr-1">
@@ -3495,15 +3581,17 @@ export function BookingClient({
                       )}
                       {timeFmt.format(new Date(s.startsAt))}
                       {s.targeted && (
-                        <span className="block text-[10px] font-semibold">
-                          {s.targeted.label || "Special"} ·{" "}
-                          {formatPrice(s.targeted.price)}
+                        <span className="block text-[11px] font-medium">
+                          {s.targeted.label || "Special"} · {formatPrice(s.targeted.price)}
                         </span>
                       )}
                     </button>
                   );
                 })}
-              </div>
+                    </div>
+                  </div>
+                );
+              })}
             </>
           )}
         </Section>
@@ -4273,7 +4361,7 @@ function Section({
         <h2
           ref={headingRef}
           tabIndex={focusOnMount ? -1 : undefined}
-          className="text-xs font-semibold uppercase tracking-wide text-muted outline-none"
+          className="font-display text-[17px] leading-6 text-offwhite outline-none"
         >
           {title}
         </h2>
@@ -4291,7 +4379,7 @@ function BackStep({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="text-xs text-muted transition-colors hover:text-offwhite"
+      className="-mr-2 inline-flex min-h-[44px] items-center px-2 text-sm text-muted transition-colors hover:text-offwhite"
     >
       ← Back
     </button>
@@ -4354,19 +4442,23 @@ function MonthCalendar({
           onClick={onPrevMonth}
           disabled={atFloor}
           aria-label="Previous month"
-          className="rounded-lg px-2 py-1 text-sm text-muted transition-colors hover:text-offwhite disabled:opacity-30"
+          className="flex h-11 w-11 items-center justify-center rounded-xl text-muted transition-colors hover:text-offwhite disabled:opacity-30"
         >
-          ←
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="m15 18-6-6 6-6" />
+          </svg>
         </button>
-        <span className="text-sm font-semibold">{monthLabel(viewMonth)}</span>
+        <span className="font-display text-[17px]">{monthLabel(viewMonth)}</span>
         <button
           type="button"
           onClick={onNextMonth}
           disabled={atCeiling}
           aria-label="Next month"
-          className="rounded-lg px-2 py-1 text-sm text-muted transition-colors hover:text-offwhite disabled:opacity-30"
+          className="flex h-11 w-11 items-center justify-center rounded-xl text-muted transition-colors hover:text-offwhite disabled:opacity-30"
         >
-          →
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="m9 18 6-6-6-6" />
+          </svg>
         </button>
       </div>
       <div className="grid grid-cols-7 gap-1 text-center">

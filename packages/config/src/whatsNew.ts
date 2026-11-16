@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-16-booking-times-by-part-of-day",
+    date: "2026-11-16",
+    kind: "feature",
+    title: "Open times sorted into morning, afternoon, evening",
+    body:
+      "On your booking page, each service's open times now sit under Morning, Afternoon and Evening, in " +
+      "bigger buttons that are easier to tap. After booking, your client sees the visit as a card with its " +
+      "date, time and service.",
+  },
+  {
     id: "2026-11-16-clients-redesign",
     date: "2026-11-16",
     kind: "feature",

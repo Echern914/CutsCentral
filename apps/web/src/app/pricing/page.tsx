@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { APP_NAME, BILLING, PLANS } from "@chairback/config/constants";
 import { PricingSection } from "@/components/marketing/PricingSection";
-import { ScissorsMark } from "@/components/marketing/PunchCardDemo";
-import { HideInNativeApp } from "@/components/HideInNativeApp";
+import { SiteFooter } from "@/components/marketing/SiteFooter";
+import { SiteHeader } from "@/components/marketing/SiteHeader";
 
 /**
  * Standalone pricing page - what people type and what ads deep-link to.
@@ -34,38 +34,7 @@ export const metadata: Metadata = {
 export default function PricingPage() {
   return (
     <div className="relative min-h-dvh overflow-x-clip">
-      {/* Same minimal marketing chrome as the landing page nav. */}
-      <header className="sticky top-0 z-20">
-        <nav
-          aria-label="Primary"
-          className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-xl px-5 py-3"
-        >
-          <Link href="/" className="flex items-center gap-2">
-            <ScissorsMark className="h-4 w-4 text-gold" />
-            <span className="font-display text-base tracking-tight">{APP_NAME}</span>
-          </Link>
-          {/* Sign-in / Get-started are hidden in-app (3.1.1): build 32's shell
-              renders /pricing inside the WebView, and "Get started" → /signup is
-              a business-registration entry. No in-app surface links here, but
-              gating keeps the page safe-by-construction if one ever does. */}
-          <HideInNativeApp>
-            <div className="flex items-center gap-2">
-              <Link
-                href="/login"
-                className="rounded-xl px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
-              >
-                Sign in
-              </Link>
-              <Link
-                href="/signup"
-                className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-[box-shadow,filter] duration-150 ease-out hover:bg-primary/90"
-              >
-                Get started
-              </Link>
-            </div>
-          </HideInNativeApp>
-        </nav>
-      </header>
+      <SiteHeader />
 
       <main>
         {/* Visually-hidden h1: PricingSection's heading is an h2 (it renders as
@@ -85,6 +54,7 @@ export default function PricingPage() {
           .
         </p>
       </main>
+      <SiteFooter />
     </div>
   );
 }
