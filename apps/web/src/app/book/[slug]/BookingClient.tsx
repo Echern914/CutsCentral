@@ -1271,7 +1271,7 @@ export function BookingClient({
                         type="button"
                         onClick={() => pickDaySlot(svc, s)}
                         aria-pressed={chosen}
-                        className={TIME_CHIP}
+                        className={s.targeted ? `${TIME_CHIP} col-span-2` : TIME_CHIP}
                         style={timeChipStyle(Boolean(s.targeted), chosen)}
                       >
                         {s.targeted && (
@@ -1450,6 +1450,8 @@ export function BookingClient({
       color: picked ? onAccent : undefined,
     };
   }
+  // A special spans two cells (col-span-2 at the call sites), so its label and
+  // price sit on one line under the time instead of stacking in a narrow cell.
   const TIME_CHIP =
     "min-h-[44px] rounded-xl border px-1 py-1.5 text-center text-sm font-semibold leading-tight tabular-nums transition-colors";
 
@@ -3569,7 +3571,7 @@ export function BookingClient({
                         });
                       }}
                       aria-pressed={picked}
-                      className={TIME_CHIP}
+                      className={s.targeted ? `${TIME_CHIP} col-span-2` : TIME_CHIP}
                       style={timeChipStyle(Boolean(s.targeted), picked)}
                     >
                       {s.targeted && (
@@ -3579,9 +3581,8 @@ export function BookingClient({
                       )}
                       {timeFmt.format(new Date(s.startsAt))}
                       {s.targeted && (
-                        <span className="block text-[10px] font-semibold">
-                          {s.targeted.label || "Special"} ·{" "}
-                          {formatPrice(s.targeted.price)}
+                        <span className="block text-[11px] font-medium">
+                          {s.targeted.label || "Special"} · {formatPrice(s.targeted.price)}
                         </span>
                       )}
                     </button>
