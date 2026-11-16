@@ -13,6 +13,21 @@ import { LocalDate } from "@/components/ui/LocalDate";
 import { useToast } from "@/components/ui/Toast";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { bulkClientAction } from "../actions";
+import { initialsOf } from "../_components/appointmentCardStyles";
+
+/** "Nov 13" this year, "Sep 27, 2025" for an older visit. */
+function shortDate(iso: string): Intl.DateTimeFormatOptions {
+  const sameYear = new Date(iso).getUTCFullYear() === new Date().getUTCFullYear();
+  return sameYear ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" };
+}
+
+function TickMark() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="m5 12.5 4.5 4.5L19 7.5" />
+    </svg>
+  );
+}
 
 export interface ClientRow {
   id: string;
@@ -129,7 +144,7 @@ export function ClientsList({
           <button
             disabled={pending}
             onClick={() => runBulk("nudge")}
-            className="rounded-md bg-primary px-4 py-1.5 text-xs font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
+            className="rounded-md bg-primary min-h-[44px] px-4 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
           >
             Nudge
           </button>
@@ -143,27 +158,27 @@ export function ClientsList({
               )
                 runBulk("attestConsent");
             }}
-            className="rounded-md border border-emerald-soft/40 px-4 py-1.5 text-xs text-emerald-soft transition-colors duration-150 ease-out hover:bg-emerald-soft/10 disabled:opacity-50"
+            className="rounded-md border border-emerald-soft/40 min-h-[44px] px-4 text-sm text-emerald-soft transition-colors duration-150 ease-out hover:bg-emerald-soft/10 disabled:opacity-50"
           >
             Mark consent
           </button>
           <button
             disabled={pending}
             onClick={() => runBulk("optOut")}
-            className="rounded-md border border-subtle px-4 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+            className="rounded-md border border-subtle min-h-[44px] px-4 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
           >
             Opt out
           </button>
           <button
             disabled={pending}
             onClick={() => runBulk("optIn")}
-            className="rounded-md border border-subtle px-4 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+            className="rounded-md border border-subtle min-h-[44px] px-4 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
           >
             Opt in
           </button>
           <button
             onClick={() => setSelected(new Set())}
-            className="ml-auto text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+            className="ml-auto min-h-[44px] px-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
           >
             Clear
           </button>
@@ -171,47 +186,81 @@ export function ClientsList({
       )}
 
       <Card className="overflow-hidden">
-        <div className="flex items-center gap-3 border-b border-subtle px-4 py-2.5 sm:px-5">
-          <input
-            type="checkbox"
-            checked={allSelected}
-            onChange={toggleAll}
-            className="h-5 w-5 accent-gold"
-            aria-label="Select all"
-          />
-          <span className="text-xs text-muted">Select all</span>
-        </div>
+        <label className="flex min-h-[44px] cursor-pointer items-center gap-3 border-b border-subtle px-3 sm:px-4">
+          <span className="flex w-11 shrink-0 justify-center">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={toggleAll}
+              className="h-5 w-5 accent-gold"
+              aria-label="Select all"
+            />
+          </span>
+          <span className="text-xs text-muted">Select all, or tap a client&apos;s initials</span>
+        </label>
         <ul className="divide-y divide-subtle">
           {clients.map((c) => (
-            <li key={c.id} className="flex items-center gap-3 px-4 py-4 sm:px-5">
-              <input
-                type="checkbox"
-                checked={selected.has(c.id)}
-                onChange={() => toggle(c.id)}
-                className="h-5 w-5 shrink-0 accent-gold"
-                aria-label={`Select ${c.name}`}
-              />
+            <li key={c.id} className="flex items-center gap-3 px-3 py-2.5 sm:px-4">
+              {/* The avatar IS the row's checkbox (Studio): tap it to select,
+                  it turns to a tick. Still a real checkbox underneath, so a
+                  keyboard and a screen reader get "Select <name>" as before. */}
+              <label className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center">
+                <input
+                  type="checkbox"
+                  checked={selected.has(c.id)}
+                  onChange={() => toggle(c.id)}
+                  className="peer sr-only"
+                  aria-label={`Select ${c.name}`}
+                />
+                <span
+                  aria-hidden
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-charcoal-700 text-sm font-semibold text-offwhite transition-colors duration-150 ease-out peer-checked:bg-primary peer-checked:text-on-primary peer-focus-visible:ring-2 peer-focus-visible:ring-gold"
+                >
+                  {selected.has(c.id) ? <TickMark /> : initialsOf(c.name || "Client")}
+                </span>
+              </label>
               <Link
                 href={`/dashboard/clients/${c.id}`}
-                className="flex min-w-0 flex-1 items-center justify-between gap-3 transition-opacity duration-150 ease-out hover:opacity-80"
+                className="flex min-h-[44px] min-w-0 flex-1 items-center justify-between gap-3 transition-opacity duration-150 ease-out hover:opacity-80"
               >
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-offwhite">
+                  <p className="truncate text-[15px] font-semibold text-offwhite">
                     {c.name}
                     {/* Plain text: the whole row is already a link. */}
                     {c.instagram && <span className="font-normal text-muted"> @{c.instagram}</span>}
                   </p>
-                  {/* Badges on their own wrapping line so a long name can't push
-                      them off-screen (they carry the consent/opt-out signal). */}
+                  {/* One line of what a barber scans for: how often, and when
+                      they were last in. The phone lives on the profile (and
+                      search finds it): at 390px it only ever showed half. */}
+                  <p className="mt-0.5 truncate text-xs text-muted">
+                    {c.frequencySegment && FREQUENCY_SEGMENTS[c.frequencySegment].label}
+                    {c.frequencySegment && c.lastVisitAt && " · "}
+                    {c.lastVisitAt ? (
+                      <>
+                        {"last "}
+                        <LocalDate iso={c.lastVisitAt} options={shortDate(c.lastVisitAt)} />
+                      </>
+                    ) : (
+                      !c.frequencySegment && "No visits yet"
+                    )}
+                  </p>
+                  {/* Only the exceptions get a badge - they carry the consent /
+                      opt-out signal, so they wrap on their own line rather
+                      than being pushed off-screen by a long name. */}
                   {(c.nameFromApp ||
-                    c.source === "manual" ||
                     c.optedOut ||
                     !c.smsConsent ||
                     c.archived ||
                     c.bookingBlocked ||
-                    c.loyaltyTier ||
-                    c.frequencySegment) && (
+                    (!c.phone && !c.email)) && (
                     <span className="mt-1 flex flex-wrap gap-1.5">
+                      {/* Nothing to reach them by: no reminder, no nudge by
+                          text or email. Worth fixing, so it is flagged. */}
+                      {!c.phone && !c.email && (
+                        <span className="rounded-md bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+                          no contact
+                        </span>
+                      )}
                       {/* The shop had no name for this row; the one shown is the
                           customer's own, from their ChairBack app - say so. */}
                       {c.nameFromApp && (
@@ -220,26 +269,6 @@ export function ClientsList({
                           title="You have no name for this client. This is the name they set in their own ChairBack app."
                         >
                           name from app
-                        </span>
-                      )}
-                      {c.loyaltyTier && (
-                        <span
-                          className="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-                          style={{
-                            color: LOYALTY_TIERS[c.loyaltyTier].color,
-                            backgroundColor: `${LOYALTY_TIERS[c.loyaltyTier].color}1A`,
-                          }}
-                          title="Loyalty tier (set by your tier rules on Rewards, or raised by hand)"
-                        >
-                          {LOYALTY_TIERS[c.loyaltyTier].label}
-                        </span>
-                      )}
-                      {c.frequencySegment && (
-                        <span
-                          className="rounded-md bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted"
-                          title="How often this client visits"
-                        >
-                          {FREQUENCY_SEGMENTS[c.frequencySegment].label}
                         </span>
                       )}
                       {c.archived && (
@@ -253,11 +282,6 @@ export function ClientsList({
                           title="Blocked from booking online - they can't book, join your waitlist or move a booking themselves"
                         >
                           blocked
-                        </span>
-                      )}
-                      {c.source === "manual" && (
-                        <span className="rounded-md bg-charcoal-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
-                          manual
                         </span>
                       )}
                       {c.optedOut && (
@@ -275,19 +299,33 @@ export function ClientsList({
                       )}
                     </span>
                   )}
-                  <p className="mt-0.5 truncate text-xs text-muted">
-                    {c.phone ?? c.email ?? "no contact"}
-                    {c.lastVisitAt ? (
-                      <>
-                        {" · last "}
-                        <LocalDate iso={c.lastVisitAt} />
-                      </>
-                    ) : null}
-                  </p>
                 </div>
-                <span className="shrink-0 font-display text-gold" title="Punch balance">
-                  {c.balance}
-                </span>
+                {/* Standing on the right, as on the board: the tier, then the
+                    punch balance said in words (a bare gold "2" read as nothing). */}
+                {(c.loyaltyTier || c.balance > 0) && (
+                  <span className="shrink-0 text-right">
+                    {c.loyaltyTier && (
+                      // Ink text with the tier's colour as a dot: Silver's
+                      // #C7CBD1 as TEXT vanished on the light theme.
+                      <span
+                        className="inline-flex items-center gap-1.5 rounded-full border border-subtle px-2 py-0.5 text-[11px] font-semibold text-offwhite"
+                        title="Loyalty tier (set by your tier rules on Rewards, or raised by hand)"
+                      >
+                        <span
+                          aria-hidden
+                          className="h-2 w-2 rounded-full"
+                          style={{ backgroundColor: LOYALTY_TIERS[c.loyaltyTier].color }}
+                        />
+                        {LOYALTY_TIERS[c.loyaltyTier].label}
+                      </span>
+                    )}
+                    {c.balance > 0 && (
+                      <span className="mt-0.5 block text-[11px] tabular-nums text-muted" title="Punch balance">
+                        {c.balance} {c.balance === 1 ? "punch" : "punches"}
+                      </span>
+                    )}
+                  </span>
+                )}
               </Link>
             </li>
           ))}

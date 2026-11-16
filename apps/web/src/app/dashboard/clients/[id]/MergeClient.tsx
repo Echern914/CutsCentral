@@ -165,7 +165,7 @@ export function MergeClient({
             <button
               onClick={() => doMerge(picked)}
               disabled={merging}
-              className="rounded-md bg-primary px-4 py-1.5 text-xs font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-primary px-4 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
             >
               {merging ? "Merging…" : "Yes, merge"}
             </button>

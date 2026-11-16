@@ -11,6 +11,7 @@ import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { Card } from "@/components/ui/Card";
 import { Avatar } from "@/components/ui/Avatar";
 import { InstagramHandle } from "@/components/InstagramHandle";
+import { displayPhone, mailtoUri, smsUri, telUri } from "@/lib/contactUri";
 import { UpcomingVisits, type UpcomingRow } from "./UpcomingVisits";
 import { BookingBlock } from "./BookingBlock";
 import { ClientActions } from "./ClientActions";
@@ -152,21 +153,27 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
     visits.find((v) => v.status === "COMPLETED")?.service?.trim() || "visit";
   const overdue =
     client.nextExpectedAt !== null && new Date(client.nextExpectedAt).getTime() < Date.now();
+  const tel = telUri(client.phone);
+  const sms = smsUri(client.phone);
+  const mail = mailtoUri(client.email);
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-5 py-8">
-      <Link href="/dashboard/clients" className="text-xs text-muted transition-colors duration-150 ease-out hover:text-offwhite">
-        ← All clients
+    <main className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-5 sm:py-8">
+      <Link
+        href="/dashboard/clients"
+        className="-ml-1 inline-flex min-h-[44px] items-center px-1 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+      >
+        ← Clients
       </Link>
 
-      <header className="mb-6 mt-2 flex flex-wrap items-start justify-between gap-4">
-        <div className="flex min-w-0 items-start gap-3">
+      <header className="mb-5 mt-1 flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 items-start gap-3.5">
           {/* Clients have no photo (and no account to upload one from), so this
               is always the generated initials chip — it gives the page a face
               to anchor on instead of opening with bare text. */}
-          <Avatar name={client.name} size="md" className="mt-1" />
-          <div className="min-w-0">
-          <h1 className="font-display text-3xl tracking-tight">
+          <Avatar name={client.name} size="lg" className="!h-16 !w-16 !text-lg" />
+          <div className="min-w-0 pt-1">
+          <h1 className="break-words font-display text-[28px] leading-tight tracking-tight">
             {client.name}
             {client.archived && (
               <span className="ml-2 align-middle text-[10px] uppercase tracking-wide text-muted/80">
@@ -196,8 +203,8 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
             clientId={client.id}
             canChange={canChangeTier}
           />
-          <p className="mt-1 text-sm text-muted">
-            {client.phone ?? "no phone"}
+          <p className="mt-1 break-words text-sm text-muted">
+            {displayPhone(client.phone) ?? "No phone"}
             {client.email ? ` · ${client.email}` : ""}
             {client.instagram && (
               <>
@@ -236,6 +243,25 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         />
       </header>
 
+      {/* Reach them from your own phone. A hand-off to Phone, Messages or
+          Mail: ChairBack sends nothing, so texting being off does not apply.
+          Text is left out for someone who texted STOP. */}
+      {(tel || (sms && !client.optedOut) || mail) && (
+        <div className="mb-5 flex gap-2 sm:max-w-md [&>*]:flex-1">
+          {tel && <ContactLink href={tel} label="Call" icon="call" />}
+          {sms && !client.optedOut && <ContactLink href={sms} label="Text" icon="text" />}
+          {mail && <ContactLink href={mail} label="Email" icon="email" />}
+        </div>
+      )}
+
+      {client.archived && (
+        <div className="mb-4 rounded-2xl border border-subtle bg-charcoal-800 px-5 py-3 text-sm text-muted">
+          This client is archived — hidden from your active book, stats, and all
+          texts. Their history is kept. Restore them under Profile and settings
+          to bring them back.
+        </div>
+      )}
+
       <div className="mb-6">
         <ClientActions
           clientId={client.id}
@@ -248,80 +274,39 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         />
       </div>
 
-      {offersRes.data?.enabled && (
-        <div className="mb-6">
-          <ClientOffers
-            list={offersRes.data}
-            client={{ id: client.id, name: [client.firstName, client.lastName].filter(Boolean).join(" ") || "Client" }}
-          />
-        </div>
-      )}
-
-      {client.archived && (
-        <div className="mb-4 rounded-2xl border border-subtle bg-charcoal-800 px-5 py-3 text-sm text-muted">
-          This client is archived — hidden from your active book, stats, and all
-          texts. Their history is kept. Restore them below to bring them back.
-        </div>
-      )}
-
-      <div className="mb-6 flex flex-col gap-3">
-        <EditClient
-          clientId={client.id}
-          firstName={client.firstName}
-          lastName={client.lastName}
-          phone={client.phone}
-          email={client.email}
-          instagram={client.instagram ?? null}
-          archived={client.archived}
-        />
-        {/* Merge folds a duplicate INTO this client; it makes no sense to merge
-            into an archived (hidden) record, so only offer it on active ones. */}
-        {!client.archived && (
-          <MergeClient clientId={client.id} clientName={client.name} />
-        )}
-        <EmailMarketing
-          clientId={client.id}
-          hasEmail={Boolean(client.email)}
-          initial={client.emailMarketing}
-          timezone={timezone}
-        />
-        {client.savedCard && <SavedCardPanel card={client.savedCard} timezone={timezone} />}
-        <BookingBlock
-          clientId={client.id}
-          initial={client.bookingBlockedAt}
-          upcoming={upcoming.length}
-          timezone={timezone}
-        />
-      </div>
-
-      {/* Snapshot (punch/reward stats only exist for rewards shops) */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        {rewardsOn && <Stat label="Punch balance" value={String(balance)} accent />}
-        {rewardsOn && (
+      {/* Snapshot (punch/reward stats only exist for rewards shops). One strip,
+          not four cards: it reads as one fact about one person. */}
+      <Card className="overflow-hidden">
+        {/* Every cell draws its own right and bottom hairline; the -1px
+            margins push the outer ones under the card's clipped edge, so the
+            lines only ever fall BETWEEN cells, at 2 or 4 across. */}
+        <div
+          className={`-mb-px -mr-px grid grid-cols-2 [&>*]:border-b [&>*]:border-r [&>*]:border-subtle ${
+            rewardsOn ? "sm:grid-cols-4" : ""
+          }`}
+        >
+          {rewardsOn && <Stat label="Punches" value={String(balance)} accent />}
+          {rewardsOn && (
+            <Stat label="Rewards ready" value={rewards.length === 0 ? "n/a" : String(readyCount)} />
+          )}
           <Stat
-            label="Rewards ready"
-            value={rewards.length === 0 ? "n/a" : String(readyCount)}
+            label="Comes every"
+            value={
+              client.medianIntervalDays
+                ? `~${client.medianIntervalDays} days`
+                : client.preferredCadence
+                  ? CADENCE_OPTIONS[client.preferredCadence].short
+                  : "n/a"
+            }
           />
-        )}
-        <Stat
-          label="Visits every"
-          value={
-            client.medianIntervalDays
-              ? `~${client.medianIntervalDays}d`
-              : client.preferredCadence
-                ? CADENCE_OPTIONS[client.preferredCadence].short
-                : "n/a"
-          }
-        />
-        <Stat label="Last visit" value={fmt(client.lastVisitAt, timezone)} />
-      </div>
+          <Stat label="Last visit" value={fmt(client.lastVisitAt, timezone)} />
+        </div>
 
-      {/* Per-card balances - only meaningful once the shop has custom cards. */}
-      {rewardsOn && hasCards && (
-        <Card className="mt-4 px-5 py-3">
-          <ul className="flex flex-wrap gap-x-5 gap-y-1.5">
+        {/* Per-card balances - only meaningful once the shop has custom cards. */}
+        {rewardsOn && hasCards && (
+          <ul className="flex flex-wrap gap-x-5 gap-y-1.5 border-t border-subtle px-4 py-3">
             {cards.map((c) => (
-              <li key={c.id ?? "default"} className="flex items-center gap-1.5 text-xs">
+              <li key={c.id ?? "default"} className="flex items-center gap-1.5 text-sm">
                 <span
                   aria-hidden
                   className="inline-block h-2.5 w-2.5 rounded-full"
@@ -331,36 +316,41 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
                   {c.emoji ? `${c.emoji} ` : ""}
                   {c.name}
                 </span>
-                <span className="font-medium text-offwhite">{c.balance}</span>
+                <span className="font-medium text-offwhite tabular-nums">{c.balance}</span>
               </li>
             ))}
           </ul>
-        </Card>
-      )}
+        )}
 
-      {/* Where the balance stands against the menu - each reward measures
-          against its OWN card's balance. */}
-      {rewardsOn && rewards.length > 0 && (
-        <Card className="mt-4 px-5 py-3.5">
-          <ul className="flex flex-wrap gap-x-5 gap-y-1.5">
+        {/* Where the balance stands against the menu - each reward measures
+            against its OWN card's balance. */}
+        {rewardsOn && rewards.length > 0 && (
+          <ul className="flex flex-col gap-1 border-t border-subtle px-4 py-3">
             {rewards.map((r) => {
               const cardBalance = balanceByCard.get(r.cardTypeId) ?? 0;
               return (
-                <li key={r.id} className="text-xs">
-                  <span className={r.affordable ? "text-emerald-soft" : "text-muted"}>
+                <li key={r.id} className="flex items-baseline justify-between gap-3 text-sm">
+                  <span className="min-w-0 truncate text-offwhite">
                     {r.emoji ? `${r.emoji} ` : ""}
-                    {r.name} · {r.punchCost}
-                    {r.affordable ? ", ready" : ` (${r.punchCost - cardBalance} to go)`}
+                    {r.name}
+                    <span className="text-muted"> · {r.punchCost}</span>
+                  </span>
+                  <span className={`shrink-0 text-xs ${r.affordable ? "font-semibold text-emerald-soft" : "text-muted"}`}>
+                    {r.affordable ? "Ready" : `${r.punchCost - cardBalance} to go`}
                   </span>
                 </li>
               );
             })}
           </ul>
-        </Card>
-      )}
+        )}
+      </Card>
 
       {/* What's coming, before what's been. The history below is past-only. */}
       <UpcomingVisits rows={upcoming} timezone={timezone} />
+
+      <div className="mt-6">
+        <NotesEditor clientId={client.id} initial={client.notes} />
+      </div>
 
       <div className="mt-6 grid gap-6 md:grid-cols-2">
         {/* Visit history (per-row edit/delete) */}
@@ -397,20 +387,94 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         </div>
       )}
 
-      <div className="mt-6">
-        <NotesEditor clientId={client.id} initial={client.notes} />
-      </div>
+      {offersRes.data?.enabled && (
+        <div className="mt-6">
+          <ClientOffers
+            list={offersRes.data}
+            client={{ id: client.id, name: [client.firstName, client.lastName].filter(Boolean).join(" ") || "Client" }}
+          />
+        </div>
+      )}
+
+      {/* The record itself, below the person: edits, merges, consents, the
+          saved card and the booking block are things you do now and then,
+          not every time you open a client. */}
+      <section aria-labelledby="client-settings" className="mt-8">
+        <h2 id="client-settings" className="mb-3 font-display text-lg">
+          Profile and settings
+        </h2>
+        <div className="flex flex-col gap-3">
+          <EditClient
+            clientId={client.id}
+            firstName={client.firstName}
+            lastName={client.lastName}
+            phone={client.phone}
+            email={client.email}
+            instagram={client.instagram ?? null}
+            archived={client.archived}
+          />
+          {/* Merge folds a duplicate INTO this client; it makes no sense to merge
+              into an archived (hidden) record, so only offer it on active ones. */}
+          {!client.archived && (
+            <MergeClient clientId={client.id} clientName={client.name} />
+          )}
+          <EmailMarketing
+            clientId={client.id}
+            hasEmail={Boolean(client.email)}
+            initial={client.emailMarketing}
+            timezone={timezone}
+          />
+          {client.savedCard && <SavedCardPanel card={client.savedCard} timezone={timezone} />}
+          <BookingBlock
+            clientId={client.id}
+            initial={client.bookingBlockedAt}
+            upcoming={upcoming.length}
+            timezone={timezone}
+          />
+        </div>
+      </section>
     </main>
   );
 }
 
+/** One cell of the stats strip; the strip draws the dividers. */
 function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <Card className="p-4">
-      <p className="text-[10px] uppercase tracking-wide text-muted">{label}</p>
-      <p className={`mt-1 font-display text-xl ${accent ? "text-gold" : "text-offwhite"}`}>
+    <div className="min-w-0 px-4 py-3.5">
+      <p className="text-xs text-muted">{label}</p>
+      <p
+        className={`mt-0.5 truncate font-display text-xl tabular-nums ${accent ? "text-gold" : "text-offwhite"}`}
+      >
         {value}
       </p>
-    </Card>
+    </div>
+  );
+}
+
+const CONTACT_ICONS = {
+  call: "M5.5 3.5h2.2l1.2 3.4-1.6 1.1a9 9 0 0 0 4.7 4.7l1.1-1.6 3.4 1.2v2.2a1.5 1.5 0 0 1-1.6 1.5A13 13 0 0 1 4 5.1a1.5 1.5 0 0 1 1.5-1.6Z",
+  text: "M4 5.5A1.5 1.5 0 0 1 5.5 4h9A1.5 1.5 0 0 1 16 5.5v6a1.5 1.5 0 0 1-1.5 1.5H9l-3.5 3v-3h0A1.5 1.5 0 0 1 4 11.5Z",
+  email: "M3.5 5.5h13v9h-13ZM3.5 6l6.5 5 6.5-5",
+} as const;
+
+/** A tel:/sms:/mailto: hand-off, as a 44px button. */
+function ContactLink({ href, label, icon }: { href: string; label: string; icon: keyof typeof CONTACT_ICONS }) {
+  return (
+    <a
+      href={href}
+      className="flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-subtle-strong bg-charcoal-800 px-3 text-sm font-semibold text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+    >
+      <svg aria-hidden viewBox="0 0 20 20" className="h-4 w-4 shrink-0">
+        <path
+          d={CONTACT_ICONS[icon]}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      {label}
+    </a>
   );
 }

@@ -170,7 +170,7 @@ export function PunchHistory({
 
                 {/* Controls: only on live (not reversed, not a correction) rows. */}
                 {!dimmed && !isEditing && !isConfirming && (
-                  <div className="mt-1.5 flex gap-3">
+                  <div className="mt-1.5 flex gap-4">
                     <button
                       onClick={() => {
                         // Mirror openEdit closing the undo confirm: opening a
@@ -180,7 +180,7 @@ export function PunchHistory({
                         setConfirmUndoId(e.id);
                       }}
                       disabled={pending}
-                      className="text-[11px] text-muted underline-offset-2 transition-colors duration-150 ease-out hover:text-danger-soft hover:underline disabled:opacity-50"
+                      className="relative text-xs text-muted underline-offset-2 after:absolute after:-inset-x-2 after:-inset-y-3 transition-colors duration-150 ease-out hover:text-danger-soft hover:underline disabled:opacity-50"
                     >
                       Undo
                     </button>
@@ -188,7 +188,7 @@ export function PunchHistory({
                       <button
                         onClick={() => openEdit(e)}
                         disabled={pending}
-                        className="text-[11px] text-muted underline-offset-2 transition-colors duration-150 ease-out hover:text-gold hover:underline disabled:opacity-50"
+                        className="relative text-xs text-muted underline-offset-2 after:absolute after:-inset-x-2 after:-inset-y-3 transition-colors duration-150 ease-out hover:text-gold hover:underline disabled:opacity-50"
                       >
                         Edit count
                       </button>

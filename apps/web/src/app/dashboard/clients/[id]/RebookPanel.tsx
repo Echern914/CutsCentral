@@ -53,29 +53,31 @@ export function RebookPanel({
   const [nudged, setNudged] = useState(false);
 
   return (
-    <div className="flex min-w-40 flex-col items-center gap-2 rounded-2xl border border-subtle bg-charcoal-800 px-5 py-4 text-center">
+    // A full-width strip on a phone (count left, button right), the stacked
+    // card beside the name from `sm` up.
+    <div className="flex w-full items-center justify-between gap-3 rounded-2xl border border-subtle bg-charcoal-800 px-4 py-3 sm:w-auto sm:min-w-40 sm:flex-col sm:justify-start sm:gap-2 sm:px-5 sm:py-4 sm:text-center">
       {daysSince === null ? (
         <p className="text-sm text-muted">No visits yet</p>
       ) : (
-        <>
+        <div className="flex min-w-0 items-baseline gap-2 sm:flex-col sm:items-center sm:gap-2">
           <p
             className={cn(
-              "font-display text-4xl leading-none",
+              "font-display text-3xl leading-none sm:text-4xl",
               overdue ? "text-gold" : "text-offwhite",
             )}
           >
             {daysSince}
           </p>
-          <p className="text-xs text-muted">
+          <p className="min-w-0 text-xs text-muted">
             {daysSince === 1 ? "day" : "days"} since last {serviceLabel}
           </p>
-        </>
+        </div>
       )}
       {premiumLocked ? (
         // Badge + plain words, no price. The way to billing is
         // UpgradeOnWebLink: a link on the web, Safari from the app (never the
         // WebView), nothing in an older app build (3.1.1).
-        <div className="flex flex-col items-center gap-1.5">
+        <div className="flex flex-col items-end gap-1.5 text-right sm:items-center sm:text-center">
           <PlanBadge tier="pro" />
           <p className="text-xs text-muted">Rebooking nudges are part of Premium.</p>
           <UpgradeOnWebLink className="text-xs font-semibold text-gold hover:underline">
@@ -105,7 +107,7 @@ export function RebookPanel({
         }
         // The only "no" left: a client blocked from booking (page.tsx).
         title={canNudge ? "" : "Blocked from booking - unblock them to send a nudge"}
-        className="w-full rounded-md border border-gold/50 px-4 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
+        className="min-h-[44px] shrink-0 rounded-xl border border-gold/50 px-4 text-sm font-medium text-gold sm:w-full transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
       >
         {nudged ? "Nudge sent" : pending ? "…" : "Nudge now"}
       </button>

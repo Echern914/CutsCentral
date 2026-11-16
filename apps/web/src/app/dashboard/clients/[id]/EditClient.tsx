@@ -153,7 +153,7 @@ export function EditClient({
           <button
             onClick={save}
             disabled={pending}
-            className="rounded-md bg-primary px-4 py-1.5 text-xs font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
+            className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-primary px-4 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
           >
             {pending ? "Saving…" : "Save"}
           </button>
@@ -183,7 +183,7 @@ export function EditClient({
           setEditing(true);
         }}
         disabled={pending}
-        className="rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+        className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-subtle px-4 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
       >
         Edit profile
       </button>
@@ -192,26 +192,26 @@ export function EditClient({
         <button
           onClick={restore}
           disabled={pending}
-          className="rounded-md border border-emerald-soft/40 px-4 py-2 text-xs text-emerald-soft transition-colors duration-150 ease-out hover:bg-emerald-soft/10 disabled:opacity-50"
+          className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-emerald-soft/40 px-4 text-sm text-emerald-soft transition-colors duration-150 ease-out hover:bg-emerald-soft/10 disabled:opacity-50"
         >
           {pending ? "…" : "Restore client"}
         </button>
       ) : confirmArchive ? (
-        <span className="flex items-center gap-2">
-          <span className="text-[11px] text-muted">
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="basis-full text-sm text-muted sm:basis-auto">
             Hide this client from your active book? History is kept; you can restore them.
           </span>
           <button
             onClick={archive}
             disabled={pending}
-            className="rounded-md bg-danger-soft/90 px-3 py-1.5 text-[11px] font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-danger-soft disabled:opacity-50"
+            className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-danger-soft/90 px-3 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-danger-soft disabled:opacity-50"
           >
             {pending ? "…" : "Yes, archive"}
           </button>
           <button
             onClick={() => setConfirmArchive(false)}
             disabled={pending}
-            className="text-[11px] text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+            className="min-h-[44px] px-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
           >
             Cancel
           </button>
@@ -220,7 +220,7 @@ export function EditClient({
         <button
           onClick={() => setConfirmArchive(true)}
           disabled={pending}
-          className="rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:text-danger-soft hover:bg-charcoal-700 disabled:opacity-50"
+          className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-subtle px-4 text-sm text-muted transition-colors duration-150 ease-out hover:text-danger-soft hover:bg-charcoal-700 disabled:opacity-50"
         >
           Archive
         </button>
