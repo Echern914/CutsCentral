@@ -488,7 +488,7 @@ export function CheckoutFlow({
               onDone();
               onBookNext();
             }}
-            className="min-h-[3.5rem] rounded-full bg-gold px-4 font-display text-lg text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted"
+            className="min-h-[3.5rem] rounded-xl bg-primary px-4 font-display text-lg text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
           >
             {firstName ? `Book ${firstName}’s next visit` : "Book their next visit"}
           </button>
@@ -501,10 +501,10 @@ export function CheckoutFlow({
             onBackToAppointment();
           }}
           className={cn(
-            "min-h-[3rem] rounded-full px-4 font-medium transition-colors duration-150 ease-out",
+            "min-h-[3rem] rounded-xl px-4 font-medium transition-colors duration-150 ease-out",
             paid && onBookNext
               ? "border border-subtle-strong text-offwhite hover:bg-charcoal-700"
-              : "bg-gold text-charcoal-900 hover:bg-gold-muted",
+              : "bg-primary text-on-primary hover:bg-primary/90",
           )}
         >
           Back to the appointment
@@ -724,7 +724,7 @@ export function CheckoutFlow({
             setStep("result");
             onDone();
           }}
-          className="min-h-[3.5rem] rounded-full bg-gold px-4 font-display text-xl text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-60"
+          className="min-h-[3.5rem] rounded-xl bg-primary px-4 font-display text-xl text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-60"
         >
           {records
             ? busy

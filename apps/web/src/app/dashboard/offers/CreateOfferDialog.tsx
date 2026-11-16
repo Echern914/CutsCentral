@@ -190,7 +190,7 @@ export function CreateOfferDialog({
           <button
             type="button"
             onClick={close}
-            className="flex h-11 w-full items-center justify-center rounded-xl bg-gold px-5 text-sm font-semibold text-charcoal-900 transition-colors duration-150 ease-out hover:bg-gold-muted"
+            className="flex h-11 w-full items-center justify-center rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
           >
             Done
           </button>

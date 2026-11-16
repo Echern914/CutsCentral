@@ -94,13 +94,13 @@ export default async function OnboardingDonePage() {
             {/* Setup couldn't send the request they came for: offer it. */}
             <Link
               href={`/team/link/${retry.key}`}
-              className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-on-gold shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105"
+              className="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-on-primary transition-all duration-200 ease-out hover:bg-primary/90"
             >
               Finish joining {retry.teamName}&apos;s team
             </Link>
             <Link
               href="/dashboard"
-              className="w-full rounded-full border border-subtle px-5 py-3 text-sm text-offwhite transition-colors duration-200 ease-out hover:bg-charcoal-700"
+              className="w-full rounded-xl border border-subtle px-5 py-3 text-sm text-offwhite transition-colors duration-200 ease-out hover:bg-charcoal-700"
             >
               Go to dashboard
             </Link>
@@ -109,7 +109,7 @@ export default async function OnboardingDonePage() {
           <>
             <Link
               href="/dashboard"
-              className="w-full rounded-full bg-gold-gradient px-5 py-3 text-sm font-semibold text-on-gold shadow-glow transition-all duration-200 ease-out hover:shadow-glow-lg hover:brightness-105"
+              className="w-full rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-on-primary transition-all duration-200 ease-out hover:bg-primary/90"
             >
               Go to your dashboard
             </Link>

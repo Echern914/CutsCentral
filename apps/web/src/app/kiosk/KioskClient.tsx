@@ -60,10 +60,10 @@ const MAX_SERVICES = 3;
 /** Kiosk-scale controls: comfortably past the 44px floor, 16px+ text. */
 const BTN =
   "flex min-h-14 w-full items-center justify-center rounded-2xl px-6 text-lg font-semibold transition-colors disabled:opacity-40";
-const PRIMARY = `${BTN} bg-gold text-charcoal hover:bg-gold-muted`;
+const PRIMARY = `${BTN} bg-primary text-on-primary hover:bg-primary/90`;
 const GHOST = `${BTN} border border-subtle bg-charcoal-800/60 text-offwhite hover:bg-charcoal-700`;
 const INPUT =
-  "h-14 w-full min-w-0 rounded-2xl border border-subtle bg-charcoal-900 px-4 text-center text-2xl text-offwhite outline-none focus:border-gold";
+  "h-14 w-full min-w-0 rounded-xl border border-subtle-strong bg-charcoal-800 px-4 text-center text-2xl text-offwhite outline-none focus:border-gold";
 
 function digitsOnly(v: string): string {
   return v.replace(/\D/g, "").slice(0, 15);

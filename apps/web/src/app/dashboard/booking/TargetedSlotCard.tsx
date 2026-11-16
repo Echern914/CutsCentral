@@ -94,7 +94,7 @@ export function TargetedSlotCard({
         {status && (
           <span
             className={cn(
-              "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium",
+              "shrink-0 rounded-md px-2 py-0.5 text-[10px] font-medium",
               status.tone === "booked" && "bg-emerald-soft/15 text-emerald-soft",
               status.tone === "open" && "bg-gold/15 text-gold",
               status.tone === "muted" && "bg-charcoal-700 text-muted",

@@ -510,7 +510,7 @@ export function ServiceDatesSheet({
                 onClick={() => setWho([])}
                 aria-pressed={who.length === 0}
                 className={cn(
-                  "min-h-[44px] rounded-full border px-3.5 text-sm transition-colors",
+                  "min-h-[44px] rounded-xl border px-3.5 text-sm transition-colors",
                   who.length === 0 ? "border-gold bg-gold/15 text-gold" : "border-subtle text-muted",
                 )}
               >
@@ -525,7 +525,7 @@ export function ServiceDatesSheet({
                     onClick={() => setWho((cur) => (on ? cur.filter((id) => id !== s.id) : [...cur, s.id]))}
                     aria-pressed={on}
                     className={cn(
-                      "min-h-[44px] rounded-full border px-3.5 text-sm transition-colors",
+                      "min-h-[44px] rounded-xl border px-3.5 text-sm transition-colors",
                       on ? "border-gold bg-gold/15 text-gold" : "border-subtle text-muted",
                     )}
                   >
@@ -725,7 +725,7 @@ export function ServiceDatesSheet({
               type="button"
               onClick={save}
               disabled={!canSave || busy}
-              className="min-h-[48px] flex-[2] rounded-xl bg-gold text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+              className="min-h-[48px] flex-[2] rounded-xl bg-primary text-sm font-semibold text-on-primary disabled:opacity-50"
             >
               {busy
                 ? "Saving…"

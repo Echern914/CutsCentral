@@ -121,7 +121,7 @@ export function MentorshipSection({
                       onClick={() => void flip(m, key)}
                       data-qa={`mentor-share-${key}`}
                       className={cn(
-                        "min-h-[40px] min-w-[72px] shrink-0 rounded-full px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
+                        "min-h-[40px] min-w-[72px] shrink-0 rounded-md px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
                         on && !isSaving
                           ? "bg-emerald-soft/15 text-emerald-soft"
                           : "border border-subtle text-muted hover:bg-charcoal-700",

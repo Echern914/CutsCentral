@@ -9,7 +9,7 @@ import { bookOnChairBackAction, keepOwnLinkAction } from "../stepActions";
 const option =
   "flex w-full flex-col items-start gap-1 rounded-2xl border border-subtle bg-charcoal-800/40 p-4 text-left transition-colors hover:border-gold/50 disabled:opacity-50";
 const primary =
-  "inline-flex h-11 items-center justify-center rounded-full bg-gold px-5 text-sm font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50";
+  "inline-flex h-11 items-center justify-center rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50";
 
 /**
  * Setup: how clients book. ChairBack's own booking first (what a shop leaving

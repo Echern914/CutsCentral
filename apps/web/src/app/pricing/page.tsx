@@ -38,7 +38,7 @@ export default function PricingPage() {
       <header className="sticky top-0 z-20">
         <nav
           aria-label="Primary"
-          className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-full px-5 py-3"
+          className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-xl px-5 py-3"
         >
           <Link href="/" className="flex items-center gap-2">
             <ScissorsMark className="h-4 w-4 text-gold" />
@@ -52,13 +52,13 @@ export default function PricingPage() {
             <div className="flex items-center gap-2">
               <Link
                 href="/login"
-                className="rounded-full px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+                className="rounded-xl px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
               >
                 Sign in
               </Link>
               <Link
                 href="/signup"
-                className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-on-gold shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
+                className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-[box-shadow,filter] duration-150 ease-out hover:bg-primary/90"
               >
                 Get started
               </Link>

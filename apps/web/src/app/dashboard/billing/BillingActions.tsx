@@ -33,8 +33,8 @@ export function UpgradeButton({
         }
         className={
           variant === "primary"
-            ? "rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-on-gold shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
-            : "rounded-full border border-gold/40 px-6 py-2.5 text-sm font-semibold text-gold transition-all duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
+            ? "rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-on-primary transition-all duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
+            : "rounded-xl border border-gold/40 px-6 py-2.5 text-sm font-semibold text-gold transition-all duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
         }
       >
         {pending ? "Opening checkout…" : label}
@@ -58,7 +58,7 @@ export function UpgradeToPremiumAiButton({ label }: { label: string }) {
             if (r?.error) setError(r.error);
           })
         }
-        className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-on-gold shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+        className="rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-on-primary transition-all duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
       >
         {pending ? "Upgrading…" : label}
       </button>
@@ -94,7 +94,7 @@ export function UpgradeToTierButton({
             });
           })
         }
-        className="rounded-full bg-gold-gradient px-6 py-2.5 text-sm font-semibold text-on-gold shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+        className="rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-on-primary transition-all duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
       >
         {pending ? "Upgrading…" : label}
       </button>
@@ -122,7 +122,7 @@ export function StartAiTrialButton({ label }: { label: string }) {
             if (r?.error) setError(r.error);
           })
         }
-        className="rounded-full border border-gold/50 bg-gold/10 px-6 py-2.5 text-sm font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/20 disabled:opacity-50"
+        className="rounded-xl border border-gold/50 bg-gold/10 px-6 py-2.5 text-sm font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/20 disabled:opacity-50"
       >
         {pending ? "Starting…" : label}
       </button>
@@ -146,7 +146,7 @@ export function ReceptionistAddonButton({ label }: { label: string }) {
             if (r?.error) setError(r.error);
           })
         }
-        className="rounded-full border border-gold/40 px-6 py-2.5 text-sm font-semibold text-gold transition-all duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
+        className="rounded-xl border border-gold/40 px-6 py-2.5 text-sm font-semibold text-gold transition-all duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
       >
         {pending ? "Opening checkout…" : label}
       </button>
@@ -168,7 +168,7 @@ export function ManageBillingButton() {
             if (r?.error) setError(r.error);
           })
         }
-        className="rounded-full border border-subtle px-5 py-2.5 text-sm text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+        className="rounded-xl border border-subtle px-5 py-2.5 text-sm text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
       >
         {pending ? "Opening…" : "Manage billing"}
       </button>
@@ -195,7 +195,7 @@ export function CancelMembershipButton() {
             by default, warns on hover. The 2-tap confirm still guards it. */}
         <button
           onClick={() => setConfirming(true)}
-          className="rounded-full border border-subtle px-5 py-2.5 text-sm text-muted transition-all duration-150 ease-out hover:border-danger-soft/40 hover:bg-danger-soft/10 hover:text-danger-soft"
+          className="rounded-xl border border-subtle px-5 py-2.5 text-sm text-muted transition-all duration-150 ease-out hover:border-danger-soft/40 hover:bg-danger-soft/10 hover:text-danger-soft"
         >
           Cancel membership
         </button>
@@ -223,14 +223,14 @@ export function CancelMembershipButton() {
               if (r?.error) setError(r.error);
             })
           }
-          className="rounded-full border border-danger-soft/40 px-4 py-2 text-sm text-danger-soft transition-all duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50"
+          className="rounded-xl border border-danger-soft/40 px-4 py-2 text-sm text-danger-soft transition-all duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50"
         >
           {pending ? "Opening…" : "Yes, cancel"}
         </button>
         <button
           disabled={pending}
           onClick={() => setConfirming(false)}
-          className="rounded-full border border-subtle px-4 py-2 text-sm text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+          className="rounded-xl border border-subtle px-4 py-2 text-sm text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
         >
           Keep my membership
         </button>

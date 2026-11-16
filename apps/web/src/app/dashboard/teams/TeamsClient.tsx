@@ -314,7 +314,7 @@ export function TeamsClient({
                         onClick={() => void flip(link, key)}
                         data-qa={`share-${key}`}
                         className={cn(
-                          "min-h-[40px] min-w-[72px] shrink-0 rounded-full px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
+                          "min-h-[40px] min-w-[72px] shrink-0 rounded-md px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
                           on && !isSaving
                             ? "bg-emerald-soft/15 text-emerald-soft"
                             : "border border-subtle text-muted hover:bg-charcoal-700",
@@ -343,7 +343,7 @@ export function TeamsClient({
                       onClick={() => void flipSchedule(link)}
                       data-qa="share-shareSchedule"
                       className={cn(
-                        "min-h-[40px] min-w-[72px] shrink-0 rounded-full px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
+                        "min-h-[40px] min-w-[72px] shrink-0 rounded-md px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
                         link.shareSchedule && saving !== `${link.id}:shareSchedule`
                           ? "bg-emerald-soft/15 text-emerald-soft"
                           : "border border-subtle text-muted hover:bg-charcoal-700",
@@ -374,7 +374,7 @@ export function TeamsClient({
                       onClick={() => void flipSetup(link)}
                       data-qa="share-shareSetup"
                       className={cn(
-                        "min-h-[40px] min-w-[72px] shrink-0 rounded-full px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
+                        "min-h-[40px] min-w-[72px] shrink-0 rounded-md px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
                         link.shareSetup && saving !== `${link.id}:shareSetup`
                           ? "bg-emerald-soft/15 text-emerald-soft"
                           : "border border-subtle text-muted hover:bg-charcoal-700",
@@ -461,7 +461,7 @@ export function TeamsClient({
                       onClick={() => void flipWalkIns(link)}
                       data-qa="take-walk-ins"
                       className={cn(
-                        "min-h-[40px] min-w-[72px] shrink-0 rounded-full px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
+                        "min-h-[40px] min-w-[72px] shrink-0 rounded-md px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-60",
                         link.walkIns.take && saving !== `${link.id}:walkIns`
                           ? "bg-emerald-soft/15 text-emerald-soft"
                           : "border border-subtle text-muted hover:bg-charcoal-700",
@@ -575,7 +575,7 @@ export function TeamsClient({
                 setLeaveError(null);
                 setLeaving(null);
               }}
-              className="min-h-[40px] rounded-full border border-subtle px-4 text-xs text-muted transition-colors hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-50"
+              className="min-h-[40px] rounded-md border border-subtle px-4 text-xs text-muted transition-colors hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-50"
             >
               Stay
             </button>
@@ -583,7 +583,7 @@ export function TeamsClient({
               type="button"
               disabled={leaveBusy}
               onClick={() => leaving && void leave(leaving)}
-              className="min-h-[40px] rounded-full bg-danger-soft/90 px-4 text-xs font-semibold text-white transition-colors hover:bg-danger-soft disabled:opacity-50"
+              className="min-h-[40px] rounded-md bg-danger-soft/90 px-4 text-xs font-semibold text-white transition-colors hover:bg-danger-soft disabled:opacity-50"
             >
               {leaveBusy
                 ? "Leaving…"

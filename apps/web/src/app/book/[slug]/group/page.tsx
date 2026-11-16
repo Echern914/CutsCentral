@@ -54,7 +54,7 @@ export default async function GroupBookPage({ params }: { params: { slug: string
         </p>
         <Link
           href={`/book/${params.slug}`}
-          className="mt-5 inline-block rounded-xl bg-gold px-5 py-2.5 font-semibold text-charcoal-900"
+          className="mt-5 inline-block rounded-xl bg-primary px-5 py-2.5 font-semibold text-on-primary"
         >
           Book one person
         </Link>

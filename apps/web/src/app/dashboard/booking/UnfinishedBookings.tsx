@@ -205,7 +205,7 @@ export function UnfinishedBookings({ isNative, toast }: { isNative: boolean; toa
           <h2 id="unfinished-bookings-title" className="font-display text-lg">
             Didn&apos;t finish booking
             {waiting > 0 && (
-              <span className="ml-2 rounded-full bg-warning-soft/20 px-2 py-0.5 align-middle text-[11px] font-semibold text-warning-soft">
+              <span className="ml-2 rounded-md bg-warning-soft/20 px-2 py-0.5 align-middle text-[11px] font-semibold text-warning-soft">
                 {waiting + more}
               </span>
             )}
@@ -501,7 +501,7 @@ function UnfinishedCard({
             gets the full width and stays one line on a phone. */}
         <span className="flex min-w-0 items-start gap-2">
           <span className={cn(NAME_WRAP_CLS, "flex-1 text-[15px]")}>{name}</span>
-          <span className={cn("mt-0.5 shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-semibold", chip.cls)}>
+          <span className={cn("mt-0.5 shrink-0 rounded-md px-2.5 py-0.5 text-[10px] font-semibold", chip.cls)}>
             {chip.label}
           </span>
           <Chevron open={isOpen} />
@@ -606,7 +606,7 @@ function UnfinishedCard({
                 <button
                   type="button"
                   onClick={() => void book(step === "outside_hours")}
-                  className={cn(BTN_BASE, "bg-gold font-semibold text-charcoal-900 hover:bg-gold/90")}
+                  className={cn(BTN_BASE, "bg-primary font-semibold text-on-primary hover:bg-primary/90")}
                 >
                   {step === "confirm" ? "Book" : "Book anyway"}
                 </button>
@@ -628,7 +628,7 @@ function UnfinishedCard({
                   type="button"
                   onClick={() => setStep("confirm")}
                   disabled={step === "working"}
-                  className={cn(BTN_BASE, "col-span-3 bg-gold font-semibold text-charcoal-900 hover:bg-gold/90 sm:col-span-1")}
+                  className={cn(BTN_BASE, "col-span-3 bg-primary font-semibold text-on-primary hover:bg-primary/90 sm:col-span-1")}
                 >
                   {step === "working" ? "Booking…" : "Book them"}
                 </button>

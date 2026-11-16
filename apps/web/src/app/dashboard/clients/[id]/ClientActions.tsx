@@ -231,7 +231,7 @@ export function ClientActions({
     onPick: (cardTypeId?: string) => void;
   }) {
     return (
-      <div className="w-full basis-full rounded-2xl sm:max-w-xs border border-subtle bg-charcoal-800 p-2 shadow-glow-sm">
+      <div className="w-full basis-full rounded-2xl sm:max-w-xs border border-subtle bg-charcoal-800 p-2">
         <p className="px-2 pb-1.5 pt-1 text-[10px] uppercase tracking-wide text-muted">
           {label}
         </p>
@@ -257,7 +257,7 @@ export function ClientActions({
     <div className="flex flex-wrap items-center gap-2">
       <button
         onClick={copy}
-        className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
+        className="rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
       >
         Copy rewards link
       </button>
@@ -280,7 +280,7 @@ export function ClientActions({
           });
         }}
         title="Mint a fresh rewards link and kill every previously texted one (use if a link leaked)"
-        className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+        className="rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
       >
         New link
       </button>
@@ -301,7 +301,7 @@ export function ClientActions({
             } else toast("Could not update", "error");
           })
         }
-        className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+        className="rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
       >
         {isOptedOut ? "Opt back in" : "Opt out"}
       </button>
@@ -311,7 +311,7 @@ export function ClientActions({
           disabled={pending}
           onClick={() => (hasCards ? setVisitPickerOpen((v) => !v) : logVisit())}
           title="Record a visit that happened outside your booking calendar"
-          className="rounded-full border border-gold/50 px-4 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
+          className="rounded-md border border-gold/50 px-4 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
         >
           Log visit
         </button>
@@ -335,14 +335,14 @@ export function ClientActions({
             <button
               disabled={pending}
               onClick={() => setOnBooks(null)}
-              className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+              className="rounded-md border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               disabled={pending}
               onClick={() => logVisit(onBooks.cardTypeId, true)}
-              className="rounded-full border border-gold/50 px-3 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
+              className="rounded-md border border-gold/50 px-3 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10 disabled:opacity-50"
             >
               Log a separate visit
             </button>
@@ -358,7 +358,7 @@ export function ClientActions({
               if (hasCards) setPunchPickerOpen((v) => !v);
               else setBonusFor((v) => (v ? null : {}));
             }}
-            className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+            className="rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
           >
             +1 punch
           </button>
@@ -372,7 +372,7 @@ export function ClientActions({
             />
           )}
           {bonusFor && (
-            <div className="w-full basis-full rounded-2xl sm:max-w-xs border border-subtle bg-charcoal-800 p-3 shadow-glow-sm">
+            <div className="w-full basis-full rounded-2xl sm:max-w-xs border border-subtle bg-charcoal-800 p-3">
               <ReasonPicker
                 prompt={`Why the bonus punch${bonusFor.cardTypeId ? ` on ${cardName(bonusFor.cardTypeId)}` : ""}?`}
                 presets={BONUS_REASONS}
@@ -389,12 +389,12 @@ export function ClientActions({
         <div className="contents">
           <button
             onClick={() => setPickerOpen((v) => !v)}
-            className="rounded-full bg-gold px-4 py-2 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+            className="rounded-md bg-primary px-4 py-2 text-xs font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
           >
             Redeem reward{affordable.length > 1 ? ` (${affordable.length})` : ""}
           </button>
           {pickerOpen && (
-            <div className="w-full basis-full rounded-2xl sm:max-w-xs border border-subtle bg-charcoal-800 p-2 shadow-glow-sm">
+            <div className="w-full basis-full rounded-2xl sm:max-w-xs border border-subtle bg-charcoal-800 p-2">
               <p className="px-2 pb-1.5 pt-1 text-[10px] uppercase tracking-wide text-muted">
                 Pick the reward to redeem
               </p>
@@ -437,12 +437,12 @@ export function ClientActions({
         <div className="contents">
           <button
             onClick={() => setPromoPickerOpen((v) => !v)}
-            className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
+            className="rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
           >
             Promo used…
           </button>
           {promoPickerOpen && (
-            <div className="w-full basis-full rounded-2xl sm:max-w-xs border border-subtle bg-charcoal-800 p-2 shadow-glow-sm">
+            <div className="w-full basis-full rounded-2xl sm:max-w-xs border border-subtle bg-charcoal-800 p-2">
               <p className="px-2 pb-1.5 pt-1 text-[10px] uppercase tracking-wide text-muted">
                 Which promo did they use?
               </p>

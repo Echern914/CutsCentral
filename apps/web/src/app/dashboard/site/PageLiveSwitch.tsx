@@ -131,14 +131,14 @@ export function PageLiveSwitch({
             <button
               type="button"
               onClick={() => commit(false)}
-              className="min-h-[44px] rounded-full border border-danger-soft/50 px-5 text-sm font-semibold text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
+              className="min-h-[44px] rounded-xl border border-danger-soft/50 px-5 text-sm font-semibold text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
             >
               Hide page
             </button>
             <button
               type="button"
               onClick={() => setConfirming(false)}
-              className="min-h-[44px] rounded-full border border-subtle px-5 text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+              className="min-h-[44px] rounded-xl border border-subtle px-5 text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               Keep it live
             </button>

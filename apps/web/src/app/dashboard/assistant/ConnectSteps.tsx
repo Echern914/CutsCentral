@@ -221,9 +221,9 @@ export function ConnectSteps({ connectUrl }: { connectUrl: string }) {
                 type="button"
                 aria-selected={provider === key}
                 onClick={() => setProvider(key)}
-                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors duration-150 ease-out ${
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors duration-150 ease-out ${
                   provider === key
-                    ? "bg-gold text-charcoal"
+                    ? "bg-primary text-on-primary"
                     : "border border-subtle text-muted hover:text-offwhite"
                 }`}
               >

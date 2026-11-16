@@ -111,15 +111,15 @@ export interface AdminFlags {
 }
 
 const BTN =
-  "rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-50";
+  "rounded-md border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-50";
 const BTN_GOLD =
-  "rounded-full bg-gold px-3 py-1.5 text-xs font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50";
+  "rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90 disabled:opacity-50";
 const BTN_RED =
-  "rounded-full border border-danger-soft/40 px-3 py-1.5 text-xs text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50";
+  "rounded-md border border-danger-soft/40 px-3 py-1.5 text-xs text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10 disabled:opacity-50";
 const SELECT =
   "rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-xs text-offwhite focus:border-gold focus:outline-none";
 const INPUT =
-  "rounded-lg border border-subtle bg-charcoal-800 px-2 py-1.5 text-xs text-offwhite placeholder:text-muted focus:border-gold focus:outline-none";
+  "min-h-[44px] rounded-xl border border-subtle-strong bg-charcoal-800 px-2 py-1.5 text-xs text-offwhite placeholder:text-muted focus:border-gold focus:outline-none";
 
 function money(cents: number, currency: string): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: currency.toUpperCase() }).format(
@@ -131,7 +131,7 @@ function Pill({ on, label }: { on: boolean; label: string }) {
   return (
     <span
       className={cn(
-        "rounded-full px-2.5 py-0.5 text-[11px]",
+        "rounded-md px-2.5 py-0.5 text-[11px]",
         on ? "bg-emerald-soft/15 text-emerald-soft" : "bg-offwhite/5 text-muted",
       )}
     >
@@ -456,7 +456,7 @@ function AccountRow({
       <td className="px-4 py-3">
         <span
           className={cn(
-            "rounded-full px-2 py-0.5 text-[11px]",
+            "rounded-md px-2 py-0.5 text-[11px]",
             acc.status === "ACTIVE" ? "bg-emerald-soft/15 text-emerald-soft" : "bg-warning-soft/15 text-warning-soft",
           )}
         >

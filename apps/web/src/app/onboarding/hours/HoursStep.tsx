@@ -14,7 +14,7 @@ const StaffHoursSheet = dynamic(
 );
 
 const primary =
-  "inline-flex h-11 w-full items-center justify-center rounded-full bg-gold px-5 text-sm font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50";
+  "inline-flex h-11 w-full items-center justify-center rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50";
 
 /**
  * Setup: each person's week, in the same hours editor the Calendar uses -
@@ -67,7 +67,7 @@ export function HoursStep({
               className={
                 s.hasHours
                   ? "shrink-0 text-sm text-gold underline-offset-4 hover:underline"
-                  : "shrink-0 rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal hover:bg-gold-muted"
+                  : "shrink-0 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary hover:bg-primary/90"
               }
             >
               {s.hasHours ? "Edit" : "Set hours"}

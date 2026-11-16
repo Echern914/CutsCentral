@@ -23,7 +23,7 @@ import {
  */
 
 const ACT_BTN =
-  "flex h-11 items-center justify-center rounded-full px-4 text-xs font-semibold transition-colors disabled:opacity-40";
+  "flex h-11 items-center justify-center rounded-md px-4 text-xs font-semibold transition-colors disabled:opacity-40";
 
 function displayName(e: { firstName: string; lastName: string | null }): string {
   const initial = e.lastName?.trim()?.[0];
@@ -99,7 +99,7 @@ export function BarberWalkIns() {
             <div className="min-w-0 flex-1">
               <p className="break-words text-sm font-medium text-offwhite">
                 {displayName(e)}
-                <span className="ml-2 rounded-full bg-emerald-soft/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-soft">
+                <span className="ml-2 rounded-md bg-emerald-soft/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-soft">
                   {e.status === "IN_SERVICE"
                     ? "In your chair"
                     : e.status === "READY"
@@ -126,7 +126,7 @@ export function BarberWalkIns() {
                 <>
                   <button
                     type="button"
-                    className={cn(ACT_BTN, "bg-gold text-charcoal")}
+                    className={cn(ACT_BTN, "bg-primary text-on-primary")}
                     disabled={pending}
                     onClick={() => act(e.id, "start")}
                   >
@@ -153,7 +153,7 @@ export function BarberWalkIns() {
               {e.status === "IN_SERVICE" && (
                 <button
                   type="button"
-                  className={cn(ACT_BTN, "bg-gold text-charcoal")}
+                  className={cn(ACT_BTN, "bg-primary text-on-primary")}
                   disabled={pending}
                   onClick={() => act(e.id, "complete")}
                 >
@@ -176,7 +176,7 @@ export function BarberWalkIns() {
             </div>
             <button
               type="button"
-              className={cn(ACT_BTN, "shrink-0 bg-gold text-charcoal")}
+              className={cn(ACT_BTN, "shrink-0 bg-primary text-on-primary")}
               disabled={pending || !canAct}
               title={canAct ? undefined : "Your login isn't linked to a chair yet"}
               onClick={() => act(e.id, "claim")}

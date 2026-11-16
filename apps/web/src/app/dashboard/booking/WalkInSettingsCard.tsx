@@ -22,7 +22,7 @@ import {
 
 const PILL = (on: boolean) =>
   cn(
-    "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
+    "shrink-0 rounded-md px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
     on
       ? "bg-emerald-soft/15 text-emerald-soft"
       : "border border-subtle text-muted hover:bg-charcoal-700",

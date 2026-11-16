@@ -266,7 +266,7 @@ export function YearlyReport() {
               type="button"
               onClick={download}
               disabled={!report || busy !== null}
-              className="flex-1 rounded-xl bg-gold px-4 py-2.5 text-sm font-semibold text-black transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50"
+              className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-on-primary transition-transform duration-200 ease-out hover:scale-[1.01] disabled:opacity-50"
             >
               {busy === "download" ? "Preparing…" : "Download PDF"}
             </button>

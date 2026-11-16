@@ -121,7 +121,7 @@ export function TodayAgenda({
                     <span className="text-xs tabular-nums text-muted">
                       {timeFmt.format(new Date(r.start))}
                     </span>
-                    <span className="shrink-0 rounded-full bg-charcoal-700 px-2.5 py-0.5 text-[10px] font-medium text-muted">
+                    <span className="shrink-0 rounded-md bg-charcoal-700 px-2.5 py-0.5 text-[10px] font-medium text-muted">
                       Blocked
                     </span>
                   </div>
@@ -150,7 +150,7 @@ export function TodayAgenda({
                     {timeFmt.format(new Date(r.start))}
                   </span>
                   {r.status === "pending" ? (
-                    <span className="shrink-0 rounded-full bg-gold/15 px-2.5 py-0.5 text-[10px] font-semibold text-gold">
+                    <span className="shrink-0 rounded-md bg-gold/15 px-2.5 py-0.5 text-[10px] font-semibold text-gold">
                       Request
                     </span>
                   ) : r.price !== null ? (

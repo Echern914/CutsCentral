@@ -18,12 +18,9 @@ const inter = localFont({
   weight: "100 900",
 });
 
-const display = localFont({
-  src: "../fonts/bricolage-latin.woff2",
-  variable: "--font-display",
-  display: "swap",
-  weight: "200 800",
-});
+// Titles are Inter as well (`font-display` sets it tighter). Bricolage is no
+// longer ChairBack's own title face; it stays only as a shop-page font choice,
+// loaded by the /s layout.
 
 export const metadata: Metadata = {
   // Absolute base for OG/twitter URLs - without it, sharing any page renders a
@@ -77,13 +74,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${inter.variable} ${display.variable}`}>
+    <html lang="en" className={inter.variable}>
       <body className="font-sans antialiased bg-charcoal text-offwhite">
         {/* Skip link: first focusable element, hidden until keyboard-focused, so
             keyboard/SR users can jump past nav straight to page content (WCAG 2.4.1). */}
         <a
           href="#main"
-          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-gold focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-charcoal"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-on-primary"
         >
           Skip to content
         </a>

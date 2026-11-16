@@ -272,7 +272,7 @@ export function GalleryEditor({
             addUrls([urlDraft.trim()]);
             setUrlDraft("");
           }}
-          className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+          className="shrink-0 rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
         >
           Add
         </button>

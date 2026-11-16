@@ -53,7 +53,7 @@ export function OffersSwitch({ enabled, canSwitch }: { enabled: boolean; canSwit
             onClick={() => void change(true)}
             disabled={pending}
             data-qa="offers-switch-on"
-            className="mt-4 rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50"
+            className="mt-4 rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50"
           >
             {pending ? "Switching on…" : "Switch on Offers & codes"}
           </button>
@@ -89,7 +89,7 @@ export function OffersSwitch({ enabled, canSwitch }: { enabled: boolean; canSwit
               onClick={() => void change(false)}
               disabled={pending}
               data-qa="offers-switch-off"
-              className="rounded-full border border-subtle px-4 py-1.5 text-danger-soft transition-colors hover:border-danger-soft disabled:opacity-50"
+              className="rounded-xl border border-subtle px-4 py-1.5 text-danger-soft transition-colors hover:border-danger-soft disabled:opacity-50"
             >
               {pending ? "Switching off…" : "Switch off"}
             </button>

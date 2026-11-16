@@ -73,13 +73,13 @@ export function HiddenPageBanner({ booksHere }: { booksHere: boolean }) {
           type="button"
           onClick={turnOn}
           disabled={pending}
-          className="min-h-[44px] rounded-full bg-gold px-5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-60"
+          className="min-h-[44px] rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-60"
         >
           {pending ? "Turning it on…" : "Turn it back on"}
         </button>
         <Link
           href="/dashboard/site"
-          className="inline-flex min-h-[44px] items-center rounded-full border border-subtle px-5 text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+          className="inline-flex min-h-[44px] items-center rounded-xl border border-subtle px-5 text-sm text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
         >
           Page settings
         </Link>

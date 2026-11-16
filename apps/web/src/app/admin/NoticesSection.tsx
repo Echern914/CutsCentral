@@ -273,7 +273,7 @@ export function NoticesSection({ notices }: { notices: AdminNotice[] }) {
               type="submit"
               disabled={pending}
               data-qa="notice-submit"
-              className="h-10 flex-1 rounded-xl bg-gold px-4 text-xs font-semibold text-charcoal-900 transition-opacity duration-150 disabled:opacity-60 sm:flex-none"
+              className="h-10 flex-1 rounded-xl bg-primary px-4 text-xs font-semibold text-on-primary transition-opacity duration-150 disabled:opacity-60 sm:flex-none"
             >
               {pending ? "Saving…" : editing ? "Save changes" : "Post notice"}
             </button>
@@ -299,7 +299,7 @@ export function NoticesSection({ notices }: { notices: AdminNotice[] }) {
               <li key={n.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                   <p className="text-sm [overflow-wrap:anywhere]">
-                    <span className="mr-2 rounded-full bg-charcoal-700 px-2 py-0.5 text-xs text-offwhite">
+                    <span className="mr-2 rounded-md bg-charcoal-700 px-2 py-0.5 text-xs text-offwhite">
                       {STATE_LABEL[n.state]}
                     </span>
                     <span className="mr-1.5 text-xs uppercase tracking-wide text-muted">

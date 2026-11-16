@@ -217,7 +217,7 @@ export function RewardsClient({
                 "1 visit to Bronze" prompt for a brand-new client). */}
             {rewardsOn && loyalty.tier && loyalty.color && (
               <span
-                className="mt-3 inline-block rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide"
+                className="mt-3 inline-block rounded-md px-3 py-1 text-xs font-semibold uppercase tracking-wide"
                 style={{
                   color: loyalty.color,
                   backgroundColor: `${loyalty.color}1A`,
@@ -531,7 +531,7 @@ export function RewardsClient({
                           </div>
                           {reward.ready ? (
                             <span
-                              className="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
+                              className="shrink-0 rounded-md px-3 py-1 text-xs font-semibold"
                               style={{ backgroundColor: accent, color: t.onAccent }}
                             >
                               Ready!
@@ -745,7 +745,7 @@ function PunchCardSurface({
           {card.name}
           {card.exclusive && (
             <span
-              className="ml-2 rounded-full px-2 py-0.5 text-[9px] tracking-wide"
+              className="ml-2 rounded-md px-2 py-0.5 text-[9px] tracking-wide"
               style={{ border: `1px solid ${accent}66`, color: accent }}
             >
               VIP
@@ -811,7 +811,7 @@ function PunchCardSurface({
                   </div>
                   {reward.ready ? (
                     <span
-                      className="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
+                      className="shrink-0 rounded-md px-3 py-1 text-xs font-semibold"
                       style={{ backgroundColor: accent, color: t.onAccent }}
                     >
                       Ready!

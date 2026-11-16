@@ -61,7 +61,7 @@ export function ShopQrCard({
           type="button"
           onClick={generate}
           disabled={pending}
-          className="mt-4 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+          className="mt-4 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
         >
           {pending ? "Building…" : "Show my QR code"}
         </button>

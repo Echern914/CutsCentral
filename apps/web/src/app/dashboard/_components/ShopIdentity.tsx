@@ -48,7 +48,7 @@ export function ShopIdentity({
             type="button"
             onClick={copy}
             title="Copy your booking link"
-            className="truncate rounded-full px-2 py-1 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+            className="truncate rounded-xl px-2 py-1 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
           >
             {display}
           </button>

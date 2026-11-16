@@ -187,7 +187,7 @@ export function GetTheApp({
             {/* Get the app is the main button. "Open in ChairBack" was, and for
                 anyone without the app a custom scheme is a Safari error. */}
             <a
-              className="inline-flex min-h-11 items-center rounded-full bg-gold px-5 font-semibold text-charcoal-900"
+              className="inline-flex min-h-11 items-center rounded-xl bg-primary px-5 font-semibold text-on-primary"
               href={MOBILE_APP.appStoreUrl}
               target="_blank"
               rel="noopener noreferrer"

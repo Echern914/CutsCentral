@@ -19,7 +19,7 @@ type Toast = (msg: string, kind?: "success" | "error") => void;
  */
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
 export function ClientNoteCard({
   shopName,
@@ -108,7 +108,7 @@ export function ClientNoteCard({
         type="button"
         onClick={() => void save()}
         disabled={!dirty || saving}
-        className="mt-3 min-h-11 w-full rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50 sm:w-auto"
+        className="mt-3 min-h-11 w-full rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50 sm:w-auto"
       >
         {saving ? "Saving…" : "Save note"}
       </button>

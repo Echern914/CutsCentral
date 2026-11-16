@@ -11,7 +11,7 @@ import {
 export const NATIVE_BILLING_LABEL = "Manage plan on getchairback.com";
 
 const NATIVE_BUTTON =
-  "inline-flex items-center gap-1 rounded-full border border-gold/50 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold";
+  "inline-flex items-center gap-1 rounded-md border border-gold/50 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold";
 
 /**
  * THE one way any surface sends a barber to change their plan.

@@ -64,7 +64,7 @@ const PX = 2.4;
 /** Tap-to-add snaps to this many minutes. */
 const SNAP = 5;
 
-const field = "h-11 rounded-xl border border-subtle bg-charcoal-700 px-3 text-sm text-offwhite";
+const field = "h-11 rounded-xl border border-subtle-strong bg-charcoal-800 px-3 text-sm text-offwhite";
 
 const prettyDate = dayLabel;
 
@@ -683,7 +683,7 @@ export function LiveDayView({
                     aria-pressed={on}
                     onClick={() => toggle(setCounts, s.id)}
                     className={cn(
-                      "min-h-[44px] rounded-full border px-3 text-xs transition-colors",
+                      "min-h-[44px] rounded-md border px-3 text-xs transition-colors",
                       on ? "border-gold/60 bg-gold/15 text-gold" : "border-subtle text-muted hover:text-offwhite",
                     )}
                   >
@@ -767,7 +767,7 @@ export function LiveDayView({
                           aria-pressed={on}
                           onClick={() => toggle(setFillChairs, c.staffId)}
                           className={cn(
-                            "min-h-[44px] rounded-full border px-3 text-xs transition-colors",
+                            "min-h-[44px] rounded-md border px-3 text-xs transition-colors",
                             on ? "border-gold/60 bg-gold/15 text-gold" : "border-subtle text-muted hover:text-offwhite",
                           )}
                         >

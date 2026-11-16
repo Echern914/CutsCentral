@@ -214,6 +214,6 @@ export function ExternalBlockBanner({
 }
 
 const PRIMARY_BTN =
-  "min-h-[2.75rem] flex-none rounded-lg bg-gold px-3 py-2 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50";
+  "min-h-[2.75rem] flex-none rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50";
 const SECONDARY_BTN =
   "min-h-[2.75rem] flex-none rounded-lg border border-subtle-strong px-3 py-2 text-xs font-medium text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50";

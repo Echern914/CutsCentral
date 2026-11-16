@@ -232,7 +232,7 @@ export function DashboardNavInline({
                 // px-3 until there is real room: at 768 the five tabs plus the
                 // logo and the account/sign-out cluster were 6px too wide for
                 // the viewport. Full padding returns at lg.
-                "shrink-0 rounded-full px-3 py-1.5 text-sm font-medium transition-colors duration-150 ease-out lg:px-4",
+                "shrink-0 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors duration-150 ease-out lg:px-4",
                 active
                   ? "bg-gold/15 text-gold"
                   : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
@@ -249,7 +249,7 @@ export function DashboardNavInline({
           aria-expanded={moreOpen}
           className={cn(
             // Matches the tabs beside it - see the padding note above.
-            "shrink-0 rounded-full px-3 py-1.5 text-sm font-medium transition-colors duration-150 ease-out lg:px-4",
+            "shrink-0 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors duration-150 ease-out lg:px-4",
             moreActive
               ? "bg-gold/15 text-gold"
               : "text-muted hover:bg-charcoal-700 hover:text-offwhite",

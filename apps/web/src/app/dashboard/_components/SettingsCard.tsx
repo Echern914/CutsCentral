@@ -20,7 +20,7 @@ export interface ShopSettings {
 }
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
 
 function Save() {
@@ -29,7 +29,7 @@ function Save() {
     <button
       type="submit"
       disabled={pending}
-      className="rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50"
+      className="rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90 disabled:opacity-50"
     >
       {pending ? "Saving…" : "Save settings"}
     </button>

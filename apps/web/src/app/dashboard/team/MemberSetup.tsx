@@ -47,8 +47,8 @@ export function MemberSetup({ setup }: { setup: SetupProgress | null | undefined
             key={s.id}
             className={
               s.done
-                ? "rounded-full bg-emerald-soft/10 px-2 py-0.5 text-[11px] text-emerald-soft"
-                : "rounded-full border border-subtle px-2 py-0.5 text-[11px] text-muted"
+                ? "rounded-md bg-emerald-soft/10 px-2 py-0.5 text-[11px] text-emerald-soft"
+                : "rounded-md border border-subtle px-2 py-0.5 text-[11px] text-muted"
             }
           >
             <span aria-hidden="true">{s.done ? "✓ " : "○ "}</span>

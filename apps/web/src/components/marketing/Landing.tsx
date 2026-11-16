@@ -32,7 +32,7 @@ export function Landing() {
       <header className="sticky top-0 z-20">
         <nav
           aria-label="Primary"
-          className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-full px-5 py-3"
+          className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-xl px-5 py-3"
         >
           <Link href="/" className="flex items-center gap-2">
             <ScissorsMark className="h-4 w-4 text-gold" />
@@ -43,20 +43,20 @@ export function Landing() {
             <HideInNativeApp>
               <a
                 href="#pricing"
-                className="hidden rounded-full px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:inline"
+                className="hidden rounded-xl px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite sm:inline"
               >
                 Pricing
               </a>
             </HideInNativeApp>
             <Link
               href="/login"
-              className="rounded-full px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+              className="rounded-xl px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
             >
               Sign in
             </Link>
             <Link
               href="/signup"
-              className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-on-gold shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
+              className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-[box-shadow,filter] duration-150 ease-out hover:bg-primary/90"
             >
               Get started
             </Link>
@@ -69,7 +69,7 @@ export function Landing() {
         <section className="mx-auto grid w-full max-w-6xl items-center gap-16 px-6 pb-20 pt-16 sm:pt-24 lg:grid-cols-[1.05fr_0.95fr]">
           <Stagger className="text-center lg:text-left" gap={0.1}>
             <StaggerItem>
-              <p className="inline-flex items-center gap-2 rounded-full border border-gold/30 bg-gold/10 px-3 py-1 text-xs font-medium text-gold-soft">
+              <p className="inline-flex items-center gap-2 rounded-md border border-gold/30 bg-gold/10 px-3 py-1 text-xs font-medium text-gold-soft">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-gold" />
                 Works with Acuity, Square, or ChairBack&apos;s own booking
               </p>
@@ -92,14 +92,14 @@ export function Landing() {
               <div className="mt-9 flex flex-wrap items-center justify-center gap-4 lg:justify-start">
                 <Link
                   href="/signup"
-                  className="inline-flex items-center gap-2 rounded-full bg-gold-gradient px-8 py-3.5 text-sm font-semibold text-on-gold shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
+                  className="inline-flex items-center gap-2 rounded-xl bg-primary px-8 py-3.5 text-sm font-semibold text-on-primary transition-[box-shadow,filter] duration-150 ease-out hover:bg-primary/90"
                 >
                   Start free
                   <ArrowIcon className="h-4 w-4" />
                 </Link>
                 <Link
                   href="/login"
-                  className="rounded-full border border-subtle px-7 py-3.5 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:border-subtle-strong hover:bg-charcoal-700"
+                  className="rounded-xl border border-subtle px-7 py-3.5 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:border-subtle-strong hover:bg-charcoal-700"
                 >
                   Sign in
                 </Link>
@@ -177,7 +177,7 @@ export function Landing() {
             />
             {STEPS.map((s, i) => (
               <StaggerItem key={s.title} className="relative text-center">
-                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-gold-gradient font-display text-lg text-on-gold shadow-glow-sm">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-gold-gradient font-display text-lg text-on-gold">
                   {i + 1}
                 </div>
                 <h3 className="mt-5 font-display text-xl">{s.title}</h3>
@@ -224,7 +224,7 @@ export function Landing() {
             </Reveal>
             <div className="order-1 lg:order-2">
               <Reveal>
-                <p className="inline-flex items-center gap-2 rounded-full border border-gold/30 bg-gold/10 px-3 py-1 text-xs font-medium text-gold-soft">
+                <p className="inline-flex items-center gap-2 rounded-md border border-gold/30 bg-gold/10 px-3 py-1 text-xs font-medium text-gold-soft">
                   <span className="h-1.5 w-1.5 rounded-full bg-gold" />
                   Smart nudges
                 </p>
@@ -268,7 +268,7 @@ export function Landing() {
                 key={f.title}
                 className={i === 0 ? "sm:col-span-2 lg:col-span-1" : undefined}
               >
-                <div className="glass group h-full rounded-3xl p-7 transition-all duration-200 ease-out hover:-translate-y-1 hover:border-gold/25 hover:shadow-glow-sm">
+                <div className="glass group h-full rounded-3xl p-7 transition-all duration-200 ease-out hover:-translate-y-1 hover:border-gold/25">
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-gold/25 bg-gold/10 text-gold transition-transform duration-200 ease-out group-hover:scale-110">
                     {f.icon}
                   </div>
@@ -338,7 +338,7 @@ export function Landing() {
               <div className="mt-9">
                 <Link
                   href="/signup"
-                  className="inline-flex animate-pulse-glow items-center gap-2 rounded-full bg-gold-gradient px-10 py-4 text-base font-semibold text-on-gold transition-[filter] duration-150 ease-out hover:brightness-105"
+                  className="inline-flex items-center gap-2 rounded-xl bg-primary px-10 py-4 text-base font-semibold text-on-primary transition-[filter] duration-150 ease-out hover:bg-primary/90"
                 >
                   Get started free
                   <ArrowIcon className="h-4 w-4" />

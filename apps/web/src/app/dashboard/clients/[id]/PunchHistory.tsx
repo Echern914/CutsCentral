@@ -144,7 +144,7 @@ export function PunchHistory({
                     ) : null}
                     {e.card && (
                       <span
-                        className="ml-2 rounded-full border border-subtle px-2 py-0.5 text-[10px] uppercase tracking-wide"
+                        className="ml-2 rounded-md border border-subtle px-2 py-0.5 text-[10px] uppercase tracking-wide"
                         style={{ color: e.card.accentColor ?? "#D4AF37" }}
                       >
                         {e.card.emoji ? `${e.card.emoji} ` : ""}

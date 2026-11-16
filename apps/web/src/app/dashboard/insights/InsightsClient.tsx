@@ -734,7 +734,7 @@ export function ServiceBars({
                         editingThis ? setGoalEditor(null) : openGoalEditor(s.serviceId!)
                       }
                       className={cn(
-                        "shrink-0 rounded-full border px-2 py-0.5 text-[10px] tabular-nums transition-colors",
+                        "shrink-0 rounded-md border px-2 py-0.5 text-[10px] tabular-nums transition-colors",
                         g
                           ? g.pct >= 1
                             ? "border-emerald-soft/40 bg-emerald-soft/10 text-emerald-soft"
@@ -793,7 +793,7 @@ export function ServiceBars({
                       <button
                         onClick={() => void removeServiceGoal(g)}
                         disabled={goalSaving}
-                        className="rounded-full border border-subtle px-2.5 py-1 text-[11px] text-muted transition-colors hover:text-danger-soft"
+                        className="rounded-md border border-subtle px-2.5 py-1 text-[11px] text-muted transition-colors hover:text-danger-soft"
                       >
                         Remove
                       </button>
@@ -801,7 +801,7 @@ export function ServiceBars({
                     <button
                       onClick={() => void saveServiceGoal(s.serviceId!)}
                       disabled={goalSaving}
-                      className="rounded-full bg-gold px-3 py-1 text-[11px] font-semibold text-charcoal-900 disabled:opacity-50"
+                      className="rounded-md bg-primary px-3 py-1 text-[11px] font-semibold text-on-primary disabled:opacity-50"
                     >
                       {goalSaving ? "Saving…" : "Save"}
                     </button>
@@ -1015,7 +1015,7 @@ export function UtilizationCard({
               setTargetError(null);
               setEditingTarget((v) => !v);
             }}
-            className="rounded-full border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
+            className="rounded-md border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
           >
             {chairTimeTarget === null ? "Set a target" : "Edit target"}
           </button>
@@ -1042,21 +1042,21 @@ export function UtilizationCard({
                 <button
                   onClick={() => void clearTarget()}
                   disabled={savingTarget}
-                  className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-danger-soft"
+                  className="rounded-md border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-danger-soft"
                 >
                   Remove
                 </button>
               )}
               <button
                 onClick={() => setEditingTarget(false)}
-                className="rounded-full border border-subtle px-3 py-1 text-xs text-muted hover:text-offwhite"
+                className="rounded-md border border-subtle px-3 py-1 text-xs text-muted hover:text-offwhite"
               >
                 Cancel
               </button>
               <button
                 onClick={() => void saveTarget()}
                 disabled={savingTarget}
-                className="rounded-full bg-gold px-3 py-1 text-xs font-semibold text-charcoal-900 disabled:opacity-50"
+                className="rounded-md bg-primary px-3 py-1 text-xs font-semibold text-on-primary disabled:opacity-50"
               >
                 {savingTarget ? "Saving…" : "Save"}
               </button>
@@ -1077,7 +1077,7 @@ export function UtilizationCard({
               onClick={() => setPeriodOpen((v) => !v)}
               aria-expanded={periodOpen}
               className={cn(
-                "shrink-0 rounded-full border px-3 py-1 text-xs transition-colors duration-150 ease-out",
+                "shrink-0 rounded-md border px-3 py-1 text-xs transition-colors duration-150 ease-out",
                 periodOpen
                   ? "border-gold/60 bg-gold/15 text-gold"
                   : "border-subtle text-muted hover:text-offwhite",
@@ -1193,7 +1193,7 @@ export function UtilizationCard({
               {chairTimeTarget !== null && (
                 <span
                   className={cn(
-                    "rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums",
+                    "rounded-md border px-2 py-0.5 text-[10px] font-semibold tabular-nums",
                     (data?.totals.utilizationPct ?? 0) >= chairTimeTarget
                       ? "border-emerald-soft/40 bg-emerald-soft/10 text-emerald-soft"
                       : "border-warning-soft/40 bg-warning-soft/10 text-warning-soft",
@@ -1480,7 +1480,7 @@ function GoalCell({
         <div className="mt-auto pt-3">
           <button
             onClick={onBeginEdit}
-            className="rounded-full border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
+            className="rounded-md border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
           >
             Set a target
           </button>
@@ -1500,7 +1500,7 @@ function GoalCell({
         <p className="text-[11px] uppercase tracking-wide text-muted">{title}</p>
         <span
           className={cn(
-            "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold",
+            "shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-semibold",
             onPace
               ? "border-emerald-soft/40 bg-emerald-soft/10 text-emerald-soft"
               : "border-warning-soft/40 bg-warning-soft/10 text-warning-soft",
@@ -1556,14 +1556,14 @@ function GoalCell({
       <div className="mt-auto flex gap-2 pt-3">
         <button
           onClick={onBeginEdit}
-          className="rounded-full border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
+          className="rounded-md border border-gold/50 px-3 py-1 text-xs text-gold transition-colors hover:bg-gold/10"
         >
           Edit &amp; plan
         </button>
         <button
           onClick={onClear}
           disabled={saving}
-          className="rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-danger-soft"
+          className="rounded-md border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:text-danger-soft"
         >
           Remove
         </button>

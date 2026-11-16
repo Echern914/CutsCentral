@@ -53,7 +53,7 @@ export function ReturnToApp({ code, state }: { code: string; state: string }) {
         <div className="mt-5 flex flex-col gap-3">
           <a
             href={target.current}
-            className="flex min-h-[44px] w-full items-center justify-center rounded-xl bg-gold px-5 py-3 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted"
+            className="flex min-h-[44px] w-full items-center justify-center rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90"
           >
             Open ChairBack
           </a>

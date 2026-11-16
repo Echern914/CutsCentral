@@ -935,7 +935,7 @@ export function AppointmentForm({
               <button
                 type="button"
                 onClick={() => onCreated({ id: earlier.booked.id, startsAt: earlier.booked.startsAt })}
-                className="self-start rounded-full border border-gold/50 px-3 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+                className="self-start rounded-md border border-gold/50 px-3 py-1.5 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
               >
                 Open that booking
               </button>
@@ -1775,7 +1775,7 @@ export function Sheet({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="flex h-11 shrink-0 items-center rounded-full border border-subtle px-3 text-xs text-muted hover:text-offwhite sm:h-9"
+            className="flex h-11 shrink-0 items-center rounded-md border border-subtle px-3 text-xs text-muted hover:text-offwhite sm:h-9"
           >
             Close
           </button>

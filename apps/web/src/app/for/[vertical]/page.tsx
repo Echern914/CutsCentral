@@ -229,7 +229,7 @@ export default function VerticalPage({
       <header className="sticky top-0 z-20">
         <nav
           aria-label="Primary"
-          className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-full px-5 py-3"
+          className="glass mx-auto mt-4 flex w-[min(72rem,calc(100%-2rem))] items-center justify-between rounded-xl px-5 py-3"
         >
           <Link href="/" className="font-display text-base tracking-tight">
             {APP_NAME}
@@ -237,13 +237,13 @@ export default function VerticalPage({
           <div className="flex items-center gap-2">
             <Link
               href="/login"
-              className="rounded-full px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
+              className="rounded-xl px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:text-offwhite"
             >
               Sign in
             </Link>
             <Link
               href={signupHref}
-              className="rounded-full bg-gold-gradient px-4 py-2 text-sm font-semibold text-on-gold shadow-glow-sm transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow hover:brightness-105"
+              className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-[box-shadow,filter] duration-150 ease-out hover:bg-primary/90"
             >
               Get started
             </Link>
@@ -253,7 +253,7 @@ export default function VerticalPage({
 
       <main className="mx-auto w-full max-w-4xl px-6">
         <section className="pb-16 pt-16 text-center sm:pt-24">
-          <p className="inline-flex items-center gap-2 rounded-full border border-gold/30 bg-gold/10 px-3 py-1 text-xs font-medium text-gold-soft">
+          <p className="inline-flex items-center gap-2 rounded-md border border-gold/30 bg-gold/10 px-3 py-1 text-xs font-medium text-gold-soft">
             {APP_NAME} for {v.label.toLowerCase()}
           </p>
           <h1 className="mx-auto mt-6 max-w-2xl font-display text-5xl leading-[1.05] tracking-tight sm:text-6xl">
@@ -265,13 +265,13 @@ export default function VerticalPage({
           <div className="mt-9 flex flex-wrap items-center justify-center gap-4">
             <Link
               href={signupHref}
-              className="rounded-full bg-gold-gradient px-8 py-3.5 text-sm font-semibold text-on-gold shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
+              className="rounded-xl bg-primary px-8 py-3.5 text-sm font-semibold text-on-primary transition-[box-shadow,filter] duration-150 ease-out hover:bg-primary/90"
             >
               Start your {BILLING.trialDays}-day free trial
             </Link>
             <Link
               href="/#pricing"
-              className="rounded-full border border-subtle px-7 py-3.5 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+              className="rounded-xl border border-subtle px-7 py-3.5 text-sm font-medium text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               See pricing
             </Link>
@@ -308,7 +308,7 @@ export default function VerticalPage({
           </p>
           <Link
             href={signupHref}
-            className="mt-7 inline-block rounded-full bg-gold-gradient px-9 py-3.5 text-sm font-semibold text-on-gold shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
+            className="mt-7 inline-block rounded-xl bg-primary px-9 py-3.5 text-sm font-semibold text-on-primary transition-[box-shadow,filter] duration-150 ease-out hover:bg-primary/90"
           >
             Get started free
           </Link>

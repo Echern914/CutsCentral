@@ -12,7 +12,7 @@ export function Marquee({ items }: { items: readonly string[] }) {
         {row.map((t, i) => (
           <span
             key={i}
-            className="whitespace-nowrap rounded-full border border-subtle bg-charcoal-800/70 px-4 py-2 text-xs text-muted"
+            className="whitespace-nowrap rounded-md border border-subtle bg-charcoal-800/70 px-4 py-2 text-xs text-muted"
           >
             {t}
           </span>

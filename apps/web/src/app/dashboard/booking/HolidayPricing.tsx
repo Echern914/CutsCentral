@@ -485,7 +485,7 @@ export function HolidayPricing({
                 return (
                   <span
                     key={run.from}
-                    className="inline-flex items-center gap-1 rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 text-[11px] text-gold"
+                    className="inline-flex items-center gap-1 rounded-md border border-gold/40 bg-gold/10 px-2 py-0.5 text-[11px] text-gold"
                   >
                     {text}
                     <button
@@ -515,7 +515,7 @@ export function HolidayPricing({
                   onClick={() => toggle(s.id)}
                   aria-pressed={on}
                   className={cn(
-                    "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+                    "rounded-md border px-2.5 py-1 text-[11px] transition-colors",
                     on
                       ? "border-gold/60 bg-gold/15 text-gold"
                       : "border-subtle text-muted hover:text-offwhite",

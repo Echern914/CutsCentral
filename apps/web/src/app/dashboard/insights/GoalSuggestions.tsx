@@ -172,7 +172,7 @@ function SuggestionCell({
           type="button"
           onClick={() => void use()}
           disabled={saving || already}
-          className="rounded-full bg-gold px-3 py-1.5 text-xs font-semibold text-on-gold transition-opacity disabled:opacity-50"
+          className="rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity disabled:opacity-50"
         >
           {saving ? "Saving…" : already ? "This is your goal" : "Use this goal"}
         </button>

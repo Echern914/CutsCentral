@@ -123,7 +123,7 @@ export function TextingSwitch({ initial }: { initial: TextingState }) {
                 data-qa="texting-apply"
                 disabled={pending}
                 onClick={() => void apply()}
-                className="h-10 flex-1 rounded-xl bg-gold px-4 text-xs font-semibold text-charcoal-900 transition-opacity duration-150 disabled:opacity-60"
+                className="h-10 flex-1 rounded-xl bg-primary px-4 text-xs font-semibold text-on-primary transition-opacity duration-150 disabled:opacity-60"
               >
                 {pending ? "Saving…" : next ? "Turn texting on" : "Turn texting off"}
               </button>

@@ -7,7 +7,7 @@ import { FormError } from "@/components/ui/FormError";
 import { applyForAwardAction, type AwardMe } from "./actions";
 
 const input =
-  "w-full rounded-xl border border-subtle bg-charcoal-800 px-3 py-2.5 text-base text-offwhite placeholder:text-muted sm:text-sm";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2.5 text-base text-offwhite placeholder:text-muted sm:text-sm";
 
 /**
  * The application: which of their own stats to put forward (read from their
@@ -133,7 +133,7 @@ export function ApplyForAward({ me }: { me: AwardMe }) {
         <button
           type="submit"
           disabled={pending}
-          className="inline-flex h-11 items-center justify-center rounded-full bg-gold px-5 text-sm font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50 sm:w-auto"
+          className="inline-flex h-11 items-center justify-center rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50 sm:w-auto"
         >
           {pending ? "Sending…" : app ? "Update my application" : "Send my application"}
         </button>

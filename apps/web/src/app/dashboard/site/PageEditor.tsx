@@ -49,7 +49,7 @@ import { PageLiveSwitch } from "./PageLiveSwitch";
 import { SHOP_NAME_MAX, shopNameError } from "./shopName";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
 
 // Fields with an inline error slot right under their input. A server rejection
@@ -419,7 +419,7 @@ export function PageEditor({
           <div className="flex items-center gap-2">
             <button
               onClick={copyUrl}
-              className="rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
+              className="rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               Copy
             </button>
@@ -427,7 +427,7 @@ export function PageEditor({
               href={`${pageUrl}?from=dashboard`}
               target="_blank"
               rel="noopener noreferrer"
-              className="rounded-full border border-gold/50 px-4 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+              className="rounded-md border border-gold/50 px-4 py-2 text-xs font-medium text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
             >
               Open
             </a>
@@ -474,7 +474,7 @@ export function PageEditor({
                       onClick={() => setTheme(key)}
                       className={cn(
                         "rounded-2xl border p-3 text-left transition-[border-color,box-shadow] duration-150 ease-out",
-                        active ? "border-gold/60 shadow-glow-sm" : "border-subtle hover:border-subtle-strong",
+                        active ? "border-gold/60" : "border-subtle hover:border-subtle-strong",
                       )}
                       style={{ backgroundColor: t.bg }}
                     >
@@ -769,7 +769,7 @@ export function PageEditor({
                   aria-label="Keep my street address private"
                   onClick={() => setAddressPrivate((v) => !v)}
                   className={cn(
-                    "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
+                    "shrink-0 rounded-md px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
                     addressPrivate
                       ? "bg-emerald-soft/15 text-emerald-soft"
                       : "border border-subtle text-muted hover:bg-charcoal-700",
@@ -821,7 +821,7 @@ export function PageEditor({
                       onClick={() => setSectionOrder([...tpl.sectionOrder])}
                       title={tpl.hint}
                       className={cn(
-                        "rounded-full border px-3 py-1.5 text-xs transition-colors",
+                        "rounded-md border px-3 py-1.5 text-xs transition-colors",
                         active
                           ? "border-gold/60 bg-gold/10 text-gold"
                           : "border-subtle text-muted hover:text-offwhite",
@@ -902,7 +902,7 @@ export function PageEditor({
               <button
                 onClick={() => setTakesRequests((v) => !v)}
                 className={cn(
-                  "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
+                  "shrink-0 rounded-md px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
                   takesRequests ? "bg-emerald-soft/15 text-emerald-soft" : "border border-subtle text-muted hover:bg-charcoal-700",
                 )}
               >
@@ -938,7 +938,7 @@ export function PageEditor({
               <button
                 onClick={() => setWaitlistEnabled((v) => !v)}
                 className={cn(
-                  "shrink-0 rounded-full px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
+                  "shrink-0 rounded-md px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
                   waitlistEnabled
                     ? "bg-emerald-soft/15 text-emerald-soft"
                     : "border border-subtle text-muted hover:bg-charcoal-700",
@@ -974,7 +974,7 @@ export function PageEditor({
               Boolean(shopNameError(name))
             }
             onClick={save}
-            className="rounded-full bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50 sm:px-6"
+            className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50 sm:px-6"
           >
             {pending ? "Saving…" : "Save page"}
           </button>
@@ -985,7 +985,7 @@ export function PageEditor({
           )}
           <button
             onClick={() => setShowPreviewMobile((v) => !v)}
-            className="rounded-full border border-subtle px-4 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 sm:px-5 lg:hidden"
+            className="rounded-xl border border-subtle px-4 py-2.5 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 sm:px-5 lg:hidden"
           >
             {showPreviewMobile ? "Hide preview" : "Preview"}
           </button>

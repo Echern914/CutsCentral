@@ -96,13 +96,13 @@ export function UpcomingVisits({
 function StatusBadge({ status }: { status: string }) {
   if (status === "PENDING") {
     return (
-      <span className="shrink-0 rounded-full border border-gold/40 bg-gold/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-gold">
+      <span className="shrink-0 rounded-md border border-gold/40 bg-gold/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-gold">
         Needs approval
       </span>
     );
   }
   return (
-    <span className="shrink-0 rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-soft">
+    <span className="shrink-0 rounded-md border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-soft">
       Confirmed
     </span>
   );

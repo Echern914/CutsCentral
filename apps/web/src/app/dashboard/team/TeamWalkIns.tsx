@@ -90,7 +90,7 @@ export function TeamWalkIns({
           </p>
           <Link
             href="/dashboard/booking?tab=Settings"
-            className="mt-2 inline-flex min-h-[40px] items-center rounded-full border border-subtle px-4 text-xs text-muted transition-colors hover:bg-charcoal-700 hover:text-offwhite"
+            className="mt-2 inline-flex min-h-[40px] items-center rounded-md border border-subtle px-4 text-xs text-muted transition-colors hover:bg-charcoal-700 hover:text-offwhite"
           >
             Open Booking settings
           </Link>

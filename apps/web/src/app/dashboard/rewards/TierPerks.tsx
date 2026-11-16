@@ -137,7 +137,7 @@ function errorCopy(error: TierRuleError, tier: LoyaltyTierKey): string {
 }
 
 const inputClass =
-  "rounded-lg border border-subtle bg-charcoal-900 px-2.5 py-1.5 text-base text-offwhite focus:border-gold/50 focus:outline-none focus:ring-2 focus:ring-gold/25";
+  "min-h-[44px] rounded-xl border border-subtle-strong bg-charcoal-800 px-2.5 py-1.5 text-base text-offwhite focus:border-gold/50 focus:outline-none focus:ring-2 focus:ring-gold/25";
 
 function WindowSelect({
   value,
@@ -425,8 +425,8 @@ export function TierPerks({
                       role="radio"
                       aria-checked={d.match === m}
                       onClick={() => edit(key, { match: m })}
-                      className={`rounded-full px-3 py-1 transition-colors duration-150 ease-out ${
-                        d.match === m ? "bg-gold text-charcoal" : "text-muted hover:text-offwhite"
+                      className={`rounded-xl px-3 py-1 transition-colors duration-150 ease-out ${
+                        d.match === m ? "bg-primary text-on-primary" : "text-muted hover:text-offwhite"
                       }`}
                     >
                       {measuresOn === 2
@@ -487,7 +487,7 @@ export function TierPerks({
             type="button"
             onClick={() => void runPreview()}
             disabled={previewing}
-            className="mt-2 rounded-full border border-subtle px-4 py-1.5 text-xs font-semibold text-offwhite transition-colors duration-150 ease-out hover:border-gold/50 disabled:opacity-50"
+            className="mt-2 rounded-md border border-subtle px-4 py-1.5 text-xs font-semibold text-offwhite transition-colors duration-150 ease-out hover:border-gold/50 disabled:opacity-50"
           >
             {previewing ? "Counting…" : shownPreview ? "Count again" : "Preview before saving"}
           </button>
@@ -541,7 +541,7 @@ export function TierPerks({
           type="button"
           onClick={() => void save()}
           disabled={pending || !dirty || !checked.ok}
-          className="rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
+          className="rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
         >
           {pending ? "Saving…" : "Save tiers"}
         </button>

@@ -34,7 +34,7 @@ interface Row {
 }
 
 const fieldClass =
-  "h-10 w-full rounded-lg border border-subtle bg-charcoal-700 px-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] h-10 w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
 const nameKey = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
 
@@ -184,7 +184,7 @@ export function PasteMenu({
               type="button"
               onClick={read}
               disabled={!text.trim()}
-              className="h-11 rounded-lg bg-gold px-4 text-sm font-semibold text-charcoal-900 disabled:opacity-50 sm:h-9"
+              className="h-11 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary disabled:opacity-50 sm:h-9"
             >
               Read my menu
             </button>
@@ -305,7 +305,7 @@ export function PasteMenu({
                 type="button"
                 onClick={() => void save()}
                 disabled={saving || problems.length > 0 || sameNameTwice.size > 0}
-                className="h-11 rounded-lg bg-gold px-4 text-sm font-semibold text-charcoal-900 disabled:opacity-50 sm:h-9"
+                className="h-11 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary disabled:opacity-50 sm:h-9"
               >
                 {saving ? "Adding…" : `Add ${checked.length} ${checked.length === 1 ? "service" : "services"}`}
               </button>

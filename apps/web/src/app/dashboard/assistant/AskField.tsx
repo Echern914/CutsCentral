@@ -170,7 +170,7 @@ export function AskField({
         />
         <button
           type="submit"
-          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
         >
           Ask
         </button>
@@ -189,7 +189,7 @@ export function AskField({
               <button
                 type="button"
                 onClick={() => ask(e)}
-                className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:border-gold/30 hover:text-offwhite"
+                className="rounded-md border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:border-gold/30 hover:text-offwhite"
               >
                 {e}
               </button>
@@ -225,7 +225,7 @@ function Answer({
             <button
               type="button"
               onClick={() => onGo(answer.action!.href)}
-              className="mt-1 rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+              className="mt-1 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
             >
               {answer.action.label} →
             </button>
@@ -248,7 +248,7 @@ function Answer({
                     <button
                       type="button"
                       onClick={() => onGo(item.action!.href)}
-                      className="mt-2.5 inline-flex min-h-11 items-center rounded-full border border-gold/40 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+                      className="mt-2.5 inline-flex min-h-11 items-center rounded-md border border-gold/40 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
                     >
                       {item.action.label} →
                     </button>
@@ -279,7 +279,7 @@ function Answer({
               <button
                 type="button"
                 onClick={() => onPick(s.id, s.question)}
-                className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:border-gold/30 hover:text-offwhite"
+                className="rounded-md border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:border-gold/30 hover:text-offwhite"
               >
                 {s.question}
               </button>

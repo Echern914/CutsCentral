@@ -37,7 +37,7 @@ export function ReasonPicker({
               type="button"
               disabled={busy}
               onClick={() => onPick(p)}
-              className="rounded-full border border-subtle px-3 py-1 text-[11px] text-offwhite transition-colors duration-150 ease-out hover:border-gold/50 hover:text-gold disabled:opacity-50"
+              className="rounded-md border border-subtle px-3 py-1 text-[11px] text-offwhite transition-colors duration-150 ease-out hover:border-gold/50 hover:text-gold disabled:opacity-50"
             >
               {p}
             </button>
@@ -46,7 +46,7 @@ export function ReasonPicker({
             type="button"
             disabled={busy}
             onClick={() => setOther("")}
-            className="rounded-full border border-subtle px-3 py-1 text-[11px] text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
+            className="rounded-md border border-subtle px-3 py-1 text-[11px] text-muted transition-colors duration-150 ease-out hover:text-offwhite disabled:opacity-50"
           >
             Other…
           </button>
@@ -79,7 +79,7 @@ export function ReasonPicker({
           <button
             type="submit"
             disabled={busy || trimmed.length < 2}
-            className="rounded-full bg-gold px-3 py-1 text-[11px] font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
+            className="rounded-md bg-primary px-3 py-1 text-[11px] font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
           >
             {busy ? "…" : "Save"}
           </button>

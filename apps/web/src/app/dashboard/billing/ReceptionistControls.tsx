@@ -62,8 +62,8 @@ export function ReceptionistControls({
           }
           className={
             enabled
-              ? "rounded-full border border-subtle px-5 py-2 text-sm text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
-              : "rounded-full bg-gold-gradient px-5 py-2 text-sm font-semibold text-on-gold shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105 disabled:opacity-50"
+              ? "rounded-xl border border-subtle px-5 py-2 text-sm text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+              : "rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-on-primary transition-all duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
           }
         >
           {pending ? "Saving…" : enabled ? "Turn off" : "Turn on"}
@@ -96,7 +96,7 @@ export function ReceptionistControls({
               setCopyState(ok ? "copied" : "failed");
               if (ok) setTimeout(() => setCopyState("idle"), 2000);
             }}
-            className="rounded-full border border-subtle px-4 py-1.5 text-xs text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700"
+            className="rounded-md border border-subtle px-4 py-1.5 text-xs text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700"
           >
             {copyState === "copied" ? "Copied" : copyState === "failed" ? "Couldn't copy" : "Copy"}
           </button>

@@ -1,8 +1,17 @@
 import type { Config } from "tailwindcss";
 
 /**
- * ChairBack design tokens. Premium dark barbershop feel - charcoal + warm gold,
- * no pure #fff/#000, subtle 1px borders over heavy shadows.
+ * ChairBack design tokens - "Studio" (2026-11-16). Warm paper and white
+ * surfaces, near-black ink for primary actions, and gold kept as a SIGNAL
+ * (rewards, the brand mark, "now", selected days) - never as a button.
+ * Dark mode is the same system in black and brass ("Noir").
+ *
+ *   bg-primary text-on-primary   the one primary action (ink on light, cream on dark)
+ *   bg-gold                      a gold FILL (#C19A3B) - dots, bars, punches
+ *   text-gold / border-gold      gold INK (#8A6914) - AA as text on white
+ *
+ * Flat surfaces, 1px lines, small radii (8 / 10 / 14). No glows, no gradients,
+ * no glass blur: those read as a template, not as a product.
  */
 const config: Config = {
   content: ["./src/**/*.{ts,tsx}"],
@@ -29,6 +38,9 @@ const config: Config = {
           deep: "rgb(var(--cb-gold-deep) / <alpha-value>)",
         },
         offwhite: "rgb(var(--cb-fg) / <alpha-value>)", // primary text
+        // The primary action: ink on the light theme, cream on the dark one.
+        primary: "rgb(var(--cb-primary) / <alpha-value>)",
+        "on-primary": "rgb(var(--cb-on-primary) / <alpha-value>)",
         // Text ON the literal gold gradient: that metal is bright in BOTH
         // themes, so its text is dark in both (charcoal flips to white in light).
         "on-gold": "#1C1917",
@@ -41,10 +53,18 @@ const config: Config = {
         warning: { soft: "rgb(var(--cb-warning) / <alpha-value>)" },
         info: { soft: "rgb(var(--cb-info) / <alpha-value>)" },
       },
+      // A gold BACKGROUND is the brighter fill gold; gold TEXT and BORDERS keep
+      // the deeper ink gold that reads at AA on white. Tints (bg-gold/10) take
+      // the fill, which is what makes them warm instead of muddy.
+      backgroundColor: {
+        gold: { DEFAULT: "rgb(var(--cb-gold-fill) / <alpha-value>)" },
+      },
+      // Studio radii: 8 (chips), 10 (buttons, inputs), 14 (cards), 16+ (sheets).
       borderRadius: {
-        "2xl": "1rem",
-        "3xl": "1.5rem",
-        "4xl": "2rem",
+        xl: "0.625rem",
+        "2xl": "0.875rem",
+        "3xl": "1rem",
+        "4xl": "1.25rem",
       },
       // Borders derive from the FOREGROUND color so they flip with the theme
       // (light ink hairlines on white, warm-white ones on charcoal). The alpha
@@ -56,29 +76,28 @@ const config: Config = {
       },
       fontFamily: {
         sans: ["var(--font-inter)", "system-ui", "sans-serif"],
-        display: ["var(--font-display)", "Georgia", "serif"],
+        // Titles are Inter too, set tighter (globals.css `.font-display`). The
+        // old display face lives on only as a shop-page font choice (/s).
+        display: ["var(--font-inter)", "system-ui", "sans-serif"],
       },
       boxShadow: {
         // Ambient depth shadows: pitch black at 60-80% on charcoal would read
         // as dirt on white, so the color AND alpha are per-theme variables.
-        ambient: "0 8px 40px -12px rgb(var(--cb-shadow) / var(--cb-shadow-a))",
-        "ambient-lg": "0 24px 80px -24px rgb(var(--cb-shadow) / var(--cb-shadow-a-lg))",
-        glow: "0 0 24px -4px rgb(var(--cb-gold) / 0.45)",
-        "glow-lg": "0 0 64px -8px rgb(var(--cb-gold) / 0.5)",
-        "glow-sm": "0 0 12px -2px rgb(var(--cb-gold) / 0.35)",
-        "inner-top": "inset 0 1px 0 0 rgb(var(--cb-sheen) / 0.06)",
+        ambient: "0 1px 2px rgb(var(--cb-shadow) / var(--cb-shadow-a)), 0 8px 24px -12px rgb(var(--cb-shadow) / var(--cb-shadow-a))",
+        "ambient-lg": "0 2px 4px rgb(var(--cb-shadow) / var(--cb-shadow-a)), 0 24px 48px -24px rgb(var(--cb-shadow) / var(--cb-shadow-a-lg))",
+        // The gold glows are retired. The names stay (shop pages and string-built
+        // classes may still say them) but they now draw a plain, quiet lift.
+        glow: "0 1px 2px rgb(var(--cb-shadow) / var(--cb-shadow-a))",
+        "glow-lg": "0 1px 2px rgb(var(--cb-shadow) / var(--cb-shadow-a))",
+        "glow-sm": "0 1px 2px rgb(var(--cb-shadow) / var(--cb-shadow-a))",
+        "inner-top": "none",
       },
       backgroundImage: {
-        // The gold gradients stay literal: they are the brand's metal, used as
-        // FILLS under dark text, and the same bar of gold reads correctly on
-        // charcoal and on white. Only the sheen (a white glaze for dark cards)
-        // is variable - on white cards it fades to nothing instead of graying.
-        "gold-gradient": "linear-gradient(135deg, #E6C964 0%, #D4AF37 55%, #B8962F 100%)",
-        // Gold TEXT follows the theme: pale metal on charcoal, deep gold on white.
-        "gold-text":
-          "linear-gradient(120deg, rgb(var(--cb-goldtext-a)) 0%, rgb(var(--cb-goldtext-b)) 45%, rgb(var(--cb-goldtext-c)) 100%)",
-        "card-sheen":
-          "linear-gradient(180deg, rgb(var(--cb-sheen) / 0.045) 0%, rgb(var(--cb-sheen) / 0) 40%)",
+        // Gradients are retired: a gold FILL is one flat gold. The names stay
+        // so nothing that still says them renders unstyled.
+        "gold-gradient": "linear-gradient(rgb(var(--cb-gold-fill)), rgb(var(--cb-gold-fill)))",
+        "gold-text": "linear-gradient(rgb(var(--cb-gold)), rgb(var(--cb-gold)))",
+        "card-sheen": "none",
       },
       keyframes: {
         shimmer: {
@@ -88,10 +107,6 @@ const config: Config = {
           "0%, 100%": { transform: "translateY(0)" },
           "50%": { transform: "translateY(-10px)" },
         },
-        "pulse-glow": {
-          "0%, 100%": { boxShadow: "0 0 24px -6px rgb(var(--cb-gold) / 0.35)" },
-          "50%": { boxShadow: "0 0 42px -6px rgb(var(--cb-gold) / 0.6)" },
-        },
         "fade-in": {
           from: { opacity: "0", transform: "translateY(8px)" },
           to: { opacity: "1", transform: "translateY(0)" },
@@ -100,7 +115,6 @@ const config: Config = {
       animation: {
         shimmer: "shimmer 1.6s infinite",
         float: "float 7s ease-in-out infinite",
-        "pulse-glow": "pulse-glow 4s ease-in-out infinite",
         "fade-in": "fade-in 0.5s ease-out both",
       },
     },

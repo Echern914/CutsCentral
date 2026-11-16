@@ -188,7 +188,7 @@ export function ManageClient({
       <CustomerBack
         label={`← ${data.shop.name}`}
         fallbackHref={data.shop.slug ? `/s/${data.shop.slug}` : undefined}
-        className="mb-4 self-start rounded-full border border-offwhite/15 bg-offwhite/5 px-3.5 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
+        className="mb-4 self-start rounded-md border border-offwhite/15 bg-offwhite/5 px-3.5 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
       />
       <div className="rounded-2xl border border-offwhite/10 bg-offwhite/5 p-6">
         <p className="text-xs uppercase tracking-wide text-muted">Your appointment</p>
@@ -528,7 +528,7 @@ function SavedCardOnFile({
             type="button"
             onClick={() => void remove()}
             disabled={busy}
-            className="rounded-full border border-subtle px-3 py-1.5 text-xs font-semibold text-offwhite disabled:opacity-60"
+            className="rounded-md border border-subtle px-3 py-1.5 text-xs font-semibold text-offwhite disabled:opacity-60"
           >
             {busy ? "Removing…" : "Yes, remove it"}
           </button>
@@ -1050,7 +1050,7 @@ function ReschedulePicker({
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="rounded-full border border-offwhite/15 px-3 py-1 text-xs text-muted transition-colors hover:text-offwhite"
+          className="rounded-md border border-offwhite/15 px-3 py-1 text-xs text-muted transition-colors hover:text-offwhite"
         >
           Close
         </button>
@@ -1081,7 +1081,7 @@ function ReschedulePicker({
               type="button"
               disabled={pending}
               onClick={() => move(priceAsk.iso, priceAsk.toCents)}
-              className="rounded-lg bg-gold px-3 py-1.5 text-xs font-semibold text-charcoal disabled:opacity-40"
+              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-40"
             >
               {pending ? "Moving…" : `Move it at ${money(priceAsk.toCents)}`}
             </button>
@@ -1121,7 +1121,7 @@ function ReschedulePicker({
                   onClick={() => move(iso)}
                   className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-40 ${
                     selected === iso
-                      ? "border-gold bg-gold text-charcoal"
+                      ? "border-primary bg-primary text-on-primary"
                       : "border-offwhite/20 hover:bg-offwhite/10"
                   }`}
                 >

@@ -99,13 +99,13 @@ export function ReferralShare({
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             onClick={share}
-            className="rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted"
+            className="rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90"
           >
             Share
           </button>
           <button
             onClick={() => copy(shareUrl, "Link")}
-            className="rounded-full border border-subtle px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+            className="rounded-xl border border-subtle px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
           >
             Copy link
           </button>
@@ -143,11 +143,11 @@ export function ReferralShare({
                   </p>
                 </div>
                 {r.status === "REWARDED" ? (
-                  <span className="shrink-0 rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-soft">
+                  <span className="shrink-0 rounded-md border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-soft">
                     Month earned
                   </span>
                 ) : (
-                  <span className="shrink-0 rounded-full border border-subtle px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  <span className="shrink-0 rounded-md border border-subtle px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
                     Joined
                   </span>
                 )}

@@ -72,7 +72,7 @@ export function PricingSection() {
               </ul>
               <Link
                 href="/signup"
-                className="mt-7 inline-flex items-center justify-center gap-2 rounded-full border border-subtle-strong px-7 py-3 text-sm font-semibold text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+                className="mt-7 inline-flex items-center justify-center gap-2 rounded-xl border border-subtle-strong px-7 py-3 text-sm font-semibold text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
               >
                 Start your free trial
                 <ArrowIcon className="h-4 w-4" />
@@ -89,7 +89,7 @@ export function PricingSection() {
                 <p className="text-xs uppercase tracking-[0.25em] text-gold-soft">
                   {PLANS.pro.name}
                 </p>
-                <span className="rounded-full bg-gold/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-gold">
+                <span className="rounded-md bg-gold/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-gold">
                   Most popular
                 </span>
               </div>
@@ -118,7 +118,7 @@ export function PricingSection() {
               </ul>
               <Link
                 href="/signup"
-                className="mt-7 inline-flex items-center justify-center gap-2 rounded-full bg-gold-gradient px-7 py-3 text-sm font-semibold text-on-gold shadow-glow transition-[box-shadow,filter] duration-150 ease-out hover:shadow-glow-lg hover:brightness-105"
+                className="mt-7 inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-7 py-3 text-sm font-semibold text-on-primary transition-[box-shadow,filter] duration-150 ease-out hover:bg-primary/90"
               >
                 Start your free trial
                 <ArrowIcon className="h-4 w-4" />

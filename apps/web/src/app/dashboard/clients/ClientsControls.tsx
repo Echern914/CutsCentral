@@ -11,7 +11,7 @@ import { addClientAction, searchClientsByNameAction, type ClientSearchResult } f
 import { ImportClients } from "./ImportClients";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
 /** One entry in the "Booked a service" filter (GET /api/dashboard/clients/service-options). */
 export interface ServiceFilterOption {
@@ -252,7 +252,7 @@ export function ClientsControls({
             setAdding((v) => !v);
             setImporting(false);
           }}
-          className="rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+          className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
         >
           {adding ? "Close" : "Add client"}
         </button>
@@ -261,7 +261,7 @@ export function ClientsControls({
             setImporting((v) => !v);
             setAdding(false);
           }}
-          className="rounded-full border border-subtle px-4 py-2 text-sm font-semibold text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
+          className="rounded-xl border border-subtle px-4 py-2 text-sm font-semibold text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
         >
           {importing ? "Close" : "Import clients"}
         </button>
@@ -279,7 +279,7 @@ function SubmitBtn() {
     <button
       type="submit"
       disabled={pending}
-      className="rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50"
+      className="rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90 disabled:opacity-50"
     >
       {pending ? "Adding…" : "Add client"}
     </button>

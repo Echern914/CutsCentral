@@ -69,7 +69,7 @@ export function ApproveAward({ award }: { award: PublicAward & { id: string } })
           type="button"
           onClick={() => void decide("approve")}
           disabled={pending}
-          className="inline-flex h-11 items-center justify-center rounded-full bg-gold px-5 text-sm font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50"
+          className="inline-flex h-11 items-center justify-center rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50"
         >
           {pending ? "Saving…" : "Approve and post it"}
         </button>
@@ -80,14 +80,14 @@ export function ApproveAward({ award }: { award: PublicAward & { id: string } })
               type="button"
               onClick={() => void decide("decline")}
               disabled={pending}
-              className="inline-flex h-11 items-center justify-center rounded-full border border-subtle px-4 text-sm text-offwhite disabled:opacity-50"
+              className="inline-flex h-11 items-center justify-center rounded-xl border border-subtle px-4 text-sm text-offwhite disabled:opacity-50"
             >
               Yes, decline
             </button>
             <button
               type="button"
               onClick={() => setConfirmDecline(false)}
-              className="inline-flex h-11 items-center justify-center rounded-full px-3 text-sm text-muted"
+              className="inline-flex h-11 items-center justify-center rounded-xl px-3 text-sm text-muted"
             >
               Keep it
             </button>
@@ -97,7 +97,7 @@ export function ApproveAward({ award }: { award: PublicAward & { id: string } })
             type="button"
             onClick={() => setConfirmDecline(true)}
             disabled={pending}
-            className="inline-flex h-11 items-center justify-center rounded-full border border-subtle px-5 text-sm text-muted transition-colors hover:text-offwhite disabled:opacity-50"
+            className="inline-flex h-11 items-center justify-center rounded-xl border border-subtle px-5 text-sm text-muted transition-colors hover:text-offwhite disabled:opacity-50"
           >
             Decline
           </button>

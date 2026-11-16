@@ -133,7 +133,7 @@ export function BusinessTypeCard({
           <button
             onClick={() => void save()}
             disabled={pending || !choice}
-            className="rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50"
+            className="rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50"
           >
             {pending ? "Saving…" : selected ? "Save" : "That's my business"}
           </button>

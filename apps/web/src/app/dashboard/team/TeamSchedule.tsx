@@ -79,7 +79,7 @@ export function TeamSchedule({
             disabled={loading}
             onClick={() => void pickDay(key)}
             className={cn(
-              "min-h-[40px] rounded-full border px-3 text-xs font-medium transition-colors disabled:opacity-60",
+              "min-h-[40px] rounded-md border px-3 text-xs font-medium transition-colors disabled:opacity-60",
               data.day === key
                 ? "border-gold/50 bg-gold/10 text-gold"
                 : "border-subtle text-muted hover:text-offwhite",

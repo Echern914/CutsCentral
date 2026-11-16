@@ -16,7 +16,7 @@ import { DomainGuideButton } from "./DomainGuide";
 import { relativeRecordName } from "./registrarGuides";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
 /**
  * "Use your own domain" card. The flow it renders:
@@ -125,7 +125,7 @@ export function DomainCard({ initial }: { initial: DomainStatus }) {
               <button
                 type="submit"
                 disabled={pending || !input.trim()}
-                className="shrink-0 rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-opacity duration-150 ease-out disabled:opacity-40"
+                className="shrink-0 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-opacity duration-150 ease-out disabled:opacity-40"
               >
                 {pending ? "Connecting…" : "Connect"}
               </button>
@@ -141,7 +141,7 @@ export function DomainCard({ initial }: { initial: DomainStatus }) {
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-offwhite">{status.domain}</span>
               <span
-                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${
                   live ? "bg-emerald-soft/15 text-emerald-soft" : "bg-gold/15 text-gold"
                 }`}
               >
@@ -252,7 +252,7 @@ export function DomainCard({ initial }: { initial: DomainStatus }) {
                   type="button"
                   disabled={pending}
                   onClick={() => run(() => verifyDomainAction())}
-                  className="rounded-full bg-gold px-4 py-2 text-sm font-semibold text-charcoal transition-opacity duration-150 ease-out disabled:opacity-40"
+                  className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary transition-opacity duration-150 ease-out disabled:opacity-40"
                 >
                   {pending ? "Checking…" : "I've added them — check again"}
                 </button>
@@ -272,7 +272,7 @@ export function DomainCard({ initial }: { initial: DomainStatus }) {
                     );
                   }
                 }}
-                className="rounded-full border border-subtle px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-40"
+                className="rounded-xl border border-subtle px-4 py-2 text-sm text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite disabled:opacity-40"
               >
                 Disconnect
               </button>

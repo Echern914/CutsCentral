@@ -165,7 +165,7 @@ export function MoreSheet({
               ref={closeRef}
               type="button"
               onClick={onClose}
-              className="rounded-full border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+              className="rounded-md border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
             >
               Done
             </button>
@@ -196,7 +196,7 @@ export function MoreSheet({
                   <Link
                     href={`${askHref}?q=${encodeURIComponent(query.trim())}`}
                     onClick={onClose}
-                    className="mt-3 inline-block rounded-full border border-gold/40 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+                    className="mt-3 inline-block rounded-md border border-gold/40 px-3.5 py-1.5 text-xs font-semibold text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
                   >
                     Ask the assistant about &ldquo;{query.trim()}&rdquo; →
                   </Link>

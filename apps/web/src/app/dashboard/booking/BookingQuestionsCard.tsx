@@ -41,7 +41,7 @@ const KINDS: { value: BookingQuestionKind; label: string; hint: string }[] = [
 ];
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
 export function BookingQuestionsCard({
   initial,
@@ -417,7 +417,7 @@ export function BookingQuestionsCard({
             type="button"
             onClick={add}
             disabled={pending || !label.trim()}
-            className="self-start rounded-xl bg-gold px-4 py-2 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+            className="self-start rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             {pending ? "Adding…" : "Add question"}
           </button>
@@ -448,7 +448,7 @@ function ScopeChip({
       onClick={onClick}
       aria-pressed={on}
       className={cn(
-        "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+        "rounded-md px-3 py-1 text-xs font-medium transition-colors",
         on ? "bg-gold/20 text-gold" : "border border-subtle text-muted hover:text-offwhite",
       )}
     >

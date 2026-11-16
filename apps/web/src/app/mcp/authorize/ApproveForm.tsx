@@ -75,13 +75,13 @@ export function ApproveForm({
           type="button"
           onClick={() => void approve()}
           disabled={pending}
-          className="flex-1 rounded-full bg-gold px-6 py-3.5 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-60"
+          className="flex-1 rounded-xl bg-primary px-6 py-3.5 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90 disabled:opacity-60"
         >
           {pending ? "Connecting…" : "Connect assistant"}
         </button>
         <a
           href="/dashboard/assistant"
-          className="flex-1 rounded-full border border-subtle px-6 py-3.5 text-center text-sm font-semibold text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+          className="flex-1 rounded-xl border border-subtle px-6 py-3.5 text-center text-sm font-semibold text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
         >
           Cancel
         </a>

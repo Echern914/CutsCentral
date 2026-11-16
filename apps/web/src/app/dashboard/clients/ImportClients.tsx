@@ -15,7 +15,7 @@ import { useToast } from "@/components/ui/Toast";
 import { importClientsAction, type ImportClientRow, type ImportResult } from "../actions";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
 /**
  * Client import - the "bring your book off Booksy/TheCut/Fresha/Vagaro" flow.
@@ -260,7 +260,7 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
           accept=".csv,.vcf,text/csv,text/vcard,text/x-vcard"
           onChange={onFile}
           aria-label="Choose a CSV or contacts file"
-          className="block w-full min-w-0 text-sm text-muted file:mr-3 file:rounded-full file:border-0 file:bg-gold file:px-4 file:py-2 file:text-sm file:font-semibold file:text-charcoal hover:file:bg-gold-muted"
+          className="block w-full min-w-0 text-sm text-muted file:mr-3 file:rounded-xl file:border-0 file:bg-primary file:px-4 file:py-2 file:text-sm file:font-semibold file:text-on-primary hover:file:bg-primary/90"
         />
 
         {drafts.length > 0 && !result && (
@@ -354,7 +354,7 @@ export function ImportClients({ onDone }: { onDone: () => void }) {
               <button
                 onClick={doImport}
                 disabled={pending || count === 0}
-                className="rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors duration-200 ease-out hover:bg-gold-muted disabled:opacity-50"
+                className="rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-on-primary transition-colors duration-200 ease-out hover:bg-primary/90 disabled:opacity-50"
               >
                 {pending ? "Importing…" : `Import ${count} client${count === 1 ? "" : "s"}`}
               </button>

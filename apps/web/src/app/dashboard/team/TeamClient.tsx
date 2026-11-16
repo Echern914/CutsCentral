@@ -19,7 +19,7 @@ import {
 } from "./actions";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
 /**
  * 🔴 The KEYS are the `ShopRole` enum - authorization wire values that never
@@ -212,7 +212,7 @@ export function TeamClient({
                   <button
                     onClick={submitInvite}
                     disabled={pending}
-                    className="shrink-0 rounded-full bg-gold px-5 py-2 text-sm font-semibold text-charcoal transition-colors hover:bg-gold-muted disabled:opacity-50"
+                    className="shrink-0 rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-50"
                   >
                     {pending ? "Sending…" : "Send invite"}
                   </button>
@@ -276,7 +276,7 @@ export function TeamClient({
                     <span className="truncate font-medium">{m.user.name}</span>
                     <span
                       className={cn(
-                        "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium",
+                        "shrink-0 rounded-md px-2 py-0.5 text-[10px] font-medium",
                         isTheOwner
                           ? "bg-gold/15 text-gold"
                           : "bg-charcoal-600/60 text-muted",

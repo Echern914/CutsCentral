@@ -13,7 +13,7 @@ interface Hit {
 }
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
 /**
  * Fold a duplicate client into THIS one (the winner). The barber searches for the
@@ -123,7 +123,7 @@ export function MergeClient({
             <button
               onClick={runSearch}
               disabled={searching}
-              className="shrink-0 rounded-full border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+              className="shrink-0 rounded-md border border-subtle px-4 py-2 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
             >
               {searching ? "…" : "Search"}
             </button>
@@ -140,7 +140,7 @@ export function MergeClient({
                   </div>
                   <button
                     onClick={() => setPicked(h)}
-                    className="shrink-0 rounded-full border border-gold/50 px-3 py-1 text-[11px] text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
+                    className="shrink-0 rounded-md border border-gold/50 px-3 py-1 text-[11px] text-gold transition-colors duration-150 ease-out hover:bg-gold/10"
                   >
                     Merge in
                   </button>
@@ -165,7 +165,7 @@ export function MergeClient({
             <button
               onClick={() => doMerge(picked)}
               disabled={merging}
-              className="rounded-full bg-gold px-4 py-1.5 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted disabled:opacity-50"
+              className="rounded-md bg-primary px-4 py-1.5 text-xs font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
             >
               {merging ? "Merging…" : "Yes, merge"}
             </button>

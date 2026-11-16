@@ -2576,7 +2576,7 @@ export function BookingClient({
               <button
                 type="button"
                 onClick={reloadPage}
-                className="mt-3 rounded-full border border-warning-soft/40 px-4 py-2 text-sm font-medium text-amber-100"
+                className="mt-3 rounded-xl border border-warning-soft/40 px-4 py-2 text-sm font-medium text-amber-100"
               >
                 {seriesResult ? "Start again" : "Pick another time"}
               </button>
@@ -2871,7 +2871,7 @@ export function BookingClient({
       {/* Barber-only "back to dashboard" (only when opened from the dashboard). */}
       <BackToDashboard
         fallbackHref="/dashboard/booking"
-        className="mb-4 inline-flex items-center rounded-full border border-offwhite/15 bg-offwhite/5 px-3.5 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
+        className="mb-4 inline-flex items-center rounded-md border border-offwhite/15 bg-offwhite/5 px-3.5 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
       />
 
       <header className="mb-6 text-center">
@@ -2922,7 +2922,7 @@ export function BookingClient({
               onClick={() => void finishUnfinished()}
               disabled={resuming}
               aria-busy={resuming}
-              className="rounded-full px-4 py-2 text-xs font-semibold disabled:opacity-60"
+              className="rounded-md px-4 py-2 text-xs font-semibold disabled:opacity-60"
               style={{ backgroundColor: accent, color: onAccent }}
             >
               {resuming ? "Opening…" : "Finish booking"}
@@ -2933,7 +2933,7 @@ export function BookingClient({
                 forgetUnfinishedBooking(data.shop.slug);
                 setUnfinished(null);
               }}
-              className="rounded-full border border-subtle px-4 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
+              className="rounded-md border border-subtle px-4 py-2 text-xs font-medium text-muted transition-colors hover:text-offwhite"
             >
               Not now
             </button>
@@ -3084,7 +3084,7 @@ export function BookingClient({
               <button
                 type="button"
                 onClick={() => dayDate && pickDay(dayDate)}
-                className="rounded-full border border-offwhite/15 px-4 py-1.5 text-xs font-medium transition-colors hover:bg-white/[0.06]"
+                className="rounded-md border border-offwhite/15 px-4 py-1.5 text-xs font-medium transition-colors hover:bg-white/[0.06]"
               >
                 Try again
               </button>
@@ -3550,7 +3550,7 @@ export function BookingClient({
                   </span>
                 </span>
                 <span
-                  className="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
+                  className="shrink-0 rounded-md px-3 py-1 text-xs font-semibold"
                   style={{ backgroundColor: accent, color: onAccent }}
                 >
                   +{formatPrice(u.priceDelta)}
@@ -4583,7 +4583,7 @@ function SavedCardUnlock({
           type="button"
           onClick={() => void sendCode()}
           disabled={busy}
-          className="self-start rounded-full border border-subtle px-3 py-1.5 text-offwhite disabled:opacity-60"
+          className="self-start rounded-xl border border-subtle px-3 py-1.5 text-offwhite disabled:opacity-60"
         >
           {busy ? "Sending…" : "Text me a code"}
         </button>
@@ -4602,7 +4602,7 @@ function SavedCardUnlock({
             type="button"
             onClick={() => void checkCode()}
             disabled={busy || code.trim().length !== 6}
-            className="rounded-full border border-subtle px-3 py-1.5 text-offwhite disabled:opacity-60"
+            className="rounded-xl border border-subtle px-3 py-1.5 text-offwhite disabled:opacity-60"
           >
             {busy ? "Checking…" : "Use my card"}
           </button>

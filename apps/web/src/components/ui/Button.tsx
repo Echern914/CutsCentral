@@ -6,7 +6,10 @@ import { cn } from "@/lib/cn";
 
 type Variant = "primary" | "ghost";
 
-/** Token-driven button with subtle press/hover micro-interactions. */
+/**
+ * The Studio button: ink primary (cream on the dark theme), outlined
+ * secondary. 44px tall, 10px corners. Gold is never a button.
+ */
 export function Button({
   variant = "primary",
   className,
@@ -19,13 +22,13 @@ export function Button({
 } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   const styles =
     variant === "primary"
-      ? "bg-gold-gradient text-on-gold shadow-glow hover:shadow-glow-lg hover:brightness-105"
-      : "bg-transparent text-offwhite border border-subtle hover:bg-charcoal-700 hover:border-subtle-strong";
+      ? "bg-primary text-on-primary hover:bg-primary/90"
+      : "bg-charcoal-800 text-offwhite border border-subtle-strong hover:bg-charcoal-700";
   return (
     <motion.button
       {...pressable}
       className={cn(
-        "rounded-full px-5 py-2.5 text-sm font-semibold transition-all duration-150 ease-out disabled:opacity-50 disabled:pointer-events-none",
+        "inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold transition-colors duration-150 ease-out disabled:opacity-50 disabled:pointer-events-none",
         styles,
         className,
       )}
@@ -50,8 +53,8 @@ export function LinkButton({
     <a
       href={href}
       className={cn(
-        "inline-flex items-center justify-center rounded-full px-6 py-3 text-sm font-semibold",
-        "bg-gold-gradient text-on-gold shadow-glow transition-all duration-150 ease-out hover:shadow-glow-lg hover:brightness-105",
+        "inline-flex min-h-[44px] items-center justify-center rounded-xl px-6 py-3 text-sm font-semibold",
+        "bg-primary text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90",
         className,
       )}
     >

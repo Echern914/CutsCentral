@@ -151,7 +151,7 @@ import {
 } from "@/lib/serviceFields";
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 const labelCls = "text-xs text-muted";
 // A group's name over its services in the menu.
 const menuGroupCls = "text-xs font-semibold uppercase tracking-wide text-muted";
@@ -364,7 +364,7 @@ export function BookingManager({
             key={t}
             onClick={() => switchTab(t)}
             className={cn(
-              "flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors duration-150 ease-out",
+              "flex shrink-0 items-center gap-1.5 rounded-xl px-4 py-1.5 text-sm font-medium transition-colors duration-150 ease-out",
               tab === t
                 ? "bg-gold/15 text-gold"
                 : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
@@ -587,7 +587,7 @@ function ClientChangeRule({
             onClick={onToggle}
             disabled={pending}
             className={cn(
-              "min-h-[44px] shrink-0 rounded-full px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
+              "min-h-[44px] shrink-0 rounded-md px-4 text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-50",
               on
                 ? "bg-emerald-soft/15 text-emerald-soft"
                 : "border border-subtle text-muted hover:bg-charcoal-700",
@@ -840,7 +840,7 @@ export function SettingsTab({
               <button
                 onClick={saveBookingUrl}
                 disabled={pending || !bookingUrlValid}
-                className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+                className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
               >
                 {pending ? "Saving…" : "Save link"}
               </button>
@@ -1031,7 +1031,7 @@ export function SettingsTab({
             <button
               onClick={save}
               disabled={pending}
-              className="min-h-[44px] rounded-xl bg-gold px-5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+              className="min-h-[44px] rounded-xl bg-primary px-5 text-sm font-semibold text-on-primary disabled:opacity-50"
             >
               {pending ? "Saving…" : "Save booking rules"}
             </button>
@@ -1185,7 +1185,7 @@ export function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast
         <button
           onClick={add}
           disabled={pending}
-          className="shrink-0 rounded-xl bg-gold px-4 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+          className="shrink-0 rounded-xl bg-primary px-4 text-sm font-semibold text-on-primary disabled:opacity-50"
         >
           Add
         </button>
@@ -1200,7 +1200,7 @@ export function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setHoursFor(s)}
-                className="rounded-full border border-subtle px-3 py-1 text-xs text-muted hover:text-offwhite"
+                className="rounded-md border border-subtle px-3 py-1 text-xs text-muted hover:text-offwhite"
               >
                 Hours
               </button>
@@ -1479,7 +1479,7 @@ export function ServicesTab({
                 <button
                   type="button"
                   onClick={openAdding}
-                  className="min-h-[44px] shrink-0 rounded-xl bg-gold px-4 text-sm font-semibold text-charcoal-900"
+                  className="min-h-[44px] shrink-0 rounded-xl bg-primary px-4 text-sm font-semibold text-on-primary"
                 >
                   Add service
                 </button>
@@ -1495,7 +1495,7 @@ export function ServicesTab({
                   className={cn(
                     "flex min-h-[44px] items-center gap-2 rounded-xl border px-4 text-sm font-medium transition-colors",
                     reordering
-                      ? "border-gold bg-gold text-charcoal-900"
+                      ? "border-gold bg-primary text-on-primary"
                       : "border-gold/40 text-gold hover:border-gold/70",
                   )}
                 >
@@ -1593,7 +1593,7 @@ export function ServicesTab({
                       key={s.id}
                       onClick={() => toggleStaff(s.id)}
                       className={cn(
-                        "rounded-full border px-3 py-1 text-xs transition-colors",
+                        "rounded-md border px-3 py-1 text-xs transition-colors",
                         staffIds.includes(s.id)
                           ? "border-gold/60 bg-gold/10 text-gold"
                           : "border-subtle text-muted",
@@ -1638,7 +1638,7 @@ export function ServicesTab({
               type="button"
               onClick={add}
               disabled={pending}
-              className="mt-4 min-h-[44px] self-start rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+              className="mt-4 min-h-[44px] self-start rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
             >
               {pending ? "Adding…" : "Add to menu"}
             </button>
@@ -2502,7 +2502,7 @@ export function ServiceEditForm({
                   type="button"
                   onClick={chooseAll}
                   className={cn(
-                    "min-h-[44px] rounded-full border px-4 text-sm transition-colors",
+                    "min-h-[44px] rounded-xl border px-4 text-sm transition-colors",
                     offeredByAll
                       ? "border-gold/60 bg-gold/10 text-gold"
                       : "border-subtle text-muted",
@@ -2516,7 +2516,7 @@ export function ServiceEditForm({
                     key={s.id}
                     onClick={() => toggleStaff(s.id)}
                     className={cn(
-                      "min-h-[44px] rounded-full border px-4 text-sm transition-colors",
+                      "min-h-[44px] rounded-xl border px-4 text-sm transition-colors",
                       !offeredByAll && staffIds.includes(s.id)
                         ? "border-gold/60 bg-gold/10 text-gold"
                         : "border-subtle text-muted",
@@ -2564,7 +2564,7 @@ export function ServiceEditForm({
                 <button
                   type="button"
                   onClick={() => setAllHours(allHoursCustom ? "any" : "custom")}
-                  className="shrink-0 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
+                  className="shrink-0 rounded-md border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
                 >
                   {allHoursCustom ? "All days: open" : "All days: custom"}
                 </button>
@@ -2771,7 +2771,7 @@ export function ServiceEditForm({
             type="button"
             onClick={save}
             disabled={pending}
-            className="min-h-[44px] self-start rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+            className="min-h-[44px] self-start rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             {pending ? "Saving…" : "Save changes"}
           </button>
@@ -3406,7 +3406,7 @@ function TargetedSlotsManager({
                         )
                       }
                       className={cn(
-                        "rounded-full border px-3 py-1 text-xs transition-colors",
+                        "rounded-md border px-3 py-1 text-xs transition-colors",
                         on
                           ? "border-gold/60 bg-gold/15 text-gold"
                           : "border-subtle text-muted hover:text-offwhite",
@@ -3573,7 +3573,7 @@ function TargetedSlotsManager({
         <button
           onClick={add}
           disabled={pending}
-          className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+          className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
         >
           {editingRule
             ? editingRule.draft
@@ -3865,7 +3865,7 @@ function TargetedSlotsManager({
             <button
               onClick={() => saveSlotEdit(t.id)}
               disabled={listBusy}
-              className="rounded-lg bg-gold px-3 py-1 text-xs font-semibold text-charcoal-900 disabled:opacity-50"
+              className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-on-primary disabled:opacity-50"
             >
               Save
             </button>
@@ -4020,7 +4020,7 @@ function WeeklyTimesGrid({
                 ),
               )
             }
-            className="shrink-0 rounded-full border border-subtle px-2.5 py-0.5 text-[11px] text-muted transition-colors hover:border-gold/50 hover:text-gold"
+            className="shrink-0 rounded-md border border-subtle px-2.5 py-0.5 text-[11px] text-muted transition-colors hover:border-gold/50 hover:text-gold"
           >
             Same times every day
           </button>
@@ -4281,7 +4281,7 @@ function AddOnsManager({
             onClick={() => setServiceIds([])}
             aria-pressed={serviceIds.length === 0}
             className={cn(
-              "rounded-full border px-3 py-1 text-xs transition-colors",
+              "rounded-md border px-3 py-1 text-xs transition-colors",
               serviceIds.length === 0
                 ? "border-gold/60 bg-gold/10 text-gold"
                 : "border-subtle text-muted hover:text-offwhite",
@@ -4296,7 +4296,7 @@ function AddOnsManager({
               onClick={() => toggleService(s.id)}
               aria-pressed={serviceIds.includes(s.id)}
               className={cn(
-                "rounded-full border px-3 py-1 text-xs transition-colors",
+                "rounded-md border px-3 py-1 text-xs transition-colors",
                 serviceIds.includes(s.id)
                   ? "border-gold/60 bg-gold/10 text-gold"
                   : "border-subtle text-muted hover:text-offwhite",
@@ -4314,7 +4314,7 @@ function AddOnsManager({
       <button
         onClick={add}
         disabled={pending}
-        className="mt-4 rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+        className="mt-4 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
       >
         Add add-on
       </button>
@@ -4357,7 +4357,7 @@ function AddOnsManager({
                     onClick={() => setDraftServiceIds([])}
                     aria-pressed={draftServiceIds.length === 0}
                     className={cn(
-                      "rounded-full border px-3 py-1 text-xs transition-colors",
+                      "rounded-md border px-3 py-1 text-xs transition-colors",
                       draftServiceIds.length === 0
                         ? "border-gold/60 bg-gold/10 text-gold"
                         : "border-subtle text-muted hover:text-offwhite",
@@ -4378,7 +4378,7 @@ function AddOnsManager({
                       }
                       aria-pressed={draftServiceIds.includes(s.id)}
                       className={cn(
-                        "rounded-full border px-3 py-1 text-xs transition-colors",
+                        "rounded-md border px-3 py-1 text-xs transition-colors",
                         draftServiceIds.includes(s.id)
                           ? "border-gold/60 bg-gold/10 text-gold"
                           : "border-subtle text-muted hover:text-offwhite",
@@ -4393,7 +4393,7 @@ function AddOnsManager({
                 <button
                   onClick={saveEdit}
                   disabled={pending}
-                  className="rounded-xl bg-gold px-4 py-2 text-xs font-semibold text-charcoal-900 disabled:opacity-50"
+                  className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
                 >
                   {pending ? "Saving…" : "Save changes"}
                 </button>
@@ -4514,7 +4514,7 @@ function ServiceGroupsManager({
         <button
           onClick={add}
           disabled={pending}
-          className="shrink-0 rounded-xl bg-gold px-4 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+          className="shrink-0 rounded-xl bg-primary px-4 text-sm font-semibold text-on-primary disabled:opacity-50"
         >
           Add group
         </button>
@@ -4865,7 +4865,7 @@ function ServiceGroupEditor({
                     : `Add ${s.name} to this group`
                 }
                 className={cn(
-                  "rounded-full border px-3 py-1 text-xs transition-colors",
+                  "rounded-md border px-3 py-1 text-xs transition-colors",
                   inGroup
                     ? "border-gold/60 bg-gold/10 text-gold"
                     : "border-subtle text-muted hover:text-offwhite",
@@ -5032,7 +5032,7 @@ function ServiceGroupEditor({
         <button
           onClick={save}
           disabled={pending}
-          className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+          className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
         >
           {pending ? "Saving…" : "Save"}
         </button>
@@ -5514,7 +5514,7 @@ export function StaffHoursSheet({
               type="button"
               onClick={save}
               disabled={pending}
-              className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+              className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
             >
               {pending ? "Saving…" : dirty ? "Save hours" : "Saved ✓"}
             </button>
@@ -6450,7 +6450,7 @@ function VaryByTimeEditor({
                         })
                       }
                       className={cn(
-                        "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                        "rounded-md border px-2 py-0.5 text-[11px] transition-colors",
                         on
                           ? "border-gold/60 bg-gold/15 text-gold"
                           : "border-subtle text-muted hover:text-offwhite",
@@ -6509,7 +6509,7 @@ function VaryByTimeEditor({
       <button
         type="button"
         onClick={() => onChange([...rows, { ...DEFAULT_TIME_WINDOW }])}
-        className="mt-2 rounded-full border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
+        className="mt-2 rounded-md border border-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-gold/50 hover:text-gold"
       >
         + Add time window
       </button>

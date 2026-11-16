@@ -42,7 +42,7 @@ export function DesignPicker({
             onClick={() => onChange(key)}
             className={cn(
               "flex flex-col gap-2 rounded-2xl border p-2.5 text-left transition-[border-color,box-shadow] duration-150 ease-out",
-              active ? "border-gold/60 shadow-glow-sm" : "border-subtle hover:border-subtle-strong",
+              active ? "border-gold/60" : "border-subtle hover:border-subtle-strong",
             )}
           >
             <div className="h-28 overflow-hidden rounded-xl" style={{ backgroundColor: theme.bg }} aria-hidden>

@@ -211,15 +211,15 @@ export function ConnectPlatforms({
                   <c.Logo />
                 </div>
                 {refused ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-warning-soft/15 px-2.5 py-1 text-xs font-medium text-warning-soft">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-warning-soft/15 px-2.5 py-1 text-xs font-medium text-warning-soft">
                     Not syncing
                   </span>
                 ) : connected && c.connectPath ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-soft/15 px-2.5 py-1 text-xs font-medium text-emerald-soft">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-emerald-soft/15 px-2.5 py-1 text-xs font-medium text-emerald-soft">
                     <Check /> Connected
                   </span>
                 ) : selected ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-gold/20 px-2.5 py-1 text-xs font-medium text-gold">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-gold/20 px-2.5 py-1 text-xs font-medium text-gold">
                     <Check /> Active
                   </span>
                 ) : null}
@@ -266,7 +266,7 @@ export function ConnectPlatforms({
                       connectOAuth(c.connectPath!);
                     }
                   }}
-                  className="mt-auto inline-flex w-fit items-center gap-1.5 rounded-full bg-gold px-3.5 py-1.5 text-xs font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+                  className="mt-auto inline-flex w-fit items-center gap-1.5 rounded-md bg-primary px-3.5 py-1.5 text-xs font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
                 >
                   {pending ? "Opening…" : `Connect ${c.name.split(" ")[0]}`}
                 </span>
@@ -289,9 +289,9 @@ export function ConnectPlatforms({
                       }
                     }}
                     className={cn(
-                      "inline-flex w-fit items-center rounded-full px-3 py-1.5 text-xs font-medium transition-colors duration-150 ease-out",
+                      "inline-flex w-fit items-center rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-150 ease-out",
                       refused
-                        ? "bg-gold font-semibold text-charcoal hover:bg-gold-muted"
+                        ? "bg-primary font-semibold text-on-primary hover:bg-primary/90"
                         : "border border-subtle text-offwhite hover:bg-charcoal-700",
                     )}
                   >
@@ -310,7 +310,7 @@ export function ConnectPlatforms({
                         disconnect(c.key, c.name.split(" ")[0]);
                       }
                     }}
-                    className="inline-flex w-fit items-center rounded-full border border-danger-soft/30 px-3 py-1.5 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
+                    className="inline-flex w-fit items-center rounded-md border border-danger-soft/30 px-3 py-1.5 text-xs font-medium text-danger-soft transition-colors duration-150 ease-out hover:bg-danger-soft/10"
                   >
                     {pending ? "Working…" : "Disconnect"}
                   </span>

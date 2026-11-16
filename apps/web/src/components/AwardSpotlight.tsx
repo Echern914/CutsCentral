@@ -72,7 +72,7 @@ export function AwardSpotlight({
         type="button"
         onClick={() => setOpen(true)}
         data-qa="award-pill"
-        className="fixed left-1/2 top-[calc(0.75rem+env(safe-area-inset-top))] z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-1.5 rounded-full border border-gold/50 bg-charcoal-900/90 px-3.5 py-1.5 text-xs font-semibold text-gold shadow-lg backdrop-blur"
+        className="fixed left-1/2 top-[calc(0.75rem+env(safe-area-inset-top))] z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-1.5 rounded-md border border-gold/50 bg-charcoal-900/90 px-3.5 py-1.5 text-xs font-semibold text-gold shadow-lg backdrop-blur"
       >
         <TrophyIcon className="h-3.5 w-3.5 shrink-0" />
         <span className="truncate">
@@ -135,7 +135,7 @@ export function AwardSpotlight({
                 ref={closeRef}
                 type="button"
                 onClick={close}
-                className="relative mt-5 inline-flex h-11 w-full items-center justify-center rounded-full bg-gold text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-gold-muted"
+                className="relative mt-5 inline-flex h-11 w-full items-center justify-center rounded-full bg-primary text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
               >
                 See their page
               </button>

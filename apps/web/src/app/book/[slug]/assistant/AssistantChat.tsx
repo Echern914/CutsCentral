@@ -188,7 +188,7 @@ export function AssistantChat({ slug, shopName, signedIn }: { slug: string; shop
                       type="button"
                       disabled={busy}
                       onClick={() => void run({ pick: c.pick }, c.label)}
-                      className="rounded-full border border-subtle px-3 py-1.5 text-xs transition-colors hover:border-gold/40 disabled:opacity-50"
+                      className="rounded-md border border-subtle px-3 py-1.5 text-xs transition-colors hover:border-gold/40 disabled:opacity-50"
                       data-qa="assistant-choice"
                     >
                       {c.label}
@@ -243,7 +243,7 @@ export function AssistantChat({ slug, shopName, signedIn }: { slug: string; shop
             type="button"
             disabled={busy}
             onClick={() => void run({ nav: m.nav }, m.label)}
-            className="rounded-full border border-gold/40 px-3 py-1.5 text-xs font-semibold transition-colors hover:bg-gold/10 disabled:opacity-50"
+            className="rounded-md border border-gold/40 px-3 py-1.5 text-xs font-semibold transition-colors hover:bg-gold/10 disabled:opacity-50"
             data-qa={`assistant-menu-${m.nav}`}
           >
             {m.label}
@@ -266,7 +266,7 @@ export function AssistantChat({ slug, shopName, signedIn }: { slug: string; shop
           onChange={(e) => setDraft(e.target.value)}
           maxLength={500}
           placeholder="e.g. anything open tomorrow afternoon?"
-          className="min-w-0 flex-1 rounded-full border border-subtle bg-transparent px-4 py-2.5 text-sm text-offwhite placeholder:text-muted"
+          className="min-w-0 flex-1 rounded-xl border border-subtle bg-transparent px-4 py-2.5 text-sm text-offwhite placeholder:text-muted"
           data-qa="assistant-input"
         />
         <Button type="submit" disabled={busy || !draft.trim()} data-qa="assistant-send">

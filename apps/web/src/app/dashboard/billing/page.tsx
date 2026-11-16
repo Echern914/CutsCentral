@@ -426,7 +426,7 @@ export default async function BillingPage({
                   <HideInNativeApp> · ${PLANS.starter.priceMonthlyUsd}/mo</HideInNativeApp>
                 </p>
                 {b.subscribed && b.plan === "starter" && (
-                  <span className="rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-soft">
+                  <span className="rounded-md border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-soft">
                     Current plan
                   </span>
                 )}
@@ -477,11 +477,11 @@ export default async function BillingPage({
                   <HideInNativeApp> · ${PLANS.pro.priceMonthlyUsd}/mo</HideInNativeApp>
                 </p>
                 {b.subscribed && b.plan === "pro" ? (
-                  <span className="rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-soft">
+                  <span className="rounded-md border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-soft">
                     Current plan
                   </span>
                 ) : (
-                  <span className="rounded-full bg-gold/15 px-2.5 py-1 text-[10px] uppercase tracking-wide text-gold">
+                  <span className="rounded-md bg-gold/15 px-2.5 py-1 text-[10px] uppercase tracking-wide text-gold">
                     Most popular
                   </span>
                 )}
@@ -537,7 +537,7 @@ export default async function BillingPage({
                 front-desk staff for the price of a few cuts, not like a
                 bigger text bundle. */}
             {showPremiumAiCard && (
-            <Card className="relative flex flex-col overflow-hidden border-gold/60 p-6 shadow-glow">
+            <Card className="relative flex flex-col overflow-hidden border-gold/60 p-6">
               <div
                 className="pointer-events-none absolute inset-0 bg-gradient-to-b from-gold/10 via-transparent to-transparent"
                 aria-hidden
@@ -549,11 +549,11 @@ export default async function BillingPage({
                   <HideInNativeApp> · ${PLANS.pro_ai.priceMonthlyUsd}/mo</HideInNativeApp>
                 </p>
                 {b.plan === "pro_ai" ? (
-                  <span className="rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-soft">
+                  <span className="rounded-md border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-soft">
                     Current plan
                   </span>
                 ) : (
-                  <span className="rounded-full bg-gold-gradient px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-on-gold">
+                  <span className="rounded-md bg-primary px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-on-primary">
                     Most powerful
                   </span>
                 )}

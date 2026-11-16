@@ -87,7 +87,7 @@ function listNames(names: string[]): string {
 }
 
 const field =
-  "w-full rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800 px-3 py-2 text-sm text-offwhite placeholder:text-muted outline-none focus:border-gold/50";
 
 /** A message started elsewhere (a promo's "Email or notify"), opened ready to edit. */
 export interface BroadcastDraft {
@@ -334,7 +334,7 @@ export function BroadcastCard({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="mt-4 self-start rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900"
+          className="mt-4 self-start rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary"
         >
           Write a message
         </button>
@@ -397,7 +397,7 @@ export function BroadcastCard({
               onClick={everyone}
               aria-pressed={tiers.length === 0 && !byService}
               className={cn(
-                "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                "rounded-md px-3 py-1 text-xs font-medium transition-colors",
                 tiers.length === 0 && !byService
                   ? "bg-gold/20 text-gold"
                   : "border border-subtle text-muted hover:text-offwhite",
@@ -422,7 +422,7 @@ export function BroadcastCard({
                     onClick={() => toggleTier(t.value)}
                     aria-pressed={tiers.includes(t.value)}
                     className={cn(
-                      "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                      "rounded-md px-3 py-1 text-xs font-medium transition-colors",
                       tiers.includes(t.value)
                         ? "bg-gold/20 text-gold"
                         : "border border-subtle text-muted hover:text-offwhite",
@@ -450,7 +450,7 @@ export function BroadcastCard({
               onClick={() => setByService((v) => !v)}
               aria-pressed={byService}
               className={cn(
-                "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                "rounded-md px-3 py-1 text-xs font-medium transition-colors",
                 byService ? "bg-gold/20 text-gold" : "border border-subtle text-muted hover:text-offwhite",
               )}
             >
@@ -479,7 +479,7 @@ export function BroadcastCard({
                       onClick={() => toggleService(o.key)}
                       aria-pressed={serviceKeys.includes(o.key)}
                       className={cn(
-                        "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                        "rounded-md px-3 py-1 text-xs font-medium transition-colors",
                         serviceKeys.includes(o.key)
                           ? "bg-gold/20 text-gold"
                           : "border border-subtle text-muted hover:text-offwhite",
@@ -499,7 +499,7 @@ export function BroadcastCard({
                     onClick={() => setSinceDays(w.value)}
                     aria-pressed={sinceDays === w.value}
                     className={cn(
-                      "rounded-full px-2.5 py-0.5 text-xs transition-colors",
+                      "rounded-md px-2.5 py-0.5 text-xs transition-colors",
                       sinceDays === w.value
                         ? "bg-gold/20 text-gold"
                         : "border border-subtle text-muted hover:text-offwhite",
@@ -624,7 +624,7 @@ export function BroadcastCard({
             type="button"
             onClick={send}
             disabled={!canSend}
-            className="rounded-xl bg-gold px-5 py-2.5 text-sm font-semibold text-charcoal-900 disabled:opacity-50"
+            className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             {pending ? "Queueing…" : "Send"}
           </button>

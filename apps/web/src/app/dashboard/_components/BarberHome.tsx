@@ -184,21 +184,21 @@ export function BarberHome({
 function CheckInBadge({ row }: { row: BarberRow }) {
   if (row.runningLate) {
     return (
-      <span className="shrink-0 rounded-full border border-danger-soft/40 bg-danger-soft/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-danger-soft">
+      <span className="shrink-0 rounded-md border border-danger-soft/40 bg-danger-soft/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-danger-soft">
         Running late
       </span>
     );
   }
   if (row.checkInStatus === "ON_MY_WAY") {
     return (
-      <span className="shrink-0 rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-soft">
+      <span className="shrink-0 rounded-md border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-soft">
         {row.etaMinutes ? `${row.etaMinutes} min out` : "On the way"}
       </span>
     );
   }
   if (row.checkInStatus === "ARRIVED") {
     return (
-      <span className="shrink-0 rounded-full border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-soft">
+      <span className="shrink-0 rounded-md border border-emerald-soft/40 bg-emerald-soft/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-soft">
         Here
       </span>
     );

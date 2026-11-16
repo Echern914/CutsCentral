@@ -22,9 +22,9 @@ import {
 type Step = "phone" | "code" | "choose" | "opening";
 
 const INPUT =
-  "w-full rounded-2xl border border-subtle bg-charcoal-800/60 px-4 py-3 text-base text-offwhite placeholder:text-muted";
+  "min-h-[44px] w-full rounded-xl border border-subtle-strong bg-charcoal-800/60 px-4 py-3 text-base text-offwhite placeholder:text-muted";
 const PRIMARY =
-  "flex min-h-11 w-full items-center justify-center rounded-full bg-gold px-5 font-semibold text-charcoal-900 disabled:opacity-50";
+  "flex min-h-11 w-full items-center justify-center rounded-xl bg-primary px-5 font-semibold text-on-primary disabled:opacity-50";
 const GHOST = "flex min-h-11 w-full items-center justify-center rounded-full text-muted";
 
 export function MyRewardsClient() {

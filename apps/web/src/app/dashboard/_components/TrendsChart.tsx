@@ -71,8 +71,8 @@ export function TrendsChart({ series: initial }: { series: TrendPoint[] }) {
                   disabled={pending}
                   aria-pressed={range === m}
                   aria-label={`Last ${m} months`}
-                  className={`rounded-full px-2.5 py-1 text-xs transition-colors duration-150 ease-out ${
-                    range === m ? "bg-gold text-charcoal" : "text-muted hover:text-offwhite"
+                  className={`rounded-md px-2.5 py-1 text-xs transition-colors duration-150 ease-out ${
+                    range === m ? "bg-primary text-on-primary" : "text-muted hover:text-offwhite"
                   }`}
                 >
                   {m}m

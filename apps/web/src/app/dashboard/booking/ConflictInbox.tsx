@@ -362,7 +362,7 @@ export function ConflictInbox({
               aria-selected={status === s}
               onClick={() => setStatus(s)}
               className={cn(
-                "rounded-full px-3 py-1 text-xs font-medium capitalize transition-colors duration-150",
+                "rounded-md px-3 py-1 text-xs font-medium capitalize transition-colors duration-150",
                 status === s
                   ? "bg-gold/15 text-gold"
                   : "text-muted hover:bg-charcoal-700 hover:text-offwhite",
@@ -438,7 +438,7 @@ export function ConflictInbox({
                 <div className="flex flex-wrap items-center gap-2">
                   <span
                     className={cn(
-                      "rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+                      "rounded-md border px-2 py-0.5 text-[11px] font-semibold",
                       KIND_STYLE[r.kind] ?? "border-subtle bg-charcoal-700 text-muted",
                     )}
                   >
@@ -448,7 +448,7 @@ export function ConflictInbox({
                     {r.staffName ?? `Unknown ${vocab.stationNoun}`}
                   </span>
                   {r.resolvedAt && (
-                    <span className="rounded-full border border-subtle px-2 py-0.5 text-[11px] text-muted">
+                    <span className="rounded-md border border-subtle px-2 py-0.5 text-[11px] text-muted">
                       Resolved
                     </span>
                   )}
@@ -546,7 +546,7 @@ export function ConflictInbox({
               type="button"
               onClick={() => void confirmResolve()}
               disabled={saving}
-              className="rounded-lg bg-gold px-3 py-1.5 text-sm font-semibold text-charcoal-900 transition-colors hover:bg-gold/90 disabled:opacity-60"
+              className="rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-60"
             >
               {saving ? "Saving…" : "Mark resolved"}
             </button>
@@ -664,7 +664,7 @@ export function ConflictInbox({
               type="button"
               onClick={() => void confirmResolveAll()}
               disabled={saving}
-              className="rounded-lg bg-gold px-3 py-1.5 text-sm font-semibold text-charcoal-900 transition-colors hover:bg-gold/90 disabled:opacity-60"
+              className="rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-on-primary transition-colors hover:bg-primary/90 disabled:opacity-60"
             >
               {saving ? "Saving…" : `Resolve all ${openCount}`}
             </button>

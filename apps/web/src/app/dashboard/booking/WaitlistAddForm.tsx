@@ -59,7 +59,7 @@ export function WaitlistAddForm({
   const chip = (on: boolean) =>
     cn(
       // 44px on mobile like every other tappable thing on this screen.
-      "h-11 rounded-full border px-4 text-xs transition-colors sm:h-9 sm:px-3",
+      "h-11 rounded-md border px-4 text-xs transition-colors sm:h-9 sm:px-3",
       on ? "border-gold/50 bg-gold/10 text-gold" : "border-subtle text-muted hover:text-offwhite",
     );
 
@@ -351,7 +351,7 @@ export function WaitlistAddForm({
           onClick={submit}
           disabled={pending}
           aria-busy={pending}
-          className={cn(BTN_BASE, "bg-gold font-semibold text-charcoal-900 hover:bg-gold/90 sm:w-auto sm:px-5")}
+          className={cn(BTN_BASE, "bg-primary font-semibold text-on-primary hover:bg-primary/90 sm:w-auto sm:px-5")}
         >
           {pending ? "Adding…" : "Add to waitlist"}
         </button>
