@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-16-clients-redesign",
+    date: "2026-11-16",
+    kind: "feature",
+    title: "A cleaner client list and profile",
+    body:
+      "Filters are one row of pills that fill in while they narrow the list. Each client is one line: how " +
+      "often and when they were last in. A profile opens with Call, Text and Email, and its settings now " +
+      "sit below the history.",
+  },
+  {
     id: "2026-11-16-calendar-density",
     date: "2026-11-16",
     kind: "feature",

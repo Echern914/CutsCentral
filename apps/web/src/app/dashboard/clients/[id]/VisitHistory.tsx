@@ -125,11 +125,11 @@ export function VisitHistory({
                 </div>
 
                 {!isEditing && !isConfirming && (
-                  <div className="mt-1.5 flex gap-3">
+                  <div className="mt-1.5 flex gap-4">
                     <button
                       onClick={() => openEdit(v)}
                       disabled={pending}
-                      className="text-[11px] text-muted underline-offset-2 transition-colors duration-150 ease-out hover:text-gold hover:underline disabled:opacity-50"
+                      className="relative text-xs text-muted underline-offset-2 after:absolute after:-inset-x-2 after:-inset-y-3 transition-colors duration-150 ease-out hover:text-gold hover:underline disabled:opacity-50"
                     >
                       Edit
                     </button>
@@ -139,7 +139,7 @@ export function VisitHistory({
                         setConfirmDeleteId(v.id);
                       }}
                       disabled={pending}
-                      className="text-[11px] text-muted underline-offset-2 transition-colors duration-150 ease-out hover:text-danger-soft hover:underline disabled:opacity-50"
+                      className="relative text-xs text-muted underline-offset-2 after:absolute after:-inset-x-2 after:-inset-y-3 transition-colors duration-150 ease-out hover:text-danger-soft hover:underline disabled:opacity-50"
                     >
                       Delete
                     </button>
@@ -154,7 +154,7 @@ export function VisitHistory({
                     <button
                       onClick={() => remove(v)}
                       disabled={pending}
-                      className="rounded-md bg-danger-soft/90 px-3 py-1 text-[11px] font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-danger-soft disabled:opacity-50"
+                      className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-danger-soft/90 px-3 text-sm font-semibold text-charcoal transition-colors duration-150 ease-out hover:bg-danger-soft disabled:opacity-50"
                     >
                       {pending ? "…" : "Yes, delete"}
                     </button>
@@ -187,7 +187,7 @@ export function VisitHistory({
                     <button
                       onClick={() => saveEdit(v)}
                       disabled={pending}
-                      className="rounded-md bg-primary px-3 py-1 text-[11px] font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
+                      className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-primary px-3 text-sm font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
                     >
                       {pending ? "…" : "Save"}
                     </button>

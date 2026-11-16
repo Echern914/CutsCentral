@@ -65,6 +65,18 @@ export function normalizePhone(raw: string | null | undefined): string | null {
 }
 
 /**
+ * How a number reads to a person: "(202) 555-0131" for a US number, the
+ * stored text unchanged for anything else. Display only - never dial or
+ * store this; `normalizePhone` is the one that decides what is dialable.
+ */
+export function displayPhone(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const e164 = normalizePhone(raw);
+  const us = e164 ? /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164) : null;
+  return us ? `(${us[1]}) ${us[2]}-${us[3]}` : raw.trim();
+}
+
+/**
  * A single address, conservatively validated. Deliberately stricter than the
  * RFC: no quoted local parts, no spaces, and no CR/LF — a newline in a
  * `mailto:` is header injection, which is how a "contact" link becomes a way

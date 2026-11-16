@@ -159,19 +159,19 @@ export function MoreSheet({
       />
       <div
         ref={panelRef}
-        className="glass animate-fade-in relative max-h-[85dvh] w-full overflow-y-auto rounded-t-3xl px-4 pt-4 sm:max-h-[80dvh] sm:max-w-2xl sm:rounded-3xl sm:px-6"
+        className="animate-fade-in relative max-h-[85dvh] border border-subtle bg-charcoal-900 shadow-lg w-full overflow-y-auto rounded-t-3xl px-4 pt-4 sm:max-h-[80dvh] sm:max-w-2xl sm:rounded-3xl sm:px-6"
         // The sheet is the bottom-most surface in the app, so it owns the
         // home-indicator gap itself (the native shell insets only the TOP).
         style={{ paddingBottom: "calc(1.5rem + env(safe-area-inset-bottom))" }}
       >
-        <div className="sticky top-0 z-10 -mx-4 mb-3 bg-charcoal-800/80 px-4 pb-3 pt-2 backdrop-blur sm:-mx-6 sm:px-6">
+        <div className="sticky top-0 z-10 -mx-4 mb-3 bg-charcoal-900/90 px-4 pb-3 pt-2 backdrop-blur sm:-mx-6 sm:px-6">
           <div className="flex items-center justify-between">
             <h2 className="font-display text-lg tracking-tight">Everything else</h2>
             <button
               ref={closeRef}
               type="button"
               onClick={onClose}
-              className="rounded-md border border-subtle px-3 py-1.5 text-xs text-muted transition-colors duration-150 ease-out hover:bg-charcoal-700 hover:text-offwhite"
+              className="-mr-2 min-h-[44px] rounded-xl px-3 text-sm font-semibold text-offwhite transition-colors duration-150 ease-out hover:bg-charcoal-700"
             >
               Done
             </button>
@@ -186,7 +186,7 @@ export function MoreSheet({
             aria-label="Search everything"
             autoComplete="off"
             enterKeyHint="search"
-            className="mt-2 w-full rounded-xl border border-subtle bg-charcoal-900/60 px-3.5 py-2.5 text-base text-offwhite placeholder:text-muted focus:border-gold/50 focus:outline-none focus:ring-2 focus:ring-gold/25"
+            className="mt-2 w-full rounded-xl border border-subtle bg-charcoal-800 px-3.5 py-2.5 text-base text-offwhite placeholder:text-muted focus:border-gold/50 focus:outline-none focus:ring-2 focus:ring-gold/25"
           />
         </div>
 
@@ -209,7 +209,7 @@ export function MoreSheet({
                 )}
               </div>
             ) : (
-              <ul className="grid gap-1.5 sm:grid-cols-2">
+              <ul className="overflow-hidden rounded-2xl border border-subtle bg-charcoal-800 divide-y divide-subtle">
                 {hits.map((f) => (
                   <li key={f.id}>
                     <FeatureLink
@@ -229,8 +229,8 @@ export function MoreSheet({
           <>
             {recents.length > 0 && (
               <section className="mb-6">
-                <h3 className="px-1 text-xs uppercase tracking-[0.16em] text-muted">Recent</h3>
-                <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-muted">Recent</h3>
+                <ul className="mt-2 overflow-hidden rounded-2xl border border-subtle bg-charcoal-800 divide-y divide-subtle">
                   {recents.map((f) => (
                     <li key={f.id}>
                       <FeatureLink
@@ -252,10 +252,10 @@ export function MoreSheet({
               if (items.length === 0) return null;
               return (
                 <section key={cat.id} className="mb-6">
-                  <h3 className="px-1 text-xs uppercase tracking-[0.16em] text-muted">
+                  <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-muted">
                     {cat.name}
                   </h3>
-                  <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                  <ul className="mt-2 overflow-hidden rounded-2xl border border-subtle bg-charcoal-800 divide-y divide-subtle">
                     {items.map((f) => (
                       <li key={f.id}>
                         <FeatureLink
@@ -285,20 +285,23 @@ export function MoreSheet({
             cross-shop operator tool, and the registry's whole contract is that
             everything in it is scoped to the shop the caller is acting on. */}
         <section className="mb-2">
-          <h3 className="px-1 text-xs uppercase tracking-[0.16em] text-muted">
+          <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-muted">
             Support
           </h3>
-          <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+          <ul className="mt-2 overflow-hidden rounded-2xl border border-subtle bg-charcoal-800 divide-y divide-subtle">
             <li>
               <Link
                 href={supportHref}
                 onClick={onClose}
-                className="block rounded-2xl border border-subtle px-3.5 py-3 transition-colors duration-150 ease-out hover:bg-charcoal-700"
+                className="flex min-h-[56px] items-center gap-3 px-4 py-2.5 transition-colors duration-150 ease-out hover:bg-charcoal-700"
               >
-                <span className="text-sm font-medium">Help &amp; contact</span>
-                <span className="mt-0.5 block text-xs text-muted">
-                  Guides, FAQs, and how to reach a human
+                <span className="min-w-0 flex-1">
+                  <span className="text-[15px] font-medium">Help &amp; contact</span>
+                  <span className="mt-0.5 block text-xs text-muted">
+                    Guides, FAQs, and how to reach a human
+                  </span>
                 </span>
+                <RowChevron />
               </Link>
             </li>
             {isAdmin && (
@@ -306,12 +309,15 @@ export function MoreSheet({
                 <Link
                   href="/admin"
                   onClick={onClose}
-                  className="block rounded-2xl border border-subtle px-3.5 py-3 transition-colors duration-150 ease-out hover:bg-charcoal-700"
+                  className="flex min-h-[56px] items-center gap-3 px-4 py-2.5 transition-colors duration-150 ease-out hover:bg-charcoal-700"
                 >
-                  <span className="text-sm font-medium">Admin</span>
-                  <span className="mt-0.5 block text-xs text-muted">
-                    Cross-shop operator tools
+                  <span className="min-w-0 flex-1">
+                    <span className="text-[15px] font-medium">Admin</span>
+                    <span className="mt-0.5 block text-xs text-muted">
+                      Cross-shop operator tools
+                    </span>
                   </span>
+                  <RowChevron />
                 </Link>
               </li>
             )}
@@ -374,24 +380,27 @@ function FeatureLink({
    */
   opensBrowser?: boolean;
 }) {
-  const className = `block w-full rounded-2xl border px-3.5 py-3 text-left transition-colors duration-150 ease-out hover:bg-charcoal-700 ${
-    current ? "border-gold/40 bg-gold/5" : "border-subtle"
+  const className = `flex min-h-[56px] w-full items-center gap-3 px-4 py-2.5 text-left transition-colors duration-150 ease-out hover:bg-charcoal-700 ${
+    current ? "bg-gold/5" : ""
   }`;
   const body = (
     <>
-      <span className="flex items-center gap-2">
-        <span className="min-w-0 truncate text-sm font-medium">
-          {feature.name}
-          {opensBrowser && <OpensBrowserMark />}
-        </span>
-        {lockedAs && <PlanBadge tier={lockedAs} />}
-        {(current || tag) && (
-          <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.14em] text-muted">
-            {current ? "You're here" : tag}
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="min-w-0 truncate text-[15px] font-medium">
+            {feature.name}
+            {opensBrowser && <OpensBrowserMark />}
           </span>
-        )}
+          {lockedAs && <PlanBadge tier={lockedAs} />}
+          {(current || tag) && (
+            <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.14em] text-muted">
+              {current ? "You're here" : tag}
+            </span>
+          )}
+        </span>
+        <span className="mt-0.5 block text-xs text-muted">{feature.description}</span>
       </span>
-      <span className="mt-0.5 block text-xs text-muted">{feature.description}</span>
+      <RowChevron />
     </>
   );
   if (opensBrowser) {
@@ -424,6 +433,15 @@ function FeatureLink({
     >
       {body}
     </Link>
+  );
+}
+
+/** The ">" at the end of a row: it goes somewhere. */
+function RowChevron() {
+  return (
+    <svg aria-hidden viewBox="0 0 12 12" className="h-3 w-3 shrink-0 text-muted">
+      <path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 
