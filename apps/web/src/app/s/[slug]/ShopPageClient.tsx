@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, type CSSProperties } from "react";
-import { motion } from "framer-motion";
 import {
   DEFAULT_LAYOUT_STYLE,
   DEFAULT_PAGE_FONT,
@@ -9,21 +8,17 @@ import {
   LAYOUT_STYLES,
   PAGE_FONTS,
   PAGE_THEMES,
-  pageDesignFor,
   type LayoutStyleKey,
   type PageFontKey,
   type PageSectionKey,
   type PageThemeKey,
 } from "@chairback/config/constants";
 import { isUsableBookingLink, showsRequestForm } from "@chairback/config/bookingLinks";
-import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { useSignalNativeReady } from "@/lib/nativeReady";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { useAppHasRewardsTab } from "@/lib/useAppHasRewardsTab";
-import { ShopWaitlistForm } from "./ShopWaitlistForm";
-import { Gallery, Hours, Promotions, Rewards, Reviews, StampMark } from "./pageSections";
-import { PrimaryCta, ShopChrome, ShopFooter, TextToBookBlock } from "./pageChrome";
-import { DesignedPage } from "./designs/DesignedPage";
+import { Gallery, Hours, Promotions, Rewards, Reviews } from "./pageSections";
+import { StudioDesign } from "./designs/StudioDesign";
 import type { DesignCtx } from "./designs/model";
 import type { ShopPageData } from "./page";
 import { AppFrameScheme } from "@/components/PageScheme";
@@ -35,9 +30,9 @@ import { AppFrameScheme } from "@/components/PageScheme";
  * identity. Self-contained styling - deliberately avoids the app's dark-chrome
  * utility classes.
  *
- * The shop's PAGE DESIGN picks the layout. "classic" - the page every shop had
- * before designs existed, and the default - renders below exactly as it always
- * did; every other design is built from the same pieces in designs/.
+ * Every shop's page is laid out as STUDIO (designs/StudioDesign.tsx). The
+ * per-shop page design picker, and the six other layouts, were retired on
+ * 2026-11-16 so every client sees the redesigned page.
  *
  * `preview` renders the exact same page for the in-editor live preview, but
  * neutralizes anything that would navigate or submit (booking link, request
@@ -151,186 +146,38 @@ export function ShopPageClient({
     hours: <Hours key="hours" data={data} theme={theme} surface={surface} />,
   };
 
-  const design = pageDesignFor(data.pageDesign);
-  if (design !== "classic") {
-    const ctx: DesignCtx = {
-      data,
-      preview,
-      inApp,
-      mounted,
-      theme,
-      accent,
-      layout,
-      surface,
-      rootStyle,
-      bookHref,
-      bookIsNative,
-      hasBooking,
-      showRequestForm,
-      bookQuery,
-      platformOrigin,
-      rewardsHref,
-      rewardsLabel,
-      appRewardsTab,
-      sections,
-      order,
-    };
-    return (
-      <>
-        {!preview && <AppFrameScheme scheme={theme.scheme} />}
-        <DesignedPage design={design} ctx={ctx} />
-      </>
-    );
-  }
-
+  // 🔴 EVERY SHOP RENDERS STUDIO. The owner's call (2026-11-16): the client side
+  // is redesigned for every shop, whatever page design it had picked. The shop
+  // still dresses it - its theme, accent, fonts, shape, logo, photos and section
+  // order all apply - but the layout is no longer a choice. `data.pageDesign` is
+  // still stored and sent by the API; nothing here reads it.
+  const ctx: DesignCtx = {
+    data,
+    preview,
+    inApp,
+    mounted,
+    theme,
+    accent,
+    layout,
+    surface,
+    rootStyle,
+    bookHref,
+    bookIsNative,
+    hasBooking,
+    showRequestForm,
+    bookQuery,
+    platformOrigin,
+    rewardsHref,
+    rewardsLabel,
+    appRewardsTab,
+    sections,
+    order,
+  };
   return (
-    <div className="min-h-dvh" style={rootStyle}>
+    <>
       {/* The iPhone app's bar above this page wears the same scheme. */}
       {!preview && <AppFrameScheme scheme={theme.scheme} />}
-      <ShopChrome data={data} preview={preview} theme={theme} layout={layout} />
-      <motion.main
-        variants={staggerContainer}
-        initial="hidden"
-        animate="show"
-        className="mx-auto w-full max-w-lg px-5 pb-16"
-        style={{ fontFamily: "var(--page-body)" }}
-      >
-        {/* Hero: a full-bleed banner that fades into the page, then the shop's
-            logo coin (when uploaded) overlapping the fade, then the name. */}
-        <motion.header variants={fadeUp} className="relative" data-tour="hero">
-          {data.heroImageUrl ? (
-            <div className="relative -mx-5 h-48 overflow-hidden sm:h-56">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={data.heroImageUrl} alt="" className="h-full w-full object-cover" />
-              {/* Fade the bottom of the banner into the page background so it
-                  blends in and the name sits on a clean surface. */}
-              <div
-                className="absolute inset-0"
-                style={{ background: `linear-gradient(180deg, transparent 45%, ${theme.bg} 100%)` }}
-                aria-hidden
-              />
-            </div>
-          ) : (
-            <div
-              className="-mx-5 h-28"
-              style={{ background: `radial-gradient(420px 200px at 50% 0%, ${accent}26, transparent 70%)` }}
-              aria-hidden
-            />
-          )}
-
-          {/* Logo coin — same treatment as the rewards page header. alt="" is
-              deliberate: the shop name renders immediately below. */}
-          {data.logoUrl && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={data.logoUrl}
-              alt=""
-              className="relative z-10 mx-auto -mt-10 h-16 w-16 object-cover"
-              style={{
-                backgroundColor: theme.surface,
-                border: `1px solid ${theme.border}`,
-                borderRadius: layout.radius,
-              }}
-            />
-          )}
-
-          <div className={`${data.logoUrl ? "mt-3" : "mt-4"} text-center`}>
-            <h1 className="text-3xl tracking-tight" style={{ fontFamily: "var(--page-display)" }}>
-              {data.name}
-            </h1>
-            {data.bio && (
-              <p className="mx-auto mt-2 max-w-sm text-sm" style={{ color: theme.muted }}>
-                {data.bio}
-              </p>
-            )}
-            {data.instagramHandle && (
-              <a
-                href={preview ? undefined : `https://instagram.com/${data.instagramHandle}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={preview ? (e) => e.preventDefault() : undefined}
-                className="mt-3 inline-block text-sm font-medium hover:underline"
-                style={{ color: accent }}
-              >
-                @{data.instagramHandle}
-              </a>
-            )}
-          </div>
-        </motion.header>
-
-        <TextToBookBlock data={data} accent={accent} theme={theme} />
-
-        <PrimaryCta
-          data={data}
-          preview={preview}
-          theme={theme}
-          layout={layout}
-          accent={accent}
-          bookHref={bookHref}
-          hasBooking={hasBooking}
-          showRequestForm={showRequestForm}
-        />
-
-        {/* A known client's way to their punch card. Its own block, OUTSIDE the
-            data-tour="book-cta" div above - the demo tour spotlights that
-            anchor, and this link only exists for real token-holding clients,
-            never in the demo. Deliberately secondary to Book: this page exists
-            to get them booked; the card is what they check on the way. Inside
-            an app build whose Rewards tab holds it all, it isn't here at all. */}
-        {rewardsHref && !appRewardsTab && (
-          <motion.div variants={fadeUp} className="mt-3">
-            <a
-              href={rewardsHref}
-              className="flex w-full items-center justify-center gap-2 py-3 text-center text-sm font-medium transition-transform duration-200 ease-out hover:scale-[1.01]"
-              style={{
-                border: `1px solid ${theme.border}`,
-                color: theme.text,
-                borderRadius: layout.buttonRadius,
-              }}
-            >
-              <StampMark />
-              {rewardsLabel}
-            </a>
-          </motion.div>
-        )}
-
-        {/* Standing waitlist entry: for when they're fully booked. Not shown with
-            the request form (that's already a "reach out" path). */}
-        {data.waitlistEnabled && !showRequestForm && (
-          <motion.div variants={fadeUp} className="mt-3">
-            <ShopWaitlistForm
-              slug={data.slug}
-              shopName={data.name}
-              accent={accent}
-              preview={preview}
-              theme={{
-                surface: theme.surface,
-                border: theme.border,
-                muted: theme.muted,
-                scheme: theme.scheme,
-                radius: layout.radius,
-                buttonRadius: layout.buttonRadius,
-              }}
-            />
-          </motion.div>
-        )}
-
-        {/* Movable sections, in the shop's chosen order */}
-        {order.map((key) => sections[key])}
-
-        <ShopFooter
-          data={data}
-          preview={preview}
-          inApp={inApp}
-          theme={theme}
-          layout={layout}
-          accent={accent}
-          bookHref={bookHref}
-          hasBooking={hasBooking}
-          rewardsHref={rewardsHref}
-          platformOrigin={platformOrigin}
-        />
-      </motion.main>
-    </div>
+      <StudioDesign ctx={ctx} />
+    </>
   );
 }

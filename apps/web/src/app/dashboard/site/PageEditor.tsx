@@ -11,7 +11,6 @@ import {
   LAYOUT_STYLE_KEYS,
   PAGE_FONTS,
   PAGE_FONT_KEYS,
-  PAGE_DESIGNS,
   PAGE_TEMPLATES,
   PAGE_TEMPLATE_KEYS,
   PAGE_THEMES,
@@ -21,7 +20,6 @@ import {
   SLUG_REGEX,
   pageDesignFor,
   type LayoutStyleKey,
-  type PageDesignKey,
   type PageFontKey,
   type PageSectionKey,
   type PageThemeKey,
@@ -39,7 +37,6 @@ import { savePageAction, type PageSettingsInput } from "./actions";
 
 /** What Save page owns: every page field but the Live switch, which saves itself. */
 type EditorFields = Omit<PageSettingsInput, "publicPageEnabled">;
-import { DesignPicker } from "./DesignPicker";
 import { GalleryEditor } from "./GalleryEditor";
 import { ImageField } from "./ImageField";
 import { SectionOrderEditor } from "./SectionOrderEditor";
@@ -101,7 +98,9 @@ export function PageEditor({
   const [name, setName] = useState(settings.name);
   const [slug, setSlug] = useState(settings.slug ?? "");
   const [theme, setTheme] = useState<string>(settings.theme);
-  const [pageDesign, setPageDesign] = useState<PageDesignKey>(pageDesignFor(settings.pageDesign));
+  // Every page is Studio now (ShopPageClient), so there is no picker. The stored
+  // value still rides along in a save, unchanged, because the API requires it.
+  const pageDesign = pageDesignFor(settings.pageDesign);
   const [bio, setBio] = useState(settings.bio ?? "");
   const [logoUrl, setLogoUrl] = useState(settings.logoUrl ?? "");
   const [accentColor, setAccentColor] = useState(settings.accentColor ?? "");
@@ -254,7 +253,6 @@ export function PageEditor({
       industry: settings.industry,
       serviceNoun: settings.serviceNoun,
       theme,
-      pageDesign,
       services: publicMenu.services,
       staff: publicMenu.staff,
       logoUrl: logoUrl.trim() || null,
@@ -305,7 +303,6 @@ export function PageEditor({
       slug,
       bio,
       theme,
-      pageDesign,
       publicMenu,
       logoUrl,
       heroImageUrl,
@@ -439,21 +436,6 @@ export function PageEditor({
               initialEnabled={settings.publicPageEnabled}
               booksHere={settings.bookingMode === "native"}
             />
-          </div>
-        </Card>
-
-        {/* Page design: the whole layout. Classic is the page every shop
-            already has; the rest lead with the work. */}
-        <Card className="overflow-hidden">
-          <CardHeader title="Page design" subtitle="How your page is laid out. Classic is the page you have now." />
-          <div className="flex flex-col gap-3 px-5 py-5">
-            <DesignPicker value={pageDesign} onChange={setPageDesign} theme={activeTheme} accent={previewAccent} />
-            {pageDesign !== "classic" && gallery.length === 0 && (
-              <p className="text-xs text-muted" role="status">
-                {PAGE_DESIGNS[pageDesign].label} leads with your photos. Add some under Photo gallery below — until
-                you do, the preview shows examples and your live page skips the photo parts.
-              </p>
-            )}
           </div>
         </Card>
 
@@ -835,11 +817,9 @@ export function PageEditor({
               <p className="mt-1.5 text-[11px] text-muted">
                 Applies instantly to the order below — drag to fine-tune, then Save.
               </p>
-              {pageDesign !== "classic" && (
-                <p className="mt-1.5 text-[11px] text-muted">
-                  In {PAGE_DESIGNS[pageDesign].label} your photos lead the page, so these sections follow below them.
-                </p>
-              )}
+              <p className="mt-1.5 text-[11px] text-muted">
+                Your newest photos show as Recent work near the top of your page, so these sections follow below them.
+              </p>
             </div>
             <SectionOrderEditor value={sectionOrder} onChange={setSectionOrder} />
           </div>

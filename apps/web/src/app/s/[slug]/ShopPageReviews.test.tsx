@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import type { ShopPageData } from "./page";
 
 vi.mock("next/navigation", () => ({
@@ -69,6 +69,12 @@ const review = (id: string, rating: number, authorName: string, body: string | n
   createdAt: "2026-09-20T15:00:00.000Z",
 });
 
+/**
+ * The reviews section's own header. Studio also prints the rating under the
+ * shop's name, so the same "4.9" is on the page twice - these pin the section's.
+ */
+const reviewsSection = () => within(document.getElementById("reviews")!);
+
 describe("the header counts ratings", () => {
   it("🔴 labels the count as ratings, and it can exceed the cards", () => {
     render(
@@ -79,8 +85,8 @@ describe("the header counts ratings", () => {
         })}
       />,
     );
-    expect(screen.getByText("4.9")).toBeTruthy();
-    expect(screen.getByText("· 37 ratings")).toBeTruthy();
+    expect(reviewsSection().getByText("4.9")).toBeTruthy();
+    expect(reviewsSection().getByText("· 37 ratings")).toBeTruthy();
     expect(screen.queryByText(/37 reviews/)).toBeNull();
   });
 
@@ -112,15 +118,15 @@ describe("the header counts ratings", () => {
 
   it("one rating is singular", () => {
     render(<ShopPageClient data={page({ reviewSummary: { count: 1, avgRating: 4, writtenCount: 0 } })} />);
-    expect(screen.getByText("· 1 rating")).toBeTruthy();
+    expect(reviewsSection().getByText("· 1 rating")).toBeTruthy();
   });
 
   it("🔴 a shop whose ratings are all star-only still shows its average", () => {
     // No cards at all - but three real ratings. The old header hid itself
     // whenever there were no cards, which would now hide real stars.
     render(<ShopPageClient data={page({ reviewSummary: { count: 3, avgRating: 3.67, writtenCount: 0 } })} />);
-    expect(screen.getByText("3.7")).toBeTruthy();
-    expect(screen.getByText("· 3 ratings")).toBeTruthy();
+    expect(reviewsSection().getByText("3.7")).toBeTruthy();
+    expect(reviewsSection().getByText("· 3 ratings")).toBeTruthy();
   });
 
   it("no ratings: no header", () => {

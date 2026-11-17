@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-16-studio-page-for-everyone",
+    date: "2026-11-16",
+    kind: "feature",
+    title: "Every page now has the new look",
+    body:
+      "Your page now uses the new layout: your menu (each service books), your team and recent work, with Book " +
+      "pinned at the bottom. Your colours, fonts, logo and photos still apply, so there is no layout to pick " +
+      "anymore. The screen clients see once they book is cleaner too.",
+  },
+  {
     id: "2026-11-16-calendar-week-view",
     date: "2026-11-16",
     kind: "feature",

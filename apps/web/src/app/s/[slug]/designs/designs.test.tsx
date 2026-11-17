@@ -18,15 +18,16 @@ vi.mock("@/lib/useAppHasRewardsTab", () => ({ useAppHasRewardsTab: rewardsTab })
 const { ShopPageClient } = await import("../ShopPageClient");
 
 /**
- * PAGE DESIGNS. The owner: "have them as templates... keep the one that
- * everyone has been using now as the default". And, of the circled buttons,
- * "Gallery here and move that to customer side".
+ * THE SHOP PAGE IS STUDIO, FOR EVERY SHOP. The owner (2026-11-16) wanted the
+ * client side redesigned "no matter what the barbers wanted", so the per-shop
+ * design picker and the other six layouts are gone and whatever a shop stored
+ * renders Studio.
  *
- * Pinned: no design (or a junk one) is the classic page, untouched; every other
- * design leads with Book and the work and drops the standing waitlist from the
- * top; a photo opens full screen with "Book this look" that picks its service
- * and person; the rewards button leaves the page in the app; example photos
- * exist only in the editor preview.
+ * Pinned: every stored value (none, classic, an old design, junk) is Studio;
+ * Book leads and the standing waitlist is off the top; a photo opens full
+ * screen with "Book this look" that picks its service and person; the rewards
+ * button leaves the page in the app; example photos exist only in the editor
+ * preview.
  */
 const DAY = 86_400_000;
 const ago = (days: number) => new Date(Date.now() - days * DAY).toISOString();
@@ -89,34 +90,14 @@ beforeEach(() => {
   rewardsTab.mockReturnValue(false);
 });
 
-describe("the design a shop gets", () => {
-  it("🔴 none stored is classic: the waitlist and the rewards button stay where they always were", () => {
-    render(
-      <ShopPageClient
-        data={page({ pageDesign: undefined })}
-        rewardsHref="/r/tok/rewards"
-        rewardsLabel="Your rewards · 3 punches"
-      />,
-    );
-    expect(screen.getByRole("button", { name: "Join the waitlist" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: /Your rewards · 3 punches/ })).toBeTruthy();
-    // Classic's own gallery, not a design's grid: no photo opens a viewer.
-    expect(screen.getByText("The work")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Skin taper" })).toBeNull();
-  });
-
-  it("a design that doesn't exist is classic too", () => {
-    render(<ShopPageClient data={page({ pageDesign: "neon-zebra" })} />);
-    expect(screen.getByRole("button", { name: "Join the waitlist" })).toBeTruthy();
-  });
-});
-
-describe("every new design", () => {
-  for (const design of ["grid", "lookbook", "reel", "profile", "fresh", "studio"]) {
-    it(`🔴 ${design}: Book leads, the work shows, and the standing waitlist is off the top`, () => {
-      render(<ShopPageClient data={page({ pageDesign: design })} />);
+describe("every shop gets Studio, whatever design it stored", () => {
+  // None stored, the old default, a retired design, and a value nothing knows.
+  for (const pageDesign of [undefined, "classic", "grid", "neon-zebra"]) {
+    it(`🔴 ${pageDesign ?? "none stored"}: the menu books, the work shows, and the standing waitlist is off the top`, () => {
+      render(<ShopPageClient data={page({ pageDesign })} />);
+      expect(screen.getByRole("link", { name: /^Book Haircut/ }).getAttribute("href")).toBe("/book/fresh?service=svc-cut");
+      expect(screen.getByText("Recent work")).toBeTruthy();
       expect(screen.getAllByRole("link", { name: "Book an appointment" }).length).toBeGreaterThan(0);
-      expect(screen.getAllByRole("button", { name: /Skin taper|Hard part|Waves/ }).length).toBeGreaterThan(0);
       // A shop that books here offers the waitlist on its booking page.
       expect(screen.queryByRole("button", { name: "Join the waitlist" })).toBeNull();
     });
@@ -125,7 +106,7 @@ describe("every new design", () => {
   it("a shop that books elsewhere keeps its waitlist, lower down", () => {
     render(
       <ShopPageClient
-        data={page({ pageDesign: "grid", bookingMode: "link", bookingUrl: "https://book.example/fresh", services: [], staff: [] })}
+        data={page({ bookingMode: "link", bookingUrl: "https://book.example/fresh", services: [], staff: [] })}
       />,
     );
     expect(screen.getByRole("button", { name: "Join the waitlist" })).toBeTruthy();
@@ -134,7 +115,7 @@ describe("every new design", () => {
 
 describe("a photo, full screen", () => {
   it("🔴 Book this look opens booking with that service and that person already picked", () => {
-    render(<ShopPageClient data={page({ pageDesign: "grid" })} bookQuery="?cb_domain=shop.example" />);
+    render(<ShopPageClient data={page()} bookQuery="?cb_domain=shop.example" />);
     fireEvent.click(screen.getByRole("button", { name: "Skin taper" }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByRole("heading", { name: "Skin taper" })).toBeTruthy();
@@ -146,7 +127,7 @@ describe("a photo, full screen", () => {
   });
 
   it("steps through the photos, and Escape closes it", () => {
-    render(<ShopPageClient data={page({ pageDesign: "grid" })} />);
+    render(<ShopPageClient data={page()} />);
     fireEvent.click(screen.getByRole("button", { name: "Skin taper" }));
     const dialog = screen.getByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Next photo" }));
@@ -158,7 +139,7 @@ describe("a photo, full screen", () => {
   it("a shop that books elsewhere sends the photo to its own booking link, as it is", () => {
     render(
       <ShopPageClient
-        data={page({ pageDesign: "grid", bookingMode: "link", bookingUrl: "https://book.example/fresh" })}
+        data={page({ bookingMode: "link", bookingUrl: "https://book.example/fresh" })}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Skin taper" }));
@@ -170,38 +151,32 @@ describe("a photo, full screen", () => {
 describe("the page served on a shop's own domain", () => {
   it("🔴 every way to book - and back to ChairBack - leads to the platform", () => {
     // Served on the shop's domain, where "/" is this page and booking does
-    // not live: Book, the photo's Book this look, the rewards finder and the
-    // powered-by line all point at getchairback.com.
-    for (const design of ["classic", "grid"]) {
-      const { unmount } = render(
-        <ShopPageClient
-          data={page({ pageDesign: design })}
-          bookQuery="?cb_domain=shop.example"
-          platformOrigin="https://getchairback.com"
-        />,
-      );
-      for (const link of screen.getAllByRole("link", { name: /Book an appointment|Book with Fresh Studio/ })) {
-        expect(link.getAttribute("href"), design).toBe("https://getchairback.com/book/fresh?cb_domain=shop.example");
-      }
-      expect(screen.getByRole("link", { name: /Find my rewards/ }).getAttribute("href"), design).toBe(
-        "https://getchairback.com/my-rewards",
-      );
-      expect(screen.getByRole("link", { name: /Powered by/ }).getAttribute("href"), design).toBe(
-        "https://getchairback.com/?ref=fresh",
-      );
-      if (design === "grid") {
-        fireEvent.click(screen.getByRole("button", { name: "Skin taper" }));
-        const book = within(screen.getByRole("dialog")).getByRole("link", { name: "Book this look" });
-        expect(book.getAttribute("href")).toBe(
-          "https://getchairback.com/book/fresh?cb_domain=shop.example&service=svc-cut&staff=st-marcus",
-        );
-      }
-      unmount();
+    // not live: Book, a menu row, the photo's Book this look, the rewards
+    // finder and the powered-by line all point at getchairback.com.
+    render(
+      <ShopPageClient data={page()} bookQuery="?cb_domain=shop.example" platformOrigin="https://getchairback.com" />,
+    );
+    for (const link of screen.getAllByRole("link", { name: /Book an appointment|Book with Fresh Studio/ })) {
+      expect(link.getAttribute("href")).toBe("https://getchairback.com/book/fresh?cb_domain=shop.example");
     }
+    expect(screen.getByRole("link", { name: /^Book Haircut/ }).getAttribute("href")).toBe(
+      "https://getchairback.com/book/fresh?cb_domain=shop.example&service=svc-cut",
+    );
+    expect(screen.getByRole("link", { name: /Find my rewards/ }).getAttribute("href")).toBe(
+      "https://getchairback.com/my-rewards",
+    );
+    expect(screen.getByRole("link", { name: /Powered by/ }).getAttribute("href")).toBe(
+      "https://getchairback.com/?ref=fresh",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Skin taper" }));
+    const book = within(screen.getByRole("dialog")).getByRole("link", { name: "Book this look" });
+    expect(book.getAttribute("href")).toBe(
+      "https://getchairback.com/book/fresh?cb_domain=shop.example&service=svc-cut&staff=st-marcus",
+    );
   });
 
   it("on getchairback.com itself, the same links stay on this site", () => {
-    render(<ShopPageClient data={page({ pageDesign: undefined })} />);
+    render(<ShopPageClient data={page()} />);
     for (const link of screen.getAllByRole("link", { name: /Book an appointment|Book with Fresh Studio/ })) {
       expect(link.getAttribute("href")).toBe("/book/fresh");
     }
@@ -215,8 +190,8 @@ describe("the rewards button", () => {
     <ShopPageClient data={page({ pageDesign: design })} rewardsHref="/r/tok/rewards" rewardsLabel="Your rewards · 3 punches" />
   );
 
-  for (const design of [undefined, "grid", "studio"]) {
-    const name = design ?? "classic";
+  for (const design of [undefined, "classic"]) {
+    const name = design ?? "none stored";
 
     it(`🔴 ${name}: inside an app build whose Rewards tab holds it all - timer included - it leaves the page`, () => {
       nativeApp.mockReturnValue(true);
@@ -238,91 +213,23 @@ describe("the rewards button", () => {
   }
 });
 
-describe("the designs' own jobs", () => {
-  it("lookbook: every service carries its photos and its own Book", () => {
-    render(<ShopPageClient data={page({ pageDesign: "lookbook" })} />);
-    expect(screen.getByRole("link", { name: "Book Haircut" }).getAttribute("href")).toBe("/book/fresh?service=svc-cut");
-    expect(screen.getByRole("link", { name: "Book Beard Trim" }).getAttribute("href")).toBe("/book/fresh?service=svc-beard");
-    expect(screen.getByRole("button", { name: "Skin taper" })).toBeTruthy();
-    // A photo that names no service follows under More work.
-    expect(screen.getByText("More work")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Waves" })).toBeTruthy();
-  });
-
-  it("reel: plays the first photos and steps on a tap; Book is pinned, not repeated", () => {
-    render(<ShopPageClient data={page({ pageDesign: "reel" })} />);
-    expect(screen.getByRole("img", { name: "Skin taper" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Next photo" }));
-    expect(screen.getByRole("img", { name: "Hard part" })).toBeTruthy();
-    // The pinned bar, and the footer's "Book with" - no second top button.
-    expect(screen.getAllByRole("link", { name: "Book an appointment" })).toHaveLength(1);
-  });
-
-  it("profile: tabs, and the work filters by who did it", () => {
-    render(<ShopPageClient data={page({ pageDesign: "profile" })} />);
-    expect(screen.getByRole("tab", { name: "Work" }).getAttribute("aria-selected")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "Dre" }));
-    expect(screen.queryByRole("button", { name: "Skin taper" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Hard part" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("tab", { name: "Services" }));
-    expect(screen.getByRole("link", { name: "Book Beard Trim" }).getAttribute("href")).toBe("/book/fresh?service=svc-beard");
-  });
-
+describe("a review link", () => {
   // The "Switching from Booksy or TheCut" guide hands the shop a review link,
   // /s/<slug>#reviews, to send its regulars. It must land on the reviews.
-  it("a #reviews link has somewhere to land in every design, and opens profile's Reviews tab", () => {
+  it("🔴 /s/<slug>#reviews has somewhere to land", () => {
     window.history.replaceState(null, "", "#reviews");
     try {
-      for (const pageDesign of ["classic", "grid", "lookbook", "reel", "fresh", "profile", "studio"]) {
-        const { unmount } = render(<ShopPageClient data={page({ pageDesign })} />);
-        expect(document.getElementById("reviews"), pageDesign).not.toBeNull();
-        if (pageDesign === "profile") {
-          expect(screen.getByRole("tab", { name: "Reviews" }).getAttribute("aria-selected")).toBe("true");
-        }
-        unmount();
-      }
+      render(<ShopPageClient data={page()} />);
+      expect(document.getElementById("reviews")).not.toBeNull();
     } finally {
       window.history.replaceState(null, "", window.location.pathname);
     }
-  });
-
-  it("fresh: newest first, dated, with written reviews between the photos", () => {
-    render(
-      <ShopPageClient
-        data={page({
-          pageDesign: "fresh",
-          reviews: [{ id: "r1", rating: 5, body: "Best in town", authorName: "Chris T.", createdAt: ago(3) }],
-          reviewSummary: { count: 1, avgRating: 5, writtenCount: 1 },
-        })}
-      />,
-    );
-    const shots = screen
-      .getAllByRole("button", { name: /Beard Trim|Skin taper|Hard part|Waves/ })
-      .map((b) => b.getAttribute("aria-label"));
-    expect(shots).toEqual(["Beard Trim", "Skin taper", "Hard part", "Waves"]);
-    expect(screen.getByText("Yesterday")).toBeTruthy();
-    expect(screen.getByText("2 days ago")).toBeTruthy();
-    expect(screen.getByText("“Best in town”")).toBeTruthy();
-  });
-
-  it("fresh: reviews the shop hid stay out of the feed", () => {
-    render(
-      <ShopPageClient
-        data={page({
-          pageDesign: "fresh",
-          sectionOrder: ["hours"],
-          reviews: [{ id: "r1", rating: 5, body: "Best in town", authorName: "Chris T.", createdAt: ago(3) }],
-          reviewSummary: { count: 1, avgRating: 5, writtenCount: 1 },
-        })}
-      />,
-    );
-    expect(screen.queryByText("“Best in town”")).toBeNull();
   });
 });
 
 describe("studio", () => {
   it("every row of the menu books that service, and everyone on the team books with them", () => {
-    render(<ShopPageClient data={page({ pageDesign: "studio" })} />);
+    render(<ShopPageClient data={page()} />);
     expect(screen.getByRole("link", { name: /^Book Haircut/ }).getAttribute("href")).toBe("/book/fresh?service=svc-cut");
     expect(screen.getByRole("link", { name: /^Book Beard Trim/ }).getAttribute("href")).toBe("/book/fresh?service=svc-beard");
     expect(screen.getByRole("link", { name: "Book with Marcus" }).getAttribute("href")).toBe("/book/fresh?staff=st-marcus");
@@ -330,12 +237,12 @@ describe("studio", () => {
   });
 
   it("a team of one is the shop itself, so there is no team to pick from", () => {
-    render(<ShopPageClient data={page({ pageDesign: "studio", staff: [STAFF[0]!] })} />);
+    render(<ShopPageClient data={page({ staff: [STAFF[0]!] })} />);
     expect(screen.queryByText("The team")).toBeNull();
   });
 
   it("🔴 Book is pinned once, with the lowest price beside it - not repeated at the top", () => {
-    render(<ShopPageClient data={page({ pageDesign: "studio" })} />);
+    render(<ShopPageClient data={page()} />);
     const book = screen.getAllByRole("link", { name: "Book an appointment" });
     expect(book).toHaveLength(1);
     expect(book[0]!.getAttribute("href")).toBe("/book/fresh");
@@ -347,7 +254,7 @@ describe("studio", () => {
   it("a shop with no way to book online gets the request form in the page, and no pinned bar", () => {
     render(
       <ShopPageClient
-        data={page({ pageDesign: "studio", bookingMode: "link", bookingUrl: null, services: [], staff: [] })}
+        data={page({ bookingMode: "link", bookingUrl: null, services: [], staff: [] })}
       />,
     );
     expect(screen.getByRole("button", { name: "Send request" })).toBeTruthy();
@@ -356,14 +263,13 @@ describe("studio", () => {
   });
 
   it("offers directions, a text and Instagram only when the shop has them", () => {
-    const { unmount } = render(<ShopPageClient data={page({ pageDesign: "studio" })} />);
+    const { unmount } = render(<ShopPageClient data={page()} />);
     expect(screen.queryByRole("link", { name: /Directions to/ })).toBeNull();
     expect(screen.queryByRole("link", { name: "Text Fresh Studio" })).toBeNull();
     unmount();
     render(
       <ShopPageClient
         data={page({
-          pageDesign: "studio",
           addressStreet: "12 Main St",
           addressCity: "Hoboken",
           addressRegion: "NJ",
@@ -395,7 +301,7 @@ describe("studio", () => {
       const share = vi.fn(async (_data: ShareData) => {});
       Object.defineProperty(navigator, "share", { value: share, configurable: true });
       window.history.replaceState(null, "", "/r/secret-token-123/shop?ref=x");
-      render(<ShopPageClient data={page({ pageDesign: "studio" })} rewardsHref="/r/secret-token-123/rewards" />);
+      render(<ShopPageClient data={page()} rewardsHref="/r/secret-token-123/rewards" />);
       fireEvent.click(screen.getByRole("button", { name: "Share" }));
       await vi.waitFor(() => expect(share).toHaveBeenCalledTimes(1));
       const sent = share.mock.calls[0]![0];
@@ -406,7 +312,7 @@ describe("studio", () => {
     it("on the shop's own domain the shared link is the platform's, which works anywhere", async () => {
       const share = vi.fn(async (_data: ShareData) => {});
       Object.defineProperty(navigator, "share", { value: share, configurable: true });
-      render(<ShopPageClient data={page({ pageDesign: "studio" })} platformOrigin="https://getchairback.com" />);
+      render(<ShopPageClient data={page()} platformOrigin="https://getchairback.com" />);
       fireEvent.click(screen.getByRole("button", { name: "Share" }));
       await vi.waitFor(() => expect(share).toHaveBeenCalledTimes(1));
       expect(share.mock.calls[0]![0].url).toBe("https://getchairback.com/s/fresh");
@@ -416,7 +322,7 @@ describe("studio", () => {
       delete (navigator as { share?: unknown }).share;
       const writeText = vi.fn(async () => {});
       Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-      render(<ShopPageClient data={page({ pageDesign: "studio" })} />);
+      render(<ShopPageClient data={page()} />);
       fireEvent.click(screen.getByRole("button", { name: "Share" }));
       await screen.findByText("Link copied");
       expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/s/fresh`);
@@ -425,7 +331,7 @@ describe("studio", () => {
     it("does nothing in the editor preview", () => {
       const share = vi.fn(async () => {});
       Object.defineProperty(navigator, "share", { value: share, configurable: true });
-      render(<ShopPageClient data={page({ pageDesign: "studio" })} preview />);
+      render(<ShopPageClient data={page()} preview />);
       fireEvent.click(screen.getByRole("button", { name: "Share" }));
       expect(share).not.toHaveBeenCalled();
     });
@@ -434,10 +340,10 @@ describe("studio", () => {
 
 describe("example photos", () => {
   it("🔴 only in the editor preview, labeled - the live page never shows work the shop didn't post", () => {
-    const { unmount } = render(<ShopPageClient data={page({ pageDesign: "grid", gallery: [] })} preview />);
+    const { unmount } = render(<ShopPageClient data={page({ gallery: [] })} preview />);
     expect(screen.getByText("Example photos — yours will appear here")).toBeTruthy();
     unmount();
-    render(<ShopPageClient data={page({ pageDesign: "grid", gallery: [] })} />);
+    render(<ShopPageClient data={page({ gallery: [] })} />);
     expect(screen.queryByText(/Example photos/)).toBeNull();
     expect(screen.queryByText("The work")).toBeNull();
   });

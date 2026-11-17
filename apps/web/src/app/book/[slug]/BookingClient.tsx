@@ -2704,15 +2704,32 @@ export function BookingClient({
   if (confirmedToken !== null) {
     // The client half (they agreed, and gave a phone) AND the shop half.
     const textsReminder = consent && phone.trim() !== "" && data.shop.textReminders === true;
+    // Who the visit is with - the person it is written against. Null for
+    // "anyone", and after a payment redirect, which keeps only the time.
+    const bookedWithName = data.staff.find((s) => s.id === (pickedStaffId ?? staffId))?.name ?? null;
     return (
-      <main className="mx-auto min-h-screen max-w-md px-5 pb-10 pt-10 text-offwhite">
+      <main className="mx-auto min-h-screen max-w-md px-5 pb-10 pt-3 text-offwhite">
         {data.shop.slug === DEMO.SHOP_SLUG && <DemoTour route="book" />}
+        {/* Done, top right (the Studio "Booked" board): back to wherever the
+            customer started - in the app WebView the confirmation was a dead
+            end with no browser chrome. CustomerBack renders only when there is
+            somewhere to go, so the row keeps its height either way. */}
+        <div className="flex min-h-[44px] justify-end">
+          <CustomerBack
+            label="Done"
+            className="flex min-h-[44px] items-center px-2 text-[15px] font-semibold text-offwhite"
+          />
+        </div>
         {/* data-tour: keep in sync with packages/config/src/demoTour.ts */}
-        <div data-tour="confirmation">
+        <div data-tour="confirmation" className="mt-1">
+          {/* Booked is green, everywhere a booking is booked. A request is not
+              booked yet, so it keeps the shop's colour. */}
           <div
             aria-hidden="true"
-            className="mb-4 flex h-[52px] w-[52px] items-center justify-center rounded-full"
-            style={{ backgroundColor: `${accent}22`, color: accentInk }}
+            className={`mb-4 flex h-[52px] w-[52px] items-center justify-center rounded-full ${
+              wasRequest ? "" : "bg-emerald-soft/15 text-emerald-soft"
+            }`}
+            style={wasRequest ? { backgroundColor: `${accent}22`, color: accentInk } : undefined}
           >
             <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
               <path d="M20 6 9 17l-5-5" />
@@ -2751,15 +2768,12 @@ export function BookingClient({
           </p>
           {/* Spell out WHEN — "You're booked!" with no date/time forced the
               customer into the manage page just to see what they booked. A
-              date tile in the shop's colour, then the day and time on the
-              shop's clock, the service and the shop. */}
+              date tile with an ink band, then the day and time on the shop's
+              clock, the service and who it is with, and the shop. */}
           {shownSlot !== null && (
-            <div className="mt-5 flex gap-3.5 rounded-2xl border border-subtle bg-charcoal-800 p-4">
+            <div className="mt-5 flex gap-3.5 rounded-2xl border border-subtle bg-charcoal-800 p-4 shadow-ambient">
               <span className="w-14 shrink-0 self-start overflow-hidden rounded-xl border border-subtle text-center">
-                <span
-                  className="block text-[11px] font-semibold uppercase leading-[18px] tracking-[0.04em]"
-                  style={{ backgroundColor: accent, color: onAccent }}
-                >
+                <span className="block bg-primary text-[11px] font-semibold uppercase leading-[18px] tracking-[0.04em] text-on-primary">
                   {new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "short" }).format(
                     new Date(shownSlot),
                   )}
@@ -2778,7 +2792,10 @@ export function BookingClient({
                   , {timeFmt.format(new Date(shownSlot))}
                 </span>
                 {selectedService ? (
-                  <span className="block text-sm text-muted">{selectedService.name}</span>
+                  <span className="block text-sm text-muted">
+                    {selectedService.name}
+                    {bookedWithName ? ` with ${bookedWithName}` : ""}
+                  </span>
                 ) : null}
                 <span className="block text-sm text-muted">{data.shop.name}</span>
               </span>
@@ -2828,17 +2845,6 @@ export function BookingClient({
               the app under Profile.
             </p>
           )}
-          {/* The owner's note ("Please arrive 10 minutes early"). Not on a
-              request: nothing is booked yet, and its approval email carries it. */}
-          {!wasRequest && <ClientNoteBlock shopName={data.shop.name} note={data.shop.clientNote} />}
-          <ShopLocationBooked location={data.shop.location} />
-          <Link
-            href={`/book/manage/${confirmedToken}`}
-            className="mt-5 flex min-h-[48px] w-full items-center justify-center rounded-xl px-5 text-[15px] font-semibold"
-            style={{ backgroundColor: accent, color: onAccent }}
-          >
-            View / change my appointment
-          </Link>
           {/* 🔴 NOT FOR A REQUEST. `wasRequest` means the barber has not said
               yes yet — a Wallet pass sitting in someone's phone saying they
               have an appointment they do NOT yet have is worse than no pass.
@@ -2855,6 +2861,10 @@ export function BookingClient({
               />
             </div>
           )}
+          {/* The owner's note ("Please arrive 10 minutes early"). Not on a
+              request: nothing is booked yet, and its approval email carries it. */}
+          {!wasRequest && <ClientNoteBlock shopName={data.shop.name} note={data.shop.clientNote} />}
+          <ShopLocationBooked location={data.shop.location} />
           {/* The one moment a customer is certain to be pleased with us, and
               the one page they are most likely to come back to - so it is where
               "Open in ChairBack" belongs. openPath is the MANAGE page rather
@@ -2868,14 +2878,6 @@ export function BookingClient({
               openPath={`/book/manage/${confirmedToken}`}
             />
           </div>
-          {/* Escape hatch: in the app WebView the confirmation was a dead end
-              (no browser chrome) — pop back to wherever the customer started
-              (rewards home or shop page). */}
-          <CustomerBack
-            label={`← Back to ${data.shop.name}`}
-            className="mt-2 flex min-h-[44px] w-full items-center justify-center text-sm text-muted transition-colors hover:text-offwhite"
-          />
-
           {data.shop.payDirect && (
             <PayDirectInfo
               payDirect={data.shop.payDirect}
@@ -2883,6 +2885,21 @@ export function BookingClient({
               accent={accent}
             />
           )}
+          {/* The manage page closes the screen as a quiet link (the Studio
+              "Booked" board), not a button shouting over the confirmation.
+              🔴 No promise that they CAN move or cancel: a shop may switch
+              that off, or the visit may already be inside its cutoff - the
+              manage page says which. */}
+          <div className="mt-8 border-t border-subtle pt-4 text-center text-sm text-muted">
+            {wasRequest ? "Want to check on it?" : "Need to change something?"}
+            <Link
+              href={`/book/manage/${confirmedToken}`}
+              className="flex min-h-[44px] items-center justify-center text-[15px] font-semibold"
+              style={{ color: accentInk }}
+            >
+              {wasRequest ? "View my request" : "Manage booking"}
+            </Link>
+          </div>
         </div>
       </main>
     );
