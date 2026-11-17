@@ -210,7 +210,19 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        docs/lock-screen-widget.md - see docs/release-1.1.6.md. Without the
   //        flag, prebuild leaves the target, the App Group entitlement and the
   //        names setting out.
-  version: "1.1.7",
+  //
+  // 1.1.7 = build 54 (#702): never a blank dashboard on return, Add to Apple
+  //        Wallet, the tiers on the Rewards tab. Ready for Distribution in App
+  //        Store Connect by 2026-11-16, so the version string moves.
+  //
+  // 1.1.8 = build 55. The app changes merged after 54 was archived: the Terms
+  //        + Privacy tick before a sign-in code (#715), Manage plan opening
+  //        billing in Safari (#723), appointments booked together as one card
+  //        (#738) and "Email me my link" on Connect your profile (#750). 54 was
+  //        archived on the Mac, so its exact commit is not recorded; #706,
+  //        #709 and #713 merged before its release notes were last edited and
+  //        are re-checked on the device anyway (docs/release-1.1.8.md).
+  version: "1.1.8",
   orientation: "portrait",
   // Light: the app's screens are white & gold, so system controls (alerts,
   // pickers, keyboards) match them rather than following the phone's setting.
@@ -229,7 +241,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "54",
+    buildNumber: "55",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,
