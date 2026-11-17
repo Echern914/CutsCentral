@@ -189,13 +189,14 @@ export function mapsQuery(data: Pick<ShopPageData, "name" | "addressStreet" | "a
 }
 
 /**
- * The link a visitor shares: the shop's page by its slug, never the address
- * bar. This page also renders under a client's own rewards link, and the
- * token in that address is the key to their card - a share must not hand it
- * on. On the shop's own domain the platform link works just the same.
+ * The link a visitor shares: the shop's page, never the address bar. This
+ * page also renders under a client's own rewards link, and the token in that
+ * address is the key to their card - a share must not hand it on. On the
+ * shop's own domain (`platformOrigin` set) the share is the domain itself:
+ * that is the shop's page, and the address the owner wants passed around.
  */
 export function shareUrl(ctx: Pick<DesignCtx, "platformOrigin" | "data">, origin: string): string {
-  return `${ctx.platformOrigin || origin}/s/${ctx.data.slug}`;
+  return ctx.platformOrigin ? origin : `${origin}/s/${ctx.data.slug}`;
 }
 
 /** Directions, a text, Instagram: only the ones this shop has, as equal buttons. */

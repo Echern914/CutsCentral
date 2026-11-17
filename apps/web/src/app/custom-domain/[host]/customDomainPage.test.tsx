@@ -13,7 +13,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  *     page fails closed - never the other shop, not even its name;
  *   - 🔴 a lookup that could not answer shows a retry page ON the domain - never
  *     the ChairBack home page, never anybody's shop;
- *   - its links to booking and to ChairBack itself point at getchairback.com.
+ *   - its Book links stay ON the domain (/book); only its links to ChairBack
+ *     itself point at getchairback.com.
  *
  * The API is a small fake world: which shop holds which slug, and which
  * verified domain belongs to whom. The page is the real one, with its
@@ -146,7 +147,7 @@ function elements(node: ReactNode): ReactElement[] {
 }
 
 type Visit =
-  | { kind: "shop"; name: string; props: { bookQuery?: string; platformOrigin?: string } }
+  | { kind: "shop"; name: string; props: { bookQuery?: string; bookPath?: string; platformOrigin?: string } }
   | { kind: "retry"; props: { domain: string; retryHref: string } }
   | { kind: "redirect"; to: string }
   | { kind: "notFound" };
@@ -160,6 +161,7 @@ async function page(host: string, searchParams: Record<string, string> = {}): Pr
     const props = all.find((e) => e.type === ShopPageClient)!.props as {
       data: { name: string };
       bookQuery?: string;
+      bookPath?: string;
       platformOrigin?: string;
     };
     return { kind: "shop", name: props.data.name, props };
@@ -182,15 +184,18 @@ const IG_QUERY = new URLSearchParams(IG).toString();
 //  ── the page ──────────────────────────────────────────────────────────────
 
 describe("the page on a shop's own domain", () => {
-  it("🔴 renders the shop the verified domain belongs to, with booking on the platform", async () => {
+  it("🔴 renders the shop the verified domain belongs to, with booking ON the domain", async () => {
     const { metadata, out } = await visit("studioone.com", IG);
     expect(out.kind).toBe("shop");
     if (out.kind !== "shop") return;
     expect(out.name).toBe("Studio One");
-    // Book goes to getchairback.com - where saved cards, remembered details
-    // and Apple Pay live - and carries the same ownership check on.
+    // Book stays on studioone.com, at its shortest address - the address bar
+    // never says getchairback.com. The booking page served there makes its
+    // own ownership check on the host, so no marker rides along.
+    expect(out.props.bookPath).toBe("/book");
+    expect(out.props.bookQuery).toBeUndefined();
+    // Only "Powered by" points at ChairBack's own site.
     expect(out.props.platformOrigin).toBe("https://getchairback.com");
-    expect(out.props.bookQuery).toBe("?cb_domain=studioone.com");
     expect(metadata.title).toBe("Studio One");
     // Search keeps indexing the one address it always has.
     expect(metadata.alternates?.canonical).toBe("https://getchairback.com/s/studio-one");

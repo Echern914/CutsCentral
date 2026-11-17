@@ -60,11 +60,11 @@ describe("/book/<slug> for a shop that books somewhere else", () => {
     );
   });
 
-  it("🔴 from a custom domain, lands on the shop's page - never ChairBack's home - with the domain check intact", async () => {
-    // How it arrives: drickcuts.com/book -> /from-domain -> 308 to THIS page on
-    // the platform host with cb_domain set. "/" here would be ChairBack's own
-    // marketing page, so the target must be the shop page, still carrying the
-    // domain it has to prove it owns.
+  it("🔴 from a custom-domain link, lands on the shop's page - never ChairBack's home - with the domain check intact", async () => {
+    // How it arrives: a link from the redirect days, when drickcuts.com/book
+    // 308'd to THIS page on the platform host with cb_domain set. "/" here
+    // would be ChairBack's own marketing page, so the target must be the shop
+    // page, still carrying the domain it has to prove it owns.
     answer(booking, page({ bookingMode: "link", customDomain: "acuitycuts.com" }));
     await expect(render({ cb_domain: "acuitycuts.com", utm_source: "ig" })).rejects.toThrow(
       redirectsTo("/s/acuity-cuts?cb_domain=acuitycuts.com&utm_source=ig"),

@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-16-clients-stay-on-your-domain",
+    date: "2026-11-16",
+    kind: "feature",
+    title: "Clients stay on your own domain",
+    body:
+      "If you connected your own domain, clients now stay on it: booking, Manage booking and their rewards " +
+      "keep your domain in the address bar instead of switching to getchairback.com. Returning clients may " +
+      "be asked for their details once there.",
+  },
+  {
     id: "2026-11-16-calendar-opens-on-week",
     date: "2026-11-16",
     kind: "feature",

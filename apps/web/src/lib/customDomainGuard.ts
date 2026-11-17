@@ -4,34 +4,23 @@
  * A domain is looked up to a slug, and a slug is not an identity: a shop can
  * rename, and another shop can take the name it let go. A lookup - however
  * fresh - answers for the moment it ran, and the shop's page is read a moment
- * later: in the same render when the page is served on the domain itself
- * (app/custom-domain), after a redirect when booking is (`?cb_domain=` on
- * getchairback.com). Either way the page renders only if the shop it is about
- * to show OWNS that verified domain. Anything else fails closed: the visitor
- * gets a plain not-found, never a stranger's page.
+ * later, in the same render (app/custom-domain), or by a page served on the
+ * domain at its own path. Either way the page renders only if the shop it is
+ * about to show OWNS that verified domain. Anything else fails closed: the
+ * visitor gets a plain not-found, never a stranger's page.
  *
- * Dependency-free on purpose - the middleware, the resolver route and the
- * pages all import it.
+ * Dependency-free on purpose - the middleware, the client and the pages all
+ * import it.
  */
-
-/** The query parameter a custom-domain redirect adds to say where it came from. */
-export const DOMAIN_PARAM = "cb_domain";
 
 /**
- * How the middleware carries the visitor's ORIGINAL path to the resolver
- * route: a REQUEST HEADER (Next's middleware header override), never a query
- * parameter.
- *
- * 🔴 A QUERY PARAMETER ADDED BY THE REWRITE DOES NOT RELIABLY ARRIVE. On
- * Vercel the function is invoked with the rewritten URL, so it does; under
- * `next start` the route handler's request keeps the ORIGINAL URL, so it does
- * not - drickcuttinup.com/book landed on the shop page in the production-build
- * end-to-end check while every unit test passed (they hand the rewritten URL
- * to the route themselves). A request header set by the middleware reaches
- * the route on both. The visitor's own query stays in the URL, where both
- * runtimes deliver it.
+ * The query parameter the old custom-domain redirect added to say where a
+ * visit came from. Nothing sends visitors off their domain any more (booking
+ * is served on it - lib/customDomainRouting.ts), but links from the redirect
+ * days live on in browser history and bookmarks, and the platform's pages
+ * still make the same check for them.
  */
-export const PATH_HEADER = "x-cb-domain-path";
+export const DOMAIN_PARAM = "cb_domain";
 
 /** One DNS label; a host is two or more, ending in an alphabetic TLD. */
 const HOST_SHAPE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;

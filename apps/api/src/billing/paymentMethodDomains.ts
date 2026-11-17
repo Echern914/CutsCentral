@@ -1,4 +1,5 @@
 import { apiEnv } from "@chairback/config";
+import { prisma } from "@chairback/db";
 import { logger } from "../logger.js";
 import { connectEnabled, stripeClient } from "./stripe.js";
 
@@ -30,7 +31,21 @@ import { connectEnabled, stripeClient } from "./stripe.js";
  *
  * Stripe handles Apple merchant validation itself, so there is deliberately no
  * `apple-developer-merchantid-domain-association` file to serve.
+ *
+ * 🔴 EVERY VERIFIED SHOP DOMAIN TOO. Since 2026-11 a client who arrives on a
+ * shop's own domain books there (web lib/customDomainRouting.ts), so the
+ * Payment Element draws on drickcuttinup.com - a host Apple has never heard
+ * of, where the wallet tab is silently missing unless that domain is
+ * registered as well. Still one platform registration per domain, for the
+ * same destination-charge reason. The apex only: the web 308s www to it
+ * before any page draws.
  */
+
+/**
+ * The most shop domains one boot re-checks - a ceiling on Stripe calls at
+ * boot, far above the shops that have one.
+ */
+const CUSTOM_DOMAIN_LIMIT = 500;
 
 export interface WalletDomainResult {
   /** Domains newly registered by this call. */
@@ -72,8 +87,70 @@ export function walletDomains(appBaseUrl: string): string[] {
 }
 
 /**
- * Make sure every wallet domain for this deployment is registered. Idempotent:
- * the common case is one `list` call per domain and no writes.
+ * The shop domains customers book on: verified ones only. An unverified claim
+ * is just a row (nobody is served under it), and registering it would put a
+ * name we have not proven into the platform's Stripe account.
+ */
+export async function verifiedCustomDomains(): Promise<string[]> {
+  const rows = await prisma.shop.findMany({
+    where: { customDomain: { not: null }, customDomainVerifiedAt: { not: null } },
+    select: { customDomain: true },
+    orderBy: { customDomainVerifiedAt: "asc" },
+    take: CUSTOM_DOMAIN_LIMIT,
+  });
+  return rows.flatMap((r) => (r.customDomain ? [r.customDomain.toLowerCase()] : []));
+}
+
+/** Register one domain, re-enable it, or re-check it - and say which into `out`. */
+async function ensureWalletDomain(domain: string, out: WalletDomainResult): Promise<void> {
+  try {
+    const found = await stripeClient().paymentMethodDomains.list({
+      domain_name: domain,
+      limit: 1,
+    });
+    const known = found.data[0];
+    if (!known) {
+      await stripeClient().paymentMethodDomains.create({ domain_name: domain });
+      out.registered.push(domain);
+      return;
+    }
+    // A domain can exist but be DISABLED (someone switched it off in the
+    // dashboard, or a validation lapsed). Enabling is the same one-line
+    // fix as creating, and leaving it off would be the silent-Apple-Pay
+    // failure this module exists to prevent.
+    if (!known.enabled) {
+      await stripeClient().paymentMethodDomains.update(known.id, { enabled: true });
+      out.registered.push(domain);
+      return;
+    }
+    // Registered, but Apple Pay never came good - typically a shop domain
+    // registered the moment it was verified, before its certificate was
+    // issued. Ask Stripe to check again; it says what is still wrong.
+    if (known.apple_pay?.status === "inactive") {
+      const checked = await stripeClient().paymentMethodDomains.validate(known.id);
+      if (checked.apple_pay?.status === "inactive") {
+        out.failed.push({
+          domain,
+          reason: checked.apple_pay.status_details?.error_message ?? "apple_pay inactive",
+        });
+      } else {
+        out.registered.push(domain);
+      }
+      return;
+    }
+    out.existing.push(domain);
+  } catch (err) {
+    out.failed.push({
+      domain,
+      reason: err instanceof Error ? err.message : "unknown",
+    });
+  }
+}
+
+/**
+ * Make sure every wallet domain for this deployment is registered: its own
+ * hosts, then every verified shop domain. Idempotent: the common case is one
+ * `list` call per domain and no writes.
  *
  * Never throws — a wallet that fails to register must not take the API down,
  * and the checkout still works by card.
@@ -82,38 +159,40 @@ export async function ensureWalletDomains(): Promise<WalletDomainResult> {
   const out: WalletDomainResult = { registered: [], existing: [], failed: [] };
   if (!connectEnabled()) return out;
   const domains = walletDomains(apiEnv().APP_BASE_URL);
+  // Local dev and CI (localhost) make no Stripe call at all - not even for
+  // the shop domains their database happens to hold.
   if (domains.length === 0) return out;
 
-  for (const domain of domains) {
-    try {
-      const found = await stripeClient().paymentMethodDomains.list({
-        domain_name: domain,
-        limit: 1,
-      });
-      const known = found.data[0];
-      if (known) {
-        // A domain can exist but be DISABLED (someone switched it off in the
-        // dashboard, or a validation lapsed). Enabling is the same one-line
-        // fix as creating, and leaving it off would be the silent-Apple-Pay
-        // failure this module exists to prevent.
-        if (!known.enabled) {
-          await stripeClient().paymentMethodDomains.update(known.id, { enabled: true });
-          out.registered.push(domain);
-        } else {
-          out.existing.push(domain);
-        }
-        continue;
-      }
-      await stripeClient().paymentMethodDomains.create({ domain_name: domain });
-      out.registered.push(domain);
-    } catch (err) {
-      out.failed.push({
-        domain,
-        reason: err instanceof Error ? err.message : "unknown",
-      });
-    }
+  for (const domain of domains) await ensureWalletDomain(domain, out);
+
+  let custom: string[] = [];
+  try {
+    custom = await verifiedCustomDomains();
+  } catch (err) {
+    out.failed.push({ domain: "(shop domains)", reason: err instanceof Error ? err.message : "unknown" });
+  }
+  for (const domain of custom) {
+    if (!domains.includes(domain)) await ensureWalletDomain(domain, out);
   }
   return out;
+}
+
+/**
+ * A shop domain that has JUST been verified: register it now rather than at
+ * the next deploy, so its first client already sees Apple Pay. Fire-and-forget,
+ * like the boot hook - the owner's "check again" never waits on Stripe.
+ */
+export function ensureCustomDomainWallet(domain: string): void {
+  if (!connectEnabled() || walletDomains(apiEnv().APP_BASE_URL).length === 0) return;
+  void (async () => {
+    const out: WalletDomainResult = { registered: [], existing: [], failed: [] };
+    await ensureWalletDomain(domain.toLowerCase(), out);
+    if (out.failed.length > 0) {
+      logger.warn({ failed: out.failed }, "wallets: shop domain NOT registered - Apple Pay will not render on it yet");
+    } else {
+      logger.info({ registered: out.registered, existing: out.existing }, "wallets: shop domain registered for Apple Pay");
+    }
+  })();
 }
 
 /**

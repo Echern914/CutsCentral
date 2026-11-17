@@ -19,16 +19,14 @@ describe("booking with a photo's picks", () => {
     expect(bookPickedHref(viaDomain, { serviceId: "svc" })).toBe("/book/fresh?cb_domain=a.com&service=svc");
   });
 
-  it("🔴 on the shop's own domain, books on the platform - where booking lives", () => {
+  it("🔴 on the shop's own domain, books right there - its own /book, the host picks the shop", () => {
     const onDomain = {
       ...native,
-      bookHref: "https://getchairback.com/book/fresh?cb_domain=a.com",
-      bookQuery: "?cb_domain=a.com",
+      bookHref: "/book",
+      bookPath: "/book",
       platformOrigin: "https://getchairback.com",
     };
-    expect(bookPickedHref(onDomain, { serviceId: "svc", staffId: "st" })).toBe(
-      "https://getchairback.com/book/fresh?cb_domain=a.com&service=svc&staff=st",
-    );
+    expect(bookPickedHref(onDomain, { serviceId: "svc", staffId: "st" })).toBe("/book?service=svc&staff=st");
   });
 
   it("an outside booking site gets its own link as it is - our ids mean nothing there", () => {

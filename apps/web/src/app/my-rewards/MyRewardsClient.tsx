@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSignalNativeReady } from "@/lib/nativeReady";
+import { linkOnThisSite } from "@/lib/customDomainRouting";
 import {
   recoveryChallengeAction,
   recoverySelectAction,
@@ -110,8 +111,10 @@ export function MyRewardsClient() {
     }
     setStep("opening");
     // A full navigation on purpose: the rewards URL may deep-link into the
-    // native app, and only a real navigation lets the OS claim it.
-    window.location.assign(res.data.url);
+    // native app, and only a real navigation lets the OS claim it. On a
+    // shop's own domain the card opens there instead, so the client stays on
+    // the address they came in on (lib/customDomainRouting.ts).
+    window.location.assign(linkOnThisSite(res.data.url, window.location.host));
   }
 
   return (

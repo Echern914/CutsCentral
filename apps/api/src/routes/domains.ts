@@ -5,6 +5,7 @@ import { randomToken } from "@chairback/config";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireActiveAccess } from "../middleware/billing.js";
 import { requireManager } from "../auth/roles.js";
+import { ensureCustomDomainWallet } from "../billing/paymentMethodDomains.js";
 import {
   attachDomain,
   detachDomain,
@@ -309,6 +310,9 @@ domainsRouter.post("/verify", requireUser, requireShop, requireManager, requireA
       where: { id: shop.id },
       data: { customDomainVerifiedAt: verifiedAt },
     });
+    // Clients book on this domain now, so Apple Pay must know it - straight
+    // away, not at the next deploy (billing/paymentMethodDomains.ts).
+    ensureCustomDomainWallet(shop.customDomain);
   }
   res.json(
     serializeStatus(

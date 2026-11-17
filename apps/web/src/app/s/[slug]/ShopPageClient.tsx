@@ -44,24 +44,31 @@ export function ShopPageClient({
   rewardsHref,
   rewardsLabel = "Your rewards",
   bookQuery,
+  bookPath,
   platformOrigin = "",
 }: {
   data: ShopPageData;
   preview?: boolean;
   /**
-   * Appended to the native Book link. Set for a visit that came through the
-   * shop's custom domain (`?cb_domain=`), so the booking page applies the same
-   * same-shop check the landing page just passed - or for a customer's own
-   * page opened from the ChairBack app (`?cb_me=`, config bookingHandoff.ts),
-   * so their booking shows in the app.
+   * Appended to the native Book link. Set for a visit that came through a
+   * link of the custom-domain redirect days (`?cb_domain=`), so the booking
+   * page applies the same same-shop check the landing page just passed - or
+   * for a customer's own page opened from the ChairBack app (`?cb_me=`, config
+   * bookingHandoff.ts), so their booking shows in the app.
    */
   bookQuery?: string;
   /**
-   * Where this page's links to ChairBack itself point - booking, finding your
-   * rewards, the powered-by line. Empty (this same site) on getchairback.com;
+   * Where native booking lives on THIS site: `/book/<slug>` on
+   * getchairback.com (the default), `/book` on the shop's own domain, so the
+   * address bar there reads drickcuttinup.com/book (lib/customDomainRouting.ts).
+   */
+  bookPath?: string;
+  /**
+   * Where this page's links to ChairBack ITSELF point - the powered-by line,
+   * the address a share hands on. Empty (this same site) on getchairback.com;
    * the platform's origin when the page is served on the shop's OWN domain,
-   * where "/" is this very page and booking does not live
-   * (lib/customDomainRouting.ts).
+   * where "/" is this very page. Booking and finding your rewards are not
+   * ChairBack's pages: they stay on whichever site this is.
    */
   platformOrigin?: string;
   /**
@@ -93,7 +100,7 @@ export function ShopPageClient({
   // The shared rule (bookingLinks.ts): an outside link only when a customer
   // could actually open it - a malformed one is no destination, not a dead button.
   const outsideLink = isUsableBookingLink(data.bookingUrl) ? data.bookingUrl : null;
-  const bookHref = bookIsNative ? `${platformOrigin}/book/${data.slug}${bookQuery ?? ""}` : outsideLink;
+  const bookHref = bookIsNative ? `${bookPath ?? `/book/${data.slug}`}${bookQuery ?? ""}` : outsideLink;
   // A shop may have NO booking destination (no native, no external link). Then
   // we hide the "Book" CTAs and lean on the request form instead.
   const hasBooking = bookIsNative || outsideLink !== null;
@@ -166,6 +173,7 @@ export function ShopPageClient({
     hasBooking,
     showRequestForm,
     bookQuery,
+    bookPath,
     platformOrigin,
     rewardsHref,
     rewardsLabel,

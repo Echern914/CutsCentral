@@ -1,11 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE_NAME } from "@chairback/config/constants";
-import { PATH_HEADER, isPlatformHost, normalizeHost } from "@/lib/customDomainGuard";
+import { isPlatformHost, normalizeHost } from "@/lib/customDomainGuard";
 import {
   CUSTOM_DOMAIN_PREFIX,
   PLATFORM_ORIGIN,
-  RESOLVER_PREFIX,
-  customDomainTarget,
+  VISIT_PATH_HEADER,
+  customDomainRoute,
 } from "@/lib/customDomainRouting";
 
 /**
@@ -56,7 +56,7 @@ const BILLING_HANDOFF_PARAM = "h";
 export const BILLING_LANDING_PATH = "/auth/billing/landing";
 
 /** Internal routes a shop's domain is rewritten to - never addresses in their own right. */
-const INTERNAL_PREFIXES = [CUSTOM_DOMAIN_PREFIX, RESOLVER_PREFIX];
+const INTERNAL_PREFIXES = [CUSTOM_DOMAIN_PREFIX];
 
 /**
  * Hosts that ARE this app. Anything else is a shop's custom domain (attached
@@ -148,16 +148,19 @@ function gateResponse(req: NextRequest, pathname: string): NextResponse {
 /**
  * A request on a shop's own domain (lib/customDomainRouting.ts has the whole
  * table). None of these outcomes needs to know WHICH shop the domain belongs
- * to - that lookup happens in the route the request is rewritten to, and it is
- * the only place the shop is ever decided:
+ * to - that is decided by the page the request is served by, and only there:
  *
  *  - www -> the apex: one canonical hostname, one permanent hop;
- *  - the shop's page -> served ON the domain. From an http:// bio link that is
- *    one hop in total (Vercel's own https upgrade); it used to be two, the
- *    second leaving for getchairback.com;
- *  - booking -> the resolver, which looks the domain up and sends the visitor
- *    to the shop's booking on getchairback.com, the visitor's query intact;
+ *  - the shop's page and its booking -> served ON the domain from the
+ *    internal route, which looks the host up. From an http:// bio link that is
+ *    one hop in total (Vercel's own https upgrade);
+ *  - a page a token opens (manage a booking, a rewards card) and finding your
+ *    rewards -> served ON the domain at their own path; the page shows a
+ *    token's shop here only if it owns the domain;
  *  - everything else -> the platform, same path and query.
+ *
+ * The visitor's query rides along on every one of them: an Instagram bio link
+ * arrives with utm_* and fbclid, the only record of where the visit came from.
  */
 function customDomainResponse(req: NextRequest, rawHost: string): NextResponse {
   const host = normalizeHost(rawHost);
@@ -169,18 +172,33 @@ function customDomainResponse(req: NextRequest, rawHost: string): NextResponse {
     return NextResponse.redirect(`https://${host.slice(4)}${pathname}${search}`, 308);
   }
 
-  const target = customDomainTarget(pathname);
-  if (target === "shop") {
+  // 🔴 BEFORE THE FETCH CHECK BELOW. A page served on this domain answers its
+  // own fetches - the router's navigations and prefetches, and every server
+  // action the booking form posts (Confirm is one). Answering those with the
+  // 204 below would leave the form unable to book.
+  const route = customDomainRoute(pathname);
+  if (route.kind === "shop") {
     const url = req.nextUrl.clone();
-    url.pathname = `${CUSTOM_DOMAIN_PREFIX}/${host}`;
-    // 🔴 THE VISITOR'S QUERY RIDES ALONG. An Instagram bio link arrives with
-    // utm_* and fbclid - the only record of where the visit came from.
+    url.pathname = `${CUSTOM_DOMAIN_PREFIX}/${host}${route.page}`;
     return NextResponse.rewrite(url);
   }
+  if (route.kind === "served") {
+    // The page's own path and query, for a layout that must redirect (see
+    // VISIT_PATH_HEADER). SET, never appended: whatever the browser sent
+    // under this name is replaced.
+    const headers = new Headers(req.headers);
+    headers.set(VISIT_PATH_HEADER, `${route.path}${search}`);
+    if (route.path === pathname) return NextResponse.next({ request: { headers } });
+    // `/Book/Manage/<token>`: the same page under the spelling the app's
+    // routes answer to (they are case-sensitive; the token is not touched).
+    const url = req.nextUrl.clone();
+    url.pathname = route.path;
+    return NextResponse.rewrite(url, { request: { headers } });
+  }
 
-  // Neither of the others is a page on this domain - both end on
-  // getchairback.com. 🔴 A browser FETCH for one (the router's <Link>
-  // prefetch or client navigation) must not be sent to another origin: the
+  // Not a page on this domain - it ends on getchairback.com. 🔴 A browser
+  // FETCH for one (the router's <Link> prefetch or client navigation) must
+  // not be sent to another origin: the
   // page's CSP (connect-src 'self') blocks it, the console fills with errors,
   // and the tap waits on a request that was always going to fail. An answer
   // that is not a flight response makes Next do a plain browser navigation to
@@ -195,16 +213,6 @@ function customDomainResponse(req: NextRequest, rawHost: string): NextResponse {
     return new NextResponse(null, { status: 204, headers: { "Cache-Control": "no-store" } });
   }
 
-  if (target === "book") {
-    const url = req.nextUrl.clone();
-    url.pathname = `${RESOLVER_PREFIX}/${host}`;
-    // The original path travels as a request header, set here and so never
-    // the visitor's to choose (see PATH_HEADER for why not a query parameter).
-    const headers = new Headers(req.headers);
-    headers.set(PATH_HEADER, pathname.slice(0, 200));
-    return NextResponse.rewrite(url, { request: { headers } });
-  }
-
   // Temporary on purpose: what a shop's domain serves may grow, and a
   // browser-cached permanent redirect would outlive that.
   return NextResponse.redirect(`${PLATFORM_ORIGIN}${pathname}${search}`, 307);
@@ -216,9 +224,9 @@ export const config = {
   // negative lookahead skips Next internals, the API proxy, and any path with a
   // file extension (static assets) so this never runs on _next/*, images, etc.
   //
-  // 🔴 The internal custom-domain routes are listed on their own because the
-  // first pattern misses them: /custom-domain/example.com ENDS in ".com",
-  // which that pattern reads as a file extension. Without these entries the
-  // 404 above never runs and the internal routes answer on the platform host.
-  matcher: ["/((?!_next/|api/|.*\\.[\\w]+$).*)", "/custom-domain/:path*", "/from-domain/:path*"],
+  // 🔴 The internal custom-domain route is listed on its own because the
+  // first pattern misses it: /custom-domain/example.com ENDS in ".com",
+  // which that pattern reads as a file extension. Without this entry the 404
+  // above never runs and the internal route answers on the platform host.
+  matcher: ["/((?!_next/|api/|.*\\.[\\w]+$).*)", "/custom-domain/:path*"],
 };

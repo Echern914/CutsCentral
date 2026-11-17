@@ -149,30 +149,28 @@ describe("a photo, full screen", () => {
 });
 
 describe("the page served on a shop's own domain", () => {
-  it("🔴 every way to book - and back to ChairBack - leads to the platform", () => {
-    // Served on the shop's domain, where "/" is this page and booking does
-    // not live: Book, a menu row, the photo's Book this look, the rewards
-    // finder and the powered-by line all point at getchairback.com.
-    render(
-      <ShopPageClient data={page()} bookQuery="?cb_domain=shop.example" platformOrigin="https://getchairback.com" />,
-    );
+  it("🔴 every way to book stays ON the shop's domain - only 'Powered by' leads to ChairBack", () => {
+    // Served on the shop's domain, where "/" is this page and /book is its
+    // booking (lib/customDomainRouting.ts): Book, a menu row, the photo's Book
+    // this look and the rewards finder all stay there, so the address bar
+    // never says getchairback.com. Only the powered-by line is ChairBack's.
+    render(<ShopPageClient data={page()} bookPath="/book" platformOrigin="https://getchairback.com" />);
     for (const link of screen.getAllByRole("link", { name: /Book an appointment|Book with Fresh Studio/ })) {
-      expect(link.getAttribute("href")).toBe("https://getchairback.com/book/fresh?cb_domain=shop.example");
+      expect(link.getAttribute("href")).toBe("/book");
     }
-    expect(screen.getByRole("link", { name: /^Book Haircut/ }).getAttribute("href")).toBe(
-      "https://getchairback.com/book/fresh?cb_domain=shop.example&service=svc-cut",
-    );
-    expect(screen.getByRole("link", { name: /Find my rewards/ }).getAttribute("href")).toBe(
-      "https://getchairback.com/my-rewards",
-    );
+    expect(screen.getByRole("link", { name: /^Book Haircut/ }).getAttribute("href")).toBe("/book?service=svc-cut");
+    expect(screen.getByRole("link", { name: /Find my rewards/ }).getAttribute("href")).toBe("/my-rewards");
     expect(screen.getByRole("link", { name: /Powered by/ }).getAttribute("href")).toBe(
       "https://getchairback.com/?ref=fresh",
     );
     fireEvent.click(screen.getByRole("button", { name: "Skin taper" }));
     const book = within(screen.getByRole("dialog")).getByRole("link", { name: "Book this look" });
-    expect(book.getAttribute("href")).toBe(
-      "https://getchairback.com/book/fresh?cb_domain=shop.example&service=svc-cut&staff=st-marcus",
-    );
+    expect(book.getAttribute("href")).toBe("/book?service=svc-cut&staff=st-marcus");
+    for (const link of screen.getAllByRole("link")) {
+      const href = link.getAttribute("href") ?? "";
+      if (/Powered by/.test(link.textContent ?? "")) continue;
+      expect(href.startsWith("https://getchairback.com"), href).toBe(false);
+    }
   });
 
   it("on getchairback.com itself, the same links stay on this site", () => {
@@ -309,13 +307,13 @@ describe("studio", () => {
       expect(JSON.stringify(sent)).not.toContain("secret-token");
     });
 
-    it("on the shop's own domain the shared link is the platform's, which works anywhere", async () => {
+    it("on the shop's own domain the shared link is the domain itself - the address the owner hands out", async () => {
       const share = vi.fn(async (_data: ShareData) => {});
       Object.defineProperty(navigator, "share", { value: share, configurable: true });
-      render(<ShopPageClient data={page()} platformOrigin="https://getchairback.com" />);
+      render(<ShopPageClient data={page()} bookPath="/book" platformOrigin="https://getchairback.com" />);
       fireEvent.click(screen.getByRole("button", { name: "Share" }));
       await vi.waitFor(() => expect(share).toHaveBeenCalledTimes(1));
-      expect(share.mock.calls[0]![0].url).toBe("https://getchairback.com/s/fresh");
+      expect(share.mock.calls[0]![0].url).toBe(window.location.origin);
     });
 
     it("with no share sheet, copies the link and says so", async () => {

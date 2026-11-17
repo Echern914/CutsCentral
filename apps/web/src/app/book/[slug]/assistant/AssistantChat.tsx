@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { TermsAgreement } from "@/components/legal/TermsAgreement";
+import { linkOnThisSite } from "@/lib/customDomainRouting";
 import {
   confirmAction,
   sendTurnAction,
@@ -197,7 +198,13 @@ export function AssistantChat({ slug, shopName, signedIn }: { slug: string; shop
                 </div>
               )}
               {line.link && (
-                <a className="text-xs text-gold underline" href={line.link.url}>
+                // The API names the booking page on getchairback.com; on the
+                // shop's own domain it opens there instead (customDomainRouting).
+                // Lines with a link only ever arrive from a turn, in the browser.
+                <a
+                  className="text-xs text-gold underline"
+                  href={typeof window === "undefined" ? line.link.url : linkOnThisSite(line.link.url, window.location.host)}
+                >
                   {line.link.label}
                 </a>
               )}
