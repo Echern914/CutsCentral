@@ -222,7 +222,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   //        archived on the Mac, so its exact commit is not recorded; #706,
   //        #709 and #713 merged before its release notes were last edited and
   //        are re-checked on the device anyway (docs/release-1.1.8.md).
-  version: "1.1.8",
+  //
+  // 1.1.9 = build 56. My ChairBack in the Studio look the web got on
+  //        2026-11-16 (paper, ink buttons, gold as an accent only), and a shop
+  //        page's Directions opening in the Maps app (#776).
+  version: "1.1.9",
   orientation: "portrait",
   // Light: the app's screens are white & gold, so system controls (alerts,
   // pickers, keyboards) match them rather than following the phone's setting.
@@ -241,7 +245,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 🔴 The number Apple sees. Was ignored while EAS owned the counter
     // (appVersionSource:"remote", last EAS build = 39); it is authoritative now
     // that builds are made locally. Must exceed the previous upload, every time.
-    buildNumber: "55",
+    buildNumber: "56",
     // iPhone-only for v1: the dashboard WebView isn't iPad-optimized, and
     // supporting tablet would require iPad screenshots + iPad review coverage.
     supportsTablet: false,

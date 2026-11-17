@@ -8,12 +8,13 @@
  * every foreground here to a readable contrast against `bg`.
  */
 export const FRAME = {
-  bg: "#FAF8F3",
-  spinner: "#1C1917",
-  title: "#1C1917",
-  sub: "#57534E",
-  buttonBg: "#1C1917",
-  buttonText: "#FAF8F3",
+  // Studio paper and ink (web globals.css :root), since 2026-11-17.
+  bg: "#F6F4EF",
+  spinner: "#1A1814",
+  title: "#1A1814",
+  sub: "#5E5850",
+  buttonBg: "#1A1814",
+  buttonText: "#FFFFFF",
 } as const;
 
 /**
@@ -23,12 +24,12 @@ export const FRAME = {
  * a white slab on top, and with the page dark the status bar's clock turned
  * white - on cream, so it vanished (Eric, 2026-10-22).
  *
- * `light` is the app's own cream (customer/theme.ts); `dark` is the web's
- * black & gold (globals.css [data-theme="dark"]).
+ * `light` is the app's own paper (customer/theme.ts); `dark` is the web's
+ * Studio dark (globals.css [data-theme="dark"]).
  */
 export const PAGE_BAR = {
-  light: { bg: "#FAF8F3", title: "#1C1917", tint: "#9A7A1F" },
-  dark: { bg: "#0A0A0B", title: "#F5F5F4", tint: "#D4AF37" },
+  light: { bg: "#F6F4EF", title: "#1A1814", tint: "#8A6914" },
+  dark: { bg: "#0F0E0C", title: "#F3EFE7", tint: "#D2B062" },
 } as const;
 
 export type PageBarScheme = keyof typeof PAGE_BAR;

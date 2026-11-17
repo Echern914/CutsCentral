@@ -170,7 +170,7 @@ export default function AppointmentScreen() {
         ) : null}
         <Button
           label={upcoming ? `Visit ${a.shop.name}` : "Book again"}
-          icon={<Store size={18} color={color.onGold} />}
+          icon={<Store size={18} color={color.onPrimary} />}
           // Book again repeats THIS visit: its service (and provider) at the times.
           onPress={() => (upcoming ? openStorefront(router, a.shop) : openBookAgain(router, a))}
           accessibilityHint={upcoming ? "Opens the shop's page" : "Opens booking for the same service, at the times"}
