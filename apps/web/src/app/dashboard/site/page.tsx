@@ -42,6 +42,7 @@ export interface ShopPageSettings {
   sectionOrder: string[];
   pageShowsServices: boolean;
   pageShowsDirections: boolean;
+  pageOriginalLayout: boolean;
   // Client rewards page content control.
   rewardsWelcome: string | null;
   rewardsSections: string[];

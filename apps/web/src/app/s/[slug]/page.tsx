@@ -87,6 +87,8 @@ export interface ShopPageData {
   showServices?: boolean;
   /** Off unless the barber turned Directions on (older payloads: off too). */
   showDirections?: boolean;
+  /** The barber chose the original look over Studio (older payloads: Studio). */
+  originalLayout?: boolean;
   bookingUrl: string | null;
   bookingMode: BookingModeKey;
   takesRequests: boolean;

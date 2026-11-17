@@ -19,6 +19,7 @@ import { useIsNativeApp } from "@/lib/useIsNativeApp";
 import { useAppHasRewardsTab } from "@/lib/useAppHasRewardsTab";
 import { Gallery, Hours, Promotions, Rewards, Reviews } from "./pageSections";
 import { StudioDesign } from "./designs/StudioDesign";
+import { OriginalDesign } from "./designs/OriginalDesign";
 import type { DesignCtx } from "./designs/model";
 import type { ShopPageData } from "./page";
 import { AppFrameScheme } from "@/components/PageScheme";
@@ -153,8 +154,10 @@ export function ShopPageClient({
     hours: <Hours key="hours" data={data} theme={theme} surface={surface} />,
   };
 
-  // 🔴 EVERY SHOP RENDERS STUDIO. The owner's call (2026-11-16): the client side
-  // is redesigned for every shop, whatever page design it had picked. The shop
+  // 🔴 EVERY SHOP RENDERS STUDIO unless its barber picked the ORIGINAL look
+  // (Shop.pageOriginalLayout, 2026-11-17 - a barber asked for his page back).
+  // The owner's call (2026-11-16): the client side is redesigned for every
+  // shop, whatever page design it had picked. The shop
   // still dresses it - its theme, accent, fonts, shape, logo, photos and section
   // order all apply - but the layout is no longer a choice. `data.pageDesign` is
   // still stored and sent by the API; nothing here reads it.
@@ -185,7 +188,7 @@ export function ShopPageClient({
     <>
       {/* The iPhone app's bar above this page wears the same scheme. */}
       {!preview && <AppFrameScheme scheme={theme.scheme} />}
-      <StudioDesign ctx={ctx} />
+      {data.originalLayout === true ? <OriginalDesign ctx={ctx} /> : <StudioDesign ctx={ctx} />}
     </>
   );
 }

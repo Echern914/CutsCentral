@@ -74,6 +74,7 @@ const FIELD_LABELS: Record<string, string> = {
   sectionOrder: "Sections",
   pageShowsServices: "Services on your page",
   pageShowsDirections: "Directions button",
+  pageOriginalLayout: "Page look",
   rewardsSections: "Rewards sections",
   publicPageEnabled: "Live toggle",
   takesRequests: "Requests toggle",
@@ -131,6 +132,8 @@ export function PageEditor({
   const [pageShowsServices, setPageShowsServices] = useState(settings.pageShowsServices !== false);
   // Off unless the barber turned it on (an older payload: off).
   const [pageShowsDirections, setPageShowsDirections] = useState(settings.pageShowsDirections === true);
+  // The new page unless the barber picked the original look (older payload: new).
+  const [pageOriginalLayout, setPageOriginalLayout] = useState(settings.pageOriginalLayout === true);
   const [rewardsWelcome, setRewardsWelcome] = useState(settings.rewardsWelcome ?? "");
   const [rewardsSections, setRewardsSections] = useState<RewardsSectionKey[]>(
     settings.rewardsSections?.length
@@ -210,6 +213,7 @@ export function PageEditor({
     sectionOrder,
     pageShowsServices,
     pageShowsDirections,
+    pageOriginalLayout,
     rewardsWelcome: rewardsWelcome.trim(),
     rewardsSections,
     takesRequests,
@@ -288,6 +292,7 @@ export function PageEditor({
       sectionOrder,
       showServices: pageShowsServices,
       showDirections: pageShowsDirections,
+      originalLayout: pageOriginalLayout,
       bookingUrl: settings.bookingUrl,
       bookingMode: settings.bookingMode,
       takesRequests,
@@ -332,6 +337,7 @@ export function PageEditor({
       sectionOrder,
       pageShowsServices,
       pageShowsDirections,
+      pageOriginalLayout,
       takesRequests,
       waitlistEnabled,
     ],
@@ -778,6 +784,8 @@ export function PageEditor({
                   <p className="mt-0.5 text-xs text-muted">
                     {!pageShowsDirections
                       ? "Off: your page has no Directions button."
+                      : pageOriginalLayout
+                        ? "The original page look has no Directions button. Switch to the new look to show it."
                       : !addressStreet.trim()
                         ? "Add your street address above, or the button stays hidden."
                         : addressPrivate
@@ -862,6 +870,41 @@ export function PageEditor({
                 Your newest photos show as Recent work near the top of your page, so these sections follow below them.
               </p>
             </div>
+            <div className="border-b border-subtle pb-5">
+              <p className="text-sm text-offwhite">Page look</p>
+              <p className="mt-0.5 text-xs text-muted">
+                {pageOriginalLayout
+                  ? "Original: your name, a big Book button, then your sections. Clients pick a service when they book."
+                  : "New: the redesigned page, with your recent photos and your services list."}
+              </p>
+              <div role="radiogroup" aria-label="Page look" className="mt-2 grid grid-cols-2 gap-2">
+                {([
+                  { original: false, label: "New" },
+                  { original: true, label: "Original" },
+                ] as const).map((opt) => {
+                  const active = pageOriginalLayout === opt.original;
+                  return (
+                    <button
+                      key={opt.label}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => setPageOriginalLayout(opt.original)}
+                      className={cn(
+                        "min-h-11 rounded-md px-4 py-2 text-sm font-medium transition-colors duration-150 ease-out",
+                        active
+                          ? "bg-emerald-soft/15 text-emerald-soft"
+                          : "border border-subtle text-muted hover:bg-charcoal-700",
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {/* The services list is part of the NEW look; the original never had one. */}
+            {!pageOriginalLayout && (
             <div className="flex items-center justify-between gap-3 border-b border-subtle pb-5">
               <div className="min-w-0">
                 <p className="text-sm text-offwhite">Services</p>
@@ -885,6 +928,7 @@ export function PageEditor({
                 {pageShowsServices ? "Shown" : "Hidden"}
               </button>
             </div>
+            )}
             <SectionOrderEditor value={sectionOrder} onChange={setSectionOrder} />
           </div>
         </Card>

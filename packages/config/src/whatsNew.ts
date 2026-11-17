@@ -36,6 +36,24 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-17-one-calendar-for-a-tapped-service",
+    date: "2026-11-17",
+    kind: "fix",
+    title: "One calendar when a client taps a service",
+    body:
+      "When a client taps a service on your page, booking now shows just that service's calendar and times, " +
+      "not a second calendar under the first. Back opens your full menu.",
+  },
+  {
+    id: "2026-11-17-page-original-look",
+    date: "2026-11-17",
+    kind: "feature",
+    title: "Bring back your page's original look",
+    body:
+      "Liked your page the way it was? In your page editor, under Sections, set Page look to Original: your " +
+      "name, a big Book button, then your sections. New stays the default, and you can switch back any time.",
+  },
+  {
     id: "2026-11-17-directions-off-until-on",
     date: "2026-11-17",
     kind: "fix",

@@ -30,6 +30,7 @@ export interface PageSettingsInput {
   sectionOrder: string[];
   pageShowsServices: boolean;
   pageShowsDirections: boolean;
+  pageOriginalLayout: boolean;
   rewardsWelcome: string;
   rewardsSections: string[];
   takesRequests: boolean;
@@ -76,6 +77,7 @@ const PAGE_FIELDS = [
   "sectionOrder",
   "pageShowsServices",
   "pageShowsDirections",
+  "pageOriginalLayout",
   "rewardsWelcome",
   "rewardsSections",
   "takesRequests",

@@ -249,6 +249,29 @@ describe("studio", () => {
     expect(book[0]!.getAttribute("href")).toBe("/book/fresh");
   });
 
+  it("🔴 the ORIGINAL look, when the barber picks it: the name, a big Book button, no services list", () => {
+    render(<ShopPageClient data={page({ originalLayout: true, addressStreet: "12 Main St", showDirections: true })} />);
+    expect(screen.getByRole("heading", { level: 1, name: "Fresh Studio" })).toBeTruthy();
+    expect(screen.queryByText("Services")).toBeNull();
+    expect(screen.queryByText("Beard Trim")).toBeNull();
+    expect(screen.queryByText("From")).toBeNull();
+    const book = screen.getAllByRole("link", { name: "Book an appointment" });
+    expect(book[0]!.getAttribute("href")).toBe("/book/fresh");
+    expect(book[0]!.closest("[data-tour='book-cta']")).toBeTruthy();
+    // The original page never had a Directions button.
+    expect(screen.queryByRole("link", { name: /Directions to/ })).toBeNull();
+  });
+
+  it("🔴 every other shop gets the new page, older payloads included", () => {
+    const { unmount } = render(<ShopPageClient data={page({ originalLayout: false })} />);
+    expect(screen.getByText("Services")).toBeTruthy();
+    unmount();
+    const data = page();
+    delete (data as { originalLayout?: boolean }).originalLayout;
+    render(<ShopPageClient data={data} />);
+    expect(screen.getByText("Services")).toBeTruthy();
+  });
+
   it("an older payload with no showServices still shows the menu", () => {
     const data = page();
     delete (data as { showServices?: boolean }).showServices;

@@ -156,6 +156,28 @@ describe("public shop page", () => {
     expect(page.body.showDirections).toBe(false);
   });
 
+  it("🔴 the page is the new look by default; a shop can pick the original", async () => {
+    let page = await request(app).get(`/api/page/${slugA}`);
+    expect(page.body.originalLayout).toBe(false);
+
+    const original = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({ pageOriginalLayout: true });
+    expect(original.status).toBe(200);
+    expect(original.body.pageOriginalLayout).toBe(true);
+    page = await request(app).get(`/api/page/${slugA}`);
+    expect(page.body.originalLayout).toBe(true);
+
+    const back = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({ pageOriginalLayout: false });
+    expect(back.body.pageOriginalLayout).toBe(false);
+    page = await request(app).get(`/api/page/${slugA}`);
+    expect(page.body.originalLayout).toBe(false);
+  });
+
   it("gallery with captions + style fields save and round-trip", async () => {
     const patch = await request(app)
       .patch("/api/shops/me")

@@ -237,13 +237,35 @@ describe("a rebook prefill", () => {
       data: { timezone: "UTC", date: DAY, bundles: [], ungrouped: [] },
     });
     render(<BookingClient data={shopData()} prefill={{ serviceId: "svc_1", staffId: null }} />);
-    expect(await screen.findByText("Pick a time for Standard visit")).toBeTruthy();
+    expect(await screen.findByText("1 · Pick a time for Standard visit")).toBeTruthy();
     // Let the automatic landing and its hops run their course.
     await act(async () => {
       await new Promise((r) => setTimeout(r, 300));
     });
     expect(dayBundles.mock.calls.length).toBeGreaterThan(1);
-    expect(screen.getByText("Pick a time for Standard visit")).toBeTruthy();
+    expect(screen.getByText("1 · Pick a time for Standard visit")).toBeTruthy();
+  });
+
+  it("🔴 a service tapped on the shop page gets ONE calendar - its own - and Back opens the full menu", async () => {
+    const merged = vi.mocked(actions.getMergedSlotsAction);
+    merged.mockResolvedValue({
+      ok: true,
+      data: { timezone: "UTC", slots: [{ startsAt: SLOT, staffIds: ["stf_1"] }] },
+    } as never);
+    dayBundles.mockResolvedValue({
+      ok: true,
+      data: { timezone: "UTC", date: DAY, bundles: [], ungrouped: [] },
+    });
+    render(<BookingClient data={shopData()} prefill={{ serviceId: "svc_1", staffId: "stf_1" }} />);
+    expect(await screen.findByText("1 · Pick a time for Standard visit")).toBeTruthy();
+    // No day calendar and no menu stacked above the service's own calendar.
+    expect(screen.queryByText("1 · Pick a day")).toBeNull();
+    expect(screen.queryByText("2 · Choose a service")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Back/ }));
+    expect(await screen.findByText("1 · Pick a day")).toBeTruthy();
+    expect(screen.getByText("2 · Choose a service")).toBeTruthy();
+    expect(screen.queryByText("1 · Pick a time for Standard visit")).toBeNull();
   });
 
   it("'Book again' lands ON the time step - scrolled past the day picker and the menu", async () => {
@@ -259,7 +281,7 @@ describe("a rebook prefill", () => {
     const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
     try {
       render(<BookingClient data={shopData()} prefill={{ serviceId: "svc_1", staffId: "stf_1" }} />);
-      const heading = await screen.findByText("Pick a time for Standard visit");
+      const heading = await screen.findByText("1 · Pick a time for Standard visit");
       const timeStep = heading.closest("section");
       expect(timeStep).toBeTruthy();
       // The time step's own section was brought into view, top first.

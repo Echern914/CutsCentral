@@ -353,6 +353,8 @@ const updateShopSchema = createShopSchema
     pageShowsServices: z.boolean(),
     // The Directions button (off by default; needs a public street to show).
     pageShowsDirections: z.boolean(),
+    // The page's look: the new page (false, every shop) or the original one.
+    pageOriginalLayout: z.boolean(),
     // Lead form: when on, the public page shows "Request an appointment".
     // notifyPhone is texted on each new lead (normalized to E.164 below); ""/null
     // = inbox only.
@@ -1298,6 +1300,8 @@ publicPageRouter.get("/:slug", async (req, res) => {
     showServices: shop.pageShowsServices,
     // The barber's choice to offer Directions (off unless turned on).
     showDirections: shop.pageShowsDirections,
+    // The barber chose the original look over the new page.
+    originalLayout: shop.pageOriginalLayout,
     bookingUrl: shop.bookingUrl,
     // When native booking is on, the page CTA points at /book/[slug] instead of
     // the external bookingUrl, and the lead form is hidden.
@@ -1938,6 +1942,7 @@ function serializeShop(shop: {
   sectionOrder: string[];
   pageShowsServices: boolean;
   pageShowsDirections: boolean;
+  pageOriginalLayout: boolean;
   rewardsWelcome: string | null;
   rewardsSections: string[];
   takesRequests: boolean;
@@ -2019,6 +2024,7 @@ function serializeShop(shop: {
     sectionOrder: readSectionOrder(shop.sectionOrder),
     pageShowsServices: shop.pageShowsServices,
     pageShowsDirections: shop.pageShowsDirections,
+    pageOriginalLayout: shop.pageOriginalLayout,
     rewardsWelcome: shop.rewardsWelcome,
     rewardsSections: readRewardsSections(shop.rewardsSections),
     takesRequests: shop.takesRequests,

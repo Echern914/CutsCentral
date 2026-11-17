@@ -479,6 +479,9 @@ model Shop {
   // barber turns it on - not every barber wants their address a tap away, and
   // it only shows when there is a public street address to point at.
   pageShowsDirections Boolean @default(false)
+  // The page's look: false = the new (Studio) page every shop gets; true = the
+  // ORIGINAL page (name, big Book button, sections), the barber's choice.
+  pageOriginalLayout Boolean @default(false)
 
   // Client rewards page (/r/[magicToken]) content control. The rewards page
   // already inherits the shop's theme/font/shape (see PAGE_* fields above); these
