@@ -130,6 +130,46 @@ describe("the page layout", () => {
     expect(screen.getByRole("button", { name: "Save page" })).toBeDisabled();
   });
 
+  it("🔴 the new look is every shop's page until the barber picks Original", async () => {
+    render(<PageEditor settings={settings()} appBase="https://app.test" />);
+    const look = screen.getByRole("radiogroup", { name: "Page look" });
+    expect(within(look).getByRole("radio", { name: "New" })).toHaveAttribute("aria-checked", "true");
+    expect(preview.last?.originalLayout).toBe(false);
+    // The services switch belongs to the new look.
+    expect(screen.getByText("Services")).toBeInTheDocument();
+
+    fireEvent.click(within(look).getByRole("radio", { name: "Original" }));
+    expect(within(look).getByRole("radio", { name: "Original" })).toHaveAttribute("aria-checked", "true");
+    expect(preview.last?.originalLayout).toBe(true);
+    expect(screen.queryByText("Services")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save page" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toEqual({ pageOriginalLayout: true });
+  });
+
+  it("reads a saved Original look back, and switching to New saves just that", async () => {
+    render(<PageEditor settings={settings({ pageOriginalLayout: true })} appBase="https://app.test" />);
+    const look = screen.getByRole("radiogroup", { name: "Page look" });
+    expect(within(look).getByRole("radio", { name: "Original" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(look).getByRole("radio", { name: "New" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save page" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toEqual({ pageOriginalLayout: false });
+  });
+
+  it("🔴 Directions is off until switched on, and saves alone", async () => {
+    render(<PageEditor settings={settings()} appBase="https://app.test" />);
+    const directions = screen.getByRole("switch", { name: "Directions button on my page" });
+    expect(directions).toHaveAttribute("aria-checked", "false");
+    expect(preview.last?.showDirections).toBe(false);
+    fireEvent.click(directions);
+    expect(preview.last?.showDirections).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Save page" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]![0]).toEqual({ pageShowsDirections: true });
+  });
+
   it("🔴 a photo's tags save with it; the preview keeps only tags a client could book", async () => {
     const menu = {
       services: [

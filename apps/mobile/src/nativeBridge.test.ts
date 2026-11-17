@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isMapsUrl,
   nativeCapabilities,
   OPEN_WEB_MESSAGE,
   parseOpenAuthRequest,
@@ -136,11 +137,32 @@ describe("parseOpenWebRequest", () => {
   });
 });
 
+describe("isMapsUrl", () => {
+  it("knows a directions link, which leaves the app for the maps app", () => {
+    expect(isMapsUrl("https://www.google.com/maps/search/?api=1&query=12%20Main%20St")).toBe(true);
+    expect(isMapsUrl("https://google.com/maps")).toBe(true);
+    expect(isMapsUrl("https://maps.google.com/?q=x")).toBe(true);
+    expect(isMapsUrl("https://maps.apple.com/?q=x")).toBe(true);
+    expect(isMapsUrl("https://maps.app.goo.gl/abc")).toBe(true);
+  });
+
+  it("🔴 nothing else, and never a lookalike host", () => {
+    expect(isMapsUrl("https://www.google.com/search?q=maps")).toBe(false);
+    expect(isMapsUrl("https://www.google.com/mapsfake")).toBe(false);
+    expect(isMapsUrl("https://www.google.com.evil.tld/maps/x")).toBe(false);
+    expect(isMapsUrl("https://evil.tld/maps.apple.com")).toBe(false);
+    expect(isMapsUrl("https://getchairback.com/s/fresh")).toBe(false);
+    expect(isMapsUrl("javascript:alert(1)")).toBe(false);
+    expect(isMapsUrl("not a url")).toBe(false);
+  });
+});
+
 describe("nativeCapabilities", () => {
   it("announces openWeb on iOS, where the US-storefront link-out applies", () => {
     expect(nativeCapabilities({ platform: "ios", nextUpWidget: false })).toEqual({
       openAuth: true,
       rewardsTab: true,
+      externalMaps: true,
       openWeb: true,
     });
   });

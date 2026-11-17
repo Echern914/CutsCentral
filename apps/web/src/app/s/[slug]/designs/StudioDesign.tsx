@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { fadeUp } from "@/components/motion/variants";
+import { useAppStrandsMaps } from "@/lib/useAppStrandsMaps";
 import { PrimaryCta, ShopFooter, TextToBookBlock } from "../pageChrome";
 import { StampMark } from "../pageSections";
 import type { PageService, PageStaff, ShopPageData } from "../page";
@@ -38,9 +39,14 @@ export function StudioDesign({ ctx }: { ctx: DesignCtx }) {
   const { photos, examples } = photosToShow(data, preview);
   const viewer = useViewer(ctx, examples);
   const recent = newestFirst(photos);
-  const services = data.services ?? [];
+  // A shop can leave its menu off the page (Shop.pageShowsServices). Then the
+  // page is a straight storefront: Book sits under the header, where it was
+  // before Studio, instead of a pinned bar quoting a price from a menu the
+  // page no longer shows. Booking itself still lists every service.
+  const showMenu = data.showServices !== false;
+  const services = showMenu ? (data.services ?? []) : [];
   const team = data.staff ?? [];
-  const pinned = ctx.hasBooking && !ctx.showRequestForm;
+  const pinned = ctx.hasBooking && !ctx.showRequestForm && showMenu;
   const city = [data.addressCity, data.addressRegion].filter(Boolean).join(", ");
 
   const bookBar = pinned ? <BookBar ctx={ctx} from={lowestPrice(services)} /> : null;
@@ -181,11 +187,23 @@ export function lowestPrice(services: PageService[]): number | null {
   return prices.length > 0 ? Math.min(...prices) : null;
 }
 
-/** The address in one line for a maps search, or null without a street or a city. */
-export function mapsQuery(data: Pick<ShopPageData, "name" | "addressStreet" | "addressCity" | "addressRegion" | "addressPostal">): string | null {
-  if (!data.addressStreet && !data.addressCity) return null;
-  const place = [data.addressStreet, data.addressCity, data.addressRegion, data.addressPostal].filter(Boolean).join(", ");
-  return `${data.name}, ${place}`;
+/**
+ * The address in one line for a maps search, or null when the page has no
+ * Directions: the barber has not turned it on (off for every shop until they
+ * do), or there is no public street to point at.
+ *
+ * 🔴 THE ADDRESS ONLY, never the shop's name and never a city alone. A search
+ * for "name, city" made the map guess, and it put a shop at the wrong place
+ * (2026-11-17). A private address reaches this payload without its street.
+ */
+export function mapsQuery(
+  data: Pick<ShopPageData, "showDirections" | "addressStreet" | "addressCity" | "addressRegion" | "addressPostal">,
+): string | null {
+  if (data.showDirections !== true || !data.addressStreet?.trim()) return null;
+  return [data.addressStreet, data.addressCity, data.addressRegion, data.addressPostal]
+    .map((p) => p?.trim())
+    .filter(Boolean)
+    .join(", ");
 }
 
 /**
@@ -202,7 +220,9 @@ export function shareUrl(ctx: Pick<DesignCtx, "platformOrigin" | "data">, origin
 /** Directions, a text, Instagram: only the ones this shop has, as equal buttons. */
 function Actions({ ctx }: { ctx: DesignCtx }) {
   const { data, theme, layout, preview } = ctx;
-  const query = mapsQuery(data);
+  // An older app build would open the map inside itself, with no way back.
+  const strandsMaps = useAppStrandsMaps();
+  const query = strandsMaps ? null : mapsQuery(data);
   const items: { key: string; label: string; aria: string; href: string; external: boolean; icon: React.ReactNode }[] = [];
   if (query) {
     items.push({

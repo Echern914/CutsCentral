@@ -471,6 +471,17 @@ model Shop {
   fontKey           String? // PAGE_FONTS key (typography pairing)
   layoutStyle       String? // LAYOUT_STYLES key (corner/button shape)
   sectionOrder      String[] @default([]) // PAGE_SECTIONS keys in render order; [] = default order
+  // The services menu on the public page. Off = the page shows no menu and
+  // its Book button sits under the header instead (the booking page still
+  // lists every service). On for every shop unless the barber turns it off.
+  pageShowsServices Boolean  @default(true)
+  // The Directions button on the public page. OFF for every shop until the
+  // barber turns it on - not every barber wants their address a tap away, and
+  // it only shows when there is a public street address to point at.
+  pageShowsDirections Boolean @default(false)
+  // The page's look: false = the new (Studio) page every shop gets; true = the
+  // ORIGINAL page (name, big Book button, sections), the barber's choice.
+  pageOriginalLayout Boolean @default(false)
 
   // Client rewards page (/r/[magicToken]) content control. The rewards page
   // already inherits the shop's theme/font/shape (see PAGE_* fields above); these

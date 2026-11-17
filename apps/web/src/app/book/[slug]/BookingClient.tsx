@@ -1395,8 +1395,17 @@ export function BookingClient({
   const isMultiBarber = serviceId !== null && staffForService.length > 1;
   // The time step is step 2 when provider is skipped, step 3 otherwise.
   const timeStepNo = isMultiBarber ? 3 : 2;
-  // Day-first flow is always day -> time -> details, so details is step 3.
-  const detailsStepNo = dayFirst ? 3 : isMultiBarber ? 4 : 3;
+  // 🔴 ONE CALENDAR, NEVER TWO. Day-first, a service only carries its own
+  // barber (staffId) when it came in already chosen: tapped on the shop page,
+  // a rebook link, the demo tour. Then the page is just that service's
+  // calendar and times, and Back opens the full day + menu. Showing the day
+  // calendar AND the service's calendar stacked put two calendars on one
+  // screen (a barber's report, 2026-11-17).
+  // (Not in the demo tour: its steps spotlight the menu above.)
+  const serviceChosenView = dayFirst && !demoTour && serviceId !== null && staffId !== null;
+  // Day-first flow is day -> time -> details (step 3), or time -> details
+  // (step 2) when the service came in already chosen.
+  const detailsStepNo = dayFirst ? (serviceChosenView ? 2 : 3) : isMultiBarber ? 4 : 3;
 
   const dateFmt = useMemo(
     () =>
@@ -3086,7 +3095,7 @@ export function BookingClient({
       {/* The calendar, on top — dates only. The day's actual times live on the
           service cards below (each service shows its own bookable chips), so a
           separate time rail here would just duplicate them. */}
-      {dayFirst && (
+      {dayFirst && !serviceChosenView && (
         <Section
           title="1 · Pick a day"
           back={
@@ -3158,7 +3167,7 @@ export function BookingClient({
           by the selected day's bundle fetch — the soonest open day is
           auto-selected on load, so an opened card shows real times instantly.
           Tapping a service's time chip books it. */}
-      {dayFirst && (
+      {dayFirst && !serviceChosenView && (
         <Section title="2 · Choose a service" tour="services" innerRef={servicesSectionRef}>
           {/* ABOVE THE SERVICES, not under the whole flow: a parent booking three
               sons never scrolled that far and booked them one at a time (a
@@ -3435,11 +3444,11 @@ export function BookingClient({
           provider step if there was one, else back to the service list. */}
       {serviceId && staffId && (
         <Section
-          // Day-first, this calendar only appears for a prefilled service, and
-          // a number would collide with "2 · Choose a service" above it.
+          // Day-first, this calendar only appears for a service that came in
+          // already chosen, and it is then the page's only calendar (step 1).
           title={
             dayFirst
-              ? `Pick a time for ${bookableServices.find((s) => s.id === serviceId)?.name ?? "your service"}`
+              ? `1 · Pick a time for ${bookableServices.find((s) => s.id === serviceId)?.name ?? "your service"}`
               : `${timeStepNo} · Pick a time`
           }
           tour="slots"

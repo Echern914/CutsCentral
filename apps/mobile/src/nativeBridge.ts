@@ -87,6 +87,24 @@ export function parseOpenWebRequest(raw: string, origins: { webOrigin: string })
 }
 
 /**
+ * A directions link (Google Maps, Apple Maps). Loaded INSIDE the WebView it
+ * stranded the visitor on a map with no way back to the app (2026-11-17), so
+ * AppWebView hands it to iOS instead, which opens the maps app or Safari.
+ * Matched on the whole host, so a lookalike (google.com.evil.tld) is not one.
+ * Hand-parsed, not `new URL()`: React Native's URL has no hostname/pathname
+ * (see joinFlow.ts).
+ */
+export function isMapsUrl(url: string): boolean {
+  const m = /^https?:\/\/([^/?#:@]+)(?::\d+)?([/?#].*)?$/i.exec(url);
+  if (!m) return false;
+  const host = m[1]!.toLowerCase();
+  const path = (m[2] ?? "").replace(/[?#].*$/, "");
+  if (host === "maps.apple.com" || host === "maps.google.com" || host === "maps.app.goo.gl") return true;
+  if (host === "google.com" || host === "www.google.com") return path === "/maps" || path.startsWith("/maps/");
+  return false;
+}
+
+/**
  * What this build tells our pages it can do (AppWebView's
  * ANNOUNCE_CAPABILITIES -> `window.__cbNative`). A page that sees the bridge
  * but not a flag knows it is inside an older build and keeps its fallback.
@@ -101,6 +119,8 @@ export function nativeCapabilities(opts: {
   return {
     openAuth: true,
     rewardsTab: true,
+    // A maps link opens in the phone's maps app, outside this WebView (isMapsUrl).
+    externalMaps: true,
     ...(opts.platform === "ios" ? { openWeb: true as const } : {}),
     ...(opts.nextUpWidget ? { nextUpWidget: true as const } : {}),
   };
